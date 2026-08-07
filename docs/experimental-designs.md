@@ -20,13 +20,13 @@ Resolve the three declarations separately and the config writes itself. They are
 
 | The question | Declaration | Values | Shown in |
 |---|---|---|---|
-| Does every unit appear in every condition, or exactly one? | `data.units.allocation` | `within` (default, paired comparisons) · `between` (core performs the assignment, unpaired) | [Within-subjects](#within-subjects--repeated-measures) · [Between-subjects](#between-subjects--parallel-arm-trial) |
-| What varies deliberately? | `sweep` | `grid` (cartesian) · `paired` (coupled axes) · `ablate` (`1 + n`, one change each) · `sample` (continuous ranges) · `baseline` (the reference, not an axis) | [Factorial](#factorial) · [Fractional factorial](#fractional-factorial-and-coupled-settings) · [Ablation](#ablation) · [Dose-response](#dose-response-and-parameter-search) |
+| Does every unit appear in every condition, or exactly one? | `data.units.allocation` | `within` (default, paired comparisons) · `between` (one arm per unit, unpaired — needs a `groups` axis) | [Within-subjects](#within-subjects--repeated-measures) · [Between-subjects](#between-subjects--parallel-arm-trial) |
+| What varies deliberately? | `sweep` | `grid` (cartesian) · `paired` (coupled axes) · `ablate` (`1 + n`, one change each) · `sample` (continuous ranges) · `groups` (arms of units, not parameters) · `baseline` (the reference, not an axis) | [Factorial](#factorial) · [Fractional factorial](#fractional-factorial-and-coupled-settings) · [Ablation](#ablation) · [Dose-response](#dose-response-and-parameter-search) · [Between-subjects](#between-subjects--parallel-arm-trial) |
 | What varies incidentally? | `replication.repeats` | `seed` · `fold` · `bootstrap` · `permutation` · `technical` | [Single condition](#single-condition-repeated) · [Cross-validation](#cross-validation-including-nested) · [Bootstrap and permutation](#bootstrap-and-permutation) · [Technical replication](#technical-and-biological-replication) |
 
 Answering a question with nothing is a valid answer: omit `sweep` for a single condition, omit `data.units` entirely when the pipeline has no unit table — though `fold`, `bootstrap`, `permutation`, and `technical` all require one, since each of them resamples or re-measures units. What each repeat kind varies and how core collapses it is the table in [reference.md § Repeat kinds](reference.md#repeat-kinds) — both differ per kind, and that's the point of naming the kind rather than passing a count. What no repeat kind does is set `n`: that counts units, and every interval core reports comes from the [per-unit table](reference.md#the-unit-table-is-the-inference-base).
 
-Two choices sit *below* an answer rather than beside it. `assign.method` (`random` | `by_attribute` | `blocked`) only applies once allocation is `between`, and `cluster_by` is orthogonal to all three — it declares that units aren't independent, which changes the intervals rather than the design. See [Clustered and hierarchical data](#clustered-and-hierarchical-data) and [Matched case-control](#matched-case-control).
+Two choices sit *below* an answer rather than beside it. `assign.method` (`random` | `by_attribute` | `blocked`) only applies once allocation is `between`, and it answers a narrower question than the axis does — the `groups` axis says what the arms are, `assign.method` says how a unit reaches one. `cluster_by` is orthogonal to all three — it declares that units aren't independent, which changes the intervals rather than the design. See [Clustered and hierarchical data](#clustered-and-hierarchical-data) and [Matched case-control](#matched-case-control).
 
 ### Single condition, repeated
 
@@ -52,9 +52,14 @@ sweep:
 
 ### Between-subjects / parallel-arm trial
 
-Each unit is allocated to exactly one arm. Core does the randomization, balances it, and records who went where.
+Each unit belongs to exactly one arm. The arms are a `groups` axis — the difference between them is something that happened to the units, not a parameter the pipeline varies — and `allocation` says how a unit reaches one. Core does the randomization, balances it, and records who went where.
 
 ```yaml
+sweep:
+  groups:
+    by: arm                           # → 00_arm=control, 01_arm=treatment
+    levels: [control, treatment]
+
 data:
   units:
     from: enrollment.csv
@@ -62,13 +67,25 @@ data:
     attributes: [site, severity]
     allocation: between
     assign:
-      method: blocked                 # permuted blocks keep arms balanced during enrollment
+      method: random
       stratify_by: [site, severity]
-      ratio: {00_control: 1, 01_treatment: 1}
+      ratio: {control: 1, treatment: 1}
       seed: auto
 ```
 
-The realized allocation lands in `allocation.json`, hashed. Comparisons are unpaired, derived from `allocation: between` rather than declared separately.
+The realized allocation lands in `allocation.json`, hashed. Comparisons are unpaired, derived from `allocation: between` rather than declared separately. The two conditions share a `parameters_hash`, which is the point: same code, same parameters, different units.
+
+When the arm was decided elsewhere — a trial system, a registry, an exposure that simply happened — name the column instead of a seed, and core assigns nothing:
+
+```yaml
+data:
+  units:
+    from: enrollment.csv
+    key: patient_id
+    attributes: [site, severity, arm]
+    allocation: between
+    assign: {method: by_attribute, from: arm}
+```
 
 ### Factorial
 
@@ -168,12 +185,23 @@ Core reports cluster-robust intervals and the cluster count as effective sample 
 
 ### Matched case-control
 
-Matching happens upstream; carry the matched-set identifier as an attribute and cluster on it.
+Case-vs-control is a property of the units, so it's a `groups` axis read from an existing column — nothing here is randomized. Matching happens upstream; carry the matched-set identifier as an attribute and cluster on it, which is what tells core the two arms aren't independent samples.
 
 ```yaml
+sweep:
+  groups: {by: status, levels: [control, case]}
+
 data:
-  units: {from: matched.csv, key: subject_id, attributes: [match_set], cluster_by: match_set}
+  units:
+    from: matched.csv
+    key: subject_id
+    attributes: [status, match_set]
+    allocation: between
+    assign: {method: by_attribute, from: status}
+    cluster_by: match_set
 ```
+
+Core reports each arm and their contrast with intervals clustered on `match_set`. That accounts for the matching in the intervals; it is not a conditional analysis, and if your field expects conditional logistic regression or a stratified estimator, that's a `scope: "summary"` step — see [what core will not do](#what-core-will-not-do-for-you).
 
 ---
 

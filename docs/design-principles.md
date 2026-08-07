@@ -60,7 +60,7 @@ Ten nouns, defined once. Everything else in this document is built from them, an
 | **Experiment** | A pipeline: code plus the parameters it accepts | `src/<name>/` + a template |
 | **Config** | One parameter set instantiating an experiment | `configs/<name>/config.yaml` |
 | **Run** | One execution of a config, start to finish | `<output_dir>/run_<id>/` |
-| **Condition** | One parameter combination within a run | `conditions/<nn>_<label>/` |
+| **Condition** | One cell of the design within a run — a parameter combination, a group of units, or both | `conditions/<nn>_<label>/` |
 | **Repeat** | One re-execution of a condition (seed, fold, bootstrap, permutation) | `<repeat-label>/` |
 | **Step** | One stage of the pipeline, scoped to run, condition, repeat, or summary | `src/<name>/steps/stepNN_*.py` |
 | **Unit** | The thing being measured — patient, sample, trial, item, respondent | Resolved from `input_dir` |
@@ -142,7 +142,7 @@ Each is complete and self-describing, and still takes exactly one path to run. I
 |---|---|
 | The config envelope — every top-level block except `parameters`: `metadata`, `entrypoint`, `data`, `sweep`, `replication`, `statistics`, `hypotheses` | The entire `parameters` block, via `parameter_spec` |
 | Materializing configs from a spec; value-level validation | The spec: types, defaults, ranges, choices, help text |
-| Sweep expansion (`grid`/`paired`/`ablate`/`sample`/`baseline`), repeat kinds, seed derivation, kind-aware statistics | Field-appropriate sweep and repeat defaults |
+| Sweep expansion (`grid`/`paired`/`ablate`/`sample`/`groups`/`baseline`), repeat kinds, seed derivation, kind-aware statistics | Field-appropriate sweep and repeat defaults |
 | The three hashes, run identity, step scope, lineage, units, append-only + atomic artifacts | Naming conventions (`naming_pattern`, `field_convention`, `default_repeats`) |
 | `BaseExperiment` / `BaseStep` / `BaseTemplate` / `Param` / `Unit` / `io` | Concrete templates, unit resolvers, reusable `BaseStep` subclasses |
 | Lifecycle: `new`, `generate`, `validate`, `dry-run`, `run`, `draft`, `resume`, `report`, `diff`, `freeze`, `reproduce`, `study` | Domain dependencies (an API client, an instrument driver, a solver) |
@@ -194,7 +194,7 @@ Always the experiment repo's, never `publishable`'s. Core walks up from the work
 - **Not data transfer.** `reproduce` never fetches your data. Moving governed data to a new device goes through whatever protocol governs it.
 - **Not credential transfer.** `reproduce` stops and names missing variables. Core has no mechanism to fetch or transmit a secret and won't grow one.
 - **Not adaptive or sequential designs.** Bayesian optimization, active learning, dose escalation, and interim-analysis stopping rules all decide condition *N+1* from the results of condition *N*, so the condition set can't be enumerated before the run. That contradicts "the config fully determines the run," which every other guarantee here leans on. Supporting it means the config declaring a *policy* and the realized conditions becoming an output — coherent, but a real change to the invariant rather than another expansion mode, so it isn't in core today.
-- **Not per-condition pipeline variation.** Conditions differ in parameters, never in which steps run. Allowing different steps per condition would make `code_hash` comparisons across conditions meaningless, which is the property the whole comparison story rests on.
+- **Not per-condition pipeline variation.** Conditions differ in parameters, or in which units they see, never in which steps run. Allowing different steps per condition would make `code_hash` comparisons across conditions meaningless, which is the property the whole comparison story rests on.
 - **Not scientific validity.** A config that validates is well-formed and well-recorded. Whether the design answers the question is yours — core will compute a confidence interval over five seeds without judging whether five seeds was enough.
 
 ---

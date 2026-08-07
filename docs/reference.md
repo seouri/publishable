@@ -91,6 +91,7 @@ sweep:
   # ---- What varies. Omit entirely for a single-condition experiment. ----
   # Keys are dotted paths into `parameters`; modes compose. See "Sweeps and repeats".
   baseline: {analysis.method: pearson}   # optional reference condition; enables deltas
+  groups: null                           # optional unit-group axis, e.g. {by: arm, levels: [...]}
   grid:
     analysis.method: [spearman, kendall]
   # 1 baseline + 2 grid = 3 conditions
@@ -166,7 +167,10 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Stratification attribute exists | `stratify_by: label` is not in `data.units.attributes` |
 | Repeat kind needs units | `{kind: fold}` requires `data.units` to be declared |
 | Biological replicates are units | `{kind: biological}` is not a repeat kind — independent samples are rows in the unit table |
-| Allocation is coherent | `allocation: between` with 3 conditions and 12 units gives arms of 4; below the configured minimum (warning) |
+| Allocation needs arms | `allocation: between` but no `sweep.groups` axis declares what the arms are |
+| Ratio names levels | `assign.ratio` has key `00_control`; expected one entry per `sweep.groups.levels` value (`control`, `treatment`) |
+| Attribute assignment resolves | `assign.method: by_attribute` needs `assign.from`; column `arm` has values `{a, b}`, expected the declared levels |
+| Allocation is coherent | `allocation: between` over 2 arms and 12 units gives arms of 6; below the configured minimum (warning) |
 | Allocation strata exist | `assign.stratify_by: [site]` but `site` is not in `data.units.attributes` |
 | Clustering looks undeclared | `site` has 6 distinct values across 240 units but `cluster_by` is unset (warning) |
 | Correction declared for a family | 6 conditions produce 5 baseline comparisons with `statistics.correction: none` (warning) |
@@ -378,9 +382,14 @@ This is the first question any experimental design answers, so core asks it expl
 
 **`allocation: within`** (default) — every condition sees every unit. The same patients are scored by all three methods; the same simulator inputs run at all parameter settings. Comparisons across conditions are *paired*, and core uses paired statistics automatically.
 
-**`allocation: between`** — each unit is assigned to exactly one condition, and `io.units` yields only that condition's arm. This is the parallel-arm trial, the between-subjects psychology study, the A/B test. Core performs the assignment, so it's reproducible and recorded rather than improvised:
+**`allocation: between`** — each unit belongs to exactly one arm, and `io.units` yields only that arm. This is the parallel-arm trial, the between-subjects psychology study, the A/B test, the case-control comparison. It requires a [group axis](#expansion-modes) to name the arms, because "between" answers *how units reach an arm*, not *what the arms are*:
 
 ```yaml
+sweep:
+  groups:
+    by: arm                        # the axis name — conditions become 00_arm=control, 01_arm=treatment
+    levels: [control, treatment]
+
 data:
   units:
     from: index.csv
@@ -390,11 +399,21 @@ data:
     assign:
       method: random               # random | by_attribute | blocked
       stratify_by: [site, severity]   # balance arms on these
-      ratio: {00_control: 1, 01_treatment: 1}
+      ratio: {control: 1, treatment: 1}   # keyed by level, one entry per declared level
       seed: auto                   # derived from parameters_hash; recorded explicitly
 ```
 
-The realized assignment is written to `allocation.json` in the run directory and hashed, so "which patients were in the treatment arm" is answerable from the run record alone — not from a script someone ran once. `by_attribute` uses an existing column when assignment was decided outside the tool; `blocked` uses permuted blocks to keep arms balanced as enrollment proceeds.
+The realized assignment is written to `allocation.json` in the run directory and hashed, so "which patients were in the treatment arm" is answerable from the run record alone — not from a script someone ran once.
+
+`by_attribute` covers the case where nothing was assigned by this tool: the grouping already exists in the data, as it does for a case-control study or an arm randomized by a trial system years ago. It names the column instead of a seed:
+
+```yaml
+    assign:
+      method: by_attribute
+      from: arm                    # a unit attribute whose values are exactly the declared levels
+```
+
+`blocked` uses permuted blocks, which balances arms across the roster's order rather than across an enrollment sequence — core assigns a fixed unit list at run start, so there is no accruing cohort for it to balance over time. Use it when the roster order carries meaning (site batches, plate order); otherwise `random` with `stratify_by` is the stronger guarantee.
 
 Getting this wrong is not a subtle error. Analyzing a between-subjects study as if it were paired inflates precision substantially, and the two designs need different comparisons. Because allocation is declared, core derives the comparison type instead of asking you to declare `paired` separately and hoping it matches reality.
 
@@ -532,7 +551,7 @@ That's 4 conditions × 5 repeats = 20 executions of the pipeline.
 
 ### Expansion modes
 
-Five modes, each covering a distinct experimental pattern. They compose: the final condition set is the product of every mode present, with `baseline` prepended.
+Six modes, each covering a distinct experimental pattern. They compose: the final condition set is the product of every mode present, with `baseline` prepended.
 
 **`grid` — cartesian product.** The default. Every combination of every listed value.
 
@@ -586,7 +605,33 @@ sweep:
 
 Sampling is deterministic given its seed, so `sweep.yaml` records both the seed and the fully realized condition list — a reader never has to re-derive the design, and `reproduce` regenerates the same conditions.
 
-**`baseline` — a designated reference.** Without one, every condition is a peer and `report` can only list them. With one, core computes deltas and effect sizes against it automatically:
+**`groups` — comparing arms rather than parameters.** Every mode above varies a *parameter*, which covers designs where the difference is something the pipeline does. In a parallel-arm trial the difference is something that happened to the units: the patients in one arm took the drug. There is no parameter to sweep, and forcing one would be a fiction:
+
+```yaml
+sweep:
+  groups:
+    by: arm                              # names the axis; levels become the condition labels
+    levels: [control, treatment]
+  # 2 conditions: 00_arm=control, 01_arm=treatment
+```
+
+A group level is a *set of units*, resolved from [`data.units`](#allocation-within-subjects-or-between-subjects): core assigns them when `allocation: between` with `assign.method: random` or `blocked`, and reads an existing column when `by_attribute`. `io.units` then yields that level's units, and nothing else about the condition changes.
+
+So two conditions on a group axis can share a `parameters_hash` — and that's correct, not a degenerate case. Identical code and identical parameters over two arms of units is exactly the claim a trial makes, and the three hashes say so precisely: same code, same parameters, different units. The design cell is recorded in `results.conditions[i].values` (`{arm: treatment}`) and the realized membership in `allocation.json`.
+
+Group axes compose with parameter axes like any other mode, which is how "each arm analyzed three ways" is expressed:
+
+```yaml
+sweep:
+  groups: {by: arm, levels: [control, treatment]}
+  grid:
+    analysis.method: [pearson, spearman]
+  # groups × grid = 2 × 2 = 4 conditions
+```
+
+Comparisons across a group axis are unpaired, since no unit appears in two levels — unless the levels are matched, in which case `cluster_by` on the matched-set identifier is what carries the dependence. See [experimental-designs.md § Matched case-control](experimental-designs.md#matched-case-control).
+
+**`baseline` — a designated reference.** Without one, every condition is a peer and `report` can only list them. With one, core computes deltas and effect sizes against it automatically. It accepts group levels as well as parameter paths, so `{arm: control}` designates the control arm:
 
 ```yaml
 sweep:
