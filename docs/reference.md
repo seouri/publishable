@@ -79,6 +79,12 @@ data:
     allocation: within                     # within | between — determines paired vs unpaired
     cluster_by: null                       # e.g. site, when units aren't independent
     measurements: null                     # e.g. {by: read_id, collapse: mean} for technical replicates
+    assign:                                # REQUIRED when allocation is `between`
+      method: random                       # random | by_attribute | blocked
+      from: null                           # the attribute holding the level, for by_attribute
+      stratify_by: []                      # unit attributes to balance arms on
+      ratio: {}                            # one entry per sweep.groups level, e.g. {control: 1, treatment: 1}
+      seed: auto                           # derived from parameters_hash; recorded explicitly
 
 parameters:
   # ---- Base values. Everything below is defined by the template, not by core. ----
@@ -1079,7 +1085,7 @@ Each is replaced with a marker recording that a value existed and was removed, s
 
 None of this disturbs verification: `parameters_hash` [never covered the path fields](#three-hashes), and `code_hash` covers `src/**` only.
 
-**One thing redaction can't do is judge your metrics.** Aggregates are usually safe, but a per-subgroup result over a handful of units can be disclosive in ways no automatic rule catches. `study add` prints any reported metric whose `n` falls below a configurable threshold and asks you to confirm — a prompt for your judgment, not a guarantee.
+**One thing redaction can't do is judge your metrics.** Aggregates are usually safe, but a per-subgroup result over a handful of units can be disclosive in ways no automatic rule catches. `study add` prints any reported metric whose `n.completed` falls below a configurable threshold — or, for a [`basis: repeats`](#the-unit-table-is-the-inference-base) metric, its repeat count — and asks you to confirm — a prompt for your judgment, not a guarantee.
 
 ---
 
