@@ -21,12 +21,12 @@ Resolve the three declarations separately and the config writes itself. They are
 | The question | Declaration | Values | Shown in |
 |---|---|---|---|
 | Does every unit appear in every condition, or exactly one? | `data.units.allocation` | `within` (default, paired comparisons) · `between` (core performs the assignment, unpaired) | [Within-subjects](#within-subjects--repeated-measures) · [Between-subjects](#between-subjects--parallel-arm-trial) |
-| What varies deliberately? | `sweep` | `grid` (cartesian) · `paired` (coupled axes) · `ablate` (`1 + n`, one change each) · `sample` (continuous ranges) · `baseline` (the reference, not an axis) | [Factorial](#factorial) · [Fractional factorial](#fractional-factorial-and-coupled-settings) · [Ablation](#ablation) · [Dose–response](#doseresponse-and-parameter-search) |
+| What varies deliberately? | `sweep` | `grid` (cartesian) · `paired` (coupled axes) · `ablate` (`1 + n`, one change each) · `sample` (continuous ranges) · `baseline` (the reference, not an axis) | [Factorial](#factorial) · [Fractional factorial](#fractional-factorial-and-coupled-settings) · [Ablation](#ablation) · [Dose-response](#dose-response-and-parameter-search) |
 | What varies incidentally? | `replication.repeats` | `seed` · `fold` · `bootstrap` · `permutation` · `technical` | [Single condition](#single-condition-repeated) · [Cross-validation](#cross-validation-including-nested) · [Bootstrap and permutation](#bootstrap-and-permutation) · [Technical replication](#technical-and-biological-replication) |
 
 Answering a question with nothing is a valid answer: omit `sweep` for a single condition, omit `data.units` entirely when the pipeline has no unit table — though `fold`, `bootstrap`, `permutation`, and `technical` all require one, since each of them resamples or re-measures units. What each repeat kind varies, how core aggregates it, and whether it enters `n` is the table in [reference.md § Repeat kinds](reference.md#repeat-kinds) — those three properties differ per kind, and that's the point of naming the kind rather than passing a count.
 
-Two choices sit *below* an answer rather than beside it. `assign.method` (`random` | `by_attribute` | `blocked`) only applies once allocation is `between`, and `cluster_by` is orthogonal to all three — it declares that units aren't independent, which changes the intervals rather than the design. See [Clustered and hierarchical data](#clustered-and-hierarchical-data) and [Matched case–control](#matched-casecontrol).
+Two choices sit *below* an answer rather than beside it. `assign.method` (`random` | `by_attribute` | `blocked`) only applies once allocation is `between`, and `cluster_by` is orthogonal to all three — it declares that units aren't independent, which changes the intervals rather than the design. See [Clustered and hierarchical data](#clustered-and-hierarchical-data) and [Matched case-control](#matched-case-control).
 
 ### Single condition, repeated
 
@@ -106,7 +106,7 @@ sweep:
     remove: [features.demographics, features.labs, features.notes]
 ```
 
-### Dose–response and parameter search
+### Dose-response and parameter search
 
 Discrete levels via `grid`; continuous ranges via `sample`.
 
@@ -119,7 +119,7 @@ sweep:
       drug.dose_mg: {log_uniform: [0.1, 100]}
 ```
 
-Fitting the dose–response curve is a `scope: "summary"` step; core supplies the conditions and the per-unit tables, not the curve model.
+Fitting the dose-response curve is a `scope: "summary"` step; core supplies the conditions and the per-unit tables, not the curve model.
 
 ### Cross-validation, including nested
 
@@ -166,7 +166,7 @@ data:
 
 Core reports cluster-robust intervals and the cluster count as effective sample size. Full mixed-effects modelling is an override.
 
-### Matched case–control
+### Matched case-control
 
 Matching happens upstream; carry the matched-set identifier as an attribute and cluster on it.
 

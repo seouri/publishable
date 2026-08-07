@@ -61,6 +61,7 @@ One experiment runs through README, `design-principles.md`, and `reference.md`: 
 ## Documentation conventions
 
 - Filenames are kebab-case, matching the doc's title.
+- **Hyphen, never an en dash, in anything that becomes a filename or an anchor.** Headings use `dose-response` and `case-control`, not `dose–response` — GitHub's slugger strips an en dash entirely, so `Dose–response` silently becomes `#doseresponse`, an anchor nobody would guess when hand-writing a cross-reference. This overrides the Unicode preference below, which applies to prose and diagrams only.
 - Cross-references between the four documents are dense and anchor-based. Renaming a heading breaks links elsewhere — grep the other files for the old anchor.
 - Cite another file by section — `reference.md` § "Package layout" — never by line number. Line numbers go stale on the next edit above them.
 - `×`, not `x`, for multiplication, including inside fenced blocks. Unicode is already the house style there (`├──`, `←`, `·`).
