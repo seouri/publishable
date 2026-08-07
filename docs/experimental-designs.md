@@ -146,6 +146,8 @@ sweep:
 
 Fitting the dose-response curve is a `scope: "summary"` step; core supplies the conditions and the per-unit tables, not the curve model.
 
+Because the conclusion is the fit rather than any one draw, sampled conditions are excluded from the multiplicity family and `correction: none` draws no warning here — the forty draws are inputs to one model, not forty comparisons. See [reference.md § Sweeps and repeats](reference.md#sweeps-and-repeats).
+
 ### Cross-validation
 
 ```yaml
@@ -235,7 +237,7 @@ The design is shaped around a specific claim: most irreproducible results are no
 | **Technical replicates dressed as executions** | Technical replication is `data.units.measurements`, collapsed at unit resolution. Re-running an identical step to average it away would compute the same answer three times |
 | **Pooling across conditions** | Statistics aggregate within a condition only. Cross-condition comparison is an explicit contrast against a declared baseline |
 | **Paired analysis of an unpaired design** | Comparison type derives from `allocation` and from which axes the contrast crosses, so it can't disagree with how units were actually assigned. Derived per contrast, so a composed design doesn't get one verdict applied to comparisons of both kinds |
-| **Uncorrected multiplicity across a sweep** | `statistics.correction` reports family-wise or FDR-adjusted intervals alongside raw ones; `validate` warns when a multi-condition sweep declares `none` |
+| **Uncorrected multiplicity across a sweep** | `statistics.correction` reports family-wise or FDR-adjusted intervals alongside raw ones; `validate` warns when a multi-condition *enumerated* sweep declares `none`. `sample` draws are excluded — they feed one downstream fit rather than being comparisons a reader acts on |
 | **Ignored clustering** | `cluster_by` produces cluster-robust intervals; `validate` flags an attribute that looks like an undeclared cluster |
 | **Silent attrition** | Every metric reports units resolved, completed, and failed — never a bare `n` that hides dropout. Each count is scoped to what its execution was handed, so a fold or an arm isn't charged with units it never saw |
 | **Hypotheses invented after seeing results** | A hypothesis carries the `parameters_hash` of the config that declared it; anything added later doesn't match, and undeclared analyses render as exploratory |

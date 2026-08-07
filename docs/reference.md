@@ -187,7 +187,7 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Allocation strata exist | `assign.stratify_by: [site]` but `site` is not in `data.units.attributes` |
 | Clustering looks undeclared | `site` has 6 distinct values across 240 units but `cluster_by` is unset (warning) |
 | Baseline leaves contrasts confounded | `sweep.baseline` fixes `arm: control` but not `analysis.method`, so 2 of 3 contrasts cross both a group and a parameter axis and are reported `confounded: true` (warning) |
-| Correction declared for a family | 6 conditions × 3 metrics produce a family of 15 baseline comparisons with `statistics.correction: none` (warning) |
+| Correction declared for a family | 6 enumerated conditions × 3 metrics produce a family of 15 baseline comparisons with `statistics.correction: none` (warning). Not raised for a `sample`-only sweep, whose draws aren't a family |
 | Step scope coherence | `step01_load_cohort` is `scope="run"` but reads `analysis.method`, which `sweep` varies |
 | Scope read direction | `step02_fit_model` (`scope="condition"`) reads from `step03_analyze` (`scope="repeat"`), which runs later |
 | Hypothesis references | `hypotheses[0].metric` `step03_analyze.r` names no metric any step returns |
@@ -810,6 +810,10 @@ Only metrics that receive a corrected interval are counted — that is, [`basis:
 Two consequences worth knowing before you write the config. Every numeric metric a step reports is in the family whether you look at it or not, so a step that returns twelve diagnostics widens the correction on the one you care about; return diagnostics as per-unit columns, which are inputs rather than reported comparisons, or move them to a separate step. And `family` is reported broken out rather than as a single integer, so the count is auditable instead of asserted — `report` prints it, and a reviewer can check it against the table.
 
 `hypotheses` are counted as their own family, separately from the exploratory sweep. A pre-registered confirmatory comparison shouldn't be penalized for the exploration that surrounded it, which is most of the point of declaring it in advance.
+
+**`sample` conditions are not a comparison family, and are excluded.** The reasoning above holds wherever each condition is a comparison a reader might act on, which is what an enumerated sweep produces. A `sample` sweep isn't that: forty sobol draws over `drug.dose_mg` are forty points feeding one downstream curve, and nobody claims a finding about draw 17 against draw 1. Holm-adjusting thirty-nine such contrasts corrects a multiplicity no one is exposed to, and it would shrink every interval the curve is fitted through. So `family` counts conditions from `grid`, `paired`, `ablate`, and `groups`, and skips `sample`; `report` says so beside the table rather than leaving a reader to wonder why the count is smaller than the condition list.
+
+That is also why `validate` doesn't warn about `correction: none` for a `sample`-only sweep — under the old counting rule, the config that was statistically right got warned at. `replication.rationale` is the place to say what you're doing with the draws, and for a design whose conclusion comes from a `scope: "summary"` fit, saying so is worth more than any correction core could apply to the conditions feeding it.
 
 Two things this buys:
 
