@@ -99,11 +99,11 @@ sweep:
   # 3 × 2 = 6 conditions
 ```
 
-Core reports each condition and its contrast against the baseline. **Main effects and interaction terms are not computed** — see [what core will not do](#what-core-will-not-do-for-you). For a 2×2 that's often fine; for anything you intend to analyze as a factorial model, plan on an `aggregate()` override.
+Core reports each condition and its contrast against the baseline. **Main effects and interaction terms are not computed** — see [what core will not do](#what-core-will-not-do-for-you). For a 2×2 that's often fine; for anything you intend to analyze as a factorial model, plan on a `scope: "summary"` step, which is the scope that can see every condition at once.
 
 ### Fractional factorial and coupled settings
 
-Use `paired` when factors must move together rather than combinatorially.
+Use `paired` when factors must move together rather than combinatorially — coupled settings, where a solvent implies its temperature:
 
 ```yaml
 sweep:
@@ -111,6 +111,8 @@ sweep:
     - {solvent: dmso, temp_c: 25}
     - {solvent: etoh, temp_c: 37}
 ```
+
+A fractional factorial is the same mechanism used differently: `paired` enumerates whichever subset of the full factorial your design calls for. Be clear-eyed about the division of labour, though — core will run a fraction and report each condition against the baseline, but **the fraction's purpose is estimating main effects from fewer runs, and that estimation is not core's**. You choose the fraction and its defining relation, and you fit the effects in a summary step. Core contributes the execution, the provenance, and the per-unit tables; it does not know your design is a fraction of anything.
 
 ### Ablation
 
