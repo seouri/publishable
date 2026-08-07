@@ -165,7 +165,7 @@ data:
 
 ## Mistakes core prevents
 
-The design is shaped around a specific claim: most irreproducible results are not fraud or incompetence, but ordinary bookkeeping failures that nothing in the toolchain was watching for. These are the ones core watches for.
+The design is shaped around a specific claim: most irreproducible results are not fraud or incompetence, but ordinary bookkeeping failures that nothing in the toolchain was watching for. These are the ones core watches.
 
 ### Statistical
 

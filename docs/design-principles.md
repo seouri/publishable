@@ -71,7 +71,7 @@ Two distinctions that are easy to conflate:
 - **Experiment vs. study.** An experiment is machinery; a study is a claim. One experiment usually produces many runs, and a paper reports a subset of them. Keeping these separate is what lets you rerun freely without every run pretending to be a finding.
 - **Condition vs. repeat.** A condition is a difference you're measuring the effect of. A repeat is a difference you're averaging over. Statistics aggregate within a condition and compare across conditions — never the reverse. Getting this backwards is the most common way a reproducible pipeline still produces a wrong number.
 
-*Condition* is the term experimental fields across the board already use, in preference to alternatives like "point" that carry HPC or optimization connotations.
+*Condition* is the term experimental fields already use, chosen over alternatives like "point," which carries HPC and optimization connotations.
 
 ## Everything is in the file
 

@@ -13,6 +13,7 @@ Complete reference for `publishable`. For the rationale behind these choices, se
 - [Steps and artifacts](#steps-and-artifacts) — the `io` API
 - [Step scope](#step-scope) — how often each step runs
 - [Units: the thing being measured](#units-the-thing-being-measured) — patients, samples, trials
+- [Templates: where parameters are defined](#templates-where-parameters-are-defined) — `parameter_spec`, `Param`
 
 **Designing a run**
 - [Sweeps and repeats](#sweeps-and-repeats) — conditions, repeat kinds, statistics
@@ -110,7 +111,7 @@ hypotheses:
     threshold: 0.02
 ```
 
-Three things this file is at once: the scaffold (you didn't type it), the documentation (every available parameter is present, with its constraints in a comment), and the config (it's what `run` consumes). Keeping them as one artifact is what prevents the usual drift where documentation lists options the code no longer accepts.
+This file is three things at once: the scaffold (you didn't type it), the documentation (every available parameter is present, with its constraints in a comment), and the config (it's what `run` consumes). Keeping them as one artifact is what prevents the usual drift where documentation lists options the code no longer accepts.
 
 **The file is freely editable, and nothing `publishable` does ever writes back into it.** Edit it as much as you like; each run snapshots the resolved parameters into its own `run.yaml`, which is where parameter provenance actually lives.
 
@@ -455,6 +456,8 @@ Reading across scopes is directional and read-only: a narrower step reads wider 
 `validate` also flags a likely-miscoped step: if a `"run"`-scoped step reads a parameter that appears in `sweep`, its output would silently be wrong for every condition but one. That's a static check core *can* do, because it's about declared scope and declared sweep, not about arbitrary Python.
 
 ---
+
+## Templates: where parameters are defined
 
 A template is the authoritative definition of an experiment type's parameters. Core never inspects `parameters` itself.
 
@@ -856,7 +859,7 @@ results:
       supported: true
 ```
 
-Two things this buys, both cheap because the machinery already exists:
+Both of these are cheap, because the machinery already exists:
 
 - **A confirmatory/exploratory split that holds up.** `report` renders confirmatory results as findings and exploratory ones as labelled exploration. Anything not declared before the run is exploratory by construction, rather than by anyone's recollection.
 - **Detection of after-the-fact editing.** A hypothesis carries the `parameters_hash` of the config that declared it. Add a hypothesis after seeing results and rerun, and the hash won't match the earlier run — so "we predicted this all along" is checkable rather than assertable.
