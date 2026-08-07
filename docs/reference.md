@@ -531,10 +531,19 @@ class GenericTemplate(BaseTemplate):
     }
 
     def validate(self, config) -> list[str]: ...     # extra cross-field rules; [] if OK
-    def aggregate(self, units) -> dict: ...          # optional; derive metrics FROM the unit table
+
+    # Optional; derives metrics FROM the unit table. `cfg` is this condition's
+    # resolved parameters — the same object a step receives.
+    def aggregate(self, units, cfg) -> dict:
+        fn = {"pearson": pearsonr, "spearman": spearmanr, "kendall": kendalltau}
+        return {"r": fn[cfg.parameters.analysis.method](units.pred, units.truth).statistic}
 ```
 
-`aggregate` takes the per-unit table and returns condition-level metrics — `{"r": pearsonr(units.pred, units.truth).statistic}`. It's optional, and it's the only way to give a derived statistic a real confidence interval: because core can call it on a resampled table, the metric becomes `basis: units` instead of a scalar core can only watch vary across seeds. See [The unit table is the inference base](#the-unit-table-is-the-inference-base).
+`aggregate` returns condition-level metrics derived from the per-unit table. It's optional, and it's the only way to give a derived statistic a real confidence interval: because core can call it on a resampled table, the metric becomes `basis: units` instead of a scalar core can only watch vary across seeds. See [The unit table is the inference base](#the-unit-table-is-the-inference-base).
+
+**It receives the condition's resolved `cfg`, and it has to.** In the worked example `analysis.method` is swept, so `r` is a different function in each of the three conditions — an `aggregate` that saw only the table could hard-code one coefficient and would then report the same statistic under all three labels. Core passes the same `cfg` when it recomputes the metric on a resampled table, so the value and its interval are always the same statistic. This is the one place a template sees a condition; step code still doesn't, because `cfg` arrives already resolved (see [Using them in step code](#using-them-in-step-code)).
+
+**One call per recording step, attributed to that step.** A pipeline can have several steps that call `io.record`, so there is no single unit table to hand over. Core calls `aggregate` once per step that recorded one, over that step's collapsed table, and files the result under that step — which is why the worked example's derived `r` appears at `aggregated.step03_analyze.r` rather than at the top of the condition. A template that only knows how to derive metrics from some tables returns `{}` for the rest.
 
 `Param` carries type, default, constraints, and help text — so `init` renders the file with accurate inline comments, and `validate` enforces exactly what was documented. Adding a parameter in one place makes it appear in newly-initialized configs and become enforceable at once.
 
@@ -686,7 +695,7 @@ statistics:
   null_test: {method: permutation, n: 5000, shuffle: label}
 ```
 
-Both operate on `units.parquet`, resampling or relabelling *rows* and recomputing the metric — which core can do only for a metric it knows how to compute, so this needs a per-unit column or a template [`aggregate(units)`](#templates-where-parameters-are-defined). The permutation test compares the null it builds against the value the actual run produced; a design in which every execution is permuted has no unpermuted value to test, which is one more way the repeat axis was the wrong home for it.
+Both operate on `units.parquet`, resampling or relabelling *rows* and recomputing the metric — which core can do only for a metric it knows how to compute, so this needs a per-unit column or a template [`aggregate(units, cfg)`](#templates-where-parameters-are-defined). The permutation test compares the null it builds against the value the actual run produced; a design in which every execution is permuted has no unpermuted value to test, which is one more way the repeat axis was the wrong home for it.
 
 **Technical replication is a property of the input, not of execution.** Re-running an identical step on identical inputs under the same seed produces an identical answer, so averaging three such executions is a no-op. The three reads of a sample are not three runs of anything — they're three measurement rows sharing a sample identity, and that's declared where units are resolved:
 
@@ -865,7 +874,7 @@ The `n` in a confidence interval is a count of the things the claim generalizes 
 | How the metric exists | `basis` | What core reports |
 |---|---|---|
 | A column in `units.parquet` | `units` | Mean over units, `n` = completed units, t-based `ci95` — cluster-robust when [`cluster_by`](#clustered-units) is declared |
-| Derived from the table by the template's [`aggregate(units)`](#templates-where-parameters-are-defined) | `units` | The derived value, with a percentile `ci95` from resampling units |
+| Derived from the table by the template's [`aggregate(units, cfg)`](#templates-where-parameters-are-defined) | `units` | The derived value, with a percentile `ci95` from resampling units |
 | A unit table exists, but the metric isn't derivable from it | `repeats` | Point estimate and across-repeat spread — **no `ci95`** |
 | No `data.units` at all | `repeats` | Mean, std, sem and a t-based `ci95` over repeats, labelled as such |
 
@@ -875,7 +884,7 @@ That third row is the important refusal. A step that computes a cohort-level sta
 
 Repeats are a variance component, not the inference base: for a `basis: units` metric, repeats are averaged per unit *before* any interval is computed — the same collapse technical replicates get at unit resolution — and their dispersion is reported alongside as `repeat_spread`, which answers "is this pipeline stable?" rather than "how precise is this estimate?"
 
-In the worked example, `generic`'s `aggregate` derives `r` from the recorded `pred` and `truth` columns, so `r` is unit-based even though the step also returns it.
+In the worked example, `generic`'s `aggregate` derives `r` from the recorded `pred` and `truth` columns — selecting the coefficient from `cfg.parameters.analysis.method`, since that's what the sweep varies — so `r` is unit-based even though the step also returns it.
 
 **`per_repeat` and `aggregated` come from different places, and neither is derived from the other.** `per_repeat` is verbatim what each step returned on that execution — nothing more, and no derived metric ever appears there, because deriving one per repeat would mean running `aggregate` on a table that hasn't been collapsed yet. `aggregated` is computed once, from the collapsed table. Recording both side by side is deliberate: if the step's own `r` and the derived `r` disagree, that's visible in `run.yaml` rather than reconciled behind your back. Core doesn't adjudicate which is right — one of them is measuring something else, and that's a bug in the experiment, not a number for core to pick.
 
