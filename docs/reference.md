@@ -22,7 +22,7 @@ Complete reference for `publishable`. For the rationale behind these choices, se
 **What a run produces**
 - [Run identity](#run-identity) — the output tree
 - [The two files](#the-two-files) — `config.yaml` and `run.yaml`
-- [Three hashes](#three-hashes) — code, parameters, data
+- [Three hashes](#three-hashes) — code, parameters, data, and what `auto` derives from
 - [Lineage between runs](#lineage-between-runs)
 
 **Reporting and sharing**
@@ -84,7 +84,7 @@ data:
       from: null                           # the attribute holding the level, for by_attribute
       stratify_by: []                      # unit attributes to balance arms on
       ratio: {}                            # one entry per sweep.groups level, e.g. {control: 1, treatment: 1}
-      seed: auto                           # derived from parameters_hash; recorded explicitly
+      seed: auto                           # derived from the design digest; recorded explicitly
 
 parameters:
   # ---- Base values. Everything below is defined by the template, not by core. ----
@@ -420,7 +420,7 @@ data:
       method: random               # random | by_attribute | blocked
       stratify_by: [site, severity]   # balance arms on these
       ratio: {control: 1, treatment: 1}   # keyed by level, one entry per declared level
-      seed: auto                   # derived from parameters_hash; recorded explicitly
+      seed: auto                   # derived from the design digest; recorded explicitly
 ```
 
 The realized assignment is written to `allocation.json` in the run directory and hashed, so "which patients were in the treatment arm" is answerable from the run record alone — not from a script someone ran once.
@@ -495,7 +495,7 @@ class Step(BaseStep):
 
 `io.units` is already scoped correctly: under a [group axis](#expansion-modes) it yields only that arm's units, and in a `fold` repeat only that fold's **test** partition — the units this execution produces results about. The training partition is `io.units.train`, which is a different list for a different purpose, and keeping them separate is what stops a step from silently recording a result for a unit it trained on. Core computes the partitions, so no experiment reimplements k-fold, and the exact membership of every split lands in `run.yaml` — which is what makes a cross-validation reproducible rather than merely re-runnable.
 
-**Partitions are computed once per run, not once per condition.** Every condition sees the same fold boundaries and the same seed list, derived from the config-level `parameters_hash`. This is load-bearing rather than incidental: under `allocation: within`, comparisons across conditions are paired unit by unit, and pairing fold 3 of one condition against a *differently drawn* fold 3 of another would not be a paired comparison at all. Shared partitions are also why the layout can name repeat directories `seed17`/`fold03` identically under every condition.
+**Partitions are computed once per run, not once per condition.** Every condition sees the same fold boundaries and the same seed list, derived from the config-level [design digest](#what-auto-derives-from). This is load-bearing rather than incidental: under `allocation: within`, comparisons across conditions are paired unit by unit, and pairing fold 3 of one condition against a *differently drawn* fold 3 of another would not be a paired comparison at all. Shared partitions are also why the layout can name repeat directories `seed17`/`fold03` identically under every condition.
 
 **`io.record(key, values)` is the inference base, not a convenience.** Between artifacts (files) and results (aggregate metrics) sits the per-unit table, and it is what every confidence interval core reports is computed over. It's append-only like everything else, resumable by key, and materialized as `units.parquet` in the step's directory. A step that records nothing still runs and still reports its returned metrics — but if units were declared, core has nothing to generalize from, so those metrics come back as `basis: repeats` with no interval. See [Statistical reporting](#statistical-reporting).
 
@@ -678,7 +678,7 @@ sweep:
   sample:
     n: 50
     method: sobol                        # sobol | latin_hypercube | random
-    seed: auto                           # derived from parameters_hash; recorded in sweep.yaml
+    seed: auto                           # derived from the design digest; recorded in sweep.yaml
     ranges:
       analysis.confidence: {uniform: [0.80, 0.99]}
       analysis.min_samples: {int_uniform: [10, 200]}
@@ -845,7 +845,7 @@ Two things this buys:
 
 Comparison type is derived from [`data.units.allocation`](#units-the-thing-being-measured) and from which axes a contrast crosses, rather than declared here: two conditions differing only on parameter axes were evaluated on the same units, so that contrast is paired *unit by unit*; two conditions differing on the `groups` axis are independent samples, so it's unpaired. Deriving it removes the possibility of a config that declares `paired` over a design that isn't, and deriving it per contrast rather than per run is what keeps a composed `groups × grid` design from reporting its paired contrasts as unpaired — see [Allocation](#allocation-within-subjects-or-between-subjects) for the full table. Pairing is over units, never over repeats — matching seed17 against seed17 would cancel RNG variation, which is not the variation a comparison needs to account for.
 
-`{kind: seed, n: 5}` with no explicit list derives seeds deterministically from `parameters_hash`; pass `seeds: [17, 42, ...]` for specific values. Either way the resolved list lands in `sweep.yaml`.
+`{kind: seed, n: 5}` with no explicit list derives seeds deterministically from the [design digest](#what-auto-derives-from); pass `seeds: [17, 42, ...]` for specific values. Either way the resolved list lands in `sweep.yaml`.
 
 ### Using them in step code
 
@@ -908,7 +908,7 @@ The output tree mirrors the experiment's structure: what varied, then which repe
 ```
 <run_dir>/
 ├── run.yaml
-├── sweep.yaml                                  # resolved conditions, repeat plan, seeds, sample seed
+├── sweep.yaml                                  # resolved conditions, repeat plan, seeds, fold membership, design digest
 ├── manifest/input.json
 ├── environment/{uv.lock,pyproject.toml}
 ├── shared/
@@ -1032,7 +1032,7 @@ sweep: 3 conditions (baseline + grid) × 5 repeats = 15 executions
   01_method=spearman
   02_method=kendall
 repeats: seed(n=5)
-  seeds: [17, 42, 137, 1009, 2027]  (auto, from parameters_hash)
+  seeds: [17, 42, 137, 1009, 2027]  (auto, from design digest)
   comparisons: paired (allocation: within)
 steps: step01_load_cohort (run) -> step02_fit_model (condition)
        -> step03_analyze (repeat) -> step04_compare_methods (summary)
@@ -1055,7 +1055,24 @@ A single git commit hash was doing two incompatible jobs: identifying the code a
 | `parameters_hash` | The config's whole parameter declaration, sweep and repeat plan included | Were the parameters identical? |
 | `input_manifest_hash` | Relative paths + content hashes of `input_dir` | Was the data identical? |
 
-**`parameters_hash` is one hash per run, not one per condition.** It covers the parameter block as *declared* — base values plus the `sweep` and `replication` declarations — not the per-condition values those expand into. Three properties depend on that, and none of them would survive a per-condition hash: `diff` compares two runs by a single hash; a [hypothesis](#pre-registration) carries the hash of the config that predicted it; and `seed: auto` derives seeds and fold boundaries *from* the hash, which would be circular if the hash covered the conditions the seeds produce. It's also what lets every condition share one seed list, which is what makes paired comparison across conditions well-defined. A condition's own resolved values live in `results.conditions[i].values` and in `sweep.yaml`, where they belong: they're derived, so they aren't a separate identity claim.
+**`parameters_hash` is one hash per run, not one per condition.** It covers the parameter block as *declared* — base values plus the `sweep` and `replication` declarations — not the per-condition values those expand into. Two properties depend on that, and neither would survive a per-condition hash: `diff` compares two runs by a single hash, and a [hypothesis](#pre-registration) carries the hash of the config that predicted it. A condition's own resolved values live in `results.conditions[i].values` and in `sweep.yaml`, where they belong: they're derived, so they aren't a separate identity claim.
+
+### What `auto` derives from
+
+`seed: auto` — for [repeat seeds](#repeat-kinds), [`sample`](#expansion-modes) draws, and [arm allocation](#allocation-within-subjects-or-between-subjects) — derives from a **design digest** over `data.units` (every field except `assign.seed` itself) and `sweep.groups`. Those are the declarations describing *what is being randomized over*. It covers nothing about the parameter values being swept.
+
+That separation is load-bearing, not tidiness. If randomization derived from `parameters_hash`, editing any parameter would redraw every fold boundary, reseed every repeat, and reassign every patient — so the comparison [`diff` advertises](design-principles.md#same-code-different-parameters) as "one named parameter changed" would actually be that parameter *plus* a fresh partition of the data under a fresh RNG, confounded and presented as clean. Two runs would differ in one visible place and two invisible ones. And a trial's arm membership would move because someone tuned `min_samples`, which is not a property any trial can have.
+
+| `auto` value | Mixes | So it moves when |
+|---|---|---|
+| A `seed` level's seeds | digest, as a stream truncated to `n` | the unit declaration or group axis changes — *not* when you raise `n`, which extends the list rather than redrawing it |
+| A `fold` level's boundaries | digest + that level's `k` and `stratify_by` | `k` or `stratify_by` changes, or the roster does |
+| `sweep.sample` draws | digest + `n`, `method`, `ranges` | the sample declaration changes |
+| `assign.seed` | digest + the resolved roster | the roster changes — see below |
+
+The digest is deliberately **not a fourth hash.** The [three](#three-hashes) answer "was this identical?" and are identity claims a reader checks. The digest claims nothing: it's a derivation input, recorded in `sweep.yaml` beside the values it produced so `reproduce` regenerates the same partitions. Nothing compares two digests, and `diff` doesn't print it.
+
+**Allocation also depends on the roster, so a changed roster re-randomizes.** Core assigns over the unit list resolved at run start; add ten enrollees to `enrollment.csv` and the draw is over 250 units rather than the previous 240 with ten appended. Nothing carries an earlier assignment forward, so **no `assign.method` supports prospective enrollment** — the general form of the limitation [§ Allocation](#allocation-within-subjects-or-between-subjects) notes for `blocked` specifically. Two honest ways to live with it: freeze the roster before the run and treat allocation as the one-time event it is, or let a trial system randomize and read its result with `assign.method: by_attribute`, which is what a real trial does regardless. For anything you intend to cite, pin `assign.seed` to an integer and keep `allocation.json` — a recorded assignment is a fact about what happened, and it should not be re-derivable to a different answer.
 
 The full `git.commit` is still recorded, because `reproduce` needs something to check out — but it's the *transport* mechanism, not the identity claim. `code_hash` is the identity claim, and it's narrower: it ignores everything outside `src/**`, including the config, the README, and other experiments in the same repo.
 
@@ -1527,7 +1544,7 @@ publishable/
 │   ├── replication.py         # repeat kinds (seed/fold), nesting, seed derivation
 │   ├── stats.py               # unit-table inference, resample/null_test, deltas, effect sizes
 │   ├── run_identity.py        # run_<id> allocation, latest symlink, resume resolution
-│   ├── hashes.py              # code_hash (src/** tree), parameters_hash
+│   ├── hashes.py              # code_hash (src/** tree), parameters_hash, design digest
 │   ├── config.py              # load + dot-access Config
 │   ├── run_record.py          # run.yaml assembly
 │   ├── provenance.py          # git discovery (user repo), uv env capture

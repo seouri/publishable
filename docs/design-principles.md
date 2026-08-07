@@ -123,6 +123,8 @@ parameters_hash    DIFFERS
 
 That's the comparison to aim for: code, environment, and data provably identical, with parameters differing in two named places. Note this holds **even if the two runs happened weeks apart at different commits** — `code_hash` covers `src/**` only, so unrelated commits (a README fix, a new experiment added elsewhere) don't muddy the claim the way a bare commit hash would.
 
+**The randomization has to hold still for this to mean anything.** Two named parameters is the whole claim, so anything else that moves silently between the runs breaks it. Seeds, fold boundaries, and arm assignment therefore derive from a design digest over `data.units` and `sweep.groups` — never from `parameters_hash` — so editing `min_samples` changes `min_samples` and nothing else. Deriving them from the parameter hash would mean every parameter edit also redrew the folds and reseeded the run, and `diff` would print one difference where there were three. See [What `auto` derives from](reference.md#what-auto-derives-from).
+
 For several parameter sets side by side, copy the file:
 
 ```
@@ -194,6 +196,7 @@ Always the experiment repo's, never `publishable`'s. Core walks up from the work
 - **Not data transfer.** `reproduce` never fetches your data. Moving governed data to a new device goes through whatever protocol governs it.
 - **Not credential transfer.** `reproduce` stops and names missing variables. Core has no mechanism to fetch or transmit a secret and won't grow one.
 - **Not adaptive or sequential designs.** Bayesian optimization, active learning, dose escalation, and interim-analysis stopping rules all decide condition *N+1* from the results of condition *N*, so the condition set can't be enumerated before the run. That contradicts "the config fully determines the run," which every other guarantee here leans on. Supporting it means the config declaring a *policy* and the realized conditions becoming an output — coherent, but a real change to the invariant rather than another expansion mode, so it isn't in core today.
+- **Not prospective enrollment.** Core assigns arms over the unit list resolved at run start, and carries no assignment forward from a previous run — so adding enrollees means a fresh draw over the whole roster, not an incremental allocation of the new ones. Freeze the roster and treat allocation as the one-time event it is, or let a trial system randomize and read its result with `assign.method: by_attribute`. See [What `auto` derives from](reference.md#what-auto-derives-from).
 - **Not per-condition pipeline variation.** Conditions differ in parameters, or in which units they see, never in which steps run. Allowing different steps per condition would make `code_hash` comparisons across conditions meaningless, which is the property the whole comparison story rests on.
 - **Not scientific validity.** A config that validates is well-formed and well-recorded. Whether the design answers the question is yours — core will compute a confidence interval over five seeds without judging whether five seeds was enough.
 
