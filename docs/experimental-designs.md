@@ -14,6 +14,20 @@ What `publishable` expresses, what it refuses to let you get wrong, and what it 
 
 Three declarations cover most of it: **allocation** (do units appear in every condition, or one?), **sweep** (what varies deliberately), and **repeats** (what varies incidentally).
 
+### Three questions, answered independently
+
+Resolve the three declarations separately and the config writes itself. They are not alternatives — most real designs answer all three, and the catalog below shows each answer in isolation only to keep the snippets short.
+
+| The question | Declaration | Values | Shown in |
+|---|---|---|---|
+| Does every unit appear in every condition, or exactly one? | `data.units.allocation` | `within` (default, paired comparisons) · `between` (core performs the assignment, unpaired) | [Within-subjects](#within-subjects--repeated-measures) · [Between-subjects](#between-subjects--parallel-arm-trial) |
+| What varies deliberately? | `sweep` | `grid` (cartesian) · `paired` (coupled axes) · `ablate` (`1 + n`, one change each) · `sample` (continuous ranges) · `baseline` (the reference, not an axis) | [Factorial](#factorial) · [Fractional factorial](#fractional-factorial-and-coupled-settings) · [Ablation](#ablation) · [Dose–response](#doseresponse-and-parameter-search) |
+| What varies incidentally? | `replication.repeats` | `seed` · `fold` · `bootstrap` · `permutation` · `technical` | [Single condition](#single-condition-repeated) · [Cross-validation](#cross-validation-including-nested) · [Bootstrap and permutation](#bootstrap-and-permutation) · [Technical replication](#technical-and-biological-replication) |
+
+Answering a question with nothing is a valid answer: omit `sweep` for a single condition, omit `data.units` entirely when the pipeline has no unit table — though `fold`, `bootstrap`, `permutation`, and `technical` all require one, since each of them resamples or re-measures units. What each repeat kind varies, how core aggregates it, and whether it enters `n` is the table in [reference.md § Repeat kinds](reference.md#repeat-kinds) — those three properties differ per kind, and that's the point of naming the kind rather than passing a count.
+
+Two choices sit *below* an answer rather than beside it. `assign.method` (`random` | `by_attribute` | `blocked`) only applies once allocation is `between`, and `cluster_by` is orthogonal to all three — it declares that units aren't independent, which changes the intervals rather than the design. See [Clustered and hierarchical data](#clustered-and-hierarchical-data) and [Matched case–control](#matched-casecontrol).
+
 ### Single condition, repeated
 
 The baseline case. No sweep at all.
