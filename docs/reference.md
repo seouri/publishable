@@ -123,7 +123,7 @@ hypotheses:
 
 This file is three things at once: the scaffold (you didn't type it), the documentation (every available parameter is present, with its constraints in a comment), and the config (it's what `run` consumes). Keeping them as one artifact is what prevents the usual drift where documentation lists options the code no longer accepts.
 
-**The file is freely editable, and nothing `publishable` does ever writes back into it.** Edit it as much as you like; each run snapshots the resolved parameters into its own `run.yaml`, which is where parameter provenance actually lives.
+**The file is freely editable, and nothing `publishable` does ever writes back into it.** Edit it as much as you like; each run embeds the config it used verbatim into its own `run.yaml`, which is where parameter provenance actually lives.
 
 **Whether you commit it is your call, and core takes no position.** Reproducibility doesn't depend on it either way: `run.yaml` embeds the config verbatim and fingerprints it with `parameters_hash`, so a run is fully reportable whether or not its config was ever tracked. Because of that, the scaffold's `.gitignore` says nothing about `configs/` — imposing a policy there would be the tool overriding a judgment that belongs to you.
 
@@ -955,8 +955,10 @@ A single git commit hash was doing two incompatible jobs: identifying the code a
 | Hash | Covers | Answers |
 |---|---|---|
 | `code_hash` | Tree hash of `src/**` | Was the code identical? |
-| `parameters_hash` | The resolved parameter set from the config | Were the parameters identical? |
+| `parameters_hash` | The config's whole parameter declaration, sweep and repeat plan included | Were the parameters identical? |
 | `input_manifest_hash` | Relative paths + content hashes of `input_dir` | Was the data identical? |
+
+**`parameters_hash` is one hash per run, not one per condition.** It covers the parameter block as *declared* — base values plus the `sweep` and `replication` declarations — not the per-condition values those expand into. Three properties depend on that, and none of them would survive a per-condition hash: `diff` compares two runs by a single hash; a [hypothesis](#pre-registration) carries the hash of the config that predicted it; and `seed: auto` derives seeds and fold boundaries *from* the hash, which would be circular if the hash covered the conditions the seeds produce. It's also what lets every condition share one seed list, which is what makes paired comparison across conditions well-defined. A condition's own resolved values live in `results.conditions[i].values` and in `sweep.yaml`, where they belong: they're derived, so they aren't a separate identity claim.
 
 The full `git.commit` is still recorded, because `reproduce` needs something to check out — but it's the *transport* mechanism, not the identity claim. `code_hash` is the identity claim, and it's narrower: it ignores everything outside `src/**`, including the config, the README, and other experiments in the same repo.
 

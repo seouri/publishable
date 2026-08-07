@@ -238,7 +238,7 @@ The design is shaped around a specific claim: most irreproducible results are no
 
 | Mistake | What core does |
 |---|---|
-| **"Which parameters produced this figure?"** | Every run writes `run.yaml` with the full resolved parameter set embedded and hashed |
+| **"Which parameters produced this figure?"** | Every run writes `run.yaml` with the config embedded verbatim and hashed, plus each condition's resolved values |
 | **A parameter changed *and* the code changed** | `code_hash` and `parameters_hash` are separate, so a single-variable comparison is provable rather than asserted |
 | **Results overwritten by a rerun** | Artifacts are append-only and atomic; each run gets its own `run_<id>/`. Nothing is ever deleted |
 | **Uncommitted code in a reported run** | `run` refuses a dirty `src/**`; `draft` permits it but marks the run non-citable |
