@@ -446,7 +446,17 @@ Getting this wrong is not a subtle error. Analyzing a between-subjects study as 
 
 So in "each arm analyzed three ways" ([`groups × grid`](#expansion-modes)), control-pearson vs. control-spearman is paired — the same patients scored two ways, and pairing is what cancels the between-patient variance — while control-pearson vs. treatment-pearson is unpaired. Deriving one answer for the whole run would report the first as unpaired and throw that cancellation away, which is the same class of error as the inflation above, just in the conservative direction. Each contrast records its own `paired: true|false` in `vs_baseline`.
 
-The last row is the one to design around rather than rely on. A contrast crossing the group axis *and* a parameter axis differs in two places, so its delta mixes an arm effect with a parameter effect and no amount of correct pairing separates them — that's the [factorial main-effects problem](experimental-designs.md#what-core-will-not-do-for-you), and it's why such a contrast is reported with `confounded: true` beside its interval. Designate the baseline on the group axis (`{arm: control, analysis.method: pearson}`) and the single-axis contrasts are the interpretable ones.
+The last row is the one to design around rather than rely on. A contrast crossing the group axis *and* a parameter axis differs in two places, so its delta mixes an arm effect with a parameter effect and no amount of correct pairing separates them — that's the [factorial main-effects problem](experimental-designs.md#what-core-will-not-do-for-you), and it's why such a contrast is marked rather than merely reported:
+
+```yaml
+vs_baseline:                                   # 03_arm=treatment__method=spearman
+  step03_analyze:
+    r: {delta: 0.041, paired: false, confounded: true,
+        differs_on: [arm, analysis.method],    # two axes at once — not a main effect
+        ci95: [0.012, 0.070]}
+```
+
+Designate the baseline on the group axis (`{arm: control, analysis.method: pearson}`) and the single-axis contrasts are the interpretable ones.
 
 ### Clustered units
 
