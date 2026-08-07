@@ -1,0 +1,26 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: publishable
+abstract: >-
+  Run experiments so the record is publishable by default — one config in,
+  one file a reviewer can re-run exactly. Every parameter lives in a single
+  config file, and every run pins code, environment, and input data by hash.
+authors:
+  - family-names: Lee
+    given-names: Joon
+    email: joon_lee@hms.harvard.edu
+    affiliation: Harvard Medical School
+repository-code: "https://github.com/seouri/publishable"
+url: "https://github.com/seouri/publishable"
+license: MIT
+version: 0.1.0
+date-released: "2026-08-07"
+keywords:
+  - reproducibility
+  - research-software
+  - experiments
+  - provenance
+  - preregistration
+  - open-science
+  - python
