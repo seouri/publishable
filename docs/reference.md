@@ -1353,11 +1353,13 @@ A template lists what it needs in `required_env`; `validate` confirms each is se
 
 Templates encode what a field's reviewers expect. Core enforces whatever the template declares and warns rather than silently passing when a config falls below `default_repeats`.
 
+`default_repeats` is a plain integer in every class, because core [does not compute power](experimental-designs.md#what-core-will-not-do-for-you) and a default it cannot derive would be a number pretending to be a calculation. Where a field expects an a-priori sample size, the template asks for it as a parameter — declared by you, recorded in the config, and checkable against the units actually resolved.
+
 | Convention class | Naming | Default repeats |
 |---|---|---|
 | `clinical` | `kebab-case`, includes cohort or method identifier | 3 |
 | `ml_benchmark` | `snake_case`, includes dataset + method tag | 5 |
-| `behavioral` | `snake_case`, includes study phase (`pilot`/`main`/`replication`) | power-analysis-derived; template requires a target-N parameter |
+| `behavioral` | `snake_case`, includes study phase (`pilot`/`main`/`replication`) | 1; the template instead requires a target-N parameter and warns when resolved units fall below it |
 | `simulation` | `dot.case`, includes the swept axis | 10 per condition |
 | `generic` | `kebab-case` | 1 |
 
