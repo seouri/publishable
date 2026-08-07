@@ -22,9 +22,9 @@ Resolve the three declarations separately and the config writes itself. They are
 |---|---|---|---|
 | Does every unit appear in every condition, or exactly one? | `data.units.allocation` | `within` (default, paired comparisons) · `between` (one arm per unit, unpaired — needs a `groups` axis) | [Within-subjects](#within-subjects--repeated-measures) · [Between-subjects](#between-subjects--parallel-arm-trial) |
 | What varies deliberately? | `sweep` | `grid` (cartesian) · `paired` (coupled axes) · `ablate` (`1 + n`, one change each) · `sample` (continuous ranges) · `groups` (arms of units, not parameters) · `baseline` (the reference, not an axis) | [Factorial](#factorial) · [Fractional factorial](#fractional-factorial-and-coupled-settings) · [Ablation](#ablation) · [Dose-response](#dose-response-and-parameter-search) · [Between-subjects](#between-subjects--parallel-arm-trial) |
-| What varies incidentally? | `replication.repeats` | `seed` · `fold` · `bootstrap` · `permutation` · `technical` | [Single condition](#single-condition-repeated) · [Cross-validation](#cross-validation-including-nested) · [Bootstrap and permutation](#bootstrap-and-permutation) · [Technical replication](#technical-and-biological-replication) |
+| What varies incidentally? | `replication.repeats` | `seed` · `fold` — the two things a re-execution can change | [Single condition](#single-condition-repeated) · [Cross-validation](#cross-validation-including-nested) |
 
-Answering a question with nothing is a valid answer: omit `sweep` for a single condition, omit `data.units` entirely when the pipeline has no unit table — though `fold`, `bootstrap`, `permutation`, and `technical` all require one, since each of them resamples or re-measures units. What each repeat kind varies and how core collapses it is the table in [reference.md § Repeat kinds](reference.md#repeat-kinds) — both differ per kind, and that's the point of naming the kind rather than passing a count. What no repeat kind does is set `n`: that counts units, and every interval core reports comes from the [per-unit table](reference.md#the-unit-table-is-the-inference-base).
+Answering a question with nothing is a valid answer: omit `sweep` for a single condition, omit `data.units` entirely when the pipeline has no unit table — though `fold` requires one, as do the resampling and permutation statistics in [Bootstrap and permutation](#bootstrap-and-permutation). What each repeat kind varies and how core collapses it is the table in [reference.md § Repeat kinds](reference.md#repeat-kinds) — both differ per kind, and that's the point of naming the kind rather than passing a count. What no repeat kind does is set `n`: that counts units, and every interval core reports comes from the [per-unit table](reference.md#the-unit-table-is-the-inference-base).
 
 Two choices sit *below* an answer rather than beside it. `assign.method` (`random` | `by_attribute` | `blocked`) only applies once allocation is `between`, and it answers a narrower question than the axis does — the `groups` axis says what the arms are, `assign.method` says how a unit reaches one. `cluster_by` is orthogonal to all three — it declares that units aren't independent, which changes the intervals rather than the design. See [Clustered and hierarchical data](#clustered-and-hierarchical-data) and [Matched case-control](#matched-case-control).
 
@@ -151,28 +151,29 @@ Core computes the partitions and records exact split membership, so the CV is re
 
 ### Bootstrap and permutation
 
-```yaml
-replication:
-  repeats: [{kind: bootstrap, n: 2000}]     # percentile CI, not t-based
-```
+Neither is a repeat, because neither needs the pipeline to run again — both resample the per-unit table the run already produced. They're declared under `statistics` and cost no executions:
 
 ```yaml
-replication:
-  repeats: [{kind: permutation, n: 5000, shuffle: label}]   # null distribution + p-value
+statistics:
+  resample: {method: bootstrap, n: 2000}                    # percentile CI, not t-based
+  null_test: {method: permutation, n: 5000, shuffle: label} # null distribution + p-value
 ```
 
-Neither contributes to `n`, because resamples and nulls are not observations.
+As repeat kinds these would have meant 2,000 and 5,000 full executions to compute what a resampled table gives directly, and a permutation design in which *every* execution is permuted has no unpermuted value to test against. Both need a metric core can recompute — a per-unit column, or a template `aggregate(units)`.
 
 ### Technical and biological replication
 
+Biological replicates ARE units. Technical replicates are extra measurement rows of the same unit, declared where units are resolved — not re-executions of the pipeline, which would recompute the same answer:
+
 ```yaml
 data:
-  units: {from: samples.csv, key: sample_id}   # biological replicates ARE units
-replication:
-  repeats: [{kind: technical, n: 3}]           # 3 reads per sample, averaged in
+  units:
+    from: reads.csv
+    key: sample_id                             # 3 rows per sample_id
+    measurements: {by: read_id, collapse: mean}
 ```
 
-Technical repeats collapse into the unit before any statistic runs and never enter `n`. This is the single most consequential mapping in the whole model for bench work.
+Rows sharing a key collapse into one unit before any step sees them, so technical replicates can never reach `n`. This is the single most consequential mapping in the whole model for bench work, and the direction matters: the three reads are a fact about your data file, not three runs of anything.
 
 ### Clustered and hierarchical data
 
@@ -215,8 +216,9 @@ The design is shaped around a specific claim: most irreproducible results are no
 |---|---|
 | **Repeats counted as `n`** | `n` counts units, always. Every interval is computed from the per-unit table; repeat dispersion is reported separately as `repeat_spread`, so an interval that would narrow as you add seeds is never presented as evidence about a population |
 | **A confidence interval on a number core can't recompute** | A metric that exists only as a scalar a step returned is reported as `basis: repeats` with **no interval**, rather than one over executions. Giving it an interval means making it a per-unit column or deriving it in the template's `aggregate(units)` |
-| **Technical replicates counted as `n`** | `{kind: technical}` collapses into the unit and never enters `n`. `{kind: biological}` is rejected with a pointer to the unit table |
-| **t-intervals over bootstrap resamples** | Aggregation is chosen by repeat kind; bootstrap gets percentile intervals, permutation gets a null and a p-value |
+| **Technical replicates counted as `n`** | They collapse into the unit at resolution, before any step runs, so they cannot reach `n`. `{kind: biological}` is rejected with a pointer to the unit table |
+| **t-intervals over bootstrap resamples** | `statistics.resample` produces percentile intervals and `statistics.null_test` a null with a p-value, both over the unit table — a t-interval is never applied to resamples |
+| **Technical replicates dressed as executions** | Technical replication is `data.units.measurements`, collapsed at unit resolution. Re-running an identical step to average it away would compute the same answer three times |
 | **Pooling across conditions** | Statistics aggregate within a condition only. Cross-condition comparison is an explicit contrast against a declared baseline |
 | **Paired analysis of an unpaired design** | Comparison type derives from `allocation`, so it can't disagree with how units were actually assigned |
 | **Uncorrected multiplicity across a sweep** | `statistics.correction` reports family-wise or FDR-adjusted intervals alongside raw ones; `validate` warns when a multi-condition sweep declares `none` |

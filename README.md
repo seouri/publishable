@@ -61,7 +61,7 @@ clones the exact commit, restores the locked environment, verifies the input dat
 
 **Probably not** if you want a pipeline scheduler, a live dashboard, or something to retrofit onto existing scripts. `publishable` is [greenfield only](docs/design-principles.md#greenfield-only).
 
-**Designs it speaks natively:** within- and between-subjects (with recorded randomization), factorial, ablation, dose-response, nested cross-validation, bootstrap, permutation, technical-vs-biological replication, clustered units. The statistics follow the design — bootstrap resamples get percentile intervals, technical replicates never enter `n`, and a multi-condition sweep won't report uncorrected comparisons without warning you. Modelling beyond summary statistics is yours: see [Experimental designs](docs/experimental-designs.md) for what's supported, what needs an override, and the [errors core refuses to let you make](docs/experimental-designs.md#mistakes-core-prevents).
+**Designs it speaks natively:** within- and between-subjects (with recorded randomization), factorial, ablation, dose-response, repeated cross-validation, bootstrap, permutation, technical-vs-biological replication, clustered units, matched case-control. The statistics follow the design — bootstrap resamples get percentile intervals, technical replicates never enter `n`, and a multi-condition sweep won't report uncorrected comparisons without warning you. Modelling beyond summary statistics is yours: see [Experimental designs](docs/experimental-designs.md) for what's supported, what needs an override, and the [errors core refuses to let you make](docs/experimental-designs.md#mistakes-core-prevents).
 
 | Tool | Optimizes for | `publishable` differs by |
 |---|---|---|
@@ -84,7 +84,7 @@ Five words carry the whole model:
 | **Unit** | the thing you measure — a patient, sample, trial, respondent |
 | **Step** | one stage of your pipeline, one file in `src/` |
 | **Condition** | one parameter combination you're *comparing* |
-| **Repeat** | one re-execution you're *averaging over* — a seed, fold, bootstrap, permutation, or technical replicate |
+| **Repeat** | one re-execution you're *averaging over* — a seed or a cross-validation fold |
 | **Run** | one execution of the whole thing: every step, every condition, every repeat |
 
 Statistics aggregate *within* a condition and compare *across* conditions. Getting that backwards is the most common way a reproducible pipeline still produces a wrong number, which is why the two are named separately rather than both being called "runs."
@@ -153,7 +153,7 @@ sweep:
 
 replication:
   repeats:
-    - {kind: seed, n: 5}         # seed | fold | bootstrap | permutation | technical
+    - {kind: seed, n: 5}         # seed | fold — the two things a re-execution varies
 ```
 
 And steps that never mention sweeps — each condition is resolved before your code runs:

@@ -72,12 +72,13 @@ data:
   input_dir: /secure/data/cohort-2026      # must be OUTSIDE the repo — enforced
   output_dir: /secure/results/cohort-pilot
   input_manifest_policy: hash_all          # hash_all | hash_index | none
-  units:                                   # optional; required by fold/bootstrap/permutation/technical
+  units:                                   # optional; required by fold, resample, null_test
     from: index.csv                        # a file in input_dir, or `glob:`, or a resolver
     key: patient_id                        # stable, unique identity
     attributes: [label, age, sex]          # available for stratification and reporting
     allocation: within                     # within | between — determines paired vs unpaired
     cluster_by: null                       # e.g. site, when units aren't independent
+    measurements: null                     # e.g. {by: read_id, collapse: mean} for technical replicates
 
 parameters:
   # ---- Base values. Everything below is defined by the template, not by core. ----
@@ -99,13 +100,15 @@ sweep:
 replication:
   # ---- How each condition repeats. Kind determines the statistics core applies. ----
   repeats:
-    - {kind: seed, n: 5}                 # seed | fold | bootstrap | permutation | technical
+    - {kind: seed, n: 5}                 # seed | fold
   order: as_declared                     # as_declared | randomized
   rationale: ""
 
 statistics:
-  # ---- Applied across the family of baseline comparisons in a sweep. ----
+  # ---- Computed over the per-unit table after the run. Not execution axes. ----
   correction: holm                       # none | bonferroni | holm | fdr_bh
+  resample: null                         # e.g. {method: bootstrap, n: 2000} → percentile CIs
+  null_test: null                        # e.g. {method: permutation, n: 5000, shuffle: label}
 
 hypotheses:
   # ---- Optional, but written BEFORE the run — which is what makes it meaningful. ----
@@ -157,7 +160,9 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Ablation targets | `sweep.ablate.remove[0]` is `analysis.min_samples` (int); `remove` needs a boolean or nullable parameter — use `override` |
 | Sample ranges | `sweep.sample.ranges.analysis.confidence` upper bound 1.4 violates the parameter's `lt=1` |
 | Baseline is a valid condition | `sweep.baseline` sets `analysis.method: pearsonn` |
-| Repeat kind coherence | `{kind: permutation}` requires `shuffle` to name a label parameter |
+| Repeat kind coherence | `{kind: bootstrap}` is not a repeat kind — declare `statistics.resample` instead |
+| Null test coherence | `statistics.null_test` requires `shuffle` to name a unit attribute |
+| Technical replicates | `{kind: technical}` is not a repeat kind — declare `data.units.measurements` instead |
 | Grid size sane | 6 conditions × 10 folds × 3 seeds = 180 executions exceeds the warning threshold |
 | Credentials present | `INSTRUMENT_API_TOKEN` is not set in `.env` |
 | Lockfile drift | `uv.lock` differs from the one recorded in the run you're resuming |
@@ -336,7 +341,7 @@ class Step(BaseStep):
 | `io.path(name)` | Resolves a location without writing, for libraries that insist on writing themselves. Still existence-checked. |
 | `io.read_upstream(step, name)` | Read-only access to an earlier step's artifact *in this run*. Makes cross-step dependencies visible in code instead of implicit in shared paths. |
 | `io.read_input(relpath)` | Read-only access to `input_dir`. |
-| `io.units` | The units in scope for this execution — the fold's partition, the bootstrap resample, the permuted set. See [Units](#units-the-thing-being-measured). |
+| `io.units` | The units in scope for this execution — every unit, this arm's, or this fold's partition. See [Units](#units-the-thing-being-measured). |
 | `io.record(unit_key, values)` | Appends one row to this step's per-unit result table. Append-only and resumable by key. |
 | `io.conditions` / `io.read_condition(condition, step, name)` | **`scope="summary"` only.** Iterate resolved conditions and read any condition's artifacts across repeats. |
 | `io.reuse_from(run_id, step, name)` | Explicitly read an artifact from a *previous* run — the sanctioned way to build on prior work without copying or overwriting. |
@@ -363,7 +368,7 @@ It reopens that run directory and skips every (condition, repeat, step) triple m
 
 Every experiment measures something repeatedly — patients, samples, trials, items, respondents, cells. Core makes that explicit, because otherwise the concept is present but unnamed, and every plugin reinvents it.
 
-It's load-bearing in more places than it first appears. `fold`, `bootstrap`, and `permutation` are all defined as operations *over units*. `stratify_by` needs unit attributes. The `n` in a confidence interval is a count of something. Per-item checkpointing needs a stable key. Cohort sizes are unit counts. All of that comes from one declaration:
+It's load-bearing in more places than it first appears. `fold` partitions units; `statistics.resample` and `statistics.null_test` resample and relabel them. `stratify_by` needs unit attributes. The `n` in a confidence interval is a count of something. Per-item checkpointing needs a stable key. Cohort sizes are unit counts. All of that comes from one declaration:
 
 ```yaml
 data:
@@ -434,17 +439,17 @@ class Step(BaseStep):
     scope = "repeat"
 
     def run(self, cfg, io):
-        for unit in io.units:                    # this repeat's units — the training or test
-            pred = predict(unit, cfg.parameters) # split, the bootstrap resample, etc.
+        for unit in io.units:                    # this repeat's units — the training or
+            pred = predict(unit, cfg.parameters) # test split, or this arm's units
             io.record(unit.key, {"pred": pred, "truth": unit.label})
         return {}                                 # metrics can be derived from the unit table
 ```
 
-`io.units` is already scoped correctly: in a `fold` repeat it yields that fold's partition, in a `bootstrap` repeat the resampled units, in a `permutation` repeat units with shuffled labels. Core computes the partitions, so no experiment reimplements k-fold, and the exact membership of every split lands in `run.yaml` — which is what makes a cross-validation reproducible rather than merely re-runnable.
+`io.units` is already scoped correctly: in a `fold` repeat it yields that fold's partition, and under a [group axis](#expansion-modes) only that arm's units. Core computes the partitions, so no experiment reimplements k-fold, and the exact membership of every split lands in `run.yaml` — which is what makes a cross-validation reproducible rather than merely re-runnable.
 
 **`io.record(key, values)` is the inference base, not a convenience.** Between artifacts (files) and results (aggregate metrics) sits the per-unit table, and it is what every confidence interval core reports is computed over. It's append-only like everything else, resumable by key, and materialized as `units.parquet` in the step's directory. A step that records nothing still runs and still reports its returned metrics — but core has nothing to generalize from, so those metrics come back as `basis: repeats` with no interval. See [Statistical reporting](#statistical-reporting).
 
-`data.units` is optional — a simulation with no unit table simply omits it, and `fold`/`bootstrap`/`permutation` then aren't available, which is correct, since there'd be nothing to partition. Such an experiment reports over repeats and says so; that's the one case where a repeat count is the honest denominator, because the executions *are* the observations.
+`data.units` is optional — a simulation with no unit table simply omits it, and `fold`, `statistics.resample`, and `statistics.null_test` then aren't available, which is correct, since there'd be nothing to partition or resample. Such an experiment reports over repeats and says so; that's the one case where a repeat count is the honest denominator, because the executions *are* the observations.
 
 ---
 
@@ -650,23 +655,40 @@ The baseline is always condition `00`, and `results.conditions[i].vs_baseline` c
 |---|---|---|
 | `seed` | RNG state only | Averaged per unit; dispersion reported as `repeat_spread` |
 | `fold` | data partition (k-fold, stratified, leave-one-out) | Per-unit values concatenated across folds — each unit is tested once per fold sweep |
-| `bootstrap` | resample of the input with replacement | **percentile CI**, not t-based |
-| `permutation` | shuffled labels, to build a null | **null distribution and p-value**, not a mean |
-| `technical` | re-measurement of the *same* unit | **collapsed into the unit before analysis** |
+
+**Two kinds, because a repeat is an execution.** A repeat re-runs the pipeline, so the only things that can be a repeat are things that change what the pipeline computes: the RNG state, and which units it sees. Resampling, permutation, and technical replication all *look* like repeats and aren't — see [What isn't a repeat](#what-isnt-a-repeat).
 
 **No repeat kind sets `n`.** `n` counts units, always — see [The unit table is the inference base](#the-unit-table-is-the-inference-base). Repeats say how many times the pipeline ran; they never say how many things the claim generalizes over, and conflating the two is how a five-seed run comes to report an interval that looks like evidence about a cohort.
 
-That last row is the one that decides whether a wet-lab paper survives review. A **technical replicate** is the same sample measured three times; a **biological replicate** is three independent samples. Only the second is evidence about the population, and counting technical replicates as `n` is one of the most common ways a result is overstated.
+#### What isn't a repeat
 
-Core enforces the distinction structurally rather than trusting you to remember it:
+Three things that a naive model puts on the repeat axis belong elsewhere, and putting them there is what makes them affordable and correct.
+
+**Resampling and permutation are statistics over the unit table.** `{kind: bootstrap, n: 2000}` would mean two thousand full executions of the pipeline, each with its own condition directory and artifact set — for the documented 15-execution example, roughly 8,500 artifacts to compute an interval conventionally obtained by resampling a table that already exists. So they're declared under `statistics` and computed after the run:
 
 ```yaml
-replication:
-  repeats:
-    - {kind: technical, n: 3}      # 3 reads per sample — averaged into the sample
+statistics:
+  resample: {method: bootstrap, n: 2000}          # percentile CIs over units
+  null_test: {method: permutation, n: 5000, shuffle: label}
 ```
 
-`technical` repeats are averaged into a single value per unit *before* any statistic is computed, and they never enter `n`. Biological replicates aren't a repeat kind at all — **they're units**, which is exactly what the model already says: independent samples are independent rows in your unit table. If you find yourself wanting `{kind: biological}`, add units instead; `validate` says so if you try.
+Both operate on `units.parquet`, resampling or relabelling *rows* and recomputing the metric — which core can do only for a metric it knows how to compute, so this needs a per-unit column or a template [`aggregate(units)`](#templates-where-parameters-are-defined). The permutation test compares the null it builds against the value the actual run produced; a design in which every execution is permuted has no unpermuted value to test, which is one more way the repeat axis was the wrong home for it.
+
+**Technical replication is a property of the input, not of execution.** Re-running an identical step on identical inputs under the same seed produces an identical answer, so averaging three such executions is a no-op. The three reads of a sample are not three runs of anything — they're three measurement rows sharing a sample identity, and that's declared where units are resolved:
+
+```yaml
+data:
+  units:
+    from: reads.csv
+    key: sample_id
+    measurements: {by: read_id, collapse: mean}   # rows sharing a key are technical replicates
+```
+
+Rows sharing a `key` are collapsed to one unit at resolution, before any step sees them, and `technical_n` is reported for transparency. When the pipeline does the measuring rather than the input carrying it, a step calls `io.record` once per measurement and core collapses the same way. Either path, technical replicates cannot reach `n`, because they were gone before `n` was counted.
+
+A **technical replicate** is the same sample measured three times; a **biological replicate** is three independent samples. Only the second is evidence about the population, and counting technical replicates as `n` is one of the most common ways a result is overstated.
+
+**Biological replicates aren't a repeat kind either** — they're units, which is exactly what the model already says: independent samples are independent rows in your unit table. `validate` rejects `{kind: biological}`, `{kind: technical}`, `{kind: bootstrap}`, and `{kind: permutation}` by name, each pointing at where the thing actually goes.
 
 `n` is reported explicitly rather than left to inference, and it never collapses to a single number:
 
@@ -710,7 +732,7 @@ vs_baseline:
 
 Two things this buys:
 
-- **Correct statistics by construction.** Applying a t-based CI to bootstrap resamples is wrong, and applying a mean to a permutation null is meaningless. Because the kind is declared, core picks the right summary instead of assuming everything is a seed.
+- **Correct statistics by construction.** Averaging across folds and averaging across seeds are different collapses, because a unit appears once per fold sweep and every time under a seed. Because the kind is declared, core picks the right one instead of flattening both.
 - **Nesting.** A list expresses nested designs — nested cross-validation, seeds within folds — which a single repeat count could not. Repeats compose outer-to-inner, so the example above is 30 executions per condition.
 
 Comparison type is derived from [`data.units.allocation`](#units-the-thing-being-measured) rather than declared here: `within` allocation means the same units appear in every condition, so between-condition comparisons are paired *unit by unit*; `between` allocation means the two arms are independent samples. Deriving it removes the possibility of a config that declares `paired` over a design that isn't. Pairing is over units, never over repeats — matching seed17 against seed17 would cancel RNG variation, which is not the variation a comparison needs to account for.
@@ -751,7 +773,7 @@ class Step(BaseStep):
                                   #  {kind: seed, i: 1, seed: 42}]
 ```
 
-`repeat.levels` is how a step gets what a repeat kind actually implies — `fold` supplies the index split, `bootstrap` the resampled indices, `permutation` the shuffled labels. Core computes them so every experiment doesn't reimplement k-fold, and so `run.yaml` can record exactly which units were in which partition.
+`repeat.levels` is how a step gets what a repeat kind actually implies — `fold` supplies the train and test index split, `seed` the applied seed. Core computes them so every experiment doesn't reimplement k-fold, and so `run.yaml` can record exactly which units were in which partition.
 
 ### Steps that need every condition
 
@@ -822,7 +844,7 @@ The `n` in a confidence interval is a count of the things the claim generalizes 
 
 That third row is the important refusal. A step that computes a cohort-level statistic internally and returns it as a number gives core nothing to resample: core never inspects the body of your Python, so it cannot recompute your statistic on a different set of units. What it will not do is fall back to an interval across the five seeds and present that as a confidence interval — **an interval over seeds measures how much the RNG moved the answer, and it narrows as you add seeds.** It says `basis: repeats`, reports the spread, and omits `ci95`. To get an interval, make the quantity a per-unit column, or teach the template to derive it (below).
 
-Repeats are a variance component, not the inference base: for a `basis: units` metric, repeats are averaged per unit *before* any interval is computed — the same collapse `technical` performs — and their dispersion is reported alongside as `repeat_spread`, which answers "is this pipeline stable?" rather than "how precise is this estimate?"
+Repeats are a variance component, not the inference base: for a `basis: units` metric, repeats are averaged per unit *before* any interval is computed — the same collapse technical replicates get at unit resolution — and their dispersion is reported alongside as `repeat_spread`, which answers "is this pipeline stable?" rather than "how precise is this estimate?"
 
 In the worked example, `generic`'s `aggregate` derives `r` from the recorded `pred` and `truth` columns, so `r` is unit-based even though the step also returns it. Core cross-checks the two and warns if they disagree — the step's number is what ran, the derived number is what can be intervalled, and a mismatch means one of them is measuring something else.
 
@@ -863,14 +885,19 @@ The per-condition intervals are wide and the delta's is narrow, and that isn't a
 
 #### Repeat kind still decides how repeats collapse
 
-Within a condition, each repeat kind means something different, so the collapse differs:
+Within a condition, the two repeat kinds mean something different, so the collapse differs:
 
 | Repeat kind | How its repeats enter |
 |---|---|
 | `seed` | Averaged per unit; dispersion reported as `repeat_spread` |
 | `fold` | Each unit appears in exactly one test partition per fold, so the per-unit values concatenate rather than average |
-| `bootstrap` | Percentile interval over the resamples — never a t-interval, because resamples aren't independent draws from the sampling distribution |
-| `permutation` | A null distribution and a `p_value`, compared against the unpermuted value — never a mean, because a mean over a null is not a result |
+
+And two `statistics` declarations change how the interval itself is computed, without adding executions:
+
+| Declaration | What it replaces |
+|---|---|
+| `resample: {method: bootstrap, n: 2000}` | The t-interval, with a percentile interval over resampled units — the right choice for a derived statistic whose sampling distribution isn't t-shaped |
+| `null_test: {method: permutation, n: 5000, shuffle: label}` | Nothing; it *adds* a `p_value` against a null built by relabelling units, tested against the value the run actually produced |
 
 With nested repeats, core collapses inner-to-outer, so 10 folds × 3 seeds averages seeds within each fold before combining folds — rather than flattening 30 numbers that aren't exchangeable. Whether the comparison across conditions is paired follows from `data.units.allocation`.
 
@@ -1376,8 +1403,8 @@ publishable/
 │   ├── lineage.py             # upstream run recording and chain verification
 │   ├── hypotheses.py          # pre-registered hypothesis evaluation, confirmatory/exploratory
 │   ├── study.py               # study new/add: bundle assembly, redaction, cross-run report
-│   ├── replication.py         # repeat kinds (seed/fold/bootstrap/permutation), nesting, seeding
-│   ├── stats.py               # kind-aware summaries, baseline deltas, effect sizes, paired designs
+│   ├── replication.py         # repeat kinds (seed/fold), nesting, seed derivation
+│   ├── stats.py               # unit-table inference, resample/null_test, deltas, effect sizes
 │   ├── run_identity.py        # run_<id> allocation, latest symlink, resume resolution
 │   ├── hashes.py              # code_hash (src/** tree), parameters_hash
 │   ├── config.py              # load + dot-access Config
