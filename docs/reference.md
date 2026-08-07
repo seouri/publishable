@@ -341,7 +341,7 @@ class Step(BaseStep):
 | `io.path(name)` | Resolves a location without writing, for libraries that insist on writing themselves. Still existence-checked. |
 | `io.read_upstream(step, name)` | Read-only access to an earlier step's artifact *in this run*. Makes cross-step dependencies visible in code instead of implicit in shared paths. |
 | `io.read_input(relpath)` | Read-only access to `input_dir`. |
-| `io.units` | The units in scope for this execution — every unit, this arm's, or this fold's partition. See [Units](#units-the-thing-being-measured). |
+| `io.units` | The units this execution produces results about — every unit, this arm's, or this fold's test partition. `io.units.train` carries the training partition when a `fold` repeat is declared. See [Units](#units-the-thing-being-measured). |
 | `io.record(unit_key, values)` | Appends one row to this step's per-unit result table. Append-only and resumable by key. |
 | `io.conditions` / `io.read_condition(condition, step, name)` | **`scope="summary"` only.** Iterate resolved conditions and read any condition's artifacts across repeats. |
 | `io.reuse_from(run_id, step, name)` | Explicitly read an artifact from a *previous* run — the sanctioned way to build on prior work without copying or overwriting. |
@@ -439,13 +439,16 @@ class Step(BaseStep):
     scope = "repeat"
 
     def run(self, cfg, io):
-        for unit in io.units:                    # this repeat's units — the training or
-            pred = predict(unit, cfg.parameters) # test split, or this arm's units
+        model = fit(io.units.train, cfg.parameters)  # empty unless a fold repeat is declared
+        for unit in io.units:                        # this fold's test split, or this arm
+            pred = predict(model, unit)
             io.record(unit.key, {"pred": pred, "truth": unit.label})
         return {}                                 # metrics can be derived from the unit table
 ```
 
-`io.units` is already scoped correctly: in a `fold` repeat it yields that fold's partition, and under a [group axis](#expansion-modes) only that arm's units. Core computes the partitions, so no experiment reimplements k-fold, and the exact membership of every split lands in `run.yaml` — which is what makes a cross-validation reproducible rather than merely re-runnable.
+`io.units` is already scoped correctly: under a [group axis](#expansion-modes) it yields only that arm's units, and in a `fold` repeat only that fold's **test** partition — the units this execution produces results about. The training partition is `io.units.train`, which is a different list for a different purpose, and keeping them separate is what stops a step from silently recording a result for a unit it trained on. Core computes the partitions, so no experiment reimplements k-fold, and the exact membership of every split lands in `run.yaml` — which is what makes a cross-validation reproducible rather than merely re-runnable.
+
+**Partitions are computed once per run, not once per condition.** Every condition sees the same fold boundaries and the same seed list, derived from the config-level `parameters_hash`. This is load-bearing rather than incidental: under `allocation: within`, comparisons across conditions are paired unit by unit, and pairing fold 3 of one condition against a *differently drawn* fold 3 of another would not be a paired comparison at all. Shared partitions are also why the layout can name repeat directories `seed17`/`fold03` identically under every condition.
 
 **`io.record(key, values)` is the inference base, not a convenience.** Between artifacts (files) and results (aggregate metrics) sits the per-unit table, and it is what every confidence interval core reports is computed over. It's append-only like everything else, resumable by key, and materialized as `units.parquet` in the step's directory. A step that records nothing still runs and still reports its returned metrics — but core has nothing to generalize from, so those metrics come back as `basis: repeats` with no interval. See [Statistical reporting](#statistical-reporting).
 
