@@ -8,7 +8,7 @@ abstract: >-
   config file, and every run pins code, environment, and input data by hash.
 authors:
   - family-names: Lee
-    given-names: Joon
+    given-names: Kyungjoon
     email: joon_lee@hms.harvard.edu
     affiliation: Harvard Medical School
 repository-code: "https://github.com/seouri/publishable"
