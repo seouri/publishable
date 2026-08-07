@@ -76,7 +76,7 @@ data:
     from: index.csv                        # a file in input_dir, or `glob:`, or a resolver
     key: patient_id                        # stable, unique identity
     attributes: [label, age, sex]          # available for stratification and reporting
-    allocation: within                     # within | between — determines paired vs unpaired
+    allocation: within                     # within | between — feeds paired vs unpaired, per contrast
     cluster_by: null                       # e.g. site, when units aren't independent
     measurements: null                     # e.g. {by: read_id, collapse: mean} for technical replicates
     assign:                                # REQUIRED when allocation is `between`
@@ -185,6 +185,7 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Allocation is coherent | `allocation: between` over 2 arms and 12 units gives arms of 6; below the configured minimum (warning) |
 | Allocation strata exist | `assign.stratify_by: [site]` but `site` is not in `data.units.attributes` |
 | Clustering looks undeclared | `site` has 6 distinct values across 240 units but `cluster_by` is unset (warning) |
+| Baseline leaves contrasts confounded | `sweep.baseline` fixes `arm: control` but not `analysis.method`, so 2 of 3 contrasts cross both a group and a parameter axis and are reported `confounded: true` (warning) |
 | Correction declared for a family | 6 conditions × 3 metrics produce a family of 15 baseline comparisons with `statistics.correction: none` (warning) |
 | Step scope coherence | `step01_load_cohort` is `scope="run"` but reads `analysis.method`, which `sweep` varies |
 | Scope read direction | `step02_fit_model` (`scope="condition"`) reads from `step03_analyze` (`scope="repeat"`), which runs later |
@@ -433,6 +434,19 @@ The realized assignment is written to `allocation.json` in the run directory and
 
 Getting this wrong is not a subtle error. Analyzing a between-subjects study as if it were paired inflates precision substantially, and the two designs need different comparisons. Because allocation is declared, core derives the comparison type instead of asking you to declare `paired` separately and hoping it matches reality.
 
+**Pairing is derived per comparison, not per config.** `allocation` is one value, but a run can hold contrasts of both kinds at once, so a single boolean over the whole run would be wrong for some of them. What decides a given contrast is whether the two conditions it compares share their units, and that's answerable from which axes they differ on:
+
+| The two conditions differ on | Share units? | Comparison |
+|---|---|---|
+| Parameter axes only (`grid`, `paired`, `sample`, `ablate`), `allocation: within` | Yes, all of them | Paired, unit by unit |
+| Parameter axes only, `allocation: between` | Yes — same arm, so same units | Paired within that arm |
+| The `groups` axis | No, by construction | Unpaired |
+| The `groups` axis *and* a parameter axis | No | Unpaired, and confounded — see below |
+
+So in "each arm analyzed three ways" ([`groups × grid`](#expansion-modes)), control-pearson vs. control-spearman is paired — the same patients scored two ways, and pairing is what cancels the between-patient variance — while control-pearson vs. treatment-pearson is unpaired. Deriving one answer for the whole run would report the first as unpaired and throw that cancellation away, which is the same class of error as the inflation above, just in the conservative direction. Each contrast records its own `paired: true|false` in `vs_baseline`.
+
+The last row is the one to design around rather than rely on. A contrast crossing the group axis *and* a parameter axis differs in two places, so its delta mixes an arm effect with a parameter effect and no amount of correct pairing separates them — that's the [factorial main-effects problem](experimental-designs.md#what-core-will-not-do-for-you), and it's why such a contrast is reported with `confounded: true` beside its interval. Designate the baseline on the group axis (`{arm: control, analysis.method: pearson}`) and the single-axis contrasts are the interpretable ones.
+
 ### Clustered units
 
 When units aren't independent — patients within sites, cells within animals, measurements within subjects — declare it:
@@ -659,7 +673,7 @@ sweep:
   # groups × grid = 2 × 2 = 4 conditions
 ```
 
-Comparisons across a group axis are unpaired, since no unit appears in two levels — unless the levels are matched, in which case `cluster_by` on the matched-set identifier is what carries the dependence. See [experimental-designs.md § Matched case-control](experimental-designs.md#matched-case-control).
+Comparisons *across* a group axis are unpaired, since no unit appears in two levels — unless the levels are matched, in which case `cluster_by` on the matched-set identifier is what carries the dependence. See [experimental-designs.md § Matched case-control](experimental-designs.md#matched-case-control). Comparisons *within* a level, between two parameter settings applied to the same arm, remain paired: composing a group axis with a parameter axis doesn't make every contrast in the run unpaired. See [Allocation](#allocation-within-subjects-or-between-subjects).
 
 **`baseline` — a designated reference.** Without one, every condition is a peer and `report` can only list them. With one, core computes deltas and effect sizes against it automatically. It accepts group levels as well as parameter paths, so `{arm: control}` designates the control arm:
 
@@ -785,7 +799,7 @@ Two things this buys:
 - **Correct statistics by construction.** Averaging across folds and averaging across seeds are different collapses, because a unit appears once per fold sweep and every time under a seed. Because the kind is declared, core picks the right one instead of flattening both.
 - **Nesting.** A list expresses layered repeats — seeds within folds — which a single repeat count could not. Repeats compose outer-to-inner, so the example above is 30 executions per condition. This is repeated cross-validation, not nested: an inner loop that *selects* a setting for the outer one to evaluate is [adaptive](design-principles.md#what-core-does-not-promise) and belongs inside a step.
 
-Comparison type is derived from [`data.units.allocation`](#units-the-thing-being-measured) rather than declared here: `within` allocation means the same units appear in every condition, so between-condition comparisons are paired *unit by unit*; `between` allocation means the two arms are independent samples. Deriving it removes the possibility of a config that declares `paired` over a design that isn't. Pairing is over units, never over repeats — matching seed17 against seed17 would cancel RNG variation, which is not the variation a comparison needs to account for.
+Comparison type is derived from [`data.units.allocation`](#units-the-thing-being-measured) and from which axes a contrast crosses, rather than declared here: two conditions differing only on parameter axes were evaluated on the same units, so that contrast is paired *unit by unit*; two conditions differing on the `groups` axis are independent samples, so it's unpaired. Deriving it removes the possibility of a config that declares `paired` over a design that isn't, and deriving it per contrast rather than per run is what keeps a composed `groups × grid` design from reporting its paired contrasts as unpaired — see [Allocation](#allocation-within-subjects-or-between-subjects) for the full table. Pairing is over units, never over repeats — matching seed17 against seed17 would cancel RNG variation, which is not the variation a comparison needs to account for.
 
 `{kind: seed, n: 5}` with no explicit list derives seeds deterministically from `parameters_hash`; pass `seeds: [17, 42, ...]` for specific values. Either way the resolved list lands in `sweep.yaml`.
 

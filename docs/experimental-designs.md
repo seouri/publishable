@@ -20,7 +20,7 @@ Resolve the three declarations separately and the config writes itself. They are
 
 | The question | Declaration | Values | Shown in |
 |---|---|---|---|
-| Does every unit appear in every condition, or exactly one? | `data.units.allocation` | `within` (default, paired comparisons) · `between` (one arm per unit, unpaired — needs a `groups` axis) | [Within-subjects](#within-subjects--repeated-measures) · [Between-subjects](#between-subjects--parallel-arm-trial) |
+| Does every unit appear in every condition, or exactly one? | `data.units.allocation` | `within` (default, paired comparisons) · `between` (one arm per unit, unpaired across arms — needs a `groups` axis) | [Within-subjects](#within-subjects--repeated-measures) · [Between-subjects](#between-subjects--parallel-arm-trial) |
 | What varies deliberately? | `sweep` | `grid` (cartesian) · `paired` (coupled axes) · `ablate` (`1 + n`, one change each) · `sample` (continuous ranges) · `groups` (arms of units, not parameters) · `baseline` (the reference, not an axis) | [Factorial](#factorial) · [Fractional factorial](#fractional-factorial-and-coupled-settings) · [Ablation](#ablation) · [Dose-response](#dose-response-and-parameter-search) · [Between-subjects](#between-subjects--parallel-arm-trial) |
 | What varies incidentally? | `replication.repeats` | `seed` · `fold` — the two things a re-execution can change | [Single condition](#single-condition-repeated) · [Cross-validation](#cross-validation) |
 
@@ -73,7 +73,7 @@ data:
       seed: auto
 ```
 
-The realized allocation lands in `allocation.json`, hashed. Comparisons are unpaired, derived from `allocation: between` rather than declared separately. The two conditions share a `parameters_hash`, which is the point: same code, same parameters, different units.
+The realized allocation lands in `allocation.json`, hashed. The arm-to-arm comparison is unpaired, derived from the fact that the two conditions differ on the `groups` axis rather than declared separately — and if you compose a parameter axis on top, contrasts *within* an arm stay paired, because they're the same patients analyzed two ways. The two conditions share a `parameters_hash`, which is the point: same code, same parameters, different units.
 
 When the arm was decided elsewhere — a trial system, a registry, an exposure that simply happened — name the column instead of a seed, and core assigns nothing:
 
@@ -232,7 +232,7 @@ The design is shaped around a specific claim: most irreproducible results are no
 | **t-intervals over bootstrap resamples** | `statistics.resample` produces percentile intervals and `statistics.null_test` a null with a p-value, both over the unit table — a t-interval is never applied to resamples |
 | **Technical replicates dressed as executions** | Technical replication is `data.units.measurements`, collapsed at unit resolution. Re-running an identical step to average it away would compute the same answer three times |
 | **Pooling across conditions** | Statistics aggregate within a condition only. Cross-condition comparison is an explicit contrast against a declared baseline |
-| **Paired analysis of an unpaired design** | Comparison type derives from `allocation`, so it can't disagree with how units were actually assigned |
+| **Paired analysis of an unpaired design** | Comparison type derives from `allocation` and from which axes the contrast crosses, so it can't disagree with how units were actually assigned. Derived per contrast, so a composed design doesn't get one verdict applied to comparisons of both kinds |
 | **Uncorrected multiplicity across a sweep** | `statistics.correction` reports family-wise or FDR-adjusted intervals alongside raw ones; `validate` warns when a multi-condition sweep declares `none` |
 | **Ignored clustering** | `cluster_by` produces cluster-robust intervals; `validate` flags an attribute that looks like an undeclared cluster |
 | **Silent attrition** | Every metric reports units resolved, completed, and failed — never a bare `n` that hides dropout. Each count is scoped to what its execution was handed, so a fold or an arm isn't charged with units it never saw |
