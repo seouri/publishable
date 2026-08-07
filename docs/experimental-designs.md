@@ -118,10 +118,14 @@ sweep:
 
 ```yaml
 sweep:
+  baseline: {features.demographics: true, features.labs: true, features.notes: true}
   ablate:
     from: baseline
     remove: [features.demographics, features.labs, features.notes]
+  # 00_baseline + 3 ablations = 4 conditions
 ```
+
+`ablate` reads the baseline rather than re-emitting it, so the full model appears once. It requires `sweep.baseline` and composes with no other mode — crossing "one change at a time" with a second axis stops being one change at a time.
 
 ### Dose-response and parameter search
 

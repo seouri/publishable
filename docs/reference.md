@@ -158,6 +158,8 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Sweep paths resolve | `sweep.grid` key `analysis.methd` is not a parameter of template `generic` |
 | Swept values legal | `sweep.grid.analysis.method[1]` is `spearmann`, expected one of pearson, spearman, kendall |
 | Ablation targets | `sweep.ablate.remove[0]` is `analysis.min_samples` (int); `remove` needs a boolean or nullable parameter — use `override` |
+| Ablation needs a baseline | `sweep.ablate` is declared but `sweep.baseline` is not — there is nothing to ablate from |
+| Ablation doesn't compose | `sweep.ablate` cannot be combined with `grid`, `paired`, `sample`, or `groups`; one change at a time and a second axis are contradictory |
 | Sample ranges | `sweep.sample.ranges.analysis.confidence` upper bound 1.4 violates the parameter's `lt=1` |
 | Baseline is a valid condition | `sweep.baseline` sets `analysis.method: pearsonn` |
 | Repeat kind coherence | `{kind: bootstrap}` is not a repeat kind — declare `statistics.resample` instead |
@@ -559,7 +561,9 @@ That's 4 conditions × 5 repeats = 20 executions of the pipeline.
 
 ### Expansion modes
 
-Six modes, each covering a distinct experimental pattern. They compose: the final condition set is the product of every mode present, with `baseline` prepended.
+Six modes, each covering a distinct experimental pattern. They compose: the final condition set is the product of every axis-shaped mode present — `grid`, `paired`, `sample`, `groups` — with the declared `baseline` prepended as condition `00`.
+
+`ablate` is the one mode that does not multiply, because it isn't an axis. It emits `n` conditions, each one change away from the baseline, and it reads the baseline rather than re-emitting it — so a declared baseline is condition `00` exactly once, never both as `00_baseline` and as an ablate row. It therefore requires `sweep.baseline`, which `validate` checks, and combining it with another mode is rejected: the product of "vary one thing at a time" with a second axis is no longer one thing at a time, and there is no defensible reading of what it would mean.
 
 **`grid` — cartesian product.** The default. Every combination of every listed value.
 
@@ -585,7 +589,7 @@ sweep:
       - analysis.drop_missing
       - analysis.winsorize
       - analysis.covariate_adjust
-  # 1 baseline + 3 ablations = 4 conditions
+  # 00_baseline (from `baseline`) + 3 ablations = 4 conditions
 ```
 
 `remove` sets a boolean parameter to `false` or a nullable one to `null`. Use `override` for non-boolean one-at-a-time variation:
