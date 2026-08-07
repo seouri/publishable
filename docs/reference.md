@@ -282,7 +282,7 @@ results:                                       # scientific; see "Statistical re
           r: {delta: 0.026, basis: units, paired: true, ci95: [0.017, 0.035],
               ci95_corrected: [0.011, 0.041],
               correction: holm, family_size: 2, family: {comparisons: 2, metrics: 1},
-              cohens_d: 0.41}
+              cohens_d: null}                       # r is derived, not a per-unit mean
   summary:
     step04_compare_methods: {best_method: spearman}
   hypotheses:                                  # see "Pre-registration"
@@ -659,7 +659,7 @@ sweep:
     analysis.method: [spearman, kendall]
 ```
 
-The baseline is always condition `00`, and `results.conditions[i].vs_baseline` carries the difference in each numeric metric, with a standardized effect size when both conditions have repeats. Declaring one is optional but recommended: "spearman beat pearson by 0.03 (Cohen's d = 0.4)" is the sentence a paper needs, and it can't be produced from an unlabeled set of peers.
+The baseline is always condition `00`, and `results.conditions[i].vs_baseline` carries the difference in each numeric metric, with a standardized effect size when the metric is a per-unit mean. Declaring one is optional but recommended: "the treated arm scored 0.12 higher (Cohen's d = 0.4)" is the sentence a paper needs, and it can't be produced from an unlabeled set of peers.
 
 ### Repeat kinds
 
@@ -908,10 +908,12 @@ results:
           r: {delta: 0.026, basis: units, paired: true, ci95: [0.017, 0.035],
               ci95_corrected: [0.011, 0.041],
               correction: holm, family_size: 2, family: {comparisons: 2, metrics: 1},
-              cohens_d: 0.41}
+              cohens_d: null}                       # r is derived, not a per-unit mean
   summary:
     step04_compare_methods: {best_method: spearman}
 ```
+
+**`cohens_d` is reported only for a per-unit mean.** Cohen's *d* standardizes a difference by the dispersion of the values being differenced, which needs a value per unit: with `abs_error` recorded per patient, the paired per-unit differences have a standard deviation and *d* is exactly the right summary. A derived statistic has no such thing — there is no per-patient `r` to difference — so `cohens_d` comes back `null` and the delta's interval carries the magnitude instead. Reporting a *d* there would mean inventing a denominator, which is the same error as reporting a confidence interval over seeds.
 
 The per-condition intervals are wide and the delta's is narrow, and that isn't an inconsistency — it's what `allocation: within` buys. Both conditions were evaluated on the same 228 units, so the paired difference cancels the between-patient variability that dominates each condition's own interval. Reporting the delta from unpaired intervals would throw that away; reporting it from seed dispersion would invent precision that isn't there.
 
