@@ -22,7 +22,7 @@ Resolve the three declarations separately and the config writes itself. They are
 |---|---|---|---|
 | Does every unit appear in every condition, or exactly one? | `data.units.allocation` | `within` (default, paired comparisons) · `between` (one arm per unit, unpaired — needs a `groups` axis) | [Within-subjects](#within-subjects--repeated-measures) · [Between-subjects](#between-subjects--parallel-arm-trial) |
 | What varies deliberately? | `sweep` | `grid` (cartesian) · `paired` (coupled axes) · `ablate` (`1 + n`, one change each) · `sample` (continuous ranges) · `groups` (arms of units, not parameters) · `baseline` (the reference, not an axis) | [Factorial](#factorial) · [Fractional factorial](#fractional-factorial-and-coupled-settings) · [Ablation](#ablation) · [Dose-response](#dose-response-and-parameter-search) · [Between-subjects](#between-subjects--parallel-arm-trial) |
-| What varies incidentally? | `replication.repeats` | `seed` · `fold` — the two things a re-execution can change | [Single condition](#single-condition-repeated) · [Cross-validation](#cross-validation-including-nested) |
+| What varies incidentally? | `replication.repeats` | `seed` · `fold` — the two things a re-execution can change | [Single condition](#single-condition-repeated) · [Cross-validation](#cross-validation) |
 
 Answering a question with nothing is a valid answer: omit `sweep` for a single condition, omit `data.units` entirely when the pipeline has no unit table — though `fold` requires one, as do the resampling and permutation statistics in [Bootstrap and permutation](#bootstrap-and-permutation). What each repeat kind varies and how core collapses it is the table in [reference.md § Repeat kinds](reference.md#repeat-kinds) — both differ per kind, and that's the point of naming the kind rather than passing a count. What no repeat kind does is set `n`: that counts units, and every interval core reports comes from the [per-unit table](reference.md#the-unit-table-is-the-inference-base).
 
@@ -138,7 +138,7 @@ sweep:
 
 Fitting the dose-response curve is a `scope: "summary"` step; core supplies the conditions and the per-unit tables, not the curve model.
 
-### Cross-validation, including nested
+### Cross-validation
 
 ```yaml
 replication:
@@ -148,6 +148,10 @@ replication:
 ```
 
 Core computes the partitions and records exact split membership, so the CV is reproducible rather than merely re-runnable. Aggregation is inner-to-outer: seeds within a fold, then folds across the condition.
+
+That's **repeated** cross-validation — 10 folds, each evaluated under 3 seeds. It is not nested cross-validation, and the difference is not cosmetic: in nested CV an inner loop runs *within each outer training split* and its result **selects** the setting the outer loop then evaluates. That's a condition chosen from results, which is [exactly what core refuses](design-principles.md#what-core-does-not-promise) — the config would no longer determine the run.
+
+So the outer loop is core's and the selection is yours: declare the outer `fold`, and do the inner search inside the step, over `io.units` for that fold's training partition only. The selected setting is then a value your step records per fold rather than a condition, which is also the honest description of it — a hyperparameter chosen by the pipeline is an output, not a declared parameter.
 
 ### Bootstrap and permutation
 

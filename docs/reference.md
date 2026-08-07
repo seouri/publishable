@@ -733,7 +733,7 @@ vs_baseline:
 Two things this buys:
 
 - **Correct statistics by construction.** Averaging across folds and averaging across seeds are different collapses, because a unit appears once per fold sweep and every time under a seed. Because the kind is declared, core picks the right one instead of flattening both.
-- **Nesting.** A list expresses nested designs — nested cross-validation, seeds within folds — which a single repeat count could not. Repeats compose outer-to-inner, so the example above is 30 executions per condition.
+- **Nesting.** A list expresses layered repeats — seeds within folds — which a single repeat count could not. Repeats compose outer-to-inner, so the example above is 30 executions per condition. This is repeated cross-validation, not nested: an inner loop that *selects* a setting for the outer one to evaluate is [adaptive](design-principles.md#what-core-does-not-promise) and belongs inside a step.
 
 Comparison type is derived from [`data.units.allocation`](#units-the-thing-being-measured) rather than declared here: `within` allocation means the same units appear in every condition, so between-condition comparisons are paired *unit by unit*; `between` allocation means the two arms are independent samples. Deriving it removes the possibility of a config that declares `paired` over a design that isn't. Pairing is over units, never over repeats — matching seed17 against seed17 would cancel RNG variation, which is not the variation a comparison needs to account for.
 
