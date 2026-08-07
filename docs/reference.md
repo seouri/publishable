@@ -186,6 +186,8 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Allocation is coherent | `allocation: between` over 2 arms and 12 units gives arms of 6; below the configured minimum (warning) |
 | Allocation strata exist | `assign.stratify_by: [site]` but `site` is not in `data.units.attributes` |
 | Clustering looks undeclared | `site` has 6 distinct values across 240 units but `cluster_by` is unset (warning) |
+| Folds fit inside the clusters | `{kind: fold, k: 10}` with `cluster_by: animal_id` over 6 animals — clusters are indivisible, so `k` may not exceed the cluster count |
+| Fold strata survive clustering | `{kind: fold, stratify_by: label}` with `cluster_by: animal_id`, but `label` varies within animal `A3` — a stratum can't be balanced across a split that can't divide the cluster |
 | Baseline leaves contrasts confounded | `sweep.baseline` fixes `arm: control` but not `analysis.method`, so 2 of 3 contrasts cross both a group and a parameter axis and are reported `confounded: true` (warning) |
 | Correction declared for a family | 6 enumerated conditions × 3 metrics produce a family of 15 baseline comparisons with `statistics.correction: none` (warning). Not raised for a `sample`-only sweep, whose draws aren't a family |
 | Step scope coherence | `step01_load_cohort` is `scope="run"` but reads `analysis.method`, which `sweep` varies |
@@ -468,6 +470,15 @@ When units aren't independent — patients within sites, cells within animals, m
 
 Core then computes cluster-robust intervals — over the same per-unit table every other interval comes from — and reports the number of clusters as the effective sample size alongside the unit count. Ignoring clustering is the standard route to intervals that are too narrow; declaring it costs one line, and `validate` warns when an attribute looks like a cluster identifier (few distinct values, many units each) but hasn't been declared as one.
 
+**`cluster_by` also constrains how `fold` partitions.** Whole clusters go to one side of a split; a cluster is never divided between train and test. This is not a refinement of the interval, it's the difference between a valid evaluation and a leaky one: with 300 cells from 10 animals split without regard to `animal_id`, every fold trains on other cells of the animal it tests on, and the metric is inflated before any interval is computed — so cluster-robust standard errors don't repair it. Core computes the partitions, so this has to be core's rule rather than something each experiment remembers.
+
+Two consequences of clustering the split:
+
+- **`k` is bounded by the cluster count, not the unit count.** Ten animals admit at most 10 folds, and `validate` rejects a larger `k` rather than emitting empty partitions. Fold sizes also stop being equal — clusters differ in size, so core balances units-per-fold as evenly as whole clusters allow and records the realized sizes in `sweep.yaml`.
+- **`stratify_by` must be constant within a cluster.** Stratifying folds on an attribute that varies inside a cluster is unsatisfiable once the cluster is indivisible, so `validate` rejects it instead of silently prioritizing one constraint. Stratifying on `animal_strain` works; stratifying on a per-cell `label` that differs within an animal does not.
+
+The same logic governs `assign.stratify_by` under `allocation: between`: a cluster is assigned as a whole, so arms are balanced over clusters and a matched set never straddles two arms.
+
 Core resolves this once at run start, records the resolved unit list and its hash in the input manifest, and makes it available everywhere:
 
 ```python
@@ -720,7 +731,7 @@ The baseline is always condition `00`, and `results.conditions[i].vs_baseline` c
 | Kind | Varies | Aggregation core applies |
 |---|---|---|
 | `seed` | RNG state only | Averaged per unit; dispersion reported as `repeat_spread` |
-| `fold` | data partition (k-fold, stratified, leave-one-out) | Per-unit values concatenated across folds — each unit is tested once per fold sweep |
+| `fold` | data partition (k-fold, stratified, leave-one-out; cluster-respecting when [`cluster_by`](#clustered-units) is declared) | Per-unit values concatenated across folds — each unit is tested once per fold sweep |
 
 **Two kinds, because a repeat is an execution.** A repeat re-runs the pipeline, so the only things that can be a repeat are things that change what the pipeline computes: the RNG state, and which units it sees. Resampling, permutation, and technical replication all *look* like repeats and aren't — see [What isn't a repeat](#what-isnt-a-repeat).
 

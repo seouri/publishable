@@ -26,7 +26,7 @@ Resolve the three declarations separately and the config writes itself. They are
 
 Answering a question with nothing is a valid answer: omit `sweep` for a single condition, omit `data.units` entirely when the pipeline has no unit table — though `fold` requires one, as do the resampling and permutation statistics in [Bootstrap and permutation](#bootstrap-and-permutation). What each repeat kind varies and how core collapses it is the table in [reference.md § Repeat kinds](reference.md#repeat-kinds) — both differ per kind, and that's the point of naming the kind rather than passing a count. What no repeat kind does is set `n`: that counts units, and every interval core reports comes from the [per-unit table](reference.md#the-unit-table-is-the-inference-base).
 
-Two choices sit *below* an answer rather than beside it. `assign.method` (`random` | `by_attribute` | `blocked`) only applies once allocation is `between`, and it answers a narrower question than the axis does — the `groups` axis says what the arms are, `assign.method` says how a unit reaches one. `cluster_by` is orthogonal to all three — it declares that units aren't independent, which changes the intervals rather than the design. See [Clustered and hierarchical data](#clustered-and-hierarchical-data) and [Matched case-control](#matched-case-control).
+Two choices sit *below* an answer rather than beside it. `assign.method` (`random` | `by_attribute` | `blocked`) only applies once allocation is `between`, and it answers a narrower question than the axis does — the `groups` axis says what the arms are, `assign.method` says how a unit reaches one. `cluster_by` sits below all three rather than beside them — it declares that units aren't independent, which widens the intervals. It is *not* independent of the other answers, though: because a cluster is indivisible, declaring it also constrains how `fold` splits and how `between` allocation assigns, so whole clusters stay on one side of every partition. See [Clustered and hierarchical data](#clustered-and-hierarchical-data) and [Matched case-control](#matched-case-control).
 
 ### Single condition, repeated
 
@@ -200,6 +200,8 @@ data:
 
 Core reports cluster-robust intervals and the cluster count as effective sample size. Full mixed-effects modelling is an override.
 
+Declaring the cluster also changes how the data is split, which is the part that affects the number rather than the interval around it. Add `{kind: fold, k: 5}` to the above and each fold holds out whole animals — cells from one animal never appear in both the training and test side, so the metric isn't inflated by having seen its littermates. `k` is then bounded by the animal count rather than the cell count. See [reference.md § Clustered units](reference.md#clustered-units).
+
 ### Matched case-control
 
 Case-vs-control is a property of the units, so it's a `groups` axis read from an existing column — nothing here is randomized. Matching happens upstream; carry the matched-set identifier as an attribute and cluster on it, which is what tells core the two arms aren't independent samples.
@@ -239,6 +241,7 @@ The design is shaped around a specific claim: most irreproducible results are no
 | **Paired analysis of an unpaired design** | Comparison type derives from `allocation` and from which axes the contrast crosses, so it can't disagree with how units were actually assigned. Derived per contrast, so a composed design doesn't get one verdict applied to comparisons of both kinds |
 | **Uncorrected multiplicity across a sweep** | `statistics.correction` reports family-wise or FDR-adjusted intervals alongside raw ones; `validate` warns when a multi-condition *enumerated* sweep declares `none`. `sample` draws are excluded — they feed one downstream fit rather than being comparisons a reader acts on |
 | **Ignored clustering** | `cluster_by` produces cluster-robust intervals; `validate` flags an attribute that looks like an undeclared cluster |
+| **A cluster split across train and test** | A declared `cluster_by` makes clusters indivisible in every partition core computes, so a fold can't train on one cell of an animal and test on another. `validate` rejects a `k` above the cluster count |
 | **Silent attrition** | Every metric reports units resolved, completed, and failed — never a bare `n` that hides dropout. Each count is scoped to what its execution was handed, so a fold or an arm isn't charged with units it never saw |
 | **Hypotheses invented after seeing results** | A hypothesis carries the `parameters_hash` of the config that declared it; anything added later doesn't match, and undeclared analyses render as exploratory |
 
