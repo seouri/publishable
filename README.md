@@ -61,7 +61,7 @@ clones the exact commit, restores the locked environment, verifies the input dat
 
 **Designs it speaks natively:** within- and between-subjects (with recorded randomization), factorial, ablation, dose–response, nested cross-validation, bootstrap, permutation, technical-vs-biological replication, clustered units. The statistics follow the design — bootstrap resamples get percentile intervals, technical replicates never enter `n`, and a multi-condition sweep won't report uncorrected comparisons without warning you. Modelling beyond summary statistics is yours: see [Experimental designs](docs/experimental-designs.md) for what's supported, what needs an override, and the [errors core refuses to let you make](docs/experimental-designs.md#mistakes-core-prevents).
 
-| | Optimizes for | `publishable` differs by |
+| Tool | Optimizes for | `publishable` differs by |
 |---|---|---|
 | **MLflow / W&B** | Tracking and comparing runs as they happen | Producing a self-contained record built for *publication*, not a server you query |
 | **Hydra** | Flexible config composition and CLI overrides | Refusing overrides entirely — the file is the only description of the run |
@@ -77,7 +77,7 @@ These overlap, and several compose fine with `publishable`. The distinguishing b
 
 Five words carry the whole model:
 
-| | |
+| Word | Means |
 |---|---|
 | **Unit** | the thing you measure — a patient, sample, trial, respondent |
 | **Step** | one stage of your pipeline, one file in `src/` |
@@ -259,7 +259,7 @@ That's the payoff of hashing code and parameters separately: you get to *prove* 
 
 Creation commands take a name and what's needed to create it. **Everything else takes paths only.**
 
-| | |
+| Command | Does |
 |---|---|
 | `demo` | Build and run a complete worked example, no setup required |
 | `new` · `plugin new` · `generate` · `init` | Scaffold a project, a plugin, an experiment, a step |
