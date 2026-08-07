@@ -261,7 +261,7 @@ results:                                       # scientific; see "Statistical re
     - index: 1
       label: method=spearman
       values: {analysis.method: spearman}
-      per_repeat:                              # diagnostics; not the inference base
+      per_repeat:                              # exactly what the step returned, per repeat
         step03_analyze:
           seed17: {r: 0.62, p: 0.001}
           seed42: {r: 0.59, p: 0.002}
@@ -867,7 +867,9 @@ That third row is the important refusal. A step that computes a cohort-level sta
 
 Repeats are a variance component, not the inference base: for a `basis: units` metric, repeats are averaged per unit *before* any interval is computed — the same collapse technical replicates get at unit resolution — and their dispersion is reported alongside as `repeat_spread`, which answers "is this pipeline stable?" rather than "how precise is this estimate?"
 
-In the worked example, `generic`'s `aggregate` derives `r` from the recorded `pred` and `truth` columns, so `r` is unit-based even though the step also returns it. Core cross-checks the two and warns if they disagree — the step's number is what ran, the derived number is what can be intervalled, and a mismatch means one of them is measuring something else.
+In the worked example, `generic`'s `aggregate` derives `r` from the recorded `pred` and `truth` columns, so `r` is unit-based even though the step also returns it.
+
+**`per_repeat` and `aggregated` come from different places, and neither is derived from the other.** `per_repeat` is verbatim what each step returned on that execution — nothing more, and no derived metric ever appears there, because deriving one per repeat would mean running `aggregate` on a table that hasn't been collapsed yet. `aggregated` is computed once, from the collapsed table. Recording both side by side is deliberate: if the step's own `r` and the derived `r` disagree, that's visible in `run.yaml` rather than reconciled behind your back. Core doesn't adjudicate which is right — one of them is measuring something else, and that's a bug in the experiment, not a number for core to pick.
 
 ```yaml
 results:
@@ -883,7 +885,7 @@ results:
               repeat_spread: {std: 0.021, n: 5, kind: seed}}
     - index: 1
       label: method=spearman
-      per_repeat:                                   # diagnostics; not the inference base
+      per_repeat:                                   # exactly what the step returned
         step03_analyze:
           seed17: {r: 0.62}
           seed42: {r: 0.59}
