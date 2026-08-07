@@ -127,7 +127,9 @@ sweep:
   # 00_baseline + 3 ablations = 4 conditions
 ```
 
-`ablate` reads the baseline rather than re-emitting it, so the full model appears once. It requires `sweep.baseline` and composes with no other mode — crossing "one change at a time" with a second axis stops being one change at a time.
+`ablate` reads the baseline rather than re-emitting it, so the full model appears once. It requires `sweep.baseline` and composes with no other *parameter* mode — crossing "one change at a time" with a second parameter axis stops being one change at a time.
+
+It does compose with `groups`, which varies no parameter: `groups: {by: cohort, levels: [derivation, validation]}` alongside the above gives `2 × (1 + 3) = 8` conditions, each still one change from its own arm's baseline. That's the ablation repeated per cohort, and it's the one composition that leaves "one change at a time" intact. See [reference.md § Expansion modes](reference.md#expansion-modes).
 
 ### Dose-response and parameter search
 

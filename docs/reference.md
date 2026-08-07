@@ -165,7 +165,8 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Swept values legal | `sweep.grid.analysis.method[1]` is `spearmann`, expected one of pearson, spearman, kendall |
 | Ablation targets | `sweep.ablate.remove[0]` is `analysis.min_samples` (int); `remove` needs a boolean or nullable parameter — use `override` |
 | Ablation needs a baseline | `sweep.ablate` is declared but `sweep.baseline` is not — there is nothing to ablate from |
-| Ablation doesn't compose | `sweep.ablate` cannot be combined with `grid`, `paired`, `sample`, or `groups`; one change at a time and a second axis are contradictory |
+| Ablation doesn't compose with a parameter axis | `sweep.ablate` cannot be combined with `grid`, `paired`, or `sample`; one change at a time and a second parameter axis are contradictory. `groups` is permitted — it varies no parameter |
+| Ablation baseline isn't a group level | `sweep.baseline` fixes `cohort: derivation` while `ablate` is declared; each level gets its own baseline condition, so the arms can't have one designated between them |
 | Sample ranges | `sweep.sample.ranges.analysis.confidence` upper bound 1.4 violates the parameter's `lt=1` |
 | Baseline is a valid condition | `sweep.baseline` sets `analysis.method: pearsonn` |
 | Repeat kind coherence | `{kind: bootstrap}` is not a repeat kind — declare `statistics.resample` instead |
@@ -595,7 +596,23 @@ That's 4 conditions × 5 repeats = 20 executions of the pipeline.
 
 Six modes, each covering a distinct experimental pattern. They compose: the final condition set is the product of every axis-shaped mode present — `grid`, `paired`, `sample`, `groups` — with the declared `baseline` prepended as condition `00`.
 
-`ablate` is the one mode that does not multiply, because it isn't an axis. It emits `n` conditions, each one change away from the baseline, and it reads the baseline rather than re-emitting it — so a declared baseline is condition `00` exactly once, never both as `00_baseline` and as an ablate row. It therefore requires `sweep.baseline`, which `validate` checks, and combining it with another mode is rejected: the product of "vary one thing at a time" with a second axis is no longer one thing at a time, and there is no defensible reading of what it would mean.
+`ablate` is the one mode that does not multiply, because it isn't an axis. It emits `n` conditions, each one change away from the baseline, and it reads the baseline rather than re-emitting it — so a declared baseline is condition `00` exactly once, never both as `00_baseline` and as an ablate row. It therefore requires `sweep.baseline`, which `validate` checks.
+
+Combining `ablate` with another *parameter* mode is rejected: the product of "vary one thing at a time" with a second parameter axis is no longer one thing at a time, and there is no defensible reading of what it would mean. `groups` is the exception, and the reason is the same reason it's the exception everywhere else — it varies no parameter. Crossing an ablation with a group axis leaves every condition exactly one parameter change from its arm's baseline; all that changes is which units it was measured on. So `ablate × groups` is permitted, and gives `(1 + n)` conditions per level:
+
+```yaml
+sweep:
+  groups: {by: cohort, levels: [derivation, validation]}
+  baseline: {features.labs: true, features.notes: true}
+  ablate:
+    from: baseline
+    remove: [features.labs, features.notes]
+  # 2 levels × (1 baseline + 2 ablations) = 6 conditions:
+  #   00_cohort=derivation_baseline   01_cohort=derivation_labs=false   …
+  #   03_cohort=validation_baseline   …
+```
+
+That's "which features matter, in each of two cohorts" — an ordinary design, and expressing it as two configs would give up the shared allocation, the shared seed list, and the single `run.yaml` that make the arms comparable in the first place. The baseline becomes one condition per level rather than one per run, which is the honest reading: there is no single reference condition when the reference cohort differs. `sweep.baseline` may not name the group axis for this reason — the arms are peers, and `validate` rejects a baseline that fixes a level while `ablate` is declared.
 
 **`grid` — cartesian product.** The default. Every combination of every listed value.
 
