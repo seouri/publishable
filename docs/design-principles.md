@@ -39,6 +39,7 @@ Reproducibility usually fails for a boring reason: the true record of what ran i
 - **Reproducing elsewhere shouldn't mean typing git commands.** One command clones, checks out the recorded commit, syncs, and runs. See [Reproducing on another device](reference.md#reproducing-on-another-device).
 - **Secrets are the one thing never captured.** Credentials live in `.env`; the config stores only variable *names*. See [Secrets & credentials](reference.md#secrets--credentials).
 - **The unit of measurement is first-class.** Patients, samples, trials, items — declared once, and everything from fold partitioning to per-unit result tables follows from it. See [Units](reference.md#units-the-thing-being-measured).
+- **Intervals are over units, never over executions.** `n` counts the things a claim generalizes over, so every interval core reports is computed from the per-unit table. Repeats are a variance component reported separately, because an interval across five seeds narrows as you add seeds. Where core can't compute an interval honestly, it omits it. See [The unit table is the inference base](reference.md#the-unit-table-is-the-inference-base).
 - **Steps declare how often they run.** Loading a cohort shouldn't re-execute once per condition per repeat. See [Step scope](reference.md#step-scope).
 - **Shared work is traceable.** Consuming an earlier run's artifacts records that dependency. See [Lineage](reference.md#lineage-between-runs).
 - **What you expected is recordable, not just what you computed.** The config is written and hashed before the run, which is what pre-registration means. See [Pre-registration](reference.md#pre-registration).
@@ -70,6 +71,7 @@ Two distinctions that are easy to conflate:
 
 - **Experiment vs. study.** An experiment is machinery; a study is a claim. One experiment usually produces many runs, and a paper reports a subset of them. Keeping these separate is what lets you rerun freely without every run pretending to be a finding.
 - **Condition vs. repeat.** A condition is a difference you're measuring the effect of. A repeat is a difference you're averaging over. Statistics aggregate within a condition and compare across conditions — never the reverse. Getting this backwards is the most common way a reproducible pipeline still produces a wrong number.
+- **Repeat vs. unit.** A repeat is how many times the pipeline ran; a unit is how many things were measured. Only the second can be the `n` of an inference, and a tool that blurs them will report a confidence interval that gets narrower the longer you leave it running. See [The unit table is the inference base](reference.md#the-unit-table-is-the-inference-base).
 
 *Condition* is the term experimental fields already use, chosen over alternatives like "point," which carries HPC and optimization connotations.
 

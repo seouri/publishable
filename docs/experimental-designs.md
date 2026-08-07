@@ -24,7 +24,7 @@ Resolve the three declarations separately and the config writes itself. They are
 | What varies deliberately? | `sweep` | `grid` (cartesian) · `paired` (coupled axes) · `ablate` (`1 + n`, one change each) · `sample` (continuous ranges) · `baseline` (the reference, not an axis) | [Factorial](#factorial) · [Fractional factorial](#fractional-factorial-and-coupled-settings) · [Ablation](#ablation) · [Dose-response](#dose-response-and-parameter-search) |
 | What varies incidentally? | `replication.repeats` | `seed` · `fold` · `bootstrap` · `permutation` · `technical` | [Single condition](#single-condition-repeated) · [Cross-validation](#cross-validation-including-nested) · [Bootstrap and permutation](#bootstrap-and-permutation) · [Technical replication](#technical-and-biological-replication) |
 
-Answering a question with nothing is a valid answer: omit `sweep` for a single condition, omit `data.units` entirely when the pipeline has no unit table — though `fold`, `bootstrap`, `permutation`, and `technical` all require one, since each of them resamples or re-measures units. What each repeat kind varies, how core aggregates it, and whether it enters `n` is the table in [reference.md § Repeat kinds](reference.md#repeat-kinds) — those three properties differ per kind, and that's the point of naming the kind rather than passing a count.
+Answering a question with nothing is a valid answer: omit `sweep` for a single condition, omit `data.units` entirely when the pipeline has no unit table — though `fold`, `bootstrap`, `permutation`, and `technical` all require one, since each of them resamples or re-measures units. What each repeat kind varies and how core collapses it is the table in [reference.md § Repeat kinds](reference.md#repeat-kinds) — both differ per kind, and that's the point of naming the kind rather than passing a count. What no repeat kind does is set `n`: that counts units, and every interval core reports comes from the [per-unit table](reference.md#the-unit-table-is-the-inference-base).
 
 Two choices sit *below* an answer rather than beside it. `assign.method` (`random` | `by_attribute` | `blocked`) only applies once allocation is `between`, and `cluster_by` is orthogonal to all three — it declares that units aren't independent, which changes the intervals rather than the design. See [Clustered and hierarchical data](#clustered-and-hierarchical-data) and [Matched case-control](#matched-case-control).
 
@@ -185,6 +185,8 @@ The design is shaped around a specific claim: most irreproducible results are no
 
 | Mistake | What core does |
 |---|---|
+| **Repeats counted as `n`** | `n` counts units, always. Every interval is computed from the per-unit table; repeat dispersion is reported separately as `repeat_spread`, so an interval that would narrow as you add seeds is never presented as evidence about a population |
+| **A confidence interval on a number core can't recompute** | A metric that exists only as a scalar a step returned is reported as `basis: repeats` with **no interval**, rather than one over executions. Giving it an interval means making it a per-unit column or deriving it in the template's `aggregate(units)` |
 | **Technical replicates counted as `n`** | `{kind: technical}` collapses into the unit and never enters `n`. `{kind: biological}` is rejected with a pointer to the unit table |
 | **t-intervals over bootstrap resamples** | Aggregation is chosen by repeat kind; bootstrap gets percentile intervals, permutation gets a null and a p-value |
 | **Pooling across conditions** | Statistics aggregate within a condition only. Cross-condition comparison is an explicit contrast against a declared baseline |
@@ -216,7 +218,7 @@ The design is shaped around a specific claim: most irreproducible results are no
 
 Being explicit about this matters more than the feature list, because a tool that quietly does the wrong statistic is worse than one that declines.
 
-**Modelling beyond summary statistics.** Mixed-effects and hierarchical models, factorial main effects and interactions, survival analysis with censoring, ordinal and count outcomes, and curve fitting are all out of scope for core aggregation, which handles numeric scalars per condition. The per-unit tables `io.record` produces are the right input for any of these — bring your own model in a `scope: "summary"` step, or override `aggregate()` in a template.
+**Modelling beyond summary statistics.** Mixed-effects and hierarchical models, factorial main effects and interactions, survival analysis with censoring, ordinal and count outcomes, and curve fitting are all out of scope for core aggregation, which computes means, derived scalars, and intervals over the per-unit table. That table is the right input for any of these — bring your own model in a `scope: "summary"` step, or derive the quantity you need in a template's `aggregate(units)`, which is also what gives it an interval.
 
 **Power analysis.** Core enforces a template's minimum repeat count but does not compute power or required sample size. If your field expects an a-priori calculation, record it as a parameter so it's part of the pre-registered config.
 

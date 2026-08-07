@@ -6,7 +6,7 @@ You have an experiment to run. Here's the whole arc with `publishable`:
 
 1. **Design the run.** One config file holds every parameter, the conditions you're comparing, and the repeats you'll average over. `publishable` generates it fully populated — you edit rather than author.
 2. **Run it.** `publishable run config.yaml`. No flags. Conditions and repeats expand on their own, and each one gets its own place in the output tree.
-3. **Read the results.** Means, confidence intervals, and effect sizes against your baseline, already computed and sitting next to the run that produced them.
+3. **Read the results.** Estimates, confidence intervals over your units, and effect sizes against your baseline, already computed and sitting next to the run that produced them.
 4. **Publish it.** Hand a collaborator, a reviewer, or your future self one file. `publishable reproduce` re-runs it exactly — same commit, same locked environment, same input data, each verified by hash.
 
 Nothing about what ran ends up in a shell history, so nothing has to be reconstructed later.
@@ -33,10 +33,12 @@ Running 3 conditions × 5 repeats = 15 executions
   01_method=spearman                       ████████████ 5/5
   02_method=kendall                        ████████████ 5/5
 
-  condition             r       95% CI            vs baseline
-  00_baseline           0.581   [0.555, 0.607]    —
-  01_method=spearman    0.607   [0.590, 0.624]    +0.026  (d = 0.41)
-  02_method=kendall     0.412   [0.395, 0.429]    −0.169  (d = 2.61)
+  condition             r       95% CI            vs baseline (paired)
+  00_baseline           0.581   [0.488, 0.661]    —
+  01_method=spearman    0.607   [0.517, 0.683]    +0.026  (d = 0.41)
+  02_method=kendall     0.412   [0.298, 0.514]    −0.169  (d = 2.61)
+
+  intervals over 228 of 240 units (12 failed) · seed spread ±0.014
 
 run.yaml → ~/publishable-demo-data/results/run_2026-08-07T09-14-03Z_8e21ab3/run.yaml
 ```
@@ -178,9 +180,10 @@ results:
   conditions:
     - label: method=spearman
       aggregated:
-        step03_analyze: {r: {mean: 0.607, std: 0.014, n: 5, ci95: [0.590, 0.624]}}
+        step03_analyze: {r: {value: 0.607, basis: units, n: {completed: 228},
+                             ci95: [0.517, 0.683], repeat_spread: {std: 0.014}}}
       vs_baseline:
-        step03_analyze: {r: {delta: 0.026, cohens_d: 0.41}}
+        step03_analyze: {r: {delta: 0.026, paired: true, cohens_d: 0.41}}
 provenance:
   code_hash: sha256:8e21…            # your src/**, from a clean tree
   parameters_hash: sha256:1a2b…      # this exact parameter set
@@ -251,6 +254,7 @@ That's the payoff of hashing code and parameters separately: you get to *prove* 
 - **Three things pinned, not two.** Git commit for code, `uv.lock` for environment, and a content manifest for input data. The third is what most tools leave open.
 - **Artifacts are append-only and atomic.** Nothing is ever overwritten or deleted, and a crash mid-write leaves nothing behind rather than a half-file that blocks the retry.
 - **Code and data never share a repo.** Data paths are structurally forbidden inside the git repo — code is shareable, governed data isn't, and they need different protocols.
+- **Intervals over units, not over executions.** `n` counts the things your claim generalizes over. Repeats are reported as pipeline stability, separately and labelled, because an interval across five seeds narrows as you add seeds and says nothing about your cohort. Where core can't compute an interval honestly, it reports the estimate and omits the interval.
 - **Statistics that match your design.** Declaring how units are allocated and how repeats are structured determines the analysis: paired or unpaired, t-based or percentile, clustered or not. A t-interval over bootstrap resamples is wrong, and core won't compute one — nor will it count technical replicates as `n`.
 - **Pre-registration for free.** The config is written and hashed *before* the run, so declared hypotheses can be checked against results — and after-the-fact additions don't match the hash.
 - **Stated limits.** Core documents what it [does not promise](docs/design-principles.md#what-core-does-not-promise) — bit-identical reruns against external services, verification of your Python, or scientific validity.
