@@ -179,7 +179,7 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Allocation is coherent | `allocation: between` over 2 arms and 12 units gives arms of 6; below the configured minimum (warning) |
 | Allocation strata exist | `assign.stratify_by: [site]` but `site` is not in `data.units.attributes` |
 | Clustering looks undeclared | `site` has 6 distinct values across 240 units but `cluster_by` is unset (warning) |
-| Correction declared for a family | 6 conditions produce 5 baseline comparisons with `statistics.correction: none` (warning) |
+| Correction declared for a family | 6 conditions × 3 metrics produce a family of 15 baseline comparisons with `statistics.correction: none` (warning) |
 | Step scope coherence | `step01_load_cohort` is `scope="run"` but reads `analysis.method`, which `sweep` varies |
 | Scope read direction | `step02_fit_model` (`scope="condition"`) reads from `step03_analyze` (`scope="repeat"`), which runs later |
 | Hypothesis references | `hypotheses[0].metric` `step03_analyze.r` names no metric any step returns |
@@ -275,7 +275,8 @@ results:                                       # scientific; see "Statistical re
         step03_analyze:
           r: {delta: 0.026, basis: units, paired: true, ci95: [0.017, 0.035],
               ci95_corrected: [0.011, 0.041],
-              correction: holm, family_size: 2, cohens_d: 0.41}
+              correction: holm, family_size: 2, family: {comparisons: 2, metrics: 1},
+              cohens_d: 0.41}
   summary:
     step04_compare_methods: {best_method: spearman}
   hypotheses:                                  # see "Pre-registration"
@@ -730,14 +731,23 @@ statistics:
 
 `order: randomized` shuffles the execution order of (condition, repeat) pairs under a recorded seed. For anything touching an instrument, a plate, or a service whose behaviour drifts over hours, running conditions in index order confounds the comparison with time; randomizing costs nothing and the realized order is recorded either way.
 
-`statistics.correction` applies across the family of baseline comparisons in a sweep. A six-condition sweep is five comparisons, and reporting five uncorrected intervals is how a sweep feature turns into a p-hacking feature. Corrected and raw intervals are both reported, so nothing is hidden:
+`statistics.correction` applies across the family of baseline comparisons in a sweep, and reporting that family uncorrected is how a sweep feature turns into a p-hacking feature. Corrected and raw intervals are both reported, so nothing is hidden:
 
 ```yaml
 vs_baseline:
   step03_analyze:
     r: {delta: 0.026, ci95: [0.017, 0.035],
-        ci95_corrected: [0.011, 0.041], correction: holm, family_size: 5}
+        ci95_corrected: [0.008, 0.044], correction: holm,
+        family_size: 15, family: {comparisons: 5, metrics: 3}}
 ```
+
+Only metrics that receive a corrected interval are counted — that is, [`basis: units`](#the-unit-table-is-the-inference-base) metrics, since a metric reported without an interval isn't a comparison anyone can read as significant. In the worked example that's 2 comparisons × 1 metric, so `family_size: 2`.
+
+**The family is comparisons × metrics, not comparisons.** A six-condition sweep is five comparisons, but if each step reports three numeric metrics, a reader is being shown fifteen intervals and any of them can carry the paper. Counting only conditions would under-correct by the factor that actually varies between projects — and a tool that advertises corrected intervals while counting the family too small is worse than one that reports raw intervals honestly, because the number looks handled.
+
+Two consequences worth knowing before you write the config. Every numeric metric a step reports is in the family whether you look at it or not, so a step that returns twelve diagnostics widens the correction on the one you care about; return diagnostics as per-unit columns, which are inputs rather than reported comparisons, or move them to a separate step. And `family` is reported broken out rather than as a single integer, so the count is auditable instead of asserted — `report` prints it, and a reviewer can check it against the table.
+
+`hypotheses` are counted as their own family, separately from the exploratory sweep. A pre-registered confirmatory comparison shouldn't be penalized for the exploration that surrounded it, which is most of the point of declaring it in advance.
 
 Two things this buys:
 
@@ -885,7 +895,8 @@ results:
         step03_analyze:
           r: {delta: 0.026, basis: units, paired: true, ci95: [0.017, 0.035],
               ci95_corrected: [0.011, 0.041],
-              correction: holm, family_size: 2, cohens_d: 0.41}
+              correction: holm, family_size: 2, family: {comparisons: 2, metrics: 1},
+              cohens_d: 0.41}
   summary:
     step04_compare_methods: {best_method: spearman}
 ```
