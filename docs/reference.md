@@ -259,10 +259,10 @@ execution:                                     # mechanical; nested by the scope
         step03_analyze:
           seed17: {status: completed, wall_seconds: 903.1, attempts: 2,
                    nondeterministic: false,
-                   n: {resolved: 240, completed: 228, failed: 12}}   # this execution's
+                   n: {resolved: 240, completed: 231, failed: 9}}    # this execution's
           seed42: {status: completed, wall_seconds: 897.4, attempts: 1,
                    nondeterministic: false,
-                   n: {resolved: 240, completed: 228, failed: 12}}
+                   n: {resolved: 240, completed: 233, failed: 7}}
   summary:
     step04_compare_methods: {status: completed, wall_seconds: 4.2, attempts: 1}
 
@@ -784,6 +784,8 @@ So three different `n`s exist, at three levels, and they answer different questi
 | Run | `provenance.units.n` | Every unit the declaration resolved, before any narrowing |
 
 The condition-level `n` is the one that appears beside a `ci95`, and it reconciles with the run level rather than restating it: under `fold`, each unit is tested exactly once per fold sweep, so concatenating ten 24-unit partitions gives one value per unit and the condition's `n` comes back to 240 resolved. Under a group axis it doesn't reconcile, and shouldn't — each arm's interval is over that arm's units, which is what makes it an arm-level estimate.
+
+**A unit counts as completed for the condition only if it completed in every repeat.** Failures don't have to line up across repeats — a unit can error under one seed and succeed under another, and in the worked example seed17 loses 9 units and seed42 loses 7, overlapping in 4, so 12 distinct units failed somewhere and the condition reports `completed: 228`. The intersection is the rule rather than the union because [§ Statistical reporting](#statistical-reporting) averages repeats per unit before computing any interval: a unit present in three of five seeds would otherwise enter the average on a different number of observations than its neighbours, which is a ragged table dressed as a rectangular one. Taking the intersection costs a few units and keeps every per-unit value comparable. `report` shows the per-repeat counts alongside, so a repeat that failed unusually many units is visible rather than absorbed into the condition's total.
 
 **The failure fraction `run` enforces is against the run level.** A threshold checked per execution would fire on a small fold long before the cohort was in any trouble, and a threshold checked per condition would let a systematically broken fold hide inside nine healthy ones. Run-level is the number that decides whether the complete-case result is interpretable, so that's the one with a threshold on it. Per-execution failures are still recorded and `report` surfaces any execution whose completion rate is an outlier against its condition — an early-stopping signal without a second threshold to tune.
 
