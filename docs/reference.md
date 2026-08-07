@@ -453,7 +453,7 @@ class Step(BaseStep):
 
 **Partitions are computed once per run, not once per condition.** Every condition sees the same fold boundaries and the same seed list, derived from the config-level `parameters_hash`. This is load-bearing rather than incidental: under `allocation: within`, comparisons across conditions are paired unit by unit, and pairing fold 3 of one condition against a *differently drawn* fold 3 of another would not be a paired comparison at all. Shared partitions are also why the layout can name repeat directories `seed17`/`fold03` identically under every condition.
 
-**`io.record(key, values)` is the inference base, not a convenience.** Between artifacts (files) and results (aggregate metrics) sits the per-unit table, and it is what every confidence interval core reports is computed over. It's append-only like everything else, resumable by key, and materialized as `units.parquet` in the step's directory. A step that records nothing still runs and still reports its returned metrics — but core has nothing to generalize from, so those metrics come back as `basis: repeats` with no interval. See [Statistical reporting](#statistical-reporting).
+**`io.record(key, values)` is the inference base, not a convenience.** Between artifacts (files) and results (aggregate metrics) sits the per-unit table, and it is what every confidence interval core reports is computed over. It's append-only like everything else, resumable by key, and materialized as `units.parquet` in the step's directory. A step that records nothing still runs and still reports its returned metrics — but if units were declared, core has nothing to generalize from, so those metrics come back as `basis: repeats` with no interval. See [Statistical reporting](#statistical-reporting).
 
 `data.units` is optional — a simulation with no unit table simply omits it, and `fold`, `statistics.resample`, and `statistics.null_test` then aren't available, which is correct, since there'd be nothing to partition or resample. Such an experiment reports over repeats and says so; that's the one case where a repeat count is the honest denominator, because the executions *are* the observations.
 
@@ -860,8 +860,10 @@ The `n` in a confidence interval is a count of the things the claim generalizes 
 |---|---|---|
 | A column in `units.parquet` | `units` | Mean over units, `n` = completed units, t-based `ci95` — cluster-robust when [`cluster_by`](#clustered-units) is declared |
 | Derived from the table by the template's [`aggregate(units)`](#templates-where-parameters-are-defined) | `units` | The derived value, with a percentile `ci95` from resampling units |
-| Only as a scalar a step returned | `repeats` | Point estimate and across-repeat spread — **no `ci95`** |
-| No unit table declared at all | `repeats` | Mean, std, sem and a t-based `ci95` over repeats, labelled as such |
+| A unit table exists, but the metric isn't derivable from it | `repeats` | Point estimate and across-repeat spread — **no `ci95`** |
+| No `data.units` at all | `repeats` | Mean, std, sem and a t-based `ci95` over repeats, labelled as such |
+
+Those last two rows differ, and `data.units` is the whole discriminator. With no unit table, the executions *are* the observations — a simulation's ten seeds are ten draws from the thing being studied — so an interval over repeats is the honest one, and core computes it. With a unit table present, an interval over repeats would be a claim about seeds standing in for a claim about units, so core refuses it rather than substituting the wrong denominator.
 
 That third row is the important refusal. A step that computes a cohort-level statistic internally and returns it as a number gives core nothing to resample: core never inspects the body of your Python, so it cannot recompute your statistic on a different set of units. What it will not do is fall back to an interval across the five seeds and present that as a confidence interval — **an interval over seeds measures how much the RNG moved the answer, and it narrows as you add seeds.** It says `basis: repeats`, reports the spread, and omits `ci95`. To get an interval, make the quantity a per-unit column, or teach the template to derive it (below).
 
