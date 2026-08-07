@@ -167,7 +167,6 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Technical replicates | `{kind: technical}` is not a repeat kind — declare `data.units.measurements` instead |
 | Grid size sane | 6 conditions × 10 folds × 3 seeds = 180 executions exceeds the warning threshold |
 | Credentials present | `INSTRUMENT_API_TOKEN` is not set in `.env` |
-| Lockfile drift | `uv.lock` differs from the one recorded in the run you're resuming |
 | Data outside repo | `output_dir` resolves inside the git repository |
 | Manifest readable | `input_dir` is unreadable or empty |
 | Unit keys unique | `data.units.key` `patient_id` has 3 duplicate values |
@@ -181,7 +180,6 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Allocation strata exist | `assign.stratify_by: [site]` but `site` is not in `data.units.attributes` |
 | Clustering looks undeclared | `site` has 6 distinct values across 240 units but `cluster_by` is unset (warning) |
 | Correction declared for a family | 6 conditions produce 5 baseline comparisons with `statistics.correction: none` (warning) |
-| Unit failure rate | 12 of 240 units failed in `01_method=spearman`, above the configured threshold (warning) |
 | Step scope coherence | `step01_load_cohort` is `scope="run"` but reads `analysis.method`, which `sweep` varies |
 | Scope read direction | `step02_fit_model` (`scope="condition"`) reads from `step03_analyze` (`scope="repeat"`), which runs later |
 | Hypothesis references | `hypotheses[0].metric` `step03_analyze.r` names no metric any step returns |
@@ -189,6 +187,8 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Hypothesis has an inference base | `hypotheses[0].metric` `step03_analyze.r` is `basis: repeats` — no unit table and no template `aggregate`, so it can be reported but not tested (warning) |
 
 The unknown-key check matters more than it looks: a mistyped key in a hand-edited YAML file is otherwise silently ignored, and the run proceeds with a default while you believe you changed something. Since `init` materializes every valid key, any key not in the spec is a typo by construction.
+
+Two things deliberately absent from that table are checks that need a run to have happened: the unit failure rate is enforced by `run` as it goes, and lockfile drift is checked by `resume` against the run it's resuming. `validate` takes a config path, so neither is a question it could answer.
 
 `publishable dry-run` goes further: it validates, builds the input manifest, resolves the run directory, and prints every artifact path that *would* be written — without executing a step or creating anything.
 
@@ -710,7 +710,9 @@ r:
   method: percentile_over_units
 ```
 
-The three-part `n` closes a reporting gap that otherwise goes unnoticed: when 12 of 240 units error out, a bare `n: 240` is wrong and a bare `n: 228` silently hides attrition. All three numbers are recorded, `report` shows the completion rate, and `validate` warns when failures exceed a configurable fraction — because at some level of dropout the complete-case result stops being interpretable and that's a decision for you, not a default.
+The three-part `n` closes a reporting gap that otherwise goes unnoticed: when 12 of 240 units error out, a bare `n: 240` is wrong and a bare `n: 228` silently hides attrition. All three numbers are recorded, `report` shows the completion rate, and `run` fails the whole run when failures exceed a configured fraction — because at some level of dropout the complete-case result stops being interpretable, and finding that out after the run is worse than not having spent it.
+
+**How core knows a unit failed** is worth stating, because core never inspects the body of a step. It counts: `resolved` is how many units the declaration produced, `completed` is how many distinct keys reached `io.record` in that step, and `failed` is the difference. That's an *effect*, which is the only thing core checks — consistent with [greenfield only](design-principles.md#greenfield-only). Two consequences follow. A step that swallows an exception and moves to the next unit is recorded as a failure anyway, because the row is missing; and a step that raises out of its own loop aborts the execution, so the repeat is marked `failed` in `execution` rather than reported as complete with partial units. A step that records nothing at all has `completed: 0`, which is a loud failure rather than a silent `n` of zero.
 
 `repeat_spread` sits beside the interval rather than inside it on purpose. It answers a real question — did this pipeline give the same answer five times? — and it is not a measure of how precisely the cohort was estimated. Keeping both visible, and labelling which is which, is cheaper than expecting a reader to remember the difference.
 
