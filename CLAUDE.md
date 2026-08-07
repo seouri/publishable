@@ -4,9 +4,9 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Repository status: specification only, no implementation
 
-`git ls-files` returns six files. There is no `src/`, no `pyproject.toml`, no `tests/`, and no installed CLI — the entire repo is `README.md` plus `docs/*.md`.
+`git ls-files` returns eight files. There is no `src/`, no `pyproject.toml`, no `tests/`, and no installed CLI — the entire repo is `README.md`, `CITATION.cff`, `LICENSE` and `docs/*.md`.
 
-**There are no build, lint, or test commands.** Do not invent them, and do not run `publishable <anything>`: the binary does not exist here. The commands described throughout the docs are the CLI this project *specifies*, not commands available in this working tree. Likewise, `docs/reference.md:1256` ("Package layout") is a *planned* source tree — those files do not exist yet.
+**There are no build, lint, or test commands.** Do not invent them, and do not run `publishable <anything>`: the binary does not exist here. The commands described throughout the docs are the CLI this project *specifies*, not commands available in this working tree. Likewise, `docs/reference.md` § "Package layout" is a *planned* source tree — those files do not exist yet.
 
 Work in this repo is therefore documentation work: refining the design, keeping the three docs consistent with each other and with the README.
 

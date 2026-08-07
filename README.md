@@ -97,7 +97,9 @@ my-study/
 │   ├── experiment.py          #   declares step order
 │   └── steps/
 │       ├── step01_load_cohort.py
-│       └── step02_analyze.py
+│       ├── step02_fit_model.py
+│       ├── step03_analyze.py
+│       └── step04_compare_methods.py
 ├── configs/cohort-pilot/
 │   └── config.yaml            # every parameter                    → parameters_hash
 ├── pyproject.toml + uv.lock   # the environment                    → locked
@@ -113,7 +115,7 @@ Your data lives outside it, and so does everything a run produces:
     ├── conditions/
     │   ├── 00_baseline/                ← one folder per condition, self-describing
     │   │   ├── seed17/                 ← one folder per repeat
-    │   │   │   └── step02_analyze/scores.parquet
+    │   │   │   └── step03_analyze/scores.parquet
     │   │   └── seed42/…
     │   └── 01_method=spearman/…
     └── summary/                        ← steps that compare across conditions
@@ -149,7 +151,7 @@ sweep:
 
 replication:
   repeats:
-    - {kind: seed, n: 5}         # seed | fold | bootstrap | permutation
+    - {kind: seed, n: 5}         # seed | fold | bootstrap | permutation | technical
 ```
 
 And steps that never mention sweeps — each condition is resolved before your code runs:

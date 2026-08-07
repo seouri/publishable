@@ -138,7 +138,7 @@ Each is complete and self-describing, and still takes exactly one path to run. I
 
 | Core owns | Plugins own |
 |---|---|
-| The config envelope: `metadata`, `data`, `units`, `replication`, `hypotheses`, `entrypoint` | The entire `parameters` block, via `parameter_spec` |
+| The config envelope — every top-level block except `parameters`: `metadata`, `entrypoint`, `data`, `sweep`, `replication`, `statistics`, `hypotheses` | The entire `parameters` block, via `parameter_spec` |
 | Materializing configs from a spec; value-level validation | The spec: types, defaults, ranges, choices, help text |
 | Sweep expansion (`grid`/`paired`/`ablate`/`sample`/`baseline`), repeat kinds, seed derivation, kind-aware statistics | Field-appropriate sweep and repeat defaults |
 | The three hashes, run identity, step scope, lineage, units, append-only + atomic artifacts | Naming conventions (`naming_pattern`, `field_convention`, `default_repeats`) |
@@ -181,7 +181,7 @@ The repo holds code and configs. Everything file-shaped a step produces goes to 
 
 ## Whose git hash is this?
 
-Always the experiment repo's, never `publishable`'s. Core walks up from the working directory to find `.git`; that repo's commit, branch, and `src/**` dirty state go into `provenance.git`. Core's own version is recorded separately as `provenance.publishable_version`, plugin versions as `provenance.plugin_versions` — compatibility notes, never conflated with the code that ran your experiment. In a monorepo, `--repo path/to/subpackage` pins a specific root.
+Always the experiment repo's, never `publishable`'s. Core walks up from the working directory to find `.git`; that repo's commit, branch, and `src/**` dirty state go into `provenance.git`. Core's own version is recorded separately as `provenance.publishable_version`, plugin versions as `provenance.plugin_versions` — compatibility notes, never conflated with the code that ran your experiment. In a monorepo the nearest enclosing `.git` wins, so a subpackage that needs its own `code_hash` needs its own repository — there is no flag to override the walk-up.
 
 ---
 

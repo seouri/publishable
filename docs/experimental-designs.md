@@ -65,7 +65,7 @@ sweep:
   grid:
     drug.dose: [0, 10, 20]
     diet.type: [control, high_fat]
-  # 3 x 2 = 6 conditions
+  # 3 × 2 = 6 conditions
 ```
 
 Core reports each condition and its contrast against the baseline. **Main effects and interaction terms are not computed** — see [what core will not do](#what-core-will-not-do-for-you). For a 2×2 that's often fine; for anything you intend to analyze as a factorial model, plan on an `aggregate()` override.
