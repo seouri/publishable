@@ -155,6 +155,8 @@ replication:
 
 Core computes the partitions and records exact split membership, so the CV is reproducible rather than merely re-runnable. Aggregation is inner-to-outer: seeds within a fold, then folds across the condition.
 
+Each fold execution is handed only its test partition, so its `n` is over those units — a 10-fold run over 240 units reports `resolved: 24` per execution, not 24 completions against a cohort of 240. The condition's `n` returns to the full roster, because each unit is tested exactly once per fold sweep. See [reference.md § What isn't a repeat](reference.md#what-isnt-a-repeat) for the three levels `n` is reported at and which one carries the failure threshold.
+
 That's **repeated** cross-validation — 10 folds, each evaluated under 3 seeds. It is not nested cross-validation, and the difference is not cosmetic: in nested CV an inner loop runs *within each outer training split* and its result **selects** the setting the outer loop then evaluates. That's a condition chosen from results, which is [exactly what core refuses](design-principles.md#what-core-does-not-promise) — the config would no longer determine the run.
 
 So the outer loop is core's and the selection is yours: declare the outer `fold`, and do the inner search inside the step, over `io.units` for that fold's training partition only. The selected setting is then a value your step records per fold rather than a condition, which is also the honest description of it — a hyperparameter chosen by the pipeline is an output, not a declared parameter.
@@ -233,7 +235,7 @@ The design is shaped around a specific claim: most irreproducible results are no
 | **Paired analysis of an unpaired design** | Comparison type derives from `allocation`, so it can't disagree with how units were actually assigned |
 | **Uncorrected multiplicity across a sweep** | `statistics.correction` reports family-wise or FDR-adjusted intervals alongside raw ones; `validate` warns when a multi-condition sweep declares `none` |
 | **Ignored clustering** | `cluster_by` produces cluster-robust intervals; `validate` flags an attribute that looks like an undeclared cluster |
-| **Silent attrition** | Every metric reports units resolved, completed, and failed — never a bare `n` that hides dropout |
+| **Silent attrition** | Every metric reports units resolved, completed, and failed — never a bare `n` that hides dropout. Each count is scoped to what its execution was handed, so a fold or an arm isn't charged with units it never saw |
 | **Hypotheses invented after seeing results** | A hypothesis carries the `parameters_hash` of the config that declared it; anything added later doesn't match, and undeclared analyses render as exploratory |
 
 ### Bookkeeping

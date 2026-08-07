@@ -256,9 +256,11 @@ execution:                                     # mechanical; nested by the scope
         step02_fit_model: {status: completed, wall_seconds: 61.0, attempts: 1}
         step03_analyze:
           seed17: {status: completed, wall_seconds: 903.1, attempts: 2,
-                   nondeterministic: false}
+                   nondeterministic: false,
+                   n: {resolved: 240, completed: 228, failed: 12}}   # this execution's
           seed42: {status: completed, wall_seconds: 897.4, attempts: 1,
-                   nondeterministic: false}
+                   nondeterministic: false,
+                   n: {resolved: 240, completed: 228, failed: 12}}
   summary:
     step04_compare_methods: {status: completed, wall_seconds: 4.2, attempts: 1}
 
@@ -728,7 +730,21 @@ r:
 
 The three-part `n` closes a reporting gap that otherwise goes unnoticed: when 12 of 240 units error out, a bare `n: 240` is wrong and a bare `n: 228` silently hides attrition. All three numbers are recorded, `report` shows the completion rate, and `run` fails the whole run when failures exceed a configured fraction — because at some level of dropout the complete-case result stops being interpretable, and finding that out after the run is worse than not having spent it.
 
-**How core knows a unit failed** is worth stating, because core never inspects the body of a step. It counts: `resolved` is how many units the declaration produced, `completed` is how many distinct keys reached `io.record` in that step, and `failed` is the difference. That's an *effect*, which is the only thing core checks — consistent with [greenfield only](design-principles.md#greenfield-only). Two consequences follow. A step that swallows an exception and moves to the next unit is recorded as a failure anyway, because the row is missing; and a step that raises out of its own loop aborts the execution, so the repeat is marked `failed` in `execution` rather than reported as complete with partial units. A step that records nothing at all has `completed: 0`, which is a loud failure rather than a silent `n` of zero.
+**How core knows a unit failed** is worth stating, because core never inspects the body of a step. It counts: `resolved` is how many units that execution was *given*, `completed` is how many distinct keys reached `io.record` in it, and `failed` is the difference. That's an *effect*, which is the only thing core checks — consistent with [greenfield only](design-principles.md#greenfield-only). Two consequences follow. A step that swallows an exception and moves to the next unit is recorded as a failure anyway, because the row is missing; and a step that raises out of its own loop aborts the execution, so the repeat is marked `failed` in `execution` rather than reported as complete with partial units. A step that records nothing at all has `completed: 0`, which is a loud failure rather than a silent `n` of zero.
+
+**`resolved` counts what the execution was handed, not the cohort.** This matters the moment a design narrows `io.units`, and getting it wrong would make correct runs look catastrophic. Under `{kind: fold, k: 10}` over 240 units, each execution is handed a 24-unit test partition, so a fold that records all 24 is `{resolved: 24, completed: 24, failed: 0}` — not 216 failures against a cohort it was never given. Under a [group axis](#expansion-modes) it's that arm's roster, ~120 rather than 240. `resolved` always equals `len(io.units)` for that execution, which is the only definition a step could be held to.
+
+So three different `n`s exist, at three levels, and they answer different questions:
+
+| Level | Where | Counts |
+|---|---|---|
+| Execution | `execution.conditions[i].steps.<step>.<repeat>.n` | The units *this* fold or arm was handed, and how many it recorded |
+| Condition | `results.conditions[i].aggregated.<step>.<metric>.n` | The condition's collapsed table — the inference base for its interval |
+| Run | `provenance.units.n` | Every unit the declaration resolved, before any narrowing |
+
+The condition-level `n` is the one that appears beside a `ci95`, and it reconciles with the run level rather than restating it: under `fold`, each unit is tested exactly once per fold sweep, so concatenating ten 24-unit partitions gives one value per unit and the condition's `n` comes back to 240 resolved. Under a group axis it doesn't reconcile, and shouldn't — each arm's interval is over that arm's units, which is what makes it an arm-level estimate.
+
+**The failure fraction `run` enforces is against the run level.** A threshold checked per execution would fire on a small fold long before the cohort was in any trouble, and a threshold checked per condition would let a systematically broken fold hide inside nine healthy ones. Run-level is the number that decides whether the complete-case result is interpretable, so that's the one with a threshold on it. Per-execution failures are still recorded and `report` surfaces any execution whose completion rate is an outlier against its condition — an early-stopping signal without a second threshold to tune.
 
 `repeat_spread` sits beside the interval rather than inside it on purpose. It answers a real question — did this pipeline give the same answer five times? — and it is not a measure of how precisely the cohort was estimated. Keeping both visible, and labelling which is which, is cheaper than expecting a reader to remember the difference.
 
