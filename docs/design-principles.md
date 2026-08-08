@@ -154,6 +154,10 @@ Core ships one template, `generic`. Anything domain-shaped is a plugin; the refe
 
 A good test of whether something belongs in core: would it be identical for a wet-lab assay, a simulation sweep, and an LLM benchmark?
 
+**The shape your input must have is derived, not declared.** Every experiment needs its data in a particular shape, and that shape is written down nowhere. It doesn't have to be: `key`, `attributes`, `cluster_by`, `measurements.by`, `holdout.from`, `assign.from`, `stratify_by`, and `null_test.shuffle` each name a field, so what the input must supply is a projection of the design declarations you already wrote. A `data.units.schema` block would be a second copy of that, free to drift, and would raise the same unanswerable question as a defaults file — which one is canonical when they disagree? So core enforces the projection at `validate`, down to values rather than headers: duplicate keys, arm levels that don't match the axis, a split column with three values, a stratum that varies inside a cluster.
+
+That's also where the core/plugin line falls. *What* is required of a unit is identical for an assay, a sweep, and a benchmark, so core owns it. *How* units are found is not — a CSV index is the same everywhere, but a DICOM archive, a plate layout, and a sharded benchmark each need domain code to walk them, so that's a plugin's [unit resolver](reference.md#where-units-come-from). Core never prescribes an input layout, because there is no layout the three fields share.
+
 ---
 
 ## Greenfield only
