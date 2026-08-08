@@ -221,7 +221,7 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 
 The unknown-key check matters more than it looks: a mistyped key in a hand-edited YAML file is otherwise silently ignored, and the run proceeds with a default while you believe you changed something. Since `init` materializes every valid key, any key not in the spec is a typo by construction.
 
-**Every threshold in that table lives in `limits`**, not in a flag, an environment variable, or a core default nobody can see. A threshold is a parameter of the run like any other: it decides whether the run is allowed to proceed, or whether a reader is warned about the number they're looking at, and a value with that much authority belongs in the file being hashed rather than in the tool's source. `init` writes the defaults; changing one is an ordinary edit, and it moves `parameters_hash` along with everything else — so two runs that disagreed about what counted as too much attrition can be told apart. This is [Everything is in the file](design-principles.md#everything-is-in-the-file) applied to core's own knobs, which would otherwise be the one set of parameters living outside it.
+**Every threshold in that table lives in `limits`**, not in a flag, an environment variable, or a core default nobody can see. A threshold is a parameter of the run like any other: it decides whether the run is allowed to proceed, or whether a reader is warned about the number they're looking at, and a value with that much authority belongs in the file being hashed rather than in the tool's source. `init` writes the defaults; changing one is an ordinary edit, and it moves `parameters_hash` along with everything else — so `diff` prints a raised `max_failed_fraction` as the parameter delta it is, and two runs that disagreed about what counted as too much attrition can be told apart rather than looking identical. This is [Everything is in the file](design-principles.md#everything-is-in-the-file) applied to core's own knobs, which would otherwise be the one set of parameters living outside it.
 
 Two things deliberately absent from that table are checks that need a run to have happened: the unit failure rate is enforced by `run` as it goes, and lockfile drift is checked by `resume` against the run it's resuming. `validate` takes a config path, so neither is a question it could answer.
 
@@ -1193,7 +1193,7 @@ A single git commit hash was doing two incompatible jobs: identifying the code a
 | Hash | Covers | Answers |
 |---|---|---|
 | `code_hash` | Tree hash of `src/**` | Was the code identical? |
-| `parameters_hash` | The config's whole parameter declaration, sweep and repeat plan included | Were the parameters identical? |
+| `parameters_hash` | The config's whole parameter declaration — sweep, repeat plan, and `limits` included | Were the parameters identical? |
 | `input_manifest_hash` | Relative paths + content hashes of `input_dir`, at the depth `data.input_manifest_policy` asks for | Was the data identical? |
 
 `input_manifest_policy` decides how much of `input_dir` gets hashed, because "hash everything" stops being affordable somewhere between a spreadsheet and a 4 TB imaging archive:
