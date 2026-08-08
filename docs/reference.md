@@ -1495,14 +1495,14 @@ statistics:
 
 `order: randomized` shuffles the execution order of (condition, repeat) pairs under a recorded seed. For anything touching an instrument, a plate, or a service whose behaviour drifts over hours, running conditions in index order confounds the comparison with time; randomizing costs nothing and the realized order lands in `sweep.yaml` either way, along with each execution's `started_at` — and [`resume`](#resuming) reads it back rather than re-deriving it. A [`batch`](#a-batch-says-when-not-what) level is the exception that proves the rule: batches are positions in time, so they stay in order and the shuffle happens inside each one.
 
-`statistics.correction` applies across the family of baseline comparisons in a sweep, and reporting that family uncorrected is how a sweep feature turns into a p-hacking feature. Corrected and raw intervals are both reported, so nothing is hidden — shown here for a six-condition sweep reporting three metrics per step, which is a wider family than the worked example's and so corrects further:
+`statistics.correction` applies across the family of baseline comparisons in a sweep, and reporting that family uncorrected is how a sweep feature turns into a p-hacking feature. Corrected and raw intervals are both reported, so nothing is hidden — shown here for a six-condition sweep reporting three metrics per step, which is a wider family than the worked example's and so corrects further. The contrast shown is the strongest of its family, which is what `rank 1` means and what makes α/15 the level it gets:
 
 ```yaml
 vs_baseline:
   step03_analyze:
-    r: {delta: 0.026, basis: units, method: paired_percentile_over_units,
-        ci95: [-0.007, 0.059],
-        ci95_corrected: [-0.023, 0.075], correction: holm,
+    r: {delta: -0.169, basis: units, method: paired_percentile_over_units,
+        ci95: [-0.213, -0.125],
+        ci95_corrected: [-0.235, -0.103], correction: holm,
         correction_level: 0.0033,                    # α/15 — rank 1 of this family
         family_size: 15, family: {comparisons: 5, metrics: 3}}
 ```
