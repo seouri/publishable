@@ -126,7 +126,8 @@ statistics:
   # ---- Computed over the per-unit table after the run. Not execution axes. ----
   correction: holm                       # none | bonferroni | holm | fdr_bh
   contrasts: []                          # optional named pairwise comparisons, for claims that
-                                         #   aren't condition-vs-baseline. See "Contrasts"
+                                         #   aren't condition-vs-baseline; `within` restricts one
+                                         #   to a stratum. See "Contrasts"
   resample: null                         # {method: bootstrap, n: 2000, stratify_by: []} →
                                          #   percentile CIs for column metrics too; derived
                                          #   metrics resample either way
@@ -249,6 +250,8 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Contrast names a condition | `statistics.contrasts[0].of` is `occasions=4`, which no condition's label matches |
 | Contrast has two distinct sides | `statistics.contrasts[1]` sets `of` and `against` to the same condition |
 | Contrast has units in common | `statistics.contrasts[0]` compares two conditions whose completed units don't intersect, so no paired difference exists |
+| Contrast stratum is an attribute | `statistics.contrasts[1].within` names `site`, which is not in `data.units.attributes` |
+| Contrast stratum is populated | `contrasts[1].within: {dx_family: rare}` leaves 6 paired units; below `limits.min_reported_n` (warning) |
 | Reporting stratum is an attribute | `statistics.report_by` names `site`, which is not in `data.units.attributes` |
 | Reporting stratum is populated | `report_by: [dx_family]` has a level with 4 units; below `limits.min_reported_n` (warning) |
 | Weight attribute exists | `data.units.weight_by` names `sampling_weight`, which is not a unit attribute |
@@ -1579,6 +1582,21 @@ statistics:
 
 `of` and `against` name conditions by label — the same discrete labels a [hypothesis](#pre-registration) `compare.condition` selects, stable across machines and reruns because they derive from swept values only.
 
+**`within` restricts a contrast to a stratum**, which is how a subgroup claim becomes testable:
+
+```yaml
+statistics:
+  contrasts:
+    - {id: sensitivity,   of: "shift=abnormal", against: "shift=normal"}
+    - {id: sensitivity_f, of: "shift=abnormal", against: "shift=normal", within: {sex: f}}
+```
+
+It names unit attributes and their levels — the same attributes [`report_by`](#reporting-strata) resolves — and the contrast is computed over units matching all of them. A hypothesis reaches a stratum through the contrast rather than through a selector of its own, which is why `metric` stays `step.metric` and nothing else has to learn about strata.
+
+**A `within` contrast joins the correction family, and a `report_by` stratum does not.** That is the whole difference between the two, and it is the honest one: describing a subgroup costs nothing, *testing* one is a comparison a reader can act on, and six declared subgroup contrasts widen the correction by six. Subgroup multiplicity is the best-known way to turn a null result into a finding, so it is priced rather than free — which is also why a subgroup claim has to be declared before the run to be confirmatory at all.
+
+`limits.min_reported_n` applies to a `within` contrast's `n_paired`, since a stratified paired comparison is where a small denominator is easiest to miss and most disclosive.
+
 **Everything about how a contrast is computed is a rule that already exists.** Pairing is derived from which axes the two conditions differ on, by [the same table](#allocation-within-subjects-or-between-subjects) `vs_baseline` uses — so two arms of one parameter axis under `allocation: within` are paired unit by unit, and two levels of a group axis are not. A contrast crossing two axes is marked `confounded: true` for the same reason. Declared contrasts join the [correction family](#sweeps-and-repeats) alongside baseline comparisons, because a reader shown both is exposed to both.
 
 Results land beside the conditions rather than inside one, since a contrast belongs to neither of its sides:
@@ -1619,7 +1637,7 @@ aggregated:
         m: {value: 0.622, basis: units, n: {resolved: 120, completed: 114, failed: 6}, ci95: [...]}
 ```
 
-Three properties, each a consequence of strata not being conditions. **No executions are added** — the run is unchanged and the split happens over a table that already exists. **Strata don't join the correction family**, because a stratum is a description rather than a comparison a reader acts on; a subgroup claim you intend to *test* is a [hypothesis](#pre-registration), declared as one, and corrected in that family. And **`limits.min_reported_n` applies per stratum**, which is where it matters most: a per-subgroup result over a handful of units is exactly what [`study add`](#what-study-add-redacts) says no automatic rule can judge safe.
+Three properties, each a consequence of strata not being conditions. **No executions are added** — the run is unchanged and the split happens over a table that already exists. **Strata don't join the correction family**, because a stratum is a description rather than a comparison a reader acts on. A subgroup claim you intend to *test* is a [`within` contrast](#contrasts-claims-that-arent-condition-vs-baseline) — declared before the run, named by a hypothesis, and corrected in that family. The split is deliberate: `report_by` gives you every subgroup for free because it claims nothing, and a subgroup you want to claim something about costs a place in the family. And **`limits.min_reported_n` applies per stratum**, which is where it matters most: a per-subgroup result over a handful of units is exactly what [`study add`](#what-study-add-redacts) says no automatic rule can judge safe.
 
 `validate` rejects a `report_by` attribute that isn't declared in `data.units.attributes`, and warns when a level would hold fewer units than `limits.min_reported_n` — before the run rather than at disclosure.
 
