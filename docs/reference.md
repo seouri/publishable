@@ -330,6 +330,7 @@ Results go here rather than back into the config for four compounding reasons: w
 /secure/results/cohort-pilot/
 ├── run_2026-08-06T14-02-11Z_8e21ab3/     # <timestamp>_<short code_hash>
 │   ├── run.yaml
+│   ├── allocation.json
 │   ├── manifest/input.json
 │   ├── environment/{uv.lock,pyproject.toml}
 │   ├── sweep.yaml
@@ -1034,6 +1035,7 @@ The output tree mirrors the experiment's structure: what varied, then which repe
 <run_dir>/
 ├── run.yaml
 ├── sweep.yaml                                  # resolved conditions, repeat plan, seeds, fold membership, design digest
+├── allocation.json                             # realized arm assignment and holdout split; present when either is declared
 ├── manifest/input.json
 ├── environment/{uv.lock,pyproject.toml}
 ├── shared/
