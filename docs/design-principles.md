@@ -143,7 +143,7 @@ Each is complete and self-describing, and still takes exactly one path to run. I
 
 | Core owns | Plugins own |
 |---|---|
-| The config envelope — every top-level block except `parameters`: `metadata`, `entrypoint`, `data`, `sweep`, `replication`, `statistics`, `limits`, `hypotheses` | The entire `parameters` block, via `parameter_spec` |
+| The config envelope — every top-level block except `parameters`: `metadata`, `entrypoint`, `data`, `sweep`, `replication`, `statistics`, `limits`, `hypotheses` | The entire `parameters` block, via `parameter_spec`. A template *reads* the envelope in `validate` — cross-block rules like "this experiment type fits a model, so it needs a partition to fit on" are properties of what its steps do — but declares nothing in it |
 | Materializing configs from a spec; value-level validation | The spec: types, defaults, ranges, choices, help text |
 | Sweep expansion (`grid`/`paired`/`ablate`/`sample`/`groups`/`baseline`), repeat kinds, seed derivation, kind-aware statistics | Field-appropriate sweep and repeat defaults |
 | The three hashes, run identity, step scope, lineage, units, append-only + atomic artifacts | Naming conventions (`naming_pattern`, `field_convention`, `default_repeats`) |

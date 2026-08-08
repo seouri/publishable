@@ -419,7 +419,7 @@ class Step(BaseStep):
 | `io.resumed` / `io.recorded_keys` | `True` when this execution is a resumed attempt rather than a first one, and the unit keys already in its per-unit table from earlier attempts — a **set**, so `key in io.recorded_keys` is constant-time. Empty rather than absent on a first execution, so a step needs no second check. Together, what a step needs to skip work it already did — see [Resuming](#resuming). |
 | `io.read_upstream(step, name)` | Read-only access to an earlier step's artifact *in this run*. Makes cross-step dependencies visible in code instead of implicit in shared paths. |
 | `io.read_input(relpath)` | Read-only access to `input_dir`. |
-| `io.units` | The units this execution produces results about — every unit, this arm's, or this fold's or holdout's test partition. `io.units.train` carries the training partition when a `fold` repeat or a [`holdout`](#a-fixed-holdout-split) is declared. Both raise at `"run"` and `"condition"` scope when a `fold` repeat is declared, since no fold exists there — see [Step scope](#a-fold-repeat-puts-the-units-out-of-reach-of-the-wider-scopes). See [Units](#units-the-thing-being-measured). |
+| `io.units` | The units this execution produces results about — every unit, this arm's, or this fold's or holdout's test partition. A sequence: iterate it, take its `len`, index it. `io.units.train` carries the training partition when a `fold` repeat or a [`holdout`](#a-fixed-holdout-split) is declared, and **raises when neither is** — an empty list would let a fit run on nothing and write a plausible model, which is the failure a partition exists to prevent. Both raise at `"run"` and `"condition"` scope when a `fold` repeat is declared, since no fold exists there — see [Step scope](#a-fold-repeat-puts-the-units-out-of-reach-of-the-wider-scopes). There is no `io.units.train.train`. See [Units](#units-the-thing-being-measured). |
 | `io.record(unit_key, values, measurement=None)` | Appends one row to this step's per-unit result table, keyed by unit — or by `(unit, measurement)` when the step measures one unit more than once, which core then collapses per [`data.units.measurements`](#what-isnt-a-repeat). Append-only and resumable by whichever key applies. |
 | `io.conditions` / `io.repeats` / `io.read_condition(condition, step, name, repeat=None)` | **`scope="summary"` only.** Iterate resolved conditions and resolved repeat labels, and read any condition's artifacts. `repeat` names which repeat's copy to read and is required when `step` is repeat-scoped; repeat labels are identical under every condition, which is why `io.repeats` is a run-level list. |
 | `io.reuse_from(run_id, step, name)` | Explicitly read an artifact from a *previous* run — the sanctioned way to build on prior work without copying or overwriting. See [Lineage](#lineage-between-runs). |
@@ -765,7 +765,9 @@ class GenericTemplate(BaseTemplate):
                                       help="Drop rows with any missing value before analysis"),
     }
 
-    def validate(self, config) -> list[str]: ...     # extra cross-field rules; [] if OK
+    def validate(self, config) -> list[str]: ...     # cross-field rules; [] if OK.
+                                                     # Receives the WHOLE config, not just
+                                                     # `parameters` — see below
 
     # Optional; derives metrics FROM the unit table. `cfg` is this condition's
     # resolved parameters — the same object a step receives.
@@ -773,6 +775,10 @@ class GenericTemplate(BaseTemplate):
         fn = {"pearson": pearsonr, "spearman": spearmanr, "kendall": kendalltau}
         return {"r": fn[cfg.parameters.analysis.method](units.pred, units.truth).statistic}
 ```
+
+**`validate` receives the whole config, not only `parameters`.** The rules a template most needs to enforce are often *cross-block*, because they are properties of what its steps do and core cannot know them. An experiment type that fits a model needs somewhere to fit — so a template whose pipeline compiles a program can reject a config that declares no [`holdout`](#a-fixed-holdout-split) and no `fold` repeat, because otherwise `io.units.train` is empty and the evaluation happens on the units the model was fitted against. Core has no way to tell that config from a legitimate one; the template does.
+
+Reading the envelope is not owning it. A template still declares nothing outside `parameters` — it cannot add a field to `data` or change what `sweep` means — and returning an error from `validate` is the only thing it does with what it reads. That's the same division [`aggregate`](#templates-where-parameters-are-defined) sits on: it sees a resolved condition without getting to decide what the conditions are.
 
 `aggregate` returns condition-level metrics derived from the per-unit table. It's optional, and it's the only way to give a derived statistic a real confidence interval: because core can call it on a resampled table, the metric becomes `basis: units` instead of a scalar core can only watch vary across seeds. See [The unit table is the inference base](#the-unit-table-is-the-inference-base).
 
@@ -1263,6 +1269,36 @@ class Step(BaseStep):
 ```
 
 `repeat.levels` is how a step gets what a repeat kind actually implies — `fold` supplies the train and test index split, `seed` the applied seed. Core computes them so every experiment doesn't reimplement k-fold, and so `run.yaml` can record exactly which units were in which partition.
+
+**Which of those exist follows from the step's [scope](#step-scope), and the ones that don't raise rather than being `None`:**
+
+| `scope` | `self.condition` | `self.repeat` |
+|---|---|---|
+| `"run"` | raises — executes once, before any condition | raises |
+| `"condition"` | present | raises — repeats haven't happened yet |
+| `"repeat"` | present | present |
+| `"summary"` | raises — it runs across all of them, so no one condition is *its* condition | raises |
+
+Raising rather than returning `None` is the same choice `cfg` makes: a step can assume what it's given is real, so there is no `if self.repeat is not None` to write. A step that wants to behave differently at different scopes is two steps.
+
+### A step that partitions needs a seed, and `derive_seed` is where it comes from
+
+Core's own randomness derives from a [design digest](#what-auto-derives-from) rather than from `parameters_hash`, so a fold boundary moves when the roster does and holds still when you edit an analysis parameter. A step doing its own partitioning wants exactly that, and [§ Cross-validation](experimental-designs.md#cross-validation) routes real work here — an inner hyperparameter search, an optimizer's train/dev division. So the same derivation is available:
+
+```python
+class FitStep(BaseStep):
+    scope = "condition"
+
+    def run(self, cfg, io):
+        rng = random.Random(self.derive_seed("optimizer-dev-split"))
+        ...
+```
+
+`derive_seed(purpose)` mixes the design digest, the resolved roster, and the string you pass, and returns an integer. The `purpose` argument is not decoration: two partitions drawn in one step would otherwise share a stream and correlate for no reason anyone chose, and naming them keeps each independent — the same reason [`assign.seed`](#what-auto-derives-from) mixes in the axis name.
+
+**It moves when the roster moves, and that is the point.** A seed declared as a template parameter is the other honest option, and it is the right one when you want a division frozen against a growing cohort — but it does *not* redraw when ten patients are added, while every partition core computes does. Pick deliberately: `derive_seed` to track the data, a pinned parameter to track the file. Whichever you use, write the realized division to an artifact — it was chosen inside the step, so the record is the only place it exists.
+
+Available at every scope, because the digest is a property of the run rather than of an execution.
 
 ### Steps that need every condition
 
@@ -2151,7 +2187,8 @@ publishable/
 │   ├── param.py               # Param: type, default, constraints, help
 │   ├── validate.py            # the value-level validation engine
 │   ├── base_experiment.py     # BaseExperiment: one ordered steps list, scopes resolved from it
-│   ├── base_step.py           # BaseStep: scope, run(cfg, io), self.condition/self.repeat, nondeterministic
+│   ├── base_step.py           # BaseStep: scope, run(cfg, io), self.condition/self.repeat,
+│   │                          #     derive_seed, nondeterministic
 │   ├── artifacts.py           # io: scope-aware paths, atomic writes, append, record,
 │   │                          #     read_condition, exists/resumed/recorded_keys
 │   ├── sweep.py               # grid/paired/ablate/sample/groups/baseline expansion, labels, sweep.yaml
