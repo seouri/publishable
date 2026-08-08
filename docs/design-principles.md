@@ -39,7 +39,7 @@ Reproducibility usually fails for a boring reason: the true record of what ran i
 - **Reproducing elsewhere shouldn't mean typing git commands.** One command clones, checks out the recorded commit, syncs, and runs. See [Reproducing on another device](reference.md#reproducing-on-another-device).
 - **Secrets are the one thing never captured.** Credentials live in `.env`; the config stores only variable *names*. See [Secrets & credentials](reference.md#secrets--credentials).
 - **The unit of measurement is first-class.** Patients, samples, trials, items — declared once, and everything from fold partitioning to per-unit result tables follows from it. See [Units](reference.md#units-the-thing-being-measured).
-- **Intervals are over units, never over executions.** `n` counts the things a claim generalizes over, so every interval core reports is computed from the per-unit table. Repeats are a variance component reported separately, because an interval across five seeds narrows as you add seeds. Where core can't compute an interval honestly, it omits it. See [The unit table is the inference base](reference.md#the-unit-table-is-the-inference-base).
+- **Intervals are over units, never over executions.** `n` counts the things a claim generalizes over, so every interval core reports is computed from the per-unit table. Repeats are a variance component reported separately, because an interval across five seeds narrows as you add seeds. Where core can't compute an interval honestly, it omits it — and where your own model computed one, a `summary` step returns it as an `Estimate` and the record says you computed it rather than core. See [The unit table is the inference base](reference.md#the-unit-table-is-the-inference-base).
 - **Steps declare how often they run.** Loading a cohort shouldn't re-execute once per condition per repeat. See [Step scope](reference.md#step-scope).
 - **Shared work is traceable.** Consuming an earlier run's artifacts records that dependency. See [Lineage](reference.md#lineage-between-runs).
 - **What you expected is recordable, not just what you computed.** The config is written and hashed before the run, which is what pre-registration means. See [Pre-registration](reference.md#pre-registration).
@@ -147,7 +147,7 @@ Each is complete and self-describing, and still takes exactly one path to run. I
 | Materializing configs from a spec; value-level validation | The spec: types, defaults, ranges, choices, help text |
 | Sweep expansion (`grid`/`paired`/`ablate`/`sample`/`groups`/`baseline`), repeat kinds, seed derivation, kind-aware statistics | Field-appropriate sweep and repeat defaults |
 | The three hashes, run identity, step scope, lineage, units, append-only + atomic artifacts | Naming conventions (`naming_pattern`, `field_convention`, `default_repeats`) |
-| `BaseExperiment` / `BaseStep` / `BaseTemplate` / `Param` / `Unit` / `Apparatus` / `io` | Concrete templates, unit resolvers, apparatus probes, reusable `BaseStep` subclasses |
+| `BaseExperiment` / `BaseStep` / `BaseTemplate` / `Param` / `Unit` / `Apparatus` / `Estimate` / `io` | Concrete templates, unit resolvers, apparatus probes, reusable `BaseStep` subclasses |
 | Lifecycle: `new`, `generate`, `validate`, `dry-run`, `run`, `draft`, `resume`, `report`, `diff`, `freeze`, `reproduce`, `study` | Domain dependencies (an API client, an instrument driver, a solver) |
 | The secrets mechanism (`credential_env_var` + dotenv loading) | Which credentials an experiment type needs |
 

@@ -238,6 +238,8 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Correction declared for a family | 6 enumerated conditions × 3 metrics produce a family of 15 baseline comparisons with `statistics.correction: none` (warning). Not raised for a `sample`-only sweep, whose draws aren't a family |
 | Step scope coherence | `step01_load_cohort` is `scope="run"` but reads `analysis.method`, which `sweep` varies |
 | Scope read direction | `step02_fit_model` (`scope="condition"`) reads from `step03_analyze` (`scope="repeat"`), which runs later |
+| Estimate is summary-only | `step03_analyze` (`scope="repeat"`) returned an `Estimate`; an interval per repeat is not something core will record — see [`Estimate`](#estimate-carries-your-interval-without-core-claiming-it) |
+| Estimate labels its method | `step04_compare_methods` returned an `Estimate` with `ci95` and no `method`; an interval nobody labelled is unreadable |
 | Hypothesis references | `hypotheses[0].metric` `step03_analyze.r` names no metric any step returns |
 | Hypothesis needs baseline | `hypotheses[0].compare.to: baseline` but `sweep.baseline` is not declared |
 | Hypothesis has an inference base | `hypotheses[0].metric` `step03_analyze.r` is `basis: repeats` — no unit table and no template `aggregate`, so it can be reported but not tested (warning) |
@@ -1151,7 +1153,7 @@ vs_baseline:
         family_size: 15, family: {comparisons: 5, metrics: 3}}
 ```
 
-Only metrics that receive a corrected interval are counted — that is, [`basis: units`](#the-unit-table-is-the-inference-base) metrics, since a metric reported without an interval isn't a comparison anyone can read as significant. In the worked example that's 2 comparisons × 1 metric, so `family_size: 2`.
+Only metrics that receive a corrected interval are counted — that is, [`basis: units`](#the-unit-table-is-the-inference-base) metrics, since a metric reported without an interval isn't a comparison anyone can read as significant. A [reported `Estimate`](#estimate-carries-your-interval-without-core-claiming-it) is excluded for a different reason: core never computed it, so it has nothing to correct and no standing to say the correction was applied. In the worked example that's 2 comparisons × 1 metric, so `family_size: 2`.
 
 **The family is comparisons × metrics, not comparisons.** A six-condition sweep is five comparisons, but if each step reports three numeric metrics, a reader is being shown fifteen intervals and any of them can carry the paper. Counting only conditions would under-correct by the factor that actually varies between projects — and a tool that advertises corrected intervals while counting the family too small is worse than one that reports raw intervals honestly, because the number looks handled.
 
@@ -1227,7 +1229,52 @@ class CompareMethods(BaseStep):
 
 `cfg.parameters` in a summary step holds the *base* values with swept paths marked as varying, so there's no misleading pretense that one condition's value applies.
 
-**What a summary step returns is recorded, not interpreted.** It lands verbatim in `results.summary`, with no `basis`, no interval, and no place in the [correction family](#sweeps-and-repeats) — core didn't compute it and can't recompute it on a resampled table, which is the same reason a step-returned scalar is [`basis: repeats`](#the-unit-table-is-the-inference-base). Since factorial main effects, curve fits, conditional estimators, and mixed models are all routed here, that's worth being plain about: this scope is where core stops doing statistics and starts storing yours. Report the interval your model produced as part of the returned value if you want one beside the number.
+**What a summary step returns is recorded, not interpreted.** It lands in `results.summary`, with no `basis`, no place in the [correction family](#sweeps-and-repeats), and no recomputation on a resampled table — core didn't compute it and can't, which is the same reason a step-returned scalar is [`basis: repeats`](#the-unit-table-is-the-inference-base). Since factorial main effects, curve fits, conditional estimators, and mixed models are all routed here, that's worth being plain about: this scope is where core stops doing statistics and starts storing yours.
+
+#### `Estimate` carries your interval without core claiming it
+
+Storing a number is enough for a `best_method`; it isn't enough for a mixed model's effect and its confidence interval, which is the usual reason a summary step exists. (The step below is a mixed-model example rather than this document's worked pipeline, whose summary step returns a bare `best_method`.) Returned as a bare dict, that interval is a key core can't tell from any other — `report` won't render it as an interval, `study add` can't see the denominator it's over, and nothing in the record distinguishes it from one core computed from the unit table. So there is a shape for it:
+
+```python
+from publishable import BaseStep, Estimate
+
+class Step(BaseStep):
+    scope = "summary"
+
+    def run(self, cfg, io):
+        fit = mixed_model(io.read_condition(c, "step02_score", "units.parquet")
+                          for c in io.conditions)
+        return {
+            "site_adjusted_delta": Estimate(
+                value=0.031,
+                ci95=[0.008, 0.055],
+                n=612,                                    # what the interval is over
+                method="mixed model, site random intercept, REML",
+            ),
+            "converged": True,                            # a bare value still works
+        }
+```
+
+```yaml
+results:
+  summary:
+    step03_site_model:
+      site_adjusted_delta:
+        value: 0.031
+        reported: true                    # THE STEP computed this; core did not
+        ci95: [0.008, 0.055]
+        n: 612
+        method: "mixed model, site random intercept, REML"
+      converged: true
+```
+
+**`reported: true` is the whole mechanism, and it is an attribution rather than an endorsement.** Core stores the fields, `report` renders them as an interval, and [`study add`](#what-study-add-redacts) can check `n` against `limits.min_reported_n` — but core never recomputes the value, never resamples it, never corrects it, and never counts it in the family. Nothing about the refusal above changes; what changes is that a reader of `run.yaml` can now tell which intervals core derived from the per-unit table and which an author's own model asserted. Before this, both looked identical to every tool and to every reader, which was the worse of the two situations: the interval was already returnable, just unmarked.
+
+Three rules, each a declaration check rather than a judgement about your statistics:
+
+- **`method` is required whenever `ci95` is present.** An interval nobody labelled is unreadable, and core can enforce that a label exists without having any opinion on whether it's the right method. This is the same standard the [correction family](#sweeps-and-repeats) is held to — a number that looks handled and isn't is worse than an honest one.
+- **`n` is optional but its absence is surfaced**, because an interval with no stated denominator is exactly the disclosure risk `min_reported_n` exists to catch.
+- **`Estimate` is accepted at `scope: "summary"` only.** Elsewhere it would be a way to attach an interval to a per-execution return value, and `per_repeat` is *"exactly what the step returned"* — an interval per repeat is either a claim about that one execution or an accident, and neither belongs on the record. Intervals at every other scope come from the [unit table](#the-unit-table-is-the-inference-base), which is the refusal that makes the rest of this section work.
 
 ### How artifacts are organized
 
@@ -1636,7 +1683,7 @@ Each is replaced with a marker recording that a value existed and was removed, s
 
 None of this disturbs verification: `parameters_hash` [never covered the path fields](#three-hashes), and `code_hash` covers `src/**` only.
 
-**One thing redaction can't do is judge your metrics.** Aggregates are usually safe, but a per-subgroup result over a handful of units can be disclosive in ways no automatic rule catches. `study add` prints any reported metric whose `n.completed` falls below `limits.min_reported_n` — or, for a [`basis: repeats`](#the-unit-table-is-the-inference-base) metric, its repeat count — and asks you to confirm — a prompt for your judgment, not a guarantee.
+**One thing redaction can't do is judge your metrics.** Aggregates are usually safe, but a per-subgroup result over a handful of units can be disclosive in ways no automatic rule catches. `study add` prints any reported metric whose `n.completed` falls below `limits.min_reported_n` — or, for a [`basis: repeats`](#the-unit-table-is-the-inference-base) metric, its repeat count, and for a [reported `Estimate`](#estimate-carries-your-interval-without-core-claiming-it) the `n` it declared — and asks you to confirm — a prompt for your judgment, not a guarantee. An `Estimate` that declared no `n` is listed too: core has nothing to compare, and an interval without a denominator is the case the prompt exists for.
 
 ---
 
@@ -2007,7 +2054,7 @@ publishable/
 │   ├── run_identity.py        # run_<id> allocation, latest symlink, resume resolution
 │   ├── hashes.py              # code_hash (src/** tree), parameters_hash, design digest
 │   ├── config.py              # load + dot-access Config
-│   ├── run_record.py          # run.yaml assembly
+│   ├── run_record.py          # run.yaml assembly; Estimate storage and attribution
 │   ├── provenance.py          # git discovery (user repo), uv env capture
 │   ├── manifest.py            # input_dir manifest build/verify, policies
 │   ├── apparatus.py           # probe registry, per-condition facts, change gate
