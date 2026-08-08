@@ -842,7 +842,7 @@ statistics:
   null_test: {method: permutation, n: 5000, shuffle: label}
 ```
 
-Both operate on `units.parquet`, resampling or relabelling it and recomputing the metric — which core can do only for a metric it knows how to compute, so this needs a per-unit column or a template [`aggregate(units, cfg)`](#templates-where-parameters-are-defined). The permutation test compares the null it builds against the value the actual run produced; a design in which every execution is permuted has no unpermuted value to test, which is one more way the repeat axis was the wrong home for it.
+Both operate on `units.parquet`, resampling or relabelling it and recomputing the metric — which core can do only for a metric it knows how to compute, so this needs a per-unit column or a template [`aggregate(units, cfg)`](#templates-where-parameters-are-defined). Every declared `attributes` value is carried onto that table beside whatever the step recorded, which is what lets `shuffle` name an attribute — `label`, `arm`, `status` — and have it be a column the metric is actually computed from. A step is free to record a column of the same name; `validate` rejects that collision rather than deciding which one the shuffle meant. The permutation test compares the null it builds against the value the actual run produced; a design in which every execution is permuted has no unpermuted value to test, which is one more way the repeat axis was the wrong home for it.
 
 **What `null_test` tests depends on whether `shuffle` names a design axis.** It relabels units and recomputes the metric, so the question it answers is set by what that label does in the design:
 
