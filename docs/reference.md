@@ -965,9 +965,9 @@ sweep:
   ablate:
     from: baseline                       # start from the baseline condition below
     remove:                              # one condition per entry, each with ONE change
-      - analysis.drop_missing
-      - analysis.winsorize
-      - analysis.covariate_adjust
+      - features.demographics
+      - features.labs
+      - features.notes
   # 00_baseline (from `baseline`) + 3 ablations = 4 conditions
 ```
 
@@ -988,10 +988,9 @@ sweep:
     n: 50
     method: sobol                        # sobol | latin_hypercube | random
     seed: auto                           # derived from the design digest; recorded in sweep.yaml
-    ranges:
+    ranges:                              # uniform | int_uniform | log_uniform
       analysis.confidence: {uniform: [0.80, 0.99]}
       analysis.min_samples: {int_uniform: [10, 200]}
-      analysis.alpha: {log_uniform: [1.0e-4, 1.0e-1]}
 ```
 
 Sampling is deterministic given its seed, so `sweep.yaml` records both the seed and the fully realized condition list — a reader never has to re-derive the design, and `reproduce` regenerates the same conditions.
@@ -1278,7 +1277,7 @@ statistics:
 
 `order: randomized` shuffles the execution order of (condition, repeat) pairs under a recorded seed. For anything touching an instrument, a plate, or a service whose behaviour drifts over hours, running conditions in index order confounds the comparison with time; randomizing costs nothing and the realized order lands in `sweep.yaml` either way, along with each execution's `started_at` — and [`resume`](#resuming) reads it back rather than re-deriving it. A [`batch`](#a-batch-says-when-not-what) level is the exception that proves the rule: batches are positions in time, so they stay in order and the shuffle happens inside each one.
 
-`statistics.correction` applies across the family of baseline comparisons in a sweep, and reporting that family uncorrected is how a sweep feature turns into a p-hacking feature. Corrected and raw intervals are both reported, so nothing is hidden:
+`statistics.correction` applies across the family of baseline comparisons in a sweep, and reporting that family uncorrected is how a sweep feature turns into a p-hacking feature. Corrected and raw intervals are both reported, so nothing is hidden — shown here for a six-condition sweep reporting three metrics per step, which is a wider family than the worked example's and so corrects further:
 
 ```yaml
 vs_baseline:
@@ -2347,7 +2346,6 @@ Prepared my-study_run_2026-08-06T14-02-11Z_8e21ab3/
 
 Before running, edit:
   configs/cohort-pilot/config.yaml   data.input_dir, data.output_dir
-  .env                                ANTHROPIC_API_KEY
 
 Then:
   cd my-study_run_2026-08-06T14-02-11Z_8e21ab3
@@ -2356,7 +2354,7 @@ Then:
   uv run publishable run      configs/cohort-pilot/config.yaml
 ```
 
-`reproduce` stops rather than running because both remaining inputs need a person. Core has no mechanism to transmit a secret, and it won't fetch your data — moving governed data goes through whatever protocol governs it. Given that, `--input-dir` and `--output-dir` would only duplicate what the config already expresses, so the config stays the single description of the run.
+`reproduce` stops rather than running because both remaining inputs need a person — the transcript above lists only the paths because `generic` declares no `required_env`, and an experiment whose template does gets a `.env` line beside them. Core has no mechanism to transmit a secret, and it won't fetch your data — moving governed data goes through whatever protocol governs it. Given that, `--input-dir` and `--output-dir` would only duplicate what the config already expresses, so the config stays the single description of the run.
 
 Verification of the input data still happens: `run` builds the manifest from whatever `input_dir` you set and compares it to the recorded one, reporting a data mismatch as loudly as a lockfile mismatch. Pointing at the wrong data is caught, just at run time rather than at clone time.
 
