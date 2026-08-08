@@ -368,7 +368,7 @@ class Step(BaseStep):
 | `io.path(name)` | Resolves a location without writing, for libraries that insist on writing themselves. Still existence-checked. |
 | `io.read_upstream(step, name)` | Read-only access to an earlier step's artifact *in this run*. Makes cross-step dependencies visible in code instead of implicit in shared paths. |
 | `io.read_input(relpath)` | Read-only access to `input_dir`. |
-| `io.units` | The units this execution produces results about — every unit, this arm's, or this fold's or holdout's test partition. `io.units.train` carries the training partition when a `fold` repeat or a [`holdout`](#a-fixed-holdout-split) is declared. See [Units](#units-the-thing-being-measured). |
+| `io.units` | The units this execution produces results about — every unit, this arm's, or this fold's or holdout's test partition. `io.units.train` carries the training partition when a `fold` repeat or a [`holdout`](#a-fixed-holdout-split) is declared. Both raise at `"run"` and `"condition"` scope when a `fold` repeat is declared, since no fold exists there — see [Step scope](#a-fold-repeat-puts-the-units-out-of-reach-of-the-wider-scopes). See [Units](#units-the-thing-being-measured). |
 | `io.record(unit_key, values)` | Appends one row to this step's per-unit result table. Append-only and resumable by key. |
 | `io.conditions` / `io.read_condition(condition, step, name)` | **`scope="summary"` only.** Iterate resolved conditions and read any condition's artifacts across repeats. |
 | `io.reuse_from(run_id, step, name)` | Explicitly read an artifact from a *previous* run — the sanctioned way to build on prior work without copying or overwriting. |
@@ -560,7 +560,7 @@ Each step declares its scope:
 | `scope` | Executes | Artifacts land in | Typical use |
 |---|---|---|---|
 | `"run"` | once | `<run_dir>/shared/<step>/` | ingest, validate, normalize the input dataset |
-| `"condition"` | once per condition | `conditions/<nn>_<label>/<step>/` | fit a model for this parameter set |
+| `"condition"` | once per condition | `conditions/<nn>_<label>/<step>/` | fit a model for this parameter set — when the training set doesn't vary within the condition; see below |
 | `"repeat"` | once per repeat (the default) | `conditions/<nn>_<label>/<repeat>/<step>/` | evaluate on this fold or seed |
 | `"summary"` | once, after everything | `<run_dir>/summary/<step>/` | compare conditions, produce the headline table |
 
@@ -588,6 +588,16 @@ One ordered `steps` list expresses the whole pipeline, and core derives the exec
 Reading across scopes is directional and read-only: a narrower step reads wider ones via `io.read_upstream(step, name)` regardless of scope, and a `summary` step additionally gets `io.conditions` and `io.read_condition(condition, step, name)`. A wider step can never read a narrower one, because at the time it runs those executions haven't happened — core rejects that at `validate`, not at run time.
 
 `validate` also flags a likely-miscoped step: if a `"run"`-scoped step reads a parameter that appears in `sweep`, its output would silently be wrong for every condition but one. That's a static check core *can* do, because it's about declared scope and declared sweep, not about arbitrary Python.
+
+### A `fold` repeat puts the units out of reach of the wider scopes
+
+Fitting a model is the typical `"condition"`-scoped step, and that is the right scope exactly when the training set doesn't vary *within* the condition: under `seed` repeats, or under a fixed [`holdout`](#a-fixed-holdout-split), one fit serves every repeat and repeating it would be waste.
+
+Under a [`fold`](#repeat-kinds) repeat it is the wrong scope, and not subtly. There is no fold at condition scope — folds are repeats, and repeats haven't happened yet — so a step fitting there fits on the units that later folds will test on, and every fold's metric comes back in-sample. That is the same leak [`cluster_by`](#clustered-units) exists to prevent one level down, arriving through the execution plan instead of through the partition.
+
+Core can't read the body of a step to find out whether it fitted on those units. It doesn't have to, because it owns `io`: **when any `fold` repeat is declared, `io.units` and `io.units.train` raise at `"run"` and `"condition"` scope**, naming the fold that doesn't exist yet and pointing at repeat scope. Fitting moves into the `"repeat"`-scoped step, which is where the fold is. Wider steps that never touch units — loading a shared file, resolving paths, writing a manifest — are unaffected, which is most of what they're for.
+
+This is an effect check, not an inspection of your code: core doesn't ask what the step intended, it declines to hand over a list that could only be the wrong one. Same line as [greenfield only](design-principles.md#greenfield-only) draws everywhere else. A `holdout` does not raise, because its split is fixed for the whole run and a condition-scoped fit over `io.units.train` is exactly correct.
 
 ---
 
