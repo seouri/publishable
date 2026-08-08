@@ -125,7 +125,7 @@ limits:
   # ---- Thresholds core checks against. All warn except max_failed_fraction, which fails. ----
   max_executions: 500              # `validate` warns above this many conditions × repeats
   max_failed_fraction: 0.2         # `run` fails the run when run-level unit failures exceed it
-  min_units_per_arm: 20            # `validate` warns for a smaller arm under allocation: between
+  min_units_per_cell: 20           # `validate` warns for a smaller design cell under allocation: between
   min_clusters: 10                 # `validate` warns when `resample` would draw fewer than this
   min_reported_n: 10               # `study add` prompts on any metric reported over fewer
 
@@ -206,12 +206,12 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Every assignment names an axis | `assign.cohort` names no axis in `sweep.groups` |
 | Axis names are distinct | `sweep.groups` declares `arm` twice — a condition can't hold two values of one axis |
 | Stratification is forward-only | `assign.sex.stratify_by: [arm]`, but `arm` is declared after `sex`; an axis may only stratify on one already resolved |
-| Cells are populated | `sex × arm` over 40 units gives cells of 10; below `limits.min_units_per_arm` (warning) |
+| Cells are populated | `sex × arm` over 40 units gives cells of 10; below `limits.min_units_per_cell` (warning) |
 | Arms need allocation | `sweep.groups` declares arms but `allocation` is `within`, which says every unit appears in every condition — a unit can't be in one arm and in all of them |
 | Ratio names levels | `assign.arm.ratio` has key `f`; expected one entry per level of axis `arm` (`control`, `treatment`) |
 | Block size fills the arms | `assign.arm.block_size: 3` with `ratio: {control: 1, treatment: 1}` — a block must be a whole multiple of the ratio's sum, or it can't hold each arm's share |
 | Attribute assignment resolves | `assign.arm.method: by_attribute` reads column `arm` — defaulted from the axis name — whose values are `{a, b}`, not the declared levels |
-| Allocation is coherent | `allocation: between` over 2 arms and 12 units gives arms of 6; below `limits.min_units_per_arm` (warning) |
+| Allocation is coherent | `allocation: between` over 2 arms and 12 units gives cells of 6; below `limits.min_units_per_cell` (warning) |
 | Allocation strata exist | `assign.arm.stratify_by: [site]` but `site` is neither a unit attribute nor a group axis |
 | Clustering looks undeclared | `site` has 6 distinct values across 240 units but `cluster_by` is unset (warning) |
 | Folds fit inside the clusters | `{kind: fold, k: 10}` with `cluster_by: animal_id` over 6 animals — clusters are indivisible, so `k` may not exceed the cluster count |
