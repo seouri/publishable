@@ -138,7 +138,10 @@ statistics:
 limits:
   # ---- Thresholds core checks against. All warn except max_failed_fraction, which fails. ----
   max_executions: 500              # `validate` warns above this many conditions × repeats
-  max_failed_fraction: 0.2         # `run` fails the run when run-level unit failures exceed it
+  max_failed_fraction: 0.2         # `run` fails the run when run-level unit failures exceed it.
+                                   #   Failures only — units a step declared ineligible are not
+                                   #   attrition; see `io.skip`
+  max_ineligible_fraction: 0.5     # `run` warns when a condition can be built for fewer units
   min_units_per_cell: 20           # `validate` warns for a smaller design cell under allocation: between
   min_clusters: 10                 # `validate` warns when `resample` would draw fewer than this
   min_reported_n: 10               # `study add` prompts on any metric reported over fewer
@@ -206,6 +209,7 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Clusters enough to resample | `statistics.resample` with `cluster_by: animal_id` over 4 animals bootstraps 4 draws; below `limits.min_clusters` (warning) |
 | Technical replicates | `{kind: technical}` is not a repeat kind — declare `data.units.measurements` instead |
 | Collapse rule fits the column | `measurements.collapse: mean` over `site`, which is a string — use `first` or `mode`, or a per-column map |
+| Eligibility looks like a design problem | condition `03_arm=velocity_1.0` could be built for 96 of 330 units; above `limits.max_ineligible_fraction` (warning) |
 | Grid size sane | 6 conditions × 10 folds × 3 seeds = 180 executions exceeds `limits.max_executions` |
 | Leave-one-out is affordable | `{kind: fold, k: all}` over 240 units × 3 conditions = 720 executions exceeds `limits.max_executions` |
 | Credentials present | `INSTRUMENT_API_TOKEN` is not set in `.env` |
@@ -436,10 +440,11 @@ class Step(BaseStep):
 | `io.append(name, record)` | Appends one record to a line-oriented artifact, for incremental work that must survive a crash. Idempotent by `record_key` when supplied: a second record under a key already present is discarded, so **first write wins** — the same rule and the same reason as `io.record`. Without a key, a re-executed range appends a second copy of everything it already wrote. |
 | `io.path(name)` | Resolves a *write* location without writing, for libraries that insist on writing themselves. Existence-checked in the same direction as `io.write` — it raises `ArtifactExistsError` when the target is already there — so it is not a way to read something back. See `io.exists` below. |
 | `io.exists(name)` | Whether this step's directory already holds that artifact. The question a resumed execution asks before writing — see [Resuming](#resuming). |
-| `io.resumed` / `io.recorded_keys` | `True` when this execution is a resumed attempt rather than a first one, and the unit keys already in its per-unit table from earlier attempts — a **set**, so `key in io.recorded_keys` is constant-time. Empty rather than absent on a first execution, so a step needs no second check. Together, what a step needs to skip work it already did — see [Resuming](#resuming). |
+| `io.resumed` / `io.recorded_keys` | `True` when this execution is a resumed attempt rather than a first one, and the keys this execution has already settled — recorded *or* [skipped](#what-isnt-a-repeat) — from earlier attempts. A **set**, so `key in io.recorded_keys` is constant-time; it covers skips because its one purpose is telling a resumed step what not to redo. Empty rather than absent on a first execution, so a step needs no second check. Together, what a step needs to skip work it already did — see [Resuming](#resuming). |
 | `io.read_upstream(step, name)` | Read-only access to an earlier step's artifact *in this run*. Makes cross-step dependencies visible in code instead of implicit in shared paths. |
 | `io.read_input(relpath)` | Read-only access to `input_dir`. |
 | `io.units` | The units this execution produces results about — every unit, this arm's, or this fold's or holdout's test partition. A sequence: iterate it, take its `len`, index it. `io.units.train` carries the training partition when a `fold` repeat or a [`holdout`](#a-fixed-holdout-split) is declared, and **raises when neither is** — an empty list would let a fit run on nothing and write a plausible model, which is the failure a partition exists to prevent. Both raise at `"run"` and `"condition"` scope when a `fold` repeat is declared, since no fold exists there — see [Step scope](#a-fold-repeat-puts-the-units-out-of-reach-of-the-wider-scopes). There is no `io.units.train.train`. See [Units](#units-the-thing-being-measured). |
+| `io.skip(unit_key, reason)` | Declares that this unit admits no result in this execution by design — a transform that can't be built, an assay that doesn't apply. Counted as `ineligible` rather than `failed`, with the reason recorded per unit. |
 | `io.record(unit_key, values, measurement=None)` | Appends one row to this step's per-unit result table, keyed by unit — or by `(unit, measurement)` when the step measures one unit more than once, which core then collapses per [`data.units.measurements`](#what-isnt-a-repeat). Append-only and resumable by whichever key applies. |
 | `io.conditions` / `io.repeats` / `io.read_condition(condition, step, name, repeat=None)` | **`scope="summary"` only.** Iterate resolved conditions and resolved repeat labels, and read any condition's artifacts. `repeat` names which repeat's copy to read and is required when `step` is repeat-scoped; repeat labels are identical under every condition, which is why `io.repeats` is a run-level list. |
 | `io.reuse_from(run_id, step, name)` | Explicitly read an artifact from a *previous* run — the sanctioned way to build on prior work without copying or overwriting. See [Lineage](#lineage-between-runs). |
@@ -1190,9 +1195,25 @@ r:
   method: percentile_over_units
 ```
 
-The three-part `n` closes a reporting gap that otherwise goes unnoticed: when 12 of 240 units error out, a bare `n: 240` is wrong and a bare `n: 228` silently hides attrition. All three numbers are recorded — joined by a fourth, `clusters`, whenever [`cluster_by`](#clustered-units) makes the cluster the inferential draw — `report` shows the completion rate, and `run` fails the whole run when failures exceed `limits.max_failed_fraction` — because at some level of dropout the complete-case result stops being interpretable, and finding that out after the run is worse than not having spent it.
+The three-part `n` closes a reporting gap that otherwise goes unnoticed: when 12 of 240 units error out, a bare `n: 240` is wrong and a bare `n: 228` silently hides attrition. All three numbers are recorded — joined by `clusters` whenever [`cluster_by`](#clustered-units) makes the cluster the inferential draw, and by `ineligible` whenever a step [skipped](#what-isnt-a-repeat) a unit, each present only when it applies so a design that never skips reads as it always did — `report` shows the completion rate, and `run` fails the whole run when failures exceed `limits.max_failed_fraction` — because at some level of dropout the complete-case result stops being interpretable, and finding that out after the run is worse than not having spent it.
 
-**How core knows a unit failed** is worth stating, because core never inspects the body of a step. It counts: `resolved` is how many units that execution was *given*, `completed` is how many distinct *unit* keys reached `io.record` in it — measurements of one unit collapse before they are counted — and `failed` is the difference. That's an *effect*, which is the only thing core checks — consistent with [greenfield only](design-principles.md#greenfield-only). Two consequences follow. A step that swallows an exception and moves to the next unit is recorded as a failure anyway, because the row is missing; and a step that raises out of its own loop aborts the execution, so the repeat is marked `failed` in `execution` rather than reported as complete with partial units. A step that records nothing at all has `completed: 0`, which is a loud failure rather than a silent `n` of zero.
+**How core knows a unit failed** is worth stating, because core never inspects the body of a step. It counts: `resolved` is how many units that execution was *given*, `completed` is how many distinct *unit* keys reached `io.record` in it — measurements of one unit collapse before they are counted — `ineligible` is how many it was told to skip, and `failed` is what's left over. That's an *effect*, which is the only thing core checks — consistent with [greenfield only](design-principles.md#greenfield-only). Two consequences follow. A step that swallows an exception and moves to the next unit is recorded as a failure anyway, because the row is missing; and a step that raises out of its own loop aborts the execution, so the repeat is marked `failed` in `execution` rather than reported as complete with partial units. A step that records nothing at all has `completed: 0`, which is a loud failure rather than a silent `n` of zero.
+
+**Not producing a result and failing to produce one are different, so a step can say which.** A counterfactual that can't be constructed for a patient whose observed span is too short, an assay that doesn't apply to a sample type, a metric undefined for a unit with one observation — these are decided by the design in advance, and no amount of retrying changes them. Counting them as failures makes a healthy run look broken and puts [`limits.max_failed_fraction`](#validation) in charge of a number that mixes two unlike things:
+
+```python
+for unit in io.units:
+    if unit.span_days < cfg.parameters.transform.min_span:
+        io.skip(unit.key, "observed span too short to define a velocity")
+        continue
+    io.record(unit.key, {...})
+```
+
+`io.skip(unit_key, reason)` is a declaration, not an excuse: core takes the step's word for it exactly as it takes `io.record`'s, and both are recorded. The reason is stored per unit beside the unit table, because *which* patients an arm could not be built for is cohort flow a report has to state, and a bare count doesn't carry it. `report` shows ineligibility per condition, so an arm that quietly lost a third of the roster is visible rather than absorbed.
+
+Three consequences. **`max_failed_fraction` is over failures only** — a run whose arms differ in eligibility no longer trips a threshold meant for attrition. **`limits.max_ineligible_fraction` warns separately**, because an arm evaluable for a fifth of the cohort is a design problem rather than an execution one, and it's the same problem [`n_paired`](#contrasts-claims-that-arent-condition-vs-baseline) exists to keep out of a contrast. And **a skipped unit is decided, so a resumed step doesn't reconsider it**: `io.recorded_keys` holds every key this execution has settled — recorded or skipped — since its one purpose is telling a resumed step what not to redo.
+
+Across repeats, a unit ineligible in **every** repeat it was handed to is ineligible for the condition. A unit ineligible in some and completed in others is counted as **failed**, not ineligible: eligibility is a property of the design, so a step that answered differently for the same unit twice has a bug, and reporting that as a design fact would hide it.
 
 **`resolved` counts what the execution was handed, not the cohort.** This matters the moment a design narrows `io.units`, and getting it wrong would make correct runs look catastrophic. Under `{kind: fold, k: 10}` over 240 units, each execution is handed a 24-unit test partition, so a fold that records all 24 is `{resolved: 24, completed: 24, failed: 0}` — not 216 failures against a cohort it was never given. Under a [group axis](#expansion-modes) it's that arm's roster, ~120 rather than 240. `resolved` always equals `len(io.units)` for that execution, which is the only definition a step could be held to.
 
@@ -1200,13 +1221,13 @@ So three different `n`s exist, at three levels, and they answer different questi
 
 | Level | Where | Counts |
 |---|---|---|
-| Execution | `execution.conditions[i].steps.<step>.<repeat>.n` | The units *this* fold or arm was handed, and how many it recorded |
+| Execution | `execution.conditions[i].steps.<step>.<repeat>.n` | The units *this* fold or arm was handed, how many it recorded, and how many it declared ineligible |
 | Condition | `results.conditions[i].aggregated.<step>.<metric>.n` | The condition's collapsed table — the inference base for its interval |
 | Run | `provenance.units.n` | Every unit the declaration resolved, before any narrowing |
 
 The condition-level `n` is the one that appears beside a `ci95`, and it reconciles with the run level rather than restating it: under `fold`, each unit is tested exactly once per fold sweep, so concatenating ten 24-unit partitions gives one value per unit and the condition's `n` comes back to 240 resolved. Under a group axis it doesn't reconcile, and shouldn't — each arm's interval is over that arm's units, which is what makes it an arm-level estimate.
 
-**A unit counts as completed for the condition only if it completed in every repeat it was handed to.** Which repeats those are is decided by the kinds declared, so the rule is one sentence but never one number:
+**A unit counts as completed for the condition only if it completed in every repeat it was handed to**, and ineligible only if it was skipped in all of them. Which repeats those are is decided by the kinds declared, so the rule is one sentence but never one number:
 
 | Repeat structure | A unit is handed to | It counts as completed when |
 |---|---|---|

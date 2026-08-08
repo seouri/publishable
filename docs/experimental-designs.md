@@ -353,7 +353,8 @@ The design is shaped around a specific claim: most irreproducible results are no
 | **A cluster split across train and test** | A declared `cluster_by` makes clusters indivisible in every partition core computes, so a fold can't train on one cell of an animal and test on another. `validate` rejects a `k` above the cluster count |
 | **Resampling clustered rows as if independent** | A declared `cluster_by` makes the cluster the bootstrap draw, so 300 cells from 10 animals give a 10-draw interval rather than a 300-draw one that looks ten times more precise than the data supports |
 | **A permutation that shuffles away the matching** | `null_test` shuffles at the level the shuffled attribute lives at — within clusters when it varies inside one, whole clusters when it doesn't — so a matched design gets a conditional test instead of a free relabelling |
-| **Silent attrition** | Every metric reports units resolved, completed, and failed — never a bare `n` that hides dropout. Each count is scoped to what its execution was handed, so a fold or an arm isn't charged with units it never saw |
+| **Silent attrition** | Every metric reports units resolved, completed, ineligible, and failed — never a bare `n` that hides dropout. Each count is scoped to what its execution was handed, so a fold or an arm isn't charged with units it never saw |
+| **A design exclusion counted as a failure** | `io.skip` declares a unit that admits no result by design — an unbuildable transform, an inapplicable assay — so it lands in `ineligible` rather than `failed`, and `max_failed_fraction` keeps guarding attrition rather than a mixture of the two |
 | **Hypotheses invented after seeing results** | A hypothesis carries the `parameters_hash` of the config that declared it; anything added later doesn't match, and undeclared analyses render as exploratory |
 
 ### Bookkeeping
