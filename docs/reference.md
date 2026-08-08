@@ -114,7 +114,8 @@ replication:
 statistics:
   # ---- Computed over the per-unit table after the run. Not execution axes. ----
   correction: holm                       # none | bonferroni | holm | fdr_bh
-  resample: null                         # e.g. {method: bootstrap, n: 2000} → percentile CIs
+  resample: null                         # {method: bootstrap, n: 2000} → percentile CIs for column
+                                         # metrics too; derived metrics resample either way
   null_test: null                        # e.g. {method: permutation, n: 5000, shuffle: label}
 
 hypotheses:
@@ -175,6 +176,7 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Shuffle level is unambiguous | `null_test.shuffle: status` varies within `match_set` `M07` but is constant within `M12`, so neither a within-cluster nor a whole-cluster null applies |
 | Clusters enough to resample | `statistics.resample` with `cluster_by: animal_id` over 4 animals bootstraps 4 draws; below the configured minimum (warning) |
 | Technical replicates | `{kind: technical}` is not a repeat kind — declare `data.units.measurements` instead |
+| Collapse rule fits the column | `measurements.collapse: mean` over `site`, which is a string — use `first` or `mode`, or a per-column map |
 | Grid size sane | 6 conditions × 10 folds × 3 seeds = 180 executions exceeds the warning threshold |
 | Leave-one-out is affordable | `{kind: fold, k: all}` over 240 units × 3 conditions = 720 executions exceeds the warning threshold |
 | Credentials present | `INSTRUMENT_API_TOKEN` is not set in `.env` |
@@ -189,6 +191,7 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Holdout strata survive clustering | `holdout.stratify_by: label` with `cluster_by: animal_id`, but `label` varies within animal `A3` |
 | Biological replicates are units | `{kind: biological}` is not a repeat kind — independent samples are rows in the unit table |
 | Allocation needs arms | `allocation: between` but no `sweep.groups` axis declares what the arms are |
+| Arms need allocation | `sweep.groups` declares arms but `allocation` is `within`, which says every unit appears in every condition — a unit can't be in one arm and in all of them |
 | Ratio names levels | `assign.ratio` has key `00_control`; expected one entry per `sweep.groups.levels` value (`control`, `treatment`) |
 | Attribute assignment resolves | `assign.method: by_attribute` needs `assign.from`; column `arm` has values `{a, b}`, expected the declared levels |
 | Allocation is coherent | `allocation: between` over 2 arms and 12 units gives arms of 6; below the configured minimum (warning) |
@@ -805,6 +808,8 @@ statistics:
 
 Both operate on `units.parquet`, resampling or relabelling it and recomputing the metric — which core can do only for a metric it knows how to compute, so this needs a per-unit column or a template [`aggregate(units, cfg)`](#templates-where-parameters-are-defined). The permutation test compares the null it builds against the value the actual run produced; a design in which every execution is permuted has no unpermuted value to test, which is one more way the repeat axis was the wrong home for it.
 
+**`null_test` tests a metric within a condition, not a delta between conditions.** It relabels units and recomputes, so what it produces is a p-value for "this condition's metric against a null where the label carries no information" — one per condition, alongside that condition's estimate. It does *not* test `vs_baseline`: the null for a paired between-condition difference is a per-unit sign flip rather than a relabelling, and `shuffle` names an attribute, which can't express that. A contrast's evidence is its [interval and corrected interval](#sweeps-and-repeats), which is the form the comparison is reported in anyway.
+
 What counts as one draw is *rows* by default and *clusters* when [`cluster_by`](#clustered-units) is declared — a bootstrap over rows of clustered data reports an interval too narrow to believe, and a permutation over rows destroys the matching a matched design rests on. See [Clustered units](#clustered-units) for both rules.
 
 **Technical replication is a property of the input, not of execution.** Re-running an identical step on identical inputs under the same seed produces an identical answer, so averaging three such executions is a no-op. The three reads of a sample are not three runs of anything — they're three measurement rows sharing a sample identity, and that's declared where units are resolved:
@@ -817,7 +822,9 @@ data:
     measurements: {by: read_id, collapse: mean}   # rows sharing a key are technical replicates
 ```
 
-Rows sharing a `key` are collapsed to one unit at resolution, before any step sees them, and `technical_n` is reported for transparency. When the pipeline does the measuring rather than the input carrying it, a step calls `io.record` once per measurement and core collapses the same way. Either path, technical replicates cannot reach `n`, because they were gone before `n` was counted.
+`collapse` is `mean`, `median`, or `sum` for numeric columns and `first` or `mode` for the rest, and it may be a per-column map — `collapse: {intensity: mean, batch: first}` — when one rule doesn't fit every column. A single rule applies to every collapsed column, so `validate` rejects `mean` over a `site` string rather than coercing it: the alternative is a silently dropped column or a meaningless number, and neither is something to discover after the run. Attributes constant within a key collapse to that value with no rule needed.
+
+Rows sharing a `key` are collapsed to one unit at resolution, before any step sees them, and `technical_n` is reported for transparency — as `{min, max, median}` rather than a single number, because real files are uneven and a bare `technical_n: 3` would be a claim of balance nobody checked. A unit measured once and a unit measured five times contribute equally to `n` after collapsing, which is worth being able to see. When the pipeline does the measuring rather than the input carrying it, a step calls `io.record` once per measurement and core collapses the same way. Either path, technical replicates cannot reach `n`, because they were gone before `n` was counted.
 
 A **technical replicate** is the same sample measured three times; a **biological replicate** is three independent samples. Only the second is evidence about the population, and counting technical replicates as `n` is one of the most common ways a result is overstated.
 
@@ -834,7 +841,7 @@ r:
   value: 0.607
   basis: units                                 # what the interval is over
   n: {resolved: 240, completed: 228, failed: 12}
-  technical_n: 3                               # collapsed, shown for transparency
+  technical_n: {min: 2, max: 3, median: 3}     # collapsed, shown for transparency
   repeat_spread: {std: 0.014, n: 5, kind: seed}   # how much the pipeline moved
   ci95: [0.517, 0.683]
   method: percentile_over_units
@@ -1013,6 +1020,8 @@ The `n` in a confidence interval is a count of the things the claim generalizes 
 | No `data.units` at all | `repeats` | Mean, std, sem and a t-based `ci95` over repeats, labelled as such |
 
 Those last two rows differ, and `data.units` is the whole discriminator. With no unit table, the executions *are* the observations — a simulation's ten seeds are ten draws from the thing being studied — so an interval over repeats is the honest one, and core computes it. With a unit table present, an interval over repeats would be a claim about seeds standing in for a claim about units, so core refuses it rather than substituting the wrong denominator.
+
+**A derived metric is resampled whether or not you declare `statistics.resample`.** The two rows above are not symmetric, and this is the asymmetry: a column metric has a t-interval available, so resampling it is a choice, and `resample` is what makes it. A derived metric has no such fallback — there is no closed form for the sampling distribution of whatever `aggregate` computed — so the alternatives are a percentile interval from resampling or no interval at all, and core resamples. With `resample: null` it uses the default it documents here, `bootstrap` at `n: 2000`, which is why the worked example reports `method: percentile_over_units` under a config that declares nothing. Declaring `resample` then changes the method or the count rather than switching the behaviour on, and the resolved values are recorded in `run.yaml` beside the interval so the number is never the result of an undocumented default.
 
 That third row is the important refusal. A step that computes a cohort-level statistic internally and returns it as a number gives core nothing to resample: core never inspects the body of your Python, so it cannot recompute your statistic on a different set of units. What it will not do is fall back to an interval across the five seeds and present that as a confidence interval — **an interval over seeds measures how much the RNG moved the answer, and it narrows as you add seeds.** It says `basis: repeats`, reports the spread, and omits `ci95`. To get an interval, make the quantity a per-unit column, or teach the template to derive it (below).
 

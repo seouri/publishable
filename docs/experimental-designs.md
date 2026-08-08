@@ -39,7 +39,7 @@ replication:
 
 ### Within-subjects / repeated measures
 
-Every unit is measured under every condition. This is the default, and comparisons are paired automatically.
+Every unit is measured under every condition. This is the default, and comparisons are paired automatically. Core doesn't model the *order* each unit met the conditions in, so counterbalancing and carryover effects are yours — see [what core will not do](#what-core-will-not-do-for-you).
 
 ```yaml
 data:
@@ -209,7 +209,7 @@ data:
   units:
     from: reads.csv
     key: sample_id                             # 3 rows per sample_id
-    measurements: {by: read_id, collapse: mean}
+    measurements: {by: read_id, collapse: mean}   # or median | sum | first | mode, or per column
 ```
 
 Rows sharing a key collapse into one unit before any step sees them, so technical replicates can never reach `n`. This is the single most consequential mapping in the whole model for bench work, and the direction matters: the three reads are a fact about your data file, not three runs of anything.
@@ -295,6 +295,8 @@ The design is shaped around a specific claim: most irreproducible results are no
 Being explicit about this matters more than the feature list, because a tool that quietly does the wrong statistic is worse than one that declines.
 
 **Modelling beyond summary statistics.** Mixed-effects and hierarchical models, factorial main effects and interactions, survival analysis with censoring, ordinal and count outcomes, and curve fitting are all out of scope for core aggregation, which computes means, derived scalars, and intervals over the per-unit table. That table is the right input for any of these — bring your own model in a `scope: "summary"` step, or derive the quantity you need in a template's `aggregate(units, cfg)`, which is also what gives it an interval.
+
+**Crossover order and counterbalancing.** [Within-subjects](#within-subjects--repeated-measures) means every unit is measured under every condition, and core pairs the comparison accordingly — but it has no notion of the *order* a given unit met the conditions in, so it can neither counterbalance that order nor estimate a carryover or period effect. `replication.order: randomized` shuffles the order executions run in, which protects against drift in an instrument or a service; it is not a per-unit condition sequence, and reading it as one would be a mistake worth avoiding. A true crossover design needs the sequence to be a property of the unit: carry it as an attribute, make the sequences a `groups` axis if you want to compare them, and fit the period terms in a `scope: "summary"` step.
 
 **Power analysis.** Core enforces a template's minimum repeat count but does not compute power or required sample size. If your field expects an a-priori calculation, record it as a parameter so it's part of the pre-registered config.
 
