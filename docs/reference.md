@@ -211,7 +211,8 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Ratio names levels | `assign.arm.ratio` has key `f`; expected one entry per level of axis `arm` (`control`, `treatment`) |
 | Block size fills the arms | `assign.arm.block_size: 3` with `ratio: {control: 1, treatment: 1}` — a block must be a whole multiple of the ratio's sum, or it can't hold each arm's share |
 | Attribute assignment resolves | `assign.arm.method: by_attribute` reads column `arm` — defaulted from the axis name — whose values are `{a, b}`, not the declared levels |
-| Allocation is coherent | `allocation: between` over 2 arms and 12 units gives arms of 6; below `limits.min_units_per_arm` (warning) || Allocation strata exist | `assign.arm.stratify_by: [site]` but `site` is neither a unit attribute nor a group axis |
+| Allocation is coherent | `allocation: between` over 2 arms and 12 units gives arms of 6; below `limits.min_units_per_arm` (warning) |
+| Allocation strata exist | `assign.arm.stratify_by: [site]` but `site` is neither a unit attribute nor a group axis |
 | Clustering looks undeclared | `site` has 6 distinct values across 240 units but `cluster_by` is unset (warning) |
 | Folds fit inside the clusters | `{kind: fold, k: 10}` with `cluster_by: animal_id` over 6 animals — clusters are indivisible, so `k` may not exceed the cluster count |
 | Folds fit inside the cells | `{kind: fold, k: 10}` with `allocation: between` over cells of 8 and 232 — folds are drawn within each cell, so `k` may not exceed the smallest cell's unit count, or its cluster count when `cluster_by` is declared |
