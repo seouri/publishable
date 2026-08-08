@@ -1037,6 +1037,8 @@ class CompareMethods(BaseStep):
 
 `cfg.parameters` in a summary step holds the *base* values with swept paths marked as varying, so there's no misleading pretense that one condition's value applies.
 
+**What a summary step returns is recorded, not interpreted.** It lands verbatim in `results.summary`, with no `basis`, no interval, and no place in the [correction family](#sweeps-and-repeats) — core didn't compute it and can't recompute it on a resampled table, which is the same reason a step-returned scalar is [`basis: repeats`](#the-unit-table-is-the-inference-base). Since factorial main effects, curve fits, conditional estimators, and mixed models are all routed here, that's worth being plain about: this scope is where core stops doing statistics and starts storing yours. Report the interval your model produced as part of the returned value if you want one beside the number.
+
 ### How artifacts are organized
 
 The output tree mirrors the experiment's structure: what varied, then which repeat, then which step.
