@@ -408,13 +408,15 @@ results:                                       # scientific; see "Statistical re
 
 An execution that raises is recorded `failed` and the run **continues to the next one.** Stopping at the first failure would throw away every execution the plan had left — on a 720-execution leave-one-out sweep, a single bad fold would cost the run — and there is nothing to salvage it with, since [`resume`](#resuming) skips completed triples but cannot un-abort a plan that was never attempted. So the plan is executed to the end, and the run's own status says what came of it:
 
-| `status` | The run reached the end of its plan | And |
+| `status` | Means | Exit |
 |---|---|---|
-| `completed` | ✓ | every execution completed |
-| `partial` | ✓ | some executions failed |
-| `failed` | ✗ | it stopped where it stood |
+| `completed` | Every execution in the plan completed | `0` |
+| `partial` | The plan reached its end and some executions failed — a record worth reading | `3` |
+| `failed` | There is nothing to report | `4` |
 
-Two things produce `failed`, and both are cases where there was no plan left to execute. A `scope: "run"` step that raises takes every condition with it — there is no shared cohort for them to condition on, so continuing would mean executing a plan whose first premise is missing. And `limits.max_failed_fraction` being exceeded stops the run where it stands: unit failures only accumulate, so once the fraction is past the threshold no later execution can bring it back, and spending the remaining compute to confirm that is waste. A `scope: "summary"` step that raises is *not* one of these — every condition ran, and its own execution is one failure among the others, so the run is `partial` and the conditions are readable without it.
+**`failed` means there is nothing to report**, which is why it isn't simply "the plan didn't finish." Three things produce it. A `scope: "run"` step that raises takes every condition with it — there is no shared cohort for them to condition on, so continuing would mean executing a plan whose first premise is missing. `limits.max_failed_fraction` being exceeded stops the run where it stands: unit failures only accumulate, so once the fraction is past the threshold no later execution can bring it back, and spending the remaining compute to confirm that is waste. And the [input manifest failing its re-verification](#steps-and-artifacts) after the last execution fails a run that otherwise reached the end of its plan — the inputs moved underneath it, so every number in it is over a dataset that no longer exists, and there is no honest way to report that as `partial`.
+
+A `scope: "summary"` step that raises is *not* one of these — every condition ran, and its own execution is one failure among the others, so the run is `partial` and the conditions are readable without it.
 
 **`partial` is a reportable status, and that's the point of separating it from `failed`.** A run whose executions all ran and three of which failed has results worth reading, with the attrition recorded per execution and per condition; `report` renders it with the failures shown rather than refusing. What it is not is `completed`, so a `study add` of one is visible as what it is.
 
@@ -433,6 +435,7 @@ Results go here rather than back into the config for four compounding reasons: w
 │   ├── manifest/input.json
 │   ├── environment/{uv.lock,pyproject.toml}
 │   ├── sweep.yaml
+│   ├── executions.jsonl
 │   ├── conditions/01_method=spearman/seed17/step03_analyze/...
 │   └── summary/step04_compare_methods/...
 ├── run_2026-08-07T09-14-03Z_8e21ab3/     # a second run — collides with nothing
@@ -465,7 +468,7 @@ Like `latest`, the lock is bookkeeping rather than an artifact, so creating and 
 
 ## The other files a run writes
 
-`run.yaml` is the deliverable, and five other files in the run directory are read back by something — by `resume`, by `reproduce`, by a statistic, or by you. Each is therefore a contract rather than a log, and each is written once and never modified, like everything else under a run.
+`run.yaml` is the deliverable, and the rest of the run directory is read back by something — by `resume`, by `reproduce`, by a statistic, or by you. Each file below is therefore a contract rather than a log. All of them are append-only, which is not the same as written-once: `sweep.yaml` and `allocation.json` are settled before the first execution and never touched again, while the ledger and the per-unit tables grow as the run goes. Neither kind is ever rewritten.
 
 ### `sweep.yaml` — the resolved plan
 
@@ -480,7 +483,8 @@ conditions:
 repeats:
   - kind: seed
     seeds: [17, 42, 137, 1009, 2027]     # resolved, whether `auto` or listed
-labels: [seed17, seed42, seed137, seed1009, seed2027]
+labels: [seed17, seed42, seed137, seed1009, seed2027]   # composed, outer to inner —
+                                                        #   fold03_seed42 under fold × seed
 order: as_declared                       # as_declared | randomized
 execution_order:                         # realized, always recorded — the fact, not the rule
   - {condition: 0, repeat: seed17}
@@ -489,6 +493,18 @@ execution_order:                         # realized, always recorded — the fac
 ```
 
 A `fold` level adds `partitions` — the unit keys in each fold's train and test side, and the realized fold sizes when [`cluster_by`](#clustered-units) makes them uneven. A `sample` sweep adds the drawn `values` per condition and the seed they came from. `order: randomized` adds the `order_seed` its shuffle used, beside the `execution_order` that shuffle produced — the seed so the plan is derivable, the order because [what happened is not a thing to re-derive](#resuming). Both are there so a reader never re-derives a design, and so `reproduce` regenerates the same one.
+
+### `executions.jsonl` — what has happened so far
+
+One record appended as each execution finishes, and the file [`resume`](#resuming) reads to know what not to redo. It exists because `run.yaml` is written when the plan ends: an interrupted run has no `run.yaml` at all, so the record of what completed has to be durable before there is one.
+
+```json
+{"condition": 1, "repeat": "seed17", "step": "step03_analyze", "status": "completed",
+ "started_at": "2026-08-06T14:03:27Z", "wall_seconds": 903.1, "attempt": 1,
+ "n": {"resolved": 240, "completed": 231, "failed": 9}}
+```
+
+`run.yaml`'s `execution` block is this file folded into the scope nesting, which is why the two never disagree: one is the log, the other is the same facts arranged for a reader. A resumed attempt appends its own record for the triple it re-executes rather than amending the earlier one — that's where the `attempts` count in `run.yaml` comes from, and why an execution that ran three times leaves three records and one summary.
 
 ### `allocation.json` — who went where
 
@@ -507,12 +523,11 @@ Unit keys, never row numbers — a roster that gains a unit renumbers rows and w
 
 ### `manifest/input.json` — what was read
 
-Built by `dry-run` and at run start, re-verified after the run, and compared by `reproduce`. Its shape follows [`input_manifest_policy`](#three-hashes), and it records which policy produced it so a reader isn't left inferring the strength of the claim:
+Written at run start, re-verified after the run, and compared by `reproduce`. [`dry-run`](#before-you-spend-it) *builds* the same manifest without writing it, which is how it can tell you the input is unreadable while still creating nothing. Its shape follows [`input_manifest_policy`](#three-hashes), and it records which policy produced it so a reader isn't left inferring the strength of the claim:
 
 ```json
 {
   "policy": "hash_all",
-  "root_is_redacted": false,
   "files": [
     {"path": "index.csv",         "size": 20481, "mtime": "2026-08-01T09:12:44Z",
      "sha256": "b1c2..."},
@@ -594,7 +609,7 @@ class Step(BaseStep):
 | `io.read_input(relpath)` | Read-only access to `input_dir`. |
 | `io.units` | The units this execution produces results about — every unit, this arm's, or this fold's or holdout's test partition. A sequence: iterate it, take its `len`, index it. `io.units.train` carries the training partition when a `fold` repeat or a [`holdout`](#a-fixed-holdout-split) is declared, and **raises when neither is** — an empty list would let a fit run on nothing and write a plausible model, which is the failure a partition exists to prevent. Both raise at `"run"` and `"condition"` scope when a `fold` repeat is declared, since no fold exists there — see [Step scope](#a-fold-repeat-puts-the-units-out-of-reach-of-the-wider-scopes). There is no `io.units.train.train`. See [Units](#units-the-thing-being-measured). |
 | `io.skip(unit_key, reason)` | Declares that this unit admits no result in this execution by design — a transform that can't be built, an assay that doesn't apply. Counted as `ineligible` rather than `failed`, with the reason recorded per unit. |
-| `io.record(unit_key, values, measurement=None)` | Appends one row to this step's per-unit result table, keyed by unit. `values` is a flat mapping of scalars — `str`, `int`, `float`, `bool`, or `None`; the table is a table. Rows need not agree on keys, and a column absent from a row reads as `None`, so `units.columns` is the union across the step's rows plus every declared attribute — or by `(unit, measurement)` when the step measures one unit more than once, which core then collapses per [`data.units.measurements`](#what-isnt-a-repeat). Append-only and resumable by whichever key applies. |
+| `io.record(unit_key, values, measurement=None)` | Appends one row to this step's per-unit result table, keyed by unit — or by `(unit, measurement)` when the step measures one unit more than once, which core then collapses per [`data.units.measurements`](#what-isnt-a-repeat). Append-only and resumable by whichever key applies. `values` is a flat mapping of scalars — `str`, `int`, `float`, `bool`, or `None`; the table is a table. Rows need not agree on keys, and a column absent from a row reads as `None`, so `units.columns` is the union across the step's rows plus every declared attribute. |
 | `io.conditions` / `io.repeats` / `io.read_condition(condition, step, name, repeat=None)` | **`scope="summary"` only.** Iterate resolved conditions and resolved repeat labels, and read any condition's artifacts. `repeat` names which repeat's copy to read and is required when `step` is repeat-scoped; repeat labels are identical under every condition, which is why `io.repeats` is a run-level list. |
 | `io.reuse_from(run_id, step, name)` | Explicitly read an artifact from a *previous* run — the sanctioned way to build on prior work without copying or overwriting. See [Lineage](#lineage-between-runs). |
 
@@ -602,7 +617,7 @@ class Step(BaseStep):
 
 **That is a serialization dependency, not an API one, and the distinction is the same one [`aggregate`](#templates-where-parameters-are-defined) rests on.** Core writing `units.parquet` means core depends on a parquet library; it does not mean the table core hands a template is that library's type, and the four-operation contract holds regardless of what sits underneath. A format is a promise about a file a reader opens in ten years; a type is a promise about an object a plugin is written against. Only the first is worth pinning this hard.
 
-**A `name` is a relative path, not only a filename.** `io.write("figures/roc.png", fig)` and `io.write("programs/gpt-4.1__seed29.json", blob)` both write inside the step's own directory, creating intermediate directories as needed, and every reader — `io.path`, `io.append`, `io.read_upstream`, `io.read_condition`, `io.reuse_from` — addresses them by that same relative path. A step that produces a set rather than a single file is ordinary, and making it flatten a tree into `programs_gpt_4_1_seed29.json` would push structure into filenames where a directory says it better. The path is resolved against the step's directory and normalized first: an absolute path, a `..` segment, or a symlink leading outside are all rejected, so "artifacts land in a directory of the same name" stays a property core enforces rather than one a step could opt out of.
+**A `name` is a relative path, not only a filename.** `io.write("figures/roc.png", fig_bytes)` and `io.write("programs/gpt-4.1__seed29.json", blob)` both write inside the step's own directory, creating intermediate directories as needed, and every reader — `io.path`, `io.append`, `io.read_upstream`, `io.read_condition`, `io.reuse_from` — addresses them by that same relative path. A step that produces a set rather than a single file is ordinary, and making it flatten a tree into `programs_gpt_4_1_seed29.json` would push structure into filenames where a directory says it better. The path is resolved against the step's directory and normalized first: an absolute path, a `..` segment, or a symlink leading outside are all rejected, so "artifacts land in a directory of the same name" stays a property core enforces rather than one a step could opt out of.
 
 There is no `publishable clean` or `publishable reset`. Nothing in core deletes a file it didn't create in the same call — the [run lock](#one-execution-at-a-time-and-what-holds-the-run-directory) being the whole of the exception, and only in the sense that whichever invocation takes it is the one that releases it.
 
@@ -616,7 +631,7 @@ Because runs are identified and writes are atomic, resume is well-defined:
 uv run publishable resume /secure/results/cohort-pilot/latest
 ```
 
-It reopens that run directory and skips every (condition, repeat, step) triple marked `completed`, continuing from the first that isn't. The marks are in the run directory rather than in `run.yaml`, and they have to be: [`run.yaml` is written once, when the plan ends](#what-status-means-and-when-a-run-keeps-going), so a run that was interrupted doesn't have one — core appends each execution's record as it finishes, and assembles `run.yaml` from those at the end. On a 3-condition × 30-repeat sweep that died at condition 3, the first two conditions and all their repeats are simply not re-executed. Partial artifacts can't exist to confuse it; work that used `io.append` resumes from the last complete record.
+It reopens that run directory and skips every (condition, repeat, step) triple marked `completed`, continuing from the first that isn't. The marks are [`executions.jsonl`](#executionsjsonl--what-has-happened-so-far) in the run directory rather than `run.yaml`, and they have to be: [`run.yaml` is written once, when the plan ends](#what-status-means-and-when-a-run-keeps-going), so a run that was interrupted doesn't have one — core appends each execution's record as it finishes, and assembles `run.yaml` from those at the end. On a 3-condition × 30-repeat sweep that died at condition 3, the first two conditions and all their repeats are simply not re-executed. Partial artifacts can't exist to confuse it; work that used `io.append` resumes from the last complete record.
 
 `resume` refuses if `parameters_hash`, `code_hash`, or `uv.lock` don't match current state. Resuming into a *different* experiment is the failure this guards against; with parameters hashed separately, "I edited the config and then resumed" is caught rather than missed.
 
@@ -653,7 +668,7 @@ class Step(BaseStep):
 
 **`io.units` is never narrowed on resume, and that's deliberate.** `resolved` [is defined as `len(io.units)`](#what-isnt-a-repeat) for the execution, and a resumed execution still produced results about every unit it was handed — the earlier attempt's rows are in the same append-only table. Narrowing the list would drop `resolved` to the remainder and make a correctly resumed run look like one that evaluated 140 patients instead of 440. So the skip is the step's `continue` rather than core's filter, and the three-part `n` comes out identical whether an execution ran once or three times. The execution's `attempts` count in `run.yaml` is where the fact that it ran more than once is recorded.
 
-**`attempts` counts `resume` invocations, because core never retries on its own.** A first run leaves every execution at `attempts: 1`, and the count rises only when you re-enter a run directory. Automatic retry is deliberately absent: it would be a behavior nothing in the config describes, it would double-execute a `nondeterministic = True` step whose first attempt may have half-succeeded, and the resolution of the duplicate rows it produced would be [first-write-wins](#resuming) — a tie-break decided by core over an answer that genuinely differs. Retrying a *unit* is a different question and stays where the domain knowledge is: a step's own loop, under parameters its template declares.
+**`attempts` counts how many times that triple was executed, because core never retries on its own.** It is the number of records the triple has in [`executions.jsonl`](#executionsjsonl--what-has-happened-so-far), so a first run leaves every execution at `attempts: 1`, and the count rises only for a triple a later `resume` actually re-executed — one that completed the first time stays at `1` however many resumes the run goes through. Automatic retry is deliberately absent: it would be a behavior nothing in the config describes, it would double-execute a `nondeterministic = True` step whose first attempt may have half-succeeded, and the resolution of the duplicate rows it produced would be [first-write-wins](#resuming) — a tie-break decided by core over an answer that genuinely differs. Retrying a *unit* is a different question and stays where the domain knowledge is: a step's own loop, under parameters its template declares.
 
 **A duplicate row resolves first-write-wins.** That isn't a new rule, it's [append-only](design-principles.md#design-goals) applied: the first row is already durable and nothing overwrites it. For a deterministic step the resolution is immaterial, which is why it rarely comes up — but under `nondeterministic = True` the two rows genuinely differ, so which answer survives is a question about the experiment rather than about bookkeeping. Check `io.recorded_keys` rather than relying on the tie-break. `io.append` resolves the same way for the same reason, and its idempotency needs a `record_key`: without one there is nothing to deduplicate by, and a re-executed range appends a second copy of every record it already wrote.
 
@@ -1640,6 +1655,7 @@ The output tree mirrors the experiment's structure: what varied, then which repe
 ├── sweep.yaml                                  # resolved conditions, repeat plan, seeds, fold membership,
 │                                               #   realized execution order, design digest
 ├── allocation.json                             # realized arm assignment and holdout split; present when either is declared
+├── executions.jsonl                            # one record per finished execution — what `resume` reads
 ├── manifest/input.json
 ├── environment/{uv.lock,pyproject.toml}
 ├── shared/
@@ -1708,7 +1724,7 @@ Those last two rows differ, and `data.units` is the whole discriminator. With no
 
 And `cohens_d`, when the metric is a per-unit mean: **paired contrasts report *d*z** — the mean of the per-unit differences over their standard deviation — and **unpaired ones report *d*s**, over the pooled within-condition standard deviation. They are different quantities from the same data and the one that applies follows from `paired`, which is [derived rather than declared](#allocation-within-subjects-or-between-subjects). A weighted condition standardizes by the weighted standard deviation, on the same weights the mean used.
 
-A [`null_test`](#what-isnt-a-repeat) p-value is corrected alongside the intervals when the method supplies one, and it counts in the same family — it is exactly the number a reader acts on, so exempting it would under-correct by whatever fraction of the family carries a p-value.
+A [`null_test`](#what-isnt-a-repeat) p-value is corrected alongside the intervals when the method supplies one, at the same level the interval was computed at. **It does not add a place in the family**: the family counts comparisons × metrics, and a metric reported with both an interval and a p-value is one metric described two ways, not two findings. Counting it twice would correct a design for declaring `null_test` rather than for the comparisons it actually put in front of a reader.
 
 **A derived metric is resampled whether or not you declare `statistics.resample`.** The two rows above are not symmetric, and this is the asymmetry: a column metric has a t-interval available, so resampling it is a choice, and `resample` is what makes it. A derived metric has no such fallback — there is no closed form for the sampling distribution of whatever `aggregate` computed — so the alternatives are a percentile interval from resampling or no interval at all, and core resamples. With `resample: null` it uses the default it documents here, `bootstrap` at `n: 2000`, which is why the worked example reports `method: percentile_over_units` under a config that declares nothing. Declaring `resample` then changes the method or the count rather than switching the behaviour on, and the resolved values are recorded in `run.yaml` beside the interval so the number is never the result of an undocumented default.
 
@@ -2304,12 +2320,15 @@ Every command is scriptable, so what it returns is part of the interface:
 | `0` | Succeeded. Warnings may have been printed; a warning never changes the code |
 | `1` | The thing you asked about is wrong — a config that fails [validation](#validation), a `diff` of runs that don't share a hash, a `resume` whose hashes moved |
 | `2` | The invocation is wrong — unknown command, missing argument, unreadable path |
-| `3` | **`run`, `draft`, and `resume` only** — the run executed and did not complete: `partial` or `failed`, per [`status`](#what-status-means-and-when-a-run-keeps-going) |
-| `4` | Something outside the machine refused — an unreachable [apparatus](#the-apparatus-core-can-only-observe), a missing credential, a clone or `uv sync` that failed |
+| `3` | **`run`, `draft`, `resume` only** — the run reached the end of its plan with failures: [`status: partial`](#what-status-means-and-when-a-run-keeps-going). There is a record, and it is worth reading |
+| `4` | **`run`, `draft`, `resume` only** — the run stopped: `status: failed`. There is a record of what happened and no result to report |
+| `5` | Something outside the machine refused — an unreachable [apparatus](#the-apparatus-core-can-only-observe), a missing credential, a clone or `uv sync` that failed |
 
-`3` is separate from `1` because a run that produced a `partial` record did its job and the record is real; a script that treats it as a validation failure will delete something worth keeping. For the same reason it belongs to the commands that execute: **`report` of a `partial` run exits `0`** — it was asked to render a record and it rendered one, with the failures shown. A reader learns the run was partial from the report, which is where that belongs, not from the exit code of the command that printed it. `4` is separate because it is the class you retry, and the other three are not.
+**`partial` and `failed` get different codes because the whole point of separating them is that one is reportable.** Collapsing both into "didn't complete" would hand a script the same number for a run whose results belong in a paper and one that has none, which is exactly the judgement the two statuses exist to record. A pipeline that archives on `3` and pages on `4` is the shape this is for.
 
-**`dry-run` runs its phases in cost order and stops at the first that fails**, which is what decides its code: validation, then the input manifest, then the [apparatus probe](#the-apparatus-core-can-only-observe). So a config with an error exits `1` without ever reaching the probe, and only a config that validates gets as far as a `4`. That ordering is the point of the command — the cheap objection should never be reported second, behind a metered request that was going to fail anyway.
+Both belong to the commands that execute. **`report` of a `partial` run exits `0`** — it was asked to render a record and it rendered one, with the failures shown. A reader learns the run was partial from the report, which is where that belongs, not from the exit code of the command that printed it. `5` is separate from all of them because it is the class you retry, and the others are not.
+
+**`dry-run` runs its phases in cost order and stops at the first that fails**, which is what decides its code: validation, then the input manifest, then the [apparatus probe](#the-apparatus-core-can-only-observe). So a config with an error exits `1` without ever reaching the probe, and only a config that validates gets as far as a `5`. That ordering is the point of the command — the cheap objection should never be reported second, behind a metered request that was going to fail anyway.
 
 **`validate` collects rather than stops.** It reports every error and warning it can find in one pass, ordered by config position, because the alternative is a fix-one-rerun loop over a file with four typos in it. Only a failure that makes later checks meaningless is fatal on its own — a config that won't parse, a template that isn't installed, an experiment package that won't import — and those say so instead of reporting a hundred downstream consequences.
 
@@ -2630,7 +2649,7 @@ In order, it:
 2. Clones into a directory derived from the repository name and run ID (`my-study_run_2026-08-06T14-02-11Z_8e21ab3/`), and checks out that exact commit as a detached HEAD. *The only git operation, and you didn't type it.* No `--into`: the destination is derived, so it can't collide with an existing checkout and doesn't need naming.
 3. Verifies the checked-out tree's `code_hash` matches the recorded one — catching a rewritten or force-pushed history.
 4. Runs `uv sync --locked`, failing loudly on lockfile mismatch. Plugin versions come along automatically.
-5. Writes the embedded config to `configs/<name>/config.yaml`, with `data.input_dir` and `data.output_dir` blanked and marked `# REQUIRED: set to your local copy`. When the run had an [apparatus](#the-apparatus-core-can-only-observe), it also writes `configs/<name>/apparatus.expected.json` — the recorded facts, written once and never modified, which the first probe is checked against.
+5. Writes the embedded config to `configs/<name>/config.yaml`, with `data.input_dir` and `data.output_dir` blanked and marked `# REQUIRED: set to your local copy`. When the run had an [apparatus](#the-apparatus-core-can-only-observe), it also writes `configs/<name>/apparatus.expected.json` — the recorded facts, which the first probe is checked against. `reproduce` writes that file once and never rewrites it; you may edit it, and that asymmetry is the whole design — see below.
 6. Copies `.env.example` and lists the `required_env` variables that need values.
 7. Prints exactly what's left to do, then stops.
 
