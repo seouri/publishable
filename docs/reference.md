@@ -103,6 +103,12 @@ sweep:
   # Keys are dotted paths into `parameters`; modes compose. See "Sweeps and repeats".
   baseline: {analysis.method: pearson}   # optional reference condition; enables deltas
   groups: []                             # optional list of unit-group axes, e.g. [{by: arm, levels: [...]}]
+  paired: []                             # optional coupled settings, e.g. [{analysis.min_samples: 30,
+                                         #   analysis.confidence: 0.95}] — one axis, not a product
+  ablate: null                           # optional; 1 + n one-change conditions, e.g. {from: baseline,
+                                         #   remove: [...]} or {override: [...]} — requires baseline
+  sample: null                           # optional; continuous ranges instead of enumeration,
+                                         #   e.g. {n: 40, method: sobol, seed: auto, ranges: {...}}
   grid:
     analysis.method: [spearman, kendall]
   # 1 baseline + 2 grid = 3 conditions
@@ -196,7 +202,8 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Unit keys unique | `data.units.key` `patient_id` has 3 duplicate values |
 | Resolver is installed | `data.units.from.resolver` names `plate_wells`, which no installed plugin registers |
 | Resolver supplies the attributes | resolver `plate_wells` yields units with no `operator`, declared in `data.units.attributes` |
-| Resolver is condition-independent | resolver `plate_wells` reads `assay.panel`, which `sweep` varies — the unit table is one table for the whole run |
+| Resolver supplies the measurement field | `measurements: {by: read_id}` is declared but resolver `plate_wells` yields no `read_id` attribute to collapse on |
+| Resolver is condition-independent | resolver `plate_wells` reads `instrument.calibration_id`, which `sweep` varies — the unit table is one table for the whole run |
 | Stratification attribute exists | `stratify_by: label` is not in `data.units.attributes` |
 | Repeat kind needs units | `{kind: fold}` requires `data.units` to be declared |
 | Holdout isn't a repeat kind | `{kind: holdout}` is not a repeat kind — declare `data.units.holdout` instead |
@@ -468,7 +475,7 @@ plate_wells = "publishable_my_assay.resolvers.plate:resolve"
 
 **A resolver is its own registered artifact rather than a method on a template.** A template is [the authoritative definition of an experiment type's *parameters*](#templates-where-parameters-are-defined), and unit resolution isn't parameter-shaped: several experiments over one archive share a resolver while declaring different parameters, and one template can be pointed at inputs laid out two different ways. Coupling them would force a copy of one whenever the other varied.
 
-**What it returns is a unit table with the columns a CSV would have supplied.** `Unit` carries exactly three things — `key`, the identity `data.units.key` names; `paths`, the input files this unit is made of, relative to `input_dir`; and `attributes`, the mapping `data.units.attributes` draws from. Everything downstream is then indifferent to which form `from` took: `stratify_by`, `assign.from`, `cluster_by`, and `null_test.shuffle` all name attributes, and every check in [Validation](#validation) applies unchanged. [Technical replicates](#what-isnt-a-repeat) work the same way with one extra obligation: yield one `Unit` per measurement, sharing a `key`, and emit `measurements.by` as an *attribute* — a resolver has no columns beyond the ones it declares, so the field a CSV would simply have carried has to be named. That's the division of labour — **the plugin decides how units are found; core decides what is required of them** — and it's why there is no schema block anywhere in `data.units`. What a resolver must produce is a projection of the design declarations already written above it.
+**What it returns is a unit table with the columns a CSV would have supplied.** `Unit` carries three fields — `key`, the identity `data.units.key` names; `paths`, the input files this unit is made of, relative to `input_dir`, empty when the input is already a table; and `attributes`, the mapping `data.units.attributes` draws from. Everything downstream is then indifferent to which form `from` took: `stratify_by`, `assign.from`, `cluster_by`, and `null_test.shuffle` all name attributes, and every check in [Validation](#validation) applies unchanged. [Technical replicates](#what-isnt-a-repeat) work the same way with one extra obligation: yield one `Unit` per measurement, sharing a `key`, and emit `measurements.by` as an *attribute* — a resolver has no columns beyond the ones it declares, so the field a CSV would simply have carried has to be named. That's the division of labour — **the plugin decides how units are found; core decides what is required of them** — and it's why there is no schema block anywhere in `data.units`. What a resolver must produce is a projection of the design declarations already written above it.
 
 **It sees the same `cfg` a `scope: "run"` step does, and the same coherence rule applies:** a resolver that reads a parameter the sweep varies is rejected by `validate`. The unit table is one table for the whole run, so conditions that resolved different units couldn't be paired and `n` would mean something different in each. Parameters the sweep leaves alone are fair game, which is how a resolver is told which assay, panel, or shard to include.
 
@@ -1448,7 +1455,7 @@ These take a name plus what's needed to bring something into existence.
 |---|---|---|
 | `publishable demo` | *(none)*, `[--into DIR]` | Builds a complete worked example — synthetic units, a three-step pipeline, a sweep with a baseline — then validates and runs it. Data goes outside the created repo, as it would for real work. The fastest way to see a `run.yaml` |
 | `publishable new` | project name, `[--license]` | Scaffolds an experiment repo with README/LICENSE/CITATION.cff, `git init` + first commit |
-| `publishable plugin new` | plugin name | Scaffolds an installable template/step package |
+| `publishable plugin new` | plugin name | Scaffolds an installable template/resolver/step package |
 | `publishable generate` (`g`) | generator, name, generator args | `experiment` \| `step` \| `template` \| `report`; `experiment` accepts `--plugin` |
 | `publishable init` | `--template`, `--name`, `--input-dir`, `--output-dir`, `[--plugin]` | Alias for `generate experiment` |
 | `publishable study new` | bundle path, `--title` | Creates an empty study bundle, outside any experiment repo |
@@ -1786,7 +1793,7 @@ publishable/
 │   ├── base_experiment.py     # BaseExperiment: one ordered steps list, scopes resolved from it
 │   ├── base_step.py           # BaseStep: scope, run(cfg, io), self.condition/self.repeat, nondeterministic
 │   ├── artifacts.py           # io: scope-aware paths, atomic writes, append, record, read_condition
-│   ├── sweep.py               # grid/paired/ablate/sample/baseline expansion, labels, sweep.yaml
+│   ├── sweep.py               # grid/paired/ablate/sample/groups/baseline expansion, labels, sweep.yaml
 │   ├── units.py               # unit resolution (table/glob/resolver registry), keys, attributes, partitioning
 │   ├── scope.py               # step scope resolution, execution plan, read-direction checks
 │   ├── lineage.py             # upstream run recording and chain verification
