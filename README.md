@@ -35,7 +35,7 @@ Next:  a look at the config that describes this run
        [Enter] to continue · q to stop here
 ```
 
-Six stops, each the same beat: the real command, its real output, then what it meant. After the config comes `validate`:
+Six stops, most with the same beat: the real command, its real output, then what it meant. After the config comes `validate`:
 
 ```
 Next:  publishable validate configs/correlation-pilot/config.yaml
