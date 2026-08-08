@@ -413,10 +413,10 @@ class Step(BaseStep):
 | Method | Behavior |
 |---|---|
 | `io.write(name, obj)` | Writes into this step's directory. Raises `ArtifactExistsError` if the target exists — no overwrite, no backup-and-replace, no delete-to-make-room. **Atomic**: temp file plus rename, so a crash leaves nothing rather than a half-file that would permanently block a retry. |
-| `io.append(name, record)` | Appends one record to a line-oriented artifact, for incremental work that must survive a crash. Idempotent by record key when supplied. |
+| `io.append(name, record)` | Appends one record to a line-oriented artifact, for incremental work that must survive a crash. Idempotent by `record_key` when supplied: a second record under a key already present is discarded, so **first write wins** — the same rule and the same reason as `io.record`. Without a key, a re-executed range appends a second copy of everything it already wrote. |
 | `io.path(name)` | Resolves a *write* location without writing, for libraries that insist on writing themselves. Existence-checked in the same direction as `io.write` — it raises `ArtifactExistsError` when the target is already there — so it is not a way to read something back. See `io.exists` below. |
 | `io.exists(name)` | Whether this step's directory already holds that artifact. The question a resumed execution asks before writing — see [Resuming](#resuming). |
-| `io.resumed` / `io.recorded_keys` | `True` when this execution is a resumed attempt rather than a first one, and the unit keys already in its per-unit table from earlier attempts. Together, what a step needs to skip work it already did — see [Resuming](#resuming). |
+| `io.resumed` / `io.recorded_keys` | `True` when this execution is a resumed attempt rather than a first one, and the unit keys already in its per-unit table from earlier attempts — a **set**, so `key in io.recorded_keys` is constant-time. Empty rather than absent on a first execution, so a step needs no second check. Together, what a step needs to skip work it already did — see [Resuming](#resuming). |
 | `io.read_upstream(step, name)` | Read-only access to an earlier step's artifact *in this run*. Makes cross-step dependencies visible in code instead of implicit in shared paths. |
 | `io.read_input(relpath)` | Read-only access to `input_dir`. |
 | `io.units` | The units this execution produces results about — every unit, this arm's, or this fold's or holdout's test partition. `io.units.train` carries the training partition when a `fold` repeat or a [`holdout`](#a-fixed-holdout-split) is declared. Both raise at `"run"` and `"condition"` scope when a `fold` repeat is declared, since no fold exists there — see [Step scope](#a-fold-repeat-puts-the-units-out-of-reach-of-the-wider-scopes). See [Units](#units-the-thing-being-measured). |
@@ -459,7 +459,7 @@ class Step(BaseStep):
         if not io.exists("model.pkl"):                  # a *completed* write survives the
             io.write("model.pkl", fit(io.units.train))  # crash, and io.write won't overwrite
 
-        done = io.recorded_keys                         # empty unless this is a resume
+        done = io.recorded_keys                         # a set; empty unless this is a resume
         for unit in io.units:                           # every unit, always — see below
             if unit.key in done:
                 continue
@@ -473,7 +473,7 @@ class Step(BaseStep):
 
 **`io.units` is never narrowed on resume, and that's deliberate.** `resolved` [is defined as `len(io.units)`](#what-isnt-a-repeat) for the execution, and a resumed execution still produced results about every unit it was handed — the earlier attempt's rows are in the same append-only table. Narrowing the list would drop `resolved` to the remainder and make a correctly resumed run look like one that evaluated 140 patients instead of 440. So the skip is the step's `continue` rather than core's filter, and the three-part `n` comes out identical whether an execution ran once or three times. The execution's `attempts` count in `run.yaml` is where the fact that it ran more than once is recorded.
 
-**A duplicate row resolves first-write-wins.** That isn't a new rule, it's [append-only](design-principles.md#design-goals) applied: the first row is already durable and nothing overwrites it. For a deterministic step the resolution is immaterial, which is why it rarely comes up — but under `nondeterministic = True` the two rows genuinely differ, so which answer survives is a question about the experiment rather than about bookkeeping. Check `io.recorded_keys` rather than relying on the tie-break. `io.append` has the same shape: its idempotency needs a `record_key`, and without one a re-executed range appends a second copy of every record it already wrote.
+**A duplicate row resolves first-write-wins.** That isn't a new rule, it's [append-only](design-principles.md#design-goals) applied: the first row is already durable and nothing overwrites it. For a deterministic step the resolution is immaterial, which is why it rarely comes up — but under `nondeterministic = True` the two rows genuinely differ, so which answer survives is a question about the experiment rather than about bookkeeping. Check `io.recorded_keys` rather than relying on the tie-break. `io.append` resolves the same way for the same reason, and its idempotency needs a `record_key`: without one there is nothing to deduplicate by, and a re-executed range appends a second copy of every record it already wrote.
 
 ---
 
@@ -776,11 +776,57 @@ class GenericTemplate(BaseTemplate):
 
 `aggregate` returns condition-level metrics derived from the per-unit table. It's optional, and it's the only way to give a derived statistic a real confidence interval: because core can call it on a resampled table, the metric becomes `basis: units` instead of a scalar core can only watch vary across seeds. See [The unit table is the inference base](#the-unit-table-is-the-inference-base).
 
+**The table it receives supports exactly four operations, and that's the whole contract:**
+
+| Operation | Is |
+|---|---|
+| `for row in units` | Iterates rows, each a mapping of column name to value |
+| `units.<name>` | That column, as a sequence in row order |
+| `len(units)` | The row count — one per unit after collapsing |
+| `units.columns` | The column names present |
+
+Columns are whatever the step [recorded](#units-the-thing-being-measured) plus every declared unit attribute, so `units.truth` and `units.pred` are the same shape whichever of the two supplied them.
+
+**Four operations rather than a rich table type, on purpose.** The temptation is to promise a `DataFrame`, since one would arrive with filtering, grouping, and vectorized arithmetic already written. The cost is that every template would then be written against that library's idioms — boolean-mask indexing, `.isin`, `~` on a column — and core could never change what backs the table without breaking every plugin at once. A four-operation contract means a template does its filtering in ordinary Python and keeps working whether core stores rows, columns, or something it hasn't chosen yet. At unit-table scale that costs nothing measurable: `n` is a cohort, not a billion rows, and a metric that iterates 440 patients is not the slow part of an experiment that made 440 requests.
+
+So a metric filters by iterating, and reads a whole column only when it wants one:
+
+```python
+def aggregate(self, units, cfg) -> dict:
+    positives = [r for r in units if r["truth"]]                 # filter in Python
+    detected = sum(1 for r in positives if r["pred"])
+    return {
+        "sensitivity": detected / len(positives) if positives else None,
+        "r": pearsonr(units.pred, units.truth).statistic,         # or take columns
+    }
+```
+
+`aggregate` returning `{}` is the right answer for a table it doesn't recognize — core calls it once per recording step, and a pipeline can have several.
+
 **It receives the condition's resolved `cfg`, and it has to.** In the worked example `analysis.method` is swept, so `r` is a different function in each of the three conditions — an `aggregate` that saw only the table could hard-code one coefficient and would then report the same statistic under all three labels. Core passes the same `cfg` when it recomputes the metric on a resampled table, so the value and its interval are always the same statistic. This is the one place a template sees a condition; step code still doesn't, because `cfg` arrives already resolved (see [Using them in step code](#using-them-in-step-code)).
 
 **One call per recording step, attributed to that step.** A pipeline can have several steps that call `io.record`, so there is no single unit table to hand over. Core calls `aggregate` once per step that recorded one, over that step's collapsed table, and files the result under that step — which is why the worked example's derived `r` appears at `aggregated.step03_analyze.r` rather than at the top of the condition. A template that only knows how to derive metrics from some tables returns `{}` for the rest.
 
 `Param` carries type, default, constraints, and help text — so `init` renders the file with accurate inline comments, and `validate` enforces exactly what was documented. Adding a parameter in one place makes it appear in newly-initialized configs and become enforceable at once.
+
+**Types are `str`, `int`, `float`, `bool`, and `list`.** A list takes `item_type` and is checked element by element, because a parameter whose value is genuinely a list is ordinary — base rates to transport a predictive value to, a retry backoff schedule, a set of thresholds — and the alternatives are all worse than supporting it. Numbered scalars (`rate_1`, `rate_2`) hard-code the length into the schema; a comma-separated string defeats the type checking that is `parameter_spec`'s entire purpose. There is no `dict` type: a mapping is what nesting the dotted path already expresses.
+
+```python
+"report.prevalences":     Param(list, item_type=float, default=[0.01, 0.03]),
+"request.backoff_secs":   Param(list, item_type=int,   default=[30, 120]),
+```
+
+**Three states, not two: a value, a default of `null`, and no default at all.**
+
+| Declaration | Means | `init` writes |
+|---|---|---|
+| `Param(int, default=30)` | Optional, defaulted | `30` |
+| `Param(str, default=None, nullable=True)` | Optional, and `null` is a legal value | `null` |
+| `Param(str)` — no `default` | **Required.** You must supply a value | `""  # REQUIRED` |
+
+Omitting `default` is what makes a parameter required, which is why `default=None` is not the way to spell it — `null` is a legal value for some parameters and the absence of one is a different claim. A `Param` declaring `default=None` without `nullable=True` is rejected when the template loads, rather than at the first config that leaves it alone. Nullability is load-bearing beyond this: [`sweep.ablate.remove`](#expansion-modes) sets a boolean to `false` or a nullable parameter to `null`, and `validate` needs to know which parameters those are.
+
+Required parameters get the same treatment `metadata.description` does — materialized with an empty value and a `# REQUIRED` marker, so the file `init` produced is complete and fails validation until you fill it in, rather than being silently short a key.
 
 ---
 
