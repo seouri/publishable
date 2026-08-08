@@ -126,8 +126,10 @@ statistics:
   # ---- Computed over the per-unit table after the run. Not execution axes. ----
   correction: holm                       # none | bonferroni | holm | fdr_bh
   contrasts: []                          # optional named pairwise comparisons, for claims that
-                                         #   aren't condition-vs-baseline; `within` restricts one
-                                         #   to a stratum. See "Contrasts"
+                                         #   aren't condition-vs-baseline, e.g. [{id: sens,
+                                         #   of: "shift=abnormal", against: "shift=normal",
+                                         #   within: {sex: f}}] — `within` is optional and
+                                         #   restricts to a stratum. See "Contrasts"
   resample: null                         # {method: bootstrap, n: 2000, stratify_by: []} →
                                          #   percentile CIs for column metrics too; derived
                                          #   metrics resample either way
@@ -158,6 +160,7 @@ hypotheses:
     compare: {condition: "method=spearman", to: baseline}
     direction: greater
     threshold: 0.02
+    evaluate_on: observed                # observed | ci95_lower | ci95_upper
 ```
 
 This file is three things at once: the scaffold (you didn't type it), the documentation (every available parameter is present, with its constraints in a comment), and the config (it's what `run` consumes). Keeping them as one artifact is what prevents the usual drift where documentation lists options the code no longer accepts.
@@ -1212,6 +1215,11 @@ for unit in io.units:
     io.record(unit.key, {...})
 ```
 
+```yaml
+n: {resolved: 330, completed: 296, ineligible: 30, failed: 4}   # an arm most of the
+                                                                #   cohort admits
+```
+
 `io.skip(unit_key, reason)` is a declaration, not an excuse: core takes the step's word for it exactly as it takes `io.record`'s, and both are recorded. The reason is stored per unit beside the unit table, because *which* patients an arm could not be built for is cohort flow a report has to state, and a bare count doesn't carry it. `report` shows ineligibility per condition, so an arm that quietly lost a third of the roster is visible rather than absorbed.
 
 Three consequences. **`max_failed_fraction` is over failures only** — a run whose arms differ in eligibility no longer trips a threshold meant for attrition. **`limits.max_ineligible_fraction` warns separately**, because an arm evaluable for a fifth of the cohort is a design problem rather than an execution one, and it's the same problem [`n_paired`](#contrasts-claims-that-arent-condition-vs-baseline) exists to keep out of a contrast. And **a skipped unit is decided, so a resumed step doesn't reconsider it**: `io.recorded_keys` holds every key this execution has settled — recorded or skipped — since its one purpose is telling a resumed step what not to redo.
@@ -1857,6 +1865,7 @@ hypotheses:
     compare: {condition: "method=spearman", to: baseline}
     direction: greater
     threshold: 0.02
+    evaluate_on: observed
 ```
 
 Core evaluates each hypothesis against the results and writes the verdict into `run.yaml`:
