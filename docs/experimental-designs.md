@@ -179,6 +179,8 @@ statistics:
 
 As repeat kinds these would have meant 2,000 and 5,000 full executions to compute what a resampled table gives directly, and a permutation design in which *every* execution is permuted has no unpermuted value to test against. Both need a metric core can recompute — a per-unit column, or a template `aggregate(units, cfg)`.
 
+Both also follow `cluster_by`, because both depend on what an independent draw is. With a cluster declared, the bootstrap resamples whole clusters rather than rows — resampling rows would make every resample too alike and the interval too narrow — and the permutation shuffles within clusters when the shuffled attribute varies inside one, or whole clusters at a time when it doesn't. See [reference.md § Clustered units](reference.md#clustered-units).
+
 ### Technical and biological replication
 
 Biological replicates ARE units. Technical replicates are extra measurement rows of the same unit, declared where units are resolved — not re-executions of the pipeline, which would recompute the same answer:
@@ -224,6 +226,8 @@ data:
 
 Core reports each arm and their contrast with intervals clustered on `match_set`. That accounts for the matching in the intervals; it is not a conditional analysis, and if your field expects conditional logistic regression or a stratified estimator, that's a `scope: "summary"` step — see [what core will not do](#what-core-will-not-do-for-you).
 
+Adding `statistics.null_test` here does give you a conditional *test*, because `cluster_by` sets the level it shuffles at. `status` varies inside a matched set, so labels are permuted within each set independently — a case/control swap inside each pair — which is the classic matched permutation test rather than a free relabelling that would throw the matching away. `statistics.resample` likewise draws whole matched sets, and its interval's effective `n` is the number of sets, not the number of subjects.
+
 ---
 
 ## Mistakes core prevents
@@ -244,6 +248,8 @@ The design is shaped around a specific claim: most irreproducible results are no
 | **Uncorrected multiplicity across a sweep** | `statistics.correction` reports family-wise or FDR-adjusted intervals alongside raw ones; `validate` warns when a multi-condition *enumerated* sweep declares `none`. `sample` draws are excluded — they feed one downstream fit rather than being comparisons a reader acts on |
 | **Ignored clustering** | `cluster_by` produces cluster-robust intervals; `validate` flags an attribute that looks like an undeclared cluster |
 | **A cluster split across train and test** | A declared `cluster_by` makes clusters indivisible in every partition core computes, so a fold can't train on one cell of an animal and test on another. `validate` rejects a `k` above the cluster count |
+| **Resampling clustered rows as if independent** | A declared `cluster_by` makes the cluster the bootstrap draw, so 300 cells from 10 animals give a 10-draw interval rather than a 300-draw one that looks ten times more precise than the data supports |
+| **A permutation that shuffles away the matching** | `null_test` shuffles at the level the shuffled attribute lives at — within clusters when it varies inside one, whole clusters when it doesn't — so a matched design gets a conditional test instead of a free relabelling |
 | **Silent attrition** | Every metric reports units resolved, completed, and failed — never a bare `n` that hides dropout. Each count is scoped to what its execution was handed, so a fold or an arm isn't charged with units it never saw |
 | **Hypotheses invented after seeing results** | A hypothesis carries the `parameters_hash` of the config that declared it; anything added later doesn't match, and undeclared analyses render as exploratory |
 

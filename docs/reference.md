@@ -171,6 +171,8 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Baseline is a valid condition | `sweep.baseline` sets `analysis.method: pearsonn` |
 | Repeat kind coherence | `{kind: bootstrap}` is not a repeat kind — declare `statistics.resample` instead |
 | Null test coherence | `statistics.null_test` requires `shuffle` to name a unit attribute |
+| Shuffle level is unambiguous | `null_test.shuffle: status` varies within `match_set` `M07` but is constant within `M12`, so neither a within-cluster nor a whole-cluster null applies |
+| Clusters enough to resample | `statistics.resample` with `cluster_by: animal_id` over 4 animals bootstraps 4 draws; below the configured minimum (warning) |
 | Technical replicates | `{kind: technical}` is not a repeat kind — declare `data.units.measurements` instead |
 | Grid size sane | 6 conditions × 10 folds × 3 seeds = 180 executions exceeds the warning threshold |
 | Credentials present | `INSTRUMENT_API_TOKEN` is not set in `.env` |
@@ -479,6 +481,13 @@ Two consequences of clustering the split:
 
 The same logic governs `assign.stratify_by` under `allocation: between`: a cluster is assigned as a whole, so arms are balanced over clusters and a matched set never straddles two arms.
 
+**And it decides what [`statistics.resample` and `statistics.null_test`](#what-isnt-a-repeat) operate on.** Both work by rebuilding the unit table, so both need to know what an independent draw is. Undeclared, they treat 300 cells as 300 of them; declared, the cluster is the draw:
+
+- **`resample` resamples clusters, not rows.** A bootstrap that draws 300 cells with replacement from 10 animals produces resamples far more alike than a fresh sample of animals would be, so the percentile interval comes out too narrow — the same failure `cluster_by` exists to prevent, arriving by a different route. Core draws whole clusters with replacement, so a resampled table has a varying row count, and the interval's effective `n` is the cluster count. That count joins the [three-part `n`](#what-isnt-a-repeat) rather than replacing it — `n: {resolved: 300, completed: 300, failed: 0, clusters: 10}` — because a percentile interval over 10 draws is a different claim than one over 300, and which one a reader is holding shouldn't have to be inferred from `cluster_by` being set somewhere else in the config.
+- **`null_test` shuffles at the level the shuffled attribute lives at.** Core derives which from the data rather than asking: if `shuffle` names an attribute that varies *within* clusters, labels are permuted within each cluster independently — for [matched case-control](experimental-designs.md#matched-case-control) that's a case/control swap inside each matched set, which is the conditional test that design calls for. If the attribute is constant within a cluster, whole clusters are relabelled, which is the null for a cluster-randomized trial. Shuffling rows freely would destroy the structure the null is supposed to hold fixed, and the two designs need opposite treatments, so guessing is not an option.
+
+`validate` rejects the ambiguous middle: an attribute constant within some clusters and varying within others has no correct level, and neither null is defensible over a mixture.
+
 Core resolves this once at run start, records the resolved unit list and its hash in the input manifest, and makes it available everywhere:
 
 ```python
@@ -749,7 +758,9 @@ statistics:
   null_test: {method: permutation, n: 5000, shuffle: label}
 ```
 
-Both operate on `units.parquet`, resampling or relabelling *rows* and recomputing the metric — which core can do only for a metric it knows how to compute, so this needs a per-unit column or a template [`aggregate(units, cfg)`](#templates-where-parameters-are-defined). The permutation test compares the null it builds against the value the actual run produced; a design in which every execution is permuted has no unpermuted value to test, which is one more way the repeat axis was the wrong home for it.
+Both operate on `units.parquet`, resampling or relabelling it and recomputing the metric — which core can do only for a metric it knows how to compute, so this needs a per-unit column or a template [`aggregate(units, cfg)`](#templates-where-parameters-are-defined). The permutation test compares the null it builds against the value the actual run produced; a design in which every execution is permuted has no unpermuted value to test, which is one more way the repeat axis was the wrong home for it.
+
+What counts as one draw is *rows* by default and *clusters* when [`cluster_by`](#clustered-units) is declared — a bootstrap over rows of clustered data reports an interval too narrow to believe, and a permutation over rows destroys the matching a matched design rests on. See [Clustered units](#clustered-units) for both rules.
 
 **Technical replication is a property of the input, not of execution.** Re-running an identical step on identical inputs under the same seed produces an identical answer, so averaging three such executions is a no-op. The three reads of a sample are not three runs of anything — they're three measurement rows sharing a sample identity, and that's declared where units are resolved:
 
@@ -780,7 +791,7 @@ r:
   method: percentile_over_units
 ```
 
-The three-part `n` closes a reporting gap that otherwise goes unnoticed: when 12 of 240 units error out, a bare `n: 240` is wrong and a bare `n: 228` silently hides attrition. All three numbers are recorded, `report` shows the completion rate, and `run` fails the whole run when failures exceed a configured fraction — because at some level of dropout the complete-case result stops being interpretable, and finding that out after the run is worse than not having spent it.
+The three-part `n` closes a reporting gap that otherwise goes unnoticed: when 12 of 240 units error out, a bare `n: 240` is wrong and a bare `n: 228` silently hides attrition. All three numbers are recorded — joined by a fourth, `clusters`, whenever [`cluster_by`](#clustered-units) makes the cluster the inferential draw — `report` shows the completion rate, and `run` fails the whole run when failures exceed a configured fraction — because at some level of dropout the complete-case result stops being interpretable, and finding that out after the run is worse than not having spent it.
 
 **How core knows a unit failed** is worth stating, because core never inspects the body of a step. It counts: `resolved` is how many units that execution was *given*, `completed` is how many distinct keys reached `io.record` in it, and `failed` is the difference. That's an *effect*, which is the only thing core checks — consistent with [greenfield only](design-principles.md#greenfield-only). Two consequences follow. A step that swallows an exception and moves to the next unit is recorded as a failure anyway, because the row is missing; and a step that raises out of its own loop aborts the execution, so the repeat is marked `failed` in `execution` rather than reported as complete with partial units. A step that records nothing at all has `completed: 0`, which is a loud failure rather than a silent `n` of zero.
 
@@ -948,7 +959,7 @@ The `n` in a confidence interval is a count of the things the claim generalizes 
 | How the metric exists | `basis` | What core reports |
 |---|---|---|
 | A column in `units.parquet` | `units` | Mean over units, `n` = completed units, t-based `ci95` — cluster-robust when [`cluster_by`](#clustered-units) is declared |
-| Derived from the table by the template's [`aggregate(units, cfg)`](#templates-where-parameters-are-defined) | `units` | The derived value, with a percentile `ci95` from resampling units |
+| Derived from the table by the template's [`aggregate(units, cfg)`](#templates-where-parameters-are-defined) | `units` | The derived value, with a percentile `ci95` from resampling units — or clusters, when [`cluster_by`](#clustered-units) is declared |
 | A unit table exists, but the metric isn't derivable from it | `repeats` | Point estimate and across-repeat spread — **no `ci95`** |
 | No `data.units` at all | `repeats` | Mean, std, sem and a t-based `ci95` over repeats, labelled as such |
 
@@ -1013,8 +1024,8 @@ And two `statistics` declarations change how the interval itself is computed, wi
 
 | Declaration | What it replaces |
 |---|---|
-| `resample: {method: bootstrap, n: 2000}` | The t-interval, with a percentile interval over resampled units — the right choice for a derived statistic whose sampling distribution isn't t-shaped |
-| `null_test: {method: permutation, n: 5000, shuffle: label}` | Nothing; it *adds* a `p_value` against a null built by relabelling units, tested against the value the run actually produced |
+| `resample: {method: bootstrap, n: 2000}` | The t-interval, with a percentile interval over resampled units — or over resampled clusters when [`cluster_by`](#clustered-units) is declared. The right choice for a derived statistic whose sampling distribution isn't t-shaped |
+| `null_test: {method: permutation, n: 5000, shuffle: label}` | Nothing; it *adds* a `p_value` against a null built by relabelling units — within clusters, or whole clusters at a time, per [`cluster_by`](#clustered-units) — tested against the value the run actually produced |
 
 With nested repeats, core collapses inner-to-outer, so 10 folds × 3 seeds averages seeds within each fold before combining folds — rather than flattening 30 numbers that aren't exchangeable. Whether the comparison across conditions is paired follows from `data.units.allocation`.
 
