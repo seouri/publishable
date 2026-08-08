@@ -78,6 +78,8 @@ data:
     attributes: [label, age, sex]          # available for stratification and reporting
     allocation: within                     # within | between — feeds paired vs unpaired, per contrast
     cluster_by: null                       # e.g. site, when units aren't independent
+    weight_by: null                        # e.g. sampling_weight, when the sample is enriched or
+                                           #   stratified — see "Weighted samples"
     measurements: null                     # e.g. {by: read_id, collapse: mean} for technical replicates
     holdout: null                          # optional single fixed train/test split; see "A fixed holdout split"
     assign: {}                             # REQUIRED when allocation is `between` — one block per
@@ -123,9 +125,15 @@ replication:
 statistics:
   # ---- Computed over the per-unit table after the run. Not execution axes. ----
   correction: holm                       # none | bonferroni | holm | fdr_bh
-  resample: null                         # {method: bootstrap, n: 2000} → percentile CIs for column
-                                         # metrics too; derived metrics resample either way
+  contrasts: []                          # optional named pairwise comparisons, for claims that
+                                         #   aren't condition-vs-baseline. See "Contrasts"
+  resample: null                         # {method: bootstrap, n: 2000, stratify_by: []} →
+                                         #   percentile CIs for column metrics too; derived
+                                         #   metrics resample either way
   null_test: null                        # e.g. {method: permutation, n: 5000, shuffle: label}
+  report_by: []                          # optional unit attributes to repeat every metric over,
+                                         #   e.g. [sex, site]. Strata, not design axes — they add
+                                         #   no executions. See "Reporting strata"
 
 limits:
   # ---- Thresholds core checks against. All warn except max_failed_fraction, which fails. ----
@@ -138,6 +146,7 @@ limits:
 hypotheses:
   # ---- Optional, but written BEFORE the run — which is what makes it meaningful. ----
   # A `summary` metric takes no `compare`; see "A hypothesis may name a summary metric".
+  # `compare` also accepts {contrast: <id>}; `evaluate_on` picks observed vs. an interval bound.
   - id: h1
     kind: confirmatory                   # confirmatory | exploratory
     statement: "Spearman correlation exceeds Pearson on this cohort."
@@ -233,6 +242,15 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Fold count is legal | `{kind: fold, k: 1}` — `k` must be an integer ≥ 2, or `all` for leave-one-out |
 | Fold strata survive clustering | `{kind: fold, stratify_by: label}` with `cluster_by: animal_id`, but `label` varies within animal `A3` — a stratum can't be balanced across a split that can't divide the cluster |
 | Baseline leaves contrasts confounded | `sweep.baseline` fixes a value on every axis (`arm: control`, `analysis.method: pearson`), so 2 of 3 contrasts differ on both and are reported `confounded: true`; leaving one axis unfixed gives a baseline per cell instead (warning) |
+| Contrast names a condition | `statistics.contrasts[0].of` is `occasions=4`, which no condition's label matches |
+| Contrast has two distinct sides | `statistics.contrasts[1]` sets `of` and `against` to the same condition |
+| Contrast has units in common | `statistics.contrasts[0]` compares two conditions whose completed units don't intersect, so no paired difference exists |
+| Reporting stratum is an attribute | `statistics.report_by` names `site`, which is not in `data.units.attributes` |
+| Reporting stratum is populated | `report_by: [dx_family]` has a level with 4 units; below `limits.min_reported_n` (warning) |
+| Weight attribute exists | `data.units.weight_by` names `sampling_weight`, which is not a unit attribute |
+| Weights are usable | `sampling_weight` holds a zero or negative value for 3 units; a weight is what a unit stands for |
+| Weighting looks undeclared | `sampling_weight` varies across units and looks like an inverse sampling probability, but `weight_by` is unset (warning) |
+| Resample strata exist | `statistics.resample.stratify_by` names `count_stratum`, which is not a unit attribute |
 | Correction declared for a family | 6 enumerated conditions × 3 metrics produce a family of 15 baseline comparisons with `statistics.correction: none` (warning). Not raised for a `sample`-only sweep, whose draws aren't a family |
 | Step scope coherence | `step01_load_cohort` is `scope="run"` but reads `analysis.method`, which `sweep` varies |
 | Scope read direction | `step02_fit_model` (`scope="condition"`) reads from `step03_analyze` (`scope="repeat"`), which runs later |
@@ -240,6 +258,8 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Estimate labels its method | `step04_compare_methods` returned an `Estimate` with `ci95` and no `method`; an interval nobody labelled is unreadable |
 | Hypothesis references | `hypotheses[0].metric` `step03_analyze.r` names no metric any step returns |
 | Hypothesis needs baseline | `hypotheses[0].compare.to: baseline` but `sweep.baseline` is not declared |
+| Hypothesis bound exists | `hypotheses[0].evaluate_on` is `ci95_lower` but `step03_analyze.r` is `basis: repeats` and has no interval to test |
+| Hypothesis names a real contrast | `hypotheses[1].compare.contrast` is `invariance`, which `statistics.contrasts` does not declare |
 | Hypothesis form matches its metric | `hypotheses[1].metric` names the summary metric `step04_agreement.s_within_lower_bound` but declares `compare`; a summary metric is one value per run, not a contrast between conditions — and a condition metric without `compare` is the same mistake inverted |
 | Hypothesis has an inference base | `hypotheses[0].metric` `step03_analyze.r` is `basis: repeats` — no unit table and no template `aggregate`, so it can be reported but not tested (warning) |
 
@@ -633,6 +653,34 @@ Four interactions worth knowing, all of them consequences of the rules already s
 - **Under `allocation: between`, the split happens within each cell** — each arm, and each cell of a crossed design — so every cell has both partitions in the declared proportion. Splitting the roster first would leave cells with unequal test sizes and, at worst, a cell with no test units at all. Folds are drawn the same way, for the same reason — see [Clustered units](#clustered-units).
 
 The realized membership is written to `allocation.json` beside any arm assignment and hashed, so which units were evaluated is answerable from the run record rather than from whoever drew the split.
+
+### Weighted samples
+
+A benchmark is often not a simple random sample of the population a claim is about. Cases are enriched, strata are oversampled, a registry draws by site. When the sampling probabilities are known, they are what turns a sample estimate back into a population one, and they're declared where the units are:
+
+```yaml
+    weight_by: sampling_weight        # a unit attribute holding the inverse sampling probability
+```
+
+Core then computes weighted means for [`basis: units`](#the-unit-table-is-the-inference-base) column metrics, hands the column to [`aggregate`](#templates-where-parameters-are-defined) like any other attribute so a derived metric can weight itself, and records `weighted_by` beside every affected value:
+
+```yaml
+r: {value: 0.607, basis: units, weighted_by: sampling_weight,
+    n: {resolved: 240, completed: 228, failed: 12}, ci95: [0.517, 0.683]}
+```
+
+**That field is the point of the feature as much as the arithmetic is.** An unweighted mean over an enriched sample is not a noisier version of the population answer, it is an answer to a different question — and without a marker it arrives in exactly the same shape as the right one, with a `basis: units` and an interval, and nothing for a reader to notice. So `validate` also warns when an attribute *looks* like a weight — numeric, positive, and varying across units in a way a measurement wouldn't — and nothing declares it. That's the same warning, for the same reason, as the one an [undeclared cluster](#clustered-units) draws.
+
+**Weighting the estimator and stratifying the draw are two decisions, and a stratified sample usually needs both:**
+
+```yaml
+statistics:
+  resample: {method: bootstrap, n: 2000, stratify_by: [dx_status, count_stratum]}
+```
+
+`weight_by` says how much each unit stands for; `resample.stratify_by` says what an independent draw is, resampling within each stratum so a bootstrap can't return a replicate whose stratum composition the design ruled out. `fold`, `holdout`, and `assign` all take a `stratify_by` already; `resample` taking one closes an asymmetry rather than adding a concept.
+
+Three interactions worth knowing. `n` still counts units — weights change what each contributes, not how many there are, and a weighted interval over 228 units is still an interval over 228 units. `cluster_by` still decides the draw when both are declared, since a cluster is what's independent and a weight is what it represents. And a [contrast](#contrasts-claims-that-arent-condition-vs-baseline) between two weighted conditions uses the same weights on both sides, which is automatic under `allocation: within` and worth checking when it isn't.
 
 ### Clustered units
 
@@ -1210,6 +1258,8 @@ vs_baseline:
 
 Only metrics that receive a corrected interval are counted — that is, [`basis: units`](#the-unit-table-is-the-inference-base) metrics, since a metric reported without an interval isn't a comparison anyone can read as significant. A [reported `Estimate`](#estimate-carries-your-interval-without-core-claiming-it) is excluded for a different reason: core never computed it, so it has nothing to correct and no standing to say the correction was applied. In the worked example that's 2 comparisons × 1 metric, so `family_size: 2`.
 
+**A "comparison" is a baseline contrast or a [declared one](#contrasts-claims-that-arent-condition-vs-baseline)** — both put an interval in front of a reader, so both count. Reporting strata do not: a stratum describes rather than compares, and a subgroup claim you intend to test is a [hypothesis](#pre-registration), corrected in that family.
+
 **The family is comparisons × metrics, not comparisons.** A six-condition sweep is five comparisons, but if each step reports three numeric metrics, a reader is being shown fifteen intervals and any of them can carry the paper. Counting only conditions would under-correct by the factor that actually varies between projects — and a tool that advertises corrected intervals while counting the family too small is worse than one that reports raw intervals honestly, because the number looks handled.
 
 Two consequences worth knowing before you write the config. Every numeric metric a step reports is in the family whether you look at it or not, so a step that returns twelve diagnostics widens the correction on the one you care about; return diagnostics as per-unit columns, which are inputs rather than reported comparisons, or move them to a separate step. And `family` is reported broken out rather than as a single integer, so the count is auditable instead of asserted — `report` prints it, and a reviewer can check it against the table.
@@ -1489,6 +1539,69 @@ With nested repeats, core collapses inner-to-outer, so 10 folds × 3 seeds avera
 
 `publishable report` renders a sweep as a comparison table across conditions, with dispersion, and a delta column when a baseline exists.
 
+#### Contrasts: claims that aren't condition-vs-baseline
+
+`vs_baseline` covers the common case — every condition against one designated reference — and it needs no declaration. Some designs' claims aren't that shape. A matched physiology experiment compares an *abnormalizing* arm against its matched *normalizing* arm, neither of which is the reference; an invariance check compares two counterfactual arms directly; a crossover compares two treated periods. No choice of baseline makes those contrasts appear, because the comparison a design cares about is between two conditions it declared for that purpose.
+
+So a contrast can be named:
+
+```yaml
+statistics:
+  contrasts:
+    - id: sensitivity
+      of: "shift=abnormal__magnitude=1.0"
+      against: "shift=normal__magnitude=1.0"
+    - id: invariance
+      of: "occasions=3"
+      against: "occasions=12"
+```
+
+`of` and `against` name conditions by label — the same discrete labels a [hypothesis](#pre-registration) `compare.condition` selects, stable across machines and reruns because they derive from swept values only.
+
+**Everything about how a contrast is computed is a rule that already exists.** Pairing is derived from which axes the two conditions differ on, by [the same table](#allocation-within-subjects-or-between-subjects) `vs_baseline` uses — so two arms of one parameter axis under `allocation: within` are paired unit by unit, and two levels of a group axis are not. A contrast crossing two axes is marked `confounded: true` for the same reason. Declared contrasts join the [correction family](#sweeps-and-repeats) alongside baseline comparisons, because a reader shown both is exposed to both.
+
+Results land beside the conditions rather than inside one, since a contrast belongs to neither of its sides:
+
+```yaml
+results:
+  contrasts:
+    - id: invariance
+      of: 04_occasions=3
+      against: 06_occasions=12
+      step03_screen:
+        prob: {delta: 0.012, basis: units, paired: true,
+               n_paired: 412,
+               ci95: [0.004, 0.021], ci95_corrected: [0.001, 0.025],
+               correction: holm, family_size: 7}
+```
+
+**`n_paired` is the intersection, and it has to be recorded.** Two conditions can complete on different units — a transform that isn't constructible for every patient, an assay that failed on a subset, an arm whose eligibility differs — and a paired comparison exists only for units that completed in *both*. Differencing the two condition means instead would not be a paired comparison at all, however carefully `paired: true` was derived. The condition-level `n` can't carry this, because it belongs to one condition and the contrast spans two, so the contrast records its own. A contrast whose intersection is empty is reported as such rather than as a delta of zero.
+
+#### Reporting strata
+
+Pre-specified subgroup reporting — by sex, by site, by severity band, by record source — is a requirement of most reporting checklists and is *not* a design axis. Making it one would be actively wrong: five reporting attributes as `groups` axes multiply into a cartesian product of cells, each an execution of a pipeline that should run once, most of them below `limits.min_units_per_cell`.
+
+`report_by` names unit attributes instead. Core repeats the aggregation it already performs, over the subsets of the per-unit table each level picks out:
+
+```yaml
+statistics:
+  report_by: [sex]
+```
+
+```yaml
+aggregated:
+  step03_analyze:
+    r: {value: 0.607, basis: units, n: {resolved: 240, completed: 228, failed: 12}, ci95: [...]}
+    by:
+      sex:
+        f: {value: 0.591, basis: units, n: {resolved: 120, completed: 114, failed: 6}, ci95: [...]}
+        m: {value: 0.622, basis: units, n: {resolved: 120, completed: 114, failed: 6}, ci95: [...]}
+```
+
+Three properties, each a consequence of strata not being conditions. **No executions are added** — the run is unchanged and the split happens over a table that already exists. **Strata don't join the correction family**, because a stratum is a description rather than a comparison a reader acts on; a subgroup claim you intend to *test* is a [hypothesis](#pre-registration), declared as one, and corrected in that family. And **`limits.min_reported_n` applies per stratum**, which is where it matters most: a per-subgroup result over a handful of units is exactly what [`study add`](#what-study-add-redacts) says no automatic rule can judge safe.
+
+`validate` rejects a `report_by` attribute that isn't declared in `data.units.attributes`, and warns when a level would hold fewer units than `limits.min_reported_n` — before the run rather than at disclosure.
+
 ### Before you spend it
 
 ```bash
@@ -1709,6 +1822,37 @@ results:
       supported: true
       verdict_rests_on: computed                       # core derived the number it compared
 ```
+
+### What a hypothesis is tested against
+
+`direction` and `threshold` are compared to the observed value by default. Some claims are about the *interval* instead, and the difference is not a refinement:
+
+```yaml
+hypotheses:
+  - id: superiority
+    kind: confirmatory
+    statement: "Paired AUROC improvement over the utilization-only baseline exceeds zero."
+    compare: {contrast: sensitivity}          # a declared contrast, or condition/to as before
+    direction: greater
+    threshold: 0.0
+    evaluate_on: ci95_lower                   # observed | ci95_lower | ci95_upper
+
+  - id: invariance
+    kind: confirmatory
+    statement: "Predictions are invariant to visit count between 3 and 12 occasions."
+    compare: {contrast: invariance}
+    direction: less
+    threshold: 0.05
+    evaluate_on: ci95_upper                   # an equivalence claim
+```
+
+**`evaluate_on: ci95_upper` is what an equivalence or non-inferiority gate is**, and there is no way to spell one against a point estimate. A mean absolute difference of 0.01 with an interval of [0.001, 0.30] passes `direction: less, threshold: 0.05` on the observed value and fails on the upper bound — and the second verdict is the correct one, because the study claimed invariance and the data are consistent with a large effect. Reporting "supported" there would be the tool asserting the opposite of what the evidence says.
+
+`evaluate_on: ci95_lower` with `direction: greater` is the superiority form, and it is also how "the interval excludes zero in the expected direction" is written — those are the same statement.
+
+Two rules `validate` enforces. A hypothesis evaluating on a bound needs a metric that *has* one, so naming a [`basis: repeats`](#the-unit-table-is-the-inference-base) metric is rejected rather than warned about — the existing warning is for a metric that can be reported but not tested, and asking for a bound it doesn't have is a stronger error. And when the metric is a [reported `Estimate`](#estimate-carries-your-interval-without-core-claiming-it), the bound tested is the one the step supplied, so `verdict_rests_on: reported` carries its usual meaning: core compared the numbers and did not derive them.
+
+Which corrected interval a bound test uses follows the family rules unchanged — `report` shows both, and a confirmatory gate reads the corrected one when a correction is declared.
 
 ### A hypothesis may name a summary metric
 
@@ -2199,7 +2343,8 @@ publishable/
 │   │                          #     computed vs. reported verdict provenance
 │   ├── study.py               # study new/add: bundle assembly, redaction, cross-run report
 │   ├── replication.py         # repeat kinds (seed/batch/fold), nesting, seed derivation
-│   ├── stats.py               # unit-table inference, resample/null_test, deltas, effect sizes
+│   ├── stats.py               # unit-table inference, resample/null_test, deltas, effect sizes,
+│   │                          #     declared contrasts, reporting strata, sample weights
 │   ├── run_identity.py        # run_<id> allocation, latest symlink, resume resolution
 │   ├── hashes.py              # code_hash (src/** tree), parameters_hash, design digest
 │   ├── config.py              # load + dot-access Config

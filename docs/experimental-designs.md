@@ -21,7 +21,7 @@ Resolve the three declarations separately and the config writes itself. They are
 | The question | Declaration | Values | Shown in |
 |---|---|---|---|
 | Does every unit appear in every condition, or exactly one? | `data.units.allocation` | `within` (default, paired comparisons) · `between` (one arm per unit, unpaired across arms — needs a `groups` axis) | [Within-subjects](#within-subjects--repeated-measures) · [Between-subjects](#between-subjects--parallel-arm-trial) |
-| What varies deliberately? | `sweep` | `grid` (cartesian) · `paired` (coupled axes) · `ablate` (`1 + n`, one change each) · `sample` (continuous ranges) · `groups` (crossable axes of units, not parameters) · `baseline` (the reference, not an axis) | [Factorial](#factorial) · [Between-subjects factorial](#between-subjects-factorial) · [Ablation](#ablation) · [Dose-response](#dose-response-and-parameter-search) · [Between-subjects](#between-subjects--parallel-arm-trial) |
+| What varies deliberately? | `sweep` | `grid` (cartesian) · `paired` (coupled axes) · `ablate` (`1 + n`, one change each) · `sample` (continuous ranges) · `groups` (crossable axes of units, not parameters) · `baseline` (the reference, not an axis; [`statistics.contrasts`](reference.md#contrasts-claims-that-arent-condition-vs-baseline) for comparisons that aren't against it) | [Factorial](#factorial) · [Between-subjects factorial](#between-subjects-factorial) · [Ablation](#ablation) · [Dose-response](#dose-response-and-parameter-search) · [Between-subjects](#between-subjects--parallel-arm-trial) |
 | What varies incidentally? | `replication.repeats` | `seed` · `batch` · `fold` — the three things a re-execution can change | [Single condition](#single-condition-repeated) · [Blocked over a drifting apparatus](#blocked-execution-over-a-drifting-apparatus) · [Cross-validation](#cross-validation) |
 
 Answering a question with nothing is a valid answer: omit `sweep` for a single condition, omit `data.units` entirely when the pipeline has no unit table — though `fold` requires one, as do the resampling and permutation statistics in [Bootstrap and permutation](#bootstrap-and-permutation). A design that evaluates on held-out units without repeating anything answers the third question with nothing too, and declares [`data.units.holdout`](#train-test-holdout) instead of a repeat. Every design below whose declarations name attributes — a `groups` axis read from a column, a `stratify_by`, a `cluster_by` — needs input that carries them, as columns in a table or from a plugin resolver that emits them; see [reference.md § Where units come from](reference.md#where-units-come-from). What each repeat kind varies and how core collapses it is the table in [reference.md § Repeat kinds](reference.md#repeat-kinds) — both differ per kind, and that's the point of naming the kind rather than passing a count. What no repeat kind does is set `n`: that counts units, and every interval core reports comes from the [per-unit table](reference.md#the-unit-table-is-the-inference-base).
@@ -243,6 +243,28 @@ This pairs with the [apparatus record](reference.md#the-apparatus-core-can-only-
 
 Core doesn't schedule the separation — it has no wall clock to enforce, and a tool deciding when your instrument is free would be worse than useless. What it does is record each execution's `started_at`, so whether the batches really were separated is answerable from the run record. `validate` warns if no step declares `nondeterministic = True`, since batching a deterministic pipeline buys *n* copies of one answer. See [reference.md § A `batch` says *when*, not *what*](reference.md#a-batch-says-when-not-what).
 
+### Equivalence and non-inferiority
+
+Some claims are that an effect is *absent* — a prediction invariant to a nuisance manipulation, a cheaper method no worse than an expensive one by more than a stated margin. A directional test on a point estimate cannot express one, and reading "the difference was small" off an estimate whose interval is wide is how an equivalence claim gets made without evidence.
+
+Declare the comparison, then test the bound rather than the value:
+
+```yaml
+statistics:
+  contrasts:
+    - {id: invariance, of: "occasions=3", against: "occasions=12"}
+
+hypotheses:
+  - id: gate
+    kind: confirmatory
+    compare: {contrast: invariance}
+    direction: less
+    threshold: 0.05          # the margin, declared before the run
+    evaluate_on: ci95_upper
+```
+
+The margin is a parameter of the claim, so it belongs in the config and moves `parameters_hash` like any other. See [reference.md § What a hypothesis is tested against](reference.md#what-a-hypothesis-is-tested-against).
+
 ### Bootstrap and permutation
 
 Neither is a repeat, because neither needs the pipeline to run again — both resample the per-unit table the run already produced. They're declared under `statistics` and cost no executions:
@@ -323,6 +345,9 @@ The design is shaped around a specific claim: most irreproducible results are no
 | **Pooling across conditions** | Statistics aggregate within a condition only. Cross-condition comparison is an explicit contrast against a declared baseline |
 | **Paired analysis of an unpaired design** | Comparison type derives from `allocation` and from which axes the contrast crosses, so it can't disagree with how units were actually assigned. Derived per contrast, so a composed design doesn't get one verdict applied to comparisons of both kinds |
 | **Uncorrected multiplicity across a sweep** | `statistics.correction` reports family-wise or FDR-adjusted intervals alongside raw ones; `validate` warns when a multi-condition *enumerated* sweep declares `none`. `sample` draws are excluded — they feed one downstream fit rather than being comparisons a reader acts on |
+| **An enriched sample reported as if it were representative** | `data.units.weight_by` weights the estimate and records `weighted_by` beside it; `validate` warns when an attribute looks like a sampling weight and nothing declares it |
+| **An equivalence claim made from a point estimate** | `evaluate_on: ci95_upper` tests the bound, so "the difference was small" cannot be claimed from an estimate whose interval is wide |
+| **A paired contrast over units that aren't paired** | A contrast is computed over the intersection of both sides' completed units and records `n_paired`, so a difference of condition means is never reported as a paired one |
 | **Ignored clustering** | `cluster_by` produces cluster-robust intervals; `validate` flags an attribute that looks like an undeclared cluster |
 | **A model fitted on the units it will be tested on** | A fold exists only at repeat scope, so under a `fold` repeat `io.units` raises at run and condition scope rather than handing a wider step the whole roster. The fit can only happen where the split does |
 | **A cluster split across train and test** | A declared `cluster_by` makes clusters indivisible in every partition core computes, so a fold can't train on one cell of an animal and test on another. `validate` rejects a `k` above the cluster count |
