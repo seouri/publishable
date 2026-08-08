@@ -683,7 +683,7 @@ class Step(BaseStep):
         cohort = io.read_upstream("step01_load_cohort", "cohort.parquet")
         result = analyze(cohort, method=cfg.parameters.analysis.method,
                          min_samples=cfg.parameters.analysis.min_samples)
-        io.write("scores.parquet", result)     # this condition's, this repeat's, this step's dir
+        io.write("scores.parquet", result.rows)  # rows: this condition's, this repeat's, this step's
         return {"r": result.r, "p": result.p}  # → results.conditions[i].per_repeat.step03_analyze
 ```
 
@@ -712,11 +712,22 @@ class Step(BaseStep):
 
 **What `io.write` does with your object is decided by the extension, from a registry core owns.** Core ships writers for the formats it also has to read — `.json`, `.jsonl`, `.yaml`, `.csv`, `.parquet` — and for anything else the object must be `bytes` or `str`, written verbatim. So `io.write("model.pkl", pickle.dumps(model))` and `io.write("figures/roc.png", fig_bytes)` are how those go out: core never pickles for you and never renders a figure, because guessing a serialization for an arbitrary object is how an artifact ends up in a format nobody can read five years later. A plugin registers a writer for an extension its domain needs, the same way it registers a template. Every reader — `io.read_upstream`, `io.read_condition`, `io.reuse_from`, `io.read_input` — inverts the same table: a registered extension comes back as the parsed object, with `.csv` and `.jsonl` yielding rows as mappings, and anything else comes back as `bytes`.
 
+**What a writer takes is what its reader gives back**, so a round trip through an artifact is true by construction rather than by convention:
+
+| Extension | `io.write` takes | Its reader yields |
+|---|---|---|
+| `.json` · `.yaml` | any nesting of mappings, sequences, and scalars | the parsed value |
+| `.jsonl` | a sequence of mappings, one per line | rows, as mappings |
+| `.csv` · `.parquet` | a sequence of mappings, one per row, every value a scalar | rows, as mappings |
+| anything else | `bytes` or `str`, written verbatim | `bytes` |
+
+Rows as mappings rather than a `DataFrame`, on the same argument [`aggregate`'s table](#templates-where-parameters-are-defined) rests on: accepting a library's table type would make that library part of core's public API, and a step is one `df.to_dict("records")` away from the shape core does take. The column set of a `.csv` or `.parquet` is the union of its rows' keys, a key absent from a row writing empty, exactly as the [per-unit table](#units-the-thing-being-measured) already behaves. Handing a writer anything else — a model, an array, an object whose shape core would have to guess — raises `ArtifactError` · `E-ARTIFACT-UNWRITABLE`, which is the same refusal as never pickling for you, one step earlier.
+
 **The extension is the longest registered suffix of the name's last component, compared in lower case.** A compound extension is the ordinary case in several domains — `.fastq.gz`, `.nii.gz`, `.tar.gz` — so splitting at the final dot is not an option: it would hand `reads.fastq.gz` to whatever claimed `.gz` and lose the format in the name. Longest-suffix is also what keeps a plugin's claim safe from a coarser one, since `.fastq.gz` beats `.gz` whichever was registered first. Only the name's last component is examined, and only against suffixes something actually registered — so `programs/gpt-4.1__seed29.json` is a `.json`, the dot inside its stem matching nothing.
 
 **That is a serialization dependency, not an API one, and the distinction is the same one [`aggregate`](#templates-where-parameters-are-defined) rests on.** Core writing `units.parquet` means core depends on a parquet library; it does not mean the table core hands a template is that library's type, and the four-operation contract holds regardless of what sits underneath. A format is a promise about a file a reader opens in ten years; a type is a promise about an object a plugin is written against. Only the first is worth pinning this hard.
 
-**A `name` is a relative path, not only a filename.** `io.write("figures/roc.png", fig_bytes)` and `io.write("programs/gpt-4.1__seed29.json", blob)` both write inside the step's own directory, creating intermediate directories as needed, and every reader — `io.path`, `io.append`, `io.read_upstream`, `io.read_condition`, `io.reuse_from` — addresses them by that same relative path. A step that produces a set rather than a single file is ordinary, and making it flatten a tree into `programs_gpt_4_1_seed29.json` would push structure into filenames where a directory says it better. The path is resolved against the step's directory and normalized first: an absolute path, a `..` segment, or a symlink leading outside are all rejected, so "artifacts land in a directory of the same name" stays a property core enforces rather than one a step could opt out of.
+**A `name` is a relative path, not only a filename.** `io.write("figures/roc.png", fig_bytes)` and `io.write("programs/gpt-4.1__seed29.json", program)` both write inside the step's own directory, creating intermediate directories as needed, and every reader — `io.path`, `io.append`, `io.read_upstream`, `io.read_condition`, `io.reuse_from` — addresses them by that same relative path. A step that produces a set rather than a single file is ordinary, and making it flatten a tree into `programs_gpt_4_1_seed29.json` would push structure into filenames where a directory says it better. The path is resolved against the step's directory and normalized first: an absolute path, a `..` segment, or a symlink leading outside are all rejected, so "artifacts land in a directory of the same name" stays a property core enforces rather than one a step could opt out of.
 
 There is no `publishable clean` or `publishable reset`. Nothing in core deletes a file it didn't create in the same call — the [run lock](#one-execution-at-a-time-and-what-holds-the-run-directory) being the whole of the exception, and only in the sense that whichever invocation takes it is the one that releases it.
 
@@ -756,8 +767,9 @@ class Step(BaseStep):
     nondeterministic = True
 
     def run(self, cfg, io):
-        if not io.exists("model.pkl"):                  # a *completed* write survives the
-            io.write("model.pkl", fit(io.units.train))  # crash, and io.write won't overwrite
+        if not io.exists("model.pkl"):                       # a *completed* write survives the
+            model = fit(io.units.train)                      # crash, and io.write won't
+            io.write("model.pkl", pickle.dumps(model))       # overwrite
 
         done = io.recorded_keys                         # a set; empty unless this is a resume
         for unit in io.units:                           # every unit, always — see below
@@ -1655,7 +1667,7 @@ class Step(BaseStep):
         result = analyze(cohort,
                          method=cfg.parameters.analysis.method,
                          min_samples=cfg.parameters.analysis.min_samples)
-        io.write("scores.parquet", result)
+        io.write("scores.parquet", result.rows)
         return {"r": result.r}
 ```
 

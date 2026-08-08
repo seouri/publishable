@@ -171,7 +171,8 @@ class Step(BaseStep):
         for unit, pred in zip(io.units, result.per_unit):
             io.record(unit.key, {"pred": pred, "truth": unit.label})   # the per-unit table —
                                                                        #   what every interval is over
-        io.write("scores.parquet", result)   # lands in this condition + repeat's own folder
+        io.write("scores.parquet", result.rows)  # rows in, rows back out — this condition +
+                                                 #   repeat's own folder
         return {"r": result.r}               # recorded per repeat, without an interval
 ```
 
