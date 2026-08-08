@@ -24,7 +24,7 @@ Why `publishable` works the way it does. This is the argument behind the [refere
 
 Reproducibility usually fails for a boring reason: the true record of what ran is scattered across a shell history, a Slack message, a half-remembered `--temperature 0.7`, and a branch that got deleted. `publishable` forces that record into one file you write *before* the run, and one file captured *during* it.
 
-- **Every parameter is in the config. No exceptions.** After `init`, no command takes any argument other than a path. There are no parameter flags, no selectors, no overrides that live only in a shell history. See [Everything is in the file](#everything-is-in-the-file).
+- **Every parameter is in the config. No exceptions.** No *operation* command takes any argument other than a path; creation commands take what is needed to bring something into existence, and nothing else does. There are no parameter flags, no selectors, no overrides that live only in a shell history. See [Everything is in the file](#everything-is-in-the-file).
 - **`init` writes the whole file for you.** You don't author YAML from scratch or hunt for available options: `init` materializes every parameter the template offers, with sensible defaults and inline documentation. Editing that file *is* designing the run. See [The one config file](reference.md#the-one-config-file).
 - **Code and parameters are hashed separately.** `code_hash` covers `src/**` and `templates/**`; `parameters_hash` covers everything the config declares about the run except its `metadata` and its two host paths, one hash per run. This is what makes "same code, different parameters" a provable claim rather than a hopeful one. See [Three hashes](reference.md#three-hashes).
 - **Changing parameters costs nothing.** Edit, validate, run. Repeat. No commit required, because code provenance doesn't depend on the config being committed. See [Same code, different parameters](#same-code-different-parameters).
@@ -36,7 +36,7 @@ Reproducibility usually fails for a boring reason: the true record of what ran i
 - **Git isn't optional for code.** `new` initializes a repo, and `run` refuses when `src/**` or `templates/**` has uncommitted changes — a code hash that doesn't match what ran isn't provenance, it's a guess. Config edits don't trip this.
 - **It's *your* commit, not ours.** Captured git identity always belongs to your experiment repo. See [Whose git hash is this?](#whose-git-hash-is-this)
 - **`uv` is not optional.** Environments are captured and rebuilt through `uv`, so "reproduce this" means `uv sync --locked`.
-- **Reproducing elsewhere shouldn't mean typing git commands.** One command clones, checks out the recorded commit, syncs, and runs. See [Reproducing on another device](reference.md#reproducing-on-another-device).
+- **Reproducing elsewhere shouldn't mean typing git commands.** One command clones, checks out the recorded commit, syncs, writes the config back out, and names what only a person can supply — your data and your credentials, neither of which core transmits. It stops there rather than running. See [Reproducing on another device](reference.md#reproducing-on-another-device).
 - **Secrets are the one thing never captured.** Credentials live in `.env`; the config stores only variable *names*. See [Secrets & credentials](reference.md#secrets--credentials).
 - **The unit of measurement is first-class.** Patients, samples, trials, items — declared once, and everything from fold partitioning to per-unit result tables follows from it. See [Units](reference.md#units-the-thing-being-measured).
 - **The sample's own shape is declared, not assumed.** An enriched or stratified benchmark carries sampling weights, and core weights the estimate and says so in the record rather than returning an unweighted number in the same shape as a weighted one. See [Weighted samples](reference.md#weighted-samples).
@@ -66,9 +66,9 @@ Ten nouns, defined once. Everything else in this document is built from them, an
 | **Step** | One stage of the pipeline, scoped to run, condition, repeat, or summary | `src/<name>/steps/stepNN_*.py` |
 | **Unit** | The thing being measured — patient, sample, trial, item, respondent | Resolved from `input_dir` |
 | **Artifact** | A file a step produced | Inside its step's directory |
-| **Result** | A value a step returned — per unit, per repeat, per condition | `run.yaml` |
+| **Result** | A value a run reports — returned by a step, or derived from the unit table by a template's `aggregate` | Per unit in that step's `units.parquet`; per repeat and per condition in `run.yaml` |
 
-Two distinctions that are easy to conflate:
+Three distinctions that are easy to conflate:
 
 - **Experiment vs. study.** An experiment is machinery; a study is a claim. One experiment usually produces many runs, and a paper reports a subset of them. Keeping these separate is what lets you rerun freely without every run pretending to be a finding.
 - **Condition vs. repeat.** A condition is a difference you're measuring the effect of. A repeat is a difference you're averaging over. Statistics aggregate within a condition and compare across conditions — never the reverse. Getting this backwards is the most common way a reproducible pipeline still produces a wrong number.
@@ -88,7 +88,7 @@ There is no `--dry-run`, no `--resume`, and no `--allow-dirty`, because a flag t
 
 The test for any future addition: could a reader holding only the config and the run record be misled about what happened? If yes, it doesn't belong on the command line.
 
-Variation that needs expressing — a sweep across models, an ablation, a set of conditions — is [structure inside the config](reference.md#sweeps-and-repeats), interpreted by the template that defined it. Never an invocation.
+Variation that needs expressing — a sweep across models, an ablation, a set of conditions — is [structure inside the config](reference.md#sweeps-and-repeats), expanded by core over the parameters the template defined. Never an invocation.
 
 ---
 
@@ -145,12 +145,12 @@ Each is complete and self-describing, and still takes exactly one path to run. I
 
 | Core owns | Plugins own |
 |---|---|
-| The config envelope — every top-level block except `parameters`: `metadata`, `entrypoint`, `data`, `sweep`, `replication`, `statistics`, `limits`, `hypotheses` | The entire `parameters` block, via `parameter_spec`. A template *reads* the envelope in `validate` — cross-block rules like "this experiment type fits a model, so it needs a partition to fit on" are properties of what its steps do — but declares nothing in it |
+| The config envelope — every top-level key except `parameters`: the four identifying fields (`schema_version`, `experiment_type`, `template_version`, `plugin`), then `metadata`, `entrypoint`, `data`, `sweep`, `replication`, `statistics`, `limits`, `hypotheses` | The entire `parameters` block, via `parameter_spec`. A template *reads* the envelope in `validate` — cross-block rules like "this experiment type fits a model, so it needs a partition to fit on" are properties of what its steps do — but declares nothing in it |
 | Materializing configs from a spec; value-level validation | The spec: types, defaults, ranges, choices, help text |
 | Sweep expansion (`grid`/`paired`/`ablate`/`sample`/`groups`/`baseline`), repeat kinds, seed derivation, kind-aware statistics | Field-appropriate sweep and repeat defaults |
 | The three hashes, run identity, step scope, lineage, units, append-only + atomic artifacts | Naming conventions (`naming_pattern`, `field_convention`, `default_repeats`) |
 | `BaseExperiment` / `BaseStep` / `BaseTemplate` / `BaseReport` / `Param` / `Unit` / `Apparatus` / `Estimate` / `io` | Concrete templates, unit resolvers, apparatus probes, artifact writers for domain formats, reusable `BaseStep` subclasses |
-| Lifecycle: `new`, `generate`, `validate`, `dry-run`, `run`, `draft`, `resume`, `report`, `diff`, `freeze`, `reproduce`, `study` | Domain dependencies (an API client, an instrument driver, a solver) |
+| Lifecycle, all of it: `new`, `plugin new`, `generate` (`init`), `demo`, `validate`, `dry-run`, `run`, `draft`, `resume`, `report`, `diff`, `freeze`, `reproduce`, `study`, `docs`, `list-templates` | Domain dependencies (an API client, an instrument driver, a solver) |
 | The secrets mechanism (`credential_env_var` + dotenv loading) | Which credentials an experiment type needs, and which apparatus facts must be captured |
 
 Core ships one template, `generic`. Anything domain-shaped is a plugin; the reference LLM plugin is documented in `publishable-llm`.
@@ -188,7 +188,7 @@ Governed data has its own protocol — IRB approval, data use agreements, encryp
 
 - `generate experiment`/`init` refuse to write such a config (paths resolved symlink-free, so a symlink into the repo doesn't slip through).
 - `validate` re-checks every time, catching a data directory that moved into the repo later.
-- `run` re-checks immediately before executing.
+- `run` re-checks immediately before executing — as do `draft` and `resume`, which execute the same plan under different rules about the code tree.
 
 The repo holds code and configs. Everything file-shaped a step produces goes to the run directory under `output_dir`, and `run.yaml` — which does contain aggregate results — is written there too, not into the repo. So the repo is what you'd hand a co-author, and the data is what you'd hand a governance office, with no judgment call in between.
 
@@ -196,7 +196,7 @@ The repo holds code and configs. Everything file-shaped a step produces goes to 
 
 ## Whose git hash is this?
 
-Always the experiment repo's, never `publishable`'s. Core walks up from the working directory to find `.git`; that repo's commit, branch, and dirty state over the hashed trees go into `provenance.git`. Core's own version is recorded separately as `provenance.publishable_version`, plugin versions as `provenance.plugin_versions` — compatibility notes, never conflated with the code that ran your experiment. In a monorepo the nearest enclosing `.git` wins, so a subpackage that needs its own `code_hash` needs its own repository — there is no flag to override the walk-up.
+Always the experiment repo's, never `publishable`'s. **The walk-up starts at the path you gave the command**, not at wherever your shell happens to be: `run configs/cohort-pilot/config.yaml` finds the repo enclosing that config, so the answer doesn't change with your working directory. Commands that take no path — `docs`, `list-templates` — start at the working directory, and so does [`resume`](reference.md#resuming), whose argument is a run directory living [outside the repo by construction](#code-and-data-never-share-a-repo); that is the one command you have to invoke from inside the repo, which is also what its `code_hash` and `uv.lock` checks against "current state" already assume. Finding no `.git` from either starting point is an error naming where it looked, never a silent fallback. From there, that repo's commit, branch, and dirty state over the hashed trees go into `provenance.git`. Core's own version is recorded separately as `provenance.publishable_version`, plugin versions as `provenance.plugin_versions` — compatibility notes, never conflated with the code that ran your experiment. In a monorepo the nearest enclosing `.git` wins, so a subpackage that needs its own `code_hash` needs its own repository — there is no flag to override the walk-up.
 
 ---
 
@@ -212,5 +212,7 @@ Always the experiment repo's, never `publishable`'s. Core walks up from the work
 - **Not a scheduler.** Core executes one execution at a time, in the recorded order, and offers no parallelism, no queue, and no distribution. Three of its guarantees are statements about *when* — a `batch` is a position in time, `order: randomized` decorrelates position from condition, and the apparatus gate fires before each execution — and none of them survives interleaving. The parallelism that pays is inside a step, where a plugin can issue 440 requests at once, and that is untouched. Running many *runs* at once is a scheduler's job, and composing with one is easy precisely because a run takes one path and needs no coordination. See [One execution at a time](reference.md#one-execution-at-a-time-and-what-holds-the-run-directory).
 - **Not per-condition pipeline variation.** Conditions differ in parameters, or in which units they see, never in which steps run. Allowing different steps per condition would make `code_hash` comparisons across conditions meaningless, which is the property the whole comparison story rests on.
 - **Not scientific validity.** A config that validates is well-formed and well-recorded. Whether the design answers the question is yours — core will compute a confidence interval over five seeds without judging whether five seeds was enough.
+
+Those are the refusals about *mechanism*. The statistical half is a list of its own — modelling beyond summary statistics, factorial main effects and interactions, crossover order and counterbalancing, leakage arriving through your inputs, power analysis — and it lives with the designs it constrains, in [experimental-designs.md § What core will not do for you](experimental-designs.md#what-core-will-not-do-for-you). A reader arriving here from the README's stated limits should read both.
 
 ---
