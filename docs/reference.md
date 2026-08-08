@@ -2569,15 +2569,17 @@ Six stops. Stops 3 through 5 each have the same beat: print the next command exa
 | 5 | `run` | The results table: estimates, [intervals over units](#the-unit-table-is-the-inference-base), paired deltas against the baseline |
 | 6 | *(nothing — `demo` prints a command)* | Opens the `run.yaml` this all produced and shows the `reproduce` invocation a collaborator would run against it. Hands off to [`publishable new`](#scaffolding-publishable-new) |
 
-**Stop 6 is the one stop that doesn't execute what it prints.** [`reproduce`](#reproducing-on-another-device) reads `provenance.git.remote` and clones it, and the demo repo has one local commit and no remote — so running it here would fail on the first step, in the last thing a new user sees. Printing it is also the truer lesson: `reproduce` is what someone *else* runs, on a machine that has neither your data nor your credentials.
-
 Stop 2 invites you to read the config, not to edit a step. That asymmetry is deliberate: `code_hash` covers [`src/**` and `templates/**`](#three-hashes), so a step edited at stop 2 would dirty the tree and make stop 5 refuse — the first `run` a user ever issues would be an error. A config edit costs nothing but a different `parameters_hash`.
+
+**Stop 6 is the one stop that doesn't execute what it prints.** [`reproduce`](#reproducing-on-another-device) reads `provenance.git.remote` and clones it, and the demo repo has one local commit and no remote — so running it here would fail on the first step, in the last thing a new user sees. Printing it is also the truer lesson: `reproduce` is what someone *else* runs, on a machine that has neither your data nor your credentials.
 
 **No pause may alter the config.** Every prompt is proceed-or-quit; nothing asks which method to sweep or how many repeats to use, and the config written at stop 1 is the config executed at stop 5. The reasoning is [Everything is in the file](design-principles.md#everything-is-in-the-file) — a prompt that reached the run without passing through the file would be a parameter flag in disguise.
 
 **Unattended, it doesn't pause.** With no terminal attached — piped, redirected, or in CI — `demo` runs the identical sequence straight through. That is not a mode and takes no flag, because the pause changes presentation only; there is nothing for a second command name to distinguish.
 
-**Quitting is expected.** `q` at any stop prints the remaining commands in order, so you leave holding the whole path, and running `publishable demo` again from the demo directory resumes at the stop you left. Since `validate` and `dry-run` create nothing, the filesystem alone can't tell stop 3 from stop 4; `demo` records the last completed stop in `.demo-progress` in the demo repo root, listed in the generated `.gitignore`. It sits outside `src/**` and `templates/**`, so it can never move `code_hash`, and being ignored it can never dirty the tree and push you onto [`draft`](#draft-runs). `--into DIR` chooses which directory all of this applies to: given one that already holds a `.demo-progress`, it resumes there rather than starting over — resuming is a property of the directory, not of how you named it.
+**Quitting is expected.** `q` at any stop prints the remaining commands in order, so you leave holding the whole path, and running `publishable demo` again from the demo directory resumes at the stop you left.
+
+**What tracks the position is `.demo-progress`**, in the demo repo root, listed in the generated `.gitignore`. A file is needed because `validate` and `dry-run` create nothing, so the filesystem alone can't tell stop 3 from stop 4. It sits outside `src/**` and `templates/**`, so it can never move `code_hash`, and being ignored it can never dirty the tree and push you onto [`draft`](#draft-runs). `--into DIR` chooses which directory all of this applies to: given one that already holds a `.demo-progress`, it resumes there rather than starting over — resuming is a property of the directory, not of how you named it.
 
 ---
 
