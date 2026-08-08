@@ -35,8 +35,8 @@ Running 3 conditions × 5 repeats = 15 executions
 
   condition             r       95% CI            vs baseline (paired, 95% CI)
   00_baseline           0.581   [0.488, 0.661]    —
-  01_method=spearman    0.607   [0.517, 0.683]    +0.026  [ 0.017,  0.035]
-  02_method=kendall     0.412   [0.298, 0.514]    −0.169  [−0.181, −0.157]
+  01_method=spearman    0.607   [0.517, 0.683]    +0.026  [−0.007,  0.059]
+  02_method=kendall     0.412   [0.347, 0.477]    −0.169  [−0.213, −0.125]
 
   intervals over 228 of 240 units (12 failed) · seed spread ±0.014
 
@@ -186,7 +186,7 @@ results:
         step03_analyze: {r: {value: 0.607, basis: units, n: {completed: 228},
                              ci95: [0.517, 0.683], repeat_spread: {std: 0.014}}}
       vs_baseline:
-        step03_analyze: {r: {delta: 0.026, paired: true, ci95: [0.017, 0.035]}}
+        step03_analyze: {r: {delta: 0.026, paired: true, ci95: [-0.007, 0.059]}}
 provenance:
   code_hash: sha256:8e21…            # your src/** + templates/**, from a clean tree
   parameters_hash: sha256:1a2b…      # this exact parameter set

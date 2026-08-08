@@ -400,8 +400,8 @@ results:                                       # scientific; see "Statistical re
         step03_analyze:
           r: {delta: 0.026, basis: units, paired: true,
               method: paired_percentile_over_units,
-              ci95: [0.017, 0.035],
-              ci95_corrected: [0.017, 0.035],       # rank 2 of 2 under holm: α/(m−i+1) = α
+              ci95: [-0.007, 0.059],
+              ci95_corrected: [-0.007, 0.059],      # rank 2 of 2 under holm: α/(m−i+1) = α
               correction: holm, correction_level: 0.05,
               family_size: 2, family: {comparisons: 2, metrics: 1},
               cohens_d: null}                       # r is derived, not a per-unit mean
@@ -1501,8 +1501,8 @@ statistics:
 vs_baseline:
   step03_analyze:
     r: {delta: 0.026, basis: units, method: paired_percentile_over_units,
-        ci95: [0.017, 0.035],
-        ci95_corrected: [0.013, 0.039], correction: holm,
+        ci95: [-0.007, 0.059],
+        ci95_corrected: [-0.023, 0.075], correction: holm,
         correction_level: 0.0033,                    # α/15 — rank 1 of this family
         family_size: 15, family: {comparisons: 5, metrics: 3}}
 ```
@@ -1518,7 +1518,7 @@ vs_baseline:
 
 Holm's rank-implied level is the conventional companion to the procedure rather than a strictly simultaneous band, and calling it that is the honest description: it is what the step-down procedure tests each comparison at, so an interval excluding the threshold agrees with the procedure's verdict. It also means **the weakest comparison in a family is corrected by nothing** — at rank *m* the level is α itself — which the worked example shows: kendall's contrast carries far the stronger evidence, so spearman's is rank 2 of 2 and its corrected interval is its raw one. That is Holm behaving correctly, not a correction that failed to apply, and it is the property that makes Holm uniformly more powerful than Bonferroni. Benjamini-Hochberg has no interval that means anything of the kind — controlling a false discovery *rate* is a statement about a set, not a bound on any one comparison — so core reports the adjusted p-value and leaves `ci95_corrected` null rather than printing a number with no construction behind it. That asymmetry is deliberate and is the same standard the family count is held to below.
 
-**Which rank, though, has to be decided by something every member has.** Holm is a p-value procedure, and this family often carries no p-values at all: a [`null_test` supplies one only where `shuffle` names an attribute](#what-isnt-a-repeat), which [a parameter-axis contrast can never be](#what-isnt-a-repeat) — the worked example's family is two of exactly that kind. So the ranking statistic is the one quantity every member is guaranteed to have, since [only metrics carrying an interval are counted](#sweeps-and-repeats): **the point estimate over half the raw `ci95` width, largest first.** It is monotone in the evidence each construction encodes and is defined whether the interval was t-based or percentile, which is what the p-value isn't. In the worked example that is 0.169 over 0.012 for kendall against 0.026 over 0.009 for spearman, giving the ranks above. Ties break by condition index, then by metric name in declaration order, so a rank is a function of the record rather than of an iteration order. Ranking on a p-value where one exists and on this ratio elsewhere would leave the family ordered by two statistics, which is not an ordering.
+**Which rank, though, has to be decided by something every member has.** Holm is a p-value procedure, and this family often carries no p-values at all: a [`null_test` supplies one only where `shuffle` names an attribute](#what-isnt-a-repeat), which [a parameter-axis contrast can never be](#what-isnt-a-repeat) — the worked example's family is two of exactly that kind. So the ranking statistic is the one quantity every member is guaranteed to have, since [only metrics carrying an interval are counted](#sweeps-and-repeats): **the point estimate over half the raw `ci95` width, largest first.** It is monotone in the evidence each construction encodes and is defined whether the interval was t-based or percentile, which is what the p-value isn't. In the worked example that is 0.169 over 0.044 for kendall against 0.026 over 0.033 for spearman — 3.84 against 0.79 — giving the ranks above. Ties break by condition index, then by metric name in declaration order, so a rank is a function of the record rather than of an iteration order. Ranking on a p-value where one exists and on this ratio elsewhere would leave the family ordered by two statistics, which is not an ordering.
 
 **`fdr_bh` therefore needs a p-value it can't always get.** Declared over a family whose metrics carry none, it leaves every member with a `null` `ci95_corrected` and no `p_value_corrected` either — a correction declared and not applied, which is the state this section exists to prevent. So `validate` warns on the condition that decides it: **no comparison in the family will carry a p-value**, either because `statistics.null_test` is undeclared or because its `shuffle` reaches none of them. Use `holm` or `bonferroni`, whose corrections are interval-shaped, or declare the `null_test` that supplies the p-value.
 
@@ -1813,8 +1813,8 @@ results:
         step03_analyze:
           r: {delta: 0.026, basis: units, paired: true,
               method: paired_percentile_over_units,
-              ci95: [0.017, 0.035],
-              ci95_corrected: [0.017, 0.035],       # rank 2 of 2 under holm: α/(m−i+1) = α
+              ci95: [-0.007, 0.059],
+              ci95_corrected: [-0.007, 0.059],      # rank 2 of 2 under holm: α/(m−i+1) = α
               correction: holm, correction_level: 0.05,
               family_size: 2, family: {comparisons: 2, metrics: 1},
               cohens_d: null}                       # r is derived, not a per-unit mean
@@ -2187,8 +2187,8 @@ results:
     - id: h1
       kind: confirmatory
       declared_in: parameters_hash sha256:1a2b...      # the config that predicted it
-      observed: {delta: 0.026, ci95: [0.017, 0.035],
-                 ci95_corrected: [0.017, 0.035]}       # corrected in the hypothesis family
+      observed: {delta: 0.026, ci95: [-0.007, 0.059],
+                 ci95_corrected: [-0.007, 0.059]}      # corrected in the hypothesis family
       verdict_evaluated_on: observed                   # 0.026 against threshold 0.02
       family_size: 1                                   # this family, not the sweep's 2
       family: {hypotheses: 1}                          # confirmatory and core-computed
@@ -2197,6 +2197,8 @@ results:
 ```
 
 **The verdict records which number it compared, because the [hypothesis family](#sweeps-and-repeats) is corrected separately from the sweep's.** `family_size` and `family` carry it in the same idiom every other family uses, with a single breakout key because a hypothesis family multiplies nothing: it counts the confirmatory hypotheses whose observations core computed, where a sweep's family counts comparisons × metrics. A reader can check the level without re-deriving it, exactly as `family` beside a `vs_baseline` delta is auditable rather than asserted. Correction reaches a verdict only through a bound: a hypothesis evaluating on `observed` compares a point estimate, which has no α to adjust, while one evaluating on `ci95_lower` or `ci95_upper` reads the corrected bound at the level *this* family implies. `verdict_evaluated_on` names which of the three the comparison actually used — spelled out rather than echoing the config's `evaluate_on`, since a record field one letter from a config field is a typo waiting to be read as agreement. So a verdict is never a number a reader has to reconstruct from `evaluate_on` plus a correction rule.
+
+**In the worked example the two available answers differ, and the field is what makes that legible.** The observed delta of 0.026 clears the declared threshold of 0.02, so `h1` is supported on `observed` — while the same delta's interval over 228 units, [−0.007, 0.059], does not exclude zero, so the same hypothesis written `evaluate_on: ci95_lower` would come back `supported: false`. Neither verdict is wrong; they answer different questions, and a reader who can see which one was asked can decide what the run showed. A record that reported only `supported: true` would be the version worth distrusting. See [What a hypothesis is tested against](#what-a-hypothesis-is-tested-against) for when to declare which.
 
 ### What a hypothesis is tested against
 
