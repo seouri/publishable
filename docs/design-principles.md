@@ -117,11 +117,12 @@ uv run publishable diff <run_a>/run.yaml <run_b>/run.yaml
 code_hash          identical    sha256:8e21...
 input_manifest     identical    sha256:3d8a...
 uv.lock            identical    sha256:6b1f...
-apparatus          identical    sha256:5d7c...
 parameters_hash    DIFFERS
   parameters.analysis.method       pearson → spearman
   parameters.analysis.min_samples  30 → 50
 ```
+
+Three rows, because template `generic` declares no [apparatus probe](reference.md#the-apparatus-core-can-only-observe); a run that measures through one gets a fourth, compared on the same footing.
 
 That's the comparison to aim for: code, environment, and data provably identical, with parameters differing in two named places. Note this holds **even if the two runs happened weeks apart at different commits** — `code_hash` covers `src/**` and `templates/**` only, so unrelated commits — a README fix, a new config, a change under `docs/` or `tests/` — don't muddy the claim the way a bare commit hash would. What *does* move it is any change under those two trees, a second experiment's package included: the boundary is the tree rather than the experiment, because core would have to read your Python to know which files an experiment uses. See [reference.md § How the three are computed](reference.md#how-the-three-are-computed), and [Whose git hash is this?](#whose-git-hash-is-this) for the remedy when a package needs a hash that holds still on its own.
 

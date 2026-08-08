@@ -257,6 +257,8 @@ statistics:
 hypotheses:
   - id: gate
     kind: confirmatory
+    statement: "Predictions are invariant to visit count between 3 and 12 occasions."
+    metric: step03_screen.prob
     compare: {contrast: invariance}
     direction: less
     threshold: 0.05          # the margin, declared before the run

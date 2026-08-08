@@ -279,6 +279,7 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Hypothesis needs baseline | `hypotheses[0].compare.to: baseline` but `sweep.baseline` is not declared |
 | Hypothesis bound exists | `hypotheses[0].evaluate_on` is `ci95_lower`, but `data.units` is undeclared and template `generic` defines no `aggregate`, so no metric this run computes can carry an interval |
 | Hypothesis names a real contrast | `hypotheses[1].compare.contrast` is `invariance`, which `statistics.contrasts` does not declare |
+| Hypothesis names a metric | `hypotheses[1]` declares `compare.contrast` and no `metric`; a contrast reports a value per step metric, so the quantity under test is unnamed |
 | Hypothesis form matches its metric | `hypotheses[1].metric` names a metric of a `scope: "summary"` step but declares `compare`; a summary metric is one value per run, not a contrast between conditions — and a condition-step metric without `compare` is the same mistake inverted |
 | Hypothesis has an inference base | `hypotheses[0]` names a metric under the same declarations, without a bound: every metric will be `basis: repeats`, so it can be reported but not tested (warning) |
 
@@ -2107,6 +2108,8 @@ That separation is load-bearing, not tidiness. If randomization derived from `pa
 | `sweep.sample` draws | digest + `n`, `method`, `ranges` | the sample declaration changes |
 | An axis's `assign.seed` | digest + the axis name + the resolved roster | the roster changes, or any axis is added or edited — see below |
 
+**An omitted `seed` is `auto`, not an error.** `sweep.sample.seed`, `assign.seed`, and `holdout.seed` each default to the derivation above — which is what `init` writes anyway, so trimming the line changes nothing and a config that never mentions a seed is fully determined. Pinning an integer is the deliberate act, and the one to take for anything you intend to cite.
+
 The digest is deliberately **not a fourth hash.** The [three](#three-hashes) answer "was this identical?" and are identity claims a reader checks. The digest claims nothing: it's a derivation input, recorded in `sweep.yaml` beside the values it produced so `reproduce` regenerates the same partitions. Nothing compares two digests, and `diff` doesn't print it.
 
 **Adding a group axis moves the draws of the axes already there.** The digest covers `sweep.groups` wholesale, so declaring `sex` alongside an existing `arm` re-randomizes `arm`. That's honest — the design changed, and the new allocation is balanced over a cross the old one knew nothing about — but it has a consequence to plan around: a reporting axis can't be added to a study already allocated without a fresh draw. Deriving each axis from its own sub-digest would keep the earlier one still, at the price of a derivation rule no longer summarizable in a sentence. Pin `seed` to an integer for anything you intend to cite, which is the same advice as below and for the same reason.
@@ -2204,6 +2207,7 @@ hypotheses:
   - id: superiority
     kind: confirmatory
     statement: "Paired AUROC improvement over the utilization-only baseline exceeds zero."
+    metric: step03_screen.auroc                # always required — see below
     compare: {contrast: sensitivity}          # a declared contrast, or condition/to as before
     direction: greater
     threshold: 0.0
@@ -2212,6 +2216,7 @@ hypotheses:
   - id: invariance
     kind: confirmatory
     statement: "Predictions are invariant to visit count between 3 and 12 occasions."
+    metric: step03_screen.prob
     compare: {contrast: invariance}
     direction: less
     threshold: 0.05
@@ -2223,6 +2228,8 @@ hypotheses:
 `evaluate_on: ci95_lower` with `direction: greater` is the superiority form, and it is also how "the interval excludes zero in the expected direction" is written — those are the same statement.
 
 Two rules core enforces. A hypothesis evaluating on a bound needs a metric that *has* one, so a [`basis: repeats`](#the-unit-table-is-the-inference-base) metric is rejected rather than warned about — the existing warning is for a metric that can be reported but not tested, and asking for a bound it doesn't have is a stronger error. `validate` catches the config-level form of that, where nothing in the run could carry an interval; the per-metric form is settled [when the step returns](#validation), like everything else about a returned key. And when the metric is a [reported `Estimate`](#estimate-carries-your-interval-without-core-claiming-it), the bound tested is the one the step supplied, so `verdict_rests_on: reported` carries its usual meaning: core compared the numbers and did not derive them.
+
+**`metric` is required in every form, because `compare` says *where* and never *what*.** A [contrast](#contrasts-claims-that-arent-condition-vs-baseline) reports one value per step metric exactly as a condition does, so `compare: {contrast: invariance}` on its own names a comparison and leaves the quantity under test unstated — and a contrast declared over a step that reports three metrics would leave three candidates. `metric` is `step.metric` in all three forms: a baseline comparison, a declared contrast, and a [summary `Estimate`](#a-hypothesis-may-name-a-summary-metric), which is the one form that takes no `compare` at all.
 
 **A hypothesis is one quantity against one threshold**, which is what makes it evaluable at all. A claim about the *shape* of a series — monotonic across doses, trending across ordered strata, flattening over a curve — has no single quantity to threshold, so it is a summary-step estimator returning an `Estimate` rather than a hypothesis. Declaring the shape claim as several adjacent hypotheses is available and rarely what you want: it tests each step of the series separately and corrects for all of them, which is a different claim from the one about the series.
 

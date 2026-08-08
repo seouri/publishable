@@ -7,7 +7,7 @@ You have an experiment to run. Here's the whole arc with `publishable`:
 1. **Design the run.** One config file holds every parameter, the conditions you're comparing, and the repeats you'll average over. `publishable` generates it fully populated — you edit rather than author.
 2. **Run it.** `publishable run config.yaml`. No flags. Conditions and repeats expand on their own, and each one gets its own place in the output tree.
 3. **Read the results.** Estimates, confidence intervals over your units, and effect sizes against your baseline, already computed and sitting next to the run that produced them.
-4. **Publish it.** Hand a collaborator, a reviewer, or your future self one file. `publishable reproduce` re-runs it exactly — same commit, same locked environment, same input data, each verified by hash.
+4. **Publish it.** Hand a collaborator, a reviewer, or your future self one file. `publishable reproduce` rebuilds exactly what ran — same commit, same locked environment, the input checked against a recorded manifest — and stops at the two things only a person can supply: your copy of the data, and your credentials.
 
 Nothing about what ran ends up in a shell history, so nothing has to be reconstructed later.
 
@@ -40,7 +40,7 @@ Running 3 conditions × 5 repeats = 15 executions
 
   intervals over 228 of 240 units (12 failed) · seed spread ±0.014
 
-run.yaml → ~/publishable-demo-data/results/run_2026-08-07T09-14-03Z_8e21ab3/run.yaml
+run.yaml → ~/publishable-demo-data/results/run_2026-08-07T09-14-03Z_2f5c8d0/run.yaml
 ```
 
 That `run.yaml` is the point. It carries the results *and* everything needed to regenerate them — so on any other machine:
@@ -49,7 +49,7 @@ That `run.yaml` is the point. It carries the results *and* everything needed to 
 publishable reproduce <path-to-run.yaml>
 ```
 
-clones the exact commit, restores the locked environment, verifies the input data hasn't changed, and runs it again.
+clones the exact commit, restores the locked environment, writes the config back out, and prints what's left to fill in. Neither data nor credentials travel, so the last step is yours — and `run` then verifies the input against the recorded manifest before spending anything.
 
 > **v0.x — the design is settled, interfaces may still shift before 1.0.** Issues and design feedback are very welcome.
 
@@ -128,7 +128,7 @@ The directory structure *is* the experiment structure, so finding an artifact ne
 ### And then
 
 ```
-run.yaml  ──►  publishable reproduce   ──►  anyone re-runs it exactly
+run.yaml  ──►  publishable reproduce   ──►  a checkout anyone can run
           └─►  publishable study add   ──►  a bundle beside your manuscript
 ```
 
@@ -167,8 +167,11 @@ class Step(BaseStep):
         # cfg.parameters — already resolved to THIS condition's values
         result = analyze(io.units, method=cfg.parameters.analysis.method)
 
+        for unit, pred in zip(io.units, result.per_unit):
+            io.record(unit.key, {"pred": pred, "truth": unit.label})   # the per-unit table —
+                                                                       #   what every interval is over
         io.write("scores.parquet", result)   # lands in this condition + repeat's own folder
-        return {"r": result.r}               # returned values become the reported metrics
+        return {"r": result.r}               # a returned scalar is recorded as-is, no interval
 ```
 
 Write it once for a single condition; adding a sweep later changes nothing here.
