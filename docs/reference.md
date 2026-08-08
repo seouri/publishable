@@ -926,6 +926,16 @@ Failures don't have to line up across repeats — a unit can error under one see
 
 **The failure fraction `run` enforces is against the run level.** A threshold checked per execution would fire on a small fold long before the cohort was in any trouble, and a threshold checked per condition would let a systematically broken fold hide inside nine healthy ones. Run-level is the number that decides whether the complete-case result is interpretable, so that's the one with a threshold on it. Per-execution failures are still recorded and `report` surfaces any execution whose completion rate is an outlier against its condition — an early-stopping signal without a second threshold to tune.
 
+**`repeat_spread` names one level, so nested repeats report a list.** With a single `seed` level it's the mapping shown above. With `fold × seed` there are two questions and they have different answers — how much the RNG moved the answer within a fold, and how much the partition moved it across folds — so core reports one entry per declared level, outer to inner, each recomputing the metric over that level's slice:
+
+```yaml
+repeat_spread:
+  - {std: 0.019, n: 10, kind: fold}
+  - {std: 0.014, n: 3, kind: seed}
+```
+
+Collapsing them into one number would average two different sources of variation and label the result with whichever kind was written first.
+
 `repeat_spread` sits beside the interval rather than inside it on purpose. It answers a real question — did this pipeline give the same answer five times? — and it is not a measure of how precisely the cohort was estimated. Keeping both visible, and labelling which is which, is cheaper than expecting a reader to remember the difference.
 
 ```yaml
