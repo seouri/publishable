@@ -137,6 +137,7 @@ limits:
 
 hypotheses:
   # ---- Optional, but written BEFORE the run — which is what makes it meaningful. ----
+  # A `summary` metric takes no `compare`; see "A hypothesis may name a summary metric".
   - id: h1
     kind: confirmatory                   # confirmatory | exploratory
     statement: "Spearman correlation exceeds Pearson on this cohort."
@@ -200,9 +201,6 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Leave-one-out is affordable | `{kind: fold, k: all}` over 240 units × 3 conditions = 720 executions exceeds `limits.max_executions` |
 | Credentials present | `INSTRUMENT_API_TOKEN` is not set in `.env` |
 | Probe is installed | template `my_assay` declares `apparatus_probe: assay_instrument`, which no installed plugin registers |
-| Apparatus is reachable | probe `assay_instrument` raised connecting to the instrument; an unreachable apparatus is worth catching before the run, not four hours into it |
-| Probe supplies the facts | probe `assay_instrument` yields no `reagent_lot`, declared in the template's `apparatus_facts` |
-| Probe emits nothing secret | probe `assay_instrument` returned a fact whose value matches `INSTRUMENT_API_TOKEN` |
 | Data outside repo | `output_dir` resolves inside the git repository |
 | Manifest readable | `input_dir` is unreadable or empty |
 | Unit keys unique | `data.units.key` `patient_id` has 3 duplicate values |
@@ -242,15 +240,16 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Estimate labels its method | `step04_compare_methods` returned an `Estimate` with `ci95` and no `method`; an interval nobody labelled is unreadable |
 | Hypothesis references | `hypotheses[0].metric` `step03_analyze.r` names no metric any step returns |
 | Hypothesis needs baseline | `hypotheses[0].compare.to: baseline` but `sweep.baseline` is not declared |
+| Hypothesis form matches its metric | `hypotheses[1].metric` names the summary metric `step04_agreement.s_within_lower_bound` but declares `compare`; a summary metric is one value per run, not a contrast between conditions — and a condition metric without `compare` is the same mistake inverted |
 | Hypothesis has an inference base | `hypotheses[0].metric` `step03_analyze.r` is `basis: repeats` — no unit table and no template `aggregate`, so it can be reported but not tested (warning) |
 
 The unknown-key check matters more than it looks: a mistyped key in a hand-edited YAML file is otherwise silently ignored, and the run proceeds with a default while you believe you changed something. Since `init` materializes every valid key, any key not in the spec is a typo by construction.
 
 **Every threshold in that table lives in `limits`**, not in a flag, an environment variable, or a core default nobody can see. A threshold is a parameter of the run like any other: it decides whether the run is allowed to proceed, or whether a reader is warned about the number they're looking at, and a value with that much authority belongs in the file being hashed rather than in the tool's source. `init` writes the defaults; changing one is an ordinary edit, and it moves `parameters_hash` along with everything else — so `diff` prints a raised `max_failed_fraction` as the parameter delta it is, and two runs that disagreed about what counted as too much attrition can be told apart rather than looking identical. This is [Everything is in the file](design-principles.md#everything-is-in-the-file) applied to core's own knobs, which would otherwise be the one set of parameters living outside it.
 
-Two things deliberately absent from that table are checks that need a run to have happened: the unit failure rate is enforced by `run` as it goes, and lockfile drift is checked by `resume` against the run it's resuming. `validate` takes a config path, so neither is a question it could answer.
+Three things deliberately absent from that table: the unit failure rate is enforced by `run` as it goes, lockfile drift is checked by `resume` against the run it's resuming, and whether the [apparatus](#the-apparatus-core-can-only-observe) is reachable is checked by `dry-run`. The first two need a run to have happened, and `validate` takes a config path. The third could be checked here and deliberately isn't: `validate` may read your config and your input, and may not reach anything outside the machine, because it's the command you run in a loop while editing YAML and a probe is metered by somebody else.
 
-`publishable dry-run` goes further: it validates, builds the input manifest, resolves the run directory, and prints every artifact path that *would* be written — without executing a step or creating anything.
+`publishable dry-run` goes further: it validates, builds the input manifest, probes the apparatus, resolves the run directory, and prints every artifact path that *would* be written — without executing a step or creating anything. It's the command that pays for the expensive pre-flight, which is why the two are separate names rather than one command and a flag.
 
 ---
 
@@ -1487,7 +1486,11 @@ class MyAssayTemplate(BaseTemplate):
 
 **A probe emits non-secret, non-identifying facts, and that's a rule rather than a convention.** A revision string, a firmware version, and a calibration ID are safe to publish; an endpoint URL or an instrument serial can identify an institution on its own, so a probe emits a *hash* of one instead of the value — which is what makes `provenance.apparatus` publishable as-is and is why [`study add`](#what-study-add-redacts) has nothing to redact from it. Credentials never appear, for the same reason [they never appear anywhere else](#secrets--credentials).
 
-**It runs at `validate`, at run start, and before every execution.** At `validate` because an unreachable apparatus or a missing fact is worth learning before you spend the run — the same argument that puts unit resolution there. Before every execution because that is the only placement that catches a revision changing *during* a long run, which is when it actually happens:
+**It runs at `dry-run`, at run start, and before every execution — never at `validate`.** An unreachable apparatus or a missing fact is worth learning before you spend the run, which is why it isn't deferred to `run`; and before every execution is the only placement that catches a revision changing *during* a long run, which is when it actually happens. But `validate` is the cheap command you invoke in a loop while editing YAML, and a probe is an authenticated request to something metered by somebody else.
+
+So the split follows what is answerable without a call. **`validate` checks that the named probe is registered by an installed plugin — the only apparatus question that needs no request.** Everything about what a probe *yields* takes calling it, so `dry-run` is where it runs, and where core checks that every fact in `apparatus_facts` came back and that no returned value matches a credential.
+
+That line is worth stating in general, because unit resolution sits on the other side of it: **`validate` may read your config and your input, and may not reach anything outside the machine.** A resolver walking a local archive costs you time on your own disk; a probe costs you quota, money, and possibly a rate limit on a service someone else operates. Both are "pre-flight," and only one of them is free to repeat.
 
 ```yaml
 provenance:
@@ -1611,7 +1614,41 @@ results:
       declared_in: parameters_hash sha256:1a2b...      # the config that predicted it
       observed: {delta: 0.026, ci95: [0.017, 0.035]}
       supported: true
+      verdict_rests_on: computed                       # core derived the number it compared
 ```
+
+### A hypothesis may name a summary metric
+
+The quantity a protocol actually pre-registers is often the model-based one: a mixed model's adjusted effect, an agreement bound, a contrast no single axis expresses. Those are [`Estimate`s returned by a `summary` step](#estimate-carries-your-interval-without-core-claiming-it), and a hypothesis can name one. It takes no `compare`, because a summary metric is one value per run rather than a contrast between conditions. (The example below is a repeatability study rather than this document's worked pipeline, whose one hypothesis is the condition contrast above.)
+
+```yaml
+hypotheses:
+  - id: h2
+    kind: confirmatory
+    statement: "Within-block safe agreement exceeds 0.99."
+    metric: step04_agreement.s_within_lower_bound      # a summary Estimate
+    direction: greater
+    threshold: 0.99
+    # no `compare`: there are no conditions to contrast
+```
+
+```yaml
+results:
+  hypotheses:
+    - id: h2
+      kind: confirmatory
+      declared_in: parameters_hash sha256:1a2b...
+      observed: {value: 0.9931, ci95: [0.9931, 1.0],
+                 method: "one-sided BCa, 10000 patient-cluster draws, seed 20260722"}
+      supported: true
+      verdict_rests_on: reported                       # THE STEP derived the number
+```
+
+**`verdict_rests_on` is the whole of what changes, and it keeps the [refusal](#estimate-carries-your-interval-without-core-claiming-it) intact.** Comparing 0.9931 against 0.99 is arithmetic, and core is willing to do arithmetic on any number in front of it. What it will not do is imply that it derived the number, so the verdict records which of the two it was. A `supported: true` resting on `reported` is a claim about your statistic; the same field resting on `computed` is a claim about core's.
+
+That distinction is why extending pre-registration here costs nothing. Both of the things pre-registration actually buys — the confirmatory/exploratory split, and a `parameters_hash` that catches a hypothesis added after the fact — are properties of *when the declaration was written*, not of who computed the observation. Withholding them from summary metrics would have meant the quantities most worth registering being the only ones that couldn't be.
+
+`validate` checks the two forms don't cross: a hypothesis naming a condition metric needs `compare`, one naming a summary metric may not have it.
 
 Both of these are cheap, because the machinery already exists:
 
@@ -1664,7 +1701,7 @@ runs:
   ablation:    {file: ablation.run.yaml,    run_id: run_2026-08-07T16-40-12Z_8e21ab3}
 ```
 
-The bundle is self-contained and device-independent: every reference is relative, `run_id` is a label rather than a locator, and nothing resolves through the original output storage. Zip it, attach it as supplementary material, or deposit it and cite the DOI. `publishable report study.yaml` renders it offline, cross-checking that runs claiming the same code really share a `code_hash`, flagging any [draft](#draft-runs) runs, and collecting every declared [hypothesis](#pre-registration) into one table.
+The bundle is self-contained and device-independent: every reference is relative, `run_id` is a label rather than a locator, and nothing resolves through the original output storage. Zip it, attach it as supplementary material, or deposit it and cite the DOI. `publishable report study.yaml` renders it offline, cross-checking that runs claiming the same code really share a `code_hash` — and the same for [`provenance.apparatus.hash`](#the-apparatus-core-can-only-observe), since "these runs used one deployment" is a claim a paper makes and a bundle can check — flagging any [draft](#draft-runs) runs, and collecting every declared [hypothesis](#pre-registration) into one table.
 
 Because the bundle carries `code.commit`, a reader goes from paper → study → the exact repo state, and from any included run record straight to [`publishable reproduce`](#reproducing-on-another-device). The chain is complete without the repo knowing any of it happened.
 
@@ -1709,13 +1746,13 @@ These take paths and nothing else.
 
 | Command | Argument | Does |
 |---|---|---|
-| `publishable validate` | config path | Every check in [Validation](#validation). Touches nothing |
-| `publishable dry-run` | config path | Validates, expands the sweep and repeat plan, builds the input manifest, prints every artifact path that *would* be written. Creates nothing |
+| `publishable validate` | config path | Every check in [Validation](#validation). Reads your config and your input; creates nothing and reaches nothing off the machine |
+| `publishable dry-run` | config path | Validates, expands the sweep and repeat plan, builds the input manifest, [probes the apparatus](#the-apparatus-core-can-only-observe), prints every artifact path that *would* be written. Creates nothing |
 | `publishable run` | config path | The real thing: requires a clean `src/**`, creates `run_<id>/`, captures provenance, executes conditions × repeats × steps, writes `run.yaml` |
 | `publishable draft` | config path | Same as `run`, but permits a dirty `src/**`. Recorded as `draft: true` — see [Draft runs](#draft-runs) |
 | `publishable resume` | run directory or run.yaml | Continues an interrupted run in place, skipping completed (condition, repeat, step) triples |
 | `publishable report` | run.yaml or study.yaml path | Renders Markdown/HTML from one run, or from a whole [study](#studies-what-a-paper-reports) |
-| `publishable freeze` | run directory | Re-captures environment mid-run without executing anything |
+| `publishable freeze` | run directory | Re-captures the environment and re-probes the [apparatus](#the-apparatus-core-can-only-observe) mid-run, without executing anything |
 | `publishable reproduce` | run.yaml or config path | Clones the recorded commit into a new checkout and prepares it to run — see [Reproducing on another device](#reproducing-on-another-device) |
 | `publishable diff` | two config or run paths | Reports each hash as identical or differing, then the specific parameter deltas |
 | `publishable docs` | *(none)* | Regenerates every `publishable:begin/end` managed region |
@@ -2000,7 +2037,7 @@ In order, it:
 2. Clones into a directory derived from the repository name and run ID (`my-study_run_2026-08-06T14-02-11Z_8e21ab3/`), and checks out that exact commit as a detached HEAD. *The only git operation, and you didn't type it.* No `--into`: the destination is derived, so it can't collide with an existing checkout and doesn't need naming.
 3. Verifies the checked-out tree's `code_hash` matches the recorded one — catching a rewritten or force-pushed history.
 4. Runs `uv sync --locked`, failing loudly on lockfile mismatch. Plugin versions come along automatically.
-5. Writes the embedded config to `configs/<name>/config.yaml`, with `data.input_dir` and `data.output_dir` blanked and marked `# REQUIRED: set to your local copy`.
+5. Writes the embedded config to `configs/<name>/config.yaml`, with `data.input_dir` and `data.output_dir` blanked and marked `# REQUIRED: set to your local copy`, and writes the recorded [apparatus](#the-apparatus-core-can-only-observe) facts beside it as the expectation the first probe will be checked against.
 6. Copies `.env.example` and lists the `required_env` variables that need values.
 7. Prints exactly what's left to do, then stops.
 
@@ -2020,6 +2057,18 @@ Then:
 `reproduce` stops rather than running because both remaining inputs need a person. Core has no mechanism to transmit a secret, and it won't fetch your data — moving governed data goes through whatever protocol governs it. Given that, `--input-dir` and `--output-dir` would only duplicate what the config already expresses, so the config stays the single description of the run.
 
 Verification of the input data still happens: `run` builds the manifest from whatever `input_dir` you set and compares it to the recorded one, reporting a data mismatch as loudly as a lockfile mismatch. Pointing at the wrong data is caught, just at run time rather than at clone time.
+
+**The apparatus is verified the same way, and it has to be.** A reproduction that ran the recorded code, in the recorded environment, over the recorded data, through a *different* model revision or a recalibrated instrument is not a reproduction — and it is the one substitution that leaves every hash matching. So the first probe compares against the facts `reproduce` wrote out and fails on any difference, at the same volume as a lockfile mismatch.
+
+The worked example above has no apparatus, because template `generic` declares no probe. A run that does gets a third thing to arrange, listed alongside the other two:
+
+```
+This run measured through an apparatus. Reproducing it needs:
+  llm_deployment   model_revision  gpt-5.5-2026-06-11
+                   api_version     2026-05-01
+```
+
+It's named in the output rather than only recorded because, unlike a path or a credential, this may take a person days to arrange — or be impossible once a provider has retired a revision. When it *is* impossible, the honest move is a new run whose record says so, not a matching one with a footnote.
 
 ---
 
@@ -2047,7 +2096,8 @@ publishable/
 │   ├── units.py               # unit resolution (table/glob/resolver registry), keys, attributes, partitioning
 │   ├── scope.py               # step scope resolution, execution plan, read-direction checks
 │   ├── lineage.py             # upstream run recording and chain verification
-│   ├── hypotheses.py          # pre-registered hypothesis evaluation, confirmatory/exploratory
+│   ├── hypotheses.py          # pre-registered hypothesis evaluation, confirmatory/exploratory,
+│   │                          #     computed vs. reported verdict provenance
 │   ├── study.py               # study new/add: bundle assembly, redaction, cross-run report
 │   ├── replication.py         # repeat kinds (seed/batch/fold), nesting, seed derivation
 │   ├── stats.py               # unit-table inference, resample/null_test, deltas, effect sizes

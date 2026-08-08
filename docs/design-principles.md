@@ -149,7 +149,7 @@ Each is complete and self-describing, and still takes exactly one path to run. I
 | The three hashes, run identity, step scope, lineage, units, append-only + atomic artifacts | Naming conventions (`naming_pattern`, `field_convention`, `default_repeats`) |
 | `BaseExperiment` / `BaseStep` / `BaseTemplate` / `Param` / `Unit` / `Apparatus` / `Estimate` / `io` | Concrete templates, unit resolvers, apparatus probes, reusable `BaseStep` subclasses |
 | Lifecycle: `new`, `generate`, `validate`, `dry-run`, `run`, `draft`, `resume`, `report`, `diff`, `freeze`, `reproduce`, `study` | Domain dependencies (an API client, an instrument driver, a solver) |
-| The secrets mechanism (`credential_env_var` + dotenv loading) | Which credentials an experiment type needs |
+| The secrets mechanism (`credential_env_var` + dotenv loading) | Which credentials an experiment type needs, and which apparatus facts must be captured |
 
 Core ships one template, `generic`. Anything domain-shaped is a plugin; the reference LLM plugin is documented in `publishable-llm`.
 
