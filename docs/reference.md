@@ -179,7 +179,7 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Ablation targets | `sweep.ablate.remove[0]` is `analysis.min_samples` (int); `remove` needs a boolean or nullable parameter — use `override` |
 | Ablation needs a baseline | `sweep.ablate` is declared but `sweep.baseline` is not — there is nothing to ablate from |
 | Ablation doesn't compose with a parameter axis | `sweep.ablate` cannot be combined with `grid`, `paired`, or `sample`; one change at a time and a second parameter axis are contradictory. `groups` is permitted — it varies no parameter |
-| Ablation baseline isn't a group level | `sweep.baseline` fixes `cohort: derivation` while `ablate` is declared; each level gets its own baseline condition, so the arms can't have one designated between them |
+| Ablation baseline isn't a group level | `sweep.baseline` fixes `cohort: derivation` while `ablate` is declared; each cell gets its own baseline condition, so the arms can't have one designated between them |
 | Sample ranges | `sweep.sample.ranges.analysis.confidence` upper bound 1.4 violates the parameter's `lt=1` |
 | Baseline is a valid condition | `sweep.baseline` sets `analysis.method: pearsonn` |
 | Repeat kind coherence | `{kind: bootstrap}` is not a repeat kind — declare `statistics.resample` instead |
@@ -201,16 +201,20 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Holdout is resolvable | `holdout.method: random` needs `frac` in (0, 1); `by_attribute` needs `from`, and column `split` has values `{train, test, dev}`, expected exactly two |
 | Holdout strata survive clustering | `holdout.stratify_by: label` with `cluster_by: animal_id`, but `label` varies within animal `A3` |
 | Biological replicates are units | `{kind: biological}` is not a repeat kind — independent samples are rows in the unit table |
-| Allocation needs arms | `allocation: between` but no `sweep.groups` axis declares what the arms are |
+| Allocation needs arms | `allocation: between` but `sweep.groups` declares no axis to say what the arms are |
+| Every axis is assigned | `sweep.groups` declares `sex` but `data.units.assign` has no `sex` block |
+| Every assignment names an axis | `assign.cohort` names no axis in `sweep.groups` |
+| Axis names are distinct | `sweep.groups` declares `arm` twice — a condition can't hold two values of one axis |
+| Stratification is forward-only | `assign.sex.stratify_by: [arm]`, but `arm` is declared after `sex`; an axis may only stratify on one already resolved |
+| Cells are populated | `sex × arm` over 40 units gives cells of 10; below `limits.min_units_per_arm` (warning) |
 | Arms need allocation | `sweep.groups` declares arms but `allocation` is `within`, which says every unit appears in every condition — a unit can't be in one arm and in all of them |
-| Ratio names levels | `assign.ratio` has key `00_control`; expected one entry per `sweep.groups.levels` value (`control`, `treatment`) |
-| Block size fills the arms | `assign.block_size: 3` with `ratio: {control: 1, treatment: 1}` — a block must be a whole multiple of the ratio's sum, or it can't hold each arm's share |
-| Attribute assignment resolves | `assign.method: by_attribute` needs `assign.from`; column `arm` has values `{a, b}`, expected the declared levels |
-| Allocation is coherent | `allocation: between` over 2 arms and 12 units gives arms of 6; below `limits.min_units_per_arm` (warning) |
-| Allocation strata exist | `assign.stratify_by: [site]` but `site` is not in `data.units.attributes` |
+| Ratio names levels | `assign.arm.ratio` has key `f`; expected one entry per level of axis `arm` (`control`, `treatment`) |
+| Block size fills the arms | `assign.arm.block_size: 3` with `ratio: {control: 1, treatment: 1}` — a block must be a whole multiple of the ratio's sum, or it can't hold each arm's share |
+| Attribute assignment resolves | `assign.arm.method: by_attribute` reads column `arm` — defaulted from the axis name — whose values are `{a, b}`, not the declared levels |
+| Allocation is coherent | `allocation: between` over 2 arms and 12 units gives arms of 6; below `limits.min_units_per_arm` (warning) || Allocation strata exist | `assign.arm.stratify_by: [site]` but `site` is neither a unit attribute nor a group axis |
 | Clustering looks undeclared | `site` has 6 distinct values across 240 units but `cluster_by` is unset (warning) |
 | Folds fit inside the clusters | `{kind: fold, k: 10}` with `cluster_by: animal_id` over 6 animals — clusters are indivisible, so `k` may not exceed the cluster count |
-| Folds fit inside the arms | `{kind: fold, k: 10}` with `allocation: between` over arms of 8 and 232 — folds are drawn within each arm, so `k` may not exceed the smallest arm's unit count, or its cluster count when `cluster_by` is declared |
+| Folds fit inside the cells | `{kind: fold, k: 10}` with `allocation: between` over cells of 8 and 232 — folds are drawn within each cell, so `k` may not exceed the smallest cell's unit count, or its cluster count when `cluster_by` is declared |
 | Fold count is legal | `{kind: fold, k: 1}` — `k` must be an integer ≥ 2, or `all` for leave-one-out |
 | Fold strata survive clustering | `{kind: fold, stratify_by: label}` with `cluster_by: animal_id`, but `label` varies within animal `A3` — a stratum can't be balanced across a split that can't divide the cluster |
 | Baseline leaves contrasts confounded | `sweep.baseline` fixes `arm: control` but not `analysis.method`, so 2 of 3 contrasts cross both a group and a parameter axis and are reported `confounded: true` (warning) |
