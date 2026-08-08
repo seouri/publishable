@@ -2193,6 +2193,8 @@ class Step(BaseStep):
 
 Trivial, but it means `publishable run` succeeds immediately after scaffolding. You get a real `run.yaml`, a real artifact tree, and a real set of provenance hashes before writing a line of your own code — so the shape of the whole loop is visible while you're still deciding whether to adopt it. Replace the body when you're ready; the `TODO` is the only thing that needs to change.
 
+**It's generated rather than imported from core, and that's the point.** Core could export this step and let a config name it, which would spare the generating entirely — but [`code_hash` covers `src/**`](#three-hashes), so an imported pipeline is a pipeline outside the hash that claims to cover it. Writing the file into your repo is what keeps the analysis under your commit. See [Core vs. plugin](design-principles.md#core-vs-plugin) for where that line falls and what may still be added on core's side of it.
+
 ---
 
 ## Plugins: where domain knowledge lives

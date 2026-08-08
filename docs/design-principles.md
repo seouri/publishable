@@ -160,6 +160,10 @@ A good test of whether something belongs in core: would it be identical for a we
 
 That's also where the core/plugin line falls. *What* is required of a unit is identical for an assay, a sweep, and a benchmark, so core owns it. *How* units are found is not — a CSV index is the same everywhere, but a DICOM archive, a plate layout, and a sharded benchmark each need domain code to walk them, so that's a plugin's [unit resolver](reference.md#where-units-come-from). Core never prescribes an input layout, because there is no layout the three fields share.
 
+**Core generates the standard pipeline rather than shipping one to import.** `generate experiment` writes a first step that already runs — it resolves the units, records them, and returns a count — so `publishable run` succeeds before you have written a line (see [The starter step runs](reference.md#the-starter-step-runs)). The obvious economy would be to skip the generating: have core export that step, let a config name it, and an experiment whose analysis is entirely tabular would need no `src/` at all. That's refused for the reason the hashes are split. [`code_hash` covers `src/**`](reference.md#three-hashes), so anything core hands you by import sits outside it, and two runs with an identical `code_hash` could then compute different things because core moved underneath them. `provenance.publishable_version` can't repair that — it's a compatibility note, deliberately never conflated with the code that ran your experiment. Generating leaves the analysis in your repo, under your commit, inside the hash it's claimed to be covered by.
+
+The line this draws is narrower than "all analysis lives in `src/**`," because a template's [`aggregate`](reference.md#templates-where-parameters-are-defined) is core's or a plugin's and sits outside it too: **what produced the numbers belongs in the hash; what summarizes an already-recorded table need not.** That's also the test for what may be added — a richer `aggregate` is a legitimate core addition, and a core step that decides what gets measured is not.
+
 ---
 
 ## Greenfield only
