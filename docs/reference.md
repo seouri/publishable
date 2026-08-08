@@ -118,6 +118,14 @@ statistics:
                                          # metrics too; derived metrics resample either way
   null_test: null                        # e.g. {method: permutation, n: 5000, shuffle: label}
 
+limits:
+  # ---- Thresholds core checks against. All warn except max_failed_fraction, which fails. ----
+  max_executions: 500              # `validate` warns above this many conditions × repeats
+  max_failed_fraction: 0.2         # `run` fails the run when run-level unit failures exceed it
+  min_units_per_arm: 20            # `validate` warns for a smaller arm under allocation: between
+  min_clusters: 10                 # `validate` warns when `resample` would draw fewer than this
+  min_reported_n: 10               # `study add` prompts on any metric reported over fewer
+
 hypotheses:
   # ---- Optional, but written BEFORE the run — which is what makes it meaningful. ----
   - id: h1
@@ -174,11 +182,11 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Repeat kind coherence | `{kind: bootstrap}` is not a repeat kind — declare `statistics.resample` instead |
 | Null test coherence | `statistics.null_test` requires `shuffle` to name a unit attribute |
 | Shuffle level is unambiguous | `null_test.shuffle: status` varies within `match_set` `M07` but is constant within `M12`, so neither a within-cluster nor a whole-cluster null applies |
-| Clusters enough to resample | `statistics.resample` with `cluster_by: animal_id` over 4 animals bootstraps 4 draws; below the configured minimum (warning) |
+| Clusters enough to resample | `statistics.resample` with `cluster_by: animal_id` over 4 animals bootstraps 4 draws; below `limits.min_clusters` (warning) |
 | Technical replicates | `{kind: technical}` is not a repeat kind — declare `data.units.measurements` instead |
 | Collapse rule fits the column | `measurements.collapse: mean` over `site`, which is a string — use `first` or `mode`, or a per-column map |
-| Grid size sane | 6 conditions × 10 folds × 3 seeds = 180 executions exceeds the warning threshold |
-| Leave-one-out is affordable | `{kind: fold, k: all}` over 240 units × 3 conditions = 720 executions exceeds the warning threshold |
+| Grid size sane | 6 conditions × 10 folds × 3 seeds = 180 executions exceeds `limits.max_executions` |
+| Leave-one-out is affordable | `{kind: fold, k: all}` over 240 units × 3 conditions = 720 executions exceeds `limits.max_executions` |
 | Credentials present | `INSTRUMENT_API_TOKEN` is not set in `.env` |
 | Data outside repo | `output_dir` resolves inside the git repository |
 | Manifest readable | `input_dir` is unreadable or empty |
@@ -194,7 +202,7 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Arms need allocation | `sweep.groups` declares arms but `allocation` is `within`, which says every unit appears in every condition — a unit can't be in one arm and in all of them |
 | Ratio names levels | `assign.ratio` has key `00_control`; expected one entry per `sweep.groups.levels` value (`control`, `treatment`) |
 | Attribute assignment resolves | `assign.method: by_attribute` needs `assign.from`; column `arm` has values `{a, b}`, expected the declared levels |
-| Allocation is coherent | `allocation: between` over 2 arms and 12 units gives arms of 6; below the configured minimum (warning) |
+| Allocation is coherent | `allocation: between` over 2 arms and 12 units gives arms of 6; below `limits.min_units_per_arm` (warning) |
 | Allocation strata exist | `assign.stratify_by: [site]` but `site` is not in `data.units.attributes` |
 | Clustering looks undeclared | `site` has 6 distinct values across 240 units but `cluster_by` is unset (warning) |
 | Folds fit inside the clusters | `{kind: fold, k: 10}` with `cluster_by: animal_id` over 6 animals — clusters are indivisible, so `k` may not exceed the cluster count |
@@ -210,6 +218,8 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Hypothesis has an inference base | `hypotheses[0].metric` `step03_analyze.r` is `basis: repeats` — no unit table and no template `aggregate`, so it can be reported but not tested (warning) |
 
 The unknown-key check matters more than it looks: a mistyped key in a hand-edited YAML file is otherwise silently ignored, and the run proceeds with a default while you believe you changed something. Since `init` materializes every valid key, any key not in the spec is a typo by construction.
+
+**Every threshold in that table lives in `limits`**, not in a flag, an environment variable, or a core default nobody can see. A threshold is a parameter of the run like any other: it decides whether the run is allowed to proceed, or whether a reader is warned about the number they're looking at, and a value with that much authority belongs in the file being hashed rather than in the tool's source. `init` writes the defaults; changing one is an ordinary edit, and it moves `parameters_hash` along with everything else — so two runs that disagreed about what counted as too much attrition can be told apart. This is [Everything is in the file](design-principles.md#everything-is-in-the-file) applied to core's own knobs, which would otherwise be the one set of parameters living outside it.
 
 Two things deliberately absent from that table are checks that need a run to have happened: the unit failure rate is enforced by `run` as it goes, and lockfile drift is checked by `resume` against the run it's resuming. `validate` takes a config path, so neither is a question it could answer.
 
@@ -882,7 +892,7 @@ r:
   method: percentile_over_units
 ```
 
-The three-part `n` closes a reporting gap that otherwise goes unnoticed: when 12 of 240 units error out, a bare `n: 240` is wrong and a bare `n: 228` silently hides attrition. All three numbers are recorded — joined by a fourth, `clusters`, whenever [`cluster_by`](#clustered-units) makes the cluster the inferential draw — `report` shows the completion rate, and `run` fails the whole run when failures exceed a configured fraction — because at some level of dropout the complete-case result stops being interpretable, and finding that out after the run is worse than not having spent it.
+The three-part `n` closes a reporting gap that otherwise goes unnoticed: when 12 of 240 units error out, a bare `n: 240` is wrong and a bare `n: 228` silently hides attrition. All three numbers are recorded — joined by a fourth, `clusters`, whenever [`cluster_by`](#clustered-units) makes the cluster the inferential draw — `report` shows the completion rate, and `run` fails the whole run when failures exceed `limits.max_failed_fraction` — because at some level of dropout the complete-case result stops being interpretable, and finding that out after the run is worse than not having spent it.
 
 **How core knows a unit failed** is worth stating, because core never inspects the body of a step. It counts: `resolved` is how many units that execution was *given*, `completed` is how many distinct *unit* keys reached `io.record` in it — measurements of one unit collapse before they are counted — and `failed` is the difference. That's an *effect*, which is the only thing core checks — consistent with [greenfield only](design-principles.md#greenfield-only). Two consequences follow. A step that swallows an exception and moves to the next unit is recorded as a failure anyway, because the row is missing; and a step that raises out of its own loop aborts the execution, so the repeat is marked `failed` in `execution` rather than reported as complete with partial units. A step that records nothing at all has `completed: 0`, which is a loud failure rather than a silent `n` of zero.
 
@@ -1155,7 +1165,7 @@ statistics: basis units (n=240 resolved); r derived by template aggregate()
 would write 64 artifacts under /secure/results/cohort-pilot/run_.../
 ```
 
-Grid sizes multiply quietly, and nested repeats multiply on top of them. `validate` warns past a configurable execution count, and `dry-run` prints the full expansion, because "6 conditions × 10 folds × 3 seeds" is easy to write and slow to discover.
+Grid sizes multiply quietly, and nested repeats multiply on top of them. `validate` warns past `limits.max_executions`, and `dry-run` prints the full expansion, because "6 conditions × 10 folds × 3 seeds" is easy to write and slow to discover.
 
 ---
 
@@ -1301,7 +1311,7 @@ Each is replaced with a marker recording that a value existed and was removed, s
 
 None of this disturbs verification: `parameters_hash` [never covered the path fields](#three-hashes), and `code_hash` covers `src/**` only.
 
-**One thing redaction can't do is judge your metrics.** Aggregates are usually safe, but a per-subgroup result over a handful of units can be disclosive in ways no automatic rule catches. `study add` prints any reported metric whose `n.completed` falls below a configurable threshold — or, for a [`basis: repeats`](#the-unit-table-is-the-inference-base) metric, its repeat count — and asks you to confirm — a prompt for your judgment, not a guarantee.
+**One thing redaction can't do is judge your metrics.** Aggregates are usually safe, but a per-subgroup result over a handful of units can be disclosive in ways no automatic rule catches. `study add` prints any reported metric whose `n.completed` falls below `limits.min_reported_n` — or, for a [`basis: repeats`](#the-unit-table-is-the-inference-base) metric, its repeat count — and asks you to confirm — a prompt for your judgment, not a guarantee.
 
 ---
 
