@@ -486,7 +486,7 @@ Getting this wrong is not a subtle error. Analyzing a between-subjects study as 
 
 So in "each arm analyzed three ways" ([`groups × grid`](#expansion-modes)), control-pearson vs. control-spearman is paired — the same patients scored two ways, and pairing is what cancels the between-patient variance — while control-pearson vs. treatment-pearson is unpaired. Deriving one answer for the whole run would report the first as unpaired and throw that cancellation away, which is the same class of error as the inflation above, just in the conservative direction. Each contrast records its own `paired: true|false` in `vs_baseline`.
 
-The last row is the one to design around rather than rely on. A contrast crossing the group axis *and* a parameter axis differs in two places, so its delta mixes an arm effect with a parameter effect and no amount of correct pairing separates them — that's the [factorial main-effects problem](experimental-designs.md#what-core-will-not-do-for-you), and it's why such a contrast is marked rather than merely reported:
+The last row is the one to design around rather than rely on. A contrast crossing two axes at once — two group axes, or a group axis and a parameter axis — differs in two places, so its delta mixes the two effects and no amount of correct pairing separates them — that's the [factorial main-effects problem](experimental-designs.md#what-core-will-not-do-for-you), and it's why such a contrast is marked rather than merely reported:
 
 ```yaml
 vs_baseline:                                   # 03_arm=treatment__method=spearman
@@ -496,7 +496,7 @@ vs_baseline:                                   # 03_arm=treatment__method=spearm
         ci95: [0.012, 0.070]}
 ```
 
-Designate the baseline on the group axis (`{arm: control, analysis.method: pearson}`) and the single-axis contrasts are the interpretable ones.
+Designate the baseline on every group axis (`{arm: control, analysis.method: pearson}`) and the single-axis contrasts are the interpretable ones.
 
 ### A fixed holdout split
 
@@ -844,7 +844,7 @@ sweep:
 
 The baseline is condition `00`, and `results.conditions[i].vs_baseline` carries the difference in each numeric metric, with a standardized effect size when the metric is a per-unit mean. Declaring one is optional but recommended: "the treated arm scored 0.12 higher (Cohen's d = 0.4)" is the sentence a paper needs, and it can't be produced from an unlabeled set of peers.
 
-**With a group axis present, whether there is one baseline or one per arm follows from whether the baseline names a level.** There is no third possibility, and neither row is a default the other overrides:
+**With group axes present, how many baseline conditions there are follows from which of their levels the baseline names.** Three cases, one rule, and none of them a default the others override:
 
 | `sweep.baseline` | Baseline conditions | Each `vs_baseline` targets |
 |---|---|---|
@@ -1025,7 +1025,7 @@ Two things this buys:
 - **Correct statistics by construction.** Averaging across folds and averaging across seeds are different collapses, because a unit appears once per fold sweep and every time under a seed. Because the kind is declared, core picks the right one instead of flattening both.
 - **Nesting.** A list expresses layered repeats — seeds within folds — which a single repeat count could not. Repeats compose outer-to-inner, so the example above is 30 executions per condition. This is repeated cross-validation, not nested: an inner loop that *selects* a setting for the outer one to evaluate is [adaptive](design-principles.md#what-core-does-not-promise) and belongs inside a step.
 
-Comparison type is derived from [`data.units.allocation`](#units-the-thing-being-measured) and from which axes a contrast crosses, rather than declared here: two conditions differing only on parameter axes were evaluated on the same units, so that contrast is paired *unit by unit*; two conditions differing on the `groups` axis are independent samples, so it's unpaired. Deriving it removes the possibility of a config that declares `paired` over a design that isn't, and deriving it per contrast rather than per run is what keeps a composed `groups × grid` design from reporting its paired contrasts as unpaired — see [Allocation](#allocation-within-subjects-or-between-subjects) for the full table. Pairing is over units, never over repeats — matching seed17 against seed17 would cancel RNG variation, which is not the variation a comparison needs to account for.
+Comparison type is derived from [`data.units.allocation`](#units-the-thing-being-measured) and from which axes a contrast crosses, rather than declared here: two conditions differing only on parameter axes were evaluated on the same units, so that contrast is paired *unit by unit*; two conditions differing on any `groups` axis are independent samples, so it's unpaired. Deriving it removes the possibility of a config that declares `paired` over a design that isn't, and deriving it per contrast rather than per run is what keeps a composed `groups × grid` design from reporting its paired contrasts as unpaired — see [Allocation](#allocation-within-subjects-or-between-subjects) for the full table. Pairing is over units, never over repeats — matching seed17 against seed17 would cancel RNG variation, which is not the variation a comparison needs to account for.
 
 `{kind: seed, n: 5}` with no explicit list derives seeds deterministically from the [design digest](#what-auto-derives-from); pass `seeds: [17, 42, ...]` for specific values. Either way the resolved list lands in `sweep.yaml`.
 
