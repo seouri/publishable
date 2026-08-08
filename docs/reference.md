@@ -492,7 +492,14 @@ execution_order:                         # realized, always recorded — the fac
   # …
 ```
 
-A `fold` level adds `partitions` — the unit keys in each fold's train and test side, and the realized fold sizes when [`cluster_by`](#clustered-units) makes them uneven. A `sample` sweep adds the drawn `values` per condition and the seed they came from. `order: randomized` adds the `order_seed` its shuffle used, beside the `execution_order` that shuffle produced — the seed so the plan is derivable, the order because [what happened is not a thing to re-derive](#resuming). Both are there so a reader never re-derives a design, and so `reproduce` regenerates the same one.
+A `fold` level adds `partitions` — the unit keys in each fold's train and test side, and the realized fold sizes when [`cluster_by`](#clustered-units) makes them uneven. A `sample` sweep adds the drawn `values` per condition and the seed they came from. `order: randomized` adds the `order_seed` its shuffle used, beside the `execution_order` that shuffle produced — the seed so the plan is derivable, the order because [what happened is not a thing to re-derive](#resuming):
+
+```yaml
+order: randomized
+order_seed: 4417029                      # absent under `as_declared`, which shuffles nothing
+```
+
+All of it is there so a reader never re-derives a design, and so `reproduce` regenerates the same one.
 
 ### `executions.jsonl` — what has happened so far
 
@@ -1346,6 +1353,14 @@ Both operate on `units.parquet`, resampling or relabelling it and recomputing th
 | An ordinary unit attribute | This condition's metric, against a world where the label carries no information | One per condition, beside that condition's estimate |
 | A [`groups`](#expansion-modes) axis attribute | That axis's contrast, against a world where its membership carries no information — permuted within cells of every *other* group axis, so a cross isn't destroyed | On the contrast, in `vs_baseline` |
 
+```yaml
+aggregated:                                    # shuffle names an ordinary attribute
+  step03_screen:
+    prob: {value: 0.71, basis: units, ci95: [0.66, 0.76],
+           p_value: 0.0004, p_value_corrected: 0.0028,
+           null_test: {method: permutation, n: 5000, shuffle: label}}
+```
+
 The second row isn't an exception to the first so much as its consequence. Permuting an attribute that *defines* the conditions moves units between them, so the quantity that changes under the null is the between-arm difference rather than any one arm's estimate — there is no within-condition permutation available, because the attribute is constant inside each condition by construction. That is also the test a parallel-arm trial and a [matched case-control](experimental-designs.md#matched-case-control) study are actually asking for, and it inherits the level rule below: within clusters when the attribute varies inside one, whole clusters when it doesn't.
 
 **A *parameter*-axis contrast stays out of reach.** Two conditions differing only on `analysis.method` were computed from the same units, so the null for their paired difference is a per-unit sign flip rather than a relabelling, and `shuffle` names an attribute, which can't express that. That contrast's evidence is its [interval and corrected interval](#sweeps-and-repeats), which is the form it's reported in anyway.
@@ -1962,7 +1977,7 @@ Two consequences worth knowing before they surprise you. **A `metadata`-only edi
 
 ### The apparatus core can only observe
 
-Code, environment, and input data are all pinned by something core controls: a tree hash, a lockfile, a content manifest. An experiment that measures through an **external apparatus** — a hosted model deployment, an instrument, a sequencer, a scoring service — depends on a fourth thing that core can neither install nor hash from disk. `uv.lock` pins the client; nothing so far pinned the server.
+Code, environment, and input data are all pinned by something core controls: [a hash over the code trees](#how-the-three-are-computed), a lockfile, a content manifest. An experiment that measures through an **external apparatus** — a hosted model deployment, an instrument, a sequencer, a scoring service — depends on a fourth thing that core can neither install nor hash from disk. `uv.lock` pins the client; nothing so far pinned the server.
 
 That gap is not a small one. For an LLM benchmark the deployment revision *is* the intervention; for a wet-lab assay the calibration run is what the numbers are traceable to. Leaving it out means a run record that pins everything except the part that moved.
 
