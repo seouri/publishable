@@ -178,6 +178,8 @@ replication:
 
 Core computes the partitions and records exact split membership, so the CV is reproducible rather than merely re-runnable. Aggregation is inner-to-outer: seeds within a fold, then folds across the condition.
 
+Leave-one-out is `k: all` — as many folds as there are units, or as there are clusters when `cluster_by` is declared. Spell it that way rather than as `k: 240`, which hard-codes a cohort size the config doesn't control and quietly stops meaning leave-one-out when a unit is added. Budget for it before declaring it: `k: all` over 240 units across 3 conditions is 720 executions.
+
 Each fold execution is handed only its test partition, so its `n` is over those units — a 10-fold run over 240 units reports `resolved: 24` per execution, not 24 completions against a cohort of 240. The condition's `n` returns to the full roster, because each unit is tested exactly once per fold sweep. See [reference.md § What isn't a repeat](reference.md#what-isnt-a-repeat) for the three levels `n` is reported at and which one carries the failure threshold.
 
 That's **repeated** cross-validation — 10 folds, each evaluated under 3 seeds. It is not nested cross-validation, and the difference is not cosmetic: in nested CV an inner loop runs *within each outer training split* and its result **selects** the setting the outer loop then evaluates. That's a condition chosen from results, which is [exactly what core refuses](design-principles.md#what-core-does-not-promise) — the config would no longer determine the run.

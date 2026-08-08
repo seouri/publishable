@@ -176,6 +176,7 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Clusters enough to resample | `statistics.resample` with `cluster_by: animal_id` over 4 animals bootstraps 4 draws; below the configured minimum (warning) |
 | Technical replicates | `{kind: technical}` is not a repeat kind — declare `data.units.measurements` instead |
 | Grid size sane | 6 conditions × 10 folds × 3 seeds = 180 executions exceeds the warning threshold |
+| Leave-one-out is affordable | `{kind: fold, k: all}` over 240 units × 3 conditions = 720 executions exceeds the warning threshold |
 | Credentials present | `INSTRUMENT_API_TOKEN` is not set in `.env` |
 | Data outside repo | `output_dir` resolves inside the git repository |
 | Manifest readable | `input_dir` is unreadable or empty |
@@ -194,6 +195,7 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Allocation strata exist | `assign.stratify_by: [site]` but `site` is not in `data.units.attributes` |
 | Clustering looks undeclared | `site` has 6 distinct values across 240 units but `cluster_by` is unset (warning) |
 | Folds fit inside the clusters | `{kind: fold, k: 10}` with `cluster_by: animal_id` over 6 animals — clusters are indivisible, so `k` may not exceed the cluster count |
+| Fold count is legal | `{kind: fold, k: 1}` — `k` must be an integer ≥ 2, or `all` for leave-one-out |
 | Fold strata survive clustering | `{kind: fold, stratify_by: label}` with `cluster_by: animal_id`, but `label` varies within animal `A3` — a stratum can't be balanced across a split that can't divide the cluster |
 | Baseline leaves contrasts confounded | `sweep.baseline` fixes `arm: control` but not `analysis.method`, so 2 of 3 contrasts cross both a group and a parameter axis and are reported `confounded: true` (warning) |
 | Correction declared for a family | 6 enumerated conditions × 3 metrics produce a family of 15 baseline comparisons with `statistics.correction: none` (warning). Not raised for a `sample`-only sweep, whose draws aren't a family |
@@ -772,9 +774,20 @@ The baseline is always condition `00`, and `results.conditions[i].vs_baseline` c
 | Kind | Varies | Aggregation core applies |
 |---|---|---|
 | `seed` | RNG state only | Averaged per unit; dispersion reported as `repeat_spread` |
-| `fold` | data partition (k-fold, stratified, leave-one-out; cluster-respecting when [`cluster_by`](#clustered-units) is declared) | Per-unit values concatenated across folds — each unit is tested once per fold sweep |
+| `fold` | data partition — k-fold, stratified, or leave-one-out via `k: all`; cluster-respecting when [`cluster_by`](#clustered-units) is declared | Per-unit values concatenated across folds — each unit is tested once per fold sweep |
 
-**Two kinds, because a repeat is an execution.** A repeat re-runs the pipeline, so the only things that can be a repeat are things that change what the pipeline computes: the RNG state, and which units it sees. Resampling, permutation, and technical replication all *look* like repeats and aren't — see [What isn't a repeat](#what-isnt-a-repeat).
+Each kind takes its own fields, and only these:
+
+| Kind | Fields |
+|---|---|
+| `seed` | `n` (how many), or `seeds: [17, 42, …]` for specific values |
+| `fold` | `k` — an integer ≥ 2, or `all` for leave-one-out — plus optional `stratify_by` |
+
+**`k: all` is how leave-one-out is spelled.** Writing `k: 240` would work arithmetically and is still the wrong thing to type: it hard-codes a count the config doesn't own, so the file silently stops meaning leave-one-out the moment the cohort gains a unit. `all` means "as many folds as there are things to leave out," and with [`cluster_by`](#clustered-units) declared that's the cluster count, making it leave-one-*cluster*-out — the only reading consistent with clusters being indivisible.
+
+Two things to expect from it. Each execution's test partition is a single unit, so `n: {resolved: 1, completed: 1}` per execution and a step's returned metrics are near-meaningless individually — the concatenated per-unit table is the whole point, and a metric that only exists as a step-returned scalar gets nothing useful out of leave-one-out. And the execution count is the unit count times everything else: 240 units × 3 conditions is 720 executions with 720 repeat directories, which is why `validate`'s [execution-count warning](#validation) and [`dry-run`](#before-you-spend-it) matter more here than anywhere else.
+
+**Two kinds, because a repeat is an execution.** A repeat re-runs the pipeline, so the only things that can be a repeat are things that change what the pipeline computes: the RNG state, and which units it sees. Resampling, permutation, technical replication, and a fixed holdout all *look* like repeats and aren't — see [What isn't a repeat](#what-isnt-a-repeat).
 
 **No repeat kind sets `n`.** `n` counts units, always — see [The unit table is the inference base](#the-unit-table-is-the-inference-base). Repeats say how many times the pipeline ran; they never say how many things the claim generalizes over, and conflating the two is how a five-seed run comes to report an interval that looks like evidence about a cohort.
 
