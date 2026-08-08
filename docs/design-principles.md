@@ -148,7 +148,7 @@ Each is complete and self-describing, and still takes exactly one path to run. I
 | Materializing configs from a spec; value-level validation | The spec: types, defaults, ranges, choices, help text |
 | Sweep expansion (`grid`/`paired`/`ablate`/`sample`/`groups`/`baseline`), repeat kinds, seed derivation, kind-aware statistics | Field-appropriate sweep and repeat defaults |
 | The three hashes, run identity, step scope, lineage, units, append-only + atomic artifacts | Naming conventions (`naming_pattern`, `field_convention`, `default_repeats`) |
-| `BaseExperiment` / `BaseStep` / `BaseTemplate` / `BaseReport` / `Param` / `Unit` / `Apparatus` / `Estimate` / `io` | Concrete templates, unit resolvers, apparatus probes, reusable `BaseStep` subclasses |
+| `BaseExperiment` / `BaseStep` / `BaseTemplate` / `BaseReport` / `Param` / `Unit` / `Apparatus` / `Estimate` / `io` | Concrete templates, unit resolvers, apparatus probes, artifact writers for domain formats, reusable `BaseStep` subclasses |
 | Lifecycle: `new`, `generate`, `validate`, `dry-run`, `run`, `draft`, `resume`, `report`, `diff`, `freeze`, `reproduce`, `study` | Domain dependencies (an API client, an instrument driver, a solver) |
 | The secrets mechanism (`credential_env_var` + dotenv loading) | Which credentials an experiment type needs, and which apparatus facts must be captured |
 

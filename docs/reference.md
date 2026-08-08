@@ -135,7 +135,8 @@ statistics:
                                          #   percentile CIs for column metrics too; derived
                                          #   metrics resample either way
   null_test: null                        # e.g. {method: permutation, n: 5000, shuffle: label}
-  report_by: []                          # optional unit attributes to repeat every metric over,
+  report_by: []                          # optional unit attributes to repeat every aggregated
+                                         #   metric over — marginally, never crossed,
                                          #   e.g. [sex, site]. Strata, not design axes — they add
                                          #   no executions. See "Reporting strata"
 
@@ -273,6 +274,7 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Weighting looks undeclared | `sampling_weight` varies across units and looks like an inverse sampling probability, but `weight_by` is unset (warning) |
 | Resample strata exist | `statistics.resample.stratify_by` names `count_stratum`, which is not a unit attribute |
 | Correction declared for a family | 6 enumerated conditions × 3 metrics produce a family of 15 baseline comparisons with `statistics.correction: none` (warning). Not raised for a `sample`-only sweep, whose draws aren't a family |
+| Correction can be applied | `statistics.correction: fdr_bh`, but no comparison in the family will carry a p-value — `statistics.null_test` is undeclared, or its `shuffle` reaches none of them; Benjamini-Hochberg has nothing to adjust (warning) |
 | Hypothesis needs baseline | `hypotheses[0].compare.to: baseline` but `sweep.baseline` is not declared |
 | Hypothesis bound exists | `hypotheses[0].evaluate_on` is `ci95_lower`, but `data.units` is undeclared and template `generic` defines no `aggregate`, so no metric this run computes can carry an interval |
 | Hypothesis names a real contrast | `hypotheses[1].compare.contrast` is `invariance`, which `statistics.contrasts` does not declare |
@@ -393,7 +395,9 @@ results:                                       # scientific; see "Statistical re
               repeat_spread: {std: 0.014, n: 5, kind: seed}}
       vs_baseline:
         step03_analyze:
-          r: {delta: 0.026, basis: units, paired: true, ci95: [0.017, 0.035],
+          r: {delta: 0.026, basis: units, paired: true,
+              method: paired_percentile_over_units,
+              ci95: [0.017, 0.035],
               ci95_corrected: [0.017, 0.035],       # rank 2 of 2 under holm: α/(m−i+1) = α
               correction: holm, correction_level: 0.05,
               family_size: 2, family: {comparisons: 2, metrics: 1},
@@ -807,7 +811,8 @@ The last row is the one to design around rather than rely on. A contrast crossin
 ```yaml
 vs_baseline:                                   # 03_arm=treatment__method=spearman
   step03_analyze:
-    r: {delta: 0.041, paired: false, confounded: true,
+    r: {delta: 0.041, basis: units, paired: false, confounded: true,
+        method: unpaired_percentile_over_units,
         differs_on: [arm, analysis.method],    # two axes at once — not a main effect
         ci95: [0.012, 0.070]}
 ```
@@ -958,7 +963,7 @@ class CompareMethods(BaseStep):
 
 One ordered `steps` list expresses the whole pipeline, and core derives the execution plan from the declared scopes. A cross-condition comparison needs no separate list of its own — it's simply the outermost scope.
 
-Reading across scopes is directional and read-only: a narrower step reads wider ones via `io.read_upstream(step, name)` regardless of scope, and a `summary` step additionally gets `io.conditions` and `io.read_condition(condition, step, name)`. A wider step can never read a narrower one, because at the time it runs those executions haven't happened. Which step a call names is an argument rather than a declaration, so this is enforced where the call is made: `io.read_upstream` raises when the step it names is narrower than the caller, naming both scopes. Same effect check as the two below.
+Reading across scopes is directional and read-only: a narrower step reads wider ones via `io.read_upstream(step, name)` regardless of scope, and a `summary` step additionally gets `io.conditions` and `io.read_condition(condition, step, name, repeat=None)`, whose `repeat` is required when the step it names is repeat-scoped. A wider step can never read a narrower one, because at the time it runs those executions haven't happened. Which step a call names is an argument rather than a declaration, so this is enforced where the call is made: `io.read_upstream` raises when the step it names is narrower than the caller, naming both scopes. Same effect check as the two below.
 
 **A swept parameter is unreadable from the scopes where it has no value.** A `"run"`-scoped step that read `analysis.method` would produce output silently wrong for every condition but one, and a `"summary"`-scoped step that read it would be picking a value no single condition owns. Neither is something core can catch by reading the config: which parameters a step reads is a fact about its body. So core doesn't ask — it owns `cfg`, and at `"run"` and `"summary"` scope, reading a path that `sweep` varies raises, naming the path and the axis that varies it. Unswept paths read normally at every scope, which is most of what a wider step wants a parameter for.
 
@@ -1356,7 +1361,7 @@ Both operate on `units.parquet`, resampling or relabelling it and recomputing th
 ```yaml
 aggregated:                                    # shuffle names an ordinary attribute
   step03_screen:
-    prob: {value: 0.71, basis: units, ci95: [0.66, 0.76],
+    prob: {value: 0.71, basis: units, method: t_over_units, ci95: [0.66, 0.76],
            p_value: 0.0004, p_value_corrected: 0.0028,
            null_test: {method: permutation, n: 5000, shuffle: label}}
 ```
@@ -1484,7 +1489,8 @@ statistics:
 ```yaml
 vs_baseline:
   step03_analyze:
-    r: {delta: 0.026, ci95: [0.017, 0.035],
+    r: {delta: 0.026, basis: units, method: paired_percentile_over_units,
+        ci95: [0.017, 0.035],
         ci95_corrected: [0.013, 0.039], correction: holm,
         correction_level: 0.0033,                    # α/15 — rank 1 of this family
         family_size: 15, family: {comparisons: 5, metrics: 3}}
@@ -1496,10 +1502,14 @@ vs_baseline:
 |---|---|---|
 | `none` | absent | — |
 | `bonferroni` | The interval at α/m, for a family of size *m* | — |
-| `holm` (default) | The interval at α/(m−i+1), where *i* is this comparison's rank when the family is ordered by evidence | `p_value_corrected` when a [`null_test`](#what-isnt-a-repeat) supplied a p-value |
-| `fdr_bh` | **`null`** | `p_value_corrected`, Benjamini-Hochberg adjusted |
+| `holm` (default) | The interval at α/(m−i+1), where *i* is this comparison's rank in the family — see below | `p_value_corrected` when a [`null_test`](#what-isnt-a-repeat) supplied a p-value |
+| `fdr_bh` | **`null`** | `p_value_corrected`, Benjamini-Hochberg adjusted — so it needs p-values; see below |
 
 Holm's rank-implied level is the conventional companion to the procedure rather than a strictly simultaneous band, and calling it that is the honest description: it is what the step-down procedure tests each comparison at, so an interval excluding the threshold agrees with the procedure's verdict. It also means **the weakest comparison in a family is corrected by nothing** — at rank *m* the level is α itself — which the worked example shows: kendall's contrast carries far the stronger evidence, so spearman's is rank 2 of 2 and its corrected interval is its raw one. That is Holm behaving correctly, not a correction that failed to apply, and it is the property that makes Holm uniformly more powerful than Bonferroni. Benjamini-Hochberg has no interval that means anything of the kind — controlling a false discovery *rate* is a statement about a set, not a bound on any one comparison — so core reports the adjusted p-value and leaves `ci95_corrected` null rather than printing a number with no construction behind it. That asymmetry is deliberate and is the same standard the family count is held to below.
+
+**Which rank, though, has to be decided by something every member has.** Holm is a p-value procedure, and this family often carries no p-values at all: a [`null_test` supplies one only where `shuffle` names an attribute](#what-isnt-a-repeat), which [a parameter-axis contrast can never be](#what-isnt-a-repeat) — the worked example's family is two of exactly that kind. So the ranking statistic is the one quantity every member is guaranteed to have, since [only metrics carrying an interval are counted](#sweeps-and-repeats): **the point estimate over half the raw `ci95` width, largest first.** It is monotone in the evidence each construction encodes and is defined whether the interval was t-based or percentile, which is what the p-value isn't. In the worked example that is 0.169 over 0.012 for kendall against 0.026 over 0.009 for spearman, giving the ranks above. Ties break by condition index, then by metric name in declaration order, so a rank is a function of the record rather than of an iteration order. Ranking on a p-value where one exists and on this ratio elsewhere would leave the family ordered by two statistics, which is not an ordering.
+
+**`fdr_bh` therefore needs a p-value it can't always get.** Declared over a family whose metrics carry none, it leaves every member with a `null` `ci95_corrected` and no `p_value_corrected` either — a correction declared and not applied, which is the state this section exists to prevent. So `validate` warns on the condition that decides it: **no comparison in the family will carry a p-value**, either because `statistics.null_test` is undeclared or because its `shuffle` reaches none of them. Use `holm` or `bonferroni`, whose corrections are interval-shaped, or declare the `null_test` that supplies the p-value.
 
 Only metrics core corrects are counted — that is, [`basis: units`](#the-unit-table-is-the-inference-base) metrics, since a metric reported without an interval isn't a comparison anyone can read as significant. The family is the same set under every method, including `fdr_bh`, where what each member receives is an adjusted p-value rather than an interval. A [reported `Estimate`](#estimate-carries-your-interval-without-core-claiming-it) is excluded for a different reason: core never computed it, so it has nothing to correct and no standing to say the correction was applied. In the worked example that's 2 comparisons × 1 metric, so `family_size: 2`.
 
@@ -1702,7 +1712,7 @@ Five properties of this layout:
   | Axis order | `groups` axes in declaration order, then parameter axes in declaration order. Never sorted — the config's order is the one you already read |
   | Key | The shortest suffix of the dotted path that is unique among the swept paths. `analysis.method` alone becomes `method`; swept beside `scoring.method` both keep a segment, as `analysis.method` and `scoring.method` |
   | Value | Rendered as written in the config — `true`/`false` for booleans, shortest round-trip form for floats. `validate` rejects a swept value whose rendering isn't `[A-Za-z0-9._+-]+`, since a label that needs escaping isn't a name anyone can type |
-  | Index | Assigned over the expansion in order, baselines first. The **last** declared axis varies fastest, so the numbering reads like nested loops written in declaration order |
+  | Index | Assigned over the expansion in order, each cell's baseline first *within its cell*. The **last** declared axis varies fastest, so the numbering reads like nested loops written in declaration order. With one baseline it is condition `00`; with [one per cell](#expansion-modes) they land at the head of each cell, which is why `ablate × groups` numbers `00_cohort=derivation__baseline` and `03_cohort=validation__baseline` rather than putting both baselines first |
 
   The index is the part to be careful with, because it's the part that moves: adding a level to any axis renumbers everything after it. That is why [`reuse_from`](#reuse_from-addresses-an-artifact-not-the-design-that-produced-it) addresses artifacts by name rather than by condition, and why a selector names the label's body rather than its prefix.
 
@@ -1710,6 +1720,8 @@ Five properties of this layout:
 - **Repeat directories name their nesting.** A single repeat level is just `seed42`; nested repeats compose into `fold03_seed42`, which reads as the repeat it is rather than as an opaque index.
 - **Repeat sits above step, not below.** A repeat is a full re-execution, so `seed17/step03_analyze/` reads correctly as "this repeat's version of this step." The inverse nesting would imply a step owns its repeats.
 - **Degenerate levels collapse.** No sweep means no `conditions/` level; a single repeat means no repeat level. Browsing a simple experiment isn't cluttered by structure it doesn't have. Step code never notices, because it never constructs paths — `io` does. The active layout is recorded in `run.yaml` so tooling can rely on it.
+
+  **A collapsed level drops out of the path and nothing takes its place**, so a condition-scoped step under no sweep writes to `<run_dir>/<step>/`, and a repeat-scoped step under no sweep and a single repeat writes there too. `shared/` and `summary/` are unaffected, because they name a *scope* rather than a level — a `"run"`-scoped step's artifacts are in `shared/` whether or not anything varied, which is what keeps "depth follows scope" readable in both layouts. Collapse isn't only cosmetic for the condition level: an unswept run varies nothing, so the [label grammar](#how-artifacts-are-organized) has no `key=value` body to render and there is no directory name for it to produce.
 
 ### Statistical reporting
 
@@ -1737,7 +1749,18 @@ Those last two rows differ, and `data.units` is the whole discriminator. With no
 | `percentile_over_units` | The 2.5th and 97.5th percentiles of the resampled distribution, over `statistics.resample.n` draws, defaulting to `bootstrap` at 2000 |
 | `t_over_repeats` | Student's *t* over the per-repeat values, df = repeats − 1. Only when [no `data.units` is declared](#the-unit-table-is-the-inference-base) |
 
-And `cohens_d`, when the metric is a per-unit mean: **paired contrasts report *d*z** — the mean of the per-unit differences over their standard deviation — and **unpaired ones report *d*s**, over the pooled within-condition standard deviation. They are different quantities from the same data and the one that applies follows from `paired`, which is [derived rather than declared](#allocation-within-subjects-or-between-subjects). A weighted condition standardizes by the weighted standard deviation, on the same weights the mean used.
+**A contrast's interval is its own construction, never a difference of the two sides' intervals.** Differencing those would discard the covariance that [pairing exists to exploit](#allocation-within-subjects-or-between-subjects) — in the worked example it would report an interval several times wider than the delta itself — so the delta is computed from the per-unit differences, or from a resample that draws for both sides at once. Which of the four applies follows from the same two facts the rows above turn on: whether the contrast is [`paired`](#allocation-within-subjects-or-between-subjects), and whether the metric is a column or a derived one:
+
+| The interval | Is |
+|---|---|
+| `paired_t_over_units` | Student's *t* on the per-unit differences over the [`n_paired`](#contrasts-claims-that-arent-condition-vs-baseline) intersection, df = `n_paired` − 1. A column metric, when no `resample` is declared |
+| `paired_percentile_over_units` | The percentiles of the resampled difference, with **one draw over the [`n_paired`](#contrasts-claims-that-arent-condition-vs-baseline) intersection applied to both sides** — the same units are drawn for each, so what's resampled is the difference rather than two independent estimates. Drawing from each side's own completed set instead would leave a unit present on one side and absent from the other with no defined contribution, which is the case `n_paired` exists because it happens. Every derived metric, and a column metric under `resample` |
+| `welch_t_over_units` | Welch's *t* on two independent condition means, df from Welch-Satterthwaite. The unpaired counterpart of the first: unequal variances are assumed rather than pooled, because two arms need be neither the same size nor the same spread |
+| `unpaired_percentile_over_units` | The percentiles of the difference, resampling within each side independently. The unpaired counterpart of the second |
+
+When [`cluster_by`](#clustered-units) is declared each takes a `_clustered` suffix and reads the cluster as the draw: the *t* forms are cluster-robust (CR1) with df = clusters − 1, over the differenced values when paired and over the arm-level ones when not, and the percentile forms resample whole clusters — jointly across both sides when paired. Same rule and same reason as `t_over_units_clustered` above. Every delta in `vs_baseline` and in [`results.contrasts`](#contrasts-claims-that-arent-condition-vs-baseline) records its `method`, exactly as every value in `aggregated` does — a [hypothesis](#pre-registration) quoting one under `observed` is quoting that record rather than restating it.
+
+And `cohens_d`, when the metric is a per-unit mean: **paired contrasts report *d*z** — the mean of the per-unit differences over their standard deviation — and **unpaired ones report *d*s**, over the pooled within-condition standard deviation. They are different quantities from the same data and the one that applies follows from `paired`, which is [derived rather than declared](#allocation-within-subjects-or-between-subjects). A weighted condition standardizes by the weighted standard deviation, on the same weights the mean used. *d*s pools where `welch_t_over_units` deliberately doesn't, and that isn't an inconsistency: an interval is an inference and gets the assumption-light construction, while *d* is a descriptive standardization whose conventional denominator *is* the pooled one — reporting a *d* against a Welch-style denominator would be a number no reader could compare to another paper's.
 
 A [`null_test`](#what-isnt-a-repeat) p-value is corrected alongside the intervals when the method supplies one, at the same level the interval was computed at. **It does not add a place in the family**: the family counts comparisons × metrics, and a metric reported with both an interval and a p-value is one metric described two ways, not two findings. Counting it twice would correct a design for declaring `null_test` rather than for the comparisons it actually put in front of a reader.
 
@@ -1777,7 +1800,9 @@ results:
               repeat_spread: {std: 0.014, n: 5, kind: seed}}
       vs_baseline:                                  # only when a baseline is declared
         step03_analyze:
-          r: {delta: 0.026, basis: units, paired: true, ci95: [0.017, 0.035],
+          r: {delta: 0.026, basis: units, paired: true,
+              method: paired_percentile_over_units,
+              ci95: [0.017, 0.035],
               ci95_corrected: [0.017, 0.035],       # rank 2 of 2 under holm: α/(m−i+1) = α
               correction: holm, correction_level: 0.05,
               family_size: 2, family: {comparisons: 2, metrics: 1},
@@ -1853,11 +1878,11 @@ Results land beside the conditions rather than inside one, since a contrast belo
 results:
   contrasts:
     - id: invariance
-      of: 04_occasions=3
+      of: 04_occasions=3                        # recorded with its index; declared without one
       against: 06_occasions=12
       step03_screen:
         prob: {delta: 0.012, basis: units, paired: true,
-               n_paired: 412,
+               method: paired_t_over_units, n_paired: 412,
                ci95: [0.004, 0.021], ci95_corrected: [0.001, 0.024],
                correction: holm, correction_level: 0.0071, family_size: 7}
 ```
@@ -1894,6 +1919,8 @@ aggregated:
         f: {value: 0.591, basis: units, n: {resolved: 120, completed: 114, failed: 6}, ci95: [...]}
         m: {value: 0.622, basis: units, n: {resolved: 120, completed: 114, failed: 6}, ci95: [...]}
 ```
+
+**Two attributes are two marginal splits, not their cross.** `report_by: [sex, site]` adds a `by.sex` block and a `by.site` block, each over the whole table; it does not produce a `f × site_03` cell. A cross *is* a set of design cells, which is what a [`groups` axis](#expansion-modes) expresses when you want to execute over it and what a [`within` contrast](#contrasts-claims-that-arent-condition-vs-baseline) expresses when you want to test one — and the cells of five reporting attributes are exactly the cartesian product this section exists to avoid. Strata also repeat `aggregated` metrics only, never `vs_baseline` or a contrast's delta: a per-stratum delta is a comparison a reader can act on, so it would have to join the correction family, and the mechanism for that already exists and is declared rather than implied.
 
 Three properties, each a consequence of strata not being conditions. **No executions are added** — the run is unchanged and the split happens over a table that already exists. **Strata don't join the correction family**, because a stratum is a description rather than a comparison a reader acts on. A subgroup claim you intend to *test* is a [`within` contrast](#contrasts-claims-that-arent-condition-vs-baseline) — declared before the run, named by a hypothesis, and corrected in that family. The split is deliberate: `report_by` gives you every subgroup for free because it claims nothing, and a subgroup you want to claim something about costs a place in the family. And **`limits.min_reported_n` applies per stratum**, which is where it matters most: a per-subgroup result over a handful of units is exactly what [`study add`](#what-study-add-redacts) says no automatic rule can judge safe.
 
@@ -2143,10 +2170,16 @@ results:
     - id: h1
       kind: confirmatory
       declared_in: parameters_hash sha256:1a2b...      # the config that predicted it
-      observed: {delta: 0.026, ci95: [0.017, 0.035]}
+      observed: {delta: 0.026, ci95: [0.017, 0.035],
+                 ci95_corrected: [0.017, 0.035]}       # corrected in the hypothesis family
+      verdict_evaluated_on: observed                   # 0.026 against threshold 0.02
+      family_size: 1                                   # this family, not the sweep's 2
+      family: {hypotheses: 1}                          # confirmatory and core-computed
       supported: true
       verdict_rests_on: computed                       # core derived the number it compared
 ```
+
+**The verdict records which number it compared, because the [hypothesis family](#sweeps-and-repeats) is corrected separately from the sweep's.** `family_size` and `family` carry it in the same idiom every other family uses, with a single breakout key because a hypothesis family multiplies nothing: it counts the confirmatory hypotheses whose observations core computed, where a sweep's family counts comparisons × metrics. A reader can check the level without re-deriving it, exactly as `family` beside a `vs_baseline` delta is auditable rather than asserted. Correction reaches a verdict only through a bound: a hypothesis evaluating on `observed` compares a point estimate, which has no α to adjust, while one evaluating on `ci95_lower` or `ci95_upper` reads the corrected bound at the level *this* family implies. `verdict_evaluated_on` names which of the three the comparison actually used — spelled out rather than echoing the config's `evaluate_on`, since a record field one letter from a config field is a typo waiting to be read as agreement. So a verdict is never a number a reader has to reconstruct from `evaluate_on` plus a correction rule.
 
 ### What a hypothesis is tested against
 
@@ -2204,7 +2237,8 @@ results:
       declared_in: parameters_hash sha256:1a2b...
       observed: {value: 0.9931, ci95: [0.9931, 1.0],
                  method: "one-sided BCa, 10000 patient-cluster draws, seed 20260722"}
-      supported: true
+      verdict_evaluated_on: observed                   # 0.9931 against threshold 0.99
+      supported: true                                  # no `family`: core corrects nothing here
       verdict_rests_on: reported                       # THE STEP derived the number
 ```
 
@@ -2258,12 +2292,14 @@ title: "Rank correlation methods for cohort triage"
 authors: ["Kyungjoon Lee"]
 code:
   remote: git@github.com:your-org/my-study.git
-  commit: 4f9a2c1e...                     # what to cite; the repo does not cite back
+  commit: 4f9a2c1e...                     # the run added as `main`; what to cite
 runs:
   main:        {file: main.run.yaml,        run_id: run_2026-08-06T14-02-11Z_8e21ab3}
   sensitivity: {file: sensitivity.run.yaml, run_id: run_2026-08-07T09-14-03Z_8e21ab3}
   ablation:    {file: ablation.run.yaml,    run_id: run_2026-08-07T16-40-12Z_8e21ab3}
 ```
+
+**`code.commit` is one commit and a study's runs need not share one**, so it names a specific run's: the one added `--as main`, or the first one added if none is. Each bundled `run.yaml` still carries its own `provenance.git.commit` and `code_hash`, which is where a per-run answer lives — `code` is the citable pointer a reader follows from the paper, not a claim that every run came from it. A sensitivity analysis rerun a month later at a later commit is ordinary, so `study add` prints a notice when a run's commit differs from `code.commit` rather than refusing; what it refuses is a **name already in the bundle**, since `main.run.yaml` silently becoming a different run is exactly the overwrite [append-only](design-principles.md#design-goals) forbids, and a bundle beside a manuscript is the last place to allow it. Re-add under a new name, or start a new bundle.
 
 The bundle is self-contained and device-independent: every reference is relative, `run_id` is a label rather than a locator, and nothing resolves through the original output storage. Zip it, attach it as supplementary material, or deposit it and cite the DOI. `publishable report study.yaml` renders it offline, cross-checking that runs claiming the same code really share a `code_hash` — and the same for [`provenance.apparatus.hash`](#the-apparatus-core-can-only-observe), since "these runs used one deployment" is a claim a paper makes and a bundle can check — flagging any [draft](#draft-runs) runs, and collecting every declared [hypothesis](#pre-registration) into one table.
 
@@ -2552,6 +2588,7 @@ publishable-my-assay/
 │   ├── templates/my_assay.py     # BaseTemplate + parameter_spec, @register_template applied
 │   ├── resolvers/                # optional unit resolvers, @register_resolver applied
 │   ├── probes/                   # optional apparatus probes, @register_probe applied
+│   ├── writers/                  # optional artifact writers, @register_writer applied
 │   └── steps/                    # optional reusable BaseStep subclasses
 ├── tests/
 │   └── test_my_assay.py          # asserts the template materializes and validates
@@ -2568,7 +2605,12 @@ plate_wells = "publishable_my_assay.resolvers.plate:resolve"
 
 [project.entry-points."publishable.probes"]
 assay_instrument = "publishable_my_assay.probes.instrument:probe"
+
+[project.entry-points."publishable.writers"]
+".fastq.gz" = "publishable_my_assay.writers.fastq:write"
 ```
+
+**Four registries, one mechanism.** Templates, [resolvers](#where-units-come-from), [probes](#the-apparatus-core-can-only-observe), and [writers](#steps-and-artifacts) are each an entry-point group and a `@register_*` decorator, and `validate` reports a config naming one that no installed package registers. A writer is keyed by the extension it claims rather than by a name, since that is what [`io.write` dispatches on](#steps-and-artifacts) — it takes the object and returns `bytes`, its reader inverts it, and core rejects a plugin claiming an extension core already owns rather than deciding which writer wins.
 
 The generated README documents the plugin the way a user needs it — install line, template list, and **a parameter table generated from `parameter_spec` itself**:
 
@@ -2683,6 +2725,8 @@ Then:
 
 `reproduce` stops rather than running because both remaining inputs need a person — the transcript above lists only the paths because `generic` declares no `required_env`, and an experiment whose template does gets a `.env` line beside them. Core has no mechanism to transmit a secret, and it won't fetch your data — moving governed data goes through whatever protocol governs it. Given that, `--input-dir` and `--output-dir` would only duplicate what the config already expresses, so the config stays the single description of the run.
 
+**Given a config rather than a `run.yaml`, there is nothing to clone and nothing to check against.** A config names no commit, no remote, and no recorded hash, so the first four steps have no input at all: what `reproduce` does with one is prepare the checkout it is already standing in — `uv sync --locked`, the `.env.example` copy, the list of what needs values, and the same closing instructions. It cannot verify a `code_hash` and says so, rather than reporting a match it never made. That form is for the case where someone handed you a config and a repo instead of a record; the `run.yaml` form is the one that reproduces a *result*, and it is the one to prefer whenever both exist.
+
 Verification of the input data still happens: `run` builds the manifest from whatever `input_dir` you set and compares it to the recorded one, reporting a data mismatch as loudly as a lockfile mismatch. Pointing at the wrong data is caught, just at run time rather than at clone time.
 
 **The apparatus is verified the same way, and it has to be.** A reproduction that ran the recorded code, in the recorded environment, over the recorded data, through a *different* model revision or a recalibrated instrument is not a reproduction — and it is the one substitution that leaves every hash matching. So the first probe compares against the facts `reproduce` wrote out and fails on any difference, at the same volume as a lockfile mismatch.
@@ -2741,7 +2785,7 @@ publishable/
 │   ├── apparatus.py           # probe registry, per-condition facts, change gate
 │   ├── uv_support.py          # uv.lock copy/hash, --locked drift checks
 │   ├── secrets.py             # dotenv loading, required_env checks — never touches provenance
-│   ├── reproduce.py           # clone/checkout/sync, then validate + run
+│   ├── reproduce.py           # clone/checkout/sync, then report what's left to supply
 │   ├── report.py              # BaseReport: standard sections, html/markdown, override discovery
 │   ├── diagnostics.py         # stable E-/W- identifiers, collected reporting, exit codes
 │   └── templates/{base.py,builtin/generic.py}
