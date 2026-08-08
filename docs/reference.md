@@ -780,7 +780,18 @@ sweep:
     analysis.method: [spearman, kendall]
 ```
 
-The baseline is always condition `00`, and `results.conditions[i].vs_baseline` carries the difference in each numeric metric, with a standardized effect size when the metric is a per-unit mean. Declaring one is optional but recommended: "the treated arm scored 0.12 higher (Cohen's d = 0.4)" is the sentence a paper needs, and it can't be produced from an unlabeled set of peers.
+The baseline is condition `00`, and `results.conditions[i].vs_baseline` carries the difference in each numeric metric, with a standardized effect size when the metric is a per-unit mean. Declaring one is optional but recommended: "the treated arm scored 0.12 higher (Cohen's d = 0.4)" is the sentence a paper needs, and it can't be produced from an unlabeled set of peers.
+
+**With a group axis present, whether there is one baseline or one per arm follows from whether the baseline names a level.** There is no third possibility, and neither row is a default the other overrides:
+
+| `sweep.baseline` | Baseline conditions | Each `vs_baseline` targets |
+|---|---|---|
+| Fixes a level on the group axis — `{arm: control, analysis.method: pearson}` | One, condition `00` | That single condition. A contrast crossing the group axis *and* a parameter axis differs in two places and is marked [`confounded: true`](#allocation-within-subjects-or-between-subjects) |
+| Fixes parameter paths only — `{analysis.method: pearson}` | One per level, the first condition of each | Its own level's baseline, so every contrast differs on exactly one axis |
+
+The second row is what [`ablate × groups`](#expansion-modes) always gets, since `validate` rejects a baseline that fixes a level while `ablate` is declared: an ablation is one change from *its own arm's* full model, and there is no single reference condition when the reference cohort differs. It's the row to prefer whenever the arms are peers — two cohorts, two sites, a derivation and a validation set — because it's the one that leaves nothing confounded.
+
+Baseline conditions are references rather than comparisons, so they never count as one: six conditions under two per-arm baselines are four comparisons in the [correction family](#sweeps-and-repeats), not five.
 
 ### Repeat kinds
 
@@ -1028,7 +1039,7 @@ Five properties of this layout:
 
 - **Depth follows scope.** A step's artifacts sit exactly as deep as the thing it varies with, so the path is a readable statement of what its output depends on. `shared/` output depends on nothing but the input; `conditions/01_.../` output depends on the condition; anything under a repeat directory depends on the repeat.
 
-- **Condition directories are self-describing.** `01_method=spearman` tells you what it is without opening `sweep.yaml`. The numeric prefix gives stable ordering; the `key=value` body gives meaning. Labels derive from swept values only, so they stay stable across machines and reruns. A declared baseline is always `00_baseline`, and a [group axis](#expansion-modes) level reads the same way: `01_arm=treatment`.
+- **Condition directories are self-describing.** `01_method=spearman` tells you what it is without opening `sweep.yaml`. The numeric prefix gives stable ordering; the `key=value` body gives meaning. Labels derive from swept values only, so they stay stable across machines and reruns. A declared baseline is `00_baseline` — or one per level, `00_cohort=derivation_baseline` and so on, when a [group axis](#expansion-modes) is present and the baseline names no level — and a group level otherwise reads the same way as any other: `01_arm=treatment`.
 
   `sample` conditions are the exception, and deliberately: a sobol draw of `dose_mg` has no short exact spelling, and rounding one into a directory name makes two distinct conditions collide at some precision. Sampled conditions are labelled `01_sample`, `02_sample`, with the drawn values in `sweep.yaml` and in `results.conditions[i].values`. Anything that selects a condition by name — a [hypothesis](#pre-registration) `compare.condition`, a `report` filter — is therefore selecting a discrete label, never a float you have to spell identically twice.
 - **Repeat directories name their nesting.** A single repeat level is just `seed42`; nested repeats compose into `fold03_seed42`, which reads as the repeat it is rather than as an opaque index.
