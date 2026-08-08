@@ -80,13 +80,15 @@ data:
     cluster_by: null                       # e.g. site, when units aren't independent
     measurements: null                     # e.g. {by: read_id, collapse: mean} for technical replicates
     holdout: null                          # optional single fixed train/test split; see "A fixed holdout split"
-    assign:                                # REQUIRED when allocation is `between`
-      method: random                       # random | by_attribute | blocked
-      from: null                           # the attribute holding the level, for by_attribute
-      stratify_by: []                      # unit attributes to balance arms on
-      ratio: {}                            # one entry per sweep.groups level, e.g. {control: 1, treatment: 1}
-      block_size: auto                     # for blocked: auto, or an integer multiple of the ratio's sum
-      seed: auto                           # derived from the design digest; recorded explicitly
+    assign: {}                             # REQUIRED when allocation is `between` — one block per
+                                           # sweep.groups axis, keyed by the axis name:
+                                           #   arm:
+                                           #     method: random     # random | by_attribute | blocked
+                                           #     from: arm          # by_attribute; defaults to the axis name
+                                           #     stratify_by: []    # unit attributes, or an earlier axis
+                                           #     ratio: {}          # one entry per level of THIS axis
+                                           #     block_size: auto   # blocked only; twice the ratio's sum
+                                           #     seed: auto         # design digest + axis name
 
 parameters:
   # ---- Base values. Everything below is defined by the template, not by core. ----
@@ -100,7 +102,7 @@ sweep:
   # ---- What varies. Omit entirely for a single-condition experiment. ----
   # Keys are dotted paths into `parameters`; modes compose. See "Sweeps and repeats".
   baseline: {analysis.method: pearson}   # optional reference condition; enables deltas
-  groups: null                           # optional unit-group axis, e.g. {by: arm, levels: [...]}
+  groups: []                             # optional list of unit-group axes, e.g. [{by: arm, levels: [...]}]
   grid:
     analysis.method: [spearman, kendall]
   # 1 baseline + 2 grid = 3 conditions
@@ -434,8 +436,8 @@ This is the first question any experimental design answers, so core asks it expl
 ```yaml
 sweep:
   groups:
-    by: arm                        # the axis name — conditions become 00_arm=control, 01_arm=treatment
-    levels: [control, treatment]
+    - by: arm                      # the axis name — conditions become 00_arm=control, 01_arm=treatment
+      levels: [control, treatment]
 
 data:
   units:
@@ -444,11 +446,12 @@ data:
     attributes: [site, sex, severity]
     allocation: between
     assign:
-      method: random               # random | by_attribute | blocked
-      stratify_by: [site, severity]   # balance arms on these
-      ratio: {control: 1, treatment: 1}   # keyed by level, one entry per declared level
-      block_size: auto             # blocked only; auto = twice the ratio's sum
-      seed: auto                   # derived from the design digest; recorded explicitly
+      arm:                         # keyed by axis name — one block per declared axis
+        method: random             # random | by_attribute | blocked
+        stratify_by: [site, severity]   # balance arms on these
+        ratio: {control: 1, treatment: 1}   # keyed by level, one entry per level of THIS axis
+        block_size: auto           # blocked only; auto = twice the ratio's sum
+        seed: auto                 # derived from the design digest and the axis name
 ```
 
 The realized assignment is written to `allocation.json` in the run directory and hashed, so "which patients were in the treatment arm" is answerable from the run record alone — not from a script someone ran once.
@@ -457,8 +460,10 @@ The realized assignment is written to `allocation.json` in the run directory and
 
 ```yaml
     assign:
-      method: by_attribute
-      from: arm                    # a unit attribute whose values are exactly the declared levels
+      arm:
+        method: by_attribute
+        from: arm                  # a unit attribute whose values are exactly the declared levels;
+                                   # `from` defaults to the axis name, so this line is optional here
 ```
 
 `blocked` uses permuted blocks of `assign.block_size` units — `auto` is twice the sum of `ratio`, the smallest block that isn't a fixed alternating pattern, and an explicit value must be a whole multiple of that sum so every block fills each arm exactly. It balances arms across the roster's order rather than across an enrollment sequence — core assigns a fixed unit list at run start, so there is no accruing cohort for it to balance over time. Use it when the roster order carries meaning (site batches, plate order); otherwise `random` with `stratify_by` is the stronger guarantee.
@@ -767,10 +772,12 @@ Sampling is deterministic given its seed, so `sweep.yaml` records both the seed 
 ```yaml
 sweep:
   groups:
-    by: arm                              # names the axis; levels become the condition labels
-    levels: [control, treatment]
+    - by: arm                            # names the axis; levels become the condition labels
+      levels: [control, treatment]
   # 2 conditions: 00_arm=control, 01_arm=treatment
 ```
+
+`groups` is a **list**, always — one axis is a list of one. Two spellings for one concept is the drift this project exists to prevent, so there is no mapping shorthand.
 
 A group level is a *set of units*, resolved from [`data.units`](#allocation-within-subjects-or-between-subjects): core assigns them when `allocation: between` with `assign.method: random` or `blocked`, and reads an existing column when `by_attribute`. `io.units` then yields that level's units, and nothing else about the condition changes.
 
@@ -780,11 +787,43 @@ Group axes compose with parameter axes like any other mode, which is how "each a
 
 ```yaml
 sweep:
-  groups: {by: arm, levels: [control, treatment]}
+  groups:
+    - {by: arm, levels: [control, treatment]}
   grid:
     analysis.method: [pearson, spearman]
   # groups × grid = 2 × 2 = 4 conditions
 ```
+
+**Group axes also cross each other**, on the same rule and for the same reason parameter axes do. A between-subjects factorial whose factors are both properties of the units — sex × arm, site × cohort, strain × treatment — is two axes in the list, and the conditions are their product:
+
+```yaml
+sweep:
+  groups:
+    - {by: sex, levels: [f, m]}
+    - {by: arm, levels: [control, treatment]}
+  # 2 × 2 = 4 cells: 00_sex=f__arm=control, 01_sex=f__arm=treatment, …
+
+data:
+  units:
+    allocation: between
+    assign:
+      sex: {method: by_attribute}          # `from` defaults to the axis name
+      arm:
+        method: random
+        stratify_by: [site, sex]           # balance arm within sex
+        ratio: {control: 1, treatment: 1}
+        seed: auto
+```
+
+**Axes resolve in declaration order, and `stratify_by` may name a group axis declared before it.** That one rule is what makes every crossed case fall out of machinery core already has, rather than needing a joint-allocation mode of its own:
+
+| The design | How it's written |
+|---|---|
+| Both factors already in the data | Two `by_attribute` axes; core assigns nothing |
+| One randomized, one observed | Declare the observed axis first, and stratify the randomized one on it — which is how the design is actually run |
+| Both randomized (a 2×2 factorial randomization) | Two `random` axes, the second stratifying on the first |
+
+`ratio` is always keyed by its own axis's levels, so no cell tuple appears anywhere in the config, and forward-only stratification makes a cycle unrepresentable rather than something `validate` has to detect. What core still won't do is decompose the result: a crossed design reports each cell and its contrasts, and [main effects and interactions](experimental-designs.md#what-core-will-not-do-for-you) remain a `scope: "summary"` step — exactly as they are for a parameter `grid`.
 
 Comparisons *across* a group axis are unpaired, since no unit appears in two levels — unless the levels are matched, in which case `cluster_by` on the matched-set identifier is what carries the dependence. See [experimental-designs.md § Matched case-control](experimental-designs.md#matched-case-control). Comparisons *within* a level, between two parameter settings applied to the same arm, remain paired: composing a group axis with a parameter axis doesn't make every contrast in the run unpaired. See [Allocation](#allocation-within-subjects-or-between-subjects).
 
