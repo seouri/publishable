@@ -2558,7 +2558,7 @@ Draft runs are recorded with `draft: true` and `git.code_dirty: true`, `report` 
 
 The one thing `demo` can give a newcomer that they can't easily get themselves is **data in the right format**. Everything after that is the CLI they have to learn anyway, so `demo` hands over the data and then walks them through the real commands rather than running them out of sight.
 
-Six stops. After the first, each has the same beat: print the next command exactly as you would type it, wait, run it on `Enter`, then say in two or three lines what its output meant.
+Six stops. Stops 3 through 5 each have the same beat: print the next command exactly as you would type it, wait, run it on `Enter`, then say in two or three lines what its output meant.
 
 | Stop | Runs | The point of the stop |
 |---|---|---|
@@ -2567,7 +2567,9 @@ Six stops. After the first, each has the same beat: print the next command exact
 | 3 | `validate` | Reads the config and the input, creates nothing, reaches nothing off the machine |
 | 4 | `dry-run` | 3 conditions × 5 repeats = 15 executions, and every artifact path that *would* be written. Still creates nothing |
 | 5 | `run` | The results table: estimates, [intervals over units](#the-unit-table-is-the-inference-base), paired deltas against the baseline |
-| 6 | `reproduce` | `run.yaml` is the deliverable, and it stops at the two things only a person can supply. Hands off to [`publishable new`](#scaffolding-publishable-new) |
+| 6 | *(nothing — `demo` prints a command)* | Opens the `run.yaml` this all produced and shows the `reproduce` invocation a collaborator would run against it. Hands off to [`publishable new`](#scaffolding-publishable-new) |
+
+**Stop 6 is the one stop that doesn't execute what it prints.** [`reproduce`](#reproducing-on-another-device) reads `provenance.git.remote` and clones it, and the demo repo has one local commit and no remote — so running it here would fail on the first step, in the last thing a new user sees. Printing it is also the truer lesson: `reproduce` is what someone *else* runs, on a machine that has neither your data nor your credentials.
 
 Stop 2 invites you to read the config, not to edit a step. That asymmetry is deliberate: `code_hash` covers [`src/**` and `templates/**`](#three-hashes), so a step edited at stop 2 would dirty the tree and make stop 5 refuse — the first `run` a user ever issues would be an error. A config edit costs nothing but a different `parameters_hash`.
 
@@ -2575,7 +2577,7 @@ Stop 2 invites you to read the config, not to edit a step. That asymmetry is del
 
 **Unattended, it doesn't pause.** With no terminal attached — piped, redirected, or in CI — `demo` runs the identical sequence straight through. That is not a mode and takes no flag, because the pause changes presentation only; there is nothing for a second command name to distinguish.
 
-**Quitting is expected.** `q` at any stop prints the remaining commands in order, so you leave holding the whole path, and running `publishable demo` again from the demo directory resumes at the stop you left. Since `validate` and `dry-run` create nothing, the filesystem alone can't tell stop 3 from stop 4; `demo` tracks position in a progress file in the demo repo root, listed in the generated `.gitignore`. It sits outside `src/**` and `templates/**`, so it can never move `code_hash`, and being ignored it can never dirty the tree and push you onto [`draft`](#draft-runs). `--into DIR` starts a fresh demo elsewhere.
+**Quitting is expected.** `q` at any stop prints the remaining commands in order, so you leave holding the whole path, and running `publishable demo` again from the demo directory resumes at the stop you left. Since `validate` and `dry-run` create nothing, the filesystem alone can't tell stop 3 from stop 4; `demo` records the last completed stop in `.demo-progress` in the demo repo root, listed in the generated `.gitignore`. It sits outside `src/**` and `templates/**`, so it can never move `code_hash`, and being ignored it can never dirty the tree and push you onto [`draft`](#draft-runs). `--into DIR` chooses which directory all of this applies to: given one that already holds a `.demo-progress`, it resumes there rather than starting over — resuming is a property of the directory, not of how you named it.
 
 ---
 

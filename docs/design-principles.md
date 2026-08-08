@@ -80,7 +80,7 @@ Three distinctions that are easy to conflate:
 
 This is the constraint the rest of the design serves. Commands fall into two classes:
 
-**Creation commands** — `new`, `plugin new`, `generate` (and its `init` alias) — take a name and whatever is needed to bring something into existence. They have arguments because the thing they're creating doesn't exist yet to hold them.
+**Creation commands** — `new`, `plugin new`, `generate` (and its `init` alias), `study new`, `study add`, and `demo` — take a name and whatever is needed to bring something into existence. They have arguments because the thing they're creating doesn't exist yet to hold them. `demo` is the degenerate case: what it creates is fixed, so it takes nothing but an optional destination.
 
 **Operation commands** — everything else — take **paths and nothing else.** No `--model`, no `--arm`, no `--set`, no selectors, no behavior flags, and no environment variables that change what happens.
 

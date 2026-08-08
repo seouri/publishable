@@ -68,7 +68,7 @@ Running 3 conditions × 5 repeats = 15 executions
 run.yaml → ~/publishable-demo-data/results/run_2026-08-07T09-14-03Z_2f5c8d0/run.yaml
 ```
 
-That `run.yaml` is the point, and it's what the last stop is about. It carries the results *and* everything needed to regenerate them — so on any other machine:
+That `run.yaml` is the point, and the last stop opens it and leaves you there. It carries the results *and* everything needed to regenerate them — so on any other machine:
 
 ```bash
 publishable reproduce <path-to-run.yaml>
