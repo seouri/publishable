@@ -85,6 +85,7 @@ data:
       from: null                           # the attribute holding the level, for by_attribute
       stratify_by: []                      # unit attributes to balance arms on
       ratio: {}                            # one entry per sweep.groups level, e.g. {control: 1, treatment: 1}
+      block_size: auto                     # for blocked: auto, or an integer multiple of the ratio's sum
       seed: auto                           # derived from the design digest; recorded explicitly
 
 parameters:
@@ -201,6 +202,7 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Allocation needs arms | `allocation: between` but no `sweep.groups` axis declares what the arms are |
 | Arms need allocation | `sweep.groups` declares arms but `allocation` is `within`, which says every unit appears in every condition — a unit can't be in one arm and in all of them |
 | Ratio names levels | `assign.ratio` has key `00_control`; expected one entry per `sweep.groups.levels` value (`control`, `treatment`) |
+| Block size fills the arms | `assign.block_size: 3` with `ratio: {control: 1, treatment: 1}` — a block must be a whole multiple of the ratio's sum, or it can't hold each arm's share |
 | Attribute assignment resolves | `assign.method: by_attribute` needs `assign.from`; column `arm` has values `{a, b}`, expected the declared levels |
 | Allocation is coherent | `allocation: between` over 2 arms and 12 units gives arms of 6; below `limits.min_units_per_arm` (warning) |
 | Allocation strata exist | `assign.stratify_by: [site]` but `site` is not in `data.units.attributes` |
@@ -444,6 +446,7 @@ data:
       method: random               # random | by_attribute | blocked
       stratify_by: [site, severity]   # balance arms on these
       ratio: {control: 1, treatment: 1}   # keyed by level, one entry per declared level
+      block_size: auto             # blocked only; auto = twice the ratio's sum
       seed: auto                   # derived from the design digest; recorded explicitly
 ```
 
@@ -457,7 +460,7 @@ The realized assignment is written to `allocation.json` in the run directory and
       from: arm                    # a unit attribute whose values are exactly the declared levels
 ```
 
-`blocked` uses permuted blocks, which balances arms across the roster's order rather than across an enrollment sequence — core assigns a fixed unit list at run start, so there is no accruing cohort for it to balance over time. Use it when the roster order carries meaning (site batches, plate order); otherwise `random` with `stratify_by` is the stronger guarantee.
+`blocked` uses permuted blocks of `assign.block_size` units — `auto` is twice the sum of `ratio`, the smallest block that isn't a fixed alternating pattern, and an explicit value must be a whole multiple of that sum so every block fills each arm exactly. It balances arms across the roster's order rather than across an enrollment sequence — core assigns a fixed unit list at run start, so there is no accruing cohort for it to balance over time. Use it when the roster order carries meaning (site batches, plate order); otherwise `random` with `stratify_by` is the stronger guarantee.
 
 Getting this wrong is not a subtle error. Analyzing a between-subjects study as if it were paired inflates precision substantially, and the two designs need different comparisons. Because allocation is declared, core derives the comparison type instead of asking you to declare `paired` separately and hoping it matches reality.
 
