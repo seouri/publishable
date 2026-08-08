@@ -21,7 +21,7 @@ Resolve the three declarations separately and the config writes itself. They are
 | The question | Declaration | Values | Shown in |
 |---|---|---|---|
 | Does every unit appear in every condition, or exactly one? | `data.units.allocation` | `within` (default, paired comparisons) · `between` (one arm per unit, unpaired across arms — needs a `groups` axis) | [Within-subjects](#within-subjects--repeated-measures) · [Between-subjects](#between-subjects--parallel-arm-trial) |
-| What varies deliberately? | `sweep` | `grid` (cartesian) · `paired` (coupled axes) · `ablate` (`1 + n`, one change each) · `sample` (continuous ranges) · `groups` (arms of units, not parameters) · `baseline` (the reference, not an axis) | [Factorial](#factorial) · [Fractional factorial](#fractional-factorial-and-coupled-settings) · [Ablation](#ablation) · [Dose-response](#dose-response-and-parameter-search) · [Between-subjects](#between-subjects--parallel-arm-trial) |
+| What varies deliberately? | `sweep` | `grid` (cartesian) · `paired` (coupled axes) · `ablate` (`1 + n`, one change each) · `sample` (continuous ranges) · `groups` (crossable axes of units, not parameters) · `baseline` (the reference, not an axis) | [Factorial](#factorial) · [Between-subjects factorial](#between-subjects-factorial) · [Ablation](#ablation) · [Dose-response](#dose-response-and-parameter-search) · [Between-subjects](#between-subjects--parallel-arm-trial) |
 | What varies incidentally? | `replication.repeats` | `seed` · `fold` — the two things a re-execution can change | [Single condition](#single-condition-repeated) · [Cross-validation](#cross-validation) |
 
 Answering a question with nothing is a valid answer: omit `sweep` for a single condition, omit `data.units` entirely when the pipeline has no unit table — though `fold` requires one, as do the resampling and permutation statistics in [Bootstrap and permutation](#bootstrap-and-permutation). A design that evaluates on held-out units without repeating anything answers the third question with nothing too, and declares [`data.units.holdout`](#train-test-holdout) instead of a repeat. What each repeat kind varies and how core collapses it is the table in [reference.md § Repeat kinds](reference.md#repeat-kinds) — both differ per kind, and that's the point of naming the kind rather than passing a count. What no repeat kind does is set `n`: that counts units, and every interval core reports comes from the [per-unit table](reference.md#the-unit-table-is-the-inference-base).
@@ -57,8 +57,8 @@ Each unit belongs to exactly one arm. The arms are a `groups` axis — the diffe
 ```yaml
 sweep:
   groups:
-    by: arm                           # → 00_arm=control, 01_arm=treatment
-    levels: [control, treatment]
+    - by: arm                         # → 00_arm=control, 01_arm=treatment
+      levels: [control, treatment]
 
 data:
   units:
@@ -67,10 +67,11 @@ data:
     attributes: [site, severity]
     allocation: between
     assign:
-      method: random
-      stratify_by: [site, severity]
-      ratio: {control: 1, treatment: 1}
-      seed: auto
+      arm:                            # one block per axis, keyed by axis name
+        method: random
+        stratify_by: [site, severity]
+        ratio: {control: 1, treatment: 1}
+        seed: auto
 ```
 
 The realized allocation lands in `allocation.json`, hashed. The arm-to-arm comparison is unpaired, derived from the fact that the two conditions differ on the `groups` axis rather than declared separately — and if you compose a parameter axis on top, contrasts *within* an arm stay paired, because they're the same patients analyzed two ways. The two conditions share a `parameters_hash`, which is the point: same code, same parameters, different units. `statistics.null_test` with `shuffle: arm` tests that contrast directly: permuting the attribute that *defines* the arms is a test of the difference between them, not of either arm's own estimate, and core attaches the p-value to the contrast for that reason — see [reference.md § What isn't a repeat](reference.md#what-isnt-a-repeat).
@@ -86,8 +87,40 @@ data:
     key: patient_id
     attributes: [site, severity, arm]
     allocation: between
-    assign: {method: by_attribute, from: arm}
+    assign: {arm: {method: by_attribute}}    # `from` defaults to the axis name
 ```
+
+### Between-subjects factorial
+
+When both factors are properties of the units rather than of the pipeline, they're two `groups` axes, and the conditions are their product:
+
+```yaml
+sweep:
+  groups:
+    - {by: sex, levels: [f, m]}
+    - {by: arm, levels: [control, treatment]}
+  # 2 × 2 = 4 cells: 00_sex=f__arm=control, 01_sex=f__arm=treatment, …
+
+data:
+  units:
+    from: enrollment.csv
+    key: patient_id
+    attributes: [site, sex]
+    allocation: between
+    assign:
+      sex: {method: by_attribute}       # read from the column; `from` defaults to the axis name
+      arm:
+        method: random
+        stratify_by: [site, sex]        # randomize arm, balanced within sex
+        ratio: {control: 1, treatment: 1}
+        seed: auto
+```
+
+Axes resolve in declaration order and `stratify_by` may name an earlier axis, which is what lets one declaration cover every crossed case: two `by_attribute` axes when both factors already exist, an observed axis followed by a randomized one stratified on it, or two randomized axes for a true factorial randomization. `ratio` always names its own axis's levels, so no cell tuple appears in the config.
+
+Every cell is a condition, so cells get their own `values`, their own labels, and their own partitions — folds and holdouts are drawn *within* each cell, and `limits.min_units_per_arm` applies per cell, which is where a 2×2 over a fixed roster starts to bite. Fixing the randomized axis in `sweep.baseline` while leaving the observed one free gives one baseline per stratum, so `sex=f__arm=treatment` compares against `sex=f__arm=control` and nothing is confounded. See [reference.md § Expansion modes](reference.md#expansion-modes).
+
+As with a parameter factorial below, **main effects and interaction terms are not computed** — core reports each cell and its contrasts, and the model is yours.
 
 ### Factorial
 
@@ -101,7 +134,7 @@ sweep:
   # 3 × 2 = 6 conditions
 ```
 
-Both axes here vary *parameters*; a factorial whose factors are properties of the units instead can't be crossed, and [what core will not do](#what-core-will-not-do-for-you) says what to write in its place. Core reports each condition and its contrast against the baseline. **Main effects and interaction terms are not computed** — see [what core will not do](#what-core-will-not-do-for-you). For a 2×2 that's often fine; for anything you intend to analyze as a factorial model, plan on a `scope: "summary"` step, which is the scope that can see every condition at once.
+Both axes here vary *parameters*; a factorial whose factors are properties of the units is [two `groups` axes](#between-subjects-factorial) instead, and reads the same way. Core reports each condition and its contrast against the baseline. **Main effects and interaction terms are not computed** — see [what core will not do](#what-core-will-not-do-for-you). For a 2×2 that's often fine; for anything you intend to analyze as a factorial model, plan on a `scope: "summary"` step, which is the scope that can see every condition at once.
 
 ### Fractional factorial and coupled settings
 
@@ -131,7 +164,7 @@ sweep:
 
 `ablate` reads the baseline rather than re-emitting it, so the full model appears once. It requires `sweep.baseline` and composes with no other *parameter* mode — crossing "one change at a time" with a second parameter axis stops being one change at a time.
 
-It does compose with `groups`, which varies no parameter: `groups: {by: cohort, levels: [derivation, validation]}` alongside the above gives `2 × (1 + 3) = 8` conditions, each still one change from its own arm's baseline. That's the ablation repeated per cohort, and it's the one composition that leaves "one change at a time" intact. See [reference.md § Expansion modes](reference.md#expansion-modes).
+It does compose with `groups`, which varies no parameter: a `{by: cohort, levels: [derivation, validation]}` axis alongside the above gives `2 × (1 + 3) = 8` conditions, each still one change from its own arm's baseline. That's the ablation repeated per cohort, and it's the one composition that leaves "one change at a time" intact. See [reference.md § Expansion modes](reference.md#expansion-modes).
 
 ### Dose-response and parameter search
 
@@ -233,7 +266,8 @@ Case-vs-control is a property of the units, so it's a `groups` axis read from an
 
 ```yaml
 sweep:
-  groups: {by: status, levels: [control, case]}
+  groups:
+    - {by: status, levels: [control, case]}
 
 data:
   units:
@@ -241,7 +275,7 @@ data:
     key: subject_id
     attributes: [status, match_set]
     allocation: between
-    assign: {method: by_attribute, from: status}
+    assign: {status: {method: by_attribute}}
     cluster_by: match_set
 ```
 
@@ -302,8 +336,6 @@ Being explicit about this matters more than the feature list, because a tool tha
 **Crossover order and counterbalancing.** [Within-subjects](#within-subjects--repeated-measures) means every unit is measured under every condition, and core pairs the comparison accordingly — but it has no notion of the *order* a given unit met the conditions in, so it can neither counterbalance that order nor estimate a carryover or period effect. `replication.order: randomized` shuffles the order executions run in, which protects against drift in an instrument or a service; it is not a per-unit condition sequence, and reading it as one would be a mistake worth avoiding. A true crossover design needs the sequence to be a property of the unit: carry it as an attribute, make the sequences a `groups` axis if you want to compare them, and fit the period terms in a `scope: "summary"` step.
 
 **Leakage that arrives through your inputs.** Core controls what `io.units` hands out, which is why a fold can't be fitted on from a wider scope — but it has no view of what a step does with `io.read_input`. A `scope: "run"` step that computes normalization constants, selects features, or imputes over the whole input file has looked at every fold's test units before any fold existed, and the resulting metric is optimistic in a way no partition rule can detect. Core validates declarations and verifies effects; the contents of your Python are outside that line, per [greenfield only](design-principles.md#greenfield-only). Fit anything learned from data inside the repeat-scoped step, over `io.units.train`.
-
-**Crossed group axes.** `sweep.groups` is one axis, so a between-subjects factorial whose factors are both properties of the units — sex × arm, site × cohort — has no crossed expression. That's a refusal rather than a gap: core computes no [main effects or interactions](#factorial) regardless, so a second group axis would buy labels for a decomposition it declines to perform, and four arms reported as peers is a misleading way to render a 2×2. Two honest shapes instead. When one factor is randomized and the other already exists, make the randomized one the axis and balance on the other — `groups: {by: arm, levels: [control, treatment]}` with `assign.stratify_by: [sex]` — which leaves sex an attribute on every recorded unit, so the subgroup analysis is a `scope: "summary"` step over the per-unit tables. When both already exist, name the cells as the levels of one axis read with `by_attribute`, and fit the factorial model in that same summary step.
 
 **Power analysis.** Core enforces a template's minimum repeat count but does not compute power or required sample size. If your field expects an a-priori calculation, record it as a parameter so it's part of the pre-registered config.
 

@@ -708,7 +708,8 @@ Combining `ablate` with another *parameter* mode is rejected: the product of "va
 
 ```yaml
 sweep:
-  groups: {by: cohort, levels: [derivation, validation]}
+  groups:
+    - {by: cohort, levels: [derivation, validation]}
   baseline: {features.labs: true, features.notes: true}
   ablate:
     from: baseline
