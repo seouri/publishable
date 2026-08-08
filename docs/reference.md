@@ -1180,7 +1180,17 @@ A single git commit hash was doing two incompatible jobs: identifying the code a
 |---|---|---|
 | `code_hash` | Tree hash of `src/**` | Was the code identical? |
 | `parameters_hash` | The config's whole parameter declaration, sweep and repeat plan included | Were the parameters identical? |
-| `input_manifest_hash` | Relative paths + content hashes of `input_dir` | Was the data identical? |
+| `input_manifest_hash` | Relative paths + content hashes of `input_dir`, at the depth `data.input_manifest_policy` asks for | Was the data identical? |
+
+`input_manifest_policy` decides how much of `input_dir` gets hashed, because "hash everything" stops being affordable somewhere between a spreadsheet and a 4 TB imaging archive:
+
+| Policy | Manifest holds | Use when |
+|---|---|---|
+| `hash_all` | Every file's relative path, size, mtime, and content hash | The default. Anything you can read through once at run start |
+| `hash_index` | Content hashes for the files `data.units.from` resolves — the index and whatever it names — plus path, size, and mtime for the rest | The archive is too large to read whole, but the table driving the run isn't |
+| `none` | Paths, sizes, and mtimes only | Input lives on storage whose contents you can't read exhaustively, and you accept a weaker claim |
+
+The three make different promises, and `run.yaml` records which one was in force so a reader isn't left inferring it. Only `hash_all` supports "the data was identical" without qualification; under `hash_index` the claim is "the units were identical and nothing else moved size or timestamp"; under `none` it's a change *detector*, not a verification. Verification after the run, and `reproduce`'s comparison against the recorded manifest, both operate at whatever depth the policy captured.
 
 **`parameters_hash` is one hash per run, not one per condition.** It covers the parameter block as *declared* — base values plus the `sweep` and `replication` declarations — not the per-condition values those expand into. Two properties depend on that, and neither would survive a per-condition hash: `diff` compares two runs by a single hash, and a [hypothesis](#pre-registration) carries the hash of the config that predicted it. A condition's own resolved values live in `results.conditions[i].values` and in `sweep.yaml`, where they belong: they're derived, so they aren't a separate identity claim.
 
