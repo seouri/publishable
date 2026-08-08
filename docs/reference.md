@@ -22,6 +22,7 @@ Complete reference for `publishable`. For the rationale behind these choices, se
 **What a run produces**
 - [Run identity](#run-identity) — the output tree
 - [The two files](#the-two-files) — `config.yaml` and `run.yaml`
+- [The other files a run writes](#the-other-files-a-run-writes) — `sweep.yaml`, `allocation.json`, manifests, unit tables
 - [Three hashes](#three-hashes) — code, parameters, data, and what `auto` derives from
 - [Lineage between runs](#lineage-between-runs)
 
@@ -66,7 +67,7 @@ metadata:
   authors: []                      # REQUIRED
   institution: ""
 
-entrypoint: "src.cohort_pilot.experiment:CohortPilotExperiment"
+entrypoint: "cohort_pilot.experiment:CohortPilotExperiment"   # see "Generators"
 
 data:
   input_dir: /secure/data/cohort-2026      # must be OUTSIDE the repo — enforced
@@ -139,15 +140,18 @@ statistics:
                                          #   no executions. See "Reporting strata"
 
 limits:
-  # ---- Thresholds core checks against. All warn except max_failed_fraction, which fails. ----
+  # ---- Thresholds core checks against. All warn except max_failed_fraction, which fails the
+  #      run, and min_reported_n, which also prompts at `study add`. ----
   max_executions: 500              # `validate` warns above this many conditions × repeats
-  max_failed_fraction: 0.2         # `run` fails the run when run-level unit failures exceed it.
+  max_failed_fraction: 0.2         # `run` fails the run when units failing anywhere, over the
+                                   #   resolved roster, exceed it.
                                    #   Failures only — units a step declared ineligible are not
                                    #   attrition; see `io.skip`
   max_ineligible_fraction: 0.5     # `run` warns when a condition can be built for fewer units
   min_units_per_cell: 20           # `validate` warns for a smaller design cell under allocation: between
   min_clusters: 10                 # `validate` warns when `resample` would draw fewer than this
-  min_reported_n: 10               # `study add` prompts on any metric reported over fewer
+  min_reported_n: 10               # `validate` warns for a stratum or `within` contrast this small;
+                                   #   `study add` prompts on any metric reported over fewer
 
 hypotheses:
   # ---- Optional, but written BEFORE the run — which is what makes it meaningful. ----
@@ -162,6 +166,8 @@ hypotheses:
     threshold: 0.02
     evaluate_on: observed                # observed | ci95_lower | ci95_upper
 ```
+
+**The four identifying fields above `metadata` say what this config is written against, and `validate` checks each.** `experiment_type` names the template and must resolve to one an installed package registers; `template_version` records the spec this file was materialized from, and a mismatch with the installed template is a **warning** naming the parameters that appeared or disappeared — not an error, because upgrading a plugin is ordinary and [nothing ever writes back into your config](#the-one-config-file). What makes an incompatibility *fail* is already covered without a version check: a retired parameter is an unknown key, and a new required one is a missing key. So the version tells you where to look and the existing checks decide whether it matters; `plugin` names where the template came from, and is a readable note beside the authoritative pin in `uv.lock` rather than a second one — core never installs from it. `schema_version` is the config format's own version: core reads any minor at or below its own and refuses a higher one, or a major it doesn't implement, rather than guessing at a field it doesn't recognize. Through v0.x a change that would break an existing config bumps the major, and there is no migration command — a config is small, `init` writes a fresh one, and the [defaults-file argument](#there-is-no-separate-defaults-file) applies to a migration file too. What protects an old *result* is that `run.yaml` embeds its config verbatim alongside the `schema_version` it was written under, so a record stays readable whether or not the format moved. All four are inside [`parameters_hash`](#three-hashes), because a config read against a different spec is a different declaration.
 
 This file is three things at once: the scaffold (you didn't type it), the documentation (every available parameter is present, with its constraints in a comment), and the config (it's what `run` consumes). Keeping them as one artifact is what prevents the usual drift where documentation lists options the code no longer accepts.
 
@@ -196,6 +202,9 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Choices | `analysis.method` is `pearsonn`, expected one of pearson, spearman, kendall |
 | **Unknown keys** | `analysis.min_sample` is not a parameter of template `generic` — did you mean `min_samples`? |
 | Naming convention | `metadata.name` doesn't match the template's `naming_pattern` |
+| Name matches its directory | `metadata.name` is `cohort-pilot-v2` under `configs/cohort-pilot/`; the two name one experiment |
+| Template is installed | `experiment_type` names `llm_diagnostic`, which no installed plugin registers — `plugin` says it should come from `someuser/publishable-llm` |
+| Template version moved | `template_version` is `1.0.0` but installed `generic` reports `1.2.0`; `request.timeout` is new and unset (warning) |
 | Replication floor | `repeats` total of 1 is below this convention class's default of 5 (warning) |
 | Sweep paths resolve | `sweep.grid` key `analysis.methd` is not a parameter of template `generic` |
 | Swept values legal | `sweep.grid.analysis.method[1]` is `spearmann`, expected one of pearson, spearman, kendall |
@@ -205,6 +214,7 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Ablation baseline isn't a group level | `sweep.baseline` fixes `cohort: derivation` while `ablate` is declared; each cell gets its own baseline condition, so the arms can't have one designated between them |
 | Sample ranges | `sweep.sample.ranges.analysis.confidence` upper bound 1.4 violates the parameter's `lt=1` |
 | Baseline is a valid condition | `sweep.baseline` sets `analysis.method: pearsonn` |
+| Swept values are nameable | `sweep.grid.prompt.text[1]` renders as `a long sentence`, which can't be a [condition label](#how-artifacts-are-organized) — a swept value must render as `[A-Za-z0-9._+-]+` |
 | Repeat kind coherence | `{kind: bootstrap}` is not a repeat kind — declare `statistics.resample` instead |
 | Batch has something to measure | `{kind: batch, n: 5}` is declared but no step sets `nondeterministic = True`, so five batches recompute one answer (warning) |
 | Batch takes no fields | `{kind: batch, k: 3}` — a batch varies nothing, so `n` is the only field it accepts |
@@ -221,6 +231,7 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Data outside repo | `output_dir` resolves inside the git repository |
 | Manifest readable | `input_dir` is unreadable or empty |
 | Unit keys unique | `data.units.key` `patient_id` has 3 duplicate values |
+| Attribute names aren't reserved | `data.units.attributes` names `paths`, which is a field of [`Unit`](#where-units-come-from) itself — `key`, `paths`, and `attributes` can't also be attributes |
 | Resolver is installed | `data.units.from.resolver` names `plate_wells`, which no installed plugin registers |
 | Resolver supplies the attributes | resolver `plate_wells` yields units with no `operator`, declared in `data.units.attributes` |
 | Resolver supplies the measurement field | `measurements: {by: read_id}` is declared but resolver `plate_wells` yields no `read_id` attribute to collapse on |
@@ -262,22 +273,30 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Weighting looks undeclared | `sampling_weight` varies across units and looks like an inverse sampling probability, but `weight_by` is unset (warning) |
 | Resample strata exist | `statistics.resample.stratify_by` names `count_stratum`, which is not a unit attribute |
 | Correction declared for a family | 6 enumerated conditions × 3 metrics produce a family of 15 baseline comparisons with `statistics.correction: none` (warning). Not raised for a `sample`-only sweep, whose draws aren't a family |
-| Step scope coherence | `step01_load_cohort` is `scope="run"` but reads `analysis.method`, which `sweep` varies |
-| Scope read direction | `step02_fit_model` (`scope="condition"`) reads from `step03_analyze` (`scope="repeat"`), which runs later |
-| Estimate is summary-only | `step03_analyze` (`scope="repeat"`) returned an `Estimate`; an interval per repeat is not something core will record — see [`Estimate`](#estimate-carries-your-interval-without-core-claiming-it) |
-| Estimate labels its method | `step04_compare_methods` returned an `Estimate` with `ci95` and no `method`; an interval nobody labelled is unreadable |
-| Hypothesis references | `hypotheses[0].metric` `step03_analyze.r` names no metric any step returns |
 | Hypothesis needs baseline | `hypotheses[0].compare.to: baseline` but `sweep.baseline` is not declared |
-| Hypothesis bound exists | `hypotheses[0].evaluate_on` is `ci95_lower` but `step03_analyze.r` is `basis: repeats` and has no interval to test |
+| Hypothesis bound exists | `hypotheses[0].evaluate_on` is `ci95_lower`, but `data.units` is undeclared and template `generic` defines no `aggregate`, so no metric this run computes can carry an interval |
 | Hypothesis names a real contrast | `hypotheses[1].compare.contrast` is `invariance`, which `statistics.contrasts` does not declare |
-| Hypothesis form matches its metric | `hypotheses[1].metric` names the summary metric `step04_agreement.s_within_lower_bound` but declares `compare`; a summary metric is one value per run, not a contrast between conditions — and a condition metric without `compare` is the same mistake inverted |
-| Hypothesis has an inference base | `hypotheses[0].metric` `step03_analyze.r` is `basis: repeats` — no unit table and no template `aggregate`, so it can be reported but not tested (warning) |
+| Hypothesis form matches its metric | `hypotheses[1].metric` names a metric of a `scope: "summary"` step but declares `compare`; a summary metric is one value per run, not a contrast between conditions — and a condition-step metric without `compare` is the same mistake inverted |
+| Hypothesis has an inference base | `hypotheses[0]` names a metric under the same declarations, without a bound: every metric will be `basis: repeats`, so it can be reported but not tested (warning) |
 
 The unknown-key check matters more than it looks: a mistyped key in a hand-edited YAML file is otherwise silently ignored, and the run proceeds with a default while you believe you changed something. Since `init` materializes every valid key, any key not in the spec is a typo by construction.
 
 **Every threshold in that table lives in `limits`**, not in a flag, an environment variable, or a core default nobody can see. A threshold is a parameter of the run like any other: it decides whether the run is allowed to proceed, or whether a reader is warned about the number they're looking at, and a value with that much authority belongs in the file being hashed rather than in the tool's source. `init` writes the defaults; changing one is an ordinary edit, and it moves `parameters_hash` along with everything else — so `diff` prints a raised `max_failed_fraction` as the parameter delta it is, and two runs that disagreed about what counted as too much attrition can be told apart rather than looking identical. This is [Everything is in the file](design-principles.md#everything-is-in-the-file) applied to core's own knobs, which would otherwise be the one set of parameters living outside it.
 
 Three things deliberately absent from that table: the unit failure rate is enforced by `run` as it goes, lockfile drift is checked by `resume` against the run it's resuming, and whether the [apparatus](#the-apparatus-core-can-only-observe) is reachable is checked by `dry-run`. The first two need a run to have happened, and `validate` takes a config path. The third could be checked here and deliberately isn't: `validate` may read your config and your input, and may not reach anything outside the machine, because it's the command you run in a loop while editing YAML and a probe is metered by somebody else.
+
+**A fourth class is absent for a harder reason: what a step reads, calls, and returns is not a declaration.** Core [never inspects the body of your Python](design-principles.md#greenfield-only), so which parameter a step reads, which step it names in a call, and which keys it returns all exist nowhere until it runs. Those are enforced as it does, by the objects core owns — `cfg`, `io`, and the returned mapping — and each fails that execution the way any other error in it would:
+
+| Checked as a step runs | Example failure |
+|---|---|
+| Scope read direction | `step02_fit_model` (`scope="condition"`) called `io.read_upstream("step03_analyze", …)`, which is `scope="repeat"` and runs later |
+| A swept parameter has no value here | `step01_load_cohort` (`scope="run"`) read `analysis.method`, which `sweep` varies — see [Step scope](#step-scope) |
+| The named metric exists | `hypotheses[0].metric` `step03_analyze.r` names a key `step03_analyze` never returned; the hypothesis is recorded unevaluated |
+| `Estimate` is summary-only | `step03_analyze` (`scope="repeat"`) returned an `Estimate`; an interval per repeat is not something core will record — see [`Estimate`](#estimate-carries-your-interval-without-core-claiming-it) |
+| `Estimate` labels its method | `step04_compare_methods` returned an `Estimate` with `ci95` and no `method`; an interval nobody labelled is unreadable |
+| A recorded column doesn't collide | a step recorded a column named `label`, which `null_test.shuffle` also resolves as a unit attribute |
+
+The cost is real and worth naming: a hypothesis that names a metric no step returns is not caught until that step has run. What `validate` catches instead is everything about the hypothesis that *is* declared — its form, its contrast, its baseline, and whether any metric in this run could carry the interval it asks for. The alternative would be a step declaring its return keys up front, which is a second source of truth for something the `return` statement already states, and the [defaults-file argument](#there-is-no-separate-defaults-file) applies to it unchanged.
 
 `publishable dry-run` goes further: it validates, builds the input manifest, probes the apparatus, resolves the run directory, and prints every artifact path that *would* be written — without executing a step or creating anything. It's the command that pays for the expensive pre-flight, which is why the two are separate names rather than one command and a flag.
 
@@ -295,7 +314,7 @@ Three things deliberately absent from that table: the unit failure rate is enfor
 # <output_dir>/run_2026-08-06T14-02-11Z_8e21ab3/run.yaml
 schema_version: "1.0"
 run_id: run_2026-08-06T14-02-11Z_8e21ab3      # <timestamp>_<short code_hash>
-status: completed                              # completed | failed | partial
+status: completed                              # completed | partial | failed — see below
 draft: false                                   # true when written by `publishable draft`
 
 config: {...}                                  # the config.yaml, embedded verbatim
@@ -347,7 +366,7 @@ execution:                                     # mechanical; nested by the scope
                           wall_seconds: 61.0, attempts: 1}
         step03_analyze:
           seed17: {status: completed, started_at: "2026-08-06T14:03:27Z",
-                   wall_seconds: 903.1, attempts: 2,
+                   wall_seconds: 903.1, attempts: 1,      # >1 only after `resume`
                    nondeterministic: false,
                    n: {resolved: 240, completed: 231, failed: 9}}    # this execution's
           seed42: {status: completed, started_at: "2026-08-06T14:18:30Z",
@@ -375,14 +394,31 @@ results:                                       # scientific; see "Statistical re
       vs_baseline:
         step03_analyze:
           r: {delta: 0.026, basis: units, paired: true, ci95: [0.017, 0.035],
-              ci95_corrected: [0.011, 0.041],
-              correction: holm, family_size: 2, family: {comparisons: 2, metrics: 1},
+              ci95_corrected: [0.017, 0.035],       # rank 2 of 2 under holm: α/(m−i+1) = α
+              correction: holm, correction_level: 0.05,
+              family_size: 2, family: {comparisons: 2, metrics: 1},
               cohens_d: null}                       # r is derived, not a per-unit mean
   summary:
     step04_compare_methods: {best_method: spearman}
   hypotheses:                                  # see "Pre-registration"
     - {id: h1, kind: confirmatory, supported: true}
 ```
+
+### What `status` means, and when a run keeps going
+
+An execution that raises is recorded `failed` and the run **continues to the next one.** Stopping at the first failure would throw away every execution the plan had left — on a 720-execution leave-one-out sweep, a single bad fold would cost the run — and there is nothing to salvage it with, since [`resume`](#resuming) skips completed triples but cannot un-abort a plan that was never attempted. So the plan is executed to the end, and the run's own status says what came of it:
+
+| `status` | The run reached the end of its plan | And |
+|---|---|---|
+| `completed` | ✓ | every execution completed |
+| `partial` | ✓ | some executions failed |
+| `failed` | ✗ | it stopped where it stood |
+
+Two things produce `failed`, and both are cases where there was no plan left to execute. A `scope: "run"` step that raises takes every condition with it — there is no shared cohort for them to condition on, so continuing would mean executing a plan whose first premise is missing. And `limits.max_failed_fraction` being exceeded stops the run where it stands: unit failures only accumulate, so once the fraction is past the threshold no later execution can bring it back, and spending the remaining compute to confirm that is waste. A `scope: "summary"` step that raises is *not* one of these — every condition ran, and its own execution is one failure among the others, so the run is `partial` and the conditions are readable without it.
+
+**`partial` is a reportable status, and that's the point of separating it from `failed`.** A run whose executions all ran and three of which failed has results worth reading, with the attrition recorded per execution and per condition; `report` renders it with the failures shown rather than refusing. What it is not is `completed`, so a `study add` of one is visible as what it is.
+
+**All three are terminal, which is what [`resume`](#resuming) distinguishes itself against.** `run.yaml` is written when the plan ends, once, and never modified — so a run directory holding one is a run that finished, and `resume` refuses it rather than re-executing the triples it recorded as failed. What `resume` is for is the case with *no* terminal status at all: a scheduler, a node eviction, a `^C`. That's also why it takes a run directory rather than a `run.yaml` — at the moment it's needed, there isn't one. To retry failed executions after a `partial`, run again: a fresh `run_<id>/` is the mechanism, and patching a record a collaborator may already hold is not.
 
 Results go here rather than back into the config for four compounding reasons: writing into a git-tracked file dirties the tree; writing into a file whose hash was taken at run start makes that hash unanswerable; overwriting previous results contradicts append-only; and one `results` block can't hold many runs. Immutable-after-write `run.yaml` fixes all four, and embedding the config keeps "one self-sufficient file to report" intact.
 
@@ -403,9 +439,113 @@ Results go here rather than back into the config for four compounding reasons: w
 └── latest -> run_2026-08-07T09-14-03Z_8e21ab3
 ```
 
+Everything beside `run.yaml` there has a shape something reads back; see [The other files a run writes](#the-other-files-a-run-writes).
+
 This is what makes append-only livable. Without a run layer, a second run against the same config would target paths the first already filled, and append-only would turn every rerun into a hard failure — so "rerun with different parameters" would require hand-editing `output_dir`, defeating the purpose. With it, reruns are the normal case and nothing is ever at risk.
 
-Including the short `code_hash` in the run ID means a directory listing already tells you which runs shared code. `latest` is a convenience symlink; commands always resolve and record the real ID.
+Including the short `code_hash` in the run ID means a directory listing already tells you which runs shared code.
+
+**A collision is resolved by suffix, not by precision.** Two runs of one config started in the same second — a shell loop, a scheduler firing twice, a test suite — would otherwise derive the same ID, and append-only would turn the second into a hard failure at the moment it least deserved one. So core takes the first free name, appending `_b`, `_c`, … when the derived one is taken, and records the ID it actually used. Timestamps to the millisecond would look like a fix and wouldn't be one: the guarantee has to hold against a filesystem, not against a clock.
+
+`latest` is a **pointer, not an artifact**, which is why repointing it on every run doesn't contradict [append-only](design-principles.md#design-goals): nothing a run produced is touched, and the runs it has pointed at are all still there under their own names. Commands always resolve it and record the real ID, so it never reaches a record — a `run.yaml` that said `latest` would mean something different tomorrow. Where a platform doesn't give symlinks cheaply, it's a `latest.txt` holding the run ID, and every command reads either.
+
+### One execution at a time, and what holds the run directory
+
+**Core runs one execution at a time, in the order [`sweep.yaml`](#the-other-files-a-run-writes) records.** That isn't a limitation waiting to be lifted; it's what the rest of the design already assumes. [`order: randomized`](#sweeps-and-repeats) exists to decorrelate execution position from condition, and position means nothing without a sequence. A [`batch`](#a-batch-says-when-not-what) level *is* a position in time. The [apparatus gate](#the-apparatus-core-can-only-observe) probes before every execution and fails the run on a change, which needs a defined "before." And [`max_failed_fraction`](#what-isnt-a-repeat) stops the run the moment it's exceeded, which is only meaningful if there's a moment. Interleaving executions would cost all four to buy a speedup on the axis where it helps least.
+
+**The parallelism worth having is inside a step, and it's yours.** A repeat-scoped step making 440 metered requests is where the wall-clock actually goes, and core neither helps nor hinders: issue them concurrently, and [`io.record`](#units-the-thing-being-measured) and [`io.append`](#steps-and-artifacts) are append-only and safe to call as each returns. What core declines to do is run *your pipeline* twice at once, which is the thing that would make the provenance ambiguous. Scheduling a fleet of runs is a scheduler's job, and [this isn't one](../README.md#is-this-for-you).
+
+**A run holds its directory while it executes.** `run_<id>/lock` records the host, pid, and start time, and is removed when [`run.yaml` is written](#what-status-means-and-when-a-run-keeps-going). `run`, `draft`, and `resume` each take it and each release it — a resumed attempt holds the directory exactly as the first one did, which is what "the invocation that takes it releases it" means when two invocations share a run. `dry-run` takes none: it resolves the run directory to print paths and creates nothing, so running one against a live run is as ordinary as reading the ledger. The lock is what makes `resume` safe: resuming a directory another process is executing would put two writers on one append-only tree, so `resume` refuses a directory whose lock is held. A lock left behind by a killed process is reported rather than assumed dead — core can't tell a crashed run from a live one on another node, and guessing wrong is the one guess that corrupts a run instead of merely delaying it.
+
+Like `latest`, the lock is bookkeeping rather than an artifact, so creating and removing it within one invocation isn't the deletion append-only forbids. A finished run directory holds no trace of it, which is right: what's worth keeping about when a run held its directory is each execution's `started_at`, and that's in the record.
+
+[`freeze`](#cli-reference) is the deliberate exception, and the only one. It executes nothing and writes nothing but one line to the append-only [probe ledger](#the-other-files-a-run-writes), so it is safe against a live lock — which is the entire point of having it, since "between blocks of a multi-day run" is exactly when a run is holding its own directory. Concurrent runs of one config need no rule at all: each gets its own `run_<id>/` — [by suffix if their timestamps collide](#run-identity) — and its own lock, and they share only the `latest` pointer, which the later terminal write wins.
+
+---
+
+## The other files a run writes
+
+`run.yaml` is the deliverable, and five other files in the run directory are read back by something — by `resume`, by `reproduce`, by a statistic, or by you. Each is therefore a contract rather than a log, and each is written once and never modified, like everything else under a run.
+
+### `sweep.yaml` — the resolved plan
+
+Written before the first execution, from the config and the [design digest](#what-auto-derives-from). It is the answer to "what was this run going to do," and [`resume` reads it back rather than re-deriving it](#resuming):
+
+```yaml
+design_digest: sha256:9c04...            # a derivation input, not an identity claim
+conditions:
+  - {index: 0, label: baseline, is_baseline: true, values: {analysis.method: pearson}}
+  - {index: 1, label: method=spearman,  values: {analysis.method: spearman}}
+  - {index: 2, label: method=kendall,   values: {analysis.method: kendall}}
+repeats:
+  - kind: seed
+    seeds: [17, 42, 137, 1009, 2027]     # resolved, whether `auto` or listed
+labels: [seed17, seed42, seed137, seed1009, seed2027]
+order: as_declared                       # as_declared | randomized
+execution_order:                         # realized, always recorded — the fact, not the rule
+  - {condition: 0, repeat: seed17}
+  - {condition: 0, repeat: seed42}
+  # …
+```
+
+A `fold` level adds `partitions` — the unit keys in each fold's train and test side, and the realized fold sizes when [`cluster_by`](#clustered-units) makes them uneven. A `sample` sweep adds the drawn `values` per condition and the seed they came from. `order: randomized` adds the `order_seed` its shuffle used, beside the `execution_order` that shuffle produced — the seed so the plan is derivable, the order because [what happened is not a thing to re-derive](#resuming). Both are there so a reader never re-derives a design, and so `reproduce` regenerates the same one.
+
+### `allocation.json` — who went where
+
+Present only when an [arm assignment](#allocation-within-subjects-or-between-subjects) or a [holdout](#a-fixed-holdout-split) is declared, and covered by `provenance.allocation_hash`. Both are partitions of one roster drawn once, so they share a file. The worked example has neither; this is the enrollment design from § Allocation:
+
+```json
+{
+  "seed": {"arm": 774512301},
+  "arms": {"arm": {"control": ["P0007", "P0011"], "treatment": ["P0002", "P0019"]}},
+  "holdout": {"train": ["P0002", "P0007"], "test": ["P0011", "P0019"]},
+  "strata": {"arm": ["site", "severity"]}
+}
+```
+
+Unit keys, never row numbers — a roster that gains a unit renumbers rows and would silently repoint every membership claim. This is the file that answers "which patients were in the treatment arm" from the record alone, which is why it is [read rather than re-drawn](#resuming) on resume and why a copy edited afterwards no longer matches its hash.
+
+### `manifest/input.json` — what was read
+
+Built by `dry-run` and at run start, re-verified after the run, and compared by `reproduce`. Its shape follows [`input_manifest_policy`](#three-hashes), and it records which policy produced it so a reader isn't left inferring the strength of the claim:
+
+```json
+{
+  "policy": "hash_all",
+  "root_is_redacted": false,
+  "files": [
+    {"path": "index.csv",         "size": 20481, "mtime": "2026-08-01T09:12:44Z",
+     "sha256": "b1c2..."},
+    {"path": "scans/P0002.nii.gz", "size": 8402113, "mtime": "2026-07-30T22:04:01Z",
+     "sha256": "77aa..."}
+  ]
+}
+```
+
+Under `hash_index` the `sha256` key is present for the files `data.units.from` resolves and absent for the rest; under `none` it is absent throughout. Absent rather than null, so "not hashed" can't be misread as "hashed to nothing."
+
+### The per-unit tables
+
+Each recording step's directory holds the table its [`io.record`](#units-the-thing-being-measured) calls built, and one file per thing that can happen to a unit:
+
+| File | Holds | One row per |
+|---|---|---|
+| `units.parquet` | The collapsed inference base — [`aggregate`](#templates-where-parameters-are-defined) receives this, and `resample`/`null_test` rebuild it | unit that completed |
+| `measurements.parquet` | The uncollapsed rows, present only when a step passed `measurement=` | (unit, measurement) |
+| `ineligible.jsonl` | `{"unit": "P0044", "reason": "observed span too short to define a velocity"}` | unit [`io.skip`](#what-isnt-a-repeat) declared |
+
+`units.parquet`'s columns are the unit key under the name [`data.units.key`](#units-the-thing-being-measured) gives it, then every declared attribute, then every key any row recorded — the union, with a column absent from a row reading as null. A failed unit has no row anywhere, which is [how core counts one](#what-isnt-a-repeat): `failed` is what's left after `completed` and `ineligible` are subtracted from `resolved`.
+
+### The apparatus files
+
+`apparatus/probes.jsonl` is the append-only ledger every probe writes to — at `dry-run`, at run start, before each execution, and at [`freeze`](#cli-reference):
+
+```json
+{"at": "2026-08-06T14:02:11Z", "phase": "run_start", "condition": "00_baseline",
+ "probe": "llm_deployment", "facts": {"model_revision": "gpt-5.5-2026-06-11"}}
+```
+
+`provenance.apparatus.facts` in `run.yaml` is the first observation per condition — what the [gate](#the-apparatus-core-can-only-observe) compares against — and the ledger is every observation, so a run that failed on a moved apparatus still shows the evaluable earlier period. [`apparatus.expected.json`](#reproducing-on-another-device), written by `reproduce` into the checkout rather than into a run directory, is that same per-condition mapping with nothing else in it: `{"probe": …, "facts": {"00_baseline": {…}}}`. It is the one file here you are expected to edit.
 
 ---
 
@@ -441,12 +581,12 @@ class Step(BaseStep):
 
 **`nondeterministic` is a declaration, not a warning.** Core seeds Python and NumPy per repeat, which covers local pseudorandomness and nothing else; a step reaching a hosted service or an instrument cannot be made to repeat, and saying so is what lets core record it per execution in `run.yaml`, note it in `report` rather than implying reproducibility it can't deliver, and check that a [`batch`](#a-batch-says-when-not-what) level has something to measure. It travels with the [apparatus record](#the-apparatus-core-can-only-observe): one says the answer may move, the other says what it moved with.
 
-`cfg` is the object `validate` already checked, so a step can assume every parameter is present, correctly typed, and in range — no defensive `cfg.get(...)`. When a sweep is declared, `cfg.parameters` is already resolved for the current condition (see [Sweeps and repeats](#sweeps-and-repeats)), so step code stays sweep-agnostic. `io` is scoped to the step's [declared scope](#step-scope) — for the default `repeat` scope that means this condition, this repeat, this step — so nothing a step writes can collide with another execution:
+`cfg` is the object `validate` already checked, so a step can assume every parameter is present, correctly typed, and in range — no defensive `cfg.get(...)`. When a sweep is declared, `cfg.parameters` is already resolved for the current condition (see [Sweeps and repeats](#sweeps-and-repeats)), so step code stays sweep-agnostic — except at `"run"` and `"summary"` scope, where no condition is current and a swept path [raises](#step-scope) instead of resolving. `io` is scoped to the step's [declared scope](#step-scope) — for the default `repeat` scope that means this condition, this repeat, this step — so nothing a step writes can collide with another execution:
 
 | Method | Behavior |
 |---|---|
 | `io.write(name, obj)` | Writes into this step's directory. Raises `ArtifactExistsError` if the target exists — no overwrite, no backup-and-replace, no delete-to-make-room. **Atomic**: temp file plus rename, so a crash leaves nothing rather than a half-file that would permanently block a retry. |
-| `io.append(name, record)` | Appends one record to a line-oriented artifact, for incremental work that must survive a crash. Idempotent by `record_key` when supplied: a second record under a key already present is discarded, so **first write wins** — the same rule and the same reason as `io.record`. Without a key, a re-executed range appends a second copy of everything it already wrote. |
+| `io.append(name, record)` | Appends one JSON object per line, so the artifact is `.jsonl` and core rejects any other extension. For incremental work that must survive a crash. Idempotent by the record's own `record_key` field when it carries one: a second record under a key already present is discarded, so **first write wins** — the same rule and the same reason as `io.record`. Without a key, a re-executed range appends a second copy of everything it already wrote. |
 | `io.path(name)` | Resolves a *write* location without writing, for libraries that insist on writing themselves. Existence-checked in the same direction as `io.write` — it raises `ArtifactExistsError` when the target is already there — so it is not a way to read something back. See `io.exists` below. |
 | `io.exists(name)` | Whether this step's directory already holds that artifact. The question a resumed execution asks before writing — see [Resuming](#resuming). |
 | `io.resumed` / `io.recorded_keys` | `True` when this execution is a resumed attempt rather than a first one, and the keys this execution has already settled — recorded *or* [skipped](#what-isnt-a-repeat) — from earlier attempts. A **set**, so `key in io.recorded_keys` is constant-time; it covers skips because its one purpose is telling a resumed step what not to redo. Empty rather than absent on a first execution, so a step needs no second check. Together, what a step needs to skip work it already did — see [Resuming](#resuming). |
@@ -454,13 +594,17 @@ class Step(BaseStep):
 | `io.read_input(relpath)` | Read-only access to `input_dir`. |
 | `io.units` | The units this execution produces results about — every unit, this arm's, or this fold's or holdout's test partition. A sequence: iterate it, take its `len`, index it. `io.units.train` carries the training partition when a `fold` repeat or a [`holdout`](#a-fixed-holdout-split) is declared, and **raises when neither is** — an empty list would let a fit run on nothing and write a plausible model, which is the failure a partition exists to prevent. Both raise at `"run"` and `"condition"` scope when a `fold` repeat is declared, since no fold exists there — see [Step scope](#a-fold-repeat-puts-the-units-out-of-reach-of-the-wider-scopes). There is no `io.units.train.train`. See [Units](#units-the-thing-being-measured). |
 | `io.skip(unit_key, reason)` | Declares that this unit admits no result in this execution by design — a transform that can't be built, an assay that doesn't apply. Counted as `ineligible` rather than `failed`, with the reason recorded per unit. |
-| `io.record(unit_key, values, measurement=None)` | Appends one row to this step's per-unit result table, keyed by unit — or by `(unit, measurement)` when the step measures one unit more than once, which core then collapses per [`data.units.measurements`](#what-isnt-a-repeat). Append-only and resumable by whichever key applies. |
+| `io.record(unit_key, values, measurement=None)` | Appends one row to this step's per-unit result table, keyed by unit. `values` is a flat mapping of scalars — `str`, `int`, `float`, `bool`, or `None`; the table is a table. Rows need not agree on keys, and a column absent from a row reads as `None`, so `units.columns` is the union across the step's rows plus every declared attribute — or by `(unit, measurement)` when the step measures one unit more than once, which core then collapses per [`data.units.measurements`](#what-isnt-a-repeat). Append-only and resumable by whichever key applies. |
 | `io.conditions` / `io.repeats` / `io.read_condition(condition, step, name, repeat=None)` | **`scope="summary"` only.** Iterate resolved conditions and resolved repeat labels, and read any condition's artifacts. `repeat` names which repeat's copy to read and is required when `step` is repeat-scoped; repeat labels are identical under every condition, which is why `io.repeats` is a run-level list. |
 | `io.reuse_from(run_id, step, name)` | Explicitly read an artifact from a *previous* run — the sanctioned way to build on prior work without copying or overwriting. See [Lineage](#lineage-between-runs). |
 
+**What `io.write` does with your object is decided by the extension, from a registry core owns.** Core ships writers for the formats it also has to read — `.json`, `.jsonl`, `.yaml`, `.csv`, `.parquet` — and for anything else the object must be `bytes` or `str`, written verbatim. So `io.write("model.pkl", pickle.dumps(model))` and `io.write("figures/roc.png", fig_bytes)` are how those go out: core never pickles for you and never renders a figure, because guessing a serialization for an arbitrary object is how an artifact ends up in a format nobody can read five years later. A plugin registers a writer for an extension its domain needs, the same way it registers a template. Every reader — `io.read_upstream`, `io.read_condition`, `io.reuse_from`, `io.read_input` — inverts the same table: a registered extension comes back as the parsed object, with `.csv` and `.jsonl` yielding rows as mappings, and anything else comes back as `bytes`.
+
+**That is a serialization dependency, not an API one, and the distinction is the same one [`aggregate`](#templates-where-parameters-are-defined) rests on.** Core writing `units.parquet` means core depends on a parquet library; it does not mean the table core hands a template is that library's type, and the four-operation contract holds regardless of what sits underneath. A format is a promise about a file a reader opens in ten years; a type is a promise about an object a plugin is written against. Only the first is worth pinning this hard.
+
 **A `name` is a relative path, not only a filename.** `io.write("figures/roc.png", fig)` and `io.write("programs/gpt-4.1__seed29.json", blob)` both write inside the step's own directory, creating intermediate directories as needed, and every reader — `io.path`, `io.append`, `io.read_upstream`, `io.read_condition`, `io.reuse_from` — addresses them by that same relative path. A step that produces a set rather than a single file is ordinary, and making it flatten a tree into `programs_gpt_4_1_seed29.json` would push structure into filenames where a directory says it better. The path is resolved against the step's directory and normalized first: an absolute path, a `..` segment, or a symlink leading outside are all rejected, so "artifacts land in a directory of the same name" stays a property core enforces rather than one a step could opt out of.
 
-There is no `publishable clean` or `publishable reset`. Nothing in core deletes a file it didn't create in the same call.
+There is no `publishable clean` or `publishable reset`. Nothing in core deletes a file it didn't create in the same call — the [run lock](#one-execution-at-a-time-and-what-holds-the-run-directory) being the whole of the exception, and only in the sense that whichever invocation takes it is the one that releases it.
 
 **On `input_dir` being read-only:** `io.read_input` offers no write path, and core never opens `input_dir` for writing. A step calling `open(path, "w")` on an input file is outside what core can prevent — the same boundary as [Greenfield only](design-principles.md#greenfield-only). What core does instead is verify the manifest after the run and fail if inputs changed.
 
@@ -472,9 +616,11 @@ Because runs are identified and writes are atomic, resume is well-defined:
 uv run publishable resume /secure/results/cohort-pilot/latest
 ```
 
-It reopens that run directory and skips every (condition, repeat, step) triple marked `completed`, continuing from the first that isn't. On a 3-condition × 30-repeat sweep that died at condition 3, the first two conditions and all their repeats are simply not re-executed. Partial artifacts can't exist to confuse it; work that used `io.append` resumes from the last complete record.
+It reopens that run directory and skips every (condition, repeat, step) triple marked `completed`, continuing from the first that isn't. The marks are in the run directory rather than in `run.yaml`, and they have to be: [`run.yaml` is written once, when the plan ends](#what-status-means-and-when-a-run-keeps-going), so a run that was interrupted doesn't have one — core appends each execution's record as it finishes, and assembles `run.yaml` from those at the end. On a 3-condition × 30-repeat sweep that died at condition 3, the first two conditions and all their repeats are simply not re-executed. Partial artifacts can't exist to confuse it; work that used `io.append` resumes from the last complete record.
 
 `resume` refuses if `parameters_hash`, `code_hash`, or `uv.lock` don't match current state. Resuming into a *different* experiment is the failure this guards against; with parameters hashed separately, "I edited the config and then resumed" is caught rather than missed.
+
+**A [`draft`](#draft-runs) is therefore rarely resumable, and that follows rather than being a separate rule.** A draft's `code_hash` is taken from the working tree, so any edit between the crash and the resume moves it and `resume` declines. That is the correct answer — the executions already recorded came from code that no longer exists — and the remedy is the ordinary one: run again, into a fresh `run_<id>/`. Iterating on code and resuming a long run are different activities, and `draft` is named for the first.
 
 **It takes the execution order from `sweep.yaml` rather than re-deriving it.** Under [`order: randomized`](#sweeps-and-repeats) a re-derivation would usually agree, since the shuffle is seeded from the design digest — but "usually" is the problem. The realized order is a fact about what happened, and a fact should not be re-computable to a different answer; that's the same reason [`allocation.json`](#allocation-within-subjects-or-between-subjects) is read rather than re-drawn. Reading it also keeps `run.yaml`'s record of the order true after a resume, which a fresh shuffle would quietly falsify.
 
@@ -506,6 +652,8 @@ class Step(BaseStep):
 `io.exists` earns its place on the first two lines: atomic writes mean a crash *during* a write leaves nothing, but a write that completed before a later crash leaves a whole artifact, and re-executing into it would raise `ArtifactExistsError` and make the step unresumable. Asking first is the only way through, and it's a question only core can answer.
 
 **`io.units` is never narrowed on resume, and that's deliberate.** `resolved` [is defined as `len(io.units)`](#what-isnt-a-repeat) for the execution, and a resumed execution still produced results about every unit it was handed — the earlier attempt's rows are in the same append-only table. Narrowing the list would drop `resolved` to the remainder and make a correctly resumed run look like one that evaluated 140 patients instead of 440. So the skip is the step's `continue` rather than core's filter, and the three-part `n` comes out identical whether an execution ran once or three times. The execution's `attempts` count in `run.yaml` is where the fact that it ran more than once is recorded.
+
+**`attempts` counts `resume` invocations, because core never retries on its own.** A first run leaves every execution at `attempts: 1`, and the count rises only when you re-enter a run directory. Automatic retry is deliberately absent: it would be a behavior nothing in the config describes, it would double-execute a `nondeterministic = True` step whose first attempt may have half-succeeded, and the resolution of the duplicate rows it produced would be [first-write-wins](#resuming) — a tie-break decided by core over an answer that genuinely differs. Retrying a *unit* is a different question and stays where the domain knowledge is: a step's own loop, under parameters its template declares.
 
 **A duplicate row resolves first-write-wins.** That isn't a new rule, it's [append-only](design-principles.md#design-goals) applied: the first row is already durable and nothing overwrites it. For a deterministic step the resolution is immaterial, which is why it rarely comes up — but under `nondeterministic = True` the two rows genuinely differ, so which answer survives is a question about the experiment rather than about bookkeeping. Check `io.recorded_keys` rather than relying on the tie-break. `io.append` resolves the same way for the same reason, and its idempotency needs a `record_key`: without one there is nothing to deduplicate by, and a re-executed range appends a second copy of every record it already wrote.
 
@@ -539,7 +687,9 @@ from: {glob: "*.dcm"}                # one unit per matching path
 from: {resolver: plate_wells}        # a plugin walks the input and yields units
 ```
 
-A table is the ordinary case, and the one everything else in this document uses: `key` and `attributes` name columns, and core reads them. `glob` covers input whose only structure is the filesystem — core builds the table itself, one row per matching path, so there are no attributes to declare and a design that needs them wants one of the other two forms.
+A table is the ordinary case, and the one everything else in this document uses: `key` and `attributes` name columns, and core reads them. `glob` covers input whose only structure is the filesystem — core builds the table itself, one row per matching path, with the path relative to `input_dir` as the `key`. The pattern is matched against those relative paths, with `**` recursing, so `{glob: "**/*.dcm"}` walks the tree and `{glob: "*.dcm"}` does not. There are no attributes to declare, so a design that needs them wants one of the other two forms.
+
+**The resolved list keeps the order it was resolved in** — table row order, resolver yield order, or lexicographic path order for a `glob`, which is what makes a glob reproducible across filesystems that walk directories differently. That order is not cosmetic: [`assign.method: blocked`](#allocation-within-subjects-or-between-subjects) balances arms *across the roster's order*, so it's the one declaration that reads the order as data. `provenance.units_hash` covers the list in that same order for the same reason — two runs that resolved the same units in a different sequence did not allocate the same trial, and a hash that called them identical would say they had.
 
 **A resolver is for input that is neither.** A DICOM archive whose units are series rather than files, a plate layout where identity is a barcode and a well position, a benchmark shipped as sharded JSONL: finding the units there is domain work, and it is the *only* domain work in the block. So it's a plugin artifact, registered the way a template is:
 
@@ -549,11 +699,11 @@ from publishable import Unit, register_resolver
 
 @register_resolver("plate_wells")
 def resolve(io, cfg):
-    for row in io.read_input("layout.csv"):
+    for row in io.read_input("layout.csv"):          # rows are mappings
         yield Unit(
-            key=f"{row.barcode}:{row.well}",
-            paths=[f"reads/{row.barcode}/{row.well}.fastq.gz"],
-            attributes={"plate": row.barcode, "operator": row.operator},
+            key=f"{row['barcode']}:{row['well']}",
+            paths=[f"reads/{row['barcode']}/{row['well']}.fastq.gz"],
+            attributes={"plate": row["barcode"], "operator": row["operator"]},
         )
 ```
 
@@ -564,7 +714,7 @@ plate_wells = "publishable_my_assay.resolvers.plate:resolve"
 
 **A resolver is its own registered artifact rather than a method on a template.** A template is [the authoritative definition of an experiment type's *parameters*](#templates-where-parameters-are-defined), and unit resolution isn't parameter-shaped: several experiments over one archive share a resolver while declaring different parameters, and one template can be pointed at inputs laid out two different ways. Coupling them would force a copy of one whenever the other varied.
 
-**What it returns is a unit table with the columns a CSV would have supplied.** `Unit` carries three fields — `key`, the identity `data.units.key` names; `paths`, the input files this unit is made of, relative to `input_dir`, empty when the input is already a table; and `attributes`, the mapping `data.units.attributes` draws from. Everything downstream is then indifferent to which form `from` took: `stratify_by`, `assign.from`, `cluster_by`, and `null_test.shuffle` all name attributes, and every check in [Validation](#validation) applies unchanged. [Technical replicates](#what-isnt-a-repeat) work the same way with one extra obligation: yield one `Unit` per measurement, sharing a `key`, and emit `measurements.by` as an *attribute* — a resolver has no columns beyond the ones it declares, so the field a CSV would simply have carried has to be named. That's the division of labour — **the plugin decides how units are found; core decides what is required of them** — and it's why there is no schema block anywhere in `data.units`. What a resolver must produce is a projection of the design declarations already written above it.
+**What it returns is a unit table with the columns a CSV would have supplied.** `Unit` carries three fields — `key`, the identity `data.units.key` names; `paths`, the input files this unit is made of, relative to `input_dir`, empty when the input is already a table; and `attributes`, the mapping `data.units.attributes` draws from. **A declared attribute is also readable directly** — `unit.label`, `unit.span_days` — because a step reading `unit.attributes["span_days"]` for every attribute would be noise. The three field names are therefore reserved: `validate` rejects an attribute called `key`, `paths`, or `attributes` rather than deciding which one `unit.key` meant. Everything downstream is then indifferent to which form `from` took: `stratify_by`, `assign.from`, `cluster_by`, and `null_test.shuffle` all name attributes, and every check in [Validation](#validation) applies unchanged. [Technical replicates](#what-isnt-a-repeat) work the same way with one extra obligation: yield one `Unit` per measurement, sharing a `key`, and emit `measurements.by` as an *attribute* — a resolver has no columns beyond the ones it declares, so the field a CSV would simply have carried has to be named. That's the division of labour — **the plugin decides how units are found; core decides what is required of them** — and it's why there is no schema block anywhere in `data.units`. What a resolver must produce is a projection of the design declarations already written above it.
 
 **It sees the same `cfg` a `scope: "run"` step does, and the same coherence rule applies:** a resolver that reads a parameter the sweep varies is rejected by `validate`. The unit table is one table for the whole run, so conditions that resolved different units couldn't be paired and `n` would mean something different in each. Parameters the sweep leaves alone are fair game, which is how a resolver is told which assay, panel, or shard to include.
 
@@ -694,6 +844,8 @@ statistics:
 
 `weight_by` says how much each unit stands for; `resample.stratify_by` says what an independent draw is, resampling within each stratum so a bootstrap can't return a replicate whose stratum composition the design ruled out. `fold`, `holdout`, and `assign` all take a `stratify_by` already; `resample` taking one closes an asymmetry rather than adding a concept.
 
+A weighted `t_over_units` interval uses the weighted mean and the weighted variance, with the degrees of freedom taken from Kish's effective sample size rather than the row count — weighting concentrates the estimate on fewer units, and an interval that ignored that would be narrower than the sample supports. `report` shows the effective size beside `n` when they differ.
+
 Three interactions worth knowing. `n` still counts units — weights change what each contributes, not how many there are, and a weighted interval over 228 units is still an interval over 228 units. `cluster_by` still decides the draw when both are declared, since a cluster is what's independent and a weight is what it represents. And a [contrast](#contrasts-claims-that-arent-condition-vs-baseline) between two weighted conditions uses the same weights on both sides, which is automatic under `allocation: within` and worth checking when it isn't.
 
 ### Clustered units
@@ -784,9 +936,11 @@ class CompareMethods(BaseStep):
 
 One ordered `steps` list expresses the whole pipeline, and core derives the execution plan from the declared scopes. A cross-condition comparison needs no separate list of its own — it's simply the outermost scope.
 
-Reading across scopes is directional and read-only: a narrower step reads wider ones via `io.read_upstream(step, name)` regardless of scope, and a `summary` step additionally gets `io.conditions` and `io.read_condition(condition, step, name)`. A wider step can never read a narrower one, because at the time it runs those executions haven't happened — core rejects that at `validate`, not at run time.
+Reading across scopes is directional and read-only: a narrower step reads wider ones via `io.read_upstream(step, name)` regardless of scope, and a `summary` step additionally gets `io.conditions` and `io.read_condition(condition, step, name)`. A wider step can never read a narrower one, because at the time it runs those executions haven't happened. Which step a call names is an argument rather than a declaration, so this is enforced where the call is made: `io.read_upstream` raises when the step it names is narrower than the caller, naming both scopes. Same effect check as the two below.
 
-`validate` also flags a likely-miscoped step: if a `"run"`-scoped step reads a parameter that appears in `sweep`, its output would silently be wrong for every condition but one. That's a static check core *can* do, because it's about declared scope and declared sweep, not about arbitrary Python.
+**A swept parameter is unreadable from the scopes where it has no value.** A `"run"`-scoped step that read `analysis.method` would produce output silently wrong for every condition but one, and a `"summary"`-scoped step that read it would be picking a value no single condition owns. Neither is something core can catch by reading the config: which parameters a step reads is a fact about its body. So core doesn't ask — it owns `cfg`, and at `"run"` and `"summary"` scope, reading a path that `sweep` varies raises, naming the path and the axis that varies it. Unswept paths read normally at every scope, which is most of what a wider step wants a parameter for.
+
+That's the same effect check as [`io.units` raising under a `fold` repeat](#a-fold-repeat-puts-the-units-out-of-reach-of-the-wider-scopes), applied to the other thing core hands a step: rather than inspecting what the step intended, core declines to hand over a value that could only be the wrong one.
 
 ### A `fold` repeat puts the units out of reach of the wider scopes
 
@@ -879,6 +1033,19 @@ def aggregate(self, units, cfg) -> dict:
 
 `Param` carries type, default, constraints, and help text — so `init` renders the file with accurate inline comments, and `validate` enforces exactly what was documented. Adding a parameter in one place makes it appear in newly-initialized configs and become enforceable at once.
 
+**The constraint vocabulary is closed**, because `parameter_spec` is the schema `validate` enforces and a spec whose vocabulary is open-ended can't be checked or rendered into a comment:
+
+| Constraint | Applies to | Renders as |
+|---|---|---|
+| `choices=[...]` | any | `# choices: a \| b \| c` |
+| `ge` · `gt` · `le` · `lt` | `int`, `float` | `# integer >= 2`, `# float in (0, 1)` |
+| `pattern=r"..."` | `str` | `# matches ^[a-z0-9-]+$` |
+| `item_type` · `min_items` · `max_items` | `list` | `# list of float, 2 to 5 items` |
+| `nullable=True` | any | permits `null` beside the declared type |
+| `help="..."` | any | the trailing comment, when no constraint claims it |
+
+There is no `validator=` hook: a rule that needs code is a cross-field rule, and those belong in the template's [`validate`](#templates-where-parameters-are-defined), where the whole config is in scope and the error message can say what the rule was for.
+
 **Types are `str`, `int`, `float`, `bool`, and `list`.** A list takes `item_type` and is checked element by element, because a parameter whose value is genuinely a list is ordinary — base rates to transport a predictive value to, a retry backoff schedule, a set of thresholds — and the alternatives are all worse than supporting it. Numbered scalars (`rate_1`, `rate_2`) hard-code the length into the schema; a comma-separated string defeats the type checking that is `parameter_spec`'s entire purpose. There is no `dict` type: a mapping is what nesting the dotted path already expresses.
 
 ```python
@@ -943,8 +1110,8 @@ sweep:
     from: baseline
     remove: [features.labs, features.notes]
   # 2 levels × (1 baseline + 2 ablations) = 6 conditions:
-  #   00_cohort=derivation_baseline   01_cohort=derivation_labs=false   …
-  #   03_cohort=validation_baseline   …
+  #   00_cohort=derivation__baseline   01_cohort=derivation__labs=false   …
+  #   03_cohort=validation__baseline   …
 ```
 
 That's "which features matter, in each of two cohorts" — an ordinary design, and expressing it as two configs would give up the shared allocation, the shared seed list, and the single `run.yaml` that make the arms comparable in the first place. The baseline becomes one condition per level rather than one per run, which is the honest reading: there is no single reference condition when the reference cohort differs. `sweep.baseline` may not name the group axis for this reason — the arms are peers, and `validate` rejects a baseline that fixes a level while `ablate` is declared.
@@ -1155,7 +1322,7 @@ statistics:
   null_test: {method: permutation, n: 5000, shuffle: label}
 ```
 
-Both operate on `units.parquet`, resampling or relabelling it and recomputing the metric — which core can do only for a metric it knows how to compute, so this needs a per-unit column or a template [`aggregate(units, cfg)`](#templates-where-parameters-are-defined). Every declared `attributes` value is carried onto that table beside whatever the step recorded, which is what lets `shuffle` name an attribute — `label`, `arm`, `status` — and have it be a column the metric is actually computed from. A step is free to record a column of the same name; `validate` rejects that collision rather than deciding which one the shuffle meant. The permutation test compares the null it builds against the value the actual run produced; a design in which every execution is permuted has no unpermuted value to test, which is one more way the repeat axis was the wrong home for it.
+Both operate on `units.parquet`, resampling or relabelling it and recomputing the metric — which core can do only for a metric it knows how to compute, so this needs a per-unit column or a template [`aggregate(units, cfg)`](#templates-where-parameters-are-defined). Every declared `attributes` value is carried onto that table beside whatever the step recorded, which is what lets `shuffle` name an attribute — `label`, `arm`, `status` — and have it be a column the metric is actually computed from. A step is free to record a column of the same name, and core rejects that collision [as the step records it](#validation) rather than deciding which one the shuffle meant. The permutation test compares the null it builds against the value the actual run produced; a design in which every execution is permuted has no unpermuted value to test, which is one more way the repeat axis was the wrong home for it.
 
 **What `null_test` tests depends on whether `shuffle` names a design axis.** It relabels units and recomputes the metric, so the question it answers is set by what that label does in the design:
 
@@ -1180,7 +1347,7 @@ data:
     measurements: {by: read_id, collapse: mean}   # rows sharing a key are technical replicates
 ```
 
-`collapse` is `mean`, `median`, or `sum` for numeric columns and `first` or `mode` for the rest, and it may be a per-column map — `collapse: {intensity: mean, batch: first}` — when one rule doesn't fit every column. A single rule applies to every collapsed column, so `validate` rejects `mean` over a `site` string rather than coercing it: the alternative is a silently dropped column or a meaningless number, and neither is something to discover after the run. Attributes constant within a key collapse to that value with no rule needed.
+`collapse` is `mean`, `median`, or `sum` for numeric columns and `first` or `mode` for the rest — `first` meaning the earliest row in [resolution order](#where-units-come-from), and `mode` breaking a tie the same way, by whichever tied value appeared first. `collapse` may be a per-column map — `collapse: {intensity: mean, batch: first}` — when one rule doesn't fit every column. A single rule applies to every collapsed column, so `validate` rejects `mean` over a `site` string rather than coercing it: the alternative is a silently dropped column or a meaningless number, and neither is something to discover after the run. Attributes constant within a key collapse to that value with no rule needed.
 
 Rows sharing a `key` are collapsed to one unit at resolution, before any step sees them, and `technical_n` is reported for transparency — as `{min, max, median}` rather than a single number, because real files are uneven and a bare `technical_n: 3` would be a claim of balance nobody checked. A unit measured once and a unit measured five times contribute equally to `n` after collapsing, which is worth being able to see. When the pipeline does the measuring rather than the input carrying it, a step names the measurement — `io.record(unit.key, values, measurement=read_id)` — and core collapses the same way, under the same `collapse` rule. That argument is what keeps the two cases apart, and it isn't optional politeness: without it, a second row for the same unit is a resumed retry to be deduplicated — [first write wins](#resuming) — and with it a second measurement to be averaged, and nothing in the row itself distinguishes them. Core raises if a step passes `measurement=` while `data.units.measurements` is undeclared, since there would be no rule to collapse under. Either path, technical replicates cannot reach `n`, because they were gone before `n` was counted.
 
@@ -1207,7 +1374,7 @@ r:
 
 The three-part `n` closes a reporting gap that otherwise goes unnoticed: when 12 of 240 units error out, a bare `n: 240` is wrong and a bare `n: 228` silently hides attrition. All three numbers are recorded — joined by `clusters` whenever [`cluster_by`](#clustered-units) makes the cluster the inferential draw, and by `ineligible` whenever a step [skipped](#what-isnt-a-repeat) a unit, each present only when it applies so a design that never skips reads as it always did — `report` shows the completion rate, and `run` fails the whole run when failures exceed `limits.max_failed_fraction` — because at some level of dropout the complete-case result stops being interpretable, and finding that out after the run is worse than not having spent it.
 
-**How core knows a unit failed** is worth stating, because core never inspects the body of a step. It counts: `resolved` is how many units that execution was *given*, `completed` is how many distinct *unit* keys reached `io.record` in it — measurements of one unit collapse before they are counted — `ineligible` is how many it was told to skip, and `failed` is what's left over. That's an *effect*, which is the only thing core checks — consistent with [greenfield only](design-principles.md#greenfield-only). Two consequences follow. A step that swallows an exception and moves to the next unit is recorded as a failure anyway, because the row is missing; and a step that raises out of its own loop aborts the execution, so the repeat is marked `failed` in `execution` rather than reported as complete with partial units. A step that records nothing at all has `completed: 0`, which is a loud failure rather than a silent `n` of zero.
+**How core knows a unit failed** is worth stating, because core never inspects the body of a step. It counts: `resolved` is how many units that execution was *given*, `completed` is how many distinct *unit* keys reached `io.record` in it — measurements of one unit collapse before they are counted — `ineligible` is how many it was told to skip, and `failed` is what's left over. That's an *effect*, which is the only thing core checks — consistent with [greenfield only](design-principles.md#greenfield-only). Two consequences follow. A step that swallows an exception and moves to the next unit is recorded as a failure anyway, because the row is missing; and a step that raises out of its own loop aborts the execution, so the repeat is marked `failed` in `execution` rather than reported as complete with partial units — the run itself [carries on to the next execution](#what-status-means-and-when-a-run-keeps-going). A step that records nothing at all has `completed: 0`, which is a loud failure rather than a silent `n` of zero.
 
 **Not producing a result and failing to produce one are different, so a step can say which.** A counterfactual that can't be constructed for a patient whose observed span is too short, an assay that doesn't apply to a sample type, a metric undefined for a unit with one observation — these are decided by the design in advance, and no amount of retrying changes them. Counting them as failures makes a healthy run look broken and puts [`limits.max_failed_fraction`](#validation) in charge of a number that mixes two unlike things:
 
@@ -1224,7 +1391,7 @@ n: {resolved: 330, completed: 296, ineligible: 30, failed: 4}   # an arm most of
                                                                 #   cohort admits
 ```
 
-`io.skip(unit_key, reason)` is a declaration, not an excuse: core takes the step's word for it exactly as it takes `io.record`'s, and both are recorded. The reason is stored per unit beside the unit table, because *which* patients an arm could not be built for is cohort flow a report has to state, and a bare count doesn't carry it. `report` shows ineligibility per condition, so an arm that quietly lost a third of the roster is visible rather than absorbed.
+`io.skip(unit_key, reason)` is a declaration, not an excuse: core takes the step's word for it exactly as it takes `io.record`'s, and both are recorded. The reason is stored per unit in [`ineligible.jsonl`](#the-per-unit-tables) beside the unit table, because *which* patients an arm could not be built for is cohort flow a report has to state, and a bare count doesn't carry it. `report` shows ineligibility per condition, so an arm that quietly lost a third of the roster is visible rather than absorbed.
 
 Three consequences. **`max_failed_fraction` is over failures only** — a run whose arms differ in eligibility no longer trips a threshold meant for attrition. **`limits.max_ineligible_fraction` warns separately**, because an arm evaluable for a fifth of the cohort is a design problem rather than an execution one, and it's the same problem [`n_paired`](#contrasts-claims-that-arent-condition-vs-baseline) exists to keep out of a contrast. And **a skipped unit is decided, so a resumed step doesn't reconsider it**: `io.recorded_keys` holds every key this execution has settled — recorded or skipped — since its one purpose is telling a resumed step what not to redo.
 
@@ -1254,7 +1421,7 @@ The qualifier is load-bearing: intersecting over *every* repeat would report `co
 
 Failures don't have to line up across repeats — a unit can error under one seed and succeed under another, and in the worked example seed17 loses 9 units and seed42 loses 7, overlapping in 4, so 12 distinct units failed somewhere and the condition reports `completed: 228`. The intersection is the rule rather than the union because [§ Statistical reporting](#statistical-reporting) averages repeats per unit before computing any interval: a unit present in three of five seeds would otherwise enter the average on a different number of observations than its neighbours, which is a ragged table dressed as a rectangular one. Taking the intersection costs a few units and keeps every per-unit value comparable. `report` shows the per-repeat counts alongside, so a repeat that failed unusually many units is visible rather than absorbed into the condition's total.
 
-**The failure fraction `run` enforces is against the run level.** A threshold checked per execution would fire on a small fold long before the cohort was in any trouble, and a threshold checked per condition would let a systematically broken fold hide inside nine healthy ones. Run-level is the number that decides whether the complete-case result is interpretable, so that's the one with a threshold on it. Per-execution failures are still recorded and `report` surfaces any execution whose completion rate is an outlier against its condition — an early-stopping signal without a second threshold to tune.
+**The failure fraction `run` enforces is against the run level.** A threshold checked per execution would fire on a small fold long before the cohort was in any trouble, and a threshold checked per condition would let a systematically broken fold hide inside nine healthy ones. Run-level is the number that decides whether the complete-case result is interpretable, so that's the one with a threshold on it. The fraction is **units that failed in at least one execution, over `provenance.units.n`** — distinct units on top, the whole resolved roster underneath. Counting failures instead of units would charge a cohort of 240 with 30 failures when one unit failed in every one of 30 executions, and dividing by the executions' summed `resolved` would move the denominator every time you added a fold. Distinct-over-roster is the only reading that means the same thing under `seed`, under `fold`, and under a group axis, which is what a threshold you set once has to do. It's evaluated as the run goes rather than at the end, because failures only accumulate: once the fraction is past the threshold no later execution can bring it back, so core stops there and the run is [`failed`](#what-status-means-and-when-a-run-keeps-going) — the one failure that ends a run rather than being absorbed into `partial`. Per-execution failures are still recorded and `report` surfaces any execution whose completion rate is an outlier against its condition — an early-stopping signal without a second threshold to tune.
 
 **`repeat_spread` names one level, so nested repeats report a list.** With a single `seed` level it's the mapping shown above. With `fold × seed` there are two questions and they have different answers — how much the RNG moved the answer within a fold, and how much the partition moved it across folds — so core reports one entry per declared level, outer to inner, each recomputing the metric over that level's slice:
 
@@ -1288,11 +1455,23 @@ statistics:
 vs_baseline:
   step03_analyze:
     r: {delta: 0.026, ci95: [0.017, 0.035],
-        ci95_corrected: [0.008, 0.044], correction: holm,
+        ci95_corrected: [0.013, 0.039], correction: holm,
+        correction_level: 0.0033,                    # α/15 — rank 1 of this family
         family_size: 15, family: {comparisons: 5, metrics: 3}}
 ```
 
-Only metrics that receive a corrected interval are counted — that is, [`basis: units`](#the-unit-table-is-the-inference-base) metrics, since a metric reported without an interval isn't a comparison anyone can read as significant. A [reported `Estimate`](#estimate-carries-your-interval-without-core-claiming-it) is excluded for a different reason: core never computed it, so it has nothing to correct and no standing to say the correction was applied. In the worked example that's 2 comparisons × 1 metric, so `family_size: 2`.
+**A corrected interval is an interval at a smaller α, and `correction_level` records which one**, because the three methods imply it differently and one of them doesn't imply it at all:
+
+| `correction` | `ci95_corrected` | Also reports |
+|---|---|---|
+| `none` | absent | — |
+| `bonferroni` | The interval at α/m, for a family of size *m* | — |
+| `holm` (default) | The interval at α/(m−i+1), where *i* is this comparison's rank when the family is ordered by evidence | `p_value_corrected` when a [`null_test`](#what-isnt-a-repeat) supplied a p-value |
+| `fdr_bh` | **`null`** | `p_value_corrected`, Benjamini-Hochberg adjusted |
+
+Holm's rank-implied level is the conventional companion to the procedure rather than a strictly simultaneous band, and calling it that is the honest description: it is what the step-down procedure tests each comparison at, so an interval excluding the threshold agrees with the procedure's verdict. It also means **the weakest comparison in a family is corrected by nothing** — at rank *m* the level is α itself — which the worked example shows: kendall's contrast carries far the stronger evidence, so spearman's is rank 2 of 2 and its corrected interval is its raw one. That is Holm behaving correctly, not a correction that failed to apply, and it is the property that makes Holm uniformly more powerful than Bonferroni. Benjamini-Hochberg has no interval that means anything of the kind — controlling a false discovery *rate* is a statement about a set, not a bound on any one comparison — so core reports the adjusted p-value and leaves `ci95_corrected` null rather than printing a number with no construction behind it. That asymmetry is deliberate and is the same standard the family count is held to below.
+
+Only metrics core corrects are counted — that is, [`basis: units`](#the-unit-table-is-the-inference-base) metrics, since a metric reported without an interval isn't a comparison anyone can read as significant. The family is the same set under every method, including `fdr_bh`, where what each member receives is an adjusted p-value rather than an interval. A [reported `Estimate`](#estimate-carries-your-interval-without-core-claiming-it) is excluded for a different reason: core never computed it, so it has nothing to correct and no standing to say the correction was applied. In the worked example that's 2 comparisons × 1 metric, so `family_size: 2`.
 
 **A "comparison" is a baseline contrast or a [declared one](#contrasts-claims-that-arent-condition-vs-baseline)** — both put an interval in front of a reader, so both count. Reporting strata do not: a stratum describes rather than compares, and a subgroup claim you intend to test is a [hypothesis](#pre-registration), corrected in that family.
 
@@ -1402,7 +1581,7 @@ class CompareMethods(BaseStep):
         return {"best_method": "spearman"}
 ```
 
-`cfg.parameters` in a summary step holds the *base* values with swept paths marked as varying, so there's no misleading pretense that one condition's value applies.
+`cfg.parameters` in a summary step holds the *base* values, and reading a path the sweep varies [raises](#step-scope) rather than returning one — there's no condition whose value it would be, so there's no misleading pretense that one applies.
 
 **What a summary step returns is recorded, not interpreted.** It lands in `results.summary`, with no `basis`, no place in the [correction family](#sweeps-and-repeats), and no recomputation on a resampled table — core didn't compute it and can't, which is the same reason a step-returned scalar is [`basis: repeats`](#the-unit-table-is-the-inference-base). Since factorial main effects, curve fits, conditional estimators, and mixed models are all routed here, that's worth being plain about: this scope is where core stops doing statistics and starts storing yours.
 
@@ -1482,7 +1661,19 @@ Five properties of this layout:
 
 - **Depth follows scope.** A step's artifacts sit exactly as deep as the thing it varies with, so the path is a readable statement of what its output depends on. `shared/` output depends on nothing but the input; `conditions/01_.../` output depends on the condition; anything under a repeat directory depends on the repeat.
 
-- **Condition directories are self-describing.** `01_method=spearman` tells you what it is without opening `sweep.yaml`. The numeric prefix gives stable ordering; the `key=value` body gives meaning. Labels derive from swept values only, so they stay stable across machines and reruns. A declared baseline is `00_baseline` — or one per cell, `00_cohort=derivation_baseline` and so on, when [another axis is present and the baseline leaves it free](#expansion-modes) — and a group level otherwise reads the same way as any other: `01_arm=treatment`.
+- **Condition directories are self-describing.** `01_method=spearman` tells you what it is without opening `sweep.yaml`. The numeric prefix gives stable ordering; the `key=value` body gives meaning. Labels derive from swept values only, so they stay stable across machines and reruns. A declared baseline is `00_baseline` — or one per cell, `00_cohort=derivation__baseline` and so on, when [another axis is present and the baseline leaves it free](#expansion-modes) — and a group level otherwise reads the same way as any other: `01_arm=treatment`.
+
+  **The grammar is exact, because a label is also a selector.** A [hypothesis](#pre-registration) `compare.condition`, a [contrast](#contrasts-claims-that-arent-condition-vs-baseline)'s `of` and `against`, and a `report` filter all name conditions by the label's body — everything after the numeric prefix — so it has to be something you can write down without seeing the directory:
+
+  | Rule | Is |
+  |---|---|
+  | Separator | `__` between axes, `=` between key and value, `_` after the numeric prefix. `00_sex=f__arm=control`, and a per-cell baseline is `00_cohort=derivation__baseline` |
+  | Axis order | `groups` axes in declaration order, then parameter axes in declaration order. Never sorted — the config's order is the one you already read |
+  | Key | The shortest suffix of the dotted path that is unique among the swept paths. `analysis.method` alone becomes `method`; swept beside `scoring.method` both keep a segment, as `analysis.method` and `scoring.method` |
+  | Value | Rendered as written in the config — `true`/`false` for booleans, shortest round-trip form for floats. `validate` rejects a swept value whose rendering isn't `[A-Za-z0-9._+-]+`, since a label that needs escaping isn't a name anyone can type |
+  | Index | Assigned over the expansion in order, baselines first. The **last** declared axis varies fastest, so the numbering reads like nested loops written in declaration order |
+
+  The index is the part to be careful with, because it's the part that moves: adding a level to any axis renumbers everything after it. That is why [`reuse_from`](#reuse_from-addresses-an-artifact-not-the-design-that-produced-it) addresses artifacts by name rather than by condition, and why a selector names the label's body rather than its prefix.
 
   `sample` conditions are the exception, and deliberately: a sobol draw of `dose_mg` has no short exact spelling, and rounding one into a directory name makes two distinct conditions collide at some precision. Sampled conditions are labelled `01_sample`, `02_sample`, with the drawn values in `sweep.yaml` and in `results.conditions[i].values`. Anything that selects a condition by name — a [hypothesis](#pre-registration) `compare.condition`, a `report` filter — is therefore selecting a discrete label, never a float you have to spell identically twice.
 - **Repeat directories name their nesting.** A single repeat level is just `seed42`; nested repeats compose into `fold03_seed42`, which reads as the repeat it is rather than as an opaque index.
@@ -1505,6 +1696,19 @@ The `n` in a confidence interval is a count of the things the claim generalizes 
 | No `data.units` at all | `repeats` | Mean, std, sem and a t-based `ci95` over repeats, labelled as such |
 
 Those last two rows differ, and `data.units` is the whole discriminator. With no unit table, the executions *are* the observations — a simulation's ten seeds are ten draws from the thing being studied — so an interval over repeats is the honest one, and core computes it. With a unit table present, an interval over repeats would be a claim about seeds standing in for a claim about units, so core refuses it rather than substituting the wrong denominator.
+
+**Each of those constructions is a specific one, named here so two readers of one `run.yaml` agree on what they're holding.** `method` records it beside every value, so nothing below has to be inferred from the config:
+
+| The interval | Is |
+|---|---|
+| `t_over_units` | Student's *t* on the per-unit values, df = completed units − 1 |
+| `t_over_units_clustered` | Cluster-robust (CR1: the sandwich estimator with the standard finite-sample scaling), df = clusters − 1. The df is the part that bites — 10 animals give 9, not 299 |
+| `percentile_over_units` | The 2.5th and 97.5th percentiles of the resampled distribution, over `statistics.resample.n` draws, defaulting to `bootstrap` at 2000 |
+| `t_over_repeats` | Student's *t* over the per-repeat values, df = repeats − 1. Only when [no `data.units` is declared](#the-unit-table-is-the-inference-base) |
+
+And `cohens_d`, when the metric is a per-unit mean: **paired contrasts report *d*z** — the mean of the per-unit differences over their standard deviation — and **unpaired ones report *d*s**, over the pooled within-condition standard deviation. They are different quantities from the same data and the one that applies follows from `paired`, which is [derived rather than declared](#allocation-within-subjects-or-between-subjects). A weighted condition standardizes by the weighted standard deviation, on the same weights the mean used.
+
+A [`null_test`](#what-isnt-a-repeat) p-value is corrected alongside the intervals when the method supplies one, and it counts in the same family — it is exactly the number a reader acts on, so exempting it would under-correct by whatever fraction of the family carries a p-value.
 
 **A derived metric is resampled whether or not you declare `statistics.resample`.** The two rows above are not symmetric, and this is the asymmetry: a column metric has a t-interval available, so resampling it is a choice, and `resample` is what makes it. A derived metric has no such fallback — there is no closed form for the sampling distribution of whatever `aggregate` computed — so the alternatives are a percentile interval from resampling or no interval at all, and core resamples. With `resample: null` it uses the default it documents here, `bootstrap` at `n: 2000`, which is why the worked example reports `method: percentile_over_units` under a config that declares nothing. Declaring `resample` then changes the method or the count rather than switching the behaviour on, and the resolved values are recorded in `run.yaml` beside the interval so the number is never the result of an undocumented default.
 
@@ -1543,8 +1747,9 @@ results:
       vs_baseline:                                  # only when a baseline is declared
         step03_analyze:
           r: {delta: 0.026, basis: units, paired: true, ci95: [0.017, 0.035],
-              ci95_corrected: [0.011, 0.041],
-              correction: holm, family_size: 2, family: {comparisons: 2, metrics: 1},
+              ci95_corrected: [0.017, 0.035],       # rank 2 of 2 under holm: α/(m−i+1) = α
+              correction: holm, correction_level: 0.05,
+              family_size: 2, family: {comparisons: 2, metrics: 1},
               cohens_d: null}                       # r is derived, not a per-unit mean
   summary:
     step04_compare_methods: {best_method: spearman}
@@ -1622,8 +1827,8 @@ results:
       step03_screen:
         prob: {delta: 0.012, basis: units, paired: true,
                n_paired: 412,
-               ci95: [0.004, 0.021], ci95_corrected: [0.001, 0.025],
-               correction: holm, family_size: 7}
+               ci95: [0.004, 0.021], ci95_corrected: [0.001, 0.024],
+               correction: holm, correction_level: 0.0071, family_size: 7}
 ```
 
 **`n_paired` is the intersection, and it has to be recorded.** Two conditions can complete on different units — a transform that isn't constructible for every patient, an assay that failed on a subset, an arm whose eligibility differs — and a paired comparison exists only for units that completed in *both*. Differencing the two condition means instead would not be a paired comparison at all, however carefully `paired: true` was derived. The condition-level `n` can't carry this, because it belongs to one condition and the contrast spans two, so the contrast records its own. A contrast whose intersection is empty is reported as such rather than as a delta of zero.
@@ -1696,11 +1901,19 @@ A single git commit hash was doing two incompatible jobs: identifying the code a
 
 | Hash | Covers | Answers |
 |---|---|---|
-| `code_hash` | Tree hash of `src/**` and `templates/**` | Was the code identical? |
-| `parameters_hash` | The config's whole parameter declaration — sweep, repeat plan, and `limits` included | Were the parameters identical? |
+| `code_hash` | Content hash of `src/**` and `templates/**` | Was the code identical? |
+| `parameters_hash` | The whole config except `metadata` and the two path fields — see below | Were the parameters identical? |
 | `input_manifest_hash` | Relative paths + content hashes of `input_dir`, at the depth `data.input_manifest_policy` asks for | Was the data identical? |
 
 **`code_hash` covers `templates/**` as well as `src/**`, because a [project-local template](#templates-where-parameters-are-defined) is code the reported numbers came out of.** Its `aggregate` derives a condition's metric and its interval, and its `validate` decides which configs are legal — so a run whose `templates/` moved computed something else, and a `code_hash` over `src/**` alone would call the two runs identical. Core's own templates and a plugin's are outside both trees and pinned differently, by `uv.lock`: a dependency has a version you can resolve, while a file in your repo has only the history your repo keeps. That's also why `template_version` isn't the answer for a local template — it's a string its author remembers to bump, which is the class of claim [`publishable_version`](design-principles.md#whose-git-hash-is-this) is deliberately kept to.
+
+### How the three are computed
+
+A hash that two machines compute differently is not an identity claim, so the constructions are fixed rather than left to an implementation.
+
+**`code_hash` is `sha256` over the sorted list of `(repo-relative path, sha256 of file contents)` pairs** across `src/**` and `templates/**`, taken from the **working tree** and skipping whatever `.gitignore` skips. Not a git tree hash, and the reason is [`draft`](#draft-runs): a git tree hash needs the content staged, so a dirty tree has none, and `run` and `draft` would then be computing two incomparable things. Reading the working tree means both compute the same function, and a draft's hash is a real fingerprint of the code that ran — just one no commit reaches, which is exactly what `draft: true` records. File modes, timestamps, and paths outside the two trees are all excluded, so a `chmod` or a touched file changes nothing.
+
+**`parameters_hash` and the [design digest](#what-auto-derives-from) are `sha256` over a canonical JSON rendering** of what each covers: UTF-8, object keys sorted, no insignificant whitespace, floats in shortest round-trip form. **Values are normalized to what `init` would have materialized before hashing** — an omitted `cluster_by` and an explicit `cluster_by: null` are the same declaration, and a config that omits a defaulted key hashes identically to one that spells it out. Without that rule, a hand-trimmed config and the file `init` wrote would disagree about parameters that are equal, and `diff` would report a difference with nothing to print.
 
 `input_manifest_policy` decides how much of `input_dir` gets hashed, because "hash everything" stops being affordable somewhere between a spreadsheet and a 4 TB imaging archive:
 
@@ -1712,7 +1925,24 @@ A single git commit hash was doing two incompatible jobs: identifying the code a
 
 The three make different promises, and `run.yaml` records which one was in force so a reader isn't left inferring it. Only `hash_all` supports "the data was identical" without qualification; under `hash_index` the claim is "the units were identical and nothing else moved size or timestamp"; under `none` it's a change *detector*, not a verification. Verification after the run, and `reproduce`'s comparison against the recorded manifest, both operate at whatever depth the policy captured.
 
-**`parameters_hash` is one hash per run, not one per condition.** It covers the parameter block as *declared* — base values plus the `sweep` and `replication` declarations — not the per-condition values those expand into. Two properties depend on that, and neither would survive a per-condition hash: `diff` compares two runs by a single hash, and a [hypothesis](#pre-registration) carries the hash of the config that predicted it. A condition's own resolved values live in `results.conditions[i].values` and in `sweep.yaml`, where they belong: they're derived, so they aren't a separate identity claim.
+**What `parameters_hash` covers is stated once, here, because four guarantees read it.** The rule is subtractive: **everything in the config except `metadata` and `data.input_dir`/`data.output_dir`.**
+
+| Block | In | Because |
+|---|---|---|
+| `schema_version`, `experiment_type`, `template_version`, `plugin`, `entrypoint` | ✓ | They decide which code and which spec the values are interpreted against. A config repointed at a different experiment class is not the same run |
+| `data`, minus the two path fields | ✓ | `units`, `assign`, `holdout`, `measurements`, and `input_manifest_policy` all decide what is measured and how strong the data claim is |
+| `parameters` | ✓ | The obvious case |
+| `sweep`, `replication` | ✓ | What varies and how often — the declaration, never the conditions it expands into |
+| `statistics`, `limits` | ✓ | They decide which number a reader is shown and whether the run was allowed to proceed. See [Validation](#validation) on why thresholds are parameters |
+| `hypotheses` | ✓ | The [pre-registration](#pre-registration) check is exactly this: a hypothesis added after the fact doesn't match the hash of the config that predicted it |
+| `metadata` | ✗ | A title, a description, an author list. Editing one changes nothing about what ran, and a re-titled config that no longer matched its own runs would be a false alarm |
+| `data.input_dir`, `data.output_dir` | ✗ | Host paths. This is what lets [`study add`](#what-study-add-redacts) redact them without disturbing verification, and what lets two machines with the data mounted differently produce the same hash |
+
+Two consequences worth knowing before they surprise you. **A `metadata`-only edit is invisible to `diff`**, which is the intent — but it means `diff` reporting `parameters_hash identical` is not a claim that the two files are byte-identical. And **adding a hypothesis makes an interrupted run unresumable**, because [`resume` refuses when `parameters_hash` moved](#resuming). That is the same rule catching the same thing it always catches — the config changed under a run in flight — and it applies to an exploratory hypothesis you added mid-run for reasons that felt harmless. Finish the run, then declare it in the config for the next one; a hypothesis declared after a run started is exactly what the mechanism exists to distinguish.
+
+**It is one hash per run, not one per condition.** It covers the declaration, not the per-condition values it expands into. Two properties depend on that, and neither would survive a per-condition hash: `diff` compares two runs by a single hash, and a hypothesis carries the hash of the config that predicted it. A condition's own resolved values live in `results.conditions[i].values` and in `sweep.yaml`, where they belong: they're derived, so they aren't a separate identity claim.
+
+**Covering `data.units` here doesn't make the [design digest](#what-auto-derives-from) redundant**, because the two are read in opposite directions. The hash is an identity claim a reader checks after the fact — *were these the same declarations?* The digest is a derivation input consumed before the run, and it deliberately covers *less*: `data.units` and `sweep.groups` only, so that editing `min_samples` moves `parameters_hash` and leaves every fold boundary and arm assignment exactly where they were. One answers whether two runs declared the same thing; the other decides what gets randomized. Nothing compares two digests.
 
 ### The apparatus core can only observe
 
@@ -1914,7 +2144,7 @@ hypotheses:
 
 `evaluate_on: ci95_lower` with `direction: greater` is the superiority form, and it is also how "the interval excludes zero in the expected direction" is written — those are the same statement.
 
-Two rules `validate` enforces. A hypothesis evaluating on a bound needs a metric that *has* one, so naming a [`basis: repeats`](#the-unit-table-is-the-inference-base) metric is rejected rather than warned about — the existing warning is for a metric that can be reported but not tested, and asking for a bound it doesn't have is a stronger error. And when the metric is a [reported `Estimate`](#estimate-carries-your-interval-without-core-claiming-it), the bound tested is the one the step supplied, so `verdict_rests_on: reported` carries its usual meaning: core compared the numbers and did not derive them.
+Two rules core enforces. A hypothesis evaluating on a bound needs a metric that *has* one, so a [`basis: repeats`](#the-unit-table-is-the-inference-base) metric is rejected rather than warned about — the existing warning is for a metric that can be reported but not tested, and asking for a bound it doesn't have is a stronger error. `validate` catches the config-level form of that, where nothing in the run could carry an interval; the per-metric form is settled [when the step returns](#validation), like everything else about a returned key. And when the metric is a [reported `Estimate`](#estimate-carries-your-interval-without-core-claiming-it), the bound tested is the one the step supplied, so `verdict_rests_on: reported` carries its usual meaning: core compared the numbers and did not derive them.
 
 **A hypothesis is one quantity against one threshold**, which is what makes it evaluable at all. A claim about the *shape* of a series — monotonic across doses, trending across ordered strata, flattening over a curve — has no single quantity to threshold, so it is a summary-step estimator returning an `Estimate` rather than a hypothesis. Declaring the shape claim as several adjacent hypotheses is available and rarely what you want: it tests each step of the series separately and corrects for all of them, which is a different claim from the one about the series.
 
@@ -2053,17 +2283,48 @@ These take paths and nothing else.
 | `publishable dry-run` | config path | Validates, expands the sweep and repeat plan, builds the input manifest, [probes the apparatus](#the-apparatus-core-can-only-observe), prints every artifact path that *would* be written. Creates nothing |
 | `publishable run` | config path | The real thing: requires a clean `src/**` and `templates/**`, creates `run_<id>/`, captures provenance, executes conditions × repeats × steps, writes `run.yaml` |
 | `publishable draft` | config path | Same as `run`, but permits a dirty code tree. Recorded as `draft: true` — see [Draft runs](#draft-runs) |
-| `publishable resume` | run directory or run.yaml | Continues an interrupted run in place, skipping completed (condition, repeat, step) triples |
+| `publishable resume` | run directory | Continues an interrupted run in place, skipping completed (condition, repeat, step) triples. Refuses a run that already holds a `run.yaml` — that run [ended](#what-status-means-and-when-a-run-keeps-going) — and one whose [lock is held](#one-execution-at-a-time-and-what-holds-the-run-directory) |
 | `publishable report` | run.yaml or study.yaml path | Renders Markdown/HTML from one run, or from a whole [study](#studies-what-a-paper-reports) |
-| `publishable freeze` | run directory | Re-captures the environment and re-probes the [apparatus](#the-apparatus-core-can-only-observe) mid-run, without executing anything. Reports a moved apparatus as a failure; the [gate](#the-apparatus-core-can-only-observe) is what stops the run — see below |
+| `publishable freeze` | run directory | Re-reads the environment and re-probes the [apparatus](#the-apparatus-core-can-only-observe) mid-run, without executing anything. Reports a moved apparatus as a failure; the [gate](#the-apparatus-core-can-only-observe) is what stops the run — see below |
 | `publishable reproduce` | run.yaml or config path | Clones the recorded commit into a new checkout and prepares it to run — see [Reproducing on another device](#reproducing-on-another-device) |
 | `publishable diff` | two config or run paths | Reports each hash as identical or differing, then the specific parameter deltas |
 | `publishable docs` | *(none)* | Regenerates every `publishable:begin/end` managed region |
 | `publishable list-templates` | *(none)* | Registered templates, including plugin-provided, with their full parameter specs |
 
-`resume` takes a *run* path rather than a config path: resuming operates on a run that already exists, and that run directory already contains the config it used. A config plus a run identifier would be two arguments describing one thing, with the standing possibility of disagreeing.
+`resume` takes a run *directory* rather than a config path: resuming operates on a run that already exists, and that run directory already contains the config it used. A config plus a run identifier would be two arguments describing one thing, with the standing possibility of disagreeing. It is the one command that can't take a `run.yaml`, and for the same reason — the runs it exists for don't have one yet.
 
-**`freeze` reports a moved apparatus; it doesn't decide.** It executes nothing, so it has no execution to fail and no business changing a run's status — it appends the probe to the ledger and reports the difference as a failure rather than a note. The next execution's [gate](#the-apparatus-core-can-only-observe) is what stops the run, and it will. What `freeze` buys is *when* you find out: on a run scheduled over days, between blocks is the natural moment to look, and learning that a revision moved an hour before the next batch is worth more than learning it as that batch dies. A read command that warned quietly would waste the only thing it's good for.
+**`freeze` reports a moved apparatus; it doesn't decide.** It executes nothing, so it has no execution to fail and no business changing a run's status — it appends the probe to the ledger and reports the difference as a failure rather than a note. Appending that one line is the only thing it writes: `environment/` was captured at run start and is [never rewritten](#one-execution-at-a-time-and-what-holds-the-run-directory), so a moved lockfile is reported too and changes nothing on disk. That's also what makes it the one command safe to point at a run [holding its own lock](#one-execution-at-a-time-and-what-holds-the-run-directory), which is the only situation it's for. The next execution's [gate](#the-apparatus-core-can-only-observe) is what stops the run, and it will. What `freeze` buys is *when* you find out: on a run scheduled over days, between blocks is the natural moment to look, and learning that a revision moved an hour before the next batch is worth more than learning it as that batch dies. A read command that warned quietly would waste the only thing it's good for.
+
+### Exit codes and diagnostics
+
+Every command is scriptable, so what it returns is part of the interface:
+
+| Code | Means |
+|---|---|
+| `0` | Succeeded. Warnings may have been printed; a warning never changes the code |
+| `1` | The thing you asked about is wrong — a config that fails [validation](#validation), a `diff` of runs that don't share a hash, a `resume` whose hashes moved |
+| `2` | The invocation is wrong — unknown command, missing argument, unreadable path |
+| `3` | **`run`, `draft`, and `resume` only** — the run executed and did not complete: `partial` or `failed`, per [`status`](#what-status-means-and-when-a-run-keeps-going) |
+| `4` | Something outside the machine refused — an unreachable [apparatus](#the-apparatus-core-can-only-observe), a missing credential, a clone or `uv sync` that failed |
+
+`3` is separate from `1` because a run that produced a `partial` record did its job and the record is real; a script that treats it as a validation failure will delete something worth keeping. For the same reason it belongs to the commands that execute: **`report` of a `partial` run exits `0`** — it was asked to render a record and it rendered one, with the failures shown. A reader learns the run was partial from the report, which is where that belongs, not from the exit code of the command that printed it. `4` is separate because it is the class you retry, and the other three are not.
+
+**`dry-run` runs its phases in cost order and stops at the first that fails**, which is what decides its code: validation, then the input manifest, then the [apparatus probe](#the-apparatus-core-can-only-observe). So a config with an error exits `1` without ever reaching the probe, and only a config that validates gets as far as a `4`. That ordering is the point of the command — the cheap objection should never be reported second, behind a metered request that was going to fail anyway.
+
+**`validate` collects rather than stops.** It reports every error and warning it can find in one pass, ordered by config position, because the alternative is a fix-one-rerun loop over a file with four typos in it. Only a failure that makes later checks meaningless is fatal on its own — a config that won't parse, a template that isn't installed, an experiment package that won't import — and those say so instead of reporting a hundred downstream consequences.
+
+**Each diagnostic carries a stable identifier**, printed beside it and usable to grep, suppress in a reviewer's checklist, or cite in an issue:
+
+```
+configs/cohort-pilot/config.yaml
+  error   E-PARAM-UNKNOWN     parameters.analysis.min_sample
+          not a parameter of template `generic` — did you mean `min_samples`?
+  warning W-STATS-FAMILY      statistics.correction
+          6 conditions × 3 metrics is a family of 15 with `correction: none`
+2 problems (1 error, 1 warning)
+```
+
+The identifier is part of the contract and outlives the wording: a message gets clearer over time, and something that pinned the wording would break when it did. There is no `--json`, because [an operation command takes paths and nothing else](design-principles.md#everything-is-in-the-file) and a flag that switches the output format is still a flag. The identifier is what a tool should key on, and it is equally stable in the output there is.
 
 ### Draft runs
 
@@ -2163,7 +2424,7 @@ The `<!-- publishable:begin ... -->` regions are **managed**: generators rewrite
 | `experiment` | `publishable g experiment cohort-pilot --template generic --input-dir ~/data --output-dir ~/results` | A fully-populated `configs/cohort-pilot/config.yaml`, `src/cohort_pilot/` (thin `experiment.py` declaring step order, plus `steps/` with one **working** starter step), and a row in the README's managed experiments table. Refuses if either path resolves inside the repo |
 | `step` | `publishable g step cohort-pilot analyze` | Next-numbered `src/cohort_pilot/steps/step03_analyze.py` with a `BaseStep` stub, registered in order |
 | `template` | `publishable g template my_assay` | `templates/my_assay.py` with a `BaseTemplate` + `parameter_spec` stub, for a template only this project needs. Its parameter table is added to the README |
-| `report` | `publishable g report cohort-pilot --format html` | A report renderer override for one experiment |
+| `report` | `publishable g report cohort-pilot --format html` | `src/cohort_pilot/report.py` — a renderer override for one experiment; see below |
 
 ```python
 # src/cohort_pilot/experiment.py — order, nothing else
@@ -2178,6 +2439,31 @@ class CohortPilotExperiment(BaseExperiment):
     # the execution plan from that. Reordering here IS reordering the pipeline.
     steps = [LoadCohort, FitModel, Analyze, CompareMethods]
 ```
+
+**`entrypoint` names that class, and it is an ordinary Python import path** — `<module>:<attribute>`, resolved with the project's own environment on `sys.path`. Because [`new` scaffolds a src layout](#scaffolding-publishable-new), `src/` is not a package and does not appear in it: the experiment generated into `src/cohort_pilot/` is `cohort_pilot.experiment:CohortPilotExperiment`. `generate experiment` writes the line, and nothing but a hand-edit changes it.
+
+It resolves at `validate`, not at `run`, because the execution plan is a property of classes core has to have imported to see: how many executions each step gets, which artifact paths [`dry-run`](#before-you-spend-it) prints, and which scope each `io` will be built for. So an experiment package that fails to import fails `validate`, with the import error as the message. That is also the one thing `validate` executes: importing a module runs its top level, so a step module that opens a connection or reads a file at import time does so during a command documented as creating nothing. Keep step modules import-clean and put the work in `run`.
+
+### A report override renders one experiment's own figures
+
+`publishable report` renders any run without configuration — the condition table, the deltas, the hypothesis verdicts, the attrition. What it can't produce is the figure your paper actually needs, because that is domain work. `generate report` writes a subclass into your repo for it:
+
+```python
+# src/cohort_pilot/report.py — generated
+from publishable import BaseReport
+
+class Report(BaseReport):
+    format = "html"                             # html | markdown — `--format` seeds this line
+
+    def sections(self, run, io):
+        yield from super().sections(run, io)    # the standard blocks, in order
+        yield self.section("Method agreement",
+                           body=render_scatter(io.read_condition(...)))
+```
+
+`run` is the parsed `run.yaml` and `io` is the same read-only accessor a [`summary` step](#steps-that-need-every-condition) gets, so an override can reach any condition's artifacts. `generate report`'s `--format` writes that attribute and does nothing else — the class is the source of truth from then on, exactly as `--input-dir` seeds a config field it doesn't afterwards own. It **adds and reorders sections; it cannot change a number** — the values it renders come from `results`, which core computed and [attributed](#estimate-carries-your-interval-without-core-claiming-it) before the renderer existed. That's the same line [`aggregate`](#templates-where-parameters-are-defined) sits on, one stage later: a renderer decides what a reader sees, never what the record says.
+
+It lives in `src/**` rather than in a plugin because it is one experiment's presentation, so [`code_hash` covers it](#three-hashes) — a figure is a claim, and the code that drew it belongs under the same commit as the analysis. A renderer several experiments share is an ordinary import from a plugin, called by each one's override.
 
 ### The starter step runs
 
@@ -2422,7 +2708,8 @@ publishable/
 │   ├── uv_support.py          # uv.lock copy/hash, --locked drift checks
 │   ├── secrets.py             # dotenv loading, required_env checks — never touches provenance
 │   ├── reproduce.py           # clone/checkout/sync, then validate + run
-│   ├── report.py
+│   ├── report.py              # BaseReport: standard sections, html/markdown, override discovery
+│   ├── diagnostics.py         # stable E-/W- identifiers, collected reporting, exit codes
 │   └── templates/{base.py,builtin/generic.py}
 ├── tests/
 ├── examples/generic/

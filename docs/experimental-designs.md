@@ -367,7 +367,7 @@ The design is shaped around a specific claim: most irreproducible results are no
 | **Results overwritten by a rerun** | Artifacts are append-only and atomic; each run gets its own `run_<id>/`. Nothing is ever deleted |
 | **Uncommitted code in a reported run** | `run` refuses a dirty `src/**` or `templates/**`; `draft` permits it but marks the run non-citable |
 | **The input data changed underneath you** | A content manifest is captured at run start and re-verified after; `reproduce` compares against the recorded hash |
-| **The apparatus changed underneath you** | Where a template declares an apparatus probe, its facts are recorded per condition at `validate`, at run start, and before every execution; a changed revision, firmware, or calibration fails the run rather than pooling two states as one dataset. See [reference.md § The apparatus core can only observe](reference.md#the-apparatus-core-can-only-observe) |
+| **The apparatus changed underneath you** | Where a template declares an apparatus probe, its facts are recorded per condition at `dry-run`, at run start, and before every execution; a changed revision, firmware, or calibration fails the run rather than pooling two states as one dataset. See [reference.md § The apparatus core can only observe](reference.md#the-apparatus-core-can-only-observe) |
 | **A typo'd parameter silently using a default** | `init` materializes every valid key, so any unrecognized key is a typo by construction and fails validation |
 | **Resuming into a different experiment** | `resume` refuses when `parameters_hash`, `code_hash`, or `uv.lock` have moved |
 | **A stale summary reported as fresh** | Steps that consume an earlier run's artifacts record it as an upstream with its hashes |
