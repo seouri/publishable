@@ -1616,6 +1616,16 @@ results:
 
 **`n_paired` is the intersection, and it has to be recorded.** Two conditions can complete on different units — a transform that isn't constructible for every patient, an assay that failed on a subset, an arm whose eligibility differs — and a paired comparison exists only for units that completed in *both*. Differencing the two condition means instead would not be a paired comparison at all, however carefully `paired: true` was derived. The condition-level `n` can't carry this, because it belongs to one condition and the contrast spans two, so the contrast records its own. A contrast whose intersection is empty is reported as such rather than as a delta of zero.
 
+**Contrasts don't nest, and the reason is one you already have.** A contrast is between two *conditions*. A comparison between two *contrasts* — is the effect at dose 1.0 larger than at dose 0.5, did the difference between arms differ between sites, is the mean of the native cells above the mean of the foreign ones — is an interaction term, and [core doesn't compute those](experimental-designs.md#what-core-will-not-do-for-you) whether they arrive through a factorial `grid` or through here. Three shapes people reach for, and all of them are the same thing wearing different clothes:
+
+| You want | It is | Where it goes |
+|---|---|---|
+| A monotonic dose response across three arms | An ordering of contrasts | `scope: "summary"` step, returned as an [`Estimate`](#estimate-carries-your-interval-without-core-claiming-it) |
+| A difference-in-differences | An interaction | Same |
+| A nested or weighted mean *over* many contrasts | An estimator over contrasts | Same |
+
+Declaring thirty contrasts to build one number is the failure mode worth naming, because `contrasts` makes it look available: it widens the correction family by thirty comparisons nobody reads individually, and the number you actually wanted still isn't computed. Declare the contrasts you will *report*, and build the combination in a summary step where it can carry its own interval and its own method.
+
 #### Reporting strata
 
 Pre-specified subgroup reporting — by sex, by site, by severity band, by record source — is a requirement of most reporting checklists and is *not* a design axis. Making it one would be actively wrong: five reporting attributes as `groups` axes multiply into a cartesian product of cells, each an execution of a pipeline that should run once, most of them below `limits.min_units_per_cell`.
@@ -1890,6 +1900,8 @@ hypotheses:
 `evaluate_on: ci95_lower` with `direction: greater` is the superiority form, and it is also how "the interval excludes zero in the expected direction" is written — those are the same statement.
 
 Two rules `validate` enforces. A hypothesis evaluating on a bound needs a metric that *has* one, so naming a [`basis: repeats`](#the-unit-table-is-the-inference-base) metric is rejected rather than warned about — the existing warning is for a metric that can be reported but not tested, and asking for a bound it doesn't have is a stronger error. And when the metric is a [reported `Estimate`](#estimate-carries-your-interval-without-core-claiming-it), the bound tested is the one the step supplied, so `verdict_rests_on: reported` carries its usual meaning: core compared the numbers and did not derive them.
+
+**A hypothesis is one quantity against one threshold**, which is what makes it evaluable at all. A claim about the *shape* of a series — monotonic across doses, trending across ordered strata, flattening over a curve — has no single quantity to threshold, so it is a summary-step estimator returning an `Estimate` rather than a hypothesis. Declaring the shape claim as several adjacent hypotheses is available and rarely what you want: it tests each step of the series separately and corrects for all of them, which is a different claim from the one about the series.
 
 Which corrected interval a bound test uses follows the family rules unchanged — `report` shows both, and a confirmatory gate reads the corrected one when a correction is declared.
 
