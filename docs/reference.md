@@ -1164,6 +1164,10 @@ Two consequences worth knowing before you write the config. Every numeric metric
 
 `hypotheses` are counted as their own family, separately from the exploratory sweep. A pre-registered confirmatory comparison shouldn't be penalized for the exploration that surrounded it, which is most of the point of declaring it in advance.
 
+**Counted-iff-corrected applies to that family too, which decides what happens to a [summary-metric hypothesis](#a-hypothesis-may-name-a-summary-metric).** Its observation is a [reported `Estimate`](#estimate-carries-your-interval-without-core-claiming-it), so core has nothing to correct — and therefore does not count it. Core's hypothesis family is the confirmatory hypotheses whose observations it computed, which keeps `family_size` predictable from the config: you can see which metrics are per-condition and which are summary without running anything.
+
+A design whose pre-registered family mixes the two therefore has *two* families, and only one of them is core's. Declare your own adjustment inside the `Estimate`'s `method`, where the number it applies to lives: `method: "one-sided BCa, 10000 draws, Bonferroni across 3 gates"`. Core then records three uncorrected `reported` verdicts and a `family_size` that doesn't pretend to cover them. Correcting them itself would mean adjusting an interval it has [already said](#estimate-carries-your-interval-without-core-claiming-it) it has no standing over, and silently absorbing them into the count would misstate the correction it *did* apply.
+
 **`sample` conditions are not a comparison family, and are excluded.** The reasoning above holds wherever each condition is a comparison a reader might act on, which is what an enumerated sweep produces. A `sample` sweep isn't that: forty sobol draws over `drug.dose_mg` are forty points feeding one downstream curve, and nobody claims a finding about draw 17 against draw 1. Holm-adjusting thirty-nine such contrasts corrects a multiplicity no one is exposed to, and it would shrink every interval the curve is fitted through. So `family` counts conditions from `grid`, `paired`, `ablate`, and `groups`, and skips `sample`; `report` says so beside the table rather than leaving a reader to wonder why the count is smaller than the condition list.
 
 That is also why `validate` doesn't warn about `correction: none` for a `sample`-only sweep — under the old counting rule, the config that was statistically right got warned at. `replication.rationale` is the place to say what you're doing with the draws, and for a design whose conclusion comes from a `scope: "summary"` fit, saying so is worth more than any correction core could apply to the conditions feeding it.
@@ -1425,6 +1429,8 @@ would write 64 artifacts under /secure/results/cohort-pilot/run_.../
 ```
 
 Grid sizes multiply quietly, and nested repeats multiply on top of them. `validate` warns past `limits.max_executions`, and `dry-run` prints the full expansion, because "6 conditions × 10 folds × 3 seeds" is easy to write and slow to discover.
+
+**`dry-run` is the command that reaches outward, so it needs what a run needs minus the compute.** It builds the input manifest and [probes the apparatus](#the-apparatus-core-can-only-observe), which means real credentials and a reachable apparatus — for a sweep over six model deployments, all six, including any local one actually running. That is the point of the split rather than a cost of it: [`validate`](#cli-reference) stays free to run in a loop while you edit YAML, and everything expensive happens once, in a command you invoke when you think you're ready. Develop a wide sweep against one level of the axis and widen it last; `dry-run` is where a config you can't afford to run announces itself.
 
 ---
 
@@ -1757,13 +1763,15 @@ These take paths and nothing else.
 | `publishable draft` | config path | Same as `run`, but permits a dirty `src/**`. Recorded as `draft: true` — see [Draft runs](#draft-runs) |
 | `publishable resume` | run directory or run.yaml | Continues an interrupted run in place, skipping completed (condition, repeat, step) triples |
 | `publishable report` | run.yaml or study.yaml path | Renders Markdown/HTML from one run, or from a whole [study](#studies-what-a-paper-reports) |
-| `publishable freeze` | run directory | Re-captures the environment and re-probes the [apparatus](#the-apparatus-core-can-only-observe) mid-run, without executing anything |
+| `publishable freeze` | run directory | Re-captures the environment and re-probes the [apparatus](#the-apparatus-core-can-only-observe) mid-run, without executing anything. Reports a moved apparatus as a failure; the [gate](#the-apparatus-core-can-only-observe) is what stops the run — see below |
 | `publishable reproduce` | run.yaml or config path | Clones the recorded commit into a new checkout and prepares it to run — see [Reproducing on another device](#reproducing-on-another-device) |
 | `publishable diff` | two config or run paths | Reports each hash as identical or differing, then the specific parameter deltas |
 | `publishable docs` | *(none)* | Regenerates every `publishable:begin/end` managed region |
 | `publishable list-templates` | *(none)* | Registered templates, including plugin-provided, with their full parameter specs |
 
 `resume` takes a *run* path rather than a config path: resuming operates on a run that already exists, and that run directory already contains the config it used. A config plus a run identifier would be two arguments describing one thing, with the standing possibility of disagreeing.
+
+**`freeze` reports a moved apparatus; it doesn't decide.** It executes nothing, so it has no execution to fail and no business changing a run's status — it appends the probe to the ledger and reports the difference as a failure rather than a note. The next execution's [gate](#the-apparatus-core-can-only-observe) is what stops the run, and it will. What `freeze` buys is *when* you find out: on a run scheduled over days, between blocks is the natural moment to look, and learning that a revision moved an hour before the next batch is worth more than learning it as that batch dies. A read command that warned quietly would waste the only thing it's good for.
 
 ### Draft runs
 
@@ -2042,7 +2050,7 @@ In order, it:
 2. Clones into a directory derived from the repository name and run ID (`my-study_run_2026-08-06T14-02-11Z_8e21ab3/`), and checks out that exact commit as a detached HEAD. *The only git operation, and you didn't type it.* No `--into`: the destination is derived, so it can't collide with an existing checkout and doesn't need naming.
 3. Verifies the checked-out tree's `code_hash` matches the recorded one — catching a rewritten or force-pushed history.
 4. Runs `uv sync --locked`, failing loudly on lockfile mismatch. Plugin versions come along automatically.
-5. Writes the embedded config to `configs/<name>/config.yaml`, with `data.input_dir` and `data.output_dir` blanked and marked `# REQUIRED: set to your local copy`, and writes the recorded [apparatus](#the-apparatus-core-can-only-observe) facts beside it as the expectation the first probe will be checked against.
+5. Writes the embedded config to `configs/<name>/config.yaml`, with `data.input_dir` and `data.output_dir` blanked and marked `# REQUIRED: set to your local copy`. When the run had an [apparatus](#the-apparatus-core-can-only-observe), it also writes `configs/<name>/apparatus.expected.json` — the recorded facts, written once and never modified, which the first probe is checked against.
 6. Copies `.env.example` and lists the `required_env` variables that need values.
 7. Prints exactly what's left to do, then stops.
 
@@ -2056,6 +2064,7 @@ Before running, edit:
 Then:
   cd my-study_run_2026-08-06T14-02-11Z_8e21ab3
   uv run publishable validate configs/cohort-pilot/config.yaml
+  uv run publishable dry-run  configs/cohort-pilot/config.yaml
   uv run publishable run      configs/cohort-pilot/config.yaml
 ```
 
@@ -2074,6 +2083,8 @@ This run measured through an apparatus. Reproducing it needs:
 ```
 
 It's named in the output rather than only recorded because, unlike a path or a credential, this may take a person days to arrange — or be impossible once a provider has retired a revision. When it *is* impossible, the honest move is a new run whose record says so, not a matching one with a footnote.
+
+**`apparatus.expected.json` is editable, and editing it is the point of naming it.** Core cannot tell a legitimately equivalent deployment from a substituted one — an institution's own endpoint serving the same revision is a different `endpoint_host` and the same apparatus in every sense that matters. So the file is a plain, readable expectation you may change, and changing it is *visible*: it sits beside the config as an untracked file the reproducing checkout didn't have before, and the run you produce records the facts you actually observed rather than the ones you claimed. That's the same posture as [`draft`](#draft-runs) taking a name rather than a flag — bypassing is available and conspicuous, instead of forbidden and therefore worked around.
 
 ---
 
