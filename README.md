@@ -20,13 +20,38 @@ uv tool install publishable        # or: pipx install publishable, brew install 
 publishable demo
 ```
 
-`demo` builds a complete worked example — synthetic data, a three-step pipeline, a parameter sweep — and runs it:
+`demo` builds a complete worked example — synthetic data, a three-step pipeline, a parameter sweep — and then walks you through running it, one command at a time. It opens with the part you can't easily make yourself:
 
 ```
 Created ./publishable-demo/
   240 synthetic units      ~/publishable-demo-data/input/
   experiment               src/correlation_pilot/
   config                   configs/correlation-pilot/config.yaml
+
+Your data sits outside the repo, where real data belongs. Everything from
+here is the CLI you'd use on an experiment of your own.
+
+Next:  a look at the config that describes this run
+       [Enter] to continue · q to stop here
+```
+
+Six stops, each the same beat: the real command, its real output, then what it meant. After the config comes `validate`:
+
+```
+Next:  publishable validate configs/correlation-pilot/config.yaml
+       [Enter] to run it · q to stop here
+
+  ✓ config valid · 240 units resolved · input_dir outside the repo
+
+validate reads your config and your data. It creates nothing, and reaches
+nothing off this machine.
+```
+
+Nothing you press changes what runs — every stop is proceed-or-quit, and the config written at the first stop is the one executed at the fifth. `q` prints the remaining commands and `publishable demo` picks up where you left off. Two stops later, past `dry-run`:
+
+```
+Next:  publishable run configs/correlation-pilot/config.yaml
+       [Enter] to run it · q to stop here
 
 Running 3 conditions × 5 repeats = 15 executions
   00_baseline           method=pearson     ████████████ 5/5
@@ -43,7 +68,7 @@ Running 3 conditions × 5 repeats = 15 executions
 run.yaml → ~/publishable-demo-data/results/run_2026-08-07T09-14-03Z_2f5c8d0/run.yaml
 ```
 
-That `run.yaml` is the point. It carries the results *and* everything needed to regenerate them — so on any other machine:
+That `run.yaml` is the point, and it's what the last stop is about. It carries the results *and* everything needed to regenerate them — so on any other machine:
 
 ```bash
 publishable reproduce <path-to-run.yaml>
@@ -274,7 +299,7 @@ Creation commands take a name and what's needed to create it. **Everything else 
 
 | Command | Does |
 |---|---|
-| `demo` | Build and run a complete worked example, no setup required |
+| `demo` | Build a complete worked example, then walk through running it command by command |
 | `new` · `plugin new` · `generate` · `init` | Scaffold a project, a plugin, an experiment, a step |
 | `validate` · `dry-run` | Check values, ranges, and the full execution plan before spending a run |
 | `run` · `draft` · `resume` | Execute; `draft` permits a dirty tree, `resume` continues an interrupted run |

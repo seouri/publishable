@@ -88,6 +88,8 @@ There is no `--dry-run`, no `--resume`, and no `--allow-dirty`, because a flag t
 
 The test for any future addition: could a reader holding only the config and the run record be misled about what happened? If yes, it doesn't belong on the command line.
 
+The same test governs anything interactive. [`demo`](reference.md#what-demo-walks-you-through) stops between commands and waits, and every one of those prompts is proceed-or-quit: **a pause may never alter the config.** A prompt that asked which method to sweep would be a parameter flag with a friendlier face — it would reach the run without passing through the file, and in the first thing a new user ever touches. Pausing changes what a person sees, never what executes, which is why it needs no mode name and why the same sequence runs unattended when nothing is watching.
+
 Variation that needs expressing — a sweep across models, an ablation, a set of conditions — is [structure inside the config](reference.md#sweeps-and-repeats), expanded by core over the parameters the template defined. Never an invocation.
 
 ---

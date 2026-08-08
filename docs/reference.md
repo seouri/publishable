@@ -2484,7 +2484,7 @@ These take a name plus what's needed to bring something into existence.
 
 | Command | Arguments | Does |
 |---|---|---|
-| `publishable demo` | *(none)*, `[--into DIR]` | Builds a complete worked example — synthetic units, a three-step pipeline, a sweep with a baseline — then validates and runs it. Data goes outside the created repo, as it would for real work. The fastest way to see a `run.yaml` |
+| `publishable demo` | *(none)*, `[--into DIR]` | Builds a complete worked example — synthetic units, a three-step pipeline, a sweep with a baseline — then walks you through validating and running it one command at a time. Data goes outside the created repo, as it would for real work. See [What `demo` walks you through](#what-demo-walks-you-through) |
 | `publishable new` | project name, `[--license]` | Scaffolds an experiment repo with README/LICENSE/CITATION.cff, `git init` + first commit |
 | `publishable plugin new` | plugin name | Scaffolds an installable template/resolver/step package |
 | `publishable generate` (`g`) | generator, name, generator args | `experiment` \| `step` \| `template` \| `report`; `experiment` accepts `--plugin` |
@@ -2553,6 +2553,29 @@ The identifier is part of the contract and outlives the wording: a message gets 
 Iterating on code means running before committing, and that needs a name rather than a flag. An `--allow-dirty`-style flag would read as "suppress a warning," which invites reflexive use; `publishable draft` reads as what it is — a provisional run whose code state isn't reachable from any commit.
 
 Draft runs are recorded with `draft: true` and `git.code_dirty: true`, `report` refuses to render one as a final result, and `diff` labels it. Everything else behaves normally, so iteration stays fast — you just can't accidentally cite one.
+
+### What `demo` walks you through
+
+The one thing `demo` can give a newcomer that they can't easily get themselves is **data in the right format**. Everything after that is the CLI they have to learn anyway, so `demo` hands over the data and then walks them through the real commands rather than running them out of sight.
+
+Six stops. After the first, each has the same beat: print the next command exactly as you would type it, wait, run it on `Enter`, then say in two or three lines what its output meant.
+
+| Stop | Runs | The point of the stop |
+|---|---|---|
+| 1 | *(`demo` itself)* | Writes 240 synthetic units to `~/publishable-demo-data/input/`, scaffolds `src/correlation_pilot/` and `configs/correlation-pilot/config.yaml`, then `git init` and a first commit. Explains why the data is [outside the repo](#why-not-in-the-repo) |
+| 2 | *(`demo` prints a file)* | Shows this config's `conditions` and `replication` blocks verbatim — the whole description of what is about to run |
+| 3 | `validate` | Reads the config and the input, creates nothing, reaches nothing off the machine |
+| 4 | `dry-run` | 3 conditions × 5 repeats = 15 executions, and every artifact path that *would* be written. Still creates nothing |
+| 5 | `run` | The results table: estimates, [intervals over units](#the-unit-table-is-the-inference-base), paired deltas against the baseline |
+| 6 | `reproduce` | `run.yaml` is the deliverable, and it stops at the two things only a person can supply. Hands off to [`publishable new`](#scaffolding-publishable-new) |
+
+Stop 2 invites you to read the config, not to edit a step. That asymmetry is deliberate: `code_hash` covers [`src/**` and `templates/**`](#three-hashes), so a step edited at stop 2 would dirty the tree and make stop 5 refuse — the first `run` a user ever issues would be an error. A config edit costs nothing but a different `parameters_hash`.
+
+**No pause may alter the config.** Every prompt is proceed-or-quit; nothing asks which method to sweep or how many repeats to use, and the config written at stop 1 is the config executed at stop 5. The reasoning is [Everything is in the file](design-principles.md#everything-is-in-the-file) — a prompt that reached the run without passing through the file would be a parameter flag in disguise.
+
+**Unattended, it doesn't pause.** With no terminal attached — piped, redirected, or in CI — `demo` runs the identical sequence straight through. That is not a mode and takes no flag, because the pause changes presentation only; there is nothing for a second command name to distinguish.
+
+**Quitting is expected.** `q` at any stop prints the remaining commands in order, so you leave holding the whole path, and running `publishable demo` again from the demo directory resumes at the stop you left. Since `validate` and `dry-run` create nothing, the filesystem alone can't tell stop 3 from stop 4; `demo` tracks position in a progress file in the demo repo root, listed in the generated `.gitignore`. It sits outside `src/**` and `templates/**`, so it can never move `code_hash`, and being ignored it can never dirty the tree and push you onto [`draft`](#draft-runs). `--into DIR` starts a fresh demo elsewhere.
 
 ---
 
