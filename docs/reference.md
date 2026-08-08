@@ -826,7 +826,7 @@ def aggregate(self, units, cfg) -> dict:
 
 Omitting `default` is what makes a parameter required, which is why `default=None` is not the way to spell it — `null` is a legal value for some parameters and the absence of one is a different claim. A `Param` declaring `default=None` without `nullable=True` is rejected when the template loads, rather than at the first config that leaves it alone. Nullability is load-bearing beyond this: [`sweep.ablate.remove`](#expansion-modes) sets a boolean to `false` or a nullable parameter to `null`, and `validate` needs to know which parameters those are.
 
-Required parameters get the same treatment `metadata.description` does — materialized with an empty value and a `# REQUIRED` marker, so the file `init` produced is complete and fails validation until you fill it in, rather than being silently short a key.
+Required parameters get the same treatment `metadata.description` does — materialized with an empty value and a `# REQUIRED` marker, so the file `init` produced is complete and fails validation until you fill it in, rather than being silently short a key. **The marker is what fails**: `validate` rejects a required parameter still holding its type's empty value, exactly as it rejects an empty `metadata.description`. The consequence is worth knowing before you declare one — an empty string can never be a legal value for a required `str`, because there is no way to distinguish the value you meant from the placeholder you didn't fill in. If empty is legitimate, the parameter has a default and isn't required.
 
 ---
 
