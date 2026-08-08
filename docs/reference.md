@@ -725,7 +725,7 @@ The same logic governs `assign.stratify_by` under `allocation: between` — **wh
 
 `validate` rejects the ambiguous middle: an attribute constant within some clusters and varying within others has no correct level, and neither null is defensible over a mixture.
 
-Core resolves this once at run start, records the resolved unit list and its hash in the input manifest, and makes it available everywhere:
+Core resolves this once at run start, records the resolved list in `provenance.units` and its hash in `provenance.units_hash`, and makes it available everywhere:
 
 ```python
 class Step(BaseStep):
