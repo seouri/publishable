@@ -38,7 +38,7 @@ Running 3 conditions × 5 repeats = 15 executions
   01_method=spearman    0.607   [0.517, 0.683]    +0.026  [−0.007,  0.059]
   02_method=kendall     0.412   [0.347, 0.477]    −0.169  [−0.213, −0.125]
 
-  intervals over 228 of 240 units (12 failed) · seed spread ±0.014
+  intervals over 228 of 240 units (12 failed) · seed spread std 0.014
 
 run.yaml → ~/publishable-demo-data/results/run_2026-08-07T09-14-03Z_2f5c8d0/run.yaml
 ```
@@ -102,6 +102,7 @@ my-study/
 │       ├── step02_fit_model.py
 │       ├── step03_analyze.py
 │       └── step04_compare_methods.py
+├── templates/                 # this project's own templates, if any  → code_hash
 ├── configs/cohort-pilot/
 │   └── config.yaml            # every parameter                    → parameters_hash
 ├── pyproject.toml + uv.lock   # the environment                    → locked
@@ -171,7 +172,7 @@ class Step(BaseStep):
             io.record(unit.key, {"pred": pred, "truth": unit.label})   # the per-unit table —
                                                                        #   what every interval is over
         io.write("scores.parquet", result)   # lands in this condition + repeat's own folder
-        return {"r": result.r}               # a returned scalar is recorded as-is, no interval
+        return {"r": result.r}               # recorded per repeat, without an interval
 ```
 
 Write it once for a single condition; adding a sweep later changes nothing here.
@@ -192,6 +193,8 @@ provenance:
   parameters_hash: sha256:1a2b…      # this exact parameter set
   input_manifest_hash: sha256:3d8a…  # the data it actually read
 ```
+
+The `r` carrying an interval is the *derived* one: template `generic`'s `aggregate` recomputes it from the per-unit table the step recorded, and being recomputable on a resampled table is what earns it a `ci95`. The `r` the step returned sits beside it under `per_repeat`, without one. That is the whole rule — [an interval is over units, never over executions](docs/reference.md#the-unit-table-is-the-inference-base).
 
 ---
 
@@ -252,9 +255,9 @@ That's the payoff of hashing code and parameters separately: you get to *prove* 
 
 ## What you get
 
-- **One file, no flags.** After `init`, every command takes a path and nothing else. A selector flag would live in a shell history that nobody archives.
+- **One file, no flags.** No *operation* command takes an argument other than a path; creation commands take what's needed to bring something into existence, and they're the only exception. A selector flag would live in a shell history that nobody archives.
 - **Code and parameters hashed separately.** `code_hash` covers your code trees only, so "same code, different parameters" is a *provable* claim — even across commits weeks apart.
-- **Three things pinned, not two — four when you measure through something.** Git commit for code, `uv.lock` for environment, and a content manifest for input data; the third is what most tools leave open. And when measurement goes through an apparatus core can't install — a hosted model deployment, an instrument — a plugin probe records its revision per condition and a change fails the run. `uv.lock` pins the client; that record pins the server.
+- **Code, environment, and data all pinned — and the apparatus too, when you measure through one.** A content hash over your code trees, with the commit recorded so a reproduction can fetch them; `uv.lock` for the environment; a content manifest for the input data, which is the one most tools leave open. And when measurement goes through an apparatus core can't install — a hosted model deployment, an instrument — a plugin probe records its revision per condition and a change fails the run. `uv.lock` pins the client; that record pins the server.
 - **Artifacts are append-only and atomic.** Nothing is ever overwritten or deleted, and a crash mid-write leaves nothing behind rather than a half-file that blocks the retry.
 - **Code and data never share a repo.** Data paths are structurally forbidden inside the git repo — code is shareable, governed data isn't, and they need different protocols.
 - **Intervals over units, not over executions.** `n` counts the things your claim generalizes over. Repeats are reported as pipeline stability, separately and labelled, because an interval across five seeds narrows as you add seeds and says nothing about your cohort. Where core can't compute an interval honestly, it reports the estimate and omits the interval.
@@ -277,6 +280,7 @@ Creation commands take a name and what's needed to create it. **Everything else 
 | `report` · `diff` · `freeze` | Render results, compare two runs hash by hash, snapshot the environment |
 | `reproduce` | Clone the recorded commit and prepare it to run — no git commands typed |
 | `study new` · `study add` | Assemble the runs a paper reports, outside the repo |
+| `docs` · `list-templates` | Regenerate the managed README regions; list every installed template and its parameters |
 
 Full details: [CLI reference](docs/reference.md#cli-reference).
 
