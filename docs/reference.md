@@ -79,6 +79,7 @@ data:
     allocation: within                     # within | between — feeds paired vs unpaired, per contrast
     cluster_by: null                       # e.g. site, when units aren't independent
     measurements: null                     # e.g. {by: read_id, collapse: mean} for technical replicates
+    holdout: null                          # optional single fixed train/test split; see "A fixed holdout split"
     assign:                                # REQUIRED when allocation is `between`
       method: random                       # random | by_attribute | blocked
       from: null                           # the attribute holding the level, for by_attribute
@@ -181,6 +182,10 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Unit keys unique | `data.units.key` `patient_id` has 3 duplicate values |
 | Stratification attribute exists | `stratify_by: label` is not in `data.units.attributes` |
 | Repeat kind needs units | `{kind: fold}` requires `data.units` to be declared |
+| Holdout isn't a repeat kind | `{kind: holdout}` is not a repeat kind — declare `data.units.holdout` instead |
+| One evaluation split, not two | `data.units.holdout` and `{kind: fold}` are both declared; each divides the units for evaluation, so together they leave no single answer to what a metric is over |
+| Holdout is resolvable | `holdout.method: random` needs `frac` in (0, 1); `by_attribute` needs `from`, and column `split` has values `{train, test, dev}`, expected exactly two |
+| Holdout strata survive clustering | `holdout.stratify_by: label` with `cluster_by: animal_id`, but `label` varies within animal `A3` |
 | Biological replicates are units | `{kind: biological}` is not a repeat kind — independent samples are rows in the unit table |
 | Allocation needs arms | `allocation: between` but no `sweep.groups` axis declares what the arms are |
 | Ratio names levels | `assign.ratio` has key `00_control`; expected one entry per `sweep.groups.levels` value (`control`, `treatment`) |
@@ -358,7 +363,7 @@ class Step(BaseStep):
 | `io.path(name)` | Resolves a location without writing, for libraries that insist on writing themselves. Still existence-checked. |
 | `io.read_upstream(step, name)` | Read-only access to an earlier step's artifact *in this run*. Makes cross-step dependencies visible in code instead of implicit in shared paths. |
 | `io.read_input(relpath)` | Read-only access to `input_dir`. |
-| `io.units` | The units this execution produces results about — every unit, this arm's, or this fold's test partition. `io.units.train` carries the training partition when a `fold` repeat is declared. See [Units](#units-the-thing-being-measured). |
+| `io.units` | The units this execution produces results about — every unit, this arm's, or this fold's or holdout's test partition. `io.units.train` carries the training partition when a `fold` repeat or a [`holdout`](#a-fixed-holdout-split) is declared. See [Units](#units-the-thing-being-measured). |
 | `io.record(unit_key, values)` | Appends one row to this step's per-unit result table. Append-only and resumable by key. |
 | `io.conditions` / `io.read_condition(condition, step, name)` | **`scope="summary"` only.** Iterate resolved conditions and read any condition's artifacts across repeats. |
 | `io.reuse_from(run_id, step, name)` | Explicitly read an artifact from a *previous* run — the sanctioned way to build on prior work without copying or overwriting. |
@@ -396,6 +401,7 @@ data:
     attributes: [label, age, sex, site]   # available for allocation, stratification, reporting
     allocation: within               # within | between — see below
     cluster_by: null                 # e.g. site, when units aren't independent
+    holdout: null                    # optional single train/test split — see below
 ```
 
 ### Allocation: within-subjects or between-subjects
@@ -462,6 +468,32 @@ vs_baseline:                                   # 03_arm=treatment__method=spearm
 
 Designate the baseline on the group axis (`{arm: control, analysis.method: pearson}`) and the single-axis contrasts are the interpretable ones.
 
+### A fixed holdout split
+
+Fitting on most of the data and evaluating on the rest, once, is the most ordinary evaluation there is. It's declared where units are resolved, because that's what it is — a partition of the unit table, decided once and never re-drawn:
+
+```yaml
+    holdout:
+      method: random                 # random | by_attribute
+      frac: 0.2                      # test fraction, for random
+      from: null                     # the attribute naming the partition, for by_attribute
+      stratify_by: [label]           # balance the split on these
+      seed: auto                     # derived from the design digest; recorded explicitly
+```
+
+`io.units` then yields the test partition and `io.units.train` the training one — the same two lists a `fold` repeat provides, without the repetition. `by_attribute` covers a split that already exists, which benchmark datasets usually ship: name the column (`from: split`, values `train`/`test`) and core partitions rather than draws.
+
+**A holdout is not a repeat kind, and that's not a technicality.** The repeat axis answers *what varies incidentally* — it exists to express multiplicity, and each level multiplies the executions. A holdout varies nothing and multiplies nothing: it's one split, fixed for the whole run, and `{kind: holdout, n: 1}` would be a repeat that never repeats. Putting it on `data.units` also puts it beside the other two declarations that partition units without re-executing anything, [`assign`](#allocation-within-subjects-or-between-subjects) and [`measurements`](#what-isnt-a-repeat). So [the two repeat kinds stay two](#repeat-kinds).
+
+Four interactions worth knowing, all of them consequences of the rules already stated rather than new ones:
+
+- **`holdout` and `fold` are mutually exclusive**, and `validate` rejects both together. They are two answers to one question — how the data is divided for evaluation — and declaring both leaves "which units is this metric over?" with no single answer. To hold out a final test set *and* cross-validate for model selection, declare the holdout and do the inner search inside the step over `io.units.train`, exactly as [§ Cross-validation](experimental-designs.md#cross-validation) prescribes for nested CV: a setting chosen from results is an output, not a condition.
+- **`resolved` is the test partition**, per [§ What isn't a repeat](#what-isnt-a-repeat) — a 20% holdout over 240 units reports `resolved: 48`, and the interval is over those 48. That's the honest denominator: the training units produced no result to generalize from.
+- **Whole clusters go to one side**, when [`cluster_by`](#clustered-units) is declared, and `stratify_by` must be constant within a cluster. Same rule and same reason as folds — a holdout that trains on one cell of an animal and tests on another leaks just as thoroughly for happening only once.
+- **Under `allocation: between`, the split happens within each arm**, so every arm has both partitions in the declared proportion. Splitting the roster first would leave arms with unequal test sizes and, at worst, an arm with no test units at all.
+
+The realized membership is written to `allocation.json` beside any arm assignment and hashed, so which units were evaluated is answerable from the run record rather than from whoever drew the split.
+
 ### Clustered units
 
 When units aren't independent — patients within sites, cells within animals, measurements within subjects — declare it:
@@ -495,14 +527,14 @@ class Step(BaseStep):
     scope = "repeat"
 
     def run(self, cfg, io):
-        model = fit(io.units.train, cfg.parameters)  # empty unless a fold repeat is declared
+        model = fit(io.units.train, cfg.parameters)  # empty unless a fold or holdout is declared
         for unit in io.units:                        # this fold's test split, or this arm
             pred = predict(model, unit)
             io.record(unit.key, {"pred": pred, "truth": unit.label})
         return {}                                 # metrics can be derived from the unit table
 ```
 
-`io.units` is already scoped correctly: under a [group axis](#expansion-modes) it yields only that arm's units, and in a `fold` repeat only that fold's **test** partition — the units this execution produces results about. The training partition is `io.units.train`, which is a different list for a different purpose, and keeping them separate is what stops a step from silently recording a result for a unit it trained on. Core computes the partitions, so no experiment reimplements k-fold, and the exact membership of every split lands in `run.yaml` — which is what makes a cross-validation reproducible rather than merely re-runnable.
+`io.units` is already scoped correctly: under a [group axis](#expansion-modes) it yields only that arm's units, and under a `fold` repeat or a [`holdout`](#a-fixed-holdout-split) only the **test** partition — the units this execution produces results about. The training partition is `io.units.train`, which is a different list for a different purpose, and keeping them separate is what stops a step from silently recording a result for a unit it trained on. Core computes the partitions, so no experiment reimplements k-fold, and the exact membership of every split lands in `run.yaml` — which is what makes a cross-validation reproducible rather than merely re-runnable.
 
 **Partitions are computed once per run, not once per condition.** Every condition sees the same fold boundaries and the same seed list, derived from the config-level [design digest](#what-auto-derives-from). This is load-bearing rather than incidental: under `allocation: within`, comparisons across conditions are paired unit by unit, and pairing fold 3 of one condition against a *differently drawn* fold 3 of another would not be a paired comparison at all. Shared partitions are also why the layout can name repeat directories `seed17`/`fold03` identically under every condition.
 
@@ -748,7 +780,7 @@ The baseline is always condition `00`, and `results.conditions[i].vs_baseline` c
 
 #### What isn't a repeat
 
-Three things that a naive model puts on the repeat axis belong elsewhere, and putting them there is what makes them affordable and correct.
+Four things that a naive model puts on the repeat axis belong elsewhere, and putting them there is what makes them affordable and correct.
 
 **Resampling and permutation are statistics over the unit table.** `{kind: bootstrap, n: 2000}` would mean two thousand full executions of the pipeline, each with its own condition directory and artifact set — for the documented 15-execution example, roughly 8,500 artifacts to compute an interval conventionally obtained by resampling a table that already exists. So they're declared under `statistics` and computed after the run:
 
@@ -776,7 +808,11 @@ Rows sharing a `key` are collapsed to one unit at resolution, before any step se
 
 A **technical replicate** is the same sample measured three times; a **biological replicate** is three independent samples. Only the second is evidence about the population, and counting technical replicates as `n` is one of the most common ways a result is overstated.
 
-**Biological replicates aren't a repeat kind either** — they're units, which is exactly what the model already says: independent samples are independent rows in your unit table. `validate` rejects `{kind: biological}`, `{kind: technical}`, `{kind: bootstrap}`, and `{kind: permutation}` by name, each pointing at where the thing actually goes.
+**Biological replicates aren't a repeat kind either** — they're units, which is exactly what the model already says: independent samples are independent rows in your unit table.
+
+**A train/test holdout is a partition, not a repetition.** It looks like `fold` with `k` of one, and the resemblance is why it gets misfiled: both hand a step a training list and a test list. But a repeat level multiplies executions, and a holdout is drawn once and fixed for the run — `{kind: holdout, n: 1}` would be a repeat that never repeats, and a second one would be incoherent rather than merely wasteful. It belongs with the other declarations that divide units without re-running anything, so it's [`data.units.holdout`](#a-fixed-holdout-split).
+
+`validate` rejects `{kind: biological}`, `{kind: technical}`, `{kind: bootstrap}`, `{kind: permutation}`, and `{kind: holdout}` by name, each pointing at where the thing actually goes.
 
 `n` is reported explicitly rather than left to inference, and it never collapses to a single number:
 

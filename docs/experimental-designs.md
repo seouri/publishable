@@ -24,9 +24,9 @@ Resolve the three declarations separately and the config writes itself. They are
 | What varies deliberately? | `sweep` | `grid` (cartesian) · `paired` (coupled axes) · `ablate` (`1 + n`, one change each) · `sample` (continuous ranges) · `groups` (arms of units, not parameters) · `baseline` (the reference, not an axis) | [Factorial](#factorial) · [Fractional factorial](#fractional-factorial-and-coupled-settings) · [Ablation](#ablation) · [Dose-response](#dose-response-and-parameter-search) · [Between-subjects](#between-subjects--parallel-arm-trial) |
 | What varies incidentally? | `replication.repeats` | `seed` · `fold` — the two things a re-execution can change | [Single condition](#single-condition-repeated) · [Cross-validation](#cross-validation) |
 
-Answering a question with nothing is a valid answer: omit `sweep` for a single condition, omit `data.units` entirely when the pipeline has no unit table — though `fold` requires one, as do the resampling and permutation statistics in [Bootstrap and permutation](#bootstrap-and-permutation). What each repeat kind varies and how core collapses it is the table in [reference.md § Repeat kinds](reference.md#repeat-kinds) — both differ per kind, and that's the point of naming the kind rather than passing a count. What no repeat kind does is set `n`: that counts units, and every interval core reports comes from the [per-unit table](reference.md#the-unit-table-is-the-inference-base).
+Answering a question with nothing is a valid answer: omit `sweep` for a single condition, omit `data.units` entirely when the pipeline has no unit table — though `fold` requires one, as do the resampling and permutation statistics in [Bootstrap and permutation](#bootstrap-and-permutation). A design that evaluates on held-out units without repeating anything answers the third question with nothing too, and declares [`data.units.holdout`](#train-test-holdout) instead of a repeat. What each repeat kind varies and how core collapses it is the table in [reference.md § Repeat kinds](reference.md#repeat-kinds) — both differ per kind, and that's the point of naming the kind rather than passing a count. What no repeat kind does is set `n`: that counts units, and every interval core reports comes from the [per-unit table](reference.md#the-unit-table-is-the-inference-base).
 
-Two choices sit *below* an answer rather than beside it. `assign.method` (`random` | `by_attribute` | `blocked`) only applies once allocation is `between`, and it answers a narrower question than the axis does — the `groups` axis says what the arms are, `assign.method` says how a unit reaches one. `cluster_by` sits below all three rather than beside them — it declares that units aren't independent, which widens the intervals. It is *not* independent of the other answers, though: because a cluster is indivisible, declaring it also constrains how `fold` splits and how `between` allocation assigns, so whole clusters stay on one side of every partition. See [Clustered and hierarchical data](#clustered-and-hierarchical-data) and [Matched case-control](#matched-case-control).
+Three choices sit *below* an answer rather than beside it. `assign.method` (`random` | `by_attribute` | `blocked`) only applies once allocation is `between`, and it answers a narrower question than the axis does — the `groups` axis says what the arms are, `assign.method` says how a unit reaches one. `cluster_by` sits below all three rather than beside them — it declares that units aren't independent, which widens the intervals. It is *not* independent of the other answers, though: because a cluster is indivisible, declaring it also constrains how `fold` splits and how `between` allocation assigns, so whole clusters stay on one side of every partition. See [Clustered and hierarchical data](#clustered-and-hierarchical-data) and [Matched case-control](#matched-case-control). `data.units.holdout` sits below the third question without being an answer to it — a single train/test split divides the units once and repeats nothing, so it's a declaration about the table rather than a repeat kind. See [Train-test holdout](#train-test-holdout).
 
 ### Single condition, repeated
 
@@ -149,6 +149,23 @@ sweep:
 Fitting the dose-response curve is a `scope: "summary"` step; core supplies the conditions and the per-unit tables, not the curve model.
 
 Because the conclusion is the fit rather than any one draw, sampled conditions are excluded from the multiplicity family and `correction: none` draws no warning here — the forty draws are inputs to one model, not forty comparisons. See [reference.md § Sweeps and repeats](reference.md#sweeps-and-repeats).
+
+### Train-test holdout
+
+Fit on most of the units, evaluate on the rest, once. It's a property of the unit table rather than a repeat, because nothing repeats — the split is drawn once and fixed for the run:
+
+```yaml
+data:
+  units:
+    from: index.csv
+    key: patient_id
+    attributes: [label]
+    holdout: {method: random, frac: 0.2, stratify_by: [label], seed: auto}
+```
+
+`io.units` is the test partition and `io.units.train` the training one. When the split already exists — as it does for most benchmark datasets — name the column instead and core partitions rather than draws: `holdout: {method: by_attribute, from: split}`.
+
+`n` is the test partition, so a 20% holdout over 240 units reports intervals over 48 units. That's the honest denominator, and it's the reason to reach for [cross-validation](#cross-validation) instead when 48 is too few to say anything with — every unit gets a turn in the test set there, without any of them being evaluated by a model that trained on it. The two are mutually exclusive; see [reference.md § A fixed holdout split](reference.md#a-fixed-holdout-split).
 
 ### Cross-validation
 
