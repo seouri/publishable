@@ -442,6 +442,10 @@ It reopens that run directory and skips every (condition, repeat, step) triple m
 
 `resume` refuses if `parameters_hash`, `code_hash`, or `uv.lock` don't match current state. Resuming into a *different* experiment is the failure this guards against; with parameters hashed separately, "I edited the config and then resumed" is caught rather than missed.
 
+**It takes the execution order from `sweep.yaml` rather than re-deriving it.** Under [`order: randomized`](#sweeps-and-repeats) a re-derivation would usually agree, since the shuffle is seeded from the design digest — but "usually" is the problem. The realized order is a fact about what happened, and a fact should not be re-computable to a different answer; that's the same reason [`allocation.json`](#allocation-within-subjects-or-between-subjects) is read rather than re-drawn. Reading it also keeps `run.yaml`'s record of the order true after a resume, which a fresh shuffle would quietly falsify.
+
+Under a [`batch`](#a-batch-says-when-not-what) level this is load-bearing rather than tidy. Batches are positions in time, so resume finishes the interrupted batch before opening the next one; a resume free to pick its own order could start batch 4 while batch 3 still had executions outstanding, and the separation the design declared would be gone from the middle of the run.
+
 #### Skipping work *inside* an execution is the step's job
 
 The triple is the granularity core can be sure of. It knows an execution finished because it recorded that it did, and it [never inspects the body of a step](design-principles.md#greenfield-only), so it cannot know which of 440 patients that step got through. Where re-executing is cheap that's the whole story and there is nothing to arrange. Where each item is metered — a hosted API call, an instrument booking, a queue submission — re-running the first 300 is a real cost, so core hands back the facts a step needs and leaves the decision to the step:
@@ -1140,7 +1144,7 @@ statistics:
   correction: holm                              # none | bonferroni | holm | fdr_bh
 ```
 
-`order: randomized` shuffles the execution order of (condition, repeat) pairs under a recorded seed. For anything touching an instrument, a plate, or a service whose behaviour drifts over hours, running conditions in index order confounds the comparison with time; randomizing costs nothing and the realized order is recorded either way, along with each execution's `started_at`. A [`batch`](#a-batch-says-when-not-what) level is the exception that proves the rule: batches are positions in time, so they stay in order and the shuffle happens inside each one.
+`order: randomized` shuffles the execution order of (condition, repeat) pairs under a recorded seed. For anything touching an instrument, a plate, or a service whose behaviour drifts over hours, running conditions in index order confounds the comparison with time; randomizing costs nothing and the realized order lands in `sweep.yaml` either way, along with each execution's `started_at` — and [`resume`](#resuming) reads it back rather than re-deriving it. A [`batch`](#a-batch-says-when-not-what) level is the exception that proves the rule: batches are positions in time, so they stay in order and the shuffle happens inside each one.
 
 `statistics.correction` applies across the family of baseline comparisons in a sweep, and reporting that family uncorrected is how a sweep feature turns into a p-hacking feature. Corrected and raw intervals are both reported, so nothing is hidden:
 
@@ -1282,7 +1286,8 @@ The output tree mirrors the experiment's structure: what varied, then which repe
 ```
 <run_dir>/
 ├── run.yaml
-├── sweep.yaml                                  # resolved conditions, repeat plan, seeds, fold membership, design digest
+├── sweep.yaml                                  # resolved conditions, repeat plan, seeds, fold membership,
+│                                               #   realized execution order, design digest
 ├── allocation.json                             # realized arm assignment and holdout split; present when either is declared
 ├── manifest/input.json
 ├── environment/{uv.lock,pyproject.toml}
