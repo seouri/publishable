@@ -365,7 +365,7 @@ The design is shaped around a specific claim: most irreproducible results are no
 | **"Which parameters produced this figure?"** | Every run writes `run.yaml` with the config embedded verbatim and hashed, plus each condition's resolved values |
 | **A parameter changed *and* the code changed** | `code_hash` and `parameters_hash` are separate, so a single-variable comparison is provable rather than asserted |
 | **Results overwritten by a rerun** | Artifacts are append-only and atomic; each run gets its own `run_<id>/`. Nothing is ever deleted |
-| **Uncommitted code in a reported run** | `run` refuses a dirty `src/**`; `draft` permits it but marks the run non-citable |
+| **Uncommitted code in a reported run** | `run` refuses a dirty `src/**` or `templates/**`; `draft` permits it but marks the run non-citable |
 | **The input data changed underneath you** | A content manifest is captured at run start and re-verified after; `reproduce` compares against the recorded hash |
 | **The apparatus changed underneath you** | Where a template declares an apparatus probe, its facts are recorded per condition at `validate`, at run start, and before every execution; a changed revision, firmware, or calibration fails the run rather than pooling two states as one dataset. See [reference.md § The apparatus core can only observe](reference.md#the-apparatus-core-can-only-observe) |
 | **A typo'd parameter silently using a default** | `init` materializes every valid key, so any unrecognized key is a typo by construction and fails validation |

@@ -171,7 +171,7 @@ This file is three things at once: the scaffold (you didn't type it), the docume
 
 Two things worth weighing when you decide:
 
-- **For committing:** parameter changes get review and history like anything else in the repo, and collaborators can start from a known config rather than re-deriving one. Since `code_hash` covers only `src/**`, committing configs doesn't disturb [same code, different parameters](design-principles.md#same-code-different-parameters) comparisons.
+- **For committing:** parameter changes get review and history like anything else in the repo, and collaborators can start from a known config rather than re-deriving one. Since `code_hash` covers only `src/**` and `templates/**`, committing configs doesn't disturb [same code, different parameters](design-principles.md#same-code-different-parameters) comparisons.
 - **Against:** `data.input_dir` is an absolute path that can encode a cohort name or institutional structure, which you may not want in a public repo. And a tracked `configs/` can accumulate stale files that look authoritative but were never run — the only authoritative record of a parameter set is the `run.yaml` of a run that used it.
 
 ### There is no separate defaults file
@@ -308,7 +308,8 @@ provenance:
     commit: 4f9a2c1e...                        # YOUR code, never publishable's
     branch: main
     remote: git@github.com:your-org/my-study.git
-    src_dirty: false                           # `run` refuses if true; `draft` permits it
+    code_dirty: false                          # `src/**` or `templates/**` uncommitted;
+                                               #   `run` refuses if true, `draft` permits it
     config_committed: false                    # recorded, not required
   environment:
     manager: uv
@@ -323,6 +324,8 @@ provenance:
   input_manifest: "manifest/input.json"
   input_manifest_hash: sha256:3d8a...
   units: {n: 240, key: patient_id, hash: sha256:c40e...}
+  allocation: null                             # "allocation.json" and its hash, when an arm
+  allocation_hash: null                        #   assignment or a holdout is declared
   upstream:                                    # runs whose artifacts this run consumed
     - run_id: run_2026-08-01T10-02-44Z_71c9de2
       code_hash: sha256:71c9...
@@ -600,7 +603,7 @@ data:
         seed: auto                 # derived from the design digest and the axis name
 ```
 
-The realized assignment is written to `allocation.json` in the run directory and hashed, so "which patients were in the treatment arm" is answerable from the run record alone — not from a script someone ran once.
+The realized assignment is written to `allocation.json` in the run directory, and its hash lands in `provenance.allocation_hash` beside the path — so "which patients were in the treatment arm" is answerable from the run record alone, and a file edited after the run no longer matches what that run reported. Not from a script someone ran once.
 
 `by_attribute` covers the case where nothing was assigned by this tool: the grouping already exists in the data, as it does for a case-control study or an arm randomized by a trial system years ago. It names the column instead of a seed:
 
@@ -663,7 +666,7 @@ Four interactions worth knowing, all of them consequences of the rules already s
 - **Whole clusters go to one side**, when [`cluster_by`](#clustered-units) is declared, and `stratify_by` must be constant within a cluster. Same rule and same reason as folds — a holdout that trains on one cell of an animal and tests on another leaks just as thoroughly for happening only once.
 - **Under `allocation: between`, the split happens within each cell** — each arm, and each cell of a crossed design — so every cell has both partitions in the declared proportion. Splitting the roster first would leave cells with unequal test sizes and, at worst, a cell with no test units at all. Folds are drawn the same way, for the same reason — see [Clustered units](#clustered-units).
 
-The realized membership is written to `allocation.json` beside any arm assignment and hashed, so which units were evaluated is answerable from the run record rather than from whoever drew the split.
+The realized membership is written to `allocation.json` beside any arm assignment, under the same `provenance.allocation_hash`, so which units were evaluated is answerable from the run record rather than from whoever drew the split. One file and one hash cover both, since both are partitions of the same roster drawn once for the run.
 
 ### Weighted samples
 
@@ -834,6 +837,8 @@ class GenericTemplate(BaseTemplate):
         fn = {"pearson": pearsonr, "spearman": spearmanr, "kendall": kendalltau}
         return {"r": fn[cfg.parameters.analysis.method](units.pred, units.truth).statistic}
 ```
+
+**A template can live in three places, and where it lives decides how it's pinned.** Core ships `generic`; a plugin ships its own and arrives as a pinned `uv.lock` entry; `generate template` writes one into `templates/` in your own repo, for a template only this project needs. The third is code the run's numbers came out of and has no version anyone resolves, so [`code_hash` covers `templates/**`](#three-hashes) alongside `src/**` — editing a local `aggregate` moves the hash exactly as editing a step does, and `run` refuses a dirty `templates/` for the same reason it refuses a dirty `src/`.
 
 **`validate` receives the whole config, not only `parameters`.** The rules a template most needs to enforce are often *cross-block*, because they are properties of what its steps do and core cannot know them. An experiment type that fits a model needs somewhere to fit — so a template whose pipeline compiles a program can reject a config that declares no [`holdout`](#a-fixed-holdout-split) and no `fold` repeat, because otherwise `io.units.train` is empty and the evaluation happens on the units the model was fitted against. Core has no way to tell that config from a legitimate one; the template does.
 
@@ -1691,9 +1696,11 @@ A single git commit hash was doing two incompatible jobs: identifying the code a
 
 | Hash | Covers | Answers |
 |---|---|---|
-| `code_hash` | Tree hash of `src/**` | Was the code identical? |
+| `code_hash` | Tree hash of `src/**` and `templates/**` | Was the code identical? |
 | `parameters_hash` | The config's whole parameter declaration — sweep, repeat plan, and `limits` included | Were the parameters identical? |
 | `input_manifest_hash` | Relative paths + content hashes of `input_dir`, at the depth `data.input_manifest_policy` asks for | Was the data identical? |
+
+**`code_hash` covers `templates/**` as well as `src/**`, because a [project-local template](#templates-where-parameters-are-defined) is code the reported numbers came out of.** Its `aggregate` derives a condition's metric and its interval, and its `validate` decides which configs are legal — so a run whose `templates/` moved computed something else, and a `code_hash` over `src/**` alone would call the two runs identical. Core's own templates and a plugin's are outside both trees and pinned differently, by `uv.lock`: a dependency has a version you can resolve, while a file in your repo has only the history your repo keeps. That's also why `template_version` isn't the answer for a local template — it's a string its author remembers to bump, which is the class of claim [`publishable_version`](design-principles.md#whose-git-hash-is-this) is deliberately kept to.
 
 `input_manifest_policy` decides how much of `input_dir` gets hashed, because "hash everything" stops being affordable somewhere between a spreadsheet and a 4 TB imaging archive:
 
@@ -1768,7 +1775,7 @@ provenance:
         reagent_lot: "LOT-88231"
 ```
 
-**A changed fact fails the run, with no policy knob.** Same line as a dirty `src/**`, a lockfile mismatch, or an input file that moved: data gathered under two different apparatus states is not one dataset, and a flag to permit it would only ever be used to paper over the moment a result stopped being interpretable. Restarting under a changed apparatus is a new run — [`resume`](#resuming) refuses it too, and the ledger keeps both observations so the evaluable earlier period is still reportable.
+**A changed fact fails the run, with no policy knob.** Same line as a dirty code tree, a lockfile mismatch, or an input file that moved: data gathered under two different apparatus states is not one dataset, and a flag to permit it would only ever be used to paper over the moment a result stopped being interpretable. Restarting under a changed apparatus is a new run — [`resume`](#resuming) refuses it too, and the ledger keeps both observations so the evaluable earlier period is still reportable.
 
 **Unlike a resolver, a probe *may* read parameters the sweep varies**, and usually must: a sweep over `llm.model` or `instrument.model` is a sweep across apparatus. The unit table has to be one table for the whole run, which is why a resolver is [condition-independent](#where-units-come-from); the apparatus has no such obligation. So facts are recorded per condition and the gate is per condition — a deployment is compared against its own first observation, never against another condition's.
 
@@ -1806,9 +1813,9 @@ The digest is deliberately **not a fourth hash.** The [three](#three-hashes) ans
 
 **Allocation also depends on the roster, so a changed roster re-randomizes.** Core assigns over the unit list resolved at run start; add ten enrollees to `enrollment.csv` and the draw is over 250 units rather than the previous 240 with ten appended. Nothing carries an earlier assignment forward, so **no `assign.method` supports prospective enrollment** — the general form of the limitation [§ Allocation](#allocation-within-subjects-or-between-subjects) notes for `blocked` specifically. Two honest ways to live with it: freeze the roster before the run and treat allocation as the one-time event it is, or let a trial system randomize and read its result with `assign.method: by_attribute`, which is what a real trial does regardless. For anything you intend to cite, pin `assign.seed` to an integer and keep `allocation.json` — a recorded assignment is a fact about what happened, and it should not be re-derivable to a different answer.
 
-The full `git.commit` is still recorded, because `reproduce` needs something to check out — but it's the *transport* mechanism, not the identity claim. `code_hash` is the identity claim, and it's narrower: it ignores everything outside `src/**`, including the config, the README, and other experiments in the same repo.
+The full `git.commit` is still recorded, because `reproduce` needs something to check out — but it's the *transport* mechanism, not the identity claim. `code_hash` is the identity claim, and it's narrower: it ignores everything outside `src/**` and `templates/**`, including the config, the README, and other experiments in the same repo.
 
-`run` refuses to execute when `src/**` has uncommitted changes, since a `code_hash` that isn't reachable from any commit can't be reproduced. Use [`publishable draft`](#draft-runs) for iteration: it permits a dirty tree and records the run as provisional rather than pretending otherwise.
+`run` refuses to execute when `src/**` or `templates/**` has uncommitted changes, since a `code_hash` that isn't reachable from any commit can't be reproduced. Use [`publishable draft`](#draft-runs) for iteration: it permits a dirty tree and records the run as provisional rather than pretending otherwise.
 
 ---
 
@@ -2014,7 +2021,7 @@ Everything host-identifying, not just the obvious paths:
 
 Each is replaced with a marker recording that a value existed and was removed, so a reader can distinguish "redacted" from "never captured." The corresponding *hashes* stay — `input_manifest_hash` survives even though the path doesn't, so data is still verifiable by anyone holding it without the record disclosing where it lives.
 
-None of this disturbs verification: `parameters_hash` [never covered the path fields](#three-hashes), and `code_hash` covers `src/**` only.
+None of this disturbs verification: `parameters_hash` [never covered the path fields](#three-hashes), and `code_hash` covers `src/**` and `templates/**` only.
 
 **One thing redaction can't do is judge your metrics.** Aggregates are usually safe, but a per-subgroup result over a handful of units can be disclosive in ways no automatic rule catches. `study add` prints any reported metric whose `n.completed` falls below `limits.min_reported_n` — or, for a [`basis: repeats`](#the-unit-table-is-the-inference-base) metric, its repeat count, and for a [reported `Estimate`](#estimate-carries-your-interval-without-core-claiming-it) the `n` it declared — and asks you to confirm — a prompt for your judgment, not a guarantee. An `Estimate` that declared no `n` is listed too: core has nothing to compare, and an interval without a denominator is the case the prompt exists for.
 
@@ -2044,8 +2051,8 @@ These take paths and nothing else.
 |---|---|---|
 | `publishable validate` | config path | Every check in [Validation](#validation). Reads your config and your input; creates nothing and reaches nothing off the machine |
 | `publishable dry-run` | config path | Validates, expands the sweep and repeat plan, builds the input manifest, [probes the apparatus](#the-apparatus-core-can-only-observe), prints every artifact path that *would* be written. Creates nothing |
-| `publishable run` | config path | The real thing: requires a clean `src/**`, creates `run_<id>/`, captures provenance, executes conditions × repeats × steps, writes `run.yaml` |
-| `publishable draft` | config path | Same as `run`, but permits a dirty `src/**`. Recorded as `draft: true` — see [Draft runs](#draft-runs) |
+| `publishable run` | config path | The real thing: requires a clean `src/**` and `templates/**`, creates `run_<id>/`, captures provenance, executes conditions × repeats × steps, writes `run.yaml` |
+| `publishable draft` | config path | Same as `run`, but permits a dirty code tree. Recorded as `draft: true` — see [Draft runs](#draft-runs) |
 | `publishable resume` | run directory or run.yaml | Continues an interrupted run in place, skipping completed (condition, repeat, step) triples |
 | `publishable report` | run.yaml or study.yaml path | Renders Markdown/HTML from one run, or from a whole [study](#studies-what-a-paper-reports) |
 | `publishable freeze` | run directory | Re-captures the environment and re-probes the [apparatus](#the-apparatus-core-can-only-observe) mid-run, without executing anything. Reports a moved apparatus as a failure; the [gate](#the-apparatus-core-can-only-observe) is what stops the run — see below |
@@ -2062,7 +2069,7 @@ These take paths and nothing else.
 
 Iterating on code means running before committing, and that needs a name rather than a flag. An `--allow-dirty`-style flag would read as "suppress a warning," which invites reflexive use; `publishable draft` reads as what it is — a provisional run whose code state isn't reachable from any commit.
 
-Draft runs are recorded with `draft: true` and `git.src_dirty: true`, `report` refuses to render one as a final result, and `diff` labels it. Everything else behaves normally, so iteration stays fast — you just can't accidentally cite one.
+Draft runs are recorded with `draft: true` and `git.code_dirty: true`, `report` refuses to render one as a final result, and `diff` labels it. Everything else behaves normally, so iteration stays fast — you just can't accidentally cite one.
 
 ---
 
@@ -2082,8 +2089,8 @@ my-study/
 ├── .git/                    # git init + first commit
 ├── .env.example             # credential variable NAMES only
 ├── .gitignore               # .env, __pycache__ — nothing data-related
-├── src/                     # one package per experiment; code_hash covers this tree
-├── templates/               # this project's own template classes
+├── src/                     # one package per experiment            → code_hash
+├── templates/               # this project's own template classes   → code_hash
 ├── configs/                 # one config.yaml per experiment — freely editable; commit or not, your call
 ├── tests/
 └── docs/
@@ -2192,7 +2199,7 @@ class Step(BaseStep):
 
 Trivial, but it means `publishable run` succeeds immediately after scaffolding. You get a real `run.yaml`, a real artifact tree, and a real set of provenance hashes before writing a line of your own code — so the shape of the whole loop is visible while you're still deciding whether to adopt it. Replace the body when you're ready; the `TODO` is the only thing that needs to change.
 
-**It's generated rather than imported from core, and that's the point.** Core could export this step and let a config name it, which would spare the generating entirely — but [`code_hash` covers `src/**`](#three-hashes), so an imported pipeline is a pipeline outside the hash that claims to cover it. Writing the file into your repo is what keeps the analysis under your commit. See [Core vs. plugin](design-principles.md#core-vs-plugin) for where that line falls and what may still be added on core's side of it.
+**It's generated rather than imported from core, and that's the point.** Core could export this step and let a config name it, which would spare the generating entirely — but [`code_hash` covers your repo's `src/**` and `templates/**`](#three-hashes), so an imported pipeline is a pipeline outside the hash that claims to cover it. Writing the file into your repo is what keeps the analysis under your commit. See [Core vs. plugin](design-principles.md#core-vs-plugin) for where that line falls and what may still be added on core's side of it.
 
 ---
 
@@ -2406,7 +2413,7 @@ publishable/
 │   ├── stats.py               # unit-table inference, resample/null_test, deltas, effect sizes,
 │   │                          #     declared contrasts, reporting strata, sample weights
 │   ├── run_identity.py        # run_<id> allocation, latest symlink, resume resolution
-│   ├── hashes.py              # code_hash (src/** tree), parameters_hash, design digest
+│   ├── hashes.py              # code_hash (src/** + templates/**), parameters_hash, digest
 │   ├── config.py              # load + dot-access Config
 │   ├── run_record.py          # run.yaml assembly; Estimate storage and attribution
 │   ├── provenance.py          # git discovery (user repo), uv env capture

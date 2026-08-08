@@ -185,7 +185,7 @@ results:
       vs_baseline:
         step03_analyze: {r: {delta: 0.026, paired: true, ci95: [0.017, 0.035]}}
 provenance:
-  code_hash: sha256:8e21…            # your src/**, from a clean tree
+  code_hash: sha256:8e21…            # your src/** + templates/**, from a clean tree
   parameters_hash: sha256:1a2b…      # this exact parameter set
   input_manifest_hash: sha256:3d8a…  # the data it actually read
 ```
@@ -250,7 +250,7 @@ That's the payoff of hashing code and parameters separately: you get to *prove* 
 ## What you get
 
 - **One file, no flags.** After `init`, every command takes a path and nothing else. A selector flag would live in a shell history that nobody archives.
-- **Code and parameters hashed separately.** `code_hash` covers `src/**` only, so "same code, different parameters" is a *provable* claim — even across commits weeks apart.
+- **Code and parameters hashed separately.** `code_hash` covers your code trees only, so "same code, different parameters" is a *provable* claim — even across commits weeks apart.
 - **Three things pinned, not two — four when you measure through something.** Git commit for code, `uv.lock` for environment, and a content manifest for input data; the third is what most tools leave open. And when measurement goes through an apparatus core can't install — a hosted model deployment, an instrument — a plugin probe records its revision per condition and a change fails the run. `uv.lock` pins the client; that record pins the server.
 - **Artifacts are append-only and atomic.** Nothing is ever overwritten or deleted, and a crash mid-write leaves nothing behind rather than a half-file that blocks the retry.
 - **Code and data never share a repo.** Data paths are structurally forbidden inside the git repo — code is shareable, governed data isn't, and they need different protocols.
