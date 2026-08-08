@@ -510,7 +510,7 @@ Four interactions worth knowing, all of them consequences of the rules already s
 - **`holdout` and `fold` are mutually exclusive**, and `validate` rejects both together. They are two answers to one question — how the data is divided for evaluation — and declaring both leaves "which units is this metric over?" with no single answer. To hold out a final test set *and* cross-validate for model selection, declare the holdout and do the inner search inside the step over `io.units.train`, exactly as [§ Cross-validation](experimental-designs.md#cross-validation) prescribes for nested CV: a setting chosen from results is an output, not a condition.
 - **`resolved` is the test partition**, per [§ What isn't a repeat](#what-isnt-a-repeat) — a 20% holdout over 240 units reports `resolved: 48`, and the interval is over those 48. That's the honest denominator: the training units produced no result to generalize from.
 - **Whole clusters go to one side**, when [`cluster_by`](#clustered-units) is declared, and `stratify_by` must be constant within a cluster. Same rule and same reason as folds — a holdout that trains on one cell of an animal and tests on another leaks just as thoroughly for happening only once.
-- **Under `allocation: between`, the split happens within each arm**, so every arm has both partitions in the declared proportion. Splitting the roster first would leave arms with unequal test sizes and, at worst, an arm with no test units at all.
+- **Under `allocation: between`, the split happens within each arm**, so every arm has both partitions in the declared proportion. Splitting the roster first would leave arms with unequal test sizes and, at worst, an arm with no test units at all. Folds are drawn the same way, for the same reason — see [Clustered units](#clustered-units).
 
 The realized membership is written to `allocation.json` beside any arm assignment and hashed, so which units were evaluated is answerable from the run record rather than from whoever drew the split.
 
@@ -817,7 +817,7 @@ Baseline conditions are references rather than comparisons, so they never count 
 | Kind | Varies | Aggregation core applies |
 |---|---|---|
 | `seed` | RNG state only | Averaged per unit; dispersion reported as `repeat_spread` |
-| `fold` | data partition — k-fold, stratified, or leave-one-out via `k: all`; cluster-respecting when [`cluster_by`](#clustered-units) is declared | Per-unit values concatenated across folds — each unit is tested once per fold sweep |
+| `fold` | data partition — k-fold, stratified, or leave-one-out via `k: all`; cluster-respecting when [`cluster_by`](#clustered-units) is declared, and drawn within each arm under `allocation: between` | Per-unit values concatenated across folds — each unit is tested once per fold sweep |
 
 Each kind takes its own fields, and only these:
 
