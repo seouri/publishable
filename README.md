@@ -57,7 +57,7 @@ clones the exact commit, restores the locked environment, verifies the input dat
 
 ## Is this for you?
 
-**A good fit if** you run experiments with parameters you sweep, repeats you average over, and results that end up in a paper — especially with data that can't live in your git repo. What a run executes is your pipeline over that data; measurements made off-machine arrive as input and are [pinned by hash, not produced](docs/design-principles.md#what-core-does-not-promise).
+**A good fit if** you run experiments with parameters you sweep, repeats you average over, and results that end up in a paper — especially with data that can't live in your git repo. What a run executes is your pipeline over that data; measurements taken outside the pipeline arrive as input and are [pinned by hash, not produced](docs/design-principles.md#what-core-does-not-promise).
 
 **Probably not** if you want a pipeline scheduler, a live dashboard, or something to retrofit onto existing scripts. `publishable` is [greenfield only](docs/design-principles.md#greenfield-only).
 
