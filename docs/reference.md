@@ -197,13 +197,17 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Grid size sane | 6 conditions × 10 folds × 3 seeds = 180 executions exceeds `limits.max_executions` |
 | Leave-one-out is affordable | `{kind: fold, k: all}` over 240 units × 3 conditions = 720 executions exceeds `limits.max_executions` |
 | Credentials present | `INSTRUMENT_API_TOKEN` is not set in `.env` |
+| Probe is installed | template `my_assay` declares `apparatus_probe: assay_instrument`, which no installed plugin registers |
+| Apparatus is reachable | probe `assay_instrument` raised connecting to the instrument; an unreachable apparatus is worth catching before the run, not four hours into it |
+| Probe supplies the facts | probe `assay_instrument` yields no `reagent_lot`, declared in the template's `apparatus_facts` |
+| Probe emits nothing secret | probe `assay_instrument` returned a fact whose value matches `INSTRUMENT_API_TOKEN` |
 | Data outside repo | `output_dir` resolves inside the git repository |
 | Manifest readable | `input_dir` is unreadable or empty |
 | Unit keys unique | `data.units.key` `patient_id` has 3 duplicate values |
 | Resolver is installed | `data.units.from.resolver` names `plate_wells`, which no installed plugin registers |
 | Resolver supplies the attributes | resolver `plate_wells` yields units with no `operator`, declared in `data.units.attributes` |
 | Resolver supplies the measurement field | `measurements: {by: read_id}` is declared but resolver `plate_wells` yields no `read_id` attribute to collapse on |
-| Resolver is condition-independent | resolver `plate_wells` reads `instrument.calibration_id`, which `sweep` varies — the unit table is one table for the whole run |
+| Resolver is condition-independent | resolver `plate_wells` reads `instrument.model`, which `sweep` varies — the unit table is one table for the whole run. (An apparatus [probe](#the-apparatus-core-can-only-observe) carries no such restriction, and usually does read a swept parameter) |
 | Stratification attribute exists | `stratify_by: label` is not in `data.units.attributes` |
 | Repeat kind needs units | `{kind: fold}` requires `data.units` to be declared |
 | Holdout isn't a repeat kind | `{kind: holdout}` is not a repeat kind — declare `data.units.holdout` instead |
@@ -228,7 +232,7 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Folds fit inside the cells | `{kind: fold, k: 10}` with `allocation: between` over cells of 8 and 232 — folds are drawn within each cell, so `k` may not exceed the smallest cell's unit count, or its cluster count when `cluster_by` is declared |
 | Fold count is legal | `{kind: fold, k: 1}` — `k` must be an integer ≥ 2, or `all` for leave-one-out |
 | Fold strata survive clustering | `{kind: fold, stratify_by: label}` with `cluster_by: animal_id`, but `label` varies within animal `A3` — a stratum can't be balanced across a split that can't divide the cluster |
-| Baseline leaves contrasts confounded | `sweep.baseline` fixes `arm: control` but not `analysis.method`, so 2 of 3 contrasts cross both a group and a parameter axis and are reported `confounded: true` (warning) |
+| Baseline leaves contrasts confounded | `sweep.baseline` fixes a value on every axis (`arm: control`, `analysis.method: pearson`), so 2 of 3 contrasts differ on both and are reported `confounded: true`; leaving one axis unfixed gives a baseline per cell instead (warning) |
 | Correction declared for a family | 6 enumerated conditions × 3 metrics produce a family of 15 baseline comparisons with `statistics.correction: none` (warning). Not raised for a `sample`-only sweep, whose draws aren't a family |
 | Step scope coherence | `step01_load_cohort` is `scope="run"` but reads `analysis.method`, which `sweep` varies |
 | Scope read direction | `step02_fit_model` (`scope="condition"`) reads from `step03_analyze` (`scope="repeat"`), which runs later |
@@ -281,6 +285,8 @@ provenance:
     uv_lock: "environment/uv.lock"             # byte-for-byte copy, in this run directory
     uv_lock_hash: sha256:6b1f...
     hardware: {gpu: "1x A100 80GB", cpu_count: 32}
+  apparatus: null                              # no probe declared; see "The apparatus core
+                                               # can only observe"
   input_manifest: "manifest/input.json"
   input_manifest_hash: sha256:3d8a...
   units: {n: 240, key: patient_id, hash: sha256:c40e...}
@@ -396,13 +402,17 @@ class Step(BaseStep):
 |---|---|
 | `io.write(name, obj)` | Writes into this step's directory. Raises `ArtifactExistsError` if the target exists — no overwrite, no backup-and-replace, no delete-to-make-room. **Atomic**: temp file plus rename, so a crash leaves nothing rather than a half-file that would permanently block a retry. |
 | `io.append(name, record)` | Appends one record to a line-oriented artifact, for incremental work that must survive a crash. Idempotent by record key when supplied. |
-| `io.path(name)` | Resolves a location without writing, for libraries that insist on writing themselves. Still existence-checked. |
+| `io.path(name)` | Resolves a *write* location without writing, for libraries that insist on writing themselves. Existence-checked in the same direction as `io.write` — it raises `ArtifactExistsError` when the target is already there — so it is not a way to read something back. See `io.exists` below. |
+| `io.exists(name)` | Whether this step's directory already holds that artifact. The question a resumed execution asks before writing — see [Resuming](#resuming). |
+| `io.resumed` / `io.recorded_keys` | `True` when this execution is a resumed attempt rather than a first one, and the unit keys already in its per-unit table from earlier attempts. Together, what a step needs to skip work it already did — see [Resuming](#resuming). |
 | `io.read_upstream(step, name)` | Read-only access to an earlier step's artifact *in this run*. Makes cross-step dependencies visible in code instead of implicit in shared paths. |
 | `io.read_input(relpath)` | Read-only access to `input_dir`. |
 | `io.units` | The units this execution produces results about — every unit, this arm's, or this fold's or holdout's test partition. `io.units.train` carries the training partition when a `fold` repeat or a [`holdout`](#a-fixed-holdout-split) is declared. Both raise at `"run"` and `"condition"` scope when a `fold` repeat is declared, since no fold exists there — see [Step scope](#a-fold-repeat-puts-the-units-out-of-reach-of-the-wider-scopes). See [Units](#units-the-thing-being-measured). |
 | `io.record(unit_key, values, measurement=None)` | Appends one row to this step's per-unit result table, keyed by unit — or by `(unit, measurement)` when the step measures one unit more than once, which core then collapses per [`data.units.measurements`](#what-isnt-a-repeat). Append-only and resumable by whichever key applies. |
-| `io.conditions` / `io.read_condition(condition, step, name)` | **`scope="summary"` only.** Iterate resolved conditions and read any condition's artifacts across repeats. |
-| `io.reuse_from(run_id, step, name)` | Explicitly read an artifact from a *previous* run — the sanctioned way to build on prior work without copying or overwriting. |
+| `io.conditions` / `io.repeats` / `io.read_condition(condition, step, name, repeat=None)` | **`scope="summary"` only.** Iterate resolved conditions and resolved repeat labels, and read any condition's artifacts. `repeat` names which repeat's copy to read and is required when `step` is repeat-scoped; repeat labels are identical under every condition, which is why `io.repeats` is a run-level list. |
+| `io.reuse_from(run_id, step, name)` | Explicitly read an artifact from a *previous* run — the sanctioned way to build on prior work without copying or overwriting. See [Lineage](#lineage-between-runs). |
+
+**A `name` is a relative path, not only a filename.** `io.write("figures/roc.png", fig)` and `io.write("programs/gpt-4.1__seed29.json", blob)` both write inside the step's own directory, creating intermediate directories as needed, and every reader — `io.path`, `io.append`, `io.read_upstream`, `io.read_condition`, `io.reuse_from` — addresses them by that same relative path. A step that produces a set rather than a single file is ordinary, and making it flatten a tree into `programs_gpt_4_1_seed29.json` would push structure into filenames where a directory says it better. The path is resolved against the step's directory and normalized first: an absolute path, a `..` segment, or a symlink leading outside are all rejected, so "artifacts land in a directory of the same name" stays a property core enforces rather than one a step could opt out of.
 
 There is no `publishable clean` or `publishable reset`. Nothing in core deletes a file it didn't create in the same call.
 
@@ -419,6 +429,35 @@ uv run publishable resume /secure/results/cohort-pilot/latest
 It reopens that run directory and skips every (condition, repeat, step) triple marked `completed`, continuing from the first that isn't. On a 3-condition × 30-repeat sweep that died at condition 3, the first two conditions and all their repeats are simply not re-executed. Partial artifacts can't exist to confuse it; work that used `io.append` resumes from the last complete record.
 
 `resume` refuses if `parameters_hash`, `code_hash`, or `uv.lock` don't match current state. Resuming into a *different* experiment is the failure this guards against; with parameters hashed separately, "I edited the config and then resumed" is caught rather than missed.
+
+#### Skipping work *inside* an execution is the step's job
+
+The triple is the granularity core can be sure of. It knows an execution finished because it recorded that it did, and it [never inspects the body of a step](design-principles.md#greenfield-only), so it cannot know which of 440 patients that step got through. Where re-executing is cheap that's the whole story and there is nothing to arrange. Where each item is metered — a hosted API call, an instrument booking, a queue submission — re-running the first 300 is a real cost, so core hands back the facts a step needs and leaves the decision to the step:
+
+```python
+class Step(BaseStep):
+    scope = "repeat"
+    nondeterministic = True
+
+    def run(self, cfg, io):
+        if not io.exists("model.pkl"):                  # a *completed* write survives the
+            io.write("model.pkl", fit(io.units.train))  # crash, and io.write won't overwrite
+
+        done = io.recorded_keys                         # empty unless this is a resume
+        for unit in io.units:                           # every unit, always — see below
+            if unit.key in done:
+                continue
+            resp, status = call(unit)
+            io.record(unit.key, {"pred": parse(resp), "status": status})
+            io.append("responses.jsonl", {"record_key": unit.key, "raw": resp.text})
+        return {}
+```
+
+`io.exists` earns its place on the first two lines: atomic writes mean a crash *during* a write leaves nothing, but a write that completed before a later crash leaves a whole artifact, and re-executing into it would raise `ArtifactExistsError` and make the step unresumable. Asking first is the only way through, and it's a question only core can answer.
+
+**`io.units` is never narrowed on resume, and that's deliberate.** `resolved` [is defined as `len(io.units)`](#what-isnt-a-repeat) for the execution, and a resumed execution still produced results about every unit it was handed — the earlier attempt's rows are in the same append-only table. Narrowing the list would drop `resolved` to the remainder and make a correctly resumed run look like one that evaluated 140 patients instead of 440. So the skip is the step's `continue` rather than core's filter, and the three-part `n` comes out identical whether an execution ran once or three times. The execution's `attempts` count in `run.yaml` is where the fact that it ran more than once is recorded.
+
+**A duplicate row resolves first-write-wins.** That isn't a new rule, it's [append-only](design-principles.md#design-goals) applied: the first row is already durable and nothing overwrites it. For a deterministic step the resolution is immaterial, which is why it rarely comes up — but under `nondeterministic = True` the two rows genuinely differ, so which answer survives is a question about the experiment rather than about bookkeeping. Check `io.recorded_keys` rather than relying on the tie-break. `io.append` has the same shape: its idempotency needs a `record_key`, and without one a re-executed range appends a second copy of every record it already wrote.
 
 ---
 
@@ -551,7 +590,7 @@ vs_baseline:                                   # 03_arm=treatment__method=spearm
         ci95: [0.012, 0.070]}
 ```
 
-Designate the baseline on every group axis (`{arm: control, analysis.method: pearson}`) and the single-axis contrasts are the interpretable ones.
+Leave the nuisance axes out of `sweep.baseline` and the problem doesn't arise: the baseline [expands over every axis it doesn't fix](#expansion-modes), so each cell gets its own reference and every contrast differs in exactly one place. Fixing a value on every axis is the other coherent choice, and it's the one that produces contrasts like the above — interpretable on the single-axis ones, marked on the rest.
 
 ### A fixed holdout split
 
@@ -696,6 +735,8 @@ class GenericTemplate(BaseTemplate):
     field_convention = "generic"
     default_repeats = 1
     required_env = []
+    apparatus_probe = None            # see "The apparatus core can only observe"
+    apparatus_facts = []              # what the probe must yield, if one is declared
 
     # One spec drives all three jobs: what `init` writes, what its comments say,
     # and what `validate` enforces. There is no second source of truth.
@@ -899,15 +940,18 @@ sweep:
 
 The baseline is condition `00`, and `results.conditions[i].vs_baseline` carries the difference in each numeric metric, with a standardized effect size when the metric is a per-unit mean. Declaring one is optional but recommended: "the treated arm scored 0.12 higher (Cohen's d = 0.4)" is the sentence a paper needs, and it can't be produced from an unlabeled set of peers.
 
-**With group axes present, how many baseline conditions there are follows from which of their levels the baseline names.** Three cases, one rule, and none of them a default the others override:
+**With more than one axis present, how many baseline conditions there are follows from how many of them the baseline fixes.** Two cases, one rule, and neither a default the other overrides:
 
 | `sweep.baseline` | Baseline conditions | Each `vs_baseline` targets |
 |---|---|---|
-| A level on every group axis — `{arm: control, analysis.method: pearson}` | One, condition `00` | That single condition. A contrast crossing another axis as well differs in two places and is marked [`confounded: true`](#allocation-within-subjects-or-between-subjects) |
-| A level on some axes — `{arm: control}`, with `sex` left free | One per level of each unfixed axis | Its own cell's baseline: `sex=f__arm=treatment` compares against `sex=f__arm=control` |
-| No group level at all — `{analysis.method: pearson}` | One per cell, the first condition of each | Its own cell's baseline, so every contrast differs on exactly one axis |
+| A value on every axis — `{arm: control, analysis.method: pearson}` | One, condition `00` | That single condition. A contrast differing on two axes at once is marked [`confounded: true`](#allocation-within-subjects-or-between-subjects) |
+| A value on some axes — `{analysis.method: pearson}`, with `arm` and `sex` left free | One per cell of the unfixed axes | Its own cell's baseline: `sex=f__arm=treatment` compares against `sex=f__arm=control` |
 
-**The rule underneath all three is that the baseline expands over whichever group axes it doesn't fix.** The middle row is the useful new one: fixing the randomized axis and leaving an observed one free gives exactly the per-stratum contrasts a subgroup report wants, with nothing confounded. The last is what [`ablate × groups`](#expansion-modes) always gets, since `validate` rejects a baseline that fixes a level while `ablate` is declared: an ablation is one change from *its own arm's* full model, and there is no single reference condition when the reference cohort differs. It's the row to prefer whenever the arms are peers — two cohorts, two sites, a derivation and a validation set — because it's the one that leaves nothing confounded.
+**The rule underneath both is that the baseline expands over whichever axes it doesn't fix** — group axes and parameter axes alike. The second row is the one to design around, because it's the row where nothing is confounded: fix the factor you're measuring, leave the axes you're stratifying over free, and every contrast differs in exactly one place.
+
+**The expansion doesn't distinguish group axes from parameter axes, because a design that treats an axis as a stratum wants a reference per stratum either way.** Fixing a randomized arm and leaving an observed `sex` axis free gives the per-subgroup contrasts a subgroup report wants. Fixing the prompt under test and leaving `llm.model` free gives the per-deployment contrasts a benchmark across deployments wants — the same shape, and the second axis is a nuisance axis in both, whether its levels are sets of units or parameter values. Restricting expansion to group axes would give the benchmark one reference deployment and mark every other deployment's contrast confounded, which is the correct verdict on a contrast nobody wanted to form and the wrong answer to the question being asked.
+
+`ablate × groups` always lands in the second row, since `validate` rejects a baseline that fixes a group level while `ablate` is declared: an ablation is one change from *its own cell's* full model, and there is no single reference condition when the reference cohort differs. Plain `ablate` lands in the first, because it isn't an axis and the baseline fixes every parameter it varies from — so there is one baseline, condition `00`, exactly as the mode's own description above says. Prefer the second row whenever the levels are peers: two cohorts, two sites, a derivation and a validation set.
 
 Baseline conditions are references rather than comparisons, so they never count as one: six conditions under two per-arm baselines are four comparisons in the [correction family](#sweeps-and-repeats), not five.
 
@@ -974,7 +1018,7 @@ data:
 
 `collapse` is `mean`, `median`, or `sum` for numeric columns and `first` or `mode` for the rest, and it may be a per-column map — `collapse: {intensity: mean, batch: first}` — when one rule doesn't fit every column. A single rule applies to every collapsed column, so `validate` rejects `mean` over a `site` string rather than coercing it: the alternative is a silently dropped column or a meaningless number, and neither is something to discover after the run. Attributes constant within a key collapse to that value with no rule needed.
 
-Rows sharing a `key` are collapsed to one unit at resolution, before any step sees them, and `technical_n` is reported for transparency — as `{min, max, median}` rather than a single number, because real files are uneven and a bare `technical_n: 3` would be a claim of balance nobody checked. A unit measured once and a unit measured five times contribute equally to `n` after collapsing, which is worth being able to see. When the pipeline does the measuring rather than the input carrying it, a step names the measurement — `io.record(unit.key, values, measurement=read_id)` — and core collapses the same way, under the same `collapse` rule. That argument is what keeps the two cases apart, and it isn't optional politeness: without it, a second row for the same unit is a resumed retry to be deduplicated, and with it a second measurement to be averaged, and nothing in the row itself distinguishes them. Core raises if a step passes `measurement=` while `data.units.measurements` is undeclared, since there would be no rule to collapse under. Either path, technical replicates cannot reach `n`, because they were gone before `n` was counted.
+Rows sharing a `key` are collapsed to one unit at resolution, before any step sees them, and `technical_n` is reported for transparency — as `{min, max, median}` rather than a single number, because real files are uneven and a bare `technical_n: 3` would be a claim of balance nobody checked. A unit measured once and a unit measured five times contribute equally to `n` after collapsing, which is worth being able to see. When the pipeline does the measuring rather than the input carrying it, a step names the measurement — `io.record(unit.key, values, measurement=read_id)` — and core collapses the same way, under the same `collapse` rule. That argument is what keeps the two cases apart, and it isn't optional politeness: without it, a second row for the same unit is a resumed retry to be deduplicated — [first write wins](#resuming) — and with it a second measurement to be averaged, and nothing in the row itself distinguishes them. Core raises if a step passes `measurement=` while `data.units.measurements` is undeclared, since there would be no rule to collapse under. Either path, technical replicates cannot reach `n`, because they were gone before `n` was counted.
 
 A **technical replicate** is the same sample measured three times; a **biological replicate** is three independent samples. Only the second is evidence about the population, and counting technical replicates as `n` is one of the most common ways a result is overstated.
 
@@ -1170,7 +1214,7 @@ Five properties of this layout:
 
 - **Depth follows scope.** A step's artifacts sit exactly as deep as the thing it varies with, so the path is a readable statement of what its output depends on. `shared/` output depends on nothing but the input; `conditions/01_.../` output depends on the condition; anything under a repeat directory depends on the repeat.
 
-- **Condition directories are self-describing.** `01_method=spearman` tells you what it is without opening `sweep.yaml`. The numeric prefix gives stable ordering; the `key=value` body gives meaning. Labels derive from swept values only, so they stay stable across machines and reruns. A declared baseline is `00_baseline` — or one per level, `00_cohort=derivation_baseline` and so on, when a [group axis](#expansion-modes) is present and the baseline names no level — and a group level otherwise reads the same way as any other: `01_arm=treatment`.
+- **Condition directories are self-describing.** `01_method=spearman` tells you what it is without opening `sweep.yaml`. The numeric prefix gives stable ordering; the `key=value` body gives meaning. Labels derive from swept values only, so they stay stable across machines and reruns. A declared baseline is `00_baseline` — or one per cell, `00_cohort=derivation_baseline` and so on, when [another axis is present and the baseline leaves it free](#expansion-modes) — and a group level otherwise reads the same way as any other: `01_arm=treatment`.
 
   `sample` conditions are the exception, and deliberately: a sobol draw of `dose_mg` has no short exact spelling, and rounding one into a directory name makes two distinct conditions collide at some precision. Sampled conditions are labelled `01_sample`, `02_sample`, with the drawn values in `sweep.yaml` and in `results.conditions[i].values`. Anything that selects a condition by name — a [hypothesis](#pre-registration) `compare.condition`, a `report` filter — is therefore selecting a discrete label, never a float you have to spell identically twice.
 - **Repeat directories name their nesting.** A single repeat level is just `seed42`; nested repeats compose into `fold03_seed42`, which reads as the repeat it is rather than as an opaque index.
@@ -1309,6 +1353,82 @@ The three make different promises, and `run.yaml` records which one was in force
 
 **`parameters_hash` is one hash per run, not one per condition.** It covers the parameter block as *declared* — base values plus the `sweep` and `replication` declarations — not the per-condition values those expand into. Two properties depend on that, and neither would survive a per-condition hash: `diff` compares two runs by a single hash, and a [hypothesis](#pre-registration) carries the hash of the config that predicted it. A condition's own resolved values live in `results.conditions[i].values` and in `sweep.yaml`, where they belong: they're derived, so they aren't a separate identity claim.
 
+### The apparatus core can only observe
+
+Code, environment, and input data are all pinned by something core controls: a tree hash, a lockfile, a content manifest. An experiment that measures through an **external apparatus** — a hosted model deployment, an instrument, a sequencer, a scoring service — depends on a fourth thing that core can neither install nor hash from disk. `uv.lock` pins the client; nothing so far pinned the server.
+
+That gap is not a small one. For an LLM benchmark the deployment revision *is* the intervention; for a wet-lab assay the calibration run is what the numbers are traceable to. Leaving it out means a run record that pins everything except the part that moved.
+
+**So the apparatus is probed, recorded, and gated — and the division of labour is the one [unit resolvers](#where-units-come-from) already use.** A template declares what must be known about the apparatus; a plugin knows how to ask:
+
+```python
+# src/publishable_my_assay/probes/instrument.py
+from publishable import Apparatus, register_probe
+
+@register_probe("assay_instrument")
+def probe(cfg) -> Apparatus:
+    client = connect(cfg.parameters.instrument.model)
+    return Apparatus(facts={
+        "model":          client.model_id,
+        "firmware":       client.firmware_version,
+        "calibration_id": client.active_calibration,      # read, not declared
+        "reagent_lot":    client.loaded_lot,
+        "endpoint_host":  sha256(client.host)[:16],        # hashed, not disclosed
+    })
+```
+
+```toml
+[project.entry-points."publishable.probes"]
+assay_instrument = "publishable_my_assay.probes.instrument:probe"
+```
+
+```python
+@register_template("my_assay")
+class MyAssayTemplate(BaseTemplate):
+    required_env = ["INSTRUMENT_API_TOKEN"]
+    apparatus_probe = "assay_instrument"                   # which plugin asks
+    apparatus_facts = ["model", "firmware", "calibration_id", "reagent_lot"]
+```
+
+`apparatus_facts` is the same projection rule as `data.units.attributes`: core enforces that the probe yields every declared fact and rejects one that doesn't, without knowing what any of them mean. **The plugin decides how the apparatus is interrogated; core decides what is required of it, records the answer, and refuses to continue when it changes.**
+
+**A probe emits non-secret, non-identifying facts, and that's a rule rather than a convention.** A revision string, a firmware version, and a calibration ID are safe to publish; an endpoint URL or an instrument serial can identify an institution on its own, so a probe emits a *hash* of one instead of the value — which is what makes `provenance.apparatus` publishable as-is and is why [`study add`](#what-study-add-redacts) has nothing to redact from it. Credentials never appear, for the same reason [they never appear anywhere else](#secrets--credentials).
+
+**It runs at `validate`, at run start, and before every execution.** At `validate` because an unreachable apparatus or a missing fact is worth learning before you spend the run — the same argument that puts unit resolution there. Before every execution because that is the only placement that catches a revision changing *during* a long run, which is when it actually happens:
+
+```yaml
+provenance:
+  apparatus:
+    probe: assay_instrument
+    ledger: "apparatus/probes.jsonl"           # every probe, append-only, with UTC and condition
+    hash: sha256:5d7c...                       # over the resolved condition → facts mapping
+    facts:                                     # one entry per condition, since the apparatus may
+      00_baseline:                             #   legitimately differ across a sweep
+        model: "seq-4000"
+        firmware: "3.11.2"
+        calibration_id: "CAL-2026-07-19"
+        reagent_lot: "LOT-88231"
+```
+
+**A changed fact fails the run, with no policy knob.** Same line as a dirty `src/**`, a lockfile mismatch, or an input file that moved: data gathered under two different apparatus states is not one dataset, and a flag to permit it would only ever be used to paper over the moment a result stopped being interpretable. Restarting under a changed apparatus is a new run — [`resume`](#resuming) refuses it too, and the ledger keeps both observations so the evaluable earlier period is still reportable.
+
+**Unlike a resolver, a probe *may* read parameters the sweep varies**, and usually must: a sweep over `llm.model` or `instrument.model` is a sweep across apparatus. The unit table has to be one table for the whole run, which is why a resolver is [condition-independent](#where-units-come-from); the apparatus has no such obligation. So facts are recorded per condition and the gate is per condition — a deployment is compared against its own first observation, never against another condition's.
+
+**This is not a fourth hash** in the sense [§ Three hashes](#three-hashes) means. It sits beside `uv_lock_hash` as an environment fingerprint: something `diff` compares and a reader checks, rather than one of the three identity claims that make "same code, different parameters" provable. `diff` prints it on the same footing:
+
+```
+code_hash          identical    sha256:8e21...
+input_manifest     identical    sha256:3d8a...
+uv.lock            identical    sha256:6b1f...
+apparatus          DIFFERS
+  calibration_id   CAL-2026-07-19 → CAL-2026-08-02
+parameters_hash    identical    sha256:1a2b...
+```
+
+That output is the point of the whole mechanism: two runs with identical code, parameters, and data that disagree, and a record that says why.
+
+`apparatus_probe` is optional and `null` by default. An experiment whose measurements never leave the machine declares nothing and records `apparatus: null` — the worked example throughout this document is one.
+
 ### What `auto` derives from
 
 `seed: auto` — for [repeat seeds](#repeat-kinds), [`sample`](#expansion-modes) draws, and [arm allocation](#allocation-within-subjects-or-between-subjects) — derives from a **design digest** over `data.units` (every field except `assign.seed` itself) and `sweep.groups`. Those are the declarations describing *what is being randomized over*. It covers nothing about the parameter values being swept.
@@ -1341,6 +1461,35 @@ The full `git.commit` is still recorded, because `reproduce` needs something to 
 Without this, the provenance chain silently breaks at the one place work is shared. A run would claim a `code_hash` describing only its own code while depending on outputs produced by code it never names. Recording the upstream closes that: `reproduce` walks the chain and reports if any ancestor is unreachable, and `diff` can tell you two runs differ only because their upstreams did.
 
 Lineage is recorded, not resolved: core won't re-execute an upstream run for you. If an ancestor's artifacts are gone, it says so rather than silently recomputing something that might not match.
+
+### `reuse_from` addresses an artifact, not the design that produced it
+
+There is no condition or repeat selector, and that's deliberate. A selector would couple a downstream config to an upstream run's *layout* — its condition numbering and its repeat labels — and those are derived from a sweep the downstream run doesn't declare. Adding a level to the upstream design renumbers its conditions, so a downstream read pinned to `03_` would silently repoint at a different cell while every hash still matched. What a run publishes for others to consume has to be something it named on purpose.
+
+The upstream run's `scope: "summary"` step is where that naming happens, and it's the only scope that can see every condition at once:
+
+```python
+# upstream run, scope="summary" — collect what downstream runs will consume
+class Step(BaseStep):
+    scope = "summary"
+
+    def run(self, cfg, io):
+        for condition in io.conditions:
+            for repeat in io.repeats:
+                io.write(f"programs/{condition.values['llm.model']}__{repeat}.json",
+                         io.read_condition(condition, "step02_optimize",
+                                           "compiled.json", repeat=repeat))
+        return {}
+```
+
+```python
+# downstream run, any scope — address it by name
+blob = io.reuse_from(cfg.parameters.program.upstream_run,
+                     "step03_collect_programs",
+                     f"programs/{cfg.parameters.program.origin}__seed{seed}.json")
+```
+
+This is the shape any produce-then-consume design takes: one run varies what produces the artifacts, a second varies what consumes them, and the artifact set is the interface between them. Conditions differ in parameters or in which units they see, [never in which steps run](design-principles.md#what-core-does-not-promise), so a single run cannot both produce an artifact per condition and cross those artifacts against each other — the second run is what the crossing needs, and the collected names are what its sweep selects from. `provenance.upstream` then records exactly which of them were read, which is what makes "two runs differ only because their upstreams did" checkable at the level of named artifacts rather than paths.
 
 ---
 
@@ -1628,7 +1777,7 @@ uv run publishable generate experiment triage-pilot \
 
 `--plugin <github-username>/<repo>` runs `uv add git+https://github.com/<user>/<repo>` and nothing more. No registry, no bespoke installer, no new trust boundary beyond "this is a git dependency," because it is one. Pin however `uv` supports: `--plugin someuser/publishable-llm@v1.2.0`.
 
-This pays off twice. The plugin becomes a normal `pyproject.toml` line and a pinned `uv.lock` entry — the same lockfile captured as provenance — so `reproduce` gets the exact plugin version free, without core inventing its own pinning story. And plugins ship reusable `BaseStep` subclasses and [unit resolvers](#where-units-come-from), not just templates, so shared machinery is importable rather than copy-pasted.
+This pays off twice. The plugin becomes a normal `pyproject.toml` line and a pinned `uv.lock` entry — the same lockfile captured as provenance — so `reproduce` gets the exact plugin version free, without core inventing its own pinning story. And plugins ship reusable `BaseStep` subclasses, [unit resolvers](#where-units-come-from), and [apparatus probes](#the-apparatus-core-can-only-observe), not just templates, so shared machinery is importable rather than copy-pasted.
 
 ### Creating a plugin: `publishable plugin new`
 
@@ -1645,6 +1794,7 @@ publishable-my-assay/
 ├── src/publishable_my_assay/
 │   ├── templates/my_assay.py     # BaseTemplate + parameter_spec, @register_template applied
 │   ├── resolvers/                # optional unit resolvers, @register_resolver applied
+│   ├── probes/                   # optional apparatus probes, @register_probe applied
 │   └── steps/                    # optional reusable BaseStep subclasses
 ├── tests/
 │   └── test_my_assay.py          # asserts the template materializes and validates
@@ -1658,6 +1808,9 @@ my_assay = "publishable_my_assay.templates.my_assay:MyAssayTemplate"
 
 [project.entry-points."publishable.resolvers"]
 plate_wells = "publishable_my_assay.resolvers.plate:resolve"
+
+[project.entry-points."publishable.probes"]
+assay_instrument = "publishable_my_assay.probes.instrument:probe"
 ```
 
 The generated README documents the plugin the way a user needs it — install line, template list, and **a parameter table generated from `parameter_spec` itself**:
@@ -1687,12 +1840,15 @@ Convention class `wet_lab` · default repeats 3 · naming `kebab-case`
 | Parameter | Type | Default | Constraints | Description |
 |---|---|---|---|---|
 | `instrument.model` | str | — | required | Instrument model identifier |
-| `instrument.calibration_id` | str | — | required | Calibration run this assay is traceable to |
 | `instrument.gain` | float | 1.0 | > 0 | Detector gain multiplier |
 
 **Required credentials:** `INSTRUMENT_API_TOKEN`
+
+**Apparatus probe:** `assay_instrument` — records `model`, `firmware`, `calibration_id`, `reagent_lot`
 <!-- publishable:end templates -->
 ````
+
+Note what is *not* in that parameter table: the **calibration run this assay is traceable to.** It's a fact about the instrument at the moment of the run, so it's [apparatus provenance](#the-apparatus-core-can-only-observe) rather than a parameter — read from the instrument instead of typed into a config, and outside `parameters_hash`, so recalibrating doesn't read as redesigning the experiment. The rule for the boundary is short: if you decide it, it's a `Param`; if you can only observe it, it's an apparatus fact.
 
 This is the same principle as `init` materializing a config: `parameter_spec` is the single source of truth, so the documentation is *derived* from it rather than maintained alongside it. Add a parameter and run `publishable docs` — the table, the example config, and newly-initialized configs all update together. Documentation that can't drift is the only kind worth generating.
 
@@ -1792,7 +1948,8 @@ publishable/
 │   ├── validate.py            # the value-level validation engine
 │   ├── base_experiment.py     # BaseExperiment: one ordered steps list, scopes resolved from it
 │   ├── base_step.py           # BaseStep: scope, run(cfg, io), self.condition/self.repeat, nondeterministic
-│   ├── artifacts.py           # io: scope-aware paths, atomic writes, append, record, read_condition
+│   ├── artifacts.py           # io: scope-aware paths, atomic writes, append, record,
+│   │                          #     read_condition, exists/resumed/recorded_keys
 │   ├── sweep.py               # grid/paired/ablate/sample/groups/baseline expansion, labels, sweep.yaml
 │   ├── units.py               # unit resolution (table/glob/resolver registry), keys, attributes, partitioning
 │   ├── scope.py               # step scope resolution, execution plan, read-direction checks
@@ -1807,6 +1964,7 @@ publishable/
 │   ├── run_record.py          # run.yaml assembly
 │   ├── provenance.py          # git discovery (user repo), uv env capture
 │   ├── manifest.py            # input_dir manifest build/verify, policies
+│   ├── apparatus.py           # probe registry, per-condition facts, change gate
 │   ├── uv_support.py          # uv.lock copy/hash, --locked drift checks
 │   ├── secrets.py             # dotenv loading, required_env checks — never touches provenance
 │   ├── reproduce.py           # clone/checkout/sync, then validate + run

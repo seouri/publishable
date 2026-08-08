@@ -134,7 +134,11 @@ sweep:
   # 3 × 2 = 6 conditions
 ```
 
-Both axes here vary *parameters*; a factorial whose factors are properties of the units is [two `groups` axes](#between-subjects-factorial) instead, and reads the same way. Core reports each condition and its contrast against the baseline. **Main effects and interaction terms are not computed** — see [what core will not do](#what-core-will-not-do-for-you). For a 2×2 that's often fine; for anything you intend to analyze as a factorial model, plan on a `scope: "summary"` step, which is the scope that can see every condition at once.
+Both axes here vary *parameters*; a factorial whose factors are properties of the units is [two `groups` axes](#between-subjects-factorial) instead, and reads the same way. Core reports each condition and its contrast against the baseline.
+
+Which contrasts those are follows from how much `sweep.baseline` fixes, and the rule is the same one the between-subjects case uses: **the baseline expands over whichever axes it doesn't fix**, group axes and parameter axes alike. So when one axis is the factor under test and the other is a stratum you're reporting across — two prompts across six model deployments, one treatment across three assay lots — fix the first and leave the second free, and you get one baseline per stratum with every contrast differing in exactly one place. Fixing a value on both axes instead gives a single reference condition and marks the contrasts that cross both [`confounded: true`](reference.md#allocation-within-subjects-or-between-subjects). See [reference.md § Expansion modes](reference.md#expansion-modes).
+
+**Main effects and interaction terms are not computed** — see [what core will not do](#what-core-will-not-do-for-you). For a 2×2 that's often fine; for anything you intend to analyze as a factorial model, plan on a `scope: "summary"` step, which is the scope that can see every condition at once.
 
 ### Fractional factorial and coupled settings
 
@@ -318,6 +322,7 @@ The design is shaped around a specific claim: most irreproducible results are no
 | **Results overwritten by a rerun** | Artifacts are append-only and atomic; each run gets its own `run_<id>/`. Nothing is ever deleted |
 | **Uncommitted code in a reported run** | `run` refuses a dirty `src/**`; `draft` permits it but marks the run non-citable |
 | **The input data changed underneath you** | A content manifest is captured at run start and re-verified after; `reproduce` compares against the recorded hash |
+| **The apparatus changed underneath you** | Where a template declares an apparatus probe, its facts are recorded per condition at `validate`, at run start, and before every execution; a changed revision, firmware, or calibration fails the run rather than pooling two states as one dataset. See [reference.md § The apparatus core can only observe](reference.md#the-apparatus-core-can-only-observe) |
 | **A typo'd parameter silently using a default** | `init` materializes every valid key, so any unrecognized key is a typo by construction and fails validation |
 | **Resuming into a different experiment** | `resume` refuses when `parameters_hash`, `code_hash`, or `uv.lock` have moved |
 | **A stale summary reported as fresh** | Steps that consume an earlier run's artifacts record it as an upstream with its hashes |

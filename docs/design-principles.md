@@ -31,7 +31,7 @@ Reproducibility usually fails for a boring reason: the true record of what ran i
 - **`validate` checks values, not just presence.** Types, ranges, choices, unknown keys — before you spend the run. See [Validation](reference.md#validation).
 - **Every run gets its own identity.** Artifacts live under `run_<id>/`, so a rerun never collides with a previous one. See [Run identity](reference.md#run-identity).
 - **Artifacts are append-only and atomic.** Nothing is ever overwritten or deleted; a crash mid-write leaves nothing behind rather than a half-file that blocks the retry. See [Steps and artifacts](reference.md#steps-and-artifacts).
-- **Code, environment, and data are all pinned.** Commit and tree hash for code, `uv.lock` for environment, and a content manifest for input data — the third is what most tools leave open.
+- **Code, environment, data, and apparatus are all pinned.** Commit and tree hash for code, `uv.lock` for environment, and a content manifest for input data — the third is what most tools leave open. Where measurement goes through something core can't install — a hosted deployment, an instrument — a plugin probe records its state per condition and a change fails the run. `uv.lock` pins the client; the apparatus record pins the server. See [The apparatus core can only observe](reference.md#the-apparatus-core-can-only-observe).
 - **Code and data never share a repo.** `input_dir`/`output_dir` are structurally forbidden inside the git repo: code is shareable, governed data isn't, and they need different protocols. See [Code and data never share a repo](#code-and-data-never-share-a-repo).
 - **Git isn't optional for code.** `new` initializes a repo, and `run` refuses when `src/**` has uncommitted changes — a code hash that doesn't match what ran isn't provenance, it's a guess. Config edits don't trip this.
 - **It's *your* commit, not ours.** Captured git identity always belongs to your experiment repo. See [Whose git hash is this?](#whose-git-hash-is-this)
@@ -116,6 +116,7 @@ uv run publishable diff <run_a>/run.yaml <run_b>/run.yaml
 code_hash          identical    sha256:8e21...
 input_manifest     identical    sha256:3d8a...
 uv.lock            identical    sha256:6b1f...
+apparatus          identical    sha256:5d7c...
 parameters_hash    DIFFERS
   parameters.analysis.method       pearson → spearman
   parameters.analysis.min_samples  30 → 50
@@ -146,7 +147,7 @@ Each is complete and self-describing, and still takes exactly one path to run. I
 | Materializing configs from a spec; value-level validation | The spec: types, defaults, ranges, choices, help text |
 | Sweep expansion (`grid`/`paired`/`ablate`/`sample`/`groups`/`baseline`), repeat kinds, seed derivation, kind-aware statistics | Field-appropriate sweep and repeat defaults |
 | The three hashes, run identity, step scope, lineage, units, append-only + atomic artifacts | Naming conventions (`naming_pattern`, `field_convention`, `default_repeats`) |
-| `BaseExperiment` / `BaseStep` / `BaseTemplate` / `Param` / `Unit` / `io` | Concrete templates, unit resolvers, reusable `BaseStep` subclasses |
+| `BaseExperiment` / `BaseStep` / `BaseTemplate` / `Param` / `Unit` / `Apparatus` / `io` | Concrete templates, unit resolvers, apparatus probes, reusable `BaseStep` subclasses |
 | Lifecycle: `new`, `generate`, `validate`, `dry-run`, `run`, `draft`, `resume`, `report`, `diff`, `freeze`, `reproduce`, `study` | Domain dependencies (an API client, an instrument driver, a solver) |
 | The secrets mechanism (`credential_env_var` + dotenv loading) | Which credentials an experiment type needs |
 
@@ -195,7 +196,7 @@ Always the experiment repo's, never `publishable`'s. Core walks up from the work
 
 ## What core does not promise
 
-- **Not bit-identical reruns.** Core seeds Python and NumPy per repeat from the resolved seed list, covering local pseudorandomness. It can't make an external dependency deterministic — a hosted API, an instrument, a human rater. A step sets `nondeterministic = True`; core records that in `run.yaml` and notes it in `report` rather than implying reproducibility it can't deliver. Domain mitigations belong in plugins.
+- **Not bit-identical reruns.** Core seeds Python and NumPy per repeat from the resolved seed list, covering local pseudorandomness. It can't make an external dependency deterministic — a hosted API, an instrument, a human rater. A step sets `nondeterministic = True`; core records that in `run.yaml` and notes it in `report` rather than implying reproducibility it can't deliver. What it *can* do is pin the apparatus that dependency runs on and refuse to continue when it moves — see [The apparatus core can only observe](reference.md#the-apparatus-core-can-only-observe). Recording the revision is not determinism; it's the difference between a result whose disagreement is explainable and one whose isn't. Domain mitigations beyond that belong in plugins.
 - **Not verification of your step code.** Core can't confirm a step wrote only through `io`, or avoided writing to `input_dir`. It verifies effects instead: manifest checks catch input mutation, existence checks catch overwrites.
 - **Not data transfer.** `reproduce` never fetches your data. Moving governed data to a new device goes through whatever protocol governs it.
 - **Not credential transfer.** `reproduce` stops and names missing variables. Core has no mechanism to fetch or transmit a secret and won't grow one.
