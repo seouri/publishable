@@ -808,7 +808,16 @@ statistics:
 
 Both operate on `units.parquet`, resampling or relabelling it and recomputing the metric — which core can do only for a metric it knows how to compute, so this needs a per-unit column or a template [`aggregate(units, cfg)`](#templates-where-parameters-are-defined). The permutation test compares the null it builds against the value the actual run produced; a design in which every execution is permuted has no unpermuted value to test, which is one more way the repeat axis was the wrong home for it.
 
-**`null_test` tests a metric within a condition, not a delta between conditions.** It relabels units and recomputes, so what it produces is a p-value for "this condition's metric against a null where the label carries no information" — one per condition, alongside that condition's estimate. It does *not* test `vs_baseline`: the null for a paired between-condition difference is a per-unit sign flip rather than a relabelling, and `shuffle` names an attribute, which can't express that. A contrast's evidence is its [interval and corrected interval](#sweeps-and-repeats), which is the form the comparison is reported in anyway.
+**What `null_test` tests depends on whether `shuffle` names a design axis.** It relabels units and recomputes the metric, so the question it answers is set by what that label does in the design:
+
+| `shuffle` names | The null it builds | Where the p-value lands |
+|---|---|---|
+| An ordinary unit attribute | This condition's metric, against a world where the label carries no information | One per condition, beside that condition's estimate |
+| The [`groups`](#expansion-modes) axis attribute | The arm contrast, against a world where arm membership carries no information | On the contrast, in `vs_baseline` |
+
+The second row isn't an exception to the first so much as its consequence. Permuting an attribute that *defines* the conditions moves units between them, so the quantity that changes under the null is the between-arm difference rather than any one arm's estimate — there is no within-condition permutation available, because the attribute is constant inside each condition by construction. That is also the test a parallel-arm trial and a [matched case-control](experimental-designs.md#matched-case-control) study are actually asking for, and it inherits the level rule below: within clusters when the attribute varies inside one, whole clusters when it doesn't.
+
+**A *parameter*-axis contrast stays out of reach.** Two conditions differing only on `analysis.method` were computed from the same units, so the null for their paired difference is a per-unit sign flip rather than a relabelling, and `shuffle` names an attribute, which can't express that. That contrast's evidence is its [interval and corrected interval](#sweeps-and-repeats), which is the form it's reported in anyway.
 
 What counts as one draw is *rows* by default and *clusters* when [`cluster_by`](#clustered-units) is declared — a bootstrap over rows of clustered data reports an interval too narrow to believe, and a permutation over rows destroys the matching a matched design rests on. See [Clustered units](#clustered-units) for both rules.
 

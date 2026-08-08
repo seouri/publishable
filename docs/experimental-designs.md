@@ -73,7 +73,7 @@ data:
       seed: auto
 ```
 
-The realized allocation lands in `allocation.json`, hashed. The arm-to-arm comparison is unpaired, derived from the fact that the two conditions differ on the `groups` axis rather than declared separately — and if you compose a parameter axis on top, contrasts *within* an arm stay paired, because they're the same patients analyzed two ways. The two conditions share a `parameters_hash`, which is the point: same code, same parameters, different units.
+The realized allocation lands in `allocation.json`, hashed. The arm-to-arm comparison is unpaired, derived from the fact that the two conditions differ on the `groups` axis rather than declared separately — and if you compose a parameter axis on top, contrasts *within* an arm stay paired, because they're the same patients analyzed two ways. The two conditions share a `parameters_hash`, which is the point: same code, same parameters, different units. `statistics.null_test` with `shuffle: arm` tests that contrast directly: permuting the attribute that *defines* the arms is a test of the difference between them, not of either arm's own estimate, and core attaches the p-value to the contrast for that reason — see [reference.md § What isn't a repeat](reference.md#what-isnt-a-repeat).
 
 `seed: auto` derives from a design digest over `data.units` and `sweep.groups`, not from `parameters_hash`, so arm membership doesn't move when you edit an analysis parameter. It does move if the roster does — core draws over the units resolved at run start and carries nothing forward from a previous run — so for a design you intend to cite, pin the seed to an integer and keep the `allocation.json` it produced. Prospective enrollment isn't something any `assign.method` supports; see [reference.md § What `auto` derives from](reference.md#what-auto-derives-from).
 
@@ -245,7 +245,7 @@ data:
 
 Core reports each arm and their contrast with intervals clustered on `match_set`. That accounts for the matching in the intervals; it is not a conditional analysis, and if your field expects conditional logistic regression or a stratified estimator, that's a `scope: "summary"` step — see [what core will not do](#what-core-will-not-do-for-you).
 
-Adding `statistics.null_test` here does give you a conditional *test*, because `cluster_by` sets the level it shuffles at. `status` varies inside a matched set, so labels are permuted within each set independently — a case/control swap inside each pair — which is the classic matched permutation test rather than a free relabelling that would throw the matching away. `statistics.resample` likewise draws whole matched sets, and its interval's effective `n` is the number of sets, not the number of subjects.
+Adding `statistics.null_test` here does give you a conditional *test*, because `cluster_by` sets the level it shuffles at. `status` varies inside a matched set, so labels are permuted within each set independently — a case/control swap inside each pair — which is the classic matched permutation test rather than a free relabelling that would throw the matching away. `status` is also the group axis, so the p-value attaches to the case-vs-control contrast rather than to either arm on its own; that's the one relabelling this design has, and [reference.md § What isn't a repeat](reference.md#what-isnt-a-repeat) sets out both cases. `statistics.resample` likewise draws whole matched sets, and its interval's effective `n` is the number of sets, not the number of subjects.
 
 ---
 
