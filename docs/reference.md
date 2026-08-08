@@ -476,8 +476,8 @@ Getting this wrong is not a subtle error. Analyzing a between-subjects study as 
 |---|---|---|
 | Parameter axes only (`grid`, `paired`, `sample`, `ablate`), `allocation: within` | Yes, all of them | Paired, unit by unit |
 | Parameter axes only, `allocation: between` | Yes — same arm, so same units | Paired within that arm |
-| The `groups` axis | No, by construction | Unpaired |
-| The `groups` axis *and* a parameter axis | No | Unpaired, and confounded — see below |
+| Any `groups` axis | No, by construction | Unpaired |
+| Two `groups` axes, or a `groups` axis *and* a parameter axis | No | Unpaired, and confounded — see below |
 
 So in "each arm analyzed three ways" ([`groups × grid`](#expansion-modes)), control-pearson vs. control-spearman is paired — the same patients scored two ways, and pairing is what cancels the between-patient variance — while control-pearson vs. treatment-pearson is unpaired. Deriving one answer for the whole run would report the first as unpaired and throw that cancellation away, which is the same class of error as the inflation above, just in the conservative direction. Each contrast records its own `paired: true|false` in `vs_baseline`.
 
@@ -515,7 +515,7 @@ Four interactions worth knowing, all of them consequences of the rules already s
 - **`holdout` and `fold` are mutually exclusive**, and `validate` rejects both together. They are two answers to one question — how the data is divided for evaluation — and declaring both leaves "which units is this metric over?" with no single answer. To hold out a final test set *and* cross-validate for model selection, declare the holdout and do the inner search inside the step over `io.units.train`, exactly as [§ Cross-validation](experimental-designs.md#cross-validation) prescribes for nested CV: a setting chosen from results is an output, not a condition.
 - **`resolved` is the test partition**, per [§ What isn't a repeat](#what-isnt-a-repeat) — a 20% holdout over 240 units reports `resolved: 48`, and the interval is over those 48. That's the honest denominator: the training units produced no result to generalize from.
 - **Whole clusters go to one side**, when [`cluster_by`](#clustered-units) is declared, and `stratify_by` must be constant within a cluster. Same rule and same reason as folds — a holdout that trains on one cell of an animal and tests on another leaks just as thoroughly for happening only once.
-- **Under `allocation: between`, the split happens within each arm**, so every arm has both partitions in the declared proportion. Splitting the roster first would leave arms with unequal test sizes and, at worst, an arm with no test units at all. Folds are drawn the same way, for the same reason — see [Clustered units](#clustered-units).
+- **Under `allocation: between`, the split happens within each cell** — each arm, and each cell of a crossed design — so every cell has both partitions in the declared proportion. Splitting the roster first would leave cells with unequal test sizes and, at worst, a cell with no test units at all. Folds are drawn the same way, for the same reason — see [Clustered units](#clustered-units).
 
 The realized membership is written to `allocation.json` beside any arm assignment and hashed, so which units were evaluated is answerable from the run record rather than from whoever drew the split.
 
@@ -565,7 +565,7 @@ class Step(BaseStep):
 
 **Partitions are computed once per run, not once per condition.** Every condition sees the same fold boundaries and the same seed list, derived from the config-level [design digest](#what-auto-derives-from). This is load-bearing rather than incidental: under `allocation: within`, comparisons across conditions are paired unit by unit, and pairing fold 3 of one condition against a *differently drawn* fold 3 of another would not be a paired comparison at all. Shared partitions are also why the layout can name repeat directories `seed17`/`fold03` identically under every condition.
 
-**Under `allocation: between`, folds are drawn within each arm** — the same rule as a [holdout](#a-fixed-holdout-split), for the same reason. One roster-wide partition would give the arms unequal test sizes and, once `k` approaches the smaller arm's size, a fold holding none of that arm's units at all, which is an arm-level metric computed from nothing. Drawing within each arm keeps every fold proportional in both, so `k` is bounded by the *smallest* arm's unit count — or its cluster count, when `cluster_by` is declared — and `validate` rejects a larger one. This is not an exception to "once per run": the boundaries are still derived once from the design digest, and every condition on a given arm sees the same ones, which is exactly what paired contrasts within an arm need.
+**Under `allocation: between`, folds are drawn within each cell** — the same rule as a [holdout](#a-fixed-holdout-split), for the same reason. One roster-wide partition would give the cells unequal test sizes and, once `k` approaches the smallest cell's size, a fold holding none of that cell's units at all, which is a cell-level metric computed from nothing. Drawing within each cell keeps every fold proportional throughout, so `k` is bounded by the *smallest* cell's unit count — or its cluster count, when `cluster_by` is declared — and `validate` rejects a larger one. This is not an exception to "once per run": the boundaries are still derived once from the design digest, and every condition on a given arm sees the same ones, which is exactly what paired contrasts within an arm need.
 
 **`io.record(key, values)` is the inference base, not a convenience.** Between artifacts (files) and results (aggregate metrics) sits the per-unit table, and it is what every confidence interval core reports is computed over. It's append-only like everything else, resumable by key, and materialized as `units.parquet` in the step's directory. A step that records nothing still runs and still reports its returned metrics — but if units were declared, core has nothing to generalize from, so those metrics come back as `basis: repeats` with no interval. See [Statistical reporting](#statistical-reporting).
 
@@ -842,10 +842,11 @@ The baseline is condition `00`, and `results.conditions[i].vs_baseline` carries 
 
 | `sweep.baseline` | Baseline conditions | Each `vs_baseline` targets |
 |---|---|---|
-| Fixes a level on the group axis — `{arm: control, analysis.method: pearson}` | One, condition `00` | That single condition. A contrast crossing the group axis *and* a parameter axis differs in two places and is marked [`confounded: true`](#allocation-within-subjects-or-between-subjects) |
-| Fixes parameter paths only — `{analysis.method: pearson}` | One per level, the first condition of each | Its own level's baseline, so every contrast differs on exactly one axis |
+| A level on every group axis — `{arm: control, analysis.method: pearson}` | One, condition `00` | That single condition. A contrast crossing another axis as well differs in two places and is marked [`confounded: true`](#allocation-within-subjects-or-between-subjects) |
+| A level on some axes — `{arm: control}`, with `sex` left free | One per level of each unfixed axis | Its own cell's baseline: `sex=f__arm=treatment` compares against `sex=f__arm=control` |
+| No group level at all — `{analysis.method: pearson}` | One per cell, the first condition of each | Its own cell's baseline, so every contrast differs on exactly one axis |
 
-The second row is what [`ablate × groups`](#expansion-modes) always gets, since `validate` rejects a baseline that fixes a level while `ablate` is declared: an ablation is one change from *its own arm's* full model, and there is no single reference condition when the reference cohort differs. It's the row to prefer whenever the arms are peers — two cohorts, two sites, a derivation and a validation set — because it's the one that leaves nothing confounded.
+**The rule underneath all three is that the baseline expands over whichever group axes it doesn't fix.** The middle row is the useful new one: fixing the randomized axis and leaving an observed one free gives exactly the per-stratum contrasts a subgroup report wants, with nothing confounded. The last is what [`ablate × groups`](#expansion-modes) always gets, since `validate` rejects a baseline that fixes a level while `ablate` is declared: an ablation is one change from *its own arm's* full model, and there is no single reference condition when the reference cohort differs. It's the row to prefer whenever the arms are peers — two cohorts, two sites, a derivation and a validation set — because it's the one that leaves nothing confounded.
 
 Baseline conditions are references rather than comparisons, so they never count as one: six conditions under two per-arm baselines are four comparisons in the [correction family](#sweeps-and-repeats), not five.
 
@@ -892,7 +893,7 @@ Both operate on `units.parquet`, resampling or relabelling it and recomputing th
 | `shuffle` names | The null it builds | Where the p-value lands |
 |---|---|---|
 | An ordinary unit attribute | This condition's metric, against a world where the label carries no information | One per condition, beside that condition's estimate |
-| The [`groups`](#expansion-modes) axis attribute | The arm contrast, against a world where arm membership carries no information | On the contrast, in `vs_baseline` |
+| A [`groups`](#expansion-modes) axis attribute | That axis's contrast, against a world where its membership carries no information — permuted within cells of every *other* group axis, so a cross isn't destroyed | On the contrast, in `vs_baseline` |
 
 The second row isn't an exception to the first so much as its consequence. Permuting an attribute that *defines* the conditions moves units between them, so the quantity that changes under the null is the between-arm difference rather than any one arm's estimate — there is no within-condition permutation available, because the attribute is constant inside each condition by construction. That is also the test a parallel-arm trial and a [matched case-control](experimental-designs.md#matched-case-control) study are actually asking for, and it inherits the level rule below: within clusters when the attribute varies inside one, whole clusters when it doesn't.
 
@@ -1258,9 +1259,11 @@ That separation is load-bearing, not tidiness. If randomization derived from `pa
 | A `seed` level's seeds | digest, as a stream truncated to `n` | the unit declaration or group axis changes — *not* when you raise `n`, which extends the list rather than redrawing it |
 | A `fold` level's boundaries | digest + that level's `k` and `stratify_by` | `k` or `stratify_by` changes, or the roster does |
 | `sweep.sample` draws | digest + `n`, `method`, `ranges` | the sample declaration changes |
-| `assign.seed` | digest + the resolved roster | the roster changes — see below |
+| An axis's `assign.seed` | digest + the axis name + the resolved roster | the roster changes, or any axis is added or edited — see below |
 
 The digest is deliberately **not a fourth hash.** The [three](#three-hashes) answer "was this identical?" and are identity claims a reader checks. The digest claims nothing: it's a derivation input, recorded in `sweep.yaml` beside the values it produced so `reproduce` regenerates the same partitions. Nothing compares two digests, and `diff` doesn't print it.
+
+**Adding a group axis moves the draws of the axes already there.** The digest covers `sweep.groups` wholesale, so declaring `sex` alongside an existing `arm` re-randomizes `arm`. That's honest — the design changed, and the new allocation is balanced over a cross the old one knew nothing about — but it has a consequence to plan around: a reporting axis can't be added to a study already allocated without a fresh draw. Deriving each axis from its own sub-digest would keep the earlier one still, at the price of a derivation rule no longer summarizable in a sentence. Pin `seed` to an integer for anything you intend to cite, which is the same advice as below and for the same reason.
 
 **Allocation also depends on the roster, so a changed roster re-randomizes.** Core assigns over the unit list resolved at run start; add ten enrollees to `enrollment.csv` and the draw is over 250 units rather than the previous 240 with ten appended. Nothing carries an earlier assignment forward, so **no `assign.method` supports prospective enrollment** — the general form of the limitation [§ Allocation](#allocation-within-subjects-or-between-subjects) notes for `blocked` specifically. Two honest ways to live with it: freeze the roster before the run and treat allocation as the one-time event it is, or let a trial system randomize and read its result with `assign.method: by_attribute`, which is what a real trial does regardless. For anything you intend to cite, pin `assign.seed` to an integer and keep `allocation.json` — a recorded assignment is a fact about what happened, and it should not be re-derivable to a different answer.
 
