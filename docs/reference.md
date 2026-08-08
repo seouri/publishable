@@ -10,6 +10,7 @@ Complete reference for `publishable`. For the rationale behind these choices, se
 - [The one config file](#the-one-config-file) — the file you edit
 
 **Writing an experiment**
+- [The importable surface](#the-importable-surface) — every name you import, and every error core raises
 - [Steps and artifacts](#steps-and-artifacts) — the `io` API
 - [Step scope](#step-scope) — how often each step runs
 - [Units: the thing being measured](#units-the-thing-being-measured) — patients, samples, trials
@@ -300,6 +301,9 @@ Three things deliberately absent from that table: the unit failure rate is enfor
 | `Estimate` labels its method | `step04_compare_methods` returned an `Estimate` with `ci95` and no `method`; an interval nobody labelled is unreadable |
 | A recorded column doesn't collide | a step recorded a column named `label`, which `null_test.shuffle` also resolves as a unit attribute |
 | A derived metric doesn't collide | template `generic`'s `aggregate` returned `r`, which `step03_analyze` also recorded as a per-unit column; one key in `aggregated` cannot hold both a column mean and a derived value — see [`aggregate`](#templates-where-parameters-are-defined) |
+| A returned value is recordable | `step03_analyze` returned `{"scores": [0.4, 0.7, …]}`; a returned value is a scalar, and a list of them is an artifact or a unit column — see [Steps and artifacts](#steps-and-artifacts) |
+
+Every row but the third raises a [`ContractError`](#errors-core-raises) carrying its own identifier; the third can't, since a hypothesis naming an absent metric is a fact about the record rather than an error in the step, and is recorded unevaluated.
 
 The cost is real and worth naming: a hypothesis that names a metric no step returns is not caught until that step has run. What `validate` catches instead is everything about the hypothesis that *is* declared — its form, its contrast, its baseline, and whether any metric in this run could carry the interval it asks for. The alternative would be a step declaring its return keys up front, which is a second source of truth for something the `return` statement already states, and the [defaults-file argument](#there-is-no-separate-defaults-file) applies to it unchanged.
 
@@ -580,6 +584,79 @@ Each recording step's directory holds the table its [`io.record`](#units-the-thi
 
 ---
 
+## The importable surface
+
+Everything you write against — a step, a template, a resolver, a probe, a report override — is imported from `publishable` itself. The submodules in [§ Package layout](#package-layout) are where core's code lives, not how you reach it: which file a name sits in is core's business and may move, and the import line at the top of your step should not move with it.
+
+```python
+from publishable import BaseStep, Estimate, Unit, register_resolver
+```
+
+| Name | Kind | Is |
+|---|---|---|
+| `BaseExperiment` | subclass | The ordered `steps` list, and nothing else — see [Generators](#generators) |
+| `BaseStep` | subclass | One stage: `scope`, `run(cfg, io)`, `nondeterministic`, `derive_seed` — see [Steps and artifacts](#steps-and-artifacts) |
+| `BaseTemplate` | subclass | An experiment type's `parameter_spec`, `validate`, `aggregate` — see [Templates](#templates-where-parameters-are-defined) |
+| `BaseReport` | subclass | A renderer override for one experiment — see [A report override](#a-report-override-renders-one-experiments-own-figures) |
+| `Param` | construct | One parameter's type, default, constraints, and help text — see [Templates](#templates-where-parameters-are-defined) |
+| `Unit` | construct | What a resolver yields: `key`, `paths`, `attributes` — see [Where units come from](#where-units-come-from) |
+| `Apparatus` | construct | What a probe returns: `facts` — see [The apparatus core can only observe](#the-apparatus-core-can-only-observe) |
+| `Estimate` | construct | An interval a `summary` step computed itself — see [`Estimate`](#estimate-carries-your-interval-without-core-claiming-it) |
+| `register_template` · `register_resolver` · `register_probe` · `register_writer` | decorator | The four plugin registries — see [Creating a plugin](#creating-a-plugin-publishable-plugin-new) |
+| `PublishableError` · `ContractError` · `ArtifactError` · `ArtifactExistsError` | exception | Everything core raises — see below |
+
+**One root, and no second path to any name.** `from publishable.templates import BaseTemplate` is not a supported spelling even where it happens to work, because two import paths for one class is the [defaults-file problem](#there-is-no-separate-defaults-file) in Python: a plugin written against the deeper one breaks when core reorganizes a module it never promised to hold still. `publishable/__init__.py` is the promise; everything under it is an implementation detail, and [§ Package layout](#package-layout) is a map of core's own source rather than a second index of this table.
+
+**`cfg` and `io` are not on it, and that's the shape of the API rather than an omission.** Both are constructed by core and handed to your `run`, already scoped — there is nothing to import and nothing to construct, which is what lets core decide what backs them. Every other name above is one you subclass, instantiate, decorate with, or catch.
+
+### What you define, and what is core's
+
+Core imports your classes before any instance exists — the [execution plan is derived at `validate`](#generators) from the declared scopes — and then constructs a fresh step per execution. Both halves of that constrain what a subclass may do:
+
+| | Must define | Defaulted | Core's |
+|---|---|---|---|
+| `BaseStep` | `run(self, cfg, io)` | `scope = "repeat"`, `nondeterministic = False` | `__init__`, `self.condition` / `self.repeat` / `self.rng`, `derive_seed` |
+| `BaseTemplate` | `parameter_spec` | `validate(self, config)` returns `[]` | The registry, materialization, and every check `parameter_spec` drives |
+| `BaseExperiment` | `steps` | — | Everything the plan is derived from |
+| `BaseReport` | `sections(self, run, io)`, a generator | — | The standard sections `super().sections` yields |
+
+`BaseReport.format` is deliberately absent from the middle column: [`generate report` always writes the line](#a-report-override-renders-one-experiments-own-figures), so a base default would be a value no generated class could ever be observed to take. `BaseTemplate.aggregate` is on neither list: it has no base implementation, and a template either defines it or doesn't. That absence is readable — it's what [`validate`'s "template `generic` defines no `aggregate`"](#validation) is testing — and a base returning `{}` would make the two cases indistinguishable.
+
+**`scope` is read from the class, not from an instance.** `dry-run` prints how many times each step will execute and where its artifacts will land, and it does that without constructing a step at all — so a `scope` assigned in `__init__` or computed per execution would be invisible to the plan that decides how often `run` is even called. It's a class attribute, and a step wanting two scopes is [two steps](#using-them-in-step-code).
+
+**`__init__` is core's, so don't define one.** Core constructs the instance, sets the execution context on it, and calls `run` — passing nothing you could accept, and discarding the instance when the execution ends. There is nothing an `__init__` could receive and nothing it could carry forward, which is why setup belongs at the top of `run` and shared machinery belongs in a base class you import from a [plugin](#plugins-where-domain-knowledge-lives). Keeping module top level free of work matters for the same reason and is a [separate rule](#generators): `validate` imports your package.
+
+A [resolver](#where-units-come-from) and a [probe](#the-apparatus-core-can-only-observe) are plain functions rather than classes — `resolve(io, cfg)` yielding `Unit`s, and `probe(cfg)` returning an `Apparatus` — because neither has state to carry or a lifecycle to hook, and a class would only be a namespace with one method in it.
+
+### Errors core raises
+
+```
+PublishableError                   # catch this to catch everything core raises
+├── ContractError                  # your code asked for, or handed back, something its declarations don't allow
+└── ArtifactError                  # core will not write this
+    └── ArtifactExistsError        # …because the target is already there
+```
+
+Two levels, and only one leaf, because only one of these is ever a *state* rather than a mistake: after a crash, the target of a write existing is an ordinary fact about a run being resumed, while every other error in the table means the code is wrong and no `except` improves it. Even there, [`io.exists` is the way through](#resuming) rather than a `try` — the type exists so a failure is greppable and testable, not to make catching it the pattern. **Each carries `.code`**, the same stable `E-` identifier a command [prints beside a diagnostic](#exit-codes-and-diagnostics) — for the same reason it exists there, that a message gets clearer over time and something pinned to the wording breaks when it does.
+
+| Raised by | Type · code |
+|---|---|
+| [`io.write`](#steps-and-artifacts) or `io.path` onto a target that exists | `ArtifactExistsError` · `E-ARTIFACT-EXISTS` |
+| A `name` that escapes the step's directory, an `io.append` onto anything but `.jsonl`, or an extension [no writer claims](#steps-and-artifacts) handed an object that isn't `bytes` or `str` | `ArtifactError` · `E-ARTIFACT-NAME`, `E-ARTIFACT-APPEND`, `E-ARTIFACT-UNWRITABLE` |
+| [Reading a step narrower than the caller](#step-scope) | `ContractError` · `E-STEP-READ-DIRECTION` |
+| [Reading a swept parameter](#step-scope) at `"run"` or `"summary"` scope | `ContractError` · `E-STEP-SWEPT-PARAM` |
+| [`io.units` or `io.units.train`](#a-fold-repeat-puts-the-units-out-of-reach-of-the-wider-scopes) where the declarations put no such list | `ContractError` · `E-STEP-UNITS-UNAVAILABLE` |
+| `self.condition` or `self.repeat` at a [scope that has none](#using-them-in-step-code) | `ContractError` · `E-STEP-CONTEXT-ABSENT` |
+| An [`Estimate`](#estimate-carries-your-interval-without-core-claiming-it) outside `"summary"` scope, or one carrying `ci95` with no `method` | `ContractError` · `E-STEP-ESTIMATE-SCOPE`, `E-STEP-ESTIMATE-METHOD` |
+| A [returned value core can't record](#steps-and-artifacts), or a returned or derived key that [collides](#templates-where-parameters-are-defined) with a recorded column | `ContractError` · `E-STEP-RETURN-TYPE`, `E-STEP-KEY-COLLISION` |
+| A [`cfg` path](#steps-and-artifacts) the config doesn't hold, or a write through a frozen [`Unit`](#the-unit-list-is-three-operations-and-the-units-in-it-are-frozen) | `ContractError` · `E-STEP-PARAM-UNKNOWN`, `E-UNIT-IMMUTABLE` |
+
+**An exception exists where your code could act on the distinction; everything a *command* reports is a [diagnostic](#exit-codes-and-diagnostics), not an exception you catch.** `validate` collecting eleven errors over a config is not eleven raises — it's a report, and modelling it as an exception per finding would force it to stop at the first. So the hierarchy above covers exactly the run-time surface, where there is a step to raise into.
+
+**A `ContractError` inside an execution fails that execution like any other error**, and the run [continues to the next one](#what-status-means-and-when-a-run-keeps-going). It is not a special stop: core has no way to know whether the mistake is in one step or in all fifteen, and a plan abandoned on the first is the outcome [that section already rejects](#what-status-means-and-when-a-run-keeps-going).
+
+---
+
 ## Steps and artifacts
 
 An experiment is a list of ordered steps. Each step is a file under `src/<experiment>/steps/`, and its artifacts land in a directory of the same name — at a depth set by the step's [scope](#step-scope). The code layout *is* the output layout:
@@ -610,9 +687,9 @@ class Step(BaseStep):
         return {"r": result.r, "p": result.p}  # → results.conditions[i].per_repeat.step03_analyze
 ```
 
-**`nondeterministic` is a declaration, not a warning.** Core seeds Python and NumPy per repeat, which covers local pseudorandomness and nothing else; a step reaching a hosted service or an instrument cannot be made to repeat, and saying so is what lets core record it per execution in `run.yaml`, note it in `report` rather than implying reproducibility it can't deliver, and check that a [`batch`](#a-batch-says-when-not-what) level has something to measure. It travels with the [apparatus record](#the-apparatus-core-can-only-observe): one says the answer may move, the other says what it moved with.
+**`nondeterministic` is a declaration, not a warning.** Core [seeds the process and hands the step its own generator](#randomness-and-which-stream-a-step-should-draw-from), which covers local pseudorandomness and nothing else; a step reaching a hosted service or an instrument cannot be made to repeat, and saying so is what lets core record it per execution in `run.yaml`, note it in `report` rather than implying reproducibility it can't deliver, and check that a [`batch`](#a-batch-says-when-not-what) level has something to measure. It travels with the [apparatus record](#the-apparatus-core-can-only-observe): one says the answer may move, the other says what it moved with.
 
-`cfg` is the object `validate` already checked, so a step can assume every parameter is present, correctly typed, and in range — no defensive `cfg.get(...)`. When a sweep is declared, `cfg.parameters` is already resolved for the current condition (see [Sweeps and repeats](#sweeps-and-repeats)), so step code stays sweep-agnostic — except at `"run"` and `"summary"` scope, where no condition is current and a swept path [raises](#step-scope) instead of resolving. `io` is scoped to the step's [declared scope](#step-scope) — for the default `repeat` scope that means this condition, this repeat, this step — so nothing a step writes can collide with another execution:
+`cfg` is the object `validate` already checked, so a step can assume every parameter is present, correctly typed, and in range — no defensive `cfg.get(...)`. **It is dot-access and nothing else**: a mapping in the config is a node with the same behavior, a list is a list whose mapping elements are those nodes, and a scalar is the scalar. There is no `.get`, no `.keys()`, and no method of any kind on a node — which is what makes it safe for a parameter to be named `items` or `values`, since there is nothing for it to shadow. A path the config doesn't hold raises [`ContractError`](#errors-core-raises) naming the full dotted path and the nearest key it could have meant, exactly as [`E-PARAM-UNKNOWN`](#validation) does at validate time, because after `init` materializes every valid key a path that misses is a typo by construction. Names beginning with an underscore never resolve as config keys and raise `AttributeError` instead, so `hasattr`, `copy`, and every other protocol that probes an object by attribute keeps working rather than meeting an exception it doesn't expect. A template's [`validate(self, config)`](#templates-where-parameters-are-defined) receives this same object, which is how a cross-block rule reads `data.units.holdout` without core handing it a second shape. When a sweep is declared, `cfg.parameters` is already resolved for the current condition (see [Sweeps and repeats](#sweeps-and-repeats)), so step code stays sweep-agnostic — except at `"run"` and `"summary"` scope, where no condition is current and a swept path [raises](#step-scope) instead of resolving. `io` is scoped to the step's [declared scope](#step-scope) — for the default `repeat` scope that means this condition, this repeat, this step — so nothing a step writes can collide with another execution:
 
 | Method | Behavior |
 |---|---|
@@ -623,15 +700,23 @@ class Step(BaseStep):
 | `io.resumed` / `io.recorded_keys` | `True` when this execution is a resumed attempt rather than a first one, and the keys this execution has already settled — recorded *or* [skipped](#what-isnt-a-repeat) — from earlier attempts. A **set**, so `key in io.recorded_keys` is constant-time; it covers skips because its one purpose is telling a resumed step what not to redo. Empty rather than absent on a first execution, so a step needs no second check. Together, what a step needs to skip work it already did — see [Resuming](#resuming). |
 | `io.read_upstream(step, name)` | Read-only access to an earlier step's artifact *in this run*. Makes cross-step dependencies visible in code instead of implicit in shared paths. |
 | `io.read_input(relpath)` | Read-only access to `input_dir`. |
-| `io.units` | The units this execution produces results about — every unit, this arm's, or this fold's or holdout's test partition. A sequence: iterate it, take its `len`, index it. `io.units.train` carries the training partition when a `fold` repeat or a [`holdout`](#a-fixed-holdout-split) is declared, and **raises when neither is** — an empty list would let a fit run on nothing and write a plausible model, which is the failure a partition exists to prevent. Both raise at `"run"` and `"condition"` scope when a `fold` repeat is declared, since no fold exists there — see [Step scope](#a-fold-repeat-puts-the-units-out-of-reach-of-the-wider-scopes). There is no `io.units.train.train`. Neither exists at all when [`data.units`](#units-the-thing-being-measured) is undeclared, so both raise there too — the same raise-rather-than-empty posture, for the same reason. See [Units](#units-the-thing-being-measured). |
+| `io.units` | The units this execution produces results about — every unit, this arm's, or this fold's or holdout's test partition. A sequence supporting [exactly three operations](#the-unit-list-is-three-operations-and-the-units-in-it-are-frozen) — iterate, `len`, index — plus `.train`. `io.units.train` carries the training partition when a `fold` repeat or a [`holdout`](#a-fixed-holdout-split) is declared, and **raises when neither is** — an empty list would let a fit run on nothing and write a plausible model, which is the failure a partition exists to prevent. Both raise at `"run"` and `"condition"` scope when a `fold` repeat is declared, since no fold exists there — see [Step scope](#a-fold-repeat-puts-the-units-out-of-reach-of-the-wider-scopes). There is no `io.units.train.train`. Neither exists at all when [`data.units`](#units-the-thing-being-measured) is undeclared, so both raise there too — the same raise-rather-than-empty posture, for the same reason. See [Units](#units-the-thing-being-measured). |
 | `io.skip(unit_key, reason)` | Declares that this unit admits no result in this execution by design — a transform that can't be built, an assay that doesn't apply. Counted as `ineligible` rather than `failed`, with the reason recorded per unit. |
-| `io.record(unit_key, values, measurement=None)` | Appends one row to this step's per-unit result table, keyed by unit — or by `(unit, measurement)` when the step measures one unit more than once, which core then collapses per [`data.units.measurements`](#what-isnt-a-repeat). Append-only and resumable by whichever key applies. `values` is a flat mapping of scalars — `str`, `int`, `float`, `bool`, or `None`; the table is a table. Rows need not agree on keys, and a column absent from a row reads as `None`, so `units.columns` is the union across the step's rows plus every declared attribute. |
+| `io.record(unit_key, values, measurement=None)` | Appends one row to this step's per-unit result table, keyed by unit — or by `(unit, measurement)` when the step measures one unit more than once, which core then collapses per [`data.units.measurements`](#what-isnt-a-repeat). Append-only and resumable by whichever key applies. `values` is a flat mapping of scalars — `str`, `int`, `float`, `bool`, or `None`, under [the same coercion](#steps-and-artifacts) every scalar core takes from you gets; the table is a table. Rows need not agree on keys, and a column absent from a row reads as `None`, so `units.columns` is the union across the step's rows plus every declared attribute. |
 | `io.conditions` / `io.repeats` / `io.read_condition(condition, step, name, repeat=None)` | **`scope="summary"` only.** Iterate resolved conditions and resolved repeat labels, and read any condition's artifacts. `repeat` names which repeat's copy to read and is required when `step` is repeat-scoped; repeat labels are identical under every condition, which is why `io.repeats` is a run-level list. |
 | `io.reuse_from(run_id, step, name)` | Explicitly read an artifact from a *previous* run — the sanctioned way to build on prior work without copying or overwriting. See [Lineage](#lineage-between-runs). |
 
 **What `io.write` does with your object is decided by the extension, from a registry core owns.** Core ships writers for the formats it also has to read — `.json`, `.jsonl`, `.yaml`, `.csv`, `.parquet` — and for anything else the object must be `bytes` or `str`, written verbatim. So `io.write("model.pkl", pickle.dumps(model))` and `io.write("figures/roc.png", fig_bytes)` are how those go out: core never pickles for you and never renders a figure, because guessing a serialization for an arbitrary object is how an artifact ends up in a format nobody can read five years later. A plugin registers a writer for an extension its domain needs, the same way it registers a template. Every reader — `io.read_upstream`, `io.read_condition`, `io.reuse_from`, `io.read_input` — inverts the same table: a registered extension comes back as the parsed object, with `.csv` and `.jsonl` yielding rows as mappings, and anything else comes back as `bytes`.
 
+**The extension is the longest registered suffix of the name's last component, compared in lower case.** A compound extension is the ordinary case in several domains — `.fastq.gz`, `.nii.gz`, `.tar.gz` — so splitting at the final dot is not an option: it would hand `reads.fastq.gz` to whatever claimed `.gz` and lose the format in the name. Longest-suffix is also what keeps a plugin's claim safe from a coarser one, since `.fastq.gz` beats `.gz` whichever was registered first. Only the name's last component is examined, and only against suffixes something actually registered — so `programs/gpt-4.1__seed29.json` is a `.json`, the dot inside its stem matching nothing.
+
 **That is a serialization dependency, not an API one, and the distinction is the same one [`aggregate`](#templates-where-parameters-are-defined) rests on.** Core writing `units.parquet` means core depends on a parquet library; it does not mean the table core hands a template is that library's type, and the four-operation contract holds regardless of what sits underneath. A format is a promise about a file a reader opens in ten years; a type is a promise about an object a plugin is written against. Only the first is worth pinning this hard.
+
+**What a step returns is the same flat mapping of scalars `io.record` takes.** Keys are strings; values are `str`, `int`, `float`, `bool`, or `None`; nothing nests. `run.yaml` is the file a paper attaches and a reviewer opens in ten years, and [`per_repeat` is *exactly what the step returned*](#the-two-files) — so a returned value that plain YAML can't hold honestly is one the record can't hold either, which is the same argument that keeps core [from pickling your objects](#steps-and-artifacts). Nesting is refused for a second reason: a [hypothesis](#pre-registration) addresses a metric as `step03_analyze.r`, and a nested return leaves that path with more than one reading. The rule is identical for the values a template's [`aggregate`](#templates-where-parameters-are-defined) derives, with one exception at one scope — an [`Estimate`](#estimate-carries-your-interval-without-core-claiming-it), whose whole purpose is to carry a structure core will render as an interval.
+
+**A value that is a scalar in every sense but its type is coerced, and only that.** `pearsonr(...).statistic` is a `numpy.float64`, not a `float`, and a rule that rejected it would reject the return statement in most of this document's own examples. So core coerces anything implementing `__float__`, `__index__`, or `__bool__` to the Python scalar it stands for, keeps that, and raises `ContractError` on everything else — a list, a dict, an array, a `DataFrame`, a fitted model. The line is deliberately at *what the value already is* rather than at what could be talked into serializing: a NumPy scalar is a float that arrived through a library, and an array is a decision about what the metric should have been.
+
+**One rule, all three surfaces.** `io.record`'s `values`, a step's return, and a template's [`aggregate`](#templates-where-parameters-are-defined) take the same scalars under the same coercion — the per-unit value a model hands you is a `numpy.float64` at least as often as a derived metric is, and a table core would reject what a return accepted would be a divergence found on the first line anyone writes. What differs between the three is only where the value lands: a column, `per_repeat`, or `aggregated`.
 
 **A `name` is a relative path, not only a filename.** `io.write("figures/roc.png", fig_bytes)` and `io.write("programs/gpt-4.1__seed29.json", blob)` both write inside the step's own directory, creating intermediate directories as needed, and every reader — `io.path`, `io.append`, `io.read_upstream`, `io.read_condition`, `io.reuse_from` — addresses them by that same relative path. A step that produces a set rather than a single file is ordinary, and making it flatten a tree into `programs_gpt_4_1_seed29.json` would push structure into filenames where a directory says it better. The path is resolved against the step's directory and normalized first: an absolute path, a `..` segment, or a symlink leading outside are all rejected, so "artifacts land in a directory of the same name" stays a property core enforces rather than one a step could opt out of.
 
@@ -754,6 +839,12 @@ plate_wells = "publishable_my_assay.resolvers.plate:resolve"
 The `io` a resolver receives is read-only: `io.read_input` and nothing else. There is no run directory yet at validate time and no step yet at run time, so there is nothing for it to write into.
 
 **Provenance is unchanged by the indirection.** The resolved list lands in `provenance.units` and its hash in `provenance.units_hash`, exactly as for a table, the resolver's plugin version in `provenance.plugin_versions`, and its name in the embedded config. A resolver that yields a different roster next month is therefore *detected* by `reproduce`, not prevented — the same promise core makes about the input files themselves. Under [`input_manifest_policy: hash_index`](#three-hashes), "the index and whatever it names" means the paths the resolver read plus the paths its units name, so a unit whose payload the resolver never opened still gets that payload hashed.
+
+### The unit list is three operations, and the units in it are frozen
+
+`io.units` supports iteration, `len`, and integer indexing, and `io.units.train` is the same kind of sequence — there is no `io.units.train.train`, because a partition of a partition is not a thing the declarations describe. That is the whole contract, and it is short for the same reason [`aggregate`'s table](#templates-where-parameters-are-defined) is: a sequence that also promised slicing, membership, and `.index` would just be a `list`, and core could never change what backs it — a lazily materialized roster, a view over a partition — without breaking every step written against it. Iteration is repeatable, so `list(io.units)` and a second `for` both work; filtering is ordinary Python over that iteration, which at cohort scale costs nothing measurable.
+
+**A `Unit` is immutable, and that is a correctness rule rather than a style.** `key` is a string, `paths` a tuple, `attributes` a read-only mapping, and the [declared attributes readable directly](#where-units-come-from) are read-only too. The roster is resolved **once per run** and the same objects are handed to every condition and every execution — which is what [pairing across conditions](#allocation-within-subjects-or-between-subjects) requires — so a step writing `unit.attributes["scored"] = True` would be editing what the next condition sees, and every condition after it would run against a roster silently different from the one `units_hash` covers. Core [cannot inspect a step's body](design-principles.md#greenfield-only) to catch that, so the object refuses instead, raising [`ContractError` · `E-UNIT-IMMUTABLE`](#errors-core-raises) at the write. A unit is also hashable by its `key`, since that is the identity `data.units.key` already declares, which makes a `set` of units the ordinary way to carry a subset through a step.
 
 ### Allocation: within-subjects or between-subjects
 
@@ -995,7 +1086,7 @@ This is an effect check, not an inspection of your code: core doesn't ask what t
 A template is the authoritative definition of an experiment type's parameters. Core never inspects `parameters` itself.
 
 ```python
-from publishable.templates import BaseTemplate, register_template, Param
+from publishable import BaseTemplate, register_template, Param
 
 @register_template("generic")
 class GenericTemplate(BaseTemplate):
@@ -1028,7 +1119,7 @@ class GenericTemplate(BaseTemplate):
         return {"r": fn[cfg.parameters.analysis.method](units.pred, units.truth).statistic}
 ```
 
-**A template can live in three places, and where it lives decides how it's pinned.** Core ships `generic`; a plugin ships its own and arrives as a pinned `uv.lock` entry; `generate template` writes one into `templates/` in your own repo, for a template only this project needs. The third is code the run's numbers came out of and has no version anyone resolves, so [`code_hash` covers `templates/**`](#three-hashes) alongside `src/**` — editing a local `aggregate` moves the hash exactly as editing a step does, and `run` refuses a dirty `templates/` for the same reason it refuses a dirty `src/`.
+**A template can live in three places, and where it lives decides how it's pinned.** Core ships `generic`; a plugin ships its own and arrives as a pinned `uv.lock` entry; `generate template` writes one into `templates/` in your own repo, for a template only this project needs. The third is code the run's numbers came out of and has no version anyone resolves, so [`code_hash` covers `templates/**`](#three-hashes) alongside `src/**` — editing a local `aggregate` moves the hash exactly as editing a step does, and `run` refuses a dirty `templates/` for the same reason it refuses a dirty `src/`. Where it lives also decides how it is *found*: the first two are [registered through an entry point](#creating-a-plugin-publishable-plugin-new), and the third — which is installed nowhere and distributed to nobody — is discovered by path from the fixed layout, making its `@register_template` argument the whole of its registration.
 
 **`validate` receives the whole config, not only `parameters`.** The rules a template most needs to enforce are often *cross-block*, because they are properties of what its steps do and core cannot know them. An experiment type that fits a model needs somewhere to fit — so a template whose pipeline compiles a program can reject a config that declares no [`holdout`](#a-fixed-holdout-split) and no `fold` repeat, because otherwise `io.units.train` is empty and the evaluation happens on the units the model was fitted against. Core has no way to tell that config from a legitimate one; the template does.
 
@@ -1061,7 +1152,7 @@ def aggregate(self, units, cfg) -> dict:
     }
 ```
 
-`aggregate` returning `{}` is the right answer for a table it doesn't recognize — core calls it once per recording step, and a pipeline can have several.
+`aggregate` returning `{}` is the right answer for a table it doesn't recognize — core calls it once per recording step, and a pipeline can have several. What it may return otherwise is [what a step may return](#steps-and-artifacts): a flat mapping of scalars, with the same coercion of a NumPy scalar and the same `ContractError` on anything structural. There is no `Estimate` exception here, since a derived metric is one core computes and resamples itself.
 
 **It receives the condition's resolved `cfg`, and it has to.** In the worked example `analysis.method` is swept, so `r` is a different function in each of the three conditions — an `aggregate` that saw only the table could hard-code one coefficient and would then report the same statistic under all three labels. Core passes the same `cfg` when it recomputes the metric on a resampled table, so the value and its interval are always the same statistic. This is the one place a template sees a condition; step code still doesn't, because `cfg` arrives already resolved (see [Using them in step code](#using-them-in-step-code)).
 
@@ -1576,8 +1667,9 @@ class Step(BaseStep):
         self.condition.label          # "method=spearman__min_samples=30"
         self.condition.is_baseline    # False
 
+        self.rng                  # this execution's numpy.random.Generator — see "Randomness"
         self.repeat.label         # "fold03_seed42"
-        self.repeat.seed          # 42  — already applied to Python and NumPy
+        self.repeat.seed          # 42  — the integer self.rng and the global streams came from
         self.repeat.index         # flat index of this execution within the condition
         self.repeat.levels        # [{kind: batch, i: 2, n: 5},
                                   #  {kind: fold, i: 2, k: 10, train: [...], test: [...]},
@@ -1595,7 +1687,26 @@ class Step(BaseStep):
 | `"repeat"` | present | present |
 | `"summary"` | raises — it runs across all of them, so no one condition is *its* condition | raises |
 
-Raising rather than returning `None` is the same choice `cfg` makes: a step can assume what it's given is real, so there is no `if self.repeat is not None` to write. A step that wants to behave differently at different scopes is two steps.
+Raising rather than returning `None` is the same choice `cfg` makes: a step can assume what it's given is real, so there is no `if self.repeat is not None` to write. A step that wants to behave differently at different scopes is two steps. What it raises is a [`ContractError`](#errors-core-raises), like every other request core declines on a declaration.
+
+**`self.rng` is not in that table, because it's present at every scope.** Core derives a seed for *every* execution, whether or not a repeat named one — see below.
+
+### Randomness, and which stream a step should draw from
+
+**Core derives one seed per execution and does two separate things with it**, and only one of them reaches your code reliably. The seed is the repeat's resolved seed where there is a repeat, and the [design digest](#what-auto-derives-from) mixed with the step's name where there isn't — so a `"condition"`-scoped fit is as seeded as a `"repeat"`-scoped one, and none of the four scopes has a hole in it.
+
+| | Is | Reaches |
+|---|---|---|
+| `self.rng` | A `numpy.random.Generator` built from that seed, at every scope | Whatever you draw from it |
+| The global streams | `random.seed(...)` and `numpy.random.seed(...)`, applied from the same seed before `run` is called | Any code that draws from `random.*` or the legacy `numpy.random.*` functions — yours, or a library's |
+
+**Draw from `self.rng`; the globals are there for libraries you don't control.** Seeding a process-global stream is the pattern [`derive_seed` argues against](#a-step-that-partitions-needs-a-seed-and-derive_seed-is-where-it-comes-from) two paragraphs down — two draws sharing a stream correlate for no reason anyone chose — and it holds against core's own seeding as much as against yours. Core does it anyway because a third-party library that draws from the global stream is otherwise unseeded and there is no other way to reach it, which is the whole of the justification: it is a compatibility measure, not the stream your analysis should be built on.
+
+**`numpy.random.seed` reaches the legacy global `RandomState` and nothing else.** A step that calls `numpy.random.default_rng()` gets a generator seeded from OS entropy, so a pipeline written the modern way is *unseeded* by a core that seeds the legacy global — which is exactly the failure `self.rng` exists to close. Take the generator core hands you rather than constructing one.
+
+**A stream drawn from concurrently is order-dependent whatever kind it is.** [The parallelism worth having is inside a step](#one-execution-at-a-time-and-what-holds-the-run-directory), and a step issuing 440 requests at once cannot share one generator across them and stay repeatable — the interleaving decides who gets which draw. Give each worker its own: `self.rng.spawn(n)` where the NumPy version supports it, or a `derive_seed` named per worker where it doesn't. Core doesn't do this for you because it doesn't know how you divided the work, and a step that draws nothing concurrently shouldn't pay for the ceremony.
+
+**`self.rng` is the execution's default stream; [`derive_seed`](#a-step-that-partitions-needs-a-seed-and-derive_seed-is-where-it-comes-from) is how you get an independent one.** Two partitions drawn in one step want two streams, and naming each is what keeps them uncorrelated — so the rule is the ordinary one: draw from `self.rng` until you need a second stream, then name what it's for. It sits beside `self.condition` and `self.repeat` rather than in `io` because it is a fact about this execution rather than about where its artifacts go — but unlike them it never raises, since core derives a seed for every execution and there is no scope at which it would have nothing to hand over.
 
 ### A step that partitions needs a seed, and `derive_seed` is where it comes from
 
@@ -1610,7 +1721,7 @@ class FitStep(BaseStep):
         ...
 ```
 
-`derive_seed(purpose)` mixes the design digest, the resolved roster, and the string you pass, and returns an integer. The `purpose` argument is not decoration: two partitions drawn in one step would otherwise share a stream and correlate for no reason anyone chose, and naming them keeps each independent — the same reason [`assign.seed`](#what-auto-derives-from) mixes in the axis name.
+`derive_seed(purpose)` mixes the design digest, the resolved roster, and the string you pass, and returns an integer — one you hand to `random.Random`, to `numpy.random.default_rng`, or to any library that takes a seed. The `purpose` argument is not decoration: two partitions drawn in one step would otherwise share a stream and correlate for no reason anyone chose, and naming them keeps each independent — the same reason [`assign.seed`](#what-auto-derives-from) mixes in the axis name.
 
 **It moves when the roster moves, and that is the point.** A seed declared as a template parameter is the other honest option, and it is the right one when you want a division frozen against a growing cohort — but it does *not* redraw when ten patients are added, while every partition core computes does. Pick deliberately: `derive_seed` to track the data, a pinned parameter to track the file. Whichever you use, write the realized division to an artifact — it was chosen inside the step, so the record is the only place it exists.
 
@@ -2417,7 +2528,7 @@ configs/cohort-pilot/config.yaml
 2 problems (1 error, 1 warning)
 ```
 
-The identifier is part of the contract and outlives the wording: a message gets clearer over time, and something that pinned the wording would break when it did. There is no `--json`, because [an operation command takes paths and nothing else](design-principles.md#everything-is-in-the-file) and a flag that switches the output format is still a flag. The identifier is what a tool should key on, and it is equally stable in the output there is.
+The identifier is part of the contract and outlives the wording: a message gets clearer over time, and something that pinned the wording would break when it did. It's one registry rather than two — the `E-` codes the [errors core raises](#errors-core-raises) carry are the same namespace as the ones printed here, since a run-time failure and a pre-flight one are equally worth grepping and there is no reader for whom they are different vocabularies. There is no `--json`, because [an operation command takes paths and nothing else](design-principles.md#everything-is-in-the-file) and a flag that switches the output format is still a flag. The identifier is what a tool should key on, and it is equally stable in the output there is.
 
 ### Draft runs
 
@@ -2635,7 +2746,13 @@ assay_instrument = "publishable_my_assay.probes.instrument:probe"
 ".fastq.gz" = "publishable_my_assay.writers.fastq:write"
 ```
 
-**Four registries, one mechanism.** Templates, [resolvers](#where-units-come-from), [probes](#the-apparatus-core-can-only-observe), and [writers](#steps-and-artifacts) are each an entry-point group and a `@register_*` decorator, and `validate` reports a config naming one that no installed package registers. A writer is keyed by the extension it claims rather than by a name, since that is what [`io.write` dispatches on](#steps-and-artifacts) — it takes the object and returns `bytes`, its reader inverts it, and core rejects a plugin claiming an extension core already owns rather than deciding which writer wins.
+**Four registries, one mechanism.** Templates, [resolvers](#where-units-come-from), [probes](#the-apparatus-core-can-only-observe), and [writers](#steps-and-artifacts) are each an entry-point group and a `@register_*` decorator, and `validate` reports a config naming one that no installed package registers. A writer is keyed by the extension it claims rather than by a name, since that is what [`io.write` dispatches on](#steps-and-artifacts) — it takes the object and returns `bytes`, and its reader inverts it.
+
+**The entry point is the registration; the decorator is a declaration checked against it.** The name a config writes is the entry-point key, and core resolves it from installed package metadata — so `validate` can answer "no installed package registers `plate_wells`" without importing a line of that package, which matters because [importing a module runs its top level](#generators) and `validate` is documented as creating nothing and reaching nothing. The `@register_*` argument is what makes the artifact findable in its own test suite and readable in its own source; when the two disagree, loading the plugin fails naming both, rather than one of them silently winning. That's the [defaults-file argument](#there-is-no-separate-defaults-file) again: two spellings of one name, and no rule for which is canonical, is a drift nobody detects until a config names the loser.
+
+**Two things register without an entry point, and neither is a plugin.** Core's own `generic` is core's to register. A [local `templates/*.py`](#templates-where-parameters-are-defined) is found by path, from the [fixed layout](#scaffolding-publishable-new) that already lets core find things without being told — it isn't installed, isn't distributed, and is pinned by [`code_hash`](#three-hashes) rather than by `uv.lock`, so there is no package metadata for it to declare itself in. Its `@register_template` argument is therefore the whole of its registration, which is the one case where the decorator is authoritative rather than checked.
+
+**A name is claimed once, and a collision is refused rather than resolved.** Two installed plugins registering `plate_wells`, a plugin registering `generic`, a plugin claiming an extension core already writes, and a [local `templates/*.py`](#templates-where-parameters-are-defined) taking the name of an installed one all fail at load, naming both providers. Install order and import order are the only tie-breaks available, and both are properties of a machine rather than of a design — a run whose template depended on which package resolved first would be reproducible everywhere except where it mattered. Shadowing is refused in the same breath and for a sharper reason: a plugin that could redefine `generic` could change what a config means without changing the config, which is the one thing [`parameters_hash`](#three-hashes) is supposed to make impossible. Rename yours.
 
 The generated README documents the plugin the way a user needs it — install line, template list, and **a parameter table generated from `parameter_spec` itself**:
 
@@ -2777,6 +2894,8 @@ It's named in the output rather than only recorded because, unlike a path or a c
 ```
 publishable/
 ├── src/publishable/
+│   ├── __init__.py            # the one public import root — see "The importable surface"
+│   ├── errors.py              # PublishableError and the three below it, each carrying its code
 │   ├── cli.py                 # dispatch
 │   ├── scaffold.py            # `new`
 │   ├── plugin_scaffold.py     # `plugin new`
