@@ -73,7 +73,7 @@ data:
   output_dir: /secure/results/cohort-pilot
   input_manifest_policy: hash_all          # hash_all | hash_index | none
   units:                                   # optional; required by fold, resample, null_test
-    from: index.csv                        # a file in input_dir, or `glob:`, or a resolver
+    from: index.csv                        # index.csv | {glob: "*.dcm"} | {resolver: <name>}
     key: patient_id                        # stable, unique identity
     attributes: [label, age, sex]          # available for stratification and reporting
     allocation: within                     # within | between — feeds paired vs unpaired, per contrast
@@ -194,6 +194,9 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Data outside repo | `output_dir` resolves inside the git repository |
 | Manifest readable | `input_dir` is unreadable or empty |
 | Unit keys unique | `data.units.key` `patient_id` has 3 duplicate values |
+| Resolver is installed | `data.units.from.resolver` names `plate_wells`, which no installed plugin registers |
+| Resolver supplies the attributes | resolver `plate_wells` yields units with no `operator`, declared in `data.units.attributes` |
+| Resolver is condition-independent | resolver `plate_wells` reads `assay.panel`, which `sweep` varies — the unit table is one table for the whole run |
 | Stratification attribute exists | `stratify_by: label` is not in `data.units.attributes` |
 | Repeat kind needs units | `{kind: fold}` requires `data.units` to be declared |
 | Holdout isn't a repeat kind | `{kind: holdout}` is not a repeat kind — declare `data.units.holdout` instead |
@@ -422,13 +425,58 @@ It's load-bearing in more places than it first appears. `fold` partitions units;
 data:
   input_dir: /secure/data/cohort-2026
   units:
-    from: index.csv                  # a file in input_dir; or `glob: "*.dcm"`, or `resolver: <template>`
+    from: index.csv                  # index.csv | {glob: "*.dcm"} | {resolver: <name>} — see below
     key: patient_id                  # stable identity — must be unique and reproducible
     attributes: [label, age, sex, site]   # available for allocation, stratification, reporting
     allocation: within               # within | between — see below
     cluster_by: null                 # e.g. site, when units aren't independent
     holdout: null                    # optional single train/test split — see below
 ```
+
+### Where units come from
+
+`from` answers a different question from the rest of the block. Everything else — `key`, `attributes`, `allocation`, `cluster_by`, `holdout` — says what the design needs of a unit; `from` says how core finds one. Three forms, in descending order of how much the input already looks like a table:
+
+```yaml
+from: index.csv                      # a delimited table in input_dir
+from: {glob: "*.dcm"}                # one unit per matching path
+from: {resolver: plate_wells}        # a plugin walks the input and yields units
+```
+
+A table is the ordinary case, and the one everything else in this document uses: `key` and `attributes` name columns, and core reads them. `glob` covers input whose only structure is the filesystem — core builds the table itself, one row per matching path, so there are no attributes to declare and a design that needs them wants one of the other two forms.
+
+**A resolver is for input that is neither.** A DICOM archive whose units are series rather than files, a plate layout where identity is a barcode and a well position, a benchmark shipped as sharded JSONL: finding the units there is domain work, and it is the *only* domain work in the block. So it's a plugin artifact, registered the way a template is:
+
+```python
+# src/publishable_my_assay/resolvers/plate.py
+from publishable import Unit, register_resolver
+
+@register_resolver("plate_wells")
+def resolve(io, cfg):
+    for row in io.read_input("layout.csv"):
+        yield Unit(
+            key=f"{row.barcode}:{row.well}",
+            paths=[f"reads/{row.barcode}/{row.well}.fastq.gz"],
+            attributes={"plate": row.barcode, "operator": row.operator},
+        )
+```
+
+```toml
+[project.entry-points."publishable.resolvers"]
+plate_wells = "publishable_my_assay.resolvers.plate:resolve"
+```
+
+**A resolver is its own registered artifact rather than a method on a template.** A template is [the authoritative definition of an experiment type's *parameters*](#templates-where-parameters-are-defined), and unit resolution isn't parameter-shaped: several experiments over one archive share a resolver while declaring different parameters, and one template can be pointed at inputs laid out two different ways. Coupling them would force a copy of one whenever the other varied.
+
+**What it returns is a unit table with the columns a CSV would have supplied.** `Unit` carries exactly three things — `key`, the identity `data.units.key` names; `paths`, the input files this unit is made of, relative to `input_dir`; and `attributes`, the mapping `data.units.attributes` draws from. Everything downstream is then indifferent to which form `from` took: `stratify_by`, `assign.from`, `cluster_by`, and `null_test.shuffle` all name attributes, and every check in [Validation](#validation) applies unchanged. [Technical replicates](#what-isnt-a-repeat) work the same way with one extra obligation: yield one `Unit` per measurement, sharing a `key`, and emit `measurements.by` as an *attribute* — a resolver has no columns beyond the ones it declares, so the field a CSV would simply have carried has to be named. That's the division of labour — **the plugin decides how units are found; core decides what is required of them** — and it's why there is no schema block anywhere in `data.units`. What a resolver must produce is a projection of the design declarations already written above it.
+
+**It sees the same `cfg` a `scope: "run"` step does, and the same coherence rule applies:** a resolver that reads a parameter the sweep varies is rejected by `validate`. The unit table is one table for the whole run, so conditions that resolved different units couldn't be paired and `n` would mean something different in each. Parameters the sweep leaves alone are fair game, which is how a resolver is told which assay, panel, or shard to include.
+
+**It runs at `validate` and `dry-run`, not only at `run`.** Every unit check in the validation table — keys unique, strata present, cells populated, `k` within the cluster count — is a question about the resolved table, so the table has to exist before a step does. A resolver that walks a large archive pays for that walk each time you validate. That cost is what makes those checks real rather than deferred to four hours into the run — and it isn't what [`input_manifest_policy`](#three-hashes) controls: that policy bounds what gets *hashed*, not what a resolver reads. For an archive too large to walk cheaply, resolve from an index inside it rather than from the tree, which is the same reason `hash_index` exists.
+
+The `io` a resolver receives is read-only: `io.read_input` and nothing else. There is no run directory yet at validate time and no step yet at run time, so there is nothing for it to write into.
+
+**Provenance is unchanged by the indirection.** The resolved list and its hash land in `provenance.units` exactly as for a table, the resolver's plugin version in `provenance.plugin_versions`, and its name in the embedded config. A resolver that yields a different roster next month is therefore *detected* by `reproduce`, not prevented — the same promise core makes about the input files themselves. Under [`input_manifest_policy: hash_index`](#three-hashes), "the index and whatever it names" means the paths the resolver read plus the paths its units name, so a unit whose payload the resolver never opened still gets that payload hashed.
 
 ### Allocation: within-subjects or between-subjects
 
@@ -1573,7 +1621,7 @@ uv run publishable generate experiment triage-pilot \
 
 `--plugin <github-username>/<repo>` runs `uv add git+https://github.com/<user>/<repo>` and nothing more. No registry, no bespoke installer, no new trust boundary beyond "this is a git dependency," because it is one. Pin however `uv` supports: `--plugin someuser/publishable-llm@v1.2.0`.
 
-This pays off twice. The plugin becomes a normal `pyproject.toml` line and a pinned `uv.lock` entry — the same lockfile captured as provenance — so `reproduce` gets the exact plugin version free, without core inventing its own pinning story. And plugins ship reusable `BaseStep` subclasses, not just templates, so shared machinery is importable rather than copy-pasted.
+This pays off twice. The plugin becomes a normal `pyproject.toml` line and a pinned `uv.lock` entry — the same lockfile captured as provenance — so `reproduce` gets the exact plugin version free, without core inventing its own pinning story. And plugins ship reusable `BaseStep` subclasses and [unit resolvers](#where-units-come-from), not just templates, so shared machinery is importable rather than copy-pasted.
 
 ### Creating a plugin: `publishable plugin new`
 
@@ -1589,6 +1637,7 @@ publishable-my-assay/
 ├── .git/
 ├── src/publishable_my_assay/
 │   ├── templates/my_assay.py     # BaseTemplate + parameter_spec, @register_template applied
+│   ├── resolvers/                # optional unit resolvers, @register_resolver applied
 │   └── steps/                    # optional reusable BaseStep subclasses
 ├── tests/
 │   └── test_my_assay.py          # asserts the template materializes and validates
@@ -1599,6 +1648,9 @@ publishable-my-assay/
 ```toml
 [project.entry-points."publishable.templates"]
 my_assay = "publishable_my_assay.templates.my_assay:MyAssayTemplate"
+
+[project.entry-points."publishable.resolvers"]
+plate_wells = "publishable_my_assay.resolvers.plate:resolve"
 ```
 
 The generated README documents the plugin the way a user needs it — install line, template list, and **a parameter table generated from `parameter_spec` itself**:
@@ -1735,7 +1787,7 @@ publishable/
 │   ├── base_step.py           # BaseStep: scope, run(cfg, io), self.condition/self.repeat, nondeterministic
 │   ├── artifacts.py           # io: scope-aware paths, atomic writes, append, record, read_condition
 │   ├── sweep.py               # grid/paired/ablate/sample/baseline expansion, labels, sweep.yaml
-│   ├── units.py               # unit resolution from input_dir, keys, attributes, partitioning
+│   ├── units.py               # unit resolution (table/glob/resolver registry), keys, attributes, partitioning
 │   ├── scope.py               # step scope resolution, execution plan, read-direction checks
 │   ├── lineage.py             # upstream run recording and chain verification
 │   ├── hypotheses.py          # pre-registered hypothesis evaluation, confirmatory/exploratory
