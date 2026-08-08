@@ -22,7 +22,7 @@ Resolve the three declarations separately and the config writes itself. They are
 |---|---|---|---|
 | Does every unit appear in every condition, or exactly one? | `data.units.allocation` | `within` (default, paired comparisons) · `between` (one arm per unit, unpaired across arms — needs a `groups` axis) | [Within-subjects](#within-subjects--repeated-measures) · [Between-subjects](#between-subjects--parallel-arm-trial) |
 | What varies deliberately? | `sweep` | `grid` (cartesian) · `paired` (coupled axes) · `ablate` (`1 + n`, one change each) · `sample` (continuous ranges) · `groups` (crossable axes of units, not parameters) · `baseline` (the reference, not an axis) | [Factorial](#factorial) · [Between-subjects factorial](#between-subjects-factorial) · [Ablation](#ablation) · [Dose-response](#dose-response-and-parameter-search) · [Between-subjects](#between-subjects--parallel-arm-trial) |
-| What varies incidentally? | `replication.repeats` | `seed` · `fold` — the two things a re-execution can change | [Single condition](#single-condition-repeated) · [Cross-validation](#cross-validation) |
+| What varies incidentally? | `replication.repeats` | `seed` · `batch` · `fold` — the three things a re-execution can change | [Single condition](#single-condition-repeated) · [Blocked over a drifting apparatus](#blocked-execution-over-a-drifting-apparatus) · [Cross-validation](#cross-validation) |
 
 Answering a question with nothing is a valid answer: omit `sweep` for a single condition, omit `data.units` entirely when the pipeline has no unit table — though `fold` requires one, as do the resampling and permutation statistics in [Bootstrap and permutation](#bootstrap-and-permutation). A design that evaluates on held-out units without repeating anything answers the third question with nothing too, and declares [`data.units.holdout`](#train-test-holdout) instead of a repeat. Every design below whose declarations name attributes — a `groups` axis read from a column, a `stratify_by`, a `cluster_by` — needs input that carries them, as columns in a table or from a plugin resolver that emits them; see [reference.md § Where units come from](reference.md#where-units-come-from). What each repeat kind varies and how core collapses it is the table in [reference.md § Repeat kinds](reference.md#repeat-kinds) — both differ per kind, and that's the point of naming the kind rather than passing a count. What no repeat kind does is set `n`: that counts units, and every interval core reports comes from the [per-unit table](reference.md#the-unit-table-is-the-inference-base).
 
@@ -225,6 +225,24 @@ That's **repeated** cross-validation — 10 folds, each evaluated under 3 seeds.
 
 So the outer loop is core's and the selection is yours: declare the outer `fold`, and do the inner search inside the step, over `io.units` for that fold's training partition only. The selected setting is then a value your step records per fold rather than a condition, which is also the honest description of it — a hyperparameter chosen by the pipeline is an output, not a declared parameter.
 
+### Blocked execution over a drifting apparatus
+
+When measurement goes through something whose behaviour moves over hours — a hosted service under varying load, an instrument that warms up, a scoring API quietly re-tuned — running every condition once, back to back, confounds the comparison with time. Declare a `batch` level and each condition is measured again at a separated time:
+
+```yaml
+replication:
+  repeats:
+    - {kind: batch, n: 5}
+  order: randomized
+  rationale: "Five blocks a day apart; the deployment is probed before each."
+```
+
+`repeat_spread` then reports how much the world moved, beside an interval that says how precisely the units were estimated — two numbers rather than one figure conflating them. A batch varies nothing the pipeline declares, which is why it takes no field but `n`.
+
+This pairs with the [apparatus record](reference.md#the-apparatus-core-can-only-observe), and the two halves are different: a *declared* change of apparatus identity — new revision, new calibration — fails the run, because two identities aren't one dataset; a `batch` level measures the variation that remains when the identity held still. Recording the apparatus without batches leaves drift unmeasured; batching without recording it leaves drift unattributable.
+
+Core doesn't schedule the separation — it has no wall clock to enforce, and a tool deciding when your instrument is free would be worse than useless. What it does is record each execution's `started_at`, so whether the batches really were separated is answerable from the run record. `validate` warns if no step declares `nondeterministic = True`, since batching a deterministic pipeline buys *n* copies of one answer. See [reference.md § A `batch` says *when*, not *what*](reference.md#a-batch-says-when-not-what).
+
 ### Bootstrap and permutation
 
 Neither is a repeat, because neither needs the pipeline to run again — both resample the per-unit table the run already produced. They're declared under `statistics` and cost no executions:
@@ -326,7 +344,8 @@ The design is shaped around a specific claim: most irreproducible results are no
 | **A typo'd parameter silently using a default** | `init` materializes every valid key, so any unrecognized key is a typo by construction and fails validation |
 | **Resuming into a different experiment** | `resume` refuses when `parameters_hash`, `code_hash`, or `uv.lock` have moved |
 | **A stale summary reported as fresh** | Steps that consume an earlier run's artifacts record it as an upstream with its hashes |
-| **Confounding by run order** | `order: randomized` shuffles execution under a recorded seed; the realized order is recorded either way |
+| **Confounding by run order** | `order: randomized` shuffles execution under a recorded seed; the realized order and each execution's `started_at` are recorded either way |
+| **Drift reported as randomness** | A `batch` level's dispersion is labelled `kind: batch`, separately from a `seed` level's, so movement in an external service isn't presented as RNG variation the tool controls |
 | **Credentials in a shared config** | The config stores variable names; values live in `.env` and are never captured, logged, or written to any artifact |
 | **Patient data in a public repo** | `input_dir` and `output_dir` may not resolve inside the repo, checked at generate, validate, and run |
 

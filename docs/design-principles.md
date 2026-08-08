@@ -61,7 +61,7 @@ Ten nouns, defined once. Everything else in this document is built from them, an
 | **Config** | One parameter set instantiating an experiment | `configs/<name>/config.yaml` |
 | **Run** | One execution of a config, start to finish | `<output_dir>/run_<id>/` |
 | **Condition** | One cell of the design within a run — a parameter combination, a group of units, or both | `conditions/<nn>_<label>/` |
-| **Repeat** | One re-execution of a condition — a seed or a cross-validation fold | `<repeat-label>/` |
+| **Repeat** | One re-execution of a condition — a seed, a timed batch, or a cross-validation fold | `<repeat-label>/` |
 | **Step** | One stage of the pipeline, scoped to run, condition, repeat, or summary | `src/<name>/steps/stepNN_*.py` |
 | **Unit** | The thing being measured — patient, sample, trial, item, respondent | Resolved from `input_dir` |
 | **Artifact** | A file a step produced | Inside its step's directory |

@@ -153,7 +153,7 @@ sweep:
 
 replication:
   repeats:
-    - {kind: seed, n: 5}         # seed | fold — the two things a re-execution varies
+    - {kind: seed, n: 5}         # seed | batch | fold — what a re-execution varies
 ```
 
 And steps that never mention sweeps — each condition is resolved before your code runs:

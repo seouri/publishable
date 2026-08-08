@@ -116,7 +116,7 @@ sweep:
 replication:
   # ---- How each condition repeats. Kind determines the statistics core applies. ----
   repeats:
-    - {kind: seed, n: 5}                 # seed | fold
+    - {kind: seed, n: 5}                 # seed | batch | fold
   order: as_declared                     # as_declared | randomized
   rationale: ""
 
@@ -189,6 +189,8 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Sample ranges | `sweep.sample.ranges.analysis.confidence` upper bound 1.4 violates the parameter's `lt=1` |
 | Baseline is a valid condition | `sweep.baseline` sets `analysis.method: pearsonn` |
 | Repeat kind coherence | `{kind: bootstrap}` is not a repeat kind — declare `statistics.resample` instead |
+| Batch has something to measure | `{kind: batch, n: 5}` is declared but no step sets `nondeterministic = True`, so five batches recompute one answer (warning) |
+| Batch takes no fields | `{kind: batch, k: 3}` — a batch varies nothing, so `n` is the only field it accepts |
 | Null test coherence | `statistics.null_test` requires `shuffle` to name a unit attribute |
 | Shuffle level is unambiguous | `null_test.shuffle: status` varies within `match_set` `M07` but is constant within `M12`, so neither a within-cluster nor a whole-cluster null applies |
 | Clusters enough to resample | `statistics.resample` with `cluster_by: animal_id` over 4 animals bootstraps 4 draws; below `limits.min_clusters` (warning) |
@@ -300,17 +302,21 @@ provenance:
 
 execution:                                     # mechanical; nested by the scope of each step
   shared:
-    step01_load_cohort: {status: completed, wall_seconds: 12.4, attempts: 1}
+    step01_load_cohort: {status: completed, started_at: "2026-08-06T14:02:13Z",
+                        wall_seconds: 12.4, attempts: 1}
   conditions:
     - index: 1
       label: method=spearman
       steps:
-        step02_fit_model: {status: completed, wall_seconds: 61.0, attempts: 1}
+        step02_fit_model: {status: completed, started_at: "2026-08-06T14:02:26Z",
+                          wall_seconds: 61.0, attempts: 1}
         step03_analyze:
-          seed17: {status: completed, wall_seconds: 903.1, attempts: 2,
+          seed17: {status: completed, started_at: "2026-08-06T14:03:27Z",
+                   wall_seconds: 903.1, attempts: 2,
                    nondeterministic: false,
                    n: {resolved: 240, completed: 231, failed: 9}}    # this execution's
-          seed42: {status: completed, wall_seconds: 897.4, attempts: 1,
+          seed42: {status: completed, started_at: "2026-08-06T14:18:30Z",
+                   wall_seconds: 897.4, attempts: 1,
                    nondeterministic: false,
                    n: {resolved: 240, completed: 233, failed: 7}}
   summary:
@@ -387,6 +393,9 @@ from publishable import BaseStep
 
 class Step(BaseStep):
     scope = "repeat"                            # the default; stated here for clarity
+    nondeterministic = False                    # the default; True when this step depends on
+                                                #   something core can't make repeat — a hosted
+                                                #   API, an instrument, a human rater
 
     def run(self, cfg, io):
         cohort = io.read_upstream("step01_load_cohort", "cohort.parquet")
@@ -395,6 +404,8 @@ class Step(BaseStep):
         io.write("scores.parquet", result)     # this condition's, this repeat's, this step's dir
         return {"r": result.r, "p": result.p}  # → results.conditions[i].per_repeat.step03_analyze
 ```
+
+**`nondeterministic` is a declaration, not a warning.** Core seeds Python and NumPy per repeat, which covers local pseudorandomness and nothing else; a step reaching a hosted service or an instrument cannot be made to repeat, and saying so is what lets core record it per execution in `run.yaml`, note it in `report` rather than implying reproducibility it can't deliver, and check that a [`batch`](#a-batch-says-when-not-what) level has something to measure. It travels with the [apparatus record](#the-apparatus-core-can-only-observe): one says the answer may move, the other says what it moved with.
 
 `cfg` is the object `validate` already checked, so a step can assume every parameter is present, correctly typed, and in range — no defensive `cfg.get(...)`. When a sweep is declared, `cfg.parameters` is already resolved for the current condition (see [Sweeps and repeats](#sweeps-and-repeats)), so step code stays sweep-agnostic. `io` is scoped to the step's [declared scope](#step-scope) — for the default `repeat` scope that means this condition, this repeat, this step — so nothing a step writes can collide with another execution:
 
@@ -607,7 +618,7 @@ Fitting on most of the data and evaluating on the rest, once, is the most ordina
 
 `io.units` then yields the test partition and `io.units.train` the training one — the same two lists a `fold` repeat provides, without the repetition. `by_attribute` covers a split that already exists, which benchmark datasets usually ship: name the column (`from: split`, values `train`/`test`) and core partitions rather than draws.
 
-**A holdout is not a repeat kind, and that's not a technicality.** The repeat axis answers *what varies incidentally* — it exists to express multiplicity, and each level multiplies the executions. A holdout varies nothing and multiplies nothing: it's one split, fixed for the whole run, and `{kind: holdout, n: 1}` would be a repeat that never repeats. Putting it on `data.units` also puts it beside the other two declarations that partition units without re-executing anything, [`assign`](#allocation-within-subjects-or-between-subjects) and [`measurements`](#what-isnt-a-repeat). So [the two repeat kinds stay two](#repeat-kinds).
+**A holdout is not a repeat kind, and that's not a technicality.** The repeat axis answers *what varies incidentally* — it exists to express multiplicity, and each level multiplies the executions. A holdout varies nothing and multiplies nothing: it's one split, fixed for the whole run, and `{kind: holdout, n: 1}` would be a repeat that never repeats. Putting it on `data.units` also puts it beside the other two declarations that partition units without re-executing anything, [`assign`](#allocation-within-subjects-or-between-subjects) and [`measurements`](#what-isnt-a-repeat). So [no repeat kind has to cover it](#repeat-kinds).
 
 Four interactions worth knowing, all of them consequences of the rules already stated rather than new ones:
 
@@ -962,6 +973,7 @@ Baseline conditions are references rather than comparisons, so they never count 
 | Kind | Varies | Aggregation core applies |
 |---|---|---|
 | `seed` | RNG state only | Averaged per unit; dispersion reported as `repeat_spread` |
+| `batch` | *when* — nothing the pipeline declares. Re-measures every condition at a separated time, so drift in the [apparatus](#the-apparatus-core-can-only-observe) shows up as dispersion instead of as a condition effect | Averaged per unit, exactly as `seed`; dispersion reported as `repeat_spread` |
 | `fold` | data partition — k-fold, stratified, or leave-one-out via `k: all`; cluster-respecting when [`cluster_by`](#clustered-units) is declared, and drawn within each arm under `allocation: between` | Per-unit values concatenated across folds — each unit is tested once per fold sweep |
 
 Each kind takes its own fields, and only these:
@@ -969,15 +981,47 @@ Each kind takes its own fields, and only these:
 | Kind | Fields |
 |---|---|
 | `seed` | `n` (how many), or `seeds: [17, 42, …]` for specific values |
+| `batch` | `n` (how many). Nothing else — a batch has no parameter of its own, which is the point |
 | `fold` | `k` — an integer ≥ 2, or `all` for leave-one-out — plus optional `stratify_by` |
 
 **`k: all` is how leave-one-out is spelled.** Writing `k: 240` would work arithmetically and is still the wrong thing to type: it hard-codes a count the config doesn't own, so the file silently stops meaning leave-one-out the moment the cohort gains a unit. `all` means "as many folds as there are things to leave out," and with [`cluster_by`](#clustered-units) declared that's the cluster count, making it leave-one-*cluster*-out — the only reading consistent with clusters being indivisible.
 
 Two things to expect from it. Each execution's test partition is a single unit, so `n: {resolved: 1, completed: 1}` per execution and a step's returned metrics are near-meaningless individually — the concatenated per-unit table is the whole point, and a metric that only exists as a step-returned scalar gets nothing useful out of leave-one-out. And the execution count is the unit count times everything else: 240 units × 3 conditions is 720 executions with 720 repeat directories, which is why `validate`'s [execution-count warning](#validation) and [`dry-run`](#before-you-spend-it) matter more here than anywhere else.
 
-**Two kinds, because a repeat is an execution.** A repeat re-runs the pipeline, so the only things that can be a repeat are things that change what the pipeline computes: the RNG state, and which units it sees. Resampling, permutation, technical replication, and a fixed holdout all *look* like repeats and aren't — see [What isn't a repeat](#what-isnt-a-repeat).
+**Three kinds, because a repeat is an execution.** A repeat re-runs the pipeline, so the only things that can be a repeat are things that change what the pipeline computes. There are three: the RNG state, which units it sees, and the state of the apparatus it measures through. Resampling, permutation, technical replication, and a fixed holdout all *look* like repeats and aren't — see [What isn't a repeat](#what-isnt-a-repeat).
+
+The third arrived late and for a reason. While the only external state core recorded was a lockfile, "the apparatus drifted" wasn't a claim this tool could make, and a level expressing it would have been a count with a story attached. Now that an [apparatus is probed and recorded per condition](#the-apparatus-core-can-only-observe), the axis along which its drift is measured is nameable, so it gets a name.
 
 **No repeat kind sets `n`.** `n` counts units, always — see [The unit table is the inference base](#the-unit-table-is-the-inference-base). Repeats say how many times the pipeline ran; they never say how many things the claim generalizes over, and conflating the two is how a five-seed run comes to report an interval that looks like evidence about a cohort.
+
+#### A `batch` says *when*, not *what*
+
+Every other repeat kind varies something core hands the pipeline — a seed, a partition. A `batch` varies nothing at all. It re-executes every condition later, and what changes is whatever changed outside: a service under different load, an instrument that warmed up, a model deployment quietly re-tuned. Three properties follow from that, and none of them is optional:
+
+**`batch` and the apparatus gate answer different halves of one question.** The [gate](#the-apparatus-core-can-only-observe) catches a *declared* change of identity — a new revision, a new calibration — and fails the run, because two identities are not one dataset. A `batch` level measures the variation that remains when the identity held still, which is the part no gate can catch and the only part an interval can describe. Running blocks without recording the apparatus leaves drift unattributable; recording the apparatus without blocks leaves it unmeasured.
+
+**Batches execute in order, and `order: randomized` shuffles *within* one.** A batch is a position in time, so shuffling batches against each other would destroy the thing being declared. Core therefore fixes the outer batch order and randomizes the (condition, inner-repeat) pairs inside each — which is also the design an operator wants: every condition met once per batch, in an order that doesn't confound it with position. The realized order and each execution's `started_at` land in `run.yaml`, so "were the batches actually separated?" is answerable from the record rather than from someone's memory. Core does not schedule the separation — it has no wall clock to enforce and inserting one would be a tool deciding when your instrument is free.
+
+**`validate` warns when no step in the pipeline sets `nondeterministic = True`.** Under a fully deterministic pipeline a `batch` level re-computes the same answer *n* times, and its `repeat_spread` is a row of zeros that cost you *n* times the compute. That's a declaration-level check, so core can make it: it compares the declared kind against the declared attribute, without looking at what any step does.
+
+```yaml
+replication:
+  repeats:
+    - {kind: batch, n: 5}                # outer: five separated blocks
+    - {kind: seed, n: 3}                 # inner: three seeds within each
+  order: randomized                      # shuffles condition × seed inside each batch
+  rationale: "Five blocks at least a day apart; the deployment is probed before each."
+```
+
+Repeat directories read `batch03_seed42`, and `repeat_spread` reports one entry per level, outer to inner — so how much the *world* moved and how much the *RNG* moved are two numbers rather than one average of both:
+
+```yaml
+repeat_spread:
+  - {std: 0.019, n: 5, kind: batch}
+  - {std: 0.004, n: 3, kind: seed}
+```
+
+That contrast is the whole reason the kind exists. Reported as a single `kind: seed` figure, those two would have been indistinguishable, and the larger of them mislabelled as randomness the tool controls.
 
 #### What isn't a repeat
 
@@ -1026,7 +1070,7 @@ A **technical replicate** is the same sample measured three times; a **biologica
 
 **A train/test holdout is a partition, not a repetition.** It looks like `fold` with `k` of one, and the resemblance is why it gets misfiled: both hand a step a training list and a test list. But a repeat level multiplies executions, and a holdout is drawn once and fixed for the run — `{kind: holdout, n: 1}` would be a repeat that never repeats, and a second one would be incoherent rather than merely wasteful. It belongs with the other declarations that divide units without re-running anything, so it's [`data.units.holdout`](#a-fixed-holdout-split).
 
-`validate` rejects `{kind: biological}`, `{kind: technical}`, `{kind: bootstrap}`, `{kind: permutation}`, and `{kind: holdout}` by name, each pointing at where the thing actually goes.
+`validate` rejects `{kind: biological}`, `{kind: technical}`, `{kind: bootstrap}`, `{kind: permutation}`, and `{kind: holdout}` by name, each pointing at where the thing actually goes. None of them is a [`batch`](#a-batch-says-when-not-what) either: a batch re-executes the pipeline against a world that may have moved, where all five of these re-derive something from data that already exists.
 
 `n` is reported explicitly rather than left to inference, and it never collapses to a single number:
 
@@ -1061,7 +1105,7 @@ The condition-level `n` is the one that appears beside a `ci95`, and it reconcil
 
 | Repeat structure | A unit is handed to | It counts as completed when |
 |---|---|---|
-| `seed` levels only | Every repeat | It completed in all of them |
+| `seed` or `batch` levels only | Every repeat | It completed in all of them |
 | A `fold` level | Exactly one fold per sweep | It completed in that fold |
 | `fold` × `seed` | Every seed of its own fold | It completed in all of that fold's seeds |
 
@@ -1095,7 +1139,7 @@ statistics:
   correction: holm                              # none | bonferroni | holm | fdr_bh
 ```
 
-`order: randomized` shuffles the execution order of (condition, repeat) pairs under a recorded seed. For anything touching an instrument, a plate, or a service whose behaviour drifts over hours, running conditions in index order confounds the comparison with time; randomizing costs nothing and the realized order is recorded either way.
+`order: randomized` shuffles the execution order of (condition, repeat) pairs under a recorded seed. For anything touching an instrument, a plate, or a service whose behaviour drifts over hours, running conditions in index order confounds the comparison with time; randomizing costs nothing and the realized order is recorded either way, along with each execution's `started_at`. A [`batch`](#a-batch-says-when-not-what) level is the exception that proves the rule: batches are positions in time, so they stay in order and the shuffle happens inside each one.
 
 `statistics.correction` applies across the family of baseline comparisons in a sweep, and reporting that family uncorrected is how a sweep feature turns into a p-hacking feature. Corrected and raw intervals are both reported, so nothing is hidden:
 
@@ -1158,7 +1202,8 @@ class Step(BaseStep):
         self.repeat.label         # "fold03_seed42"
         self.repeat.seed          # 42  — already applied to Python and NumPy
         self.repeat.index         # flat index of this execution within the condition
-        self.repeat.levels        # [{kind: fold, i: 2, k: 10, train: [...], test: [...]},
+        self.repeat.levels        # [{kind: batch, i: 2, n: 5},
+                                  #  {kind: fold, i: 2, k: 10, train: [...], test: [...]},
                                   #  {kind: seed, i: 1, seed: 42}]
 ```
 
@@ -1293,6 +1338,7 @@ Within a condition, the two repeat kinds mean something different, so the collap
 | Repeat kind | How its repeats enter |
 |---|---|
 | `seed` | Averaged per unit; dispersion reported as `repeat_spread` |
+| `batch` | Averaged per unit, exactly as `seed` — the difference is what the dispersion *means*, not how it is computed |
 | `fold` | Each unit appears in exactly one test partition per fold, so the per-unit values concatenate rather than average |
 
 And two `statistics` declarations change how the interval itself is computed, without adding executions:
@@ -1956,7 +2002,7 @@ publishable/
 │   ├── lineage.py             # upstream run recording and chain verification
 │   ├── hypotheses.py          # pre-registered hypothesis evaluation, confirmatory/exploratory
 │   ├── study.py               # study new/add: bundle assembly, redaction, cross-run report
-│   ├── replication.py         # repeat kinds (seed/fold), nesting, seed derivation
+│   ├── replication.py         # repeat kinds (seed/batch/fold), nesting, seed derivation
 │   ├── stats.py               # unit-table inference, resample/null_test, deltas, effect sizes
 │   ├── run_identity.py        # run_<id> allocation, latest symlink, resume resolution
 │   ├── hashes.py              # code_hash (src/** tree), parameters_hash, design digest
