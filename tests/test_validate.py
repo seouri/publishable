@@ -214,6 +214,42 @@ def test_a_fold_level_now_resolves(write_config):
     assert not [c for c in found if c.startswith("E-REPL")]
 
 
+def test_fold_stratify_by_is_refused_through_validate(write_config):
+    assert "E-REPL-FOLD-STRATIFY-UNSUPPORTED" in codes(
+        write_config(
+            {"replication": {"repeats": [{"kind": "fold", "k": 5, "stratify_by": "site"}]}}
+        )
+    )
+
+
+def test_fold_k_below_two_is_refused_through_validate(write_config):
+    assert "E-REPL-FOLD-K" in codes(
+        write_config({"replication": {"repeats": [{"kind": "fold", "k": 1}]}})
+    )
+
+
+def test_fold_k_too_large_is_not_yet_reachable_through_validate(write_config):
+    """`E-REPL-FOLD-K-TOO-LARGE` needs `unit_count` to know a ceiling exists at
+    all, and `validate.py`'s call to `resolve_repeats` never passes one in this
+    build (Task 8 threads the resolved roster through). So a `k` that would be
+    refused once a roster is known — 300 over, say, 240 units — resolves clean
+    here today: this pins that as the current, deliberate truth rather than
+    letting it silently regress into the crash this fix pass addresses. The
+    code itself IS produced, directly, by
+    `test_replication.test_k_larger_than_the_roster_is_refused`."""
+    assert "E-REPL-FOLD-K-TOO-LARGE" not in codes(
+        write_config({"replication": {"repeats": [{"kind": "fold", "k": 300}]}})
+    )
+
+
+def test_fold_k_all_produces_a_finding_never_a_traceback(write_config):
+    """This is the exact config that crashed `validate` with an uncaught
+    `ValueError` before the arithmetic in `_check_replication`/`_repeat_total`
+    was taught to recognize an unresolved `k: all` rather than coerce it."""
+    found = codes(write_config({"replication": {"repeats": [{"kind": "fold", "k": "all"}]}}))
+    assert "E-REPL-FOLD-K" in found
+
+
 def test_two_levels_of_one_kind_are_refused(write_config):
     assert "E-REPL-LEVEL-DUPLICATE" in codes(
         write_config(
@@ -441,6 +477,22 @@ def test_the_budget_passes_at_exactly_the_limit_and_fails_one_over(write_config)
         "limits": {"max_executions": 14},            # 3 × 5 = 15 > 14
     }))
     assert "W-EXEC-BUDGET" in found_over
+
+
+def test_the_budget_check_does_not_crash_or_guess_under_fold_k_all(write_config):
+    """An unresolved `{kind: fold, k: all}` makes the true execution count
+    unknown in this build, not zero and not 1×. Before this fix pass,
+    `_repeat_total` silently treated the unresolved count as absent (1×),
+    which could hide a budget overrun by a factor of the roster size —
+    exactly backwards for the design this check exists to catch. Skipping
+    the warning outright is the honest behavior until Task 8 threads a real
+    `unit_count` through; what matters here is that this does not raise."""
+    found = codes(write_config({
+        "sweep": {"grid": {"analysis.method": ["pearson", "spearman", "kendall"]}},
+        "replication": {"repeats": [{"kind": "fold", "k": "all"}]},
+        "limits": {"max_executions": 1},
+    }))
+    assert "W-EXEC-BUDGET" not in found
 
 
 def test_a_multi_condition_sweep_warns_about_the_uncorrected_family(write_config):

@@ -449,12 +449,24 @@ def _check_replication(
     levels = ((doc.get("replication") or {}).get("repeats")) or []
     total = 1
     any_invalid = False
+    has_unresolved_fold = False
     for level in levels:
         # `or` would read a declared 0 as "absent" and silently substitute 1,
         # which is the difference between warning about an empty design and not.
         count = level.get("n")
         if count is None:
             count = level.get("k")
+        if isinstance(count, str):
+            # `k: all` (fold's leave-one-out count) is genuinely unknown here —
+            # it needs the resolved roster, which `resolve_repeats` below only
+            # gets from `unit_count`, and this build never threads a real one in
+            # (Task 8's job). Coercing it with `int()` would crash on the wrong
+            # exception type; any OTHER string is invalid and is reported by
+            # name as `E-REPL-FOLD-K` when `resolve_repeats` runs below. Either
+            # way, the total from here on is not a fact — don't fold a guess
+            # into it, and don't derive a floor warning from it either.
+            has_unresolved_fold = True
+            continue
         if count is not None and int(count) < 1:
             c.error(
                 "E-REPL-N",
@@ -466,7 +478,7 @@ def _check_replication(
         total *= 1 if count is None else int(count)
     if any_invalid:
         return  # a floor warning derived from an invalid design would be noise
-    if total < template.default_repeats:
+    if not has_unresolved_fold and total < template.default_repeats:
         c.warn(
             "W-REPL-FLOOR",
             "replication.repeats",
@@ -624,11 +636,20 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
             )
 
 
-def _repeat_total(doc: dict[str, Any]) -> int:
+def _repeat_total(doc: dict[str, Any]) -> int | None:
     """The product of every repeat level's count, permissively: an invalid level
     (`n < 1`) is already reported by `_check_replication` under its own identifier,
     so this treats it as absent rather than reporting the same defect twice under
     `W-EXEC-BUDGET`.
+
+    Returns `None` when a level's count cannot be resolved to a number — today
+    that is exactly `{kind: fold, k: all}`, whose count is the resolved roster
+    size and this build has no roster to give it (Task 8 threads `unit_count`
+    through). Silently treating that level as contributing 1× would understate
+    `W-EXEC-BUDGET` by the roster size, which is the single case the budget
+    check exists to catch — a wrong small number is worse than admitting the
+    total is unknown, so the caller must skip the check rather than trust a
+    guess.
     """
     levels = ((doc.get("replication") or {}).get("repeats")) or []
     total = 1
@@ -636,6 +657,8 @@ def _repeat_total(doc: dict[str, Any]) -> int:
         count = level.get("n")
         if count is None:
             count = level.get("k")
+        if isinstance(count, str):
+            return None
         if isinstance(count, int) and count >= 1:
             total *= count
     return total
@@ -745,15 +768,21 @@ def _check_sweep(doc: dict[str, Any], template: Any, c: Collector) -> None:
             "`sweep` entirely",
         )
 
-    executions = len(conditions) * _repeat_total(doc)
+    repeat_total = _repeat_total(doc)
     budget = (doc.get("limits") or {}).get("max_executions")
-    if isinstance(budget, int) and executions > budget:
-        c.warn(
-            "W-EXEC-BUDGET",
-            "limits.max_executions",
-            f"{len(conditions)} conditions × {_repeat_total(doc)} repeats = {executions} "
-            f"executions exceeds {budget}",
-        )
+    # `repeat_total` is `None` when a level's count is unresolved (`{kind: fold,
+    # k: all}` without a roster) — see `_repeat_total`. Skipping the check
+    # rather than computing against a guessed 1× is deliberate: this build has
+    # no roster to resolve it against, and Task 8 is what makes it computable.
+    if repeat_total is not None and isinstance(budget, int):
+        executions = len(conditions) * repeat_total
+        if executions > budget:
+            c.warn(
+                "W-EXEC-BUDGET",
+                "limits.max_executions",
+                f"{len(conditions)} conditions × {repeat_total} repeats = {executions} "
+                f"executions exceeds {budget}",
+            )
 
     if len(conditions) > 1:
         c.warn(
