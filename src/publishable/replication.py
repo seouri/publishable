@@ -119,9 +119,43 @@ def resolve_repeats(config: dict[str, Any], digest: str) -> list[RepeatLevel]:
             "are ambiguous in both",
             code="E-REPL-LEVEL-DUPLICATE",
         )
+    _check_batch_is_outermost(resolved)
     for lv in resolved:
         _check_no_collisions(lv, digest)
     return resolved
+
+
+def _check_batch_is_outermost(levels: list[RepeatLevel]) -> None:
+    """A `batch` may only be the outermost level.
+
+    `cross_levels` gives a leaf the *innermost* member's seed, and `_seed_members`
+    derives a level's seeds from `digest|kind` alone — which is exactly right when
+    `batch` is outer, because `batch01_seed42` and `batch02_seed42` SHOULD draw
+    alike (reference.md § A `batch` says *when*, not *what*). Declared the other
+    way round it inverts: every `seedNN_batchMM` leaf takes the batch member's
+    seed, so the outer `seed` level varies nothing but a directory name while the
+    run reports success. `realize_order` inverts too — it finds the batch level by
+    kind rather than by position, so it would block on batch while the labels and
+    the directory tree say seed is outer.
+
+    Refusing is the fix rather than re-deriving the leaf seed from the whole combo:
+    that would break the documented invariant above, which is the entire point of
+    the kind. Every design the documents describe nests other levels *inside* a
+    batch — the section fixes the outer batch order and shuffles within one — so a
+    batch nested inside a seed has no meaning to preserve. Trivially lifted if a
+    document ever describes the inverted nesting.
+    """
+    for position, lv in enumerate(levels):
+        if lv.kind == "batch" and position != 0:
+            outer = [x.kind for x in levels[:position]]
+            raise ContractError(
+                f"a `batch` level is declared inside {outer!r}; a batch is a position in "
+                "time, so every other level nests within it and `batch` must be the "
+                "outermost level. Declared inside another level it varies nothing: every "
+                "leaf takes the batch member's seed, so the outer level changes only a "
+                "directory name. Swap the levels so `batch` is declared first",
+                code="E-REPL-LEVEL-BATCH-INNER",
+            )
 
 
 def cross_levels(levels: list[RepeatLevel]) -> list[Repeat]:
@@ -184,6 +218,13 @@ def realize_order(
     A batch is a position in time, so shuffling batches against each other would
     destroy the thing being declared. With no `batch` level the whole run is one
     block, because there is no boundary to shuffle inside.
+
+    The batch level is found by *kind*, not by position, which is only correct
+    because `_check_batch_is_outermost` has already refused a `batch` anywhere
+    but outermost. Without that refusal a `[seed, batch]` declaration would
+    block on batch here while the composed labels and the directory tree said
+    seed was outer — the record and the executed order disagreeing about which
+    level is which.
     """
     if mode != "randomized":
         return list(pairs)

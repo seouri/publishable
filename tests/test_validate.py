@@ -224,6 +224,18 @@ def test_two_levels_of_one_kind_are_refused(write_config):
     )
 
 
+def test_a_batch_inside_another_level_is_refused(write_config):
+    assert "E-REPL-LEVEL-BATCH-INNER" in codes(
+        write_config(
+            {
+                "replication": {
+                    "repeats": [{"kind": "seed", "n": 2}, {"kind": "batch", "n": 3}]
+                }
+            }
+        )
+    )
+
+
 def test_three_levels_are_refused(write_config):
     assert "E-REPL-LEVEL-DEPTH" in codes(
         write_config(

@@ -433,6 +433,7 @@ REPL_DECLARATION_CODES = frozenset(
         "E-REPL-FOLD-UNSUPPORTED",
         "E-REPL-LEVEL-DUPLICATE",
         "E-REPL-LEVEL-DEPTH",
+        "E-REPL-LEVEL-BATCH-INNER",
         "E-REPL-KIND",
         "E-REPL-N",
         "E-REPL-SEED-COLLISION",
@@ -512,8 +513,9 @@ def _check_replication(
 def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     """Declared-but-unimplemented blocks, refused rather than silently ignored.
 
-    This build expands `sweep.baseline` and `sweep.grid` only, and executes
-    repeats `as_declared` regardless of what is written here. `sweep.paired`,
+    This build expands `sweep.baseline` and `sweep.grid` only. Both declared
+    orders are honored — `randomized` shuffles within each batch and
+    `as_declared` leaves the plan's step-major layout alone. `sweep.paired`,
     `.ablate`, `.sample`, and `.groups` are read by nothing yet. It resolves a
     unit roster, but several `data.units` sub-fields — allocation other than
     `within`, `assign`, `cluster_by`, `weight_by`, `measurements`, `holdout`,
@@ -522,8 +524,9 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     config describes — the same class of failure `resolve_repeats` already
     refuses for repeat levels: `E-REPL-FOLD-UNSUPPORTED` for `fold`,
     `E-REPL-LEVEL-DUPLICATE` for two levels of the same kind, and
-    `E-REPL-LEVEL-DEPTH` past two levels. `batch` is no longer refused — it is
-    a supported kind. Each message says plainly that the block is honored in a
+    `E-REPL-LEVEL-DEPTH` past two levels, and `E-REPL-LEVEL-BATCH-INNER` for a
+    `batch` that is not the outermost level. `batch` itself is no longer
+    refused — it is a supported kind. Each message says plainly that the block is honored in a
     later slice, so a user does not read this as their config being malformed.
     """
     sweep = doc.get("sweep") or {}

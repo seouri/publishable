@@ -148,6 +148,23 @@ def test_two_levels_of_the_same_kind_are_refused():
     assert e.value.code == "E-REPL-LEVEL-DUPLICATE"
 
 
+def test_a_batch_declared_inside_another_level_is_refused():
+    # Nested the other way round the outer level varies nothing but a directory
+    # name: every leaf takes the batch member's seed, and batch seeds do not
+    # depend on the outer member. Six executions, three RNG streams.
+    with pytest.raises(ContractError) as e:
+        resolve_repeats(cfg([{"kind": "seed", "n": 2}, {"kind": "batch", "n": 3}]), "sha256:abc")
+    assert e.value.code == "E-REPL-LEVEL-BATCH-INNER"
+    assert "outermost" in str(e.value)
+
+
+def test_a_batch_declared_outermost_is_accepted():
+    levels = resolve_repeats(
+        cfg([{"kind": "batch", "n": 3}, {"kind": "seed", "n": 2}]), "sha256:abc"
+    )
+    assert [lv.kind for lv in levels] == ["batch", "seed"]
+
+
 def test_colliding_seeds_are_refused_rather_than_silently_perturbed(monkeypatch):
     import publishable.replication as replication
 
