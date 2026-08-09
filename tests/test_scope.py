@@ -1,4 +1,5 @@
 import pytest
+from tests import _scope_collision_other
 
 from publishable import BaseExperiment, BaseStep, ContractError
 from publishable.scope import build_plan
@@ -40,8 +41,21 @@ def test_scope_decides_execution_count():
 
 
 def test_the_plan_is_ordered_run_then_conditions_then_summary():
-    plan = build_plan(Pipeline(), conditions=[(0, None)], repeat_labels=["seed17"])
-    assert [e.scope for e in plan] == ["run", "condition", "repeat", "summary"]
+    plan = build_plan(
+        Pipeline(),
+        conditions=[(0, "pearson"), (1, "spearman")],
+        repeat_labels=["seed17", "seed42"],
+    )
+    assert [(e.scope, e.condition_index) for e in plan] == [
+        ("run", None),
+        ("condition", 0),
+        ("repeat", 0),
+        ("repeat", 0),
+        ("condition", 1),
+        ("repeat", 1),
+        ("repeat", 1),
+        ("summary", None),
+    ]
 
 
 def test_repeat_executions_carry_their_repeat_label():
@@ -76,3 +90,39 @@ def test_derive_seed_is_stable_and_varies_with_purpose():
     b = step.derive_seed("optimizer-dev-split")
     c = step.derive_seed("other-split")
     assert a == b and a != c
+
+
+def test_ordinary_pipelines_with_no_name_collision_still_build():
+    plan = build_plan(Pipeline(), conditions=[(0, None)], repeat_labels=["seed17"])
+    assert len(plan) == 4
+
+
+def test_a_step_name_collision_across_modules_is_refused():
+    class CollidingPipeline(BaseExperiment):
+        steps = [Analyze, _scope_collision_other.Analyze]
+
+    with pytest.raises(ContractError) as e:
+        build_plan(CollidingPipeline(), conditions=[(0, None)], repeat_labels=["seed17"])
+    assert e.value.code == "E-STEP-NAME-COLLISION"
+    message = str(e.value)
+    assert f"{Analyze.__module__}.{Analyze.__qualname__}" in message
+    assert (
+        f"{_scope_collision_other.Analyze.__module__}."
+        f"{_scope_collision_other.Analyze.__qualname__}"
+    ) in message
+
+
+def test_condition_index_0_is_distinguished_from_no_condition():
+    step = Fit()
+    step._bind(condition=0, repeat=None, digest="sha256:abc", seed=17)
+    assert step.condition == 0
+
+
+def test_unbound_condition_and_repeat_raise_context_absent():
+    step = Analyze()
+    with pytest.raises(ContractError) as e:
+        _ = step.condition
+    assert e.value.code == "E-STEP-CONTEXT-ABSENT"
+    with pytest.raises(ContractError) as e:
+        _ = step.repeat
+    assert e.value.code == "E-STEP-CONTEXT-ABSENT"

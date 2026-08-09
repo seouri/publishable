@@ -39,15 +39,26 @@ def build_plan(
                 + ", ".join(SCOPES),
                 code="E-STEP-SCOPE-UNKNOWN",
             )
+    names_by_cls = {cls: step_name(cls) for cls in experiment.steps}
+    seen: dict[str, type[BaseStep]] = {}
+    for cls, name in names_by_cls.items():
+        other = seen.get(name)
+        if other is not None and other is not cls:
+            raise ContractError(
+                f"{other.__module__}.{other.__qualname__} and "
+                f"{cls.__module__}.{cls.__qualname__} both derive step name {name!r}",
+                code="E-STEP-NAME-COLLISION",
+            )
+        seen[name] = cls
     plan: list[Execution] = []
     for cls in (c for c in experiment.steps if c.scope == "run"):
-        plan.append(Execution(cls, step_name(cls), "run", None, None, None))
+        plan.append(Execution(cls, names_by_cls[cls], "run", None, None, None))
     for index, label in conditions:
         for cls in (c for c in experiment.steps if c.scope == "condition"):
-            plan.append(Execution(cls, step_name(cls), "condition", index, label, None))
+            plan.append(Execution(cls, names_by_cls[cls], "condition", index, label, None))
         for cls in (c for c in experiment.steps if c.scope == "repeat"):
             for repeat in repeat_labels:
-                plan.append(Execution(cls, step_name(cls), "repeat", index, label, repeat))
+                plan.append(Execution(cls, names_by_cls[cls], "repeat", index, label, repeat))
     for cls in (c for c in experiment.steps if c.scope == "summary"):
-        plan.append(Execution(cls, step_name(cls), "summary", None, None, None))
+        plan.append(Execution(cls, names_by_cls[cls], "summary", None, None, None))
     return plan
