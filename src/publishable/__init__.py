@@ -1,5 +1,7 @@
 """The one public import root. Submodules are implementation detail."""
 
+from publishable.base_experiment import BaseExperiment
+from publishable.base_step import BaseStep
 from publishable.errors import (
     ArtifactError,
     ArtifactExistsError,
@@ -12,6 +14,8 @@ from publishable.templates.base import BaseTemplate
 __all__ = [
     "ArtifactError",
     "ArtifactExistsError",
+    "BaseExperiment",
+    "BaseStep",
     "BaseTemplate",
     "ContractError",
     "Param",
