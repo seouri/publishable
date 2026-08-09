@@ -141,3 +141,57 @@ def test_every_generated_label_body_matches_the_selector_pattern():
         for part in c.label.split("__"):
             value = part.split("=")[-1]
             assert re.match(SWEPT_VALUE_PATTERN, value), part
+
+
+def test_the_sweep_document_records_the_resolved_plan():
+    from publishable.replication import Repeat
+    from publishable.sweep import expand, sweep_document
+
+    conds = expand({"sweep": {"baseline": {"analysis.method": "pearson"},
+                              "grid": {"analysis.method": ["spearman"]}}})
+    repeats = [Repeat("seed", "seed17", 17), Repeat("seed", "seed42", 42)]
+    order = [(0, "seed17"), (0, "seed42"), (1, "seed17"), (1, "seed42")]
+    doc = sweep_document(conds, repeats, "sha256:abc", order)
+
+    assert doc["design_digest"] == "sha256:abc"
+    assert doc["conditions"] == [
+        {"index": 0, "label": "baseline", "values": {"analysis.method": "pearson"},
+         "is_baseline": True},
+        {"index": 1, "label": "method=spearman", "values": {"analysis.method": "spearman"},
+         "is_baseline": False},
+    ]
+    assert doc["repeats"] == [{"kind": "seed", "label": "seed17", "seed": 17},
+                              {"kind": "seed", "label": "seed42", "seed": 42}]
+    assert doc["order"] == [[0, "seed17"], [0, "seed42"], [1, "seed17"], [1, "seed42"]]
+
+
+def test_the_document_is_plain_yaml_safe_data():
+    """It is written with the artifact writer, so it must hold no custom types."""
+    import yaml
+
+    from publishable.replication import Repeat
+    from publishable.sweep import expand, sweep_document
+
+    doc = sweep_document(expand({"sweep": {"grid": {"a.x": [1]}}}),
+                         [Repeat("seed", "seed01", 1)], "sha256:d", [(0, "seed01")])
+    assert yaml.safe_load(yaml.safe_dump(doc)) == doc
+
+
+def test_the_document_round_trips_a_float_and_a_boolean_condition_value():
+    """The failure mode this artifact cannot afford: a value that serializes
+    to something that doesn't parse back, or parses back to a different type."""
+    import yaml
+
+    from publishable.replication import Repeat
+    from publishable.sweep import expand, sweep_document
+
+    conds = expand({"sweep": {"grid": {"analysis.threshold": [0.5], "analysis.strict": [True]}}})
+    doc = sweep_document(conds, [Repeat("seed", "seed01", 1)], "sha256:e", [(0, "seed01")])
+    round_tripped = yaml.safe_load(yaml.safe_dump(doc))
+
+    assert round_tripped == doc
+    values = round_tripped["conditions"][0]["values"]
+    assert values["analysis.threshold"] == 0.5
+    assert isinstance(values["analysis.threshold"], float)
+    assert values["analysis.strict"] is True
+    assert isinstance(values["analysis.strict"], bool)

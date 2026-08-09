@@ -16,7 +16,10 @@ import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from publishable.replication import Repeat
 
 
 @dataclass(frozen=True)
@@ -146,3 +149,27 @@ def expand(config: dict[str, Any]) -> list[Condition]:
                   values=values, is_baseline=is_baseline)
         for i, (values, is_baseline) in enumerate(rows)
     ]
+
+
+def sweep_document(
+    conditions: list[Condition],
+    repeats: list["Repeat"],
+    digest: str,
+    order: list[tuple[int, str]],
+) -> dict[str, Any]:
+    """The `sweep.yaml` payload: the resolved plan, as plain YAML-safe data.
+
+    Fold membership belongs here too per § The other files a run writes; folds
+    are a later slice and the key is absent rather than empty, so its absence
+    is not read as "no folds were drawn".
+    """
+    return {
+        "design_digest": digest,
+        "conditions": [
+            {"index": c.index, "label": c.label, "values": dict(c.values),
+             "is_baseline": c.is_baseline}
+            for c in conditions
+        ],
+        "repeats": [{"kind": r.kind, "label": r.label, "seed": r.seed} for r in repeats],
+        "order": [[index, label] for index, label in order],
+    }
