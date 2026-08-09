@@ -2562,7 +2562,7 @@ Six stops. Stops 3 through 5 each have the same beat: print the next command exa
 | Stop | Runs | The point of the stop |
 |---|---|---|
 | 1 | *(`demo` itself)* | Writes 240 synthetic units to `~/publishable-demo-data/input/`, scaffolds `src/correlation_pilot/` and `configs/correlation-pilot/config.yaml`, then `git init` and a first commit. Explains why the data is [outside the repo](#why-not-in-the-repo) |
-| 2 | *(`demo` prints a file)* | Shows this config's `conditions` and `replication` blocks verbatim — the whole description of what is about to run |
+| 2 | *(`demo` prints a file)* | Shows this config's `sweep` and `replication` blocks verbatim — the whole description of what is about to run |
 | 3 | `validate` | Reads the config and the input, creates nothing, reaches nothing off the machine |
 | 4 | `dry-run` | 3 conditions × 5 repeats = 15 executions, and every artifact path that *would* be written. Still creates nothing |
 | 5 | `run` | The results table: estimates, [intervals over units](#the-unit-table-is-the-inference-base), paired deltas against the baseline |
