@@ -430,7 +430,9 @@ def _check_units(doc: dict[str, Any], c: Collector) -> None:
 # `test_an_unresolved_repl_code_is_not_swallowed` pins that escape path.
 REPL_DECLARATION_CODES = frozenset(
     {
-        "E-REPL-FOLD-UNSUPPORTED",
+        "E-REPL-FOLD-STRATIFY-UNSUPPORTED",
+        "E-REPL-FOLD-K",
+        "E-REPL-FOLD-K-TOO-LARGE",
         "E-REPL-LEVEL-DUPLICATE",
         "E-REPL-LEVEL-DEPTH",
         "E-REPL-LEVEL-BATCH-INNER",
@@ -522,12 +524,13 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     and a `resolver` source — are read by nothing yet either. Each of these
     would otherwise validate clean and then run something other than what the
     config describes — the same class of failure `resolve_repeats` already
-    refuses for repeat levels: `E-REPL-FOLD-UNSUPPORTED` for `fold`,
-    `E-REPL-LEVEL-DUPLICATE` for two levels of the same kind, and
-    `E-REPL-LEVEL-DEPTH` past two levels, and `E-REPL-LEVEL-BATCH-INNER` for a
-    `batch` that is not the outermost level. `batch` itself is no longer
-    refused — it is a supported kind. Each message says plainly that the block is honored in a
-    later slice, so a user does not read this as their config being malformed.
+    refuses for repeat levels: `E-REPL-FOLD-STRATIFY-UNSUPPORTED` for
+    `fold.stratify_by`, `E-REPL-LEVEL-DUPLICATE` for two levels of the same
+    kind, and `E-REPL-LEVEL-DEPTH` past two levels, and
+    `E-REPL-LEVEL-BATCH-INNER` for a `batch` that is not the outermost level.
+    `batch` and `fold` themselves are no longer refused — both are supported
+    kinds. Each message says plainly that the block is honored in a later
+    slice, so a user does not read this as their config being malformed.
     """
     sweep = doc.get("sweep") or {}
     for mode, code, why in (

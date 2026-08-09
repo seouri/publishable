@@ -206,10 +206,12 @@ def test_two_bad_repeat_levels_are_both_reported():
     assert not any(f.code == "W-REPL-FLOOR" for f in c.findings)
 
 
-def test_a_fold_level_is_refused_by_name(write_config):
-    assert "E-REPL-FOLD-UNSUPPORTED" in codes(
-        write_config({"replication": {"repeats": [{"kind": "fold", "k": 5}]}})
-    )
+def test_a_fold_level_now_resolves(write_config):
+    """`fold` was refused by name through S3b; S3c's replication.py resolves it, so
+    a plain `k` declares cleanly here too — the roster-sized checks that need
+    `unit_count` are wired into `validate` in a later slice."""
+    found = codes(write_config({"replication": {"repeats": [{"kind": "fold", "k": 5}]}}))
+    assert not [c for c in found if c.startswith("E-REPL")]
 
 
 def test_two_levels_of_one_kind_are_refused(write_config):

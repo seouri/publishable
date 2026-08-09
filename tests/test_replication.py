@@ -2,6 +2,7 @@ import pytest
 
 from publishable import ContractError
 from publishable.replication import (
+    LABEL_JOIN,
     RepeatMember,
     cross_levels,
     realize_order,
@@ -115,10 +116,52 @@ def test_rejected_kinds_are_refused_by_name_with_a_pointer(kind, pointer):
     assert pointer in str(e.value)
 
 
-def test_fold_is_not_yet_implemented():
-    with pytest.raises(ContractError) as e:
-        resolve_repeats(cfg([{"kind": "fold", "k": 10}]), "sha256:abc")
-    assert e.value.code == "E-REPL-FOLD-UNSUPPORTED"
+def test_a_fold_level_resolves_to_k_members():
+    levels = resolve_repeats(cfg([{"kind": "fold", "k": 5}]), "d", unit_count=240)
+    assert levels[0].kind == "fold"
+    assert [m.label for m in levels[0].members] == [
+        "fold01", "fold02", "fold03", "fold04", "fold05"
+    ]
+
+
+def test_k_all_resolves_against_the_roster():
+    levels = resolve_repeats(cfg([{"kind": "fold", "k": "all"}]), "d", unit_count=7)
+    assert levels[0].n == 7
+
+
+def test_k_larger_than_the_roster_is_refused():
+    with pytest.raises(ContractError) as exc:
+        resolve_repeats(cfg([{"kind": "fold", "k": 300}]), "d", unit_count=240)
+    assert exc.value.code == "E-REPL-FOLD-K-TOO-LARGE"
+
+
+def test_k_below_two_is_refused():
+    with pytest.raises(ContractError) as exc:
+        resolve_repeats(cfg([{"kind": "fold", "k": 1}]), "d", unit_count=240)
+    assert exc.value.code == "E-REPL-FOLD-K"
+
+
+def test_k_all_without_a_roster_is_refused():
+    with pytest.raises(ContractError) as exc:
+        resolve_repeats(cfg([{"kind": "fold", "k": "all"}]), "d")
+    assert exc.value.code == "E-REPL-FOLD-K"
+
+
+def test_stratify_by_is_refused():
+    with pytest.raises(ContractError) as exc:
+        resolve_repeats(
+            cfg([{"kind": "fold", "k": 5, "stratify_by": "site"}]), "d", unit_count=240
+        )
+    assert exc.value.code == "E-REPL-FOLD-STRATIFY-UNSUPPORTED"
+
+
+def test_fold_outside_seed_composes_labels_outer_to_inner():
+    levels = resolve_repeats(
+        cfg([{"kind": "fold", "k": 2}, {"kind": "seed", "n": 2}]), "d", unit_count=10
+    )
+    labels = [lf.label for lf in cross_levels(levels)]
+    assert labels[0].startswith("fold01" + LABEL_JOIN)
+    assert len(labels) == 4
 
 
 def test_batch_is_now_supported():
