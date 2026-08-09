@@ -501,6 +501,21 @@ def test_a_step_reads_another_step_at_its_own_scope(tmp_path: Path):
     assert io.read_upstream("fit", "model.json") == {"k": 1}
 
 
+@pytest.mark.parametrize("target_scope", ["run", "condition", "repeat"])
+def test_a_summary_step_reads_upstream_from_every_narrower_scope(
+    tmp_path: Path, target_scope: str
+):
+    """`summary` sits above `run`, `condition`, and `repeat` alike — every one of
+    them is a read of something wider, and none may raise E-STEP-READ-DIRECTION.
+    Nothing else exercises read_upstream from a summary caller, so a bug in how
+    `summary` itself is ranked (as opposed to the separate summary-only guard on
+    io.conditions/io.read_condition) would otherwise go undetected."""
+    io = make_io(tmp_path, scope="summary", step_scopes={"upstream": target_scope})
+    (io.run_dir / "shared" / "upstream").mkdir(parents=True)
+    (io.run_dir / "shared" / "upstream" / "a.json").write_text('{"x": 1}\n')
+    assert io.read_upstream("upstream", "a.json") == {"x": 1}
+
+
 def test_read_condition_requires_a_repeat_for_a_repeat_scoped_step(tmp_path: Path):
     io = make_io(
         tmp_path,
@@ -518,6 +533,19 @@ def test_read_condition_rejects_an_unresolved_condition_index(tmp_path: Path):
     with pytest.raises(ContractError) as e:
         io.read_condition(7, "s", "a.json")
     assert e.value.code == "E-STEP-READ-CONDITION-UNKNOWN"
+
+
+def test_read_condition_succeeds_for_a_resolved_condition_with_a_null_label(tmp_path: Path):
+    """The no-`sweep` case: `sweep.expand` resolves one condition, index 0 with
+    `label=None`, meaning there is no `conditions/` level at all — not an absent
+    index. `read_condition(0, ...)` must return the artifact, not raise
+    E-STEP-READ-CONDITION-UNKNOWN, and the path must skip the `conditions/` nest."""
+    io = make_io(tmp_path, scope="summary", conditions=[(0, None)], step_scopes={"fit": "run"})
+    target = io.run_dir / "fit"
+    target.mkdir(parents=True)
+    (target / "model.json").write_text('{"m": 1}\n')
+    assert io.read_condition(0, "fit", "model.json") == {"m": 1}
+    assert not (io.run_dir / "conditions").exists()
 
 
 def test_read_condition_resolves_a_non_repeat_scoped_step_without_a_repeat(tmp_path: Path):

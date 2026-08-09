@@ -175,7 +175,7 @@ class StepIO:
         run_dir: Path,
         units: "UnitList | None" = None,
         scope: str = "repeat",
-        conditions: list[tuple[int, str]] | None = None,
+        conditions: list[tuple[int, str | None]] | None = None,
         repeats: list[str] | None = None,
         step_scopes: dict[str, str] | None = None,
     ) -> None:
@@ -354,7 +354,7 @@ class StepIO:
             )
 
     @property
-    def conditions(self) -> list[tuple[int, str]]:
+    def conditions(self) -> list[tuple[int, str | None]]:
         self._summary_only("conditions")
         return list(self._conditions or [])
 
@@ -365,14 +365,21 @@ class StepIO:
 
     def read_condition(
         self,
-        condition: "int | tuple[int, str]",
+        condition: "int | tuple[int, str | None]",
         step: str,
         name: str,
         repeat: str | None = None,
     ) -> Any:
         """`condition` accepts either a bare index or the `(index, label)` element
         `io.conditions` yields, so the documented `for condition in io.conditions:
-        io.read_condition(condition, ...)` pattern and a literal index both work."""
+        io.read_condition(condition, ...)` pattern and a literal index both work.
+
+        A resolved condition's label can itself be `None` — the no-`sweep` case,
+        where there is no `conditions/` level to nest under — so membership is
+        checked against the resolved *indices*, never by testing the label for
+        `None`: that would make a legitimately unlabeled condition indistinguishable
+        from an index this run never resolved.
+        """
         self._summary_only("read_condition")
         index = condition[0] if isinstance(condition, tuple) else condition
         target = (self._step_scopes or {}).get(step)
@@ -382,13 +389,16 @@ class StepIO:
                 "which repeat's copy to read",
                 code="E-STEP-READ-REPEAT-REQUIRED",
             )
-        label = dict(self._conditions or []).get(index)
-        if label is None:
+        by_index = dict(self._conditions or [])
+        if index not in by_index:
             raise ContractError(
                 f"condition {index} is not among this run's resolved conditions",
                 code="E-STEP-READ-CONDITION-UNKNOWN",
             )
-        base = self.run_dir / "conditions" / condition_dir_name(index, label)
+        label = by_index[index]
+        base = self.run_dir if label is None else (
+            self.run_dir / "conditions" / condition_dir_name(index, label)
+        )
         collapsed = len(self._repeats or []) <= 1
         if target == "repeat" and repeat is not None and not collapsed:
             base = base / repeat
