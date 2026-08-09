@@ -134,6 +134,24 @@ def test_a_recorded_column_is_basis_units_and_carries_an_interval():
     assert low < out["pred"]["value"] < high
 
 
+def test_a_ragged_columns_n_completed_counts_only_units_carrying_it():
+    """`finalize()` writes the union of recorded keys with nulls for columns a unit
+    didn't carry, so a column recorded for only some completed units is a
+    supported, ordinary shape — a metric recorded only for eligible-positive
+    units, say. `n.completed` for that column must count the units that actually
+    carry it, not the condition-wide `completed` figure: reporting `n.completed:
+    10` beside a mean of one value is the exact incoherence `stats.py`'s own
+    docstring rules out."""
+    collapsed = {f"p{i}": {"pred": 1.0} for i in range(10)}
+    collapsed["p0"]["rare"] = 5.0  # only one of ten units carries this column
+    out = summarize_step(
+        collapsed, {"resolved": 10, "completed": 10, "ineligible": 0, "failed": 0}
+    )
+    assert out["pred"]["n"] == {"resolved": 10, "completed": 10, "ineligible": 0, "failed": 0}
+    assert out["rare"]["n"] == {"resolved": 10, "completed": 1, "ineligible": 0, "failed": 0}
+    assert out["rare"]["ci95"] is None, "one value has no dispersion to describe"
+
+
 def test_a_single_completed_unit_reports_a_value_with_no_interval():
     """Answers the ledger's open question: one observation has no dispersion."""
     out = summarize_step(

@@ -128,6 +128,17 @@ def summarize_step(
     `None` below two units, since a single observation has no dispersion to
     describe and inventing an interval for it would not be honest.
 
+    `n.completed` is per COLUMN, not the condition-wide figure `counts` carries:
+    `StepIO.finalize()` deliberately writes the union of recorded keys with nulls
+    for columns a unit didn't carry, so a column recorded only for a subset of
+    completed units — eligible-positive units, say — is an ordinary ragged shape,
+    not a bug. Reporting the condition-wide `completed` beside that column's
+    interval would be a lie about how many observations went into it, which is
+    exactly the guarantee this module's own docstring makes. `resolved`,
+    `ineligible`, and `failed` stay condition-wide from `counts`: they describe the
+    roster a condition drew from, not any one column, and every column in the
+    table shares that one roster.
+
     A column is skipped entirely — not coerced, not defaulted — when any unit's
     value for it is not a real number (a string, or a `bool`, which is an `int`
     subclass but never a quantity to average). Averaging a bool would silently
@@ -148,7 +159,7 @@ def summarize_step(
         out[column] = {
             "value": mean_of(values),
             "basis": "units",
-            "n": dict(counts),
+            "n": {**counts, "completed": len(values)},
             "ci95": [interval.low, interval.high] if interval else None,
             "method": interval.method if interval else None,
         }

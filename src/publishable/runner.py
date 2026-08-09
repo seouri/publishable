@@ -28,10 +28,21 @@ class ExecutionResult:
 
 
 def attrition(
-    results: list[ExecutionResult], roster: "UnitList | None", condition_index: int
+    results: list[ExecutionResult],
+    roster: "UnitList | None",
+    step_name: str,
+    condition_index: int,
 ) -> dict[str, int]:
-    """The four counts, scoped to one condition. A failed unit has no row anywhere,
-    so failure is derived.
+    """The four counts, scoped to one step within one condition. A failed unit has
+    no row anywhere, so failure is derived.
+
+    `step_name` is required, mirroring `stats.collapse_repeats`: without it this
+    intersects `recorded`/`skipped` across every repeat-scoped execution of the
+    condition, including an ordinary scalar-only step (a timing step, a logging
+    step) that records no units at all. That step's empty `recorded` set would
+    then intersect every OTHER step's into emptiness too, reclassifying every unit
+    as `failed` and reporting a right-looking mean beside a wrong `n` — exactly the
+    mismatch this parameter exists to make impossible.
 
     `condition_index` is required, not defaulted: core aggregates within each
     condition and never pools across conditions, and a caller that forgot to scope
@@ -40,15 +51,21 @@ def attrition(
     the same parameter. S2 always has exactly one condition and always passes `0`.
 
     Both `completed` and `ineligible` are the INTERSECTION across the repeat-scoped
-    executions of this condition a unit was handed to — not the union. `completed`
-    intersects because the collapse averages per unit, and a unit present in three
-    of five seeds would otherwise enter that average on a different number of
-    observations than its neighbours. `ineligible` intersects for the mirrored
-    reason: eligibility is a property of the design, so a unit skipped in one
-    repeat and completed (or simply unrecorded) in another did not get a
-    consistent eligibility answer, and that inconsistency is exactly the `failed`
-    case, not a design exclusion. Only a unit skipped in EVERY recording execution
-    of this condition — a consistent answer — is `ineligible`.
+    executions of this step, in this condition, a unit was handed to — not the
+    union. `completed` intersects because the collapse averages per unit, and a
+    unit present in three of five seeds would otherwise enter that average on a
+    different number of observations than its neighbours. `ineligible` intersects
+    for the mirrored reason: eligibility is a property of the design, so a unit
+    skipped in one repeat and completed (or simply unrecorded) in another did not
+    get a consistent eligibility answer, and that inconsistency is exactly the
+    `failed` case, not a design exclusion. Only a unit skipped in EVERY recording
+    execution of this step, in this condition — a consistent answer — is
+    `ineligible`.
+
+    This is the per-step, per-condition breakdown `stats.summarize_step` attaches
+    as a metric's `n`. It is deliberately not what guards `max_failed_fraction`:
+    that threshold is run-level and a union across every recording step (see
+    `_units_failed_anywhere` in `execute_plan`), not an intersection scoped to one.
     """
     if roster is None:
         return {"resolved": 0, "completed": 0, "ineligible": 0, "failed": 0}
@@ -56,7 +73,9 @@ def attrition(
     recording = [
         r
         for r in results
-        if r.execution.scope == "repeat" and (r.execution.condition_index or 0) == condition_index
+        if r.execution.step_name == step_name
+        and r.execution.scope == "repeat"
+        and (r.execution.condition_index or 0) == condition_index
     ]
     if not recording:
         return {"resolved": len(keys), "completed": 0, "ineligible": 0, "failed": len(keys)}
@@ -67,11 +86,53 @@ def attrition(
     for r in recording:
         ineligible &= r.skipped
     return {
+        # `resolved` always equals `len(io.units)` for the execution
+        # (reference.md § "resolved counts what the execution was handed, not the
+        # cohort"). It equals the full roster here only because S2 has no `fold` or
+        # group axis that would narrow `io.units` below it — every execution is
+        # handed the whole roster, so the two coincide. The day a fold or group
+        # axis lands, this must become the union of what the recording executions
+        # were actually given, not `len(keys)` unconditionally.
         "resolved": len(keys),
         "completed": len(completed),
         "ineligible": len(ineligible),
         "failed": len(keys) - len(completed) - len(ineligible),
     }
+
+
+def _units_failed_anywhere(results: list[ExecutionResult], roster: "UnitList") -> set[str]:
+    """Units with no settled answer — neither recorded nor skipped — in at least
+    one execution of a step that records units, across the whole run.
+
+    A step "records units" if any of its repeat-scoped executions has produced at
+    least one row so far — the same notion `cli.py`'s `recording_steps` uses to
+    decide which steps enter `aggregated`, reused here rather than invented twice.
+    That guard is what keeps an ordinary scalar-only repeat step (a timing step, a
+    logging step) from ever failing the whole roster just because it records no
+    units at all — only a step in the business of recording units can flunk one. A
+    step whose every execution has crashed before producing a single row is never
+    classified as recording and so cannot trip this guard either; its execution
+    failures are still visible in `executions.jsonl` and the run's `status`, just
+    not folded into unit attrition.
+
+    This is deliberately NOT `attrition`, and deliberately not scoped to one
+    condition: `reference.md` § "The failure fraction `run` enforces is against the
+    run level" is explicit that the fraction is "units that failed in at least one
+    execution, over `provenance.units.n`" — a union across every recording
+    execution of every step, in every condition, over the whole resolved roster.
+    `attrition`'s intersection is the right shape for one step's `n`; it is the
+    wrong shape for this run-level union.
+    """
+    keys = {u.key for u in roster}
+    recording_steps = {
+        r.execution.step_name for r in results if r.execution.scope == "repeat" and r.rows
+    }
+    failed: set[str] = set()
+    for r in results:
+        if r.execution.scope != "repeat" or r.execution.step_name not in recording_steps:
+            continue
+        failed |= keys - (r.recorded | r.skipped)
+    return failed
 
 
 def step_dir_for(run_dir: Path, execution: Execution, collapse_repeats: bool) -> Path:
@@ -199,7 +260,8 @@ def execute_plan(
             )
 
         if max_failed_fraction is not None and units is not None:
-            counts = attrition(results, units, execution.condition_index or 0)
-            if counts["resolved"] and counts["failed"] / counts["resolved"] > max_failed_fraction:
+            resolved = len(units)
+            failed = _units_failed_anywhere(results, units)
+            if resolved and len(failed) / resolved > max_failed_fraction:
                 break
     return results

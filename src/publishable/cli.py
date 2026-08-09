@@ -166,15 +166,21 @@ def command_run(config_path: Path) -> int:
         # instead of every condition reporting a misleading empty `aggregated: {}`.
         aggregated: dict[int, dict[str, dict[str, Any]]] | None = None
         if roster is not None:
-            counts = attrition(results, roster, 0)
+            # `condition_index` is guarded here too, harmless today since S2 never
+            # resolves more than one condition, but load-bearing the day a sweep
+            # does: an unguarded filter would let a same-named step from another
+            # condition mark this one as having a recording step it never ran.
             recording_steps = {
                 r.execution.step_name
                 for r in results
-                if r.execution.scope == "repeat" and r.rows
+                if r.execution.scope == "repeat" and r.execution.condition_index == 0 and r.rows
             }
             aggregated = {
                 0: {
-                    step_name: summarize_step(collapse_repeats(results, step_name, 0), counts)
+                    step_name: summarize_step(
+                        collapse_repeats(results, step_name, 0),
+                        attrition(results, roster, step_name, 0),
+                    )
                     for step_name in sorted(recording_steps)
                 }
             }

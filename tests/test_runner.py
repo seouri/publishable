@@ -215,9 +215,70 @@ def test_attrition_reconciles_exactly(tmp_path: Path):
             return {}
 
     _, results, _ = harness(tmp_path, [Partial], units=roster)
-    counts = attrition(results, roster, condition_index=0)
+    counts = attrition(results, roster, "partial", condition_index=0)
     assert counts == {"resolved": 10, "completed": 7, "ineligible": 1, "failed": 2}
     assert counts["resolved"] == counts["completed"] + counts["ineligible"] + counts["failed"]
+
+
+def test_a_scalar_only_repeat_step_does_not_collapse_another_steps_attrition(tmp_path: Path):
+    """A second repeat-scoped step that records no units at all — a timing step, a
+    logging step — must not change `attrition`'s count for the step that DOES
+    record. Before `step_name` was required, `attrition` intersected `recorded`
+    across every repeat-scoped execution in the condition regardless of which step
+    produced it, so this scalar-only step's empty `recorded` set collapsed
+    `Partial`'s real 7/1/2 split down to `{resolved: 10, completed: 0,
+    ineligible: 0, failed: 10}`."""
+    roster = UnitList([Unit(key=f"p{i}") for i in range(10)])
+
+    class Partial(BaseStep):
+        scope = "repeat"
+
+        def run(self, cfg, io):
+            for u in list(io.units)[:7]:
+                io.record(u.key, {"v": 1.0})
+            io.skip("p9", "by design")
+            return {}
+
+    class TimingOnly(BaseStep):
+        scope = "repeat"
+
+        def run(self, cfg, io):
+            return {"wall_seconds": 0.01}
+
+    _, results, _ = harness(tmp_path, [Partial, TimingOnly], units=roster)
+    counts = attrition(results, roster, "partial", condition_index=0)
+    assert counts == {"resolved": 10, "completed": 7, "ineligible": 1, "failed": 2}
+    timing_counts = attrition(results, roster, "timing_only", condition_index=0)
+    assert timing_counts == {"resolved": 10, "completed": 0, "ineligible": 0, "failed": 10}
+
+
+def test_a_scalar_only_repeat_step_does_not_trip_the_failure_guard(tmp_path: Path):
+    """The `max_failed_fraction` guard must not treat a scalar-only step's lack of
+    any recorded units as attrition: only a step that is in the business of
+    recording units (as decided by whether it ever produced a row) can fail the
+    roster. A recording step that completes everyone must keep the run going even
+    though a scalar-only sibling step records nothing."""
+    roster = UnitList([Unit(key=f"p{i}") for i in range(10)])
+
+    class RecordsEveryone(BaseStep):
+        scope = "repeat"
+
+        def run(self, cfg, io):
+            for u in io.units:
+                io.record(u.key, {"v": 1.0})
+            return {}
+
+    class TimingOnly(BaseStep):
+        scope = "repeat"
+
+        def run(self, cfg, io):
+            return {"wall_seconds": 0.01}
+
+    _, results, _ = harness(
+        tmp_path, [RecordsEveryone, TimingOnly], units=roster, max_failed_fraction=0.2
+    )
+    assert len(results) == 4, "the run must not be truncated by the scalar-only step"
+    assert all(r.status == "completed" for r in results)
 
 
 def test_completion_is_the_intersection_across_repeats(tmp_path: Path):
@@ -239,7 +300,7 @@ def test_completion_is_the_intersection_across_repeats(tmp_path: Path):
         units=roster,
         repeats=[Repeat("seed", "seed17", 17), Repeat("seed", "seed42", 42)],
     )
-    assert attrition(results, roster, condition_index=0)["completed"] == 2
+    assert attrition(results, roster, "flaky", condition_index=0)["completed"] == 2
 
 
 def test_ineligibility_is_also_the_intersection_across_repeats(tmp_path: Path):
@@ -266,7 +327,7 @@ def test_ineligibility_is_also_the_intersection_across_repeats(tmp_path: Path):
         units=roster,
         repeats=[Repeat("seed", "seed17", 17), Repeat("seed", "seed42", 42)],
     )
-    counts = attrition(results, roster, condition_index=0)
+    counts = attrition(results, roster, "inconsistent_eligibility", condition_index=0)
     assert counts == {"resolved": 2, "completed": 0, "ineligible": 0, "failed": 2}
     assert counts["resolved"] == counts["completed"] + counts["ineligible"] + counts["failed"]
 
@@ -288,7 +349,7 @@ def test_a_unit_skipped_in_every_repeat_is_ineligible(tmp_path: Path):
         units=roster,
         repeats=[Repeat("seed", "seed17", 17), Repeat("seed", "seed42", 42)],
     )
-    counts = attrition(results, roster, condition_index=0)
+    counts = attrition(results, roster, "always_skip", condition_index=0)
     assert counts == {"resolved": 2, "completed": 1, "ineligible": 1, "failed": 0}
     assert counts["resolved"] == counts["completed"] + counts["ineligible"] + counts["failed"]
 
@@ -316,7 +377,7 @@ def test_skipped_in_one_repeat_and_unrecorded_in_another_is_failed(tmp_path: Pat
         units=roster,
         repeats=[Repeat("seed", "seed17", 17), Repeat("seed", "seed42", 42)],
     )
-    counts = attrition(results, roster, condition_index=0)
+    counts = attrition(results, roster, "skip_then_silently_drop", condition_index=0)
     assert counts == {"resolved": 2, "completed": 1, "ineligible": 0, "failed": 1}
     assert counts["resolved"] == counts["completed"] + counts["ineligible"] + counts["failed"]
 
@@ -336,7 +397,7 @@ def test_a_single_repeat_skip_is_still_ineligible(tmp_path: Path):
     _, results, _ = harness(
         tmp_path, [SkipOne], units=roster, repeats=[Repeat("seed", "seed17", 17)]
     )
-    counts = attrition(results, roster, condition_index=0)
+    counts = attrition(results, roster, "skip_one", condition_index=0)
     assert counts == {"resolved": 2, "completed": 1, "ineligible": 1, "failed": 0}
     assert counts["resolved"] == counts["completed"] + counts["ineligible"] + counts["failed"]
 
@@ -418,7 +479,7 @@ def test_a_raising_step_still_does_not_stop_the_run(tmp_path: Path):
 def test_attrition_with_no_units_declared_is_zeroed_not_a_crash(tmp_path: Path):
     """`units=None` (no `data.units`) is legal and must not divide by zero or disable the check."""
     _, results, _ = harness(tmp_path, [Load, Analyze], max_failed_fraction=0.2)
-    assert attrition(results, None, condition_index=0) == {
+    assert attrition(results, None, "analyze", condition_index=0) == {
         "resolved": 0,
         "completed": 0,
         "ineligible": 0,
@@ -455,7 +516,7 @@ def test_aggregated_sits_beside_per_repeat_without_altering_it(tmp_path: Path):
 
     _, results, repeats = harness(tmp_path, [Record], units=roster)
     collapsed = collapse_repeats(results, "record", condition_index=0)
-    counts = attrition(results, roster, condition_index=0)
+    counts = attrition(results, roster, "record", condition_index=0)
     summary = summarize_step(collapsed, counts)
     doc = assemble_run_yaml(
         run_id="run_x", status="completed", config={"a": 1}, code_hash="sha256:c",
@@ -525,7 +586,7 @@ def test_aggregated_is_scoped_per_condition_not_shared(tmp_path: Path):
     aggregated = {}
     for index in (0, 1):
         collapsed = collapse_repeats(results, "record", condition_index=index)
-        counts = attrition(results, roster, condition_index=index)
+        counts = attrition(results, roster, "record", condition_index=index)
         aggregated[index] = {"record": summarize_step(collapsed, counts)}
 
     doc = assemble_run_yaml(
@@ -551,7 +612,7 @@ def test_a_condition_absent_from_aggregated_gets_an_empty_mapping(tmp_path: Path
     results, repeats = _two_condition_results(tmp_path, roster)
 
     collapsed = collapse_repeats(results, "record", condition_index=0)
-    counts = attrition(results, roster, condition_index=0)
+    counts = attrition(results, roster, "record", condition_index=0)
     aggregated = {0: {"record": summarize_step(collapsed, counts)}}  # nothing for condition 1
 
     doc = assemble_run_yaml(
@@ -591,10 +652,10 @@ def test_attrition_is_scoped_per_condition(tmp_path: Path):
         plan=plan, run_dir=run_dir, input_dir=tmp_path / "input",
         cfg=Config({"parameters": {}}), repeats=repeats, digest="sha256:abc", units=roster,
     )
-    assert attrition(results, roster, condition_index=0)["completed"] == 1
-    assert attrition(results, roster, condition_index=1)["completed"] == 2
+    assert attrition(results, roster, "record", condition_index=0)["completed"] == 1
+    assert attrition(results, roster, "record", condition_index=1)["completed"] == 2
 
 
 def test_attrition_requires_condition_index():
     with pytest.raises(TypeError):
-        attrition([], None)  # type: ignore[call-arg]
+        attrition([], None, "analyze")  # type: ignore[call-arg]
