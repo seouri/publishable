@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from publishable.artifacts import StepIO
+from publishable.errors import ContractError
 from publishable.replication import Repeat
 from publishable.scope import Execution
 
@@ -55,12 +56,25 @@ def execute_plan(
     for execution in plan:
         started = datetime.now(UTC)
         clock = time.monotonic()
+
+        if execution.scope == "repeat":
+            label = execution.repeat_label or ""
+            if label not in seeds:
+                raise ContractError(
+                    f"{execution.step_name!r} has repeat label {label!r}, which has no "
+                    f"seed among the resolved repeats {sorted(seeds)!r}",
+                    code="E-RUN-SEED-MISSING",
+                )
+            seed = seeds[label]
+        else:
+            seed = 0
+
         step = execution.step_cls()
         step._bind(
             condition=execution.condition_index,
             repeat=execution.repeat_label or None,
             digest=digest,
-            seed=seeds.get(execution.repeat_label or "", 0),
+            seed=seed,
         )
         io = StepIO(
             step_dir=step_dir_for(run_dir, execution, collapse),
@@ -69,10 +83,20 @@ def execute_plan(
         )
         io.step_dir.mkdir(parents=True, exist_ok=True)
         try:
-            returned = step.run(cfg, io) or {}
+            returned = step.run(cfg, io)
+            if returned is None:
+                returned = {}
+            elif not isinstance(returned, dict):
+                raise ContractError(
+                    f"{execution.step_name!r} returned {type(returned).__name__}; "
+                    "a step's `run` must return a mapping or None",
+                    code="E-STEP-RETURN-TYPE",
+                )
             status, error = "completed", None
         except Exception as exc:  # a failed execution never stops the run
-            returned, status, error = {}, "failed", f"{type(exc).__name__}: {exc}"
+            code = getattr(exc, "code", None)
+            prefix = f"{code} " if code else ""
+            returned, status, error = {}, "failed", f"{prefix}{type(exc).__name__}: {exc}"
 
         result = ExecutionResult(
             execution=execution,

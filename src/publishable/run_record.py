@@ -54,6 +54,10 @@ def _execution_block(results: list[ExecutionResult]) -> dict[str, Any]:
 
 
 def _results_block(results: list[ExecutionResult]) -> dict[str, Any]:
+    # A "run"-scoped step's return has nowhere to land here (§ The two files gives
+    # `results` only `conditions` and `summary`), and the same is true of a
+    # "condition"-scoped step's return — both are dropped rather than given an
+    # undocumented home. See docs/superpowers/spec-defects.md.
     conditions: dict[int, dict[str, Any]] = {}
     summary: dict[str, Any] = {}
     for r in results:
@@ -65,12 +69,13 @@ def _results_block(results: list[ExecutionResult]) -> dict[str, Any]:
             continue
         index = e.condition_index or 0
         cond = conditions.setdefault(
-            index, {"index": index, "label": e.condition_label, "per_repeat": {}}
+            index, {"index": index, "label": e.condition_label, "values": {}, "per_repeat": {}}
         )
         if e.scope == "repeat":
             cond["per_repeat"].setdefault(e.step_name, {})[e.repeat_label or ""] = r.returned
-        else:
-            cond.setdefault("per_condition", {})[e.step_name] = r.returned
+        # e.scope == "condition": the return is dropped; the condition's entry still
+        # exists (with `values` and an empty/partial `per_repeat`) so its identity is
+        # on record even though its own return is not.
     return {
         "conditions": [conditions[k] for k in sorted(conditions)],
         "summary": summary,

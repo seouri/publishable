@@ -1,7 +1,10 @@
 from pathlib import Path
 
+import pytest
+
 from publishable import BaseExperiment, BaseStep
 from publishable.config import Config
+from publishable.errors import ContractError
 from publishable.replication import Repeat
 from publishable.run_record import assemble_run_yaml, run_status
 from publishable.runner import execute_plan
@@ -28,6 +31,27 @@ class Boom(BaseStep):
 
     def run(self, cfg, io):
         raise ValueError("this execution is broken")
+
+
+class ReturnsString(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        return "not-a-mapping"
+
+
+class ReturnsList(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        return []
+
+
+class ReturnsNone(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        return None
 
 
 def harness(tmp_path: Path, steps):
@@ -103,3 +127,82 @@ def test_run_yaml_carries_the_three_hashes_and_the_config_verbatim(tmp_path: Pat
     assert doc["config"] == {"metadata": {"name": "c"}}
     assert doc["draft"] is False
     assert doc["schema_version"] == "1.0"
+
+
+def test_a_repeat_label_missing_from_repeats_raises_seed_missing(tmp_path: Path):
+    class P(BaseExperiment):
+        pass
+
+    P.steps = [Analyze]
+    plan = build_plan(P(), conditions=[(0, None)], repeat_labels=["seedA", "seedB"])
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "input").mkdir(parents=True, exist_ok=True)
+    mismatched_repeats = [Repeat("seed", "seedX", 111), Repeat("seed", "seedY", 222)]
+    with pytest.raises(ContractError) as excinfo:
+        execute_plan(
+            plan=plan,
+            run_dir=run_dir,
+            input_dir=tmp_path / "input",
+            cfg=Config({"parameters": {}}),
+            repeats=mismatched_repeats,
+            digest="sha256:abc",
+        )
+    assert excinfo.value.code == "E-RUN-SEED-MISSING"
+
+
+def test_an_unlabelled_single_repeat_still_resolves_its_seed(tmp_path: Path):
+    class P(BaseExperiment):
+        pass
+
+    P.steps = [Analyze]
+    plan = build_plan(P(), conditions=[(0, None)], repeat_labels=[""])
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "input").mkdir(parents=True, exist_ok=True)
+    results = execute_plan(
+        plan=plan,
+        run_dir=run_dir,
+        input_dir=tmp_path / "input",
+        cfg=Config({"parameters": {}}),
+        repeats=[Repeat("seed", "", 17)],
+        digest="sha256:abc",
+    )
+    assert results[0].status == "completed"
+
+
+def test_a_non_mapping_return_fails_that_execution_and_the_run_continues(tmp_path: Path):
+    run_dir, results = harness(tmp_path, [ReturnsString, Analyze])
+    string_result = next(r for r in results if r.execution.step_name == "returns_string")
+    analyze_result = next(r for r in results if r.execution.step_name == "analyze")
+    assert string_result.status == "failed"
+    assert "E-STEP-RETURN-TYPE" in (string_result.error or "")
+    assert analyze_result.status == "completed"
+    assert run_status(results) == "partial"
+
+
+def test_a_falsy_non_mapping_return_also_fails_rather_than_being_swallowed(tmp_path: Path):
+    _, results = harness(tmp_path, [ReturnsList, Analyze])
+    list_result = next(r for r in results if r.execution.step_name == "returns_list")
+    assert list_result.status == "failed"
+    assert "E-STEP-RETURN-TYPE" in (list_result.error or "")
+
+
+def test_a_none_return_still_completes_with_an_empty_mapping_recorded(tmp_path: Path):
+    _, results = harness(tmp_path, [ReturnsNone])
+    none_results = [r for r in results if r.execution.step_name == "returns_none"]
+    assert none_results
+    for result in none_results:
+        assert result.status == "completed"
+        assert result.returned == {}
+
+
+def test_a_condition_entry_carries_values_and_no_per_condition_key(tmp_path: Path):
+    _, results = harness(tmp_path, [Load, Analyze])
+    doc = assemble_run_yaml(
+        run_id="run_x", status="completed", config={"a": 1}, code_hash="sha256:c",
+        parameters_hash="sha256:p", provenance={}, results=results,
+    )
+    condition = doc["results"]["conditions"][0]
+    assert condition["values"] == {}
+    assert "per_condition" not in condition
