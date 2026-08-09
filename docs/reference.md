@@ -853,7 +853,7 @@ plate_wells = "publishable_my_assay.resolvers.plate:resolve"
 
 The `io` a resolver receives is read-only: `io.read_input` and nothing else. There is no run directory yet at validate time and no step yet at run time, so there is nothing for it to write into.
 
-**Provenance is unchanged by the indirection.** The resolved list lands in `provenance.units` and its hash in `provenance.units_hash`, exactly as for a table, the resolver's plugin version in `provenance.plugin_versions`, and its name in the embedded config. A resolver that yields a different roster next month is therefore *detected* by `reproduce`, not prevented — the same promise core makes about the input files themselves. Under [`input_manifest_policy: hash_index`](#three-hashes), "the index and whatever it names" means the paths the resolver read plus the paths its units name, so a unit whose payload the resolver never opened still gets that payload hashed.
+**Provenance is unchanged by the indirection.** The resolved list lands in `provenance.units` and its hash in `provenance.units_hash`, exactly as for a table, the resolver's plugin version in `provenance.plugin_versions`, and its name in the embedded config. A resolver that yields a different roster next month is therefore *detected* when a [reproduction](#reproducing-on-another-device) runs, not prevented — the same promise core makes about the input files themselves. Under [`input_manifest_policy: hash_index`](#three-hashes), "the index and whatever it names" means the paths the resolver read plus the paths its units name, so a unit whose payload the resolver never opened still gets that payload hashed.
 
 ### The unit list is three operations, and the units in it are frozen
 
