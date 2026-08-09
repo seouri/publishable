@@ -192,10 +192,16 @@ def validate_config(
             # and `validate` reports rather than raises, so each of those is one
             # finding. Letting any of them propagate would turn a diagnosable config
             # into a traceback, which is the whole reason this import moved earlier.
+            #
+            # `load_experiment`'s own refusals already say which fault they are, so
+            # their wording passes through: a value that is not `<module>:<attribute>`
+            # was never imported at all, and framing it as an import failure sends the
+            # reader hunting for a missing module rather than a malformed config line.
+            own = isinstance(exc, ContractError) and exc.code == "E-ENTRYPOINT-IMPORT"
             c.error(
                 "E-ENTRYPOINT-IMPORT",
                 "entrypoint",
-                f"could not be imported: {type(exc).__name__}: {exc}",
+                str(exc) if own else f"could not be imported: {type(exc).__name__}: {exc}",
             )
 
     _check_metadata(doc, config_path, template, c)

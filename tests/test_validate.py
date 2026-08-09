@@ -1199,3 +1199,15 @@ def test_a_broken_entrypoint_does_not_also_warn_about_determinism(write_config_b
 def test_the_import_failure_message_names_the_exception(write_config_broken):
     message = messages_by_code(write_config_broken({}))["E-ENTRYPOINT-IMPORT"]
     assert "RuntimeError" in message and "module scope blew up" in message
+
+
+def test_an_entrypoint_without_a_colon_says_so_rather_than_blaming_the_import(write_config):
+    """`load_experiment` refuses a value that is not `<module>:<attribute>` before it
+    imports anything. That branch was only reachable through `run` until `validate`
+    began loading the entrypoint, and "could not be imported" would send the reader
+    looking for a missing module instead of a malformed config line."""
+    message = messages_by_code(write_config({"entrypoint": "cohort_pilot.experiment"}))[
+        "E-ENTRYPOINT-IMPORT"
+    ]
+    assert "is not `<module>:<attribute>`" in message
+    assert "could not be imported" not in message
