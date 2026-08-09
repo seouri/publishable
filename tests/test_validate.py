@@ -911,16 +911,25 @@ def test_a_baseline_value_is_not_subject_to_the_nameability_check(write_config):
     """A baseline condition's label is the literal `baseline` (`sweep.label_for`),
     so a baseline's fixed values are never rendered into a label. Refusing an
     unnameable one would reject a legal config — and stays legal under the per-cell
-    expansion, which labels a baseline by the axes it leaves free."""
+    expansion, which labels a baseline by the axes it leaves free.
+
+    The value has to be one `check_swept_value` actually refuses, or the test
+    passes under either setting of `_value_checks`'s `nameable`. `pear son` fails
+    `SWEPT_VALUE_PATTERN` on the space, and the baseline still fixes every grid
+    axis, so `E-SWEEP-BASELINE-PARTIAL` does not fire either. Both directions are
+    asserted on the one config: the `Param` check *is* applied to a baseline entry
+    (`reference.md`:218), the nameability check is not."""
     found = codes(
         write_config({
             "sweep": {
-                "baseline": {"analysis.method": "pearson", "analysis.min_samples": 10},
-                "grid": {"analysis.min_samples": [10, 20]},
+                "baseline": {"analysis.method": "pear son"},
+                "grid": {"analysis.method": ["spearman", "kendall"]},
             }
         })
     )
+    assert "E-PARAM-VALUE" in found
     assert "E-SWEEP-VALUE-UNNAMEABLE" not in found
+    assert "E-SWEEP-BASELINE-PARTIAL" not in found
 
 
 def test_a_baseline_that_leaves_a_grid_axis_free_is_refused(write_config):
