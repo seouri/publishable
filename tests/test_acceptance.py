@@ -530,3 +530,90 @@ def test_the_interval_matches_an_independent_computation(tmp_path: Path):
     assert metric["value"] == pytest.approx(mean)
     assert metric["ci95"][0] == pytest.approx(mean - half)
     assert metric["ci95"][1] == pytest.approx(mean + half)
+
+
+def test_a_run_scoped_step_reading_a_baseline_only_path_is_refused(tmp_path: Path):
+    """`swept_paths` is every path any condition fixes, not just the grid's axes.
+    A path fixed by `sweep.baseline` and absent from `sweep.grid` still varies
+    across conditions — `00_baseline` uses the baseline's value and every other
+    condition the base config's — so at `run`/`summary` scope it must be
+    unreadable. Reading the grid alone let a `run`-scoped step resolve it to the
+    base value, which is a value *no condition in the run used*, and the run
+    exited 0 with `status: completed`.
+    """
+    from publishable.generators.step import generate_step
+
+    root, cfg, results_dir, _ = build_with_units(tmp_path, n_units=40)
+    write_sweep_step(root)
+    generate_step(repo_root=root, experiment="cohort-pilot", step_name="read_baseline_only")
+    step_path = root / "src" / "cohort_pilot" / "steps" / "step02_read_baseline_only.py"
+    step_path.write_text(
+        "from publishable import BaseStep\n\n\n"
+        "class Step(BaseStep):\n"
+        '    scope = "run"\n\n'
+        "    def run(self, cfg, io):\n"
+        '        return {"seen": cfg.parameters.analysis.method}\n'
+    )
+    doc = yaml.safe_load(cfg.read_text())
+    # The baseline fixes both axes (so this is not the partial-baseline case);
+    # `analysis.method` is fixed by the baseline alone and never by the grid.
+    doc["sweep"] = {
+        "baseline": {"analysis.method": "pearson", "analysis.min_samples": 10},
+        "grid": {"analysis.min_samples": [10, 20]},
+    }
+    cfg.write_text(yaml.safe_dump(doc))
+    commit(root, "add a run-scoped step reading a baseline-only path")
+
+    assert main(["run", str(cfg)]) == EXIT_PARTIAL
+    run_doc = yaml.safe_load((next(results_dir.glob("run_*")) / "run.yaml").read_text())
+    assert run_doc["status"] == "partial"
+    error = run_doc["execution"]["shared"]["step02_read_baseline_only"]["error"]
+    assert "E-STEP-SWEPT-PARAM" in error
+
+
+def test_sweep_yaml_is_written_before_the_first_execution(tmp_path: Path, monkeypatch):
+    """`reference.md` § The other files a run writes: `sweep.yaml` is "settled
+    before the first execution and never touched again", and `resume` reads it
+    back rather than re-deriving it. Written after `execute_plan`, a run that died
+    inside the loop — `E-RUN-CFG-MISSING`, `E-RUN-SEED-MISSING`, both deliberately
+    outside the per-execution `try` — left a run directory with no plan at all.
+
+    The fatal is injected rather than induced: neither raise is reachable through
+    `command_run` (`cfgs` is built from the same `conditions` the plan is), so the
+    ordering is what is under test, not the specific fatal.
+    """
+    import publishable.cli as cli_module
+
+    root, cfg, results_dir = build_sweep_project(tmp_path, n_units=40)
+
+    def boom(**kwargs):
+        raise RuntimeError("died inside the execution loop")
+
+    monkeypatch.setattr(cli_module, "execute_plan", boom)
+    with pytest.raises(RuntimeError):
+        main(["run", str(cfg)])
+
+    run_dir = next(results_dir.glob("run_*"))
+    sweep_doc = yaml.safe_load((run_dir / "sweep.yaml").read_text())
+    assert [c["label"] for c in sweep_doc["conditions"]] == [
+        "baseline", "method=spearman", "method=kendall",
+    ]
+    assert len(sweep_doc["execution_order"]) == 15
+
+
+def test_run_yaml_records_what_each_condition_varied(tmp_path: Path):
+    """`reference.md`:393 and § Statistical reporting both show `values` on the
+    condition entry. `run.yaml` is the file a paper attaches, so a reader of it
+    alone must be able to say what each condition varied without opening
+    `sweep.yaml`, which the document positions as the plan rather than the record.
+    """
+    root, cfg, results_dir = build_sweep_project(tmp_path, n_units=40)
+    assert main(["run", str(cfg)]) == EXIT_OK
+    run_doc = yaml.safe_load((next(results_dir.glob("run_*")) / "run.yaml").read_text())
+    conditions = run_doc["results"]["conditions"]
+    assert [c["values"] for c in conditions] == [
+        {"analysis.method": "pearson"},
+        {"analysis.method": "spearman"},
+        {"analysis.method": "kendall"},
+    ]
+    assert [c["is_baseline"] for c in conditions] == [True, False, False]

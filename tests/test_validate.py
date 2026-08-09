@@ -873,3 +873,140 @@ def test_falling_below_the_repeat_floor_warns():
     clean = Collector()
     _check_replication({"replication": {"repeats": [{"kind": "seed", "n": 5}]}}, Benchmark(), clean)
     assert clean.findings == []
+
+
+# --- `sweep.baseline` is validated, shaped, and refused when partial -------------
+
+
+def test_a_baseline_path_must_be_a_real_parameter(write_config):
+    """`reference.md`:218, "Baseline is a valid condition". Unchecked, a misspelled
+    baseline path was planted verbatim into condition `00`'s config and the run
+    reported success having executed the base config under a baseline label."""
+    found = codes(
+        write_config({
+            "sweep": {
+                "baseline": {"analysis.methd": "pearson"},
+                "grid": {"analysis.methd": ["spearman", "kendall"]},
+            }
+        })
+    )
+    assert "E-SWEEP-PATH-UNKNOWN" in found
+
+
+def test_a_baseline_value_must_satisfy_its_param(write_config):
+    """`reference.md`:218's own example: `sweep.baseline` sets `analysis.method:
+    pearsonn`. Before this check the config validated with only `W-STATS-FAMILY`."""
+    found = messages_by_code(
+        write_config({
+            "sweep": {
+                "baseline": {"analysis.method": "pearsonn"},
+                "grid": {"analysis.method": ["spearman", "kendall"]},
+            }
+        })
+    )
+    assert "E-PARAM-VALUE" in found
+
+
+def test_a_baseline_value_is_not_subject_to_the_nameability_check(write_config):
+    """A baseline condition's label is the literal `baseline` (`sweep.label_for`),
+    so a baseline's fixed values are never rendered into a label. Refusing an
+    unnameable one would reject a legal config — and stays legal under the per-cell
+    expansion, which labels a baseline by the axes it leaves free."""
+    found = codes(
+        write_config({
+            "sweep": {
+                "baseline": {"analysis.method": "pearson", "analysis.min_samples": 10},
+                "grid": {"analysis.min_samples": [10, 20]},
+            }
+        })
+    )
+    assert "E-SWEEP-VALUE-UNNAMEABLE" not in found
+
+
+def test_a_baseline_that_leaves_a_grid_axis_free_is_refused(write_config):
+    """`reference.md`:1415-1422 requires one baseline condition per cell of the
+    unfixed axes; `expand` emits exactly one. Refused rather than diverging."""
+    found = messages_by_code(
+        write_config({
+            "sweep": {
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {
+                    "analysis.method": ["spearman", "kendall"],
+                    "analysis.min_samples": [10, 20],
+                },
+            }
+        })
+    )
+    assert "E-SWEEP-BASELINE-PARTIAL" in found
+    assert "analysis.min_samples" in found["E-SWEEP-BASELINE-PARTIAL"]
+    assert "not implemented in this build" in found["E-SWEEP-BASELINE-PARTIAL"]
+
+
+def test_a_baseline_fixing_every_axis_is_supported(write_config):
+    """The row the slice's worked example uses, and it must keep working."""
+    found = codes(
+        write_config({
+            "sweep": {
+                "baseline": {"analysis.method": "pearson", "analysis.min_samples": 10},
+                "grid": {"analysis.min_samples": [10, 20]},
+            }
+        })
+    )
+    assert "E-SWEEP-BASELINE-PARTIAL" not in found
+
+
+def test_a_bare_baseline_with_no_grid_is_supported(write_config):
+    """No grid means no unfixed axis, so the bare-baseline level stays legal."""
+    found = codes(write_config({"sweep": {"baseline": {"analysis.method": "pearson"}}}))
+    assert "E-SWEEP-BASELINE-PARTIAL" not in found
+
+
+def test_an_empty_baseline_beside_a_grid_is_not_a_partial_baseline(write_config):
+    """`baseline: {}` declares nothing and yields no baseline condition; "present
+    but empty is not a declaration" is this repo's convention elsewhere too."""
+    found = codes(
+        write_config({
+            "sweep": {"baseline": {}, "grid": {"analysis.method": ["spearman", "kendall"]}}
+        })
+    )
+    assert "E-SWEEP-BASELINE-PARTIAL" not in found
+
+
+def test_a_list_grid_is_a_diagnostic_not_a_traceback(write_config):
+    """`_check_sweep` calls `grid.items()`; without the shape guard this escaped
+    `main`'s handler as `AttributeError: 'list' object has no attribute 'items'`."""
+    found = codes(write_config({"sweep": {"grid": ["analysis.method"]}}))
+    assert "E-CONFIG-SHAPE" in found
+
+
+def test_a_list_baseline_is_a_diagnostic_not_a_traceback(write_config):
+    """`sweep.expand` calls `dict(baseline)`; without the guard this escaped as
+    `ValueError: dictionary update sequence element #0 has length 15`."""
+    found = codes(
+        write_config({
+            "sweep": {
+                "baseline": ["analysis.method"],
+                "grid": {"analysis.method": ["spearman"]},
+            }
+        })
+    )
+    assert "E-CONFIG-SHAPE" in found
+
+
+def test_a_bare_string_axis_is_refused_rather_than_expanded_per_character(write_config):
+    """Forgotten brackets: `grid: {analysis.method: spearman}` is iterable, so it
+    expanded into one condition per letter. A template with an unconstrained `str`
+    parameter would have taken that expansion clean."""
+    path = write_config({"sweep": {"grid": {"analysis.method": "spearman"}}})
+    c = Collector()
+    validate_config(path, c)
+    shape = [f for f in c.findings if f.code == "E-CONFIG-SHAPE"]
+    assert [f.path for f in shape] == ["sweep.grid.analysis.method"]
+    assert "expected a list" in shape[0].message
+
+
+def test_a_null_grid_or_baseline_is_absent_not_malformed(write_config):
+    """A key present but `null` is treated as absent everywhere else in this
+    module (`doc.get("x") or {}`), and the shape guard must not diverge."""
+    found = codes(write_config({"sweep": {"baseline": None, "grid": None}}))
+    assert "E-CONFIG-SHAPE" not in found

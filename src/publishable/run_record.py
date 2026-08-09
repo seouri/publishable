@@ -103,12 +103,18 @@ def _results_block(
     if aggregated is not None:
         for index, cond in conditions.items():
             cond["aggregated"] = aggregated[index] if index in aggregated else {}
-    # `condition_meta` is the one thing an `Execution` cannot carry: it holds
-    # `index`, `label`, and `repeat_label`, but not `is_baseline` — that fact has
-    # to arrive alongside `aggregated` rather than be inferred from executions.
-    # It also fills in a condition that has no `condition`- or `repeat`-scoped
-    # execution in `results` at all (an empty grid axis, say), so its identity
-    # is still on record.
+    # `condition_meta` is what an `Execution` cannot carry: it holds `index`,
+    # `label`, and `repeat_label`, but not `is_baseline` and not the swept
+    # `values` — those facts have to arrive alongside `aggregated` rather than
+    # be inferred from executions. It also fills in a condition that has no
+    # `condition`- or `repeat`-scoped execution in `results` at all (an empty
+    # grid axis, say), so its identity is still on record.
+    #
+    # `values` is filled here rather than left `{}`: `reference.md` § The two
+    # files and § Statistical reporting both show the swept values on the
+    # condition entry, and `run.yaml` is the file a paper attaches — a reader
+    # of it alone must be able to say what each condition varied without
+    # opening `sweep.yaml`, which is the plan rather than the record.
     if condition_meta is not None:
         for index, meta in condition_meta.items():
             cond = conditions.setdefault(
@@ -116,6 +122,7 @@ def _results_block(
             )
             cond["label"] = meta.get("label", cond.get("label"))
             cond["is_baseline"] = meta.get("is_baseline", False)
+            cond["values"] = dict(meta.get("values") or {})
         for cond in conditions.values():
             cond.setdefault("is_baseline", False)
     return {

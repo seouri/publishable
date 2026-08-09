@@ -93,6 +93,26 @@ def _check_shape(doc: dict[str, Any], c: Collector) -> bool:
             if attributes is not None and not isinstance(attributes, list):
                 _bad("data.units.attributes", attributes, "list")
 
+    # `sweep`'s two implemented sub-blocks, and each grid axis's value list.
+    # `_check_sweep` calls `grid.items()` and `sweep.expand` calls `dict(baseline)`
+    # on whatever is here, so a list or a string in either place escaped `main`'s
+    # `PublishableError`/`OSError` handler as a bare traceback. The per-axis `list`
+    # check closes the quieter version of the same gap: a bare string axis
+    # (`analysis.method: spearman`, brackets forgotten) is iterable, so it expanded
+    # character by character into one condition per letter.
+    sweep = doc.get("sweep")
+    if isinstance(sweep, dict):
+        baseline = sweep.get("baseline")
+        if baseline is not None and not isinstance(baseline, dict):
+            _bad("sweep.baseline", baseline, "mapping")
+        grid = sweep.get("grid")
+        if grid is not None and not isinstance(grid, dict):
+            _bad("sweep.grid", grid, "mapping")
+        elif isinstance(grid, dict):
+            for path, values in grid.items():
+                if values is not None and not isinstance(values, list):
+                    _bad(f"sweep.grid.{path}", values, "list")
+
     replication = doc.get("replication")
     if isinstance(replication, dict):
         repeats = replication.get("repeats")
@@ -423,6 +443,30 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
                 "later slice",
             )
 
+    # A baseline that fixes only *some* of the grid's axes. `reference.md`:1415-1422
+    # states one rule with two cases: the baseline expands over whichever axes it
+    # does not fix, giving one baseline condition per cell of the unfixed axes.
+    # `expand` emits exactly one `00_baseline` row carrying only what the baseline
+    # literally names, so the declared design is not the executed design — the
+    # failure every other refusal in this function exists to prevent. Per-cell
+    # expansion is a real feature; until it lands, refuse rather than diverge.
+    # A baseline fixing every declared axis (including the no-grid case) is the
+    # supported row and is unaffected.
+    baseline = sweep.get("baseline") or {}
+    grid = sweep.get("grid") or {}
+    unfixed = [path for path in grid if path not in baseline]
+    if baseline and unfixed:
+        c.error(
+            "E-SWEEP-BASELINE-PARTIAL",
+            "sweep.baseline",
+            f"fixes no value for {', '.join(f'`{p}`' for p in unfixed)}, and a baseline "
+            "that leaves an axis free expands to one baseline condition per cell of the "
+            "unfixed axes — which is specified but not implemented in this build; this "
+            "build emits a single `00_baseline` condition, so the design executed would "
+            "not be the design declared. Per-cell baselines will be honored in a later "
+            "slice; fix a value on every swept axis for now",
+        )
+
     units = _units_declaration(doc.get("data") or {}, c) or {}
     source = units.get("from")
     if isinstance(source, dict) and "resolver" in source:
@@ -525,8 +569,38 @@ def _check_sweep(doc: dict[str, Any], template: Any, c: Collector) -> None:
                 "conditions and the run would execute nothing while reporting success",
             )
 
-    grid = sweep.get("grid") or {}
     spec = template.parameter_spec
+
+    def _path_resolves(path: str, where: str) -> bool:
+        """`path` names a parameter this template declares. Shared by `grid` and
+        `baseline` deliberately: both fix a value at a dotted `parameters` path,
+        and two copies of this check is how the two drift apart."""
+        if path in spec:
+            return True
+        near = difflib.get_close_matches(path, list(spec), n=1)
+        hint = f" — did you mean `{near[0]}`?" if near else ""
+        c.error("E-SWEEP-PATH-UNKNOWN", where, f"is not a parameter of this template{hint}")
+        return False
+
+    def _value_checks(path: str, value: Any, where: str, nameable: bool) -> None:
+        """The value satisfies its own `Param`, and — for a value that will be
+        rendered into a condition label — is nameable.
+
+        `nameable` is False for a `baseline` entry: `sweep.label_for` returns the
+        literal `baseline` for a baseline condition, so its fixed values are never
+        rendered into a label, and refusing an unnameable one would reject a config
+        that is legal (`reference.md`:1419 labels a per-cell baseline by the axes it
+        leaves *free*, so this stays true when that expansion lands).
+        """
+        problem = spec[path].check(value)
+        if problem:
+            c.error("E-PARAM-VALUE", where, problem)
+        if nameable:
+            unnameable = check_swept_value(value)
+            if unnameable:
+                c.error("E-SWEEP-VALUE-UNNAMEABLE", where, unnameable)
+
+    grid = sweep.get("grid") or {}
     for path, values in grid.items():
         if not values:
             c.error(
@@ -536,22 +610,21 @@ def _check_sweep(doc: dict[str, Any], template: Any, c: Collector) -> None:
                 "would execute nothing while reporting success",
             )
             continue
-        if path not in spec:
-            near = difflib.get_close_matches(path, list(spec), n=1)
-            hint = f" — did you mean `{near[0]}`?" if near else ""
-            c.error(
-                "E-SWEEP-PATH-UNKNOWN",
-                f"sweep.grid.{path}",
-                f"is not a parameter of this template{hint}",
-            )
+        if not _path_resolves(path, f"sweep.grid.{path}"):
             continue
         for i, value in enumerate(values):
-            problem = spec[path].check(value)
-            if problem:
-                c.error("E-PARAM-VALUE", f"sweep.grid.{path}[{i}]", problem)
-            unnameable = check_swept_value(value)
-            if unnameable:
-                c.error("E-SWEEP-VALUE-UNNAMEABLE", f"sweep.grid.{path}[{i}]", unnameable)
+            _value_checks(path, value, f"sweep.grid.{path}[{i}]", nameable=True)
+
+    # `sweep.baseline` gets the same per-entry checks — one value, not a list.
+    # `reference.md`:218 names this by example ("Baseline is a valid condition |
+    # `sweep.baseline` sets `analysis.method: pearsonn`"). Unchecked, a misspelled
+    # path was planted verbatim into condition `00`'s config by
+    # `resolve_condition_cfg`'s `setdefault` walk, so `00_baseline` ran the base
+    # config under a label claiming otherwise and the run reported success.
+    baseline = sweep.get("baseline") or {}
+    for path, value in baseline.items():
+        if _path_resolves(path, f"sweep.baseline.{path}"):
+            _value_checks(path, value, f"sweep.baseline.{path}", nameable=False)
 
     conditions = expand(doc)
     if sweep and not conditions:

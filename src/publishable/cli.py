@@ -112,7 +112,14 @@ def command_run(config_path: Path) -> int:
     labels = [r.label for r in repeats if r.label] or [""]
 
     conditions = expand(doc)
-    swept_paths = set((doc.get("sweep") or {}).get("grid") or {})
+    # Every path any condition fixes, not just the grid's axes. A path
+    # `sweep.baseline` fixes varies across conditions by definition — condition
+    # `00` uses the baseline's value and every other condition uses the base
+    # config's — so it is exactly as unreadable at `run`/`summary` scope as a
+    # grid axis is. Reading the grid alone left a baseline-only path resolving
+    # to the base value, which is a value no condition in the run used.
+    sweep_block = doc.get("sweep") or {}
+    swept_paths = set(sweep_block.get("grid") or {}) | set(sweep_block.get("baseline") or {})
     plan = build_plan(  # phase 4
         experiment,
         conditions=[(c.index, c.label) for c in conditions],
@@ -159,19 +166,13 @@ def command_run(config_path: Path) -> int:
         if lock_path is not None:
             (run_dir / "environment" / "uv.lock").write_bytes(lock_path.read_bytes())
 
-        results = execute_plan(  # phase 7
-            plan=plan,
-            run_dir=run_dir,
-            input_dir=input_dir,
-            cfgs=cfgs,
-            repeats=repeats,
-            digest=digest,
-            units=roster,
-            max_failed_fraction=(doc.get("limits") or {}).get("max_failed_fraction"),
-        )
-
-        # `sweep.yaml` next to `manifest/input.json`, inside the lock: the resolved
-        # plan a run actually executed, not merely what the config declared.
+        # `sweep.yaml` next to `manifest/input.json`, inside the lock, and *before*
+        # the first execution: `docs/reference.md` § The other files a run writes
+        # calls it "settled before the first execution and never touched again",
+        # and `resume` reads it back rather than re-deriving it. Nothing in it
+        # comes from `results` — every argument is settled by the time the plan
+        # exists — so writing it after `execute_plan` bought nothing and left a
+        # run that died inside the loop with no plan on disk at all.
         order = (doc.get("replication") or {}).get("order") or "as_declared"
         execution_order = [
             (e.condition_index or 0, e.repeat_label or "") for e in plan if e.scope == "repeat"
@@ -183,6 +184,17 @@ def command_run(config_path: Path) -> int:
             )
         )
 
+        results = execute_plan(  # phase 7
+            plan=plan,
+            run_dir=run_dir,
+            input_dir=input_dir,
+            cfgs=cfgs,
+            repeats=repeats,
+            digest=digest,
+            units=roster,
+            max_failed_fraction=(doc.get("limits") or {}).get("max_failed_fraction"),
+        )
+
         status = run_status(results)
         # No roster means nothing to aggregate over, so `aggregated` stays `None`
         # rather than an empty dict — `assemble_run_yaml` omits the key entirely in
@@ -190,9 +202,13 @@ def command_run(config_path: Path) -> int:
         # `aggregated: {}`.
         aggregated: dict[int, dict[str, dict[str, Any]]] | None = None
         # Condition metadata `ExecutionResult` cannot carry: `Execution` holds
-        # index and label but not `is_baseline`, and the acceptance test asserts it.
+        # index and label but not `is_baseline` or the swept `values`, and
+        # `reference.md` § The two files shows both on the condition entry.
+        # `dict(...)` unwraps `Condition.values`'s `MappingProxyType`, which
+        # `yaml.safe_dump` has no representer for.
         condition_meta = {
-            c.index: {"label": c.label, "is_baseline": c.is_baseline} for c in conditions
+            c.index: {"label": c.label, "is_baseline": c.is_baseline, "values": dict(c.values)}
+            for c in conditions
         }
         if roster is not None:
             # `condition_index` is guarded per condition: core aggregates within

@@ -78,7 +78,11 @@ def attrition(
         for r in results
         if r.execution.step_name == step_name
         and r.execution.scope == "repeat"
-        and (r.execution.condition_index or 0) == condition_index
+        # Strict: `or 0` would map an unexpected `None` onto condition 0, which is
+        # the pooling this function's required `condition_index` exists to prevent.
+        # `build_plan` always gives a `repeat`-scoped execution a real index, so a
+        # `None` here is a core defect and must drop out rather than be absorbed.
+        and r.execution.condition_index == condition_index
     ]
     if not recording:
         return {"resolved": len(keys), "completed": 0, "ineligible": 0, "failed": len(keys)}

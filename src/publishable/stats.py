@@ -94,7 +94,10 @@ def collapse_repeats(
         for r in results
         if r.execution.step_name == step_name
         and r.execution.scope == "repeat"
-        and (r.execution.condition_index or 0) == condition_index
+        # Strict, for the same reason as `runner.attrition`: `or 0` would fold an
+        # unexpected `None` into condition 0's table, which is the cross-condition
+        # pooling the required `condition_index` parameter exists to make unwritable.
+        and r.execution.condition_index == condition_index
     ]
     if not recording:
         return {}
