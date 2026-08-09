@@ -43,13 +43,27 @@ def test_members_are_not_mutable_through_the_level():
         levels[0].members.append(RepeatMember(label="x", seed=1))
 
 
-def test_two_levels_may_share_a_seed_across_levels():
-    """A batch varies nothing, so the same seed re-run later is the point —
-    a collision check spanning levels would reject the design `batch` exists for."""
+def test_two_levels_may_share_a_seed_across_levels(monkeypatch):
+    """A batch varies nothing, so the same seed re-run later is the point — the
+    collision check must be scoped per level, not across the whole leaf list.
+
+    Using the real digest here would only collide by a ~2**-32 coincidence, which
+    would pass identically against the OLD spanning-all-levels check too — proving
+    nothing. So `_seed_for` is patched to depend on `index` alone, dropping the
+    digest/kind prefix `_seed_members` folds into its first argument. That forces
+    batch member i and seed member i to derive the identical seed on purpose: under
+    the old check (one collision scan over the flattened leaves) this would raise
+    `E-REPL-SEED-COLLISION`; under the per-level check it must resolve cleanly.
+    """
+    import publishable.replication as replication
+
+    monkeypatch.setattr(replication, "_seed_for", lambda digest, index: index)
     levels = resolve_repeats(cfg([{"kind": "batch", "n": 2}, {"kind": "seed", "n": 2}]), "d")
-    outer = {m.seed for m in levels[0].members}
-    inner = {m.seed for m in levels[1].members}
-    assert len(outer) == 2 and len(inner) == 2  # distinct WITHIN each level
+    outer = [m.seed for m in levels[0].members]
+    inner = [m.seed for m in levels[1].members]
+    assert outer == inner == [0, 1]  # identical ACROSS levels — what the old check forbade
+    assert len(set(outer)) == 2  # still distinct WITHIN each level
+    assert len(set(inner)) == 2
 
 
 def test_five_seed_repeats_resolve_to_five_labelled_members():

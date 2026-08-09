@@ -408,10 +408,12 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     `within`, `assign`, `cluster_by`, `weight_by`, `measurements`, `holdout`,
     and a `resolver` source — are read by nothing yet either. Each of these
     would otherwise validate clean and then run something other than what the
-    config describes — the exact failure `E-REPL-KIND-UNSUPPORTED` already
-    refuses for `batch`/`fold`/nested repeat levels. Each message says plainly
-    that the block is honored in a later slice, so a user does not read this as
-    their config being malformed.
+    config describes — the same class of failure `resolve_repeats` already
+    refuses for repeat levels: `E-REPL-FOLD-UNSUPPORTED` for `fold`,
+    `E-REPL-LEVEL-DUPLICATE` for two levels of the same kind, and
+    `E-REPL-LEVEL-DEPTH` past two levels. `batch` is no longer refused — it is
+    a supported kind. Each message says plainly that the block is honored in a
+    later slice, so a user does not read this as their config being malformed.
     """
     sweep = doc.get("sweep") or {}
     for mode, code, why in (
