@@ -3,6 +3,8 @@
 import subprocess
 from pathlib import Path
 
+from publishable.errors import ContractError
+
 GITIGNORE = """\
 # Credentials — never committed
 .env
@@ -72,6 +74,12 @@ build-backend = "hatchling.build"
 def scaffold_project(root: Path, license_name: str = "MIT") -> Path:
     """Fixed layout, so commands never need --repo or --templates-dir."""
     name = root.name
+    if root.exists() and any(root.iterdir()):
+        raise ContractError(
+            f"{root} already exists and is not empty — `new` never overwrites an "
+            "existing project; choose a different path or remove it deliberately",
+            code="E-PROJECT-EXISTS",
+        )
     root.mkdir(parents=True, exist_ok=True)
     for directory in ("src", "templates", "configs", "tests", "docs"):
         (root / directory).mkdir(exist_ok=True)

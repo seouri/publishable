@@ -41,7 +41,7 @@ def generate_step(*, repo_root: Path, experiment: str, step_name: str) -> Path:
     module = path.stem
     cls = "".join(part.capitalize() for part in step_name.split("_"))
     text = text.replace(
-        "\nSTEPS = [",
+        "\n\nSTEPS = [",
         f"\nfrom .steps.{module} import Step as {cls}\n\nSTEPS = [",
     ).replace("STEPS = [", f"STEPS = [{cls}, ", 1)
     text = text.replace(f"STEPS = [{cls}, ]", f"STEPS = [{cls}]")
