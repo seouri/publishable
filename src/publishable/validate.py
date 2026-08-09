@@ -6,12 +6,14 @@ from typing import Any
 
 import yaml
 
+from publishable.base_experiment import load_experiment
 from publishable.diagnostics import Collector
 from publishable.errors import ContractError
 from publishable.manifest import POLICIES
 from publishable.materialize import TEMPLATE_VERSION
 from publishable.param import MISSING
 from publishable.provenance import find_repo_root, resolves_inside_repo
+from publishable.replication import resolve_repeats
 from publishable.sweep import check_swept_value, expand
 from publishable.templates.registry import get_template, template_names
 from publishable.units import resolve_units
@@ -126,14 +128,36 @@ def _check_shape(doc: dict[str, Any], c: Collector) -> bool:
     return ok
 
 
-def validate_config(config_path: Path, c: Collector) -> dict[str, Any] | None:
+def load_document(config_path: Path, c: Collector | None = None) -> dict[str, Any] | None:
+    """Parse the config and confirm it is a mapping — the two things every later check
+    presumes. `c` is optional so a caller that only wants the entrypoint out of the file
+    (`command_run`, so it can import once rather than twice) can parse without reporting:
+    `validate_config` re-parses and reports, and one fault must produce one finding.
+    """
     try:
         doc = yaml.safe_load(config_path.read_text())
     except yaml.YAMLError as exc:
-        c.error("E-CONFIG-PARSE", str(config_path), f"does not parse: {exc}")
+        if c is not None:
+            c.error("E-CONFIG-PARSE", str(config_path), f"does not parse: {exc}")
         return None
     if not isinstance(doc, dict):
-        c.error("E-CONFIG-PARSE", str(config_path), "does not parse as a mapping")
+        if c is not None:
+            c.error("E-CONFIG-PARSE", str(config_path), "does not parse as a mapping")
+        return None
+    return doc
+
+
+def validate_config(
+    config_path: Path, c: Collector, *, experiment: Any | None = None
+) -> dict[str, Any] | None:
+    """Validate one config. `experiment` is the already-imported entrypoint, when the
+    caller has one — `command_run` passes what it loaded so a run imports user code once.
+    When it is absent and the config names an entrypoint, `validate` imports it itself:
+    `W-REPL-DETERMINISTIC` reads `nondeterministic` off the step classes, and warning at
+    run time instead would spend exactly the compute the warning is about.
+    """
+    doc = load_document(config_path, c)
+    if doc is None:
         return None
 
     if not _check_shape(doc, c):
@@ -150,13 +174,43 @@ def validate_config(config_path: Path, c: Collector) -> dict[str, Any] | None:
         )
         return None  # every later check reads the spec
 
+    entrypoint = doc.get("entrypoint")
+    if experiment is None and isinstance(entrypoint, str) and entrypoint:
+        try:
+            repo_root: Path | None = find_repo_root(config_path)
+        except ContractError:
+            # No repo at all. That is `_check_data`'s finding to make (or not), and
+            # there is no `src/` to import from, so the entrypoint check is skipped
+            # rather than reported as an import failure it did not cause.
+            repo_root = None
+        try:
+            if repo_root is not None:
+                experiment = load_experiment(repo_root, entrypoint)
+        except Exception as exc:
+            # Deliberately broad. Importing user code can fail every way user code
+            # can fail — a syntax error, a missing dependency, a module-scope raise —
+            # and `validate` reports rather than raises, so each of those is one
+            # finding. Letting any of them propagate would turn a diagnosable config
+            # into a traceback, which is the whole reason this import moved earlier.
+            #
+            # `load_experiment`'s own refusals already say which fault they are, so
+            # their wording passes through: a value that is not `<module>:<attribute>`
+            # was never imported at all, and framing it as an import failure sends the
+            # reader hunting for a missing module rather than a malformed config line.
+            own = isinstance(exc, ContractError) and exc.code == "E-ENTRYPOINT-IMPORT"
+            c.error(
+                "E-ENTRYPOINT-IMPORT",
+                "entrypoint",
+                str(exc) if own else f"could not be imported: {type(exc).__name__}: {exc}",
+            )
+
     _check_metadata(doc, config_path, template, c)
     _check_entrypoint(doc, c)
     _check_parameters(doc, template, c)
     _check_versions(doc, c)
     _check_data(doc, config_path, c)
     _check_units(doc, c)
-    _check_replication(doc, template, c)
+    _check_replication(doc, template, c, experiment=experiment)
     _check_unimplemented(doc, c)
     _check_sweep(doc, template, c)
     for message in template.validate(doc):
@@ -368,7 +422,28 @@ def _check_units(doc: dict[str, Any], c: Collector) -> None:
         c.error(exc.code, "data.units", str(exc))
 
 
-def _check_replication(doc: dict[str, Any], template: Any, c: Collector) -> None:
+# Refusals that are properties of the DECLARATION, so `validate` reports them as
+# findings. Anything else `resolve_repeats` raises is a genuine fault and still
+# propagates — swallowing all of them is how a real error becomes a silent pass.
+# This set is deliberately narrow: a future code `resolve_repeats` raises that is
+# not added here propagates rather than being silently absorbed into a finding.
+# `test_an_unresolved_repl_code_is_not_swallowed` pins that escape path.
+REPL_DECLARATION_CODES = frozenset(
+    {
+        "E-REPL-FOLD-UNSUPPORTED",
+        "E-REPL-LEVEL-DUPLICATE",
+        "E-REPL-LEVEL-DEPTH",
+        "E-REPL-LEVEL-BATCH-INNER",
+        "E-REPL-KIND",
+        "E-REPL-N",
+        "E-REPL-SEED-COLLISION",
+    }
+)
+
+
+def _check_replication(
+    doc: dict[str, Any], template: Any, c: Collector, *, experiment: Any | None = None
+) -> None:
     levels = ((doc.get("replication") or {}).get("repeats")) or []
     total = 1
     any_invalid = False
@@ -397,21 +472,62 @@ def _check_replication(doc: dict[str, Any], template: Any, c: Collector) -> None
             f"{template.default_repeats}",
         )
 
+    # `resolve_repeats` raises for refusals that are properties of the declaration
+    # itself — fold, duplicate kinds, and depth past two levels among them. At run
+    # time raising is right; here `validate` collects, so translate rather than let
+    # it escape. The digest is a placeholder: seeds are irrelevant to a declaration
+    # check, only the shape of `replication.repeats` is.
+    try:
+        resolve_repeats(doc, "validate")
+    except ContractError as exc:
+        if exc.code in REPL_DECLARATION_CODES:
+            c.error(exc.code, "replication.repeats", str(exc))
+        else:
+            raise
+
+    # A `batch` says *when*, not *what*: it re-executes the pipeline to capture the
+    # apparatus drifting between blocks. If nothing in the pipeline declares itself
+    # nondeterministic, there is no drift to capture. `experiment is not None` is
+    # load-bearing — when the import failed, `E-ENTRYPOINT-IMPORT` is already
+    # reported, and a second finding about a pipeline nobody could load is noise.
+    kinds = {lv.get("kind") for lv in levels if isinstance(lv, dict)}
+    if "batch" in kinds and experiment is not None:
+        if not any(getattr(s, "nondeterministic", False) for s in experiment.steps):
+            c.warn(
+                "W-REPL-DETERMINISTIC",
+                "replication.repeats",
+                "declares a `batch` level, but no step sets `nondeterministic = True`; "
+                "under a fully deterministic pipeline a batch recomputes the same answer "
+                "each time, so its dispersion is a row of zeros bought with n× the compute",
+            )
+
+    order = (doc.get("replication") or {}).get("order")
+    if order is not None and order not in ("as_declared", "randomized"):
+        c.error(
+            "E-REPL-ORDER",
+            "replication.order",
+            f"is `{order}`; the only orders are `as_declared` and `randomized`",
+        )
+
 
 def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     """Declared-but-unimplemented blocks, refused rather than silently ignored.
 
-    This build expands `sweep.baseline` and `sweep.grid` only, and executes
-    repeats `as_declared` regardless of what is written here. `sweep.paired`,
+    This build expands `sweep.baseline` and `sweep.grid` only. Both declared
+    orders are honored — `randomized` shuffles within each batch and
+    `as_declared` leaves the plan's step-major layout alone. `sweep.paired`,
     `.ablate`, `.sample`, and `.groups` are read by nothing yet. It resolves a
     unit roster, but several `data.units` sub-fields — allocation other than
     `within`, `assign`, `cluster_by`, `weight_by`, `measurements`, `holdout`,
     and a `resolver` source — are read by nothing yet either. Each of these
     would otherwise validate clean and then run something other than what the
-    config describes — the exact failure `E-REPL-KIND-UNSUPPORTED` already
-    refuses for `batch`/`fold`/nested repeat levels. Each message says plainly
-    that the block is honored in a later slice, so a user does not read this as
-    their config being malformed.
+    config describes — the same class of failure `resolve_repeats` already
+    refuses for repeat levels: `E-REPL-FOLD-UNSUPPORTED` for `fold`,
+    `E-REPL-LEVEL-DUPLICATE` for two levels of the same kind, and
+    `E-REPL-LEVEL-DEPTH` past two levels, and `E-REPL-LEVEL-BATCH-INNER` for a
+    `batch` that is not the outermost level. `batch` itself is no longer
+    refused — it is a supported kind. Each message says plainly that the block is honored in a
+    later slice, so a user does not read this as their config being malformed.
     """
     sweep = doc.get("sweep") or {}
     for mode, code, why in (
@@ -503,16 +619,6 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
                 "here, and a declaration that changes no behavior is the failure this "
                 "refusal exists to prevent; it will be honored in a later slice",
             )
-
-    order = (doc.get("replication") or {}).get("order")
-    if order is not None and order != "as_declared":
-        c.error(
-            "E-REPL-ORDER-UNSUPPORTED",
-            "replication.order",
-            f"is `{order}`, which is specified but not implemented in this build — "
-            "execution always proceeds as_declared regardless of what is declared here; "
-            "`order` will be honored in a later slice",
-        )
 
 
 def _repeat_total(doc: dict[str, Any]) -> int:

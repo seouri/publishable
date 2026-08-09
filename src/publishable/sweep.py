@@ -19,7 +19,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from publishable.replication import Repeat
+    from publishable.replication import Repeat, RepeatLevel
 
 
 @dataclass(frozen=True)
@@ -163,6 +163,7 @@ def expand(config: dict[str, Any]) -> list[Condition]:
 
 def sweep_document(
     conditions: list[Condition],
+    levels: list["RepeatLevel"],
     repeats: list["Repeat"],
     digest: str,
     order: str,
@@ -183,23 +184,36 @@ def sweep_document(
     written only when given — its absence under `as_declared` says nothing
     was shuffled, not that the seed was lost.
 
-    `repeats` groups by kind (only `seed` exists before fold membership lands
-    in a later slice): each entry carries the resolved `seeds`, whether they
-    came from `auto` or were listed explicitly. `labels` is the separate,
-    top-level list of each repeat's composed label, outer to inner — under a
-    `fold` × `seed` nesting this is where `fold03_seed42` would appear.
+    `levels` and `repeats` are the same design at two grains and both are
+    needed. `levels` is the declared structure — one entry per level, outer to
+    inner — and is what `repeats:` records, because the nesting is exactly what
+    a reader (and `resume`) must not have to recover by splitting label strings
+    apart. `repeats` is that structure crossed into leaves, and supplies
+    `labels:` alone.
+
+    Each `repeats:` entry carries its kind plus exactly the fields
+    `reference.md` § Repeat kinds gives that kind: a `seed` level its resolved
+    `seeds`, whether they came from `auto` or were listed explicitly; a `batch`
+    level its `n` and nothing else, because a batch has no parameter of its own.
+    A level's `seeds` are its own members', never one per execution — under
+    `batch` × `seed`, six leaves over two resolved seeds is the documented
+    consequence of `batch01_seed42` and `batch02_seed42` drawing alike, and a
+    flattened list of six would assert six streams that do not exist.
+
+    `labels` stays the separate, top-level list of each leaf's composed label,
+    outer to inner — under a `fold` × `seed` nesting this is where
+    `fold03_seed42` appears.
 
     Fold membership (`partitions`) belongs here too per § The other files a
     run writes; folds are a later slice and the key is absent rather than
     empty, so its absence is not read as "no folds were drawn".
     """
-    kinds_seen: list[str] = []
-    seeds_by_kind: dict[str, list[int]] = {}
-    for r in repeats:
-        if r.kind not in seeds_by_kind:
-            seeds_by_kind[r.kind] = []
-            kinds_seen.append(r.kind)
-        seeds_by_kind[r.kind].append(r.seed)
+    repeat_entries: list[dict[str, Any]] = []
+    for lv in levels:
+        if lv.kind == "batch":
+            repeat_entries.append({"kind": lv.kind, "n": lv.n})
+        else:
+            repeat_entries.append({"kind": lv.kind, "seeds": [m.seed for m in lv.members]})
 
     doc: dict[str, Any] = {
         "design_digest": digest,
@@ -208,7 +222,7 @@ def sweep_document(
              "is_baseline": c.is_baseline}
             for c in conditions
         ],
-        "repeats": [{"kind": kind, "seeds": seeds_by_kind[kind]} for kind in kinds_seen],
+        "repeats": repeat_entries,
         "labels": [r.label for r in repeats],
         "order": order,
         "execution_order": [

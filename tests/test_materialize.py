@@ -96,7 +96,6 @@ _MARKED_LATER_SLICE = re.compile(
 _MARKED_FIELD_PATHS: dict[str, tuple[object, ...]] = {
     "allocation": ("data", "units", "allocation"),
     "kind": ("replication", "repeats", 0, "kind"),
-    "order": ("replication", "order"),
 }
 
 

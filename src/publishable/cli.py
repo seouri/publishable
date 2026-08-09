@@ -13,7 +13,7 @@ from typing import Any
 
 import yaml
 
-from publishable.base_experiment import BaseExperiment
+from publishable.base_experiment import BaseExperiment, load_experiment
 from publishable.config import Config
 from publishable.diagnostics import (
     EXIT_FAILED,
@@ -29,51 +29,91 @@ from publishable.generators.step import generate_step
 from publishable.hashes import code_hash, design_digest, parameters_hash
 from publishable.manifest import build_manifest, manifest_hash, verify_manifest
 from publishable.provenance import find_repo_root, git_provenance
-from publishable.replication import resolve_repeats
+from publishable.replication import cross_levels, order_seed_for, realize_order, resolve_repeats
 from publishable.run_identity import RunLock, allocate_run_dir, point_latest
 from publishable.run_record import assemble_run_yaml, run_status
 from publishable.runner import attrition, execute_plan, resolve_condition_cfg, resolve_wide_cfg
 from publishable.scaffold import scaffold_project
-from publishable.scope import build_plan
+from publishable.scope import Execution, build_plan
 from publishable.stats import collapse_repeats, summarize_step
 from publishable.sweep import expand, sweep_document
 from publishable.units import resolve_units, units_hash
 from publishable.uv_support import uv_lock_info
-from publishable.validate import validate_config
+from publishable.validate import load_document, validate_config
 
 OPERATION_COMMANDS = {"validate", "run"}
 
 
-def _load_experiment(repo_root: Path, entrypoint: str) -> BaseExperiment:
-    """Import the entrypoint class from the project's own `src/` on `sys.path`.
+def _preloaded_experiment(config_path: Path) -> BaseExperiment | None:
+    """Import the entrypoint before validating, so a run imports user code once.
 
-    The entrypoint's root package is purged from `sys.modules` first: two projects
-    in one process can declare the same package name (both scaffolds default to a
-    layout like `cohort_pilot`), and a cached module would silently hand back the
-    other project's steps instead of raising or re-importing the right one.
+    `validate_config` imports it too when handed nothing (it needs the step classes
+    for `W-REPL-DETERMINISTIC`), and importing a project's package twice in one
+    process is exactly what `load_experiment`'s `sys.modules` purge exists to make
+    survivable — but paying for it on every run is pointless. Failures are swallowed
+    here and reported by `validate_config` as `E-ENTRYPOINT-IMPORT`; a parse that
+    fails is likewise the validator's finding to report, not this helper's.
     """
-    module_name, _, attr = entrypoint.partition(":")
-    if not module_name or not attr:
-        raise ContractError(
-            f"entrypoint {entrypoint!r} is not `<module>:<attribute>`",
-            code="E-ENTRYPOINT-IMPORT",
-        )
-    root_pkg = module_name.split(".", 1)[0]
-    for cached in [m for m in sys.modules if m == root_pkg or m.startswith(root_pkg + ".")]:
-        del sys.modules[cached]
-    sys.path.insert(0, str(repo_root / "src"))
+    doc = load_document(config_path)
+    if doc is None:
+        return None
+    entrypoint = doc.get("entrypoint")
+    if not isinstance(entrypoint, str) or not entrypoint:
+        return None
     try:
-        module = importlib.import_module(module_name)
-        cls = getattr(module, attr)
-    except (ImportError, AttributeError) as exc:
+        return load_experiment(find_repo_root(config_path), entrypoint)
+    except Exception:  # reported by `validate_config`, which collects rather than raises
+        return None
+
+
+def _apply_execution_order(
+    plan: list[Execution], execution_order: list[tuple[int, str]]
+) -> list[Execution]:
+    """Reorder `plan`'s repeat-scope executions to match `execution_order` exactly.
+
+    Called only under `order: randomized` — see the call site. Under `as_declared`
+    nothing was shuffled, so there is no realized order for the plan to match and
+    `build_plan`'s step-major layout stands unchanged.
+
+    `execution_order` is a fact about the run, not a rule to re-derive, so the plan
+    actually executed must match it rather than merely being recorded beside it.
+    `execution_order` orders `(condition, repeat label)` pairs — the grain
+    `reference.md`'s example records — so each pair's own repeat-scope steps are
+    kept together, in the order `experiment.steps` declares them, and the pairs
+    themselves are laid out in `execution_order`'s sequence. `condition`-scope
+    executions are left where `build_plan` put them (ahead of every repeat, one
+    condition's steps before the next) since nothing in `execution_order` orders
+    them.
+
+    Raises `E-RUN-ORDER-MISMATCH` if a repeat-scope execution in `plan` has no
+    home among `execution_order`'s pairs — the plan and the resolved order
+    disagree, the same invariant class `execute_plan` raises `E-RUN-CFG-MISSING`
+    for when the plan and the resolved `cfgs` disagree. Both are core bugs, not
+    user mistakes: `declared_pairs` and `plan`'s repeat labels are built from the
+    same `conditions`/`repeats` in `command_run`, so this should be unreachable —
+    but a silently dropped pair here would run fewer executions than the plan
+    declared while `sweep.yaml` recorded the fuller set, which is worse than
+    recording nothing.
+    """
+    by_pair: dict[tuple[int, str], list[Execution]] = {}
+    for e in plan:
+        if e.scope == "repeat":
+            by_pair.setdefault((e.condition_index or 0, e.repeat_label or ""), []).append(e)
+    reordered_repeats = [e for pair in execution_order for e in by_pair.get(pair, [])]
+    n_repeat = sum(1 for e in plan if e.scope == "repeat")
+    if len(reordered_repeats) != n_repeat:
         raise ContractError(
-            f"entrypoint {entrypoint!r} could not be imported: {exc}",
-            code="E-ENTRYPOINT-IMPORT",
-        ) from exc
-    finally:
-        sys.path.pop(0)
-    experiment: BaseExperiment = cls()
-    return experiment
+            f"{n_repeat} repeat-scope executions are in the plan, but only "
+            f"{len(reordered_repeats)} were found among execution_order's "
+            f"{len(execution_order)} pairs; the plan and the resolved order disagree",
+            code="E-RUN-ORDER-MISMATCH",
+        )
+    summary_executions = [e for e in plan if e.scope == "summary"]
+    return (
+        [e for e in plan if e.scope not in ("repeat", "summary")]
+        + reordered_repeats
+        + summary_executions
+    )
 
 
 def command_validate(config_path: Path) -> int:
@@ -89,7 +129,9 @@ def command_validate(config_path: Path) -> int:
 
 def command_run(config_path: Path) -> int:
     c = Collector()
-    doc = validate_config(config_path, c)  # phases 1-2: resolve, walk up, load, validate
+    experiment = _preloaded_experiment(config_path)
+    # phases 1-2: resolve, walk up, load, validate
+    doc = validate_config(config_path, c, experiment=experiment)
     if c.findings:
         print(config_path)
         print(c.render())
@@ -105,10 +147,15 @@ def command_run(config_path: Path) -> int:
         )
         print(dirty_c.render())
         return EXIT_WRONG
-    experiment = _load_experiment(repo_root, doc["entrypoint"])  # phase 3: entrypoint imports
+    if experiment is None:  # phase 3: entrypoint imports
+        # Unreachable in practice — a failed import is `E-ENTRYPOINT-IMPORT` and a
+        # missing one `E-ENTRYPOINT-REQUIRED`, both errors that returned above. Kept
+        # so `run` never proceeds on `None` if a future check stops being fatal.
+        experiment = load_experiment(repo_root, doc["entrypoint"])
 
     digest = design_digest(doc)  # phase 5: pin hashes
-    repeats = resolve_repeats(doc, digest)
+    levels = resolve_repeats(doc, digest)
+    repeats = cross_levels(levels)
     labels = [r.label for r in repeats if r.label] or [""]
 
     conditions = expand(doc)
@@ -173,13 +220,29 @@ def command_run(config_path: Path) -> int:
         # comes from `results` — every argument is settled by the time the plan
         # exists — so writing it after `execute_plan` bought nothing and left a
         # run that died inside the loop with no plan on disk at all.
-        order = (doc.get("replication") or {}).get("order") or "as_declared"
-        execution_order = [
-            (e.condition_index or 0, e.repeat_label or "") for e in plan if e.scope == "repeat"
-        ]
+        mode = ((doc.get("replication") or {}).get("order")) or "as_declared"
+        order_seed = order_seed_for(digest) if mode == "randomized" else None
+        declared_pairs = [(c.index, lf.label) for c in conditions for lf in repeats]
+        execution_order = realize_order(declared_pairs, levels, mode, order_seed or 0)
+        # Only when an order was actually realized. `realize_order` is the identity
+        # under `as_declared`, but `_apply_execution_order` is not: it regroups
+        # repeat executions pair-major, where `build_plan` lays them out step-major
+        # (for each step, for each repeat). Applying it unconditionally silently
+        # changed the execution order of every `as_declared` design with ≥2
+        # repeat-scope steps and ≥2 repeats — a different `started_at` sequence and
+        # a differently ordered `executions.jsonl` for a run that declared no
+        # shuffle at all. Pair-major is the right grain once an order has been
+        # realized, because `execution_order` records `(condition, repeat)` pairs
+        # and the plan must match the record; under `as_declared` there is no
+        # record to match and the plan's own layout stands.
+        if mode == "randomized":
+            plan = _apply_execution_order(plan, execution_order)
+
         (run_dir / "sweep.yaml").write_text(
             yaml.safe_dump(
-                sweep_document(conditions, repeats, digest, order, execution_order),
+                sweep_document(
+                    conditions, levels, repeats, digest, mode, execution_order, order_seed
+                ),
                 sort_keys=False,
             )
         )

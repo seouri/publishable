@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 import yaml
+from tests.conftest import write_experiment_module
 
 from publishable.diagnostics import Collector
 from publishable.validate import validate_config
@@ -52,6 +53,49 @@ def write_config(git_repo: Path, tmp_path: Path):
         path = git_repo / "configs" / "cohort-pilot" / "config.yaml"
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(yaml.safe_dump(doc))
+        return path
+
+    return _write
+
+
+_NONDET_EXPERIMENT = """\
+from publishable import BaseExperiment, BaseStep
+
+
+class Step01Measure(BaseStep):
+    scope = "repeat"
+    nondeterministic = True
+
+    def run(self, cfg, io):
+        return {}
+
+
+class CohortPilotExperiment(BaseExperiment):
+    steps = [Step01Measure]
+"""
+
+_BROKEN_EXPERIMENT = "raise RuntimeError('module scope blew up')\n"
+
+
+@pytest.fixture
+def write_config_nondet(git_repo: Path, write_config):
+    """`write_config`, but the entrypoint's one step declares `nondeterministic`."""
+
+    def _write(overrides: dict | None = None) -> Path:
+        path = write_config(overrides)
+        write_experiment_module(git_repo, _NONDET_EXPERIMENT)
+        return path
+
+    return _write
+
+
+@pytest.fixture
+def write_config_broken(git_repo: Path, write_config):
+    """`write_config`, but the entrypoint's module raises at import."""
+
+    def _write(overrides: dict | None = None) -> Path:
+        path = write_config(overrides)
+        write_experiment_module(git_repo, _BROKEN_EXPERIMENT)
         return path
 
     return _write
@@ -160,6 +204,114 @@ def test_two_bad_repeat_levels_are_both_reported():
     assert len(found) == 2
     # an invalid design must not also produce a floor warning on top of the errors
     assert not any(f.code == "W-REPL-FLOOR" for f in c.findings)
+
+
+def test_a_fold_level_is_refused_by_name(write_config):
+    assert "E-REPL-FOLD-UNSUPPORTED" in codes(
+        write_config({"replication": {"repeats": [{"kind": "fold", "k": 5}]}})
+    )
+
+
+def test_two_levels_of_one_kind_are_refused(write_config):
+    assert "E-REPL-LEVEL-DUPLICATE" in codes(
+        write_config(
+            {
+                "replication": {
+                    "repeats": [{"kind": "seed", "n": 2}, {"kind": "seed", "n": 3}]
+                }
+            }
+        )
+    )
+
+
+def test_a_batch_inside_another_level_is_refused(write_config):
+    assert "E-REPL-LEVEL-BATCH-INNER" in codes(
+        write_config(
+            {
+                "replication": {
+                    "repeats": [{"kind": "seed", "n": 2}, {"kind": "batch", "n": 3}]
+                }
+            }
+        )
+    )
+
+
+def test_three_levels_are_refused(write_config):
+    assert "E-REPL-LEVEL-DEPTH" in codes(
+        write_config(
+            {
+                "replication": {
+                    "repeats": [
+                        {"kind": "batch", "n": 2},
+                        {"kind": "seed", "n": 2},
+                        {"kind": "seed", "n": 2},
+                    ]
+                }
+            }
+        )
+    )
+
+
+def test_two_levels_of_different_kinds_validate_clean(write_config):
+    found = codes(
+        write_config(
+            {
+                "replication": {
+                    "repeats": [{"kind": "batch", "n": 2}, {"kind": "seed", "n": 2}]
+                }
+            }
+        )
+    )
+    assert not [c for c in found if c.startswith("E-REPL")]
+
+
+def test_randomized_order_is_accepted(write_config):
+    found = codes(
+        write_config(
+            {"replication": {"repeats": [{"kind": "seed", "n": 2}], "order": "randomized"}}
+        )
+    )
+    assert "E-REPL-ORDER" not in found
+
+
+def test_an_unknown_order_is_refused(write_config):
+    assert "E-REPL-ORDER" in codes(
+        write_config(
+            {"replication": {"repeats": [{"kind": "seed", "n": 2}], "order": "sideways"}}
+        )
+    )
+
+
+def test_an_unresolved_repl_code_is_not_swallowed(write_config, monkeypatch):
+    """`REPL_DECLARATION_CODES` is deliberately narrow: it is today's complete list
+    of refusals that are properties of the declaration, not a catch-all. A future
+    code `resolve_repeats` raises that nobody has added to the set must propagate
+    out of `validate_config` rather than being silently absorbed into a finding —
+    this pins the `else: raise` branch, which no code exercises today."""
+    import publishable.validate as validate_mod
+    from publishable.errors import ContractError
+
+    def _boom(doc, digest):
+        raise ContractError("a future refusal nobody has classified yet", code="E-REPL-FUTURE")
+
+    monkeypatch.setattr(validate_mod, "resolve_repeats", _boom)
+    with pytest.raises(ContractError):
+        validate_config(write_config(), Collector())
+
+
+def test_an_unknown_repeat_kind_is_refused_through_validate(write_config):
+    assert "E-REPL-KIND" in codes(
+        write_config({"replication": {"repeats": [{"kind": "unknown_kind", "n": 2}]}})
+    )
+
+
+def test_colliding_seeds_are_refused_through_validate(write_config, monkeypatch):
+    import publishable.replication as replication
+
+    monkeypatch.setattr(replication, "_seed_for", lambda digest, index: 42)
+    assert "E-REPL-SEED-COLLISION" in codes(
+        write_config({"replication": {"repeats": [{"kind": "seed", "n": 3}]}})
+    )
 
 
 def test_an_unrecognised_sweep_key_is_refused(write_config):
@@ -479,11 +631,10 @@ def test_every_sweep_refusal_message_defers_rather_than_scolds(write_config):
         assert "later slice" in message, f"{code} must defer, not scold"
 
 
-def test_a_non_default_replication_order_is_refused_not_silently_ignored(write_config):
-    """`replication.order: randomized` currently validates clean and then executes
-    `as_declared` anyway — the record would say randomized while the run wasn't."""
+def test_randomized_replication_order_validates_clean(write_config):
+    """`as_declared` and `randomized` both ship in this build — neither is refused."""
     found = codes(write_config({"replication.order": "randomized"}))
-    assert "E-REPL-ORDER-UNSUPPORTED" in found
+    assert "E-REPL-ORDER" not in found
 
 
 def test_a_config_without_unimplemented_blocks_still_validates_clean(write_config):
@@ -491,7 +642,6 @@ def test_a_config_without_unimplemented_blocks_still_validates_clean(write_confi
     `replication.order: as_declared` — none of the new refusals should fire
     against it."""
     found = codes(write_config())
-    assert "E-REPL-ORDER-UNSUPPORTED" not in found
     assert not [c for c in found if c.endswith("-UNSUPPORTED")]
 
 
@@ -768,13 +918,15 @@ def test_a_repeats_block_that_is_not_a_list_is_reported_not_raised(write_config,
     assert "E-CONFIG-SHAPE" in {f.code for f in c.findings}
 
 
-def test_a_correctly_shaped_repeats_list_still_validates_clean(write_config):
+def test_a_correctly_shaped_repeats_list_still_validates_clean(write_config_nondet):
     """The new container check must not become a false refusal against a `repeats`
-    that is legitimately a list of mappings."""
+    that is legitimately a list of mappings. `fold` is a genuine refusal now that
+    `_check_replication` calls `resolve_repeats`, so this uses two supported kinds —
+    and a `batch` needs a nondeterministic step, or `W-REPL-DETERMINISTIC` fires."""
     path = _with_doc_change(
-        write_config,
+        write_config_nondet,
         lambda doc: doc["replication"].update(
-            repeats=[{"kind": "seed", "n": 5}, {"kind": "fold", "n": 2}]
+            repeats=[{"kind": "batch", "n": 2}, {"kind": "seed", "n": 5}]
         ),
     )
     assert codes(path) == set()
@@ -1019,3 +1171,55 @@ def test_a_null_grid_or_baseline_is_absent_not_malformed(write_config):
     module (`doc.get("x") or {}`), and the shape guard must not diverge."""
     found = codes(write_config({"sweep": {"baseline": None, "grid": None}}))
     assert "E-CONFIG-SHAPE" not in found
+
+
+# --- `validate` loads the experiment, so it can answer W-REPL-DETERMINISTIC -----
+
+
+def test_a_batch_level_warns_when_no_step_is_nondeterministic(write_config):
+    assert "W-REPL-DETERMINISTIC" in codes(
+        write_config({"replication": {"repeats": [{"kind": "batch", "n": 3}]}})
+    )
+
+
+def test_no_warning_when_a_step_declares_nondeterminism(write_config_nondet):
+    assert "W-REPL-DETERMINISTIC" not in codes(
+        write_config_nondet({"replication": {"repeats": [{"kind": "batch", "n": 3}]}})
+    )
+
+
+def test_no_warning_without_a_batch_level(write_config):
+    assert "W-REPL-DETERMINISTIC" not in codes(
+        write_config({"replication": {"repeats": [{"kind": "seed", "n": 3}]}})
+    )
+
+
+def test_an_unimportable_entrypoint_is_a_finding_not_a_traceback(write_config_broken):
+    """validate collects; a broken step module must not escape as a traceback."""
+    found = codes(write_config_broken({}))
+    assert "E-ENTRYPOINT-IMPORT" in found
+
+
+def test_a_broken_entrypoint_does_not_also_warn_about_determinism(write_config_broken):
+    """One finding per fault. A pipeline nobody could load has no steps to read
+    `nondeterministic` off, so a second warning about its `batch` is noise."""
+    found = codes(write_config_broken({"replication": {"repeats": [{"kind": "batch", "n": 3}]}}))
+    assert "E-ENTRYPOINT-IMPORT" in found
+    assert "W-REPL-DETERMINISTIC" not in found
+
+
+def test_the_import_failure_message_names_the_exception(write_config_broken):
+    message = messages_by_code(write_config_broken({}))["E-ENTRYPOINT-IMPORT"]
+    assert "RuntimeError" in message and "module scope blew up" in message
+
+
+def test_an_entrypoint_without_a_colon_says_so_rather_than_blaming_the_import(write_config):
+    """`load_experiment` refuses a value that is not `<module>:<attribute>` before it
+    imports anything. That branch was only reachable through `run` until `validate`
+    began loading the entrypoint, and "could not be imported" would send the reader
+    looking for a missing module instead of a malformed config line."""
+    message = messages_by_code(write_config({"entrypoint": "cohort_pilot.experiment"}))[
+        "E-ENTRYPOINT-IMPORT"
+    ]
+    assert "is not `<module>:<attribute>`" in message
+    assert "could not be imported" not in message

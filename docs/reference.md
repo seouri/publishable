@@ -291,6 +291,8 @@ The unknown-key check matters more than it looks: a mistyped key in a hand-edite
 
 Four things deliberately absent from that table: the unit failure rate and the ineligible fraction are both enforced by `run` as it goes — `limits.max_failed_fraction` fails the run and `limits.max_ineligible_fraction` warns, as when condition `03_arm=velocity_1.0` turns out to be buildable for 96 of 330 units — lockfile drift is checked by `resume` against the run it's resuming, and whether the [apparatus](#the-apparatus-core-can-only-observe) is reachable is checked by `dry-run`. The first three need a run to have happened, and `validate` takes a config path: eligibility in particular is a fact about what a step [declared](#what-isnt-a-repeat) once it ran, which no declaration in the config predicts. The fourth could be checked here and deliberately isn't: `validate` may read your config and your input, and may not reach anything outside the machine, because it's the command you run in a loop while editing YAML and a probe is metered by somebody else.
 
+None of that makes `validate` a read-only pass over YAML. It imports your `entrypoint`, because [it has to](#generators) — the execution plan is a property of the step classes — and that is what lets the batch row above read a step's declared `nondeterministic`, and what makes a package that won't import a `validate` failure rather than a surprise four hours into a `run`. The cost is worth naming beside the promise above: an import executes your package's module scope, so the *reach nothing outside the machine* guarantee is one core makes about its own behavior, not one it can enforce over your code — a module that opens a socket at import time reaches the network on every `validate`. Keep module scope to definitions and the two claims coincide, which is what the generated package does.
+
 **A fifth class is absent for a harder reason: what a step reads, calls, and returns is not a declaration.** Core [never inspects the body of your Python](design-principles.md#greenfield-only), so which parameter a step reads, which step it names in a call, and which keys it returns all exist nowhere until it runs. Those are enforced as it does, by the objects core owns — `cfg`, `io`, and the returned mapping — and each fails that execution the way any other error in it would:
 
 | Checked as a step runs | Example failure |
@@ -506,6 +508,21 @@ execution_order:                         # realized, always recorded — the fac
   # …
 ```
 
+**`repeats` is one entry per declared level, outer to inner** — the same list `replication.repeats` declares, resolved. Each entry carries its `kind` plus exactly the fields [that kind takes](#repeat-kinds): a `seed` level its resolved `seeds`, a `batch` level its `n` and nothing else, because a batch has no parameter of its own and that is the point. Nesting is therefore read off the list's order rather than recovered by splitting `labels` apart, which would put the run's design at the mercy of a label format:
+
+This is the [`batch` × `seed` design](#a-batch-says-when-not-what) — five separated blocks, three seeds within each — as `sweep.yaml` records it:
+
+```yaml
+repeats:                                 # outer to inner, one entry per level
+  - {kind: batch, n: 5}                  # `n` alone — a batch varies nothing else
+  - kind: seed
+    seeds: [17, 42, 137]
+labels: [batch01_seed17, batch01_seed42, batch01_seed137,
+         batch02_seed17, …]              # 5 × 3 = 15 composed
+```
+
+The `seeds` a level records are its own three, not one per execution: fifteen leaves over three resolved seeds is the [documented consequence](#a-batch-says-when-not-what) of `batch01_seed42` and `batch02_seed42` drawing alike, and a flattened list of fifteen would assert fifteen streams that don't exist.
+
 A `fold` level adds `partitions` — the unit keys in each fold's train and test side, and the realized fold sizes when [`cluster_by`](#clustered-units) makes them uneven. A `sample` sweep adds the drawn `values` per condition and the seed they came from. `order: randomized` adds the `order_seed` its shuffle used, beside the `execution_order` that shuffle produced — the seed so the plan is derivable, the order because [what happened is not a thing to re-derive](#resuming):
 
 ```yaml
@@ -645,12 +662,16 @@ Two levels, and only one leaf, because only one of these is ever a *state* rathe
 | [`io.write`](#steps-and-artifacts) or `io.path` onto a target that exists | `ArtifactExistsError` · `E-ARTIFACT-EXISTS` |
 | A `name` that escapes the step's directory, an `io.append` onto anything but `.jsonl`, or an extension [no writer claims](#steps-and-artifacts) handed an object that isn't `bytes` or `str` | `ArtifactError` · `E-ARTIFACT-NAME`, `E-ARTIFACT-APPEND`, `E-ARTIFACT-UNWRITABLE` |
 | [Reading a step narrower than the caller](#step-scope) | `ContractError` · `E-STEP-READ-DIRECTION` |
+| [`io.read_upstream` from `summary` scope naming a condition- or repeat-scoped step, once the sweep labels its conditions, or naming a repeat-scoped step once the run resolves more than one repeat](#step-scope) | `ContractError` · `E-STEP-READ-AMBIGUOUS` |
 | [Reading a swept parameter](#step-scope) at `"run"` or `"summary"` scope | `ContractError` · `E-STEP-SWEPT-PARAM` |
 | [`io.units` or `io.units.train`](#a-fold-repeat-puts-the-units-out-of-reach-of-the-wider-scopes) where the declarations put no such list | `ContractError` · `E-STEP-UNITS-UNAVAILABLE` |
 | `self.condition` or `self.repeat` at a [scope that has none](#using-them-in-step-code) | `ContractError` · `E-STEP-CONTEXT-ABSENT` |
 | An [`Estimate`](#estimate-carries-your-interval-without-core-claiming-it) outside `"summary"` scope, or one carrying `ci95` with no `method` | `ContractError` · `E-STEP-ESTIMATE-SCOPE`, `E-STEP-ESTIMATE-METHOD` |
 | A [returned value core can't record](#steps-and-artifacts), or any [name collision the record can't hold](#validation) — a derived key against a recorded column, a recorded column against a unit attribute | `ContractError` · `E-STEP-RETURN-TYPE`, `E-STEP-KEY-COLLISION` |
 | A [`cfg` path](#steps-and-artifacts) the config doesn't hold, or a write through a frozen [`Unit`](#the-unit-list-is-three-operations-and-the-units-in-it-are-frozen) | `ContractError` · `E-STEP-PARAM-UNKNOWN`, `E-UNIT-IMMUTABLE` |
+| Core's execution plan disagreeing with the state core resolved beside it — a repeat execution whose seed or whose resolved config isn't there, or a [realized order](#a-batch-says-when-not-what) naming a pair the plan doesn't hold | `ContractError` · `E-RUN-SEED-MISSING`, `E-RUN-CFG-MISSING`, `E-RUN-ORDER-MISMATCH`, `E-REPL-ORDER-UNRESOLVED` |
+
+**That last row is the one you can't cause, and it's in the table anyway.** Every other entry is something your declarations or your step code asked for; those four are core checking its own work, because the plan and the resolved conditions, repeats, seeds, and order are all derived from one config and must agree. If they ever don't, the run would execute something other than what it recorded, and no result from it is worth reading. They carry a type and a code for the same reason everything above does rather than being an `assert`: `assert` disappears under `python -O`, which is precisely the wrong property for the only guard on a condition nothing else detects. One of them reaching you is a bug to report, not a config to fix — and unlike every row above, none of the four is raised inside an execution, so it stops the run instead of failing one step and continuing. A plan core can't trust is not a plan to keep walking.
 
 **An exception exists where your code could act on the distinction; everything a *command* reports is a [diagnostic](#exit-codes-and-diagnostics), not an exception you catch.** `validate` collecting eleven errors over a config is not eleven raises — it's a report, and modelling it as an exception per finding would force it to stop at the first. So the hierarchy above covers exactly the run-time surface, where there is a step to raise into.
 
@@ -1082,6 +1103,8 @@ One ordered `steps` list expresses the whole pipeline, and core derives the exec
 
 Reading across scopes is directional and read-only: a narrower step reads wider ones via `io.read_upstream(step, name)` regardless of scope, and a `summary` step additionally gets `io.conditions` and `io.read_condition(condition, step, name, repeat=None)`, whose `repeat` is required when the step it names is repeat-scoped. A wider step can never read a narrower one, because at the time it runs those executions haven't happened. Which step a call names is an argument rather than a declaration, so this is enforced where the call is made: `io.read_upstream` raises when the step it names is narrower than the caller, naming both scopes. Same effect check as the two below.
 
+A `summary` step sits above every condition, so once a sweep labels its conditions, `io.read_upstream` naming a condition- or repeat-scoped step has no single condition to resolve to — that ambiguity is exactly what `io.read_condition` exists to name explicitly. With no sweep declared there is exactly one, unlabeled condition, and `io.read_upstream` still resolves it directly. The same ambiguity recurs one level down, independently of any sweep: a `summary` step sits above every *repeat* too, so once a run resolves more than one repeat, `io.read_upstream` naming a repeat-scoped step has no single repeat to resolve to either, and raises for the same reason and toward the same `io.read_condition(..., repeat=...)`. With exactly one repeat that level collapses — the same collapse rule `io.read_condition`'s own nesting already applies — and `io.read_upstream` keeps resolving it directly.
+
 **A swept parameter is unreadable from the scopes where it has no value.** A `"run"`-scoped step that read `analysis.method` would produce output silently wrong for every condition but one, and a `"summary"`-scoped step that read it would be picking a value no single condition owns. Neither is something core can catch by reading the config: which parameters a step reads is a fact about its body. So core doesn't ask — it owns `cfg`, and at `"run"` and `"summary"` scope, reading a path that `sweep` varies raises, naming the path and the axis that varies it. Unswept paths read normally at every scope, which is most of what a wider step wants a parameter for.
 
 That's the same effect check as [`io.units` raising under a `fold` repeat](#a-fold-repeat-puts-the-units-out-of-reach-of-the-wider-scopes), applied to the other thing core hands a step: rather than inspecting what the step intended, core declines to hand over a value that could only be the wrong one.
@@ -1463,7 +1486,7 @@ Every other repeat kind varies something core hands the pipeline — a seed, a p
 
 **Batches execute in order, and `order: randomized` shuffles *within* one.** A batch is a position in time, so shuffling batches against each other would destroy the thing being declared. Core therefore fixes the outer batch order and randomizes the (condition, inner-repeat) pairs inside each — which is also the design an operator wants: every condition met once per batch, in an order that doesn't confound it with position. The realized order and each execution's `started_at` land in `run.yaml`, so "were the batches actually separated?" is answerable from the record rather than from someone's memory. Core does not schedule the separation — it has no wall clock to enforce and inserting one would be a tool deciding when your instrument is free.
 
-**`validate` warns when no step in the pipeline sets `nondeterministic = True`.** Under a fully deterministic pipeline a `batch` level re-computes the same answer *n* times, and its `repeat_spread` is a row of zeros that cost you *n* times the compute. That's a declaration-level check, so core can make it: it compares the declared kind against the declared attribute, without looking at what any step does.
+**`validate` warns — `W-REPL-DETERMINISTIC` — when no step in the pipeline sets `nondeterministic = True`.** Under a fully deterministic pipeline a `batch` level re-computes the same answer *n* times, and its `repeat_spread` is a row of zeros that cost you *n* times the compute. That's a declaration-level check, so core can make it before anything runs: it compares the declared kind against the declared attribute, read off the step classes it has [already imported to derive the plan](#generators). Reading a class attribute is not reading a step's body, which core [still never does](design-principles.md#greenfield-only) — so a step that is nondeterministic in fact and silent about it draws the warning anyway, and the fix is the declaration.
 
 ```yaml
 replication:

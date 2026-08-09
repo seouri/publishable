@@ -23,6 +23,9 @@ def make_io(
     conditions: list[tuple[int, str]] | None = None,
     repeats: list[str] | None = None,
     step_scopes: dict[str, str] | None = None,
+    condition_index: int | None = None,
+    condition_label: str | None = None,
+    repeat_label: str | None = None,
 ) -> StepIO:
     step_dir = tmp_path / "run" / "step"
     step_dir.mkdir(parents=True, exist_ok=True)
@@ -35,6 +38,9 @@ def make_io(
         conditions=conditions,
         repeats=repeats,
         step_scopes=step_scopes,
+        condition_index=condition_index,
+        condition_label=condition_label,
+        repeat_label=repeat_label,
     )
 
 
@@ -494,26 +500,203 @@ def test_a_narrower_step_reads_a_wider_one_normally(tmp_path: Path):
     assert io.read_upstream("load", "a.json") == {"x": 1}
 
 
+def test_a_repeat_step_reads_a_condition_scoped_step(tmp_path: Path):
+    """The case that fails today: `shared/` is where run-scoped steps write, and a
+    condition-scoped step writes under its own condition directory."""
+    io = make_io(
+        tmp_path,
+        scope="repeat",
+        condition_index=0,
+        condition_label="baseline",
+        step_scopes={"fit": "condition"},
+    )
+    cond = io.run_dir / "conditions" / "00_baseline" / "fit"
+    cond.mkdir(parents=True)
+    (cond / "model.json").write_text('{"m": 1}\n')
+    assert io.read_upstream("fit", "model.json") == {"m": 1}
+
+
+def test_a_condition_step_still_reads_a_run_scoped_step(tmp_path: Path):
+    io = make_io(
+        tmp_path,
+        scope="condition",
+        condition_index=0,
+        condition_label="baseline",
+        step_scopes={"load": "run"},
+    )
+    shared = io.run_dir / "shared" / "load"
+    shared.mkdir(parents=True)
+    (shared / "cohort.json").write_text('{"n": 3}\n')
+    assert io.read_upstream("load", "cohort.json") == {"n": 3}
+
+
+def test_reading_a_narrower_step_is_still_refused(tmp_path: Path):
+    io = make_io(
+        tmp_path,
+        scope="condition",
+        condition_index=0,
+        condition_label="baseline",
+        step_scopes={"analyze": "repeat"},
+    )
+    with pytest.raises(ContractError) as exc:
+        io.read_upstream("analyze", "scores.json")
+    assert exc.value.code == "E-STEP-READ-DIRECTION"
+
+
 def test_a_step_reads_another_step_at_its_own_scope(tmp_path: Path):
-    io = make_io(tmp_path, scope="condition", step_scopes={"fit": "condition"})
-    (io.run_dir / "shared" / "fit").mkdir(parents=True)
-    (io.run_dir / "shared" / "fit" / "model.json").write_text('{"k": 1}\n')
+    io = make_io(
+        tmp_path,
+        scope="condition",
+        step_scopes={"fit": "condition"},
+        condition_index=0,
+        condition_label="baseline",
+    )
+    fit_dir = io.run_dir / "conditions" / "00_baseline" / "fit"
+    fit_dir.mkdir(parents=True)
+    (fit_dir / "model.json").write_text('{"k": 1}\n')
+    assert io.read_upstream("fit", "model.json") == {"k": 1}
+
+
+def test_a_repeat_step_reads_another_repeat_step_at_its_own_scope(tmp_path: Path):
+    """The fourth scope. `read_upstream` resolved `run`, `condition`, and `summary`;
+    a `repeat`-scoped target fell into the condition branch with its repeat-label
+    segment omitted, so an entirely ordinary pipeline — two repeat-scope steps, the
+    second reading the first's artifact — crashed with a bare `FileNotFoundError`
+    naming a path nothing writes. With exactly one repeat the directory collapses
+    and it happened to work, so it appeared the day a user added a second seed.
+    Two repeats here for that reason.
+    """
+    io = make_io(
+        tmp_path,
+        scope="repeat",
+        step_scopes={"fit": "repeat"},
+        conditions=[(0, "baseline")],
+        repeats=["seed17", "seed42"],
+        condition_index=0,
+        condition_label="baseline",
+        repeat_label="seed42",
+    )
+    fit_dir = io.run_dir / "conditions" / "00_baseline" / "seed42" / "fit"
+    fit_dir.mkdir(parents=True)
+    (fit_dir / "model.json").write_text('{"k": 2}\n')
+    assert io.read_upstream("fit", "model.json") == {"k": 2}
+
+
+def test_a_repeat_step_reading_a_condition_step_adds_no_repeat_segment(tmp_path: Path):
+    """The segment is a property of the TARGET's scope, not the caller's: a
+    condition-scoped artifact is written once per condition, above every repeat."""
+    io = make_io(
+        tmp_path,
+        scope="repeat",
+        step_scopes={"fit": "condition"},
+        conditions=[(0, "baseline")],
+        repeats=["seed17", "seed42"],
+        condition_index=0,
+        condition_label="baseline",
+        repeat_label="seed42",
+    )
+    fit_dir = io.run_dir / "conditions" / "00_baseline" / "fit"
+    fit_dir.mkdir(parents=True)
+    (fit_dir / "model.json").write_text('{"k": 1}\n')
     assert io.read_upstream("fit", "model.json") == {"k": 1}
 
 
 @pytest.mark.parametrize("target_scope", ["run", "condition", "repeat"])
-def test_a_summary_step_reads_upstream_from_every_narrower_scope(
+def test_a_summary_step_reads_upstream_from_every_narrower_scope_in_a_no_sweep_run(
     tmp_path: Path, target_scope: str
 ):
     """`summary` sits above `run`, `condition`, and `repeat` alike — every one of
     them is a read of something wider, and none may raise E-STEP-READ-DIRECTION.
-    Nothing else exercises read_upstream from a summary caller, so a bug in how
-    `summary` itself is ranked (as opposed to the separate summary-only guard on
-    io.conditions/io.read_condition) would otherwise go undetected."""
-    io = make_io(tmp_path, scope="summary", step_scopes={"upstream": target_scope})
-    (io.run_dir / "shared" / "upstream").mkdir(parents=True)
-    (io.run_dir / "shared" / "upstream" / "a.json").write_text('{"x": 1}\n')
+    `scope.py::build_plan` gives a real summary `Execution` no condition context
+    at all (`condition_index=None, condition_label=None`), so this test doesn't
+    inject any — that state is unreachable in production and a test that
+    manufactures it proves nothing. With no sweep declared there is exactly one,
+    unlabeled condition and no `conditions/` level, so `run_dir/step/name` (or
+    `shared/`, for a run-scoped target) is genuinely where the target's writer
+    left its output."""
+    io = make_io(
+        tmp_path,
+        scope="summary",
+        conditions=[(0, None)],
+        step_scopes={"upstream": target_scope},
+    )
+    if target_scope == "run":
+        upstream_dir = io.run_dir / "shared" / "upstream"
+    else:
+        upstream_dir = io.run_dir / "upstream"
+    upstream_dir.mkdir(parents=True)
+    (upstream_dir / "a.json").write_text('{"x": 1}\n')
     assert io.read_upstream("upstream", "a.json") == {"x": 1}
+
+
+@pytest.mark.parametrize("target_scope", ["condition", "repeat"])
+def test_a_summary_step_cannot_read_upstream_from_a_labeled_sweep(
+    tmp_path: Path, target_scope: str
+):
+    """Once a sweep labels its conditions, `io.read_upstream` from `summary` scope
+    has no single condition to resolve a condition- or repeat-scoped target to —
+    that ambiguity is exactly what `io.read_condition` exists to resolve instead."""
+    io = make_io(
+        tmp_path,
+        scope="summary",
+        conditions=[(0, "baseline"), (1, "method=spearman")],
+        step_scopes={"upstream": target_scope},
+    )
+    with pytest.raises(ContractError) as exc:
+        io.read_upstream("upstream", "a.json")
+    assert exc.value.code == "E-STEP-READ-AMBIGUOUS"
+
+
+def test_a_summary_step_cannot_read_upstream_from_a_repeat_scoped_step_with_several_repeats(
+    tmp_path: Path,
+):
+    """The sibling ambiguity one level down from the labeled-sweep case above: with
+    no `sweep` block at all, a run can still resolve more than one repeat, and a
+    `summary` step sits above every one of them. `read_upstream` has no single
+    repeat to resolve a `repeat`-scoped target to, so it must refuse exactly as the
+    labeled-condition case does, pointing at `io.read_condition(..., repeat=...)`
+    instead."""
+    io = make_io(
+        tmp_path,
+        scope="summary",
+        conditions=[(0, None)],
+        repeats=["seed1", "seed2"],
+        step_scopes={"analyze": "repeat"},
+    )
+    with pytest.raises(ContractError) as exc:
+        io.read_upstream("analyze", "a.json")
+    assert exc.value.code == "E-STEP-READ-AMBIGUOUS"
+    assert "io.read_condition" in str(exc.value)
+
+
+def test_a_summary_step_reads_upstream_from_a_repeat_scoped_step_with_one_repeat(
+    tmp_path: Path,
+):
+    """The case a careless fix breaks: with exactly one repeat the repeat directory
+    collapses (`runner.step_dir_for` adds no segment), so `run_dir/step/name` is
+    genuinely where the target wrote its output, and the read must still succeed."""
+    io = make_io(
+        tmp_path,
+        scope="summary",
+        conditions=[(0, None)],
+        repeats=["seed1"],
+        step_scopes={"analyze": "repeat"},
+    )
+    upstream_dir = io.run_dir / "analyze"
+    upstream_dir.mkdir(parents=True)
+    (upstream_dir / "a.json").write_text('{"x": 1}\n')
+    assert io.read_upstream("analyze", "a.json") == {"x": 1}
+
+
+def test_a_summary_step_reads_another_summary_step(tmp_path: Path):
+    """Direct coverage of the `target == "summary"` branch: a summary step reading
+    an upstream step that is itself summary-scoped resolves under `summary/`, not
+    `shared/` or a condition directory."""
+    io = make_io(tmp_path, scope="summary", step_scopes={"earlier": "summary"})
+    summary_dir = io.run_dir / "summary" / "earlier"
+    summary_dir.mkdir(parents=True)
+    (summary_dir / "a.json").write_text('{"x": 1}\n')
+    assert io.read_upstream("earlier", "a.json") == {"x": 1}
 
 
 def test_read_condition_requires_a_repeat_for_a_repeat_scoped_step(tmp_path: Path):
