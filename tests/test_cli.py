@@ -20,7 +20,11 @@ Ran = namedtuple("Ran", ["condition_index", "repeat_label"])
 
 
 def run_a_project(
-    tmp_path: Path, *, replication: dict[str, Any] | None = None, **overrides: Any
+    tmp_path: Path,
+    *,
+    replication: dict[str, Any] | None = None,
+    capsys: pytest.CaptureFixture[str] | None = None,
+    **overrides: Any,
 ) -> dict[str, Any]:
     """Scaffold, configure, commit, and `run` a project end to end.
 
@@ -35,6 +39,14 @@ def run_a_project(
     produced them — the ground truth for "did the plan run in the order
     `sweep.yaml` recorded," read from the ledger rather than re-derived from
     the plan the way the thing under test builds `execution_order`.
+
+    `capsys` is optional and additive: pass the fixture when a caller needs to
+    assert on a diagnostic `run` prints (`command_run` prints `validate`'s
+    findings — warnings included, such as `W-REPL-DETERMINISTIC` — to stdout,
+    the same surface `test_an_unwritable_output_dir_is_a_diagnostic_not_a_traceback`
+    reads for `E-IO-FAILED`). When given, the captured text lands in the
+    returned dict under `"stdout"`/`"stderr"`; existing callers that don't pass
+    it are unaffected.
     """
     tmp_path.mkdir(parents=True, exist_ok=True)
     root = tmp_path / "proj"
@@ -64,6 +76,7 @@ def run_a_project(
         subprocess.run(["git", *args], cwd=root, check=True)
 
     assert main(["run", str(cfg)]) == EXIT_OK
+    captured = capsys.readouterr() if capsys is not None else None
     run_dir = next(results_dir.glob("run_*"))
     lines = (run_dir / "executions.jsonl").read_text().splitlines()
     ledger = [json.loads(line) for line in lines]
@@ -74,6 +87,8 @@ def run_a_project(
         "results_dir": results_dir,
         "run_dir": run_dir,
         "results": results,
+        "stdout": captured.out if captured is not None else None,
+        "stderr": captured.err if captured is not None else None,
     }
 
 
@@ -229,7 +244,7 @@ def test_the_recorded_order_is_the_order_that_ran(tmp_path: Path):
 # --- Task 9: the acceptance test — a nested batch × seed design, end to end -----
 
 
-def test_a_nested_batch_seed_run_end_to_end(tmp_path):
+def test_a_nested_batch_seed_run_end_to_end(tmp_path, capsys):
     doc = run_a_project(
         tmp_path,
         sweep={
@@ -240,7 +255,13 @@ def test_a_nested_batch_seed_run_end_to_end(tmp_path):
             "repeats": [{"kind": "batch", "n": 3}, {"kind": "seed", "n": 2}],
             "order": "randomized",
         },
+        capsys=capsys,
     )
+    # The `generic` template's demo step never sets `nondeterministic = True`, so a
+    # declared `batch` level is exactly the case `W-REPL-DETERMINISTIC` warns on —
+    # pinned here so a change that silently dropped the warning on this path
+    # wouldn't leave the whole suite green.
+    assert "W-REPL-DETERMINISTIC" in doc["stdout"]
     run_dir = doc["run_dir"]
     repeat_dirs = sorted(p.name for p in (run_dir / "conditions").glob("*/*") if p.is_dir())
     # 2 conditions × 6 composed repeat labels each = 12 directories; the same 6
@@ -279,9 +300,16 @@ def test_the_recorded_order_seed_reproduces_the_order(tmp_path):
     assert sa["execution_order"] == sb["execution_order"]
 
 
-def test_a_single_level_seed_run_has_no_composed_labels(tmp_path):
+def test_a_single_level_seed_run_has_no_composed_labels(tmp_path, capsys):
     """The regression risk of introducing a level is that it appears where it should not."""
-    doc = run_a_project(tmp_path, replication={"repeats": [{"kind": "seed", "n": 2}]})
+    doc = run_a_project(
+        tmp_path, replication={"repeats": [{"kind": "seed", "n": 2}]}, capsys=capsys
+    )
+    # No `batch` level is declared at all, so `W-REPL-DETERMINISTIC` — which fires
+    # only when a `batch` level lacks a `nondeterministic` step — has nothing to
+    # warn about here; asserted so the two tests pin opposite sides of the rule
+    # rather than both happening to pass for unrelated reasons.
+    assert "W-REPL-DETERMINISTIC" not in doc["stdout"]
     dirs = [p.name for p in doc["run_dir"].rglob("*") if p.is_dir()]
     assert not any(f"{LABEL_JOIN}seed" in d for d in dirs)
     assert not any(d.startswith("batch") for d in dirs)
