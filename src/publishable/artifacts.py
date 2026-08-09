@@ -1,0 +1,149 @@
+# src/publishable/artifacts.py
+"""Scope-aware, atomic, append-only artifacts. docs/reference.md § Steps and artifacts."""
+
+import csv
+import io as _io
+import json
+import os
+import tempfile
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+from publishable.errors import ArtifactError, ArtifactExistsError
+
+
+def write_atomic(path: Path, data: bytes) -> None:
+    """Temp file plus rename, so a crash leaves nothing rather than a half-file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".partial-")
+    try:
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.replace(tmp, path)
+    except BaseException:
+        Path(tmp).unlink(missing_ok=True)
+        raise
+
+
+def _encode_json(obj: Any) -> bytes:
+    return (json.dumps(obj, ensure_ascii=False) + "\n").encode()
+
+
+def _encode_yaml(obj: Any) -> bytes:
+    return yaml.safe_dump(obj, sort_keys=False).encode()
+
+
+def _encode_jsonl(rows: Any) -> bytes:
+    return "".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows).encode()
+
+
+def _encode_csv(rows: Any) -> bytes:
+    rows = list(rows)
+    columns: list[str] = []
+    for row in rows:
+        for key in row:
+            if key not in columns:
+                columns.append(key)
+    buf = _io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=columns, lineterminator="\n")
+    writer.writeheader()
+    writer.writerows(rows)
+    return buf.getvalue().encode()
+
+
+WRITERS = {
+    ".json": _encode_json,
+    ".yaml": _encode_yaml,
+    ".jsonl": _encode_jsonl,
+    ".csv": _encode_csv,
+}
+
+
+def _suffix_for(name: str) -> str | None:
+    """The longest registered suffix of the name's last component, lower-cased."""
+    last = name.rsplit("/", 1)[-1].lower()
+    best: str | None = None
+    for suffix in WRITERS:
+        if last.endswith(suffix) and (best is None or len(suffix) > len(best)):
+            best = suffix
+    return best
+
+
+class StepIO:
+    def __init__(self, *, step_dir: Path, input_dir: Path, run_dir: Path) -> None:
+        self.step_dir = step_dir
+        self.input_dir = input_dir
+        self.run_dir = run_dir
+        self.resumed = False
+        self.recorded_keys: set[str] = set()
+
+    def _resolve(self, name: str) -> Path:
+        candidate = (self.step_dir / name).resolve()
+        base = self.step_dir.resolve()
+        if Path(name).is_absolute() or not str(candidate).startswith(str(base) + os.sep):
+            raise ArtifactError(
+                f"{name!r} resolves outside the step's directory", code="E-ARTIFACT-NAME"
+            )
+        return candidate
+
+    def path(self, name: str) -> Path:
+        target = self._resolve(name)
+        if target.exists():
+            raise ArtifactExistsError(f"{name} already exists", code="E-ARTIFACT-EXISTS")
+        target.parent.mkdir(parents=True, exist_ok=True)
+        return target
+
+    def exists(self, name: str) -> bool:
+        return self._resolve(name).exists()
+
+    def write(self, name: str, obj: Any) -> Path:
+        target = self.path(name)
+        suffix = _suffix_for(name)
+        if suffix is not None:
+            data = WRITERS[suffix](obj)
+        elif isinstance(obj, bytes):
+            data = obj
+        elif isinstance(obj, str):
+            data = obj.encode()
+        else:
+            raise ArtifactError(
+                f"{name} has no registered writer, so the object must be bytes or str, "
+                f"not {type(obj).__name__}",
+                code="E-ARTIFACT-UNWRITABLE",
+            )
+        write_atomic(target, data)
+        return target
+
+    def append(self, name: str, record: dict[str, Any]) -> None:
+        if not name.lower().endswith(".jsonl"):
+            raise ArtifactError(
+                f"`io.append` writes one JSON object per line, so {name} must be .jsonl",
+                code="E-ARTIFACT-APPEND",
+            )
+        target = self._resolve(name)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        with target.open("a", encoding="utf-8") as fh:
+            fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+
+    def read_input(self, relpath: str) -> Any:
+        return self._read(self.input_dir / relpath)
+
+    def read_upstream(self, step: str, name: str) -> Any:
+        return self._read(self.run_dir / "shared" / step / name)
+
+    @staticmethod
+    def _read(path: Path) -> Any:
+        low = path.name.lower()
+        if low.endswith(".json"):
+            return json.loads(path.read_text())
+        if low.endswith(".yaml"):
+            return yaml.safe_load(path.read_text())
+        if low.endswith(".jsonl"):
+            return [json.loads(line) for line in path.read_text().splitlines() if line]
+        if low.endswith(".csv"):
+            return list(csv.DictReader(_io.StringIO(path.read_text())))
+        return path.read_bytes()
