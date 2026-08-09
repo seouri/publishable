@@ -341,3 +341,19 @@ def test_the_map_covers_every_unit_exactly_once():
     members = fold_members_for(levels, parts)
     allk = [k for s in members.values() for k in s]
     assert len(allk) == 9 and len(set(allk)) == 9
+
+
+def test_a_fold_in_non_outermost_position_is_still_found_by_kind():
+    """`batch` is the only kind required to be outermost, so `[batch, fold]` is a
+    legitimate design with fold at position 1. A selector that grabbed `levels[0]`
+    would read the batch level's members here instead, and its labels
+    (`batch01`/`batch02`) would not match — this is what proves the selection is
+    by kind, not position."""
+    levels = resolve_repeats(
+        cfg([{"kind": "batch", "n": 2}, {"kind": "fold", "k": 2}]), "d", unit_count=4
+    )
+    parts = [[_u("a"), _u("b")], [_u("c"), _u("d")]]
+    assert fold_members_for(levels, parts) == {
+        "fold01": frozenset({"a", "b"}),
+        "fold02": frozenset({"c", "d"}),
+    }
