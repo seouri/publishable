@@ -47,6 +47,24 @@ def test_config_committed_is_recorded_not_required(git_repo: Path):
     assert git_provenance(git_repo, cfg).config_committed is True
 
 
+def test_zero_commits_is_an_error_not_an_empty_string(tmp_path: Path):
+    repo = tmp_path / "repo"
+    (repo / "src").mkdir(parents=True)
+    (repo / "src" / "placeholder.py").write_text("# placeholder\n")
+    git("init", "-q", cwd=repo)
+    git("config", "user.email", "test@example.com", cwd=repo)
+    git("config", "user.name", "Test", cwd=repo)
+    with pytest.raises(ContractError) as e:
+        git_provenance(repo, repo / "c.yaml")
+    assert e.value.code == "E-GIT-NO-COMMIT"
+    assert str(repo) in str(e.value)
+
+
+def test_the_normal_path_is_untouched(git_repo: Path):
+    info = git_provenance(git_repo, git_repo / "c.yaml")
+    assert len(info.commit) == 40
+
+
 def test_a_missing_lockfile_is_reported_as_absent(git_repo: Path):
     assert uv_lock_info(git_repo) == (None, None)
 

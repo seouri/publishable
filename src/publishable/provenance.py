@@ -45,9 +45,25 @@ def git_provenance(start: Path, config_path: Path) -> GitInfo:
     repo = find_repo_root(start)
     dirty = bool(_git(repo, "status", "--porcelain", "--", *HASHED_TREES))
     tracked = _git(repo, "ls-files", "--error-unmatch", str(config_path))
+    # --verify (not bare `rev-parse HEAD`) matters here: on a repo with no commits,
+    # plain `git rev-parse HEAD` writes the literal string "HEAD" to stdout as part
+    # of its usage hint even though it fails, which would make `_git`'s
+    # check=False/strip() convention read back a non-empty "commit" of "HEAD".
+    # `--verify` fails with clean, empty stdout instead.
+    commit = _git(repo, "rev-parse", "--verify", "HEAD")
+    # Unlike the other _git call sites, an empty result here has no honest reading:
+    # it is not "no commit" as a fact about the repo (every repo either has a HEAD
+    # or doesn't), it is `_git`'s check=False convention swallowing a failure. A
+    # provenance record with commit="" would certify nothing while looking
+    # well-formed, so this one call site refuses instead of recording it.
+    if not commit:
+        raise ContractError(
+            f"repository at {repo} has no commits yet; provenance requires a HEAD",
+            code="E-GIT-NO-COMMIT",
+        )
     return GitInfo(
         repo_root=repo,
-        commit=_git(repo, "rev-parse", "HEAD"),
+        commit=commit,
         branch=_git(repo, "rev-parse", "--abbrev-ref", "HEAD"),
         remote=_git(repo, "remote", "get-url", "origin") or None,
         code_dirty=dirty,
