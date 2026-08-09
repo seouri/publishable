@@ -364,9 +364,17 @@ class StepIO:
         return list(self._repeats or [])
 
     def read_condition(
-        self, condition: int, step: str, name: str, repeat: str | None = None
+        self,
+        condition: "int | tuple[int, str]",
+        step: str,
+        name: str,
+        repeat: str | None = None,
     ) -> Any:
+        """`condition` accepts either a bare index or the `(index, label)` element
+        `io.conditions` yields, so the documented `for condition in io.conditions:
+        io.read_condition(condition, ...)` pattern and a literal index both work."""
         self._summary_only("read_condition")
+        index = condition[0] if isinstance(condition, tuple) else condition
         target = (self._step_scopes or {}).get(step)
         if target == "repeat" and repeat is None:
             raise ContractError(
@@ -374,13 +382,13 @@ class StepIO:
                 "which repeat's copy to read",
                 code="E-STEP-READ-REPEAT-REQUIRED",
             )
-        label = dict(self._conditions or []).get(condition)
+        label = dict(self._conditions or []).get(index)
         if label is None:
             raise ContractError(
-                f"condition {condition} is not among this run's resolved conditions",
+                f"condition {index} is not among this run's resolved conditions",
                 code="E-STEP-READ-CONDITION-UNKNOWN",
             )
-        base = self.run_dir / "conditions" / condition_dir_name(condition, label)
+        base = self.run_dir / "conditions" / condition_dir_name(index, label)
         collapsed = len(self._repeats or []) <= 1
         if target == "repeat" and repeat is not None and not collapsed:
             base = base / repeat

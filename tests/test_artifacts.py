@@ -533,6 +533,26 @@ def test_read_condition_resolves_a_non_repeat_scoped_step_without_a_repeat(tmp_p
     assert io.read_condition(1, "fit", "model.json") == {"m": 1}
 
 
+def test_read_condition_accepts_the_element_io_conditions_yields(tmp_path: Path):
+    """The documented pattern (reference.md around lines 1784, 1806, 2318):
+    `for condition in io.conditions: io.read_condition(condition, ...)` — passing
+    the (index, label) tuple straight through must work, not only a bare index."""
+    io = make_io(
+        tmp_path,
+        scope="summary",
+        conditions=[(0, "baseline"), (1, "method=spearman")],
+        step_scopes={"fit": "condition"},
+    )
+    target = io.run_dir / "conditions" / "01_method=spearman" / "fit"
+    target.mkdir(parents=True)
+    (target / "model.json").write_text('{"m": 1}\n')
+    results = {}
+    for condition in io.conditions:
+        if condition[0] == 1:
+            results[condition] = io.read_condition(condition, "fit", "model.json")
+    assert results[(1, "method=spearman")] == {"m": 1}
+
+
 def test_read_condition_resolves_a_named_repeat_when_the_run_has_several(tmp_path: Path):
     io = make_io(
         tmp_path,
