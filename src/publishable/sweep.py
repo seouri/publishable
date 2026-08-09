@@ -12,6 +12,7 @@ declared and the grid is mechanical, and reconciling the two is not
 """
 
 import itertools
+import re
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
@@ -47,6 +48,44 @@ def render_value(value: Any) -> str:
     return str(value)
 
 
+# The axis separator in a label. Kept as a module-level name — not inlined
+# as a literal in `label_for` and `check_swept_value` — because both places
+# that care about it must agree on what it is: the separator `label_for`
+# joins axes with is exactly the substring `check_swept_value` refuses.
+AXIS_SEPARATOR = "__"
+
+
+def check_swept_value(value: Any) -> str | None:
+    """None if `value` is safe to render into a condition label; otherwise why not.
+
+    `docs/reference.md` § How artifacts are organized states two rules that
+    cannot both hold for every value: a swept value must render as
+    `SWEPT_VALUE_PATTERN` (which admits `_`), and axes in a label are joined
+    by `__`. A rendered value containing `__` — e.g. `a__b` — passes the
+    pattern but destroys the separator: `one=a__b__two=c` splits into three
+    axes instead of two. Since a label is also a selector (a hypothesis's
+    `compare.condition`, a contrast's `of`/`against`, and a `report` filter
+    all name conditions by parsing the label's body back into axes), this
+    resolves the conflict by refusing the value rather than the character —
+    `_` alone stays legal.
+
+    Task 4's `validate` is where this predicate is meant to be called from,
+    once `_check_sweep` exists: this is the shape of the check it should run
+    per swept value, on top of (not instead of) the existing pattern check.
+    """
+    rendered = render_value(value)
+    if not re.match(SWEPT_VALUE_PATTERN, rendered):
+        return f"swept value {rendered!r} does not match {SWEPT_VALUE_PATTERN}"
+    if AXIS_SEPARATOR in rendered:
+        return (
+            f"swept value {rendered!r} contains {AXIS_SEPARATOR!r}, the separator "
+            "between axes in a condition label; a label is also a selector, so a "
+            "value containing the separator would produce a label that cannot be "
+            "parsed back into axes"
+        )
+    return None
+
+
 def _keys_for(paths: list[str]) -> dict[str, str]:
     """The shortest suffix of each dotted path that is unique among them all.
 
@@ -71,7 +110,7 @@ def label_for(values: dict[str, Any], grid: dict[str, Any], is_baseline: bool) -
     if is_baseline:
         return "baseline"
     keys = _keys_for(list(grid))
-    return "__".join(
+    return AXIS_SEPARATOR.join(
         f"{keys.get(path, path.rsplit('.', 1)[-1])}={render_value(value)}"
         for path, value in values.items()
     )

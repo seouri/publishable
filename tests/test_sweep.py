@@ -107,6 +107,28 @@ def test_booleans_and_floats_render_readably():
     assert [c.label for c in conds] == ["flag=true__rate=0.5", "flag=false__rate=0.5"]
 
 
+def test_a_value_rendering_the_axis_separator_is_refused():
+    from publishable.sweep import check_swept_value
+    message = check_swept_value("a__b")
+    assert message is not None
+    assert "a__b" in message
+    assert "__" in message
+
+
+def test_a_single_underscore_is_still_accepted():
+    """Narrowing the pattern to exclude `_` entirely would be over-correction —
+    only the two-character separator sequence is the conflict."""
+    from publishable.sweep import check_swept_value
+    assert check_swept_value("a_b") is None
+
+
+def test_values_already_refused_by_the_pattern_are_still_refused():
+    """The separator check is on top of the pattern check, not instead of it."""
+    from publishable.sweep import check_swept_value
+    assert check_swept_value("a b") is not None
+    assert check_swept_value("a/b") is not None
+
+
 def test_every_generated_label_body_matches_the_selector_pattern():
     import re
 
