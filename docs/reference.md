@@ -510,7 +510,7 @@ execution_order:                         # realized, always recorded — the fac
 
 **`repeats` is one entry per declared level, outer to inner** — the same list `replication.repeats` declares, resolved. Each entry carries its `kind` plus exactly the fields [that kind takes](#repeat-kinds): a `seed` level its resolved `seeds`, a `batch` level its `n` and nothing else, because a batch has no parameter of its own and that is the point. Nesting is therefore read off the list's order rather than recovered by splitting `labels` apart, which would put the run's design at the mercy of a label format:
 
-This is the [`batch` × `seed` design](#a-batch-says-when-not-what) above — five separated blocks, three seeds within each — as `sweep.yaml` records it:
+This is the [`batch` × `seed` design](#a-batch-says-when-not-what) — five separated blocks, three seeds within each — as `sweep.yaml` records it:
 
 ```yaml
 repeats:                                 # outer to inner, one entry per level
