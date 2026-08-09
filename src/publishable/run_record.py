@@ -57,6 +57,7 @@ def _execution_block(results: list[ExecutionResult]) -> dict[str, Any]:
 def _results_block(
     results: list[ExecutionResult],
     aggregated: dict[int, dict[str, dict[str, Any]]] | None,
+    condition_meta: dict[int, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     # A "run"-scoped step's return has nowhere to land here (§ The two files gives
     # `results` only `conditions` and `summary`), and the same is true of a
@@ -102,6 +103,28 @@ def _results_block(
     if aggregated is not None:
         for index, cond in conditions.items():
             cond["aggregated"] = aggregated[index] if index in aggregated else {}
+    # `condition_meta` is what an `Execution` cannot carry: it holds `index`,
+    # `label`, and `repeat_label`, but not `is_baseline` and not the swept
+    # `values` — those facts have to arrive alongside `aggregated` rather than
+    # be inferred from executions. It also fills in a condition that has no
+    # `condition`- or `repeat`-scoped execution in `results` at all (an empty
+    # grid axis, say), so its identity is still on record.
+    #
+    # `values` is filled here rather than left `{}`: `reference.md` § The two
+    # files and § Statistical reporting both show the swept values on the
+    # condition entry, and `run.yaml` is the file a paper attaches — a reader
+    # of it alone must be able to say what each condition varied without
+    # opening `sweep.yaml`, which is the plan rather than the record.
+    if condition_meta is not None:
+        for index, meta in condition_meta.items():
+            cond = conditions.setdefault(
+                index, {"index": index, "label": meta.get("label"), "values": {}, "per_repeat": {}}
+            )
+            cond["label"] = meta.get("label", cond.get("label"))
+            cond["is_baseline"] = meta.get("is_baseline", False)
+            cond["values"] = dict(meta.get("values") or {})
+        for cond in conditions.values():
+            cond.setdefault("is_baseline", False)
     return {
         "conditions": [conditions[k] for k in sorted(conditions)],
         "summary": summary,
@@ -140,6 +163,7 @@ def assemble_run_yaml(
     repeats: list[Repeat],
     draft: bool = False,
     aggregated: dict[int, dict[str, dict[str, Any]]] | None = None,
+    condition_meta: dict[int, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     # There is no `counts` parameter here: `summarize_step` already embeds the
     # per-unit counts as `n` inside each metric under `aggregated`, and the
@@ -157,5 +181,5 @@ def assemble_run_yaml(
         "provenance": provenance,
         "layout": _layout_block(results, repeats),
         "execution": _execution_block(results),
-        "results": _results_block(results, aggregated),
+        "results": _results_block(results, aggregated, condition_meta),
     }

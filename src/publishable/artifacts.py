@@ -12,9 +12,12 @@ from typing import TYPE_CHECKING, Any
 import yaml
 
 from publishable.errors import ArtifactError, ArtifactExistsError, ContractError
+from publishable.sweep import condition_dir_name
 
 if TYPE_CHECKING:
     from publishable.units import UnitList
+
+SCOPE_ORDER = {"run": 0, "condition": 1, "repeat": 2, "summary": 3}
 
 
 def write_atomic(path: Path, data: bytes) -> None:
@@ -171,6 +174,10 @@ class StepIO:
         input_dir: Path,
         run_dir: Path,
         units: "UnitList | None" = None,
+        scope: str = "repeat",
+        conditions: list[tuple[int, str | None]] | None = None,
+        repeats: list[str] | None = None,
+        step_scopes: dict[str, str] | None = None,
     ) -> None:
         self.step_dir = step_dir
         self.input_dir = input_dir
@@ -180,6 +187,10 @@ class StepIO:
         self._units = units
         self._rows: dict[str, dict[str, Any]] = {}
         self._skipped: dict[str, str] = {}
+        self._scope = scope
+        self._conditions = conditions
+        self._repeats = repeats
+        self._step_scopes = step_scopes
 
     @property
     def units(self) -> "UnitList":
@@ -333,7 +344,75 @@ class StepIO:
     def read_input(self, relpath: str) -> Any:
         return self._read(self.input_dir / relpath)
 
+    def _summary_only(self, what: str) -> None:
+        if self._scope != "summary":
+            raise ContractError(
+                f"`io.{what}` is available at `summary` scope only; this step is "
+                f"`{self._scope}`-scoped, and a narrower step has no business reading "
+                "across conditions",
+                code="E-STEP-SCOPE-ONLY",
+            )
+
+    @property
+    def conditions(self) -> list[tuple[int, str | None]]:
+        self._summary_only("conditions")
+        return list(self._conditions or [])
+
+    @property
+    def repeats(self) -> list[str]:
+        self._summary_only("repeats")
+        return list(self._repeats or [])
+
+    def read_condition(
+        self,
+        condition: "int | tuple[int, str | None]",
+        step: str,
+        name: str,
+        repeat: str | None = None,
+    ) -> Any:
+        """`condition` accepts either a bare index or the `(index, label)` element
+        `io.conditions` yields, so the documented `for condition in io.conditions:
+        io.read_condition(condition, ...)` pattern and a literal index both work.
+
+        A resolved condition's label can itself be `None` — the no-`sweep` case,
+        where there is no `conditions/` level to nest under — so membership is
+        checked against the resolved *indices*, never by testing the label for
+        `None`: that would make a legitimately unlabeled condition indistinguishable
+        from an index this run never resolved.
+        """
+        self._summary_only("read_condition")
+        index = condition[0] if isinstance(condition, tuple) else condition
+        target = (self._step_scopes or {}).get(step)
+        if target == "repeat" and repeat is None:
+            raise ContractError(
+                f"`{step}` is repeat-scoped, so `read_condition` needs a `repeat=` naming "
+                "which repeat's copy to read",
+                code="E-STEP-READ-REPEAT-REQUIRED",
+            )
+        by_index = dict(self._conditions or [])
+        if index not in by_index:
+            raise ContractError(
+                f"condition {index} is not among this run's resolved conditions",
+                code="E-STEP-READ-CONDITION-UNKNOWN",
+            )
+        label = by_index[index]
+        base = self.run_dir if label is None else (
+            self.run_dir / "conditions" / condition_dir_name(index, label)
+        )
+        collapsed = len(self._repeats or []) <= 1
+        if target == "repeat" and repeat is not None and not collapsed:
+            base = base / repeat
+        return self._read(base / step / name)
+
     def read_upstream(self, step: str, name: str) -> Any:
+        target = (self._step_scopes or {}).get(step)
+        if target is not None and SCOPE_ORDER[target] > SCOPE_ORDER[self._scope]:
+            raise ContractError(
+                f"`{step}` is `{target}`-scoped and this step is `{self._scope}`-scoped; "
+                "a wider step cannot read a narrower one, because at the time it runs "
+                "those executions have not happened",
+                code="E-STEP-READ-DIRECTION",
+            )
         return self._read(self.run_dir / "shared" / step / name)
 
     @staticmethod

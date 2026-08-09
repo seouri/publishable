@@ -16,6 +16,28 @@ def io(tmp_path: Path) -> StepIO:
     return StepIO(step_dir=step_dir, input_dir=tmp_path / "input", run_dir=tmp_path / "run")
 
 
+def make_io(
+    tmp_path: Path,
+    *,
+    scope: str = "repeat",
+    conditions: list[tuple[int, str]] | None = None,
+    repeats: list[str] | None = None,
+    step_scopes: dict[str, str] | None = None,
+) -> StepIO:
+    step_dir = tmp_path / "run" / "step"
+    step_dir.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "input").mkdir(exist_ok=True)
+    return StepIO(
+        step_dir=step_dir,
+        input_dir=tmp_path / "input",
+        run_dir=tmp_path / "run",
+        scope=scope,
+        conditions=conditions,
+        repeats=repeats,
+        step_scopes=step_scopes,
+    )
+
+
 def test_write_dispatches_on_the_longest_registered_suffix(io: StepIO):
     io.write("a.json", {"x": 1})
     io.write("b.yaml", {"y": 2})
@@ -422,3 +444,168 @@ def test_rows_returns_deep_enough_copies_that_mutating_a_row_does_not_corrupt_st
     rows = io.rows()
     rows[0]["v"] = 999
     assert io.rows() == [{"unit": "p0", "v": 1}]
+
+
+def test_conditions_and_read_condition_are_summary_only(tmp_path: Path):
+    io = make_io(tmp_path, scope="repeat", conditions=[(0, "baseline")])
+    for call in (lambda: io.conditions, lambda: io.read_condition(0, "s", "a.json")):
+        with pytest.raises(ContractError) as e:
+            call()
+        assert e.value.code == "E-STEP-SCOPE-ONLY"
+
+
+def test_repeats_is_summary_only(tmp_path: Path):
+    io = make_io(tmp_path, scope="condition", repeats=["seed17"])
+    with pytest.raises(ContractError) as e:
+        _ = io.repeats
+    assert e.value.code == "E-STEP-SCOPE-ONLY"
+
+
+def test_conditions_and_read_condition_raise_at_run_scope(tmp_path: Path):
+    io = make_io(tmp_path, scope="run", conditions=[(0, "baseline")])
+    with pytest.raises(ContractError) as e:
+        _ = io.conditions
+    assert e.value.code == "E-STEP-SCOPE-ONLY"
+
+
+def test_a_summary_step_can_list_conditions_and_repeats(tmp_path: Path):
+    io = make_io(
+        tmp_path,
+        scope="summary",
+        conditions=[(0, "baseline"), (1, "method=spearman")],
+        repeats=["seed17"],
+    )
+    assert io.conditions == [(0, "baseline"), (1, "method=spearman")]
+    assert io.repeats == ["seed17"]
+
+
+def test_a_wider_step_cannot_read_a_narrower_one(tmp_path: Path):
+    io = make_io(tmp_path, scope="condition", step_scopes={"analyze": "repeat"})
+    with pytest.raises(ContractError) as e:
+        io.read_upstream("analyze", "units.parquet")
+    assert e.value.code == "E-STEP-READ-DIRECTION"
+    assert "condition" in str(e.value) and "repeat" in str(e.value)
+
+
+def test_a_narrower_step_reads_a_wider_one_normally(tmp_path: Path):
+    io = make_io(tmp_path, scope="repeat", step_scopes={"load": "run"})
+    (io.run_dir / "shared" / "load").mkdir(parents=True)
+    (io.run_dir / "shared" / "load" / "a.json").write_text('{"x": 1}\n')
+    assert io.read_upstream("load", "a.json") == {"x": 1}
+
+
+def test_a_step_reads_another_step_at_its_own_scope(tmp_path: Path):
+    io = make_io(tmp_path, scope="condition", step_scopes={"fit": "condition"})
+    (io.run_dir / "shared" / "fit").mkdir(parents=True)
+    (io.run_dir / "shared" / "fit" / "model.json").write_text('{"k": 1}\n')
+    assert io.read_upstream("fit", "model.json") == {"k": 1}
+
+
+@pytest.mark.parametrize("target_scope", ["run", "condition", "repeat"])
+def test_a_summary_step_reads_upstream_from_every_narrower_scope(
+    tmp_path: Path, target_scope: str
+):
+    """`summary` sits above `run`, `condition`, and `repeat` alike — every one of
+    them is a read of something wider, and none may raise E-STEP-READ-DIRECTION.
+    Nothing else exercises read_upstream from a summary caller, so a bug in how
+    `summary` itself is ranked (as opposed to the separate summary-only guard on
+    io.conditions/io.read_condition) would otherwise go undetected."""
+    io = make_io(tmp_path, scope="summary", step_scopes={"upstream": target_scope})
+    (io.run_dir / "shared" / "upstream").mkdir(parents=True)
+    (io.run_dir / "shared" / "upstream" / "a.json").write_text('{"x": 1}\n')
+    assert io.read_upstream("upstream", "a.json") == {"x": 1}
+
+
+def test_read_condition_requires_a_repeat_for_a_repeat_scoped_step(tmp_path: Path):
+    io = make_io(
+        tmp_path,
+        scope="summary",
+        conditions=[(0, "baseline")],
+        step_scopes={"analyze": "repeat"},
+    )
+    with pytest.raises(ContractError) as e:
+        io.read_condition(0, "analyze", "units.parquet")
+    assert e.value.code == "E-STEP-READ-REPEAT-REQUIRED"
+
+
+def test_read_condition_rejects_an_unresolved_condition_index(tmp_path: Path):
+    io = make_io(tmp_path, scope="summary", conditions=[(0, "baseline")])
+    with pytest.raises(ContractError) as e:
+        io.read_condition(7, "s", "a.json")
+    assert e.value.code == "E-STEP-READ-CONDITION-UNKNOWN"
+
+
+def test_read_condition_succeeds_for_a_resolved_condition_with_a_null_label(tmp_path: Path):
+    """The no-`sweep` case: `sweep.expand` resolves one condition, index 0 with
+    `label=None`, meaning there is no `conditions/` level at all — not an absent
+    index. `read_condition(0, ...)` must return the artifact, not raise
+    E-STEP-READ-CONDITION-UNKNOWN, and the path must skip the `conditions/` nest."""
+    io = make_io(tmp_path, scope="summary", conditions=[(0, None)], step_scopes={"fit": "run"})
+    target = io.run_dir / "fit"
+    target.mkdir(parents=True)
+    (target / "model.json").write_text('{"m": 1}\n')
+    assert io.read_condition(0, "fit", "model.json") == {"m": 1}
+    assert not (io.run_dir / "conditions").exists()
+
+
+def test_read_condition_resolves_a_non_repeat_scoped_step_without_a_repeat(tmp_path: Path):
+    io = make_io(
+        tmp_path,
+        scope="summary",
+        conditions=[(0, "baseline"), (1, "method=spearman")],
+        step_scopes={"fit": "condition"},
+    )
+    target = io.run_dir / "conditions" / "01_method=spearman" / "fit"
+    target.mkdir(parents=True)
+    (target / "model.json").write_text('{"m": 1}\n')
+    assert io.read_condition(1, "fit", "model.json") == {"m": 1}
+
+
+def test_read_condition_accepts_the_element_io_conditions_yields(tmp_path: Path):
+    """The documented pattern (reference.md around lines 1784, 1806, 2318):
+    `for condition in io.conditions: io.read_condition(condition, ...)` — passing
+    the (index, label) tuple straight through must work, not only a bare index."""
+    io = make_io(
+        tmp_path,
+        scope="summary",
+        conditions=[(0, "baseline"), (1, "method=spearman")],
+        step_scopes={"fit": "condition"},
+    )
+    target = io.run_dir / "conditions" / "01_method=spearman" / "fit"
+    target.mkdir(parents=True)
+    (target / "model.json").write_text('{"m": 1}\n')
+    results = {}
+    for condition in io.conditions:
+        if condition[0] == 1:
+            results[condition] = io.read_condition(condition, "fit", "model.json")
+    assert results[(1, "method=spearman")] == {"m": 1}
+
+
+def test_read_condition_resolves_a_named_repeat_when_the_run_has_several(tmp_path: Path):
+    io = make_io(
+        tmp_path,
+        scope="summary",
+        conditions=[(0, "baseline")],
+        repeats=["seed1", "seed2"],
+        step_scopes={"analyze": "repeat"},
+    )
+    target = io.run_dir / "conditions" / "00_baseline" / "seed2" / "analyze"
+    target.mkdir(parents=True)
+    (target / "scores.json").write_text('{"s": 2}\n')
+    assert io.read_condition(0, "analyze", "scores.json", repeat="seed2") == {"s": 2}
+
+
+def test_read_condition_collapses_the_repeat_directory_when_the_run_has_only_one(
+    tmp_path: Path,
+):
+    io = make_io(
+        tmp_path,
+        scope="summary",
+        conditions=[(0, "baseline")],
+        repeats=["seed1"],
+        step_scopes={"analyze": "repeat"},
+    )
+    target = io.run_dir / "conditions" / "00_baseline" / "analyze"
+    target.mkdir(parents=True)
+    (target / "scores.json").write_text('{"s": 1}\n')
+    assert io.read_condition(0, "analyze", "scores.json", repeat="seed1") == {"s": 1}

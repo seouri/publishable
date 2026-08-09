@@ -32,10 +32,11 @@ from publishable.provenance import find_repo_root, git_provenance
 from publishable.replication import resolve_repeats
 from publishable.run_identity import RunLock, allocate_run_dir, point_latest
 from publishable.run_record import assemble_run_yaml, run_status
-from publishable.runner import attrition, execute_plan
+from publishable.runner import attrition, execute_plan, resolve_condition_cfg, resolve_wide_cfg
 from publishable.scaffold import scaffold_project
 from publishable.scope import build_plan
 from publishable.stats import collapse_repeats, summarize_step
+from publishable.sweep import expand, sweep_document
 from publishable.units import resolve_units, units_hash
 from publishable.uv_support import uv_lock_info
 from publishable.validate import validate_config
@@ -109,7 +110,25 @@ def command_run(config_path: Path) -> int:
     digest = design_digest(doc)  # phase 5: pin hashes
     repeats = resolve_repeats(doc, digest)
     labels = [r.label for r in repeats if r.label] or [""]
-    plan = build_plan(experiment, conditions=[(0, None)], repeat_labels=labels)  # phase 4
+
+    conditions = expand(doc)
+    # Every path any condition fixes, not just the grid's axes. A path
+    # `sweep.baseline` fixes varies across conditions by definition — condition
+    # `00` uses the baseline's value and every other condition uses the base
+    # config's — so it is exactly as unreadable at `run`/`summary` scope as a
+    # grid axis is. Reading the grid alone left a baseline-only path resolving
+    # to the base value, which is a value no condition in the run used.
+    sweep_block = doc.get("sweep") or {}
+    swept_paths = set(sweep_block.get("grid") or {}) | set(sweep_block.get("baseline") or {})
+    plan = build_plan(  # phase 4
+        experiment,
+        conditions=[(c.index, c.label) for c in conditions],
+        repeat_labels=labels,
+    )
+    cfgs: dict[int, Config] = {
+        c.index: resolve_condition_cfg(doc, dict(c.values)) for c in conditions
+    }
+    cfgs[-1] = resolve_wide_cfg(doc, swept_paths)
 
     input_dir = Path(doc["data"]["input_dir"]).expanduser()
     output_dir = Path(doc["data"]["output_dir"]).expanduser()
@@ -147,11 +166,29 @@ def command_run(config_path: Path) -> int:
         if lock_path is not None:
             (run_dir / "environment" / "uv.lock").write_bytes(lock_path.read_bytes())
 
+        # `sweep.yaml` next to `manifest/input.json`, inside the lock, and *before*
+        # the first execution: `docs/reference.md` § The other files a run writes
+        # calls it "settled before the first execution and never touched again",
+        # and `resume` reads it back rather than re-deriving it. Nothing in it
+        # comes from `results` — every argument is settled by the time the plan
+        # exists — so writing it after `execute_plan` bought nothing and left a
+        # run that died inside the loop with no plan on disk at all.
+        order = (doc.get("replication") or {}).get("order") or "as_declared"
+        execution_order = [
+            (e.condition_index or 0, e.repeat_label or "") for e in plan if e.scope == "repeat"
+        ]
+        (run_dir / "sweep.yaml").write_text(
+            yaml.safe_dump(
+                sweep_document(conditions, repeats, digest, order, execution_order),
+                sort_keys=False,
+            )
+        )
+
         results = execute_plan(  # phase 7
             plan=plan,
             run_dir=run_dir,
             input_dir=input_dir,
-            cfg=Config(doc),
+            cfgs=cfgs,
             repeats=repeats,
             digest=digest,
             units=roster,
@@ -159,31 +196,41 @@ def command_run(config_path: Path) -> int:
         )
 
         status = run_status(results)
-        # S2 always resolves a single condition, so every aggregation below is
-        # scoped to condition_index=0 — never pooled across conditions. No roster
-        # means nothing to aggregate over, so `aggregated` stays `None` rather than
-        # an empty dict — `assemble_run_yaml` omits the key entirely in that case,
-        # instead of every condition reporting a misleading empty `aggregated: {}`.
+        # No roster means nothing to aggregate over, so `aggregated` stays `None`
+        # rather than an empty dict — `assemble_run_yaml` omits the key entirely in
+        # that case, instead of every condition reporting a misleading empty
+        # `aggregated: {}`.
         aggregated: dict[int, dict[str, dict[str, Any]]] | None = None
+        # Condition metadata `ExecutionResult` cannot carry: `Execution` holds
+        # index and label but not `is_baseline` or the swept `values`, and
+        # `reference.md` § The two files shows both on the condition entry.
+        # `dict(...)` unwraps `Condition.values`'s `MappingProxyType`, which
+        # `yaml.safe_dump` has no representer for.
+        condition_meta = {
+            c.index: {"label": c.label, "is_baseline": c.is_baseline, "values": dict(c.values)}
+            for c in conditions
+        }
         if roster is not None:
-            # `condition_index` is guarded here too, harmless today since S2 never
-            # resolves more than one condition, but load-bearing the day a sweep
-            # does: an unguarded filter would let a same-named step from another
-            # condition mark this one as having a recording step it never ran.
-            recording_steps = {
-                r.execution.step_name
-                for r in results
-                if r.execution.scope == "repeat" and r.execution.condition_index == 0 and r.rows
-            }
-            aggregated = {
-                0: {
+            # `condition_index` is guarded per condition: core aggregates within
+            # each condition and never pools across conditions — an unguarded
+            # filter would let a same-named step from another condition mark this
+            # one as having a recording step it never ran.
+            aggregated = {}
+            for cond in conditions:
+                recording_steps = {
+                    r.execution.step_name
+                    for r in results
+                    if r.execution.scope == "repeat"
+                    and r.execution.condition_index == cond.index
+                    and r.rows
+                }
+                aggregated[cond.index] = {
                     step_name: summarize_step(
-                        collapse_repeats(results, step_name, 0),
-                        attrition(results, roster, step_name, 0),
+                        collapse_repeats(results, step_name, cond.index),
+                        attrition(results, roster, step_name, cond.index),
                     )
                     for step_name in sorted(recording_steps)
                 }
-            }
         changed_inputs = verify_manifest(input_dir, manifest)  # phase 8: re-verify
         if changed_inputs:
             status = "failed"
@@ -238,6 +285,7 @@ def command_run(config_path: Path) -> int:
             results=results,
             repeats=repeats,
             aggregated=aggregated,
+            condition_meta=condition_meta,
         )
         (run_dir / "run.yaml").write_text(yaml.safe_dump(doc_out, sort_keys=False))
         # `with` block exit releases the lock.

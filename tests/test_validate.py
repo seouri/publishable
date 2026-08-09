@@ -162,6 +162,156 @@ def test_two_bad_repeat_levels_are_both_reported():
     assert not any(f.code == "W-REPL-FLOOR" for f in c.findings)
 
 
+def test_an_unrecognised_sweep_key_is_refused(write_config):
+    """A typo'd mode expands to zero conditions and would otherwise run nothing.
+    Same argument as the unknown-parameter check: `init` writes every valid key,
+    so an unrecognised one is a typo by construction."""
+    found = codes(write_config({"sweep": {"gird": {"analysis.method": ["spearman"]}}}))
+    assert "E-SWEEP-KEY-UNKNOWN" in found
+
+
+def test_the_four_refused_modes_are_known_keys_not_unknown_ones(write_config):
+    """`paired`/`ablate`/`sample`/`groups` are refused by `_check_unimplemented` under
+    their own identifiers; `_check_sweep` must not double-report them as unknown."""
+    for mode in ("paired", "ablate", "sample", "groups"):
+        found = codes(write_config({"sweep": {mode: {"analysis.method": ["pearson"]}}}))
+        assert "E-SWEEP-KEY-UNKNOWN" not in found
+
+
+def test_an_axis_declaring_no_values_is_refused(write_config):
+    """Zero conditions is a run that executes nothing while reporting success —
+    the same reasoning as E-UNITS-EMPTY: zero is not a small study."""
+    assert "E-SWEEP-AXIS-EMPTY" in codes(
+        write_config({"sweep": {"grid": {"analysis.method": []}}})
+    )
+
+
+def test_an_empty_grid_block_is_refused_by_the_backstop(write_config):
+    """`sweep: {grid: {}}` never enters the per-axis loop in `_check_sweep` — that
+    loop iterates `grid.items()`, which is empty — so nothing there can catch it.
+    The backstop refuses on `expand(doc)` returning zero conditions, whatever
+    shape of `sweep` produced that."""
+    found = codes(write_config({"sweep": {"grid": {}}}))
+    assert "E-SWEEP-EXPANDS-EMPTY" in found
+
+
+def test_an_empty_axis_still_gets_the_specific_diagnosis_not_just_the_backstop(write_config):
+    """The backstop sits beneath E-SWEEP-AXIS-EMPTY, not in place of it: a config
+    with an empty axis must still receive the specific diagnosis."""
+    found = codes(write_config({"sweep": {"grid": {"analysis.method": []}}}))
+    assert "E-SWEEP-AXIS-EMPTY" in found
+    assert "E-SWEEP-EXPANDS-EMPTY" in found
+
+
+def test_no_sweep_at_all_still_validates_clean(write_config):
+    """The critical negative: no `sweep` block is the ordinary case, and a result
+    check written carelessly (e.g. `if not conditions`, without the `sweep and`
+    guard) would refuse it. `expand({})` returns exactly one condition."""
+    found = codes(write_config({}))
+    assert "E-SWEEP-EXPANDS-EMPTY" not in found
+
+
+def test_a_normal_baseline_plus_grid_config_still_validates_clean(write_config):
+    found = codes(write_config({
+        "sweep": {
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman", "kendall"]},
+        }
+    }))
+    assert not [c for c in found if c.startswith("E-SWEEP")]
+
+
+def test_a_swept_path_must_be_a_real_parameter(write_config):
+    assert "E-SWEEP-PATH-UNKNOWN" in codes(
+        write_config({"sweep": {"grid": {"analysis.methd": ["spearman"]}}})
+    )
+
+
+def test_a_swept_path_that_resolves_is_not_flagged(write_config):
+    found = codes(
+        write_config({"sweep": {"grid": {"analysis.method": ["pearson", "spearman"]}}})
+    )
+    assert "E-SWEEP-PATH-UNKNOWN" not in found
+
+
+def test_a_swept_value_must_be_checkable_against_the_spec(write_config):
+    assert "E-PARAM-VALUE" in codes(
+        write_config({"sweep": {"grid": {"analysis.method": ["spearmann"]}}})
+    )
+
+
+def test_a_swept_value_must_render_as_a_nameable_label(write_config):
+    """A label is a selector; a value needing escaping is not a name anyone can type."""
+    assert "E-SWEEP-VALUE-UNNAMEABLE" in codes(
+        write_config({"sweep": {"grid": {"analysis.method": ["a long sentence"]}}})
+    )
+
+
+def test_a_value_with_a_single_underscore_is_accepted(write_config):
+    """`_` alone stays legal — only `__`, the axis separator, is refused. The value
+    here is not one of the template's choices, so `E-PARAM-VALUE` still fires; what
+    matters is that the label check itself does not also flag it."""
+    found = codes(write_config({"sweep": {"grid": {"analysis.method": ["pearson_x"]}}}))
+    assert "E-SWEEP-VALUE-UNNAMEABLE" not in found
+
+
+def test_the_execution_budget_is_checked_against_the_real_expansion(write_config):
+    found = codes(write_config({
+        "sweep": {"grid": {"analysis.method": ["pearson", "spearman", "kendall"]}},
+        "replication": {"repeats": [{"kind": "seed", "n": 5}]},
+        "limits": {"max_executions": 10},          # 3 × 5 = 15 > 10
+    }))
+    assert "W-EXEC-BUDGET" in found
+
+
+def test_the_budget_does_not_warn_when_the_expansion_fits(write_config):
+    found = codes(write_config({
+        "sweep": {"grid": {"analysis.method": ["pearson", "spearman"]}},
+        "replication": {"repeats": [{"kind": "seed", "n": 2}]},
+        "limits": {"max_executions": 500},
+    }))
+    assert "W-EXEC-BUDGET" not in found
+
+
+def test_the_budget_passes_at_exactly_the_limit_and_fails_one_over(write_config):
+    found_at = codes(write_config({
+        "sweep": {"grid": {"analysis.method": ["pearson", "spearman"]}},
+        "replication": {"repeats": [{"kind": "seed", "n": 5}]},
+        "limits": {"max_executions": 10},           # 2 × 5 = 10, exactly at budget
+    }))
+    assert "W-EXEC-BUDGET" not in found_at
+
+    found_over = codes(write_config({
+        "sweep": {"grid": {"analysis.method": ["pearson", "spearman", "kendall"]}},
+        "replication": {"repeats": [{"kind": "seed", "n": 5}]},
+        "limits": {"max_executions": 14},            # 3 × 5 = 15 > 14
+    }))
+    assert "W-EXEC-BUDGET" in found_over
+
+
+def test_a_multi_condition_sweep_warns_about_the_uncorrected_family(write_config):
+    c = Collector()
+    validate_config(write_config({
+        "sweep": {"grid": {"analysis.method": ["pearson", "spearman", "kendall"]}}
+    }), c)
+    warning = next(f for f in c.findings if f.code == "W-STATS-FAMILY")
+    assert "3" in warning.message
+    assert "not implemented" in warning.message
+
+
+def test_a_single_condition_run_has_no_family(write_config):
+    assert "W-STATS-FAMILY" not in codes(write_config())
+
+
+def test_warnings_alone_leave_the_exit_code_at_zero(write_config):
+    c = Collector()
+    validate_config(write_config({
+        "sweep": {"grid": {"analysis.method": ["pearson", "spearman"]}}
+    }), c)
+    assert not c.has_errors
+    assert c.exit_code() == 0
+
+
 def test_an_unexpected_error_finding_the_repo_root_is_not_swallowed(write_config, monkeypatch):
     """`_check_data`'s repo-root lookup narrows its exception handling to the one case
     that legitimately means 'the inside-the-repo question does not arise' — anything
@@ -266,32 +416,67 @@ def _with_doc_change(write_config, change) -> Path:
     return path
 
 
-def test_a_declared_sweep_axis_is_refused_not_silently_ignored(write_config):
-    """S1 hardcodes one condition; a config declaring `sweep.grid` must not
-    validate clean and then run one condition while `run.yaml` records the sweep
-    verbatim, describing an experiment that never ran."""
-    sweep = {"grid": {"analysis.method": ["pearson", "spearman"]}}
-    path = _with_doc_change(write_config, lambda doc: doc.update(sweep=sweep))
-    assert "E-SWEEP-UNSUPPORTED" in codes(path)
-
-
-def test_an_empty_sweep_block_is_not_a_sweep(write_config):
-    """An empty or all-null `sweep` (the shape a generated config ships with)
-    declares no axis and must not trip the refusal meant for an actual sweep."""
-    path = _with_doc_change(
-        write_config,
-        lambda doc: doc.update(
-            sweep={
-                "grid": None,
-                "groups": [],
-                "ablate": None,
-                "baseline": None,
-                "paired": [],
-                "sample": None,
+def test_baseline_and_grid_are_now_accepted(write_config):
+    """S3a implements `baseline` and `grid` expansion; a config declaring only
+    those must validate clean rather than tripping any sweep refusal."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"analysis.method": "pearson"},
+                    "grid": {"analysis.method": ["spearman"]},
+                }
             }
-        ),
+        )
     )
-    assert "E-SWEEP-UNSUPPORTED" not in codes(path)
+    assert not [c for c in found if c.startswith("E-SWEEP")]
+
+
+@pytest.mark.parametrize(
+    "mode,value,code",
+    [
+        ("paired", [{"analysis.method": "pearson"}], "E-SWEEP-PAIRED-UNSUPPORTED"),
+        ("ablate", {"from": "baseline", "remove": ["a.b"]}, "E-SWEEP-ABLATE-UNSUPPORTED"),
+        ("sample", {"n": 40, "ranges": {}}, "E-SWEEP-SAMPLE-UNSUPPORTED"),
+        ("groups", [{"by": "arm", "levels": ["a", "b"]}], "E-SWEEP-GROUPS-UNSUPPORTED"),
+    ],
+)
+def test_each_unimplemented_mode_is_refused_on_its_own(write_config, mode, value, code):
+    """`paired`, `ablate`, `sample`, and `groups` each get their own refusal now that
+    the old blanket sweep refusal is retired — otherwise each would fall through
+    into silence the moment `baseline`/`grid` stopped covering the whole block."""
+    assert code in codes(write_config({"sweep": {mode: value}}))
+
+
+def test_an_empty_or_null_mode_is_not_a_declaration(write_config):
+    """`init` may write these absent or null; only a truthy value is refused."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {
+                    "grid": {"analysis.method": ["spearman"]},
+                    "paired": [],
+                    "ablate": None,
+                    "sample": None,
+                    "groups": [],
+                }
+            }
+        )
+    )
+    assert not [c for c in found if c.endswith("-UNSUPPORTED")]
+
+
+def test_every_sweep_refusal_message_defers_rather_than_scolds(write_config):
+    for mode, value, code in [
+        ("paired", [{"a.b": 1}], "E-SWEEP-PAIRED-UNSUPPORTED"),
+        ("ablate", {"from": "baseline"}, "E-SWEEP-ABLATE-UNSUPPORTED"),
+        ("sample", {"n": 1}, "E-SWEEP-SAMPLE-UNSUPPORTED"),
+        ("groups", [{"by": "arm"}], "E-SWEEP-GROUPS-UNSUPPORTED"),
+    ]:
+        c = Collector()
+        validate_config(write_config({"sweep": {mode: value}}), c)
+        message = next(f.message for f in c.findings if f.code == code)
+        assert "later slice" in message, f"{code} must defer, not scold"
 
 
 def test_a_non_default_replication_order_is_refused_not_silently_ignored(write_config):
@@ -306,7 +491,6 @@ def test_a_config_without_unimplemented_blocks_still_validates_clean(write_confi
     `replication.order: as_declared` — none of the new refusals should fire
     against it."""
     found = codes(write_config())
-    assert "E-SWEEP-UNSUPPORTED" not in found
     assert "E-REPL-ORDER-UNSUPPORTED" not in found
     assert not [c for c in found if c.endswith("-UNSUPPORTED")]
 
@@ -689,3 +873,149 @@ def test_falling_below_the_repeat_floor_warns():
     clean = Collector()
     _check_replication({"replication": {"repeats": [{"kind": "seed", "n": 5}]}}, Benchmark(), clean)
     assert clean.findings == []
+
+
+# --- `sweep.baseline` is validated, shaped, and refused when partial -------------
+
+
+def test_a_baseline_path_must_be_a_real_parameter(write_config):
+    """`reference.md`:218, "Baseline is a valid condition". Unchecked, a misspelled
+    baseline path was planted verbatim into condition `00`'s config and the run
+    reported success having executed the base config under a baseline label."""
+    found = codes(
+        write_config({
+            "sweep": {
+                "baseline": {"analysis.methd": "pearson"},
+                "grid": {"analysis.methd": ["spearman", "kendall"]},
+            }
+        })
+    )
+    assert "E-SWEEP-PATH-UNKNOWN" in found
+
+
+def test_a_baseline_value_must_satisfy_its_param(write_config):
+    """`reference.md`:218's own example: `sweep.baseline` sets `analysis.method:
+    pearsonn`. Before this check the config validated with only `W-STATS-FAMILY`."""
+    found = messages_by_code(
+        write_config({
+            "sweep": {
+                "baseline": {"analysis.method": "pearsonn"},
+                "grid": {"analysis.method": ["spearman", "kendall"]},
+            }
+        })
+    )
+    assert "E-PARAM-VALUE" in found
+
+
+def test_a_baseline_value_is_not_subject_to_the_nameability_check(write_config):
+    """A baseline condition's label is the literal `baseline` (`sweep.label_for`),
+    so a baseline's fixed values are never rendered into a label. Refusing an
+    unnameable one would reject a legal config — and stays legal under the per-cell
+    expansion, which labels a baseline by the axes it leaves free.
+
+    The value has to be one `check_swept_value` actually refuses, or the test
+    passes under either setting of `_value_checks`'s `nameable`. `pear son` fails
+    `SWEPT_VALUE_PATTERN` on the space, and the baseline still fixes every grid
+    axis, so `E-SWEEP-BASELINE-PARTIAL` does not fire either. Both directions are
+    asserted on the one config: the `Param` check *is* applied to a baseline entry
+    (`reference.md`:218), the nameability check is not."""
+    found = codes(
+        write_config({
+            "sweep": {
+                "baseline": {"analysis.method": "pear son"},
+                "grid": {"analysis.method": ["spearman", "kendall"]},
+            }
+        })
+    )
+    assert "E-PARAM-VALUE" in found
+    assert "E-SWEEP-VALUE-UNNAMEABLE" not in found
+    assert "E-SWEEP-BASELINE-PARTIAL" not in found
+
+
+def test_a_baseline_that_leaves_a_grid_axis_free_is_refused(write_config):
+    """`reference.md`:1415-1422 requires one baseline condition per cell of the
+    unfixed axes; `expand` emits exactly one. Refused rather than diverging."""
+    found = messages_by_code(
+        write_config({
+            "sweep": {
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {
+                    "analysis.method": ["spearman", "kendall"],
+                    "analysis.min_samples": [10, 20],
+                },
+            }
+        })
+    )
+    assert "E-SWEEP-BASELINE-PARTIAL" in found
+    assert "analysis.min_samples" in found["E-SWEEP-BASELINE-PARTIAL"]
+    assert "not implemented in this build" in found["E-SWEEP-BASELINE-PARTIAL"]
+
+
+def test_a_baseline_fixing_every_axis_is_supported(write_config):
+    """The row the slice's worked example uses, and it must keep working."""
+    found = codes(
+        write_config({
+            "sweep": {
+                "baseline": {"analysis.method": "pearson", "analysis.min_samples": 10},
+                "grid": {"analysis.min_samples": [10, 20]},
+            }
+        })
+    )
+    assert "E-SWEEP-BASELINE-PARTIAL" not in found
+
+
+def test_a_bare_baseline_with_no_grid_is_supported(write_config):
+    """No grid means no unfixed axis, so the bare-baseline level stays legal."""
+    found = codes(write_config({"sweep": {"baseline": {"analysis.method": "pearson"}}}))
+    assert "E-SWEEP-BASELINE-PARTIAL" not in found
+
+
+def test_an_empty_baseline_beside_a_grid_is_not_a_partial_baseline(write_config):
+    """`baseline: {}` declares nothing and yields no baseline condition; "present
+    but empty is not a declaration" is this repo's convention elsewhere too."""
+    found = codes(
+        write_config({
+            "sweep": {"baseline": {}, "grid": {"analysis.method": ["spearman", "kendall"]}}
+        })
+    )
+    assert "E-SWEEP-BASELINE-PARTIAL" not in found
+
+
+def test_a_list_grid_is_a_diagnostic_not_a_traceback(write_config):
+    """`_check_sweep` calls `grid.items()`; without the shape guard this escaped
+    `main`'s handler as `AttributeError: 'list' object has no attribute 'items'`."""
+    found = codes(write_config({"sweep": {"grid": ["analysis.method"]}}))
+    assert "E-CONFIG-SHAPE" in found
+
+
+def test_a_list_baseline_is_a_diagnostic_not_a_traceback(write_config):
+    """`sweep.expand` calls `dict(baseline)`; without the guard this escaped as
+    `ValueError: dictionary update sequence element #0 has length 15`."""
+    found = codes(
+        write_config({
+            "sweep": {
+                "baseline": ["analysis.method"],
+                "grid": {"analysis.method": ["spearman"]},
+            }
+        })
+    )
+    assert "E-CONFIG-SHAPE" in found
+
+
+def test_a_bare_string_axis_is_refused_rather_than_expanded_per_character(write_config):
+    """Forgotten brackets: `grid: {analysis.method: spearman}` is iterable, so it
+    expanded into one condition per letter. A template with an unconstrained `str`
+    parameter would have taken that expansion clean."""
+    path = write_config({"sweep": {"grid": {"analysis.method": "spearman"}}})
+    c = Collector()
+    validate_config(path, c)
+    shape = [f for f in c.findings if f.code == "E-CONFIG-SHAPE"]
+    assert [f.path for f in shape] == ["sweep.grid.analysis.method"]
+    assert "expected a list" in shape[0].message
+
+
+def test_a_null_grid_or_baseline_is_absent_not_malformed(write_config):
+    """A key present but `null` is treated as absent everywhere else in this
+    module (`doc.get("x") or {}`), and the shape guard must not diverge."""
+    found = codes(write_config({"sweep": {"baseline": None, "grid": None}}))
+    assert "E-CONFIG-SHAPE" not in found

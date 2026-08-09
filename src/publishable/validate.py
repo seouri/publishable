@@ -12,12 +12,9 @@ from publishable.manifest import POLICIES
 from publishable.materialize import TEMPLATE_VERSION
 from publishable.param import MISSING
 from publishable.provenance import find_repo_root, resolves_inside_repo
+from publishable.sweep import check_swept_value, expand
 from publishable.templates.registry import get_template, template_names
 from publishable.units import resolve_units
-
-# `sweep`'s six axis keys, per reference.md § The one config file. A key present
-# but empty (`groups: []`, `ablate: null`) declares no axis and is not a sweep.
-SWEEP_AXIS_KEYS = ("baseline", "grid", "paired", "ablate", "sample", "groups")
 
 REQUIRED_METADATA = ("description", "authors")
 
@@ -96,6 +93,26 @@ def _check_shape(doc: dict[str, Any], c: Collector) -> bool:
             if attributes is not None and not isinstance(attributes, list):
                 _bad("data.units.attributes", attributes, "list")
 
+    # `sweep`'s two implemented sub-blocks, and each grid axis's value list.
+    # `_check_sweep` calls `grid.items()` and `sweep.expand` calls `dict(baseline)`
+    # on whatever is here, so a list or a string in either place escaped `main`'s
+    # `PublishableError`/`OSError` handler as a bare traceback. The per-axis `list`
+    # check closes the quieter version of the same gap: a bare string axis
+    # (`analysis.method: spearman`, brackets forgotten) is iterable, so it expanded
+    # character by character into one condition per letter.
+    sweep = doc.get("sweep")
+    if isinstance(sweep, dict):
+        baseline = sweep.get("baseline")
+        if baseline is not None and not isinstance(baseline, dict):
+            _bad("sweep.baseline", baseline, "mapping")
+        grid = sweep.get("grid")
+        if grid is not None and not isinstance(grid, dict):
+            _bad("sweep.grid", grid, "mapping")
+        elif isinstance(grid, dict):
+            for path, values in grid.items():
+                if values is not None and not isinstance(values, list):
+                    _bad(f"sweep.grid.{path}", values, "list")
+
     replication = doc.get("replication")
     if isinstance(replication, dict):
         repeats = replication.get("repeats")
@@ -141,6 +158,7 @@ def validate_config(config_path: Path, c: Collector) -> dict[str, Any] | None:
     _check_units(doc, c)
     _check_replication(doc, template, c)
     _check_unimplemented(doc, c)
+    _check_sweep(doc, template, c)
     for message in template.validate(doc):
         c.error("E-TEMPLATE-RULE", "parameters", message)
     return doc
@@ -383,26 +401,70 @@ def _check_replication(doc: dict[str, Any], template: Any, c: Collector) -> None
 def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     """Declared-but-unimplemented blocks, refused rather than silently ignored.
 
-    This build hardcodes one condition and executes repeats `as_declared`
-    regardless of what is written here. It now resolves a unit roster, but
-    several `data.units` sub-fields — allocation other than `within`,
-    `assign`, `cluster_by`, `weight_by`, `measurements`, `holdout`, and a
-    `resolver` source — are read by nothing yet. Each of these would
-    otherwise validate clean and then run something other than what the
+    This build expands `sweep.baseline` and `sweep.grid` only, and executes
+    repeats `as_declared` regardless of what is written here. `sweep.paired`,
+    `.ablate`, `.sample`, and `.groups` are read by nothing yet. It resolves a
+    unit roster, but several `data.units` sub-fields — allocation other than
+    `within`, `assign`, `cluster_by`, `weight_by`, `measurements`, `holdout`,
+    and a `resolver` source — are read by nothing yet either. Each of these
+    would otherwise validate clean and then run something other than what the
     config describes — the exact failure `E-REPL-KIND-UNSUPPORTED` already
     refuses for `batch`/`fold`/nested repeat levels. Each message says plainly
     that the block is honored in a later slice, so a user does not read this as
     their config being malformed.
     """
     sweep = doc.get("sweep") or {}
-    declared_axes = [key for key in SWEEP_AXIS_KEYS if sweep.get(key)]
-    if declared_axes:
+    for mode, code, why in (
+        ("paired", "E-SWEEP-PAIRED-UNSUPPORTED", "couples parameters into one axis"),
+        (
+            "ablate",
+            "E-SWEEP-ABLATE-UNSUPPORTED",
+            "emits 1 + n one-change conditions and reads the baseline rather than "
+            "re-emitting it",
+        ),
+        (
+            "sample",
+            "E-SWEEP-SAMPLE-UNSUPPORTED",
+            "draws continuous ranges and labels its conditions `NN_sample`",
+        ),
+        (
+            "groups",
+            "E-SWEEP-GROUPS-UNSUPPORTED",
+            "is an axis over units rather than parameters, so it needs "
+            "`data.units.allocation` and `data.units.assign`",
+        ),
+    ):
+        if sweep.get(mode):
+            c.error(
+                code,
+                f"sweep.{mode}",
+                f"{why}, and is specified but not implemented in this build — this build "
+                "expands `baseline` and `grid` only; the other modes will be honored in a "
+                "later slice",
+            )
+
+    # A baseline that fixes only *some* of the grid's axes. `reference.md`:1415-1422
+    # states one rule with two cases: the baseline expands over whichever axes it
+    # does not fix, giving one baseline condition per cell of the unfixed axes.
+    # `expand` emits exactly one `00_baseline` row carrying only what the baseline
+    # literally names, so the declared design is not the executed design — the
+    # failure every other refusal in this function exists to prevent. Per-cell
+    # expansion is a real feature; until it lands, refuse rather than diverge.
+    # A baseline fixing every declared axis (including the no-grid case) is the
+    # supported row and is unaffected.
+    baseline = sweep.get("baseline") or {}
+    grid = sweep.get("grid") or {}
+    unfixed = [path for path in grid if path not in baseline]
+    if baseline and unfixed:
         c.error(
-            "E-SWEEP-UNSUPPORTED",
-            "sweep",
-            f"declares {', '.join(declared_axes)}, which is specified but not implemented "
-            "in this build — every run executes exactly one condition regardless of what "
-            "is declared here; sweep execution will be honored in a later slice",
+            "E-SWEEP-BASELINE-PARTIAL",
+            "sweep.baseline",
+            f"fixes no value for {', '.join(f'`{p}`' for p in unfixed)}, and a baseline "
+            "that leaves an axis free expands to one baseline condition per cell of the "
+            "unfixed axes — which is specified but not implemented in this build; this "
+            "build emits a single `00_baseline` condition, so the design executed would "
+            "not be the design declared. Per-cell baselines will be honored in a later "
+            "slice; fix a value on every swept axis for now",
         )
 
     units = _units_declaration(doc.get("data") or {}, c) or {}
@@ -450,4 +512,146 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
             f"is `{order}`, which is specified but not implemented in this build — "
             "execution always proceeds as_declared regardless of what is declared here; "
             "`order` will be honored in a later slice",
+        )
+
+
+def _repeat_total(doc: dict[str, Any]) -> int:
+    """The product of every repeat level's count, permissively: an invalid level
+    (`n < 1`) is already reported by `_check_replication` under its own identifier,
+    so this treats it as absent rather than reporting the same defect twice under
+    `W-EXEC-BUDGET`.
+    """
+    levels = ((doc.get("replication") or {}).get("repeats")) or []
+    total = 1
+    for level in levels:
+        count = level.get("n")
+        if count is None:
+            count = level.get("k")
+        if isinstance(count, int) and count >= 1:
+            total *= count
+    return total
+
+
+def _check_sweep(doc: dict[str, Any], template: Any, c: Collector) -> None:
+    """Checks that only become reachable once a sweep actually expands: an
+    unrecognised mode, an axis with nothing in it, a swept path the template
+    doesn't declare, a value the spec itself rejects, a value that can't render
+    into a condition label, the execution budget, and the multiplicity family
+    an enumerated sweep creates. `sweep.expand` is the single source of the
+    condition count — re-deriving it here is exactly the drift Task 4 was
+    told not to reintroduce.
+
+    `E-SWEEP-EXPANDS-EMPTY` is a backstop beneath the per-axis checks above,
+    not a replacement for them: it refuses on the *result* of `expand(doc)`
+    being zero conditions, whatever shape of `sweep` produced that — an empty
+    `grid` axis still gets the specific `E-SWEEP-AXIS-EMPTY` diagnosis (this
+    check runs after, so it never displaces that one), but a declared `sweep`
+    with no shape anyone enumerated here — `{grid: {}}`, or a hand-written
+    block of falsy keys — is still caught, because it is checked mechanically
+    against what would actually execute rather than against a list of shapes
+    someone thought of. A run that would otherwise execute zero conditions
+    while reporting `status: completed` is exactly the failure this project
+    treats as worst: a record describing an experiment nobody performed.
+    """
+    import difflib
+
+    sweep = doc.get("sweep") or {}
+    known = {"baseline", "grid", "paired", "ablate", "sample", "groups"}
+    for key in sweep:
+        if key not in known:
+            near = difflib.get_close_matches(key, sorted(known), n=1)
+            hint = f" — did you mean `{near[0]}`?" if near else ""
+            c.error(
+                "E-SWEEP-KEY-UNKNOWN",
+                f"sweep.{key}",
+                f"is not a sweep mode{hint} — `expand` understands only `baseline` and "
+                "`grid` in this build, so an unrecognised key would expand to zero "
+                "conditions and the run would execute nothing while reporting success",
+            )
+
+    spec = template.parameter_spec
+
+    def _path_resolves(path: str, where: str) -> bool:
+        """`path` names a parameter this template declares. Shared by `grid` and
+        `baseline` deliberately: both fix a value at a dotted `parameters` path,
+        and two copies of this check is how the two drift apart."""
+        if path in spec:
+            return True
+        near = difflib.get_close_matches(path, list(spec), n=1)
+        hint = f" — did you mean `{near[0]}`?" if near else ""
+        c.error("E-SWEEP-PATH-UNKNOWN", where, f"is not a parameter of this template{hint}")
+        return False
+
+    def _value_checks(path: str, value: Any, where: str, nameable: bool) -> None:
+        """The value satisfies its own `Param`, and — for a value that will be
+        rendered into a condition label — is nameable.
+
+        `nameable` is False for a `baseline` entry: `sweep.label_for` returns the
+        literal `baseline` for a baseline condition, so its fixed values are never
+        rendered into a label, and refusing an unnameable one would reject a config
+        that is legal (`reference.md`:1419 labels a per-cell baseline by the axes it
+        leaves *free*, so this stays true when that expansion lands).
+        """
+        problem = spec[path].check(value)
+        if problem:
+            c.error("E-PARAM-VALUE", where, problem)
+        if nameable:
+            unnameable = check_swept_value(value)
+            if unnameable:
+                c.error("E-SWEEP-VALUE-UNNAMEABLE", where, unnameable)
+
+    grid = sweep.get("grid") or {}
+    for path, values in grid.items():
+        if not values:
+            c.error(
+                "E-SWEEP-AXIS-EMPTY",
+                f"sweep.grid.{path}",
+                "declares no values, so the sweep expands to zero conditions and the run "
+                "would execute nothing while reporting success",
+            )
+            continue
+        if not _path_resolves(path, f"sweep.grid.{path}"):
+            continue
+        for i, value in enumerate(values):
+            _value_checks(path, value, f"sweep.grid.{path}[{i}]", nameable=True)
+
+    # `sweep.baseline` gets the same per-entry checks — one value, not a list.
+    # `reference.md`:218 names this by example ("Baseline is a valid condition |
+    # `sweep.baseline` sets `analysis.method: pearsonn`"). Unchecked, a misspelled
+    # path was planted verbatim into condition `00`'s config by
+    # `resolve_condition_cfg`'s `setdefault` walk, so `00_baseline` ran the base
+    # config under a label claiming otherwise and the run reported success.
+    baseline = sweep.get("baseline") or {}
+    for path, value in baseline.items():
+        if _path_resolves(path, f"sweep.baseline.{path}"):
+            _value_checks(path, value, f"sweep.baseline.{path}", nameable=False)
+
+    conditions = expand(doc)
+    if sweep and not conditions:
+        c.error(
+            "E-SWEEP-EXPANDS-EMPTY",
+            "sweep",
+            "expands to zero conditions, so the run would execute nothing while "
+            "reporting success — declare `baseline`, a non-empty `grid`, or remove "
+            "`sweep` entirely",
+        )
+
+    executions = len(conditions) * _repeat_total(doc)
+    budget = (doc.get("limits") or {}).get("max_executions")
+    if isinstance(budget, int) and executions > budget:
+        c.warn(
+            "W-EXEC-BUDGET",
+            "limits.max_executions",
+            f"{len(conditions)} conditions × {_repeat_total(doc)} repeats = {executions} "
+            f"executions exceeds {budget}",
+        )
+
+    if len(conditions) > 1:
+        c.warn(
+            "W-STATS-FAMILY",
+            "statistics.correction",
+            f"{len(conditions)} conditions form a family of {len(conditions) - 1} baseline "
+            "comparisons per metric, and multiplicity correction is not implemented in this "
+            "build — every interval reported is uncorrected, and each records "
+            "`correction: null` to say so",
         )

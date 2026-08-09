@@ -1,5 +1,6 @@
 """The execution loop. One execution at a time, in the recorded order."""
 
+import copy
 import json
 import time
 from dataclasses import dataclass
@@ -8,9 +9,11 @@ from pathlib import Path
 from typing import Any
 
 from publishable.artifacts import StepIO
+from publishable.config import Config, SweptAway
 from publishable.errors import ContractError
 from publishable.replication import Repeat
 from publishable.scope import Execution
+from publishable.sweep import condition_dir_name
 from publishable.units import UnitList
 
 
@@ -75,7 +78,11 @@ def attrition(
         for r in results
         if r.execution.step_name == step_name
         and r.execution.scope == "repeat"
-        and (r.execution.condition_index or 0) == condition_index
+        # Strict: `or 0` would map an unexpected `None` onto condition 0, which is
+        # the pooling this function's required `condition_index` exists to prevent.
+        # `build_plan` always gives a `repeat`-scoped execution a real index, so a
+        # `None` here is a core defect and must drop out rather than be absorbed.
+        and r.execution.condition_index == condition_index
     ]
     if not recording:
         return {"resolved": len(keys), "completed": 0, "ineligible": 0, "failed": len(keys)}
@@ -142,13 +149,60 @@ def step_dir_for(run_dir: Path, execution: Execution, collapse_repeats: bool) ->
     if execution.scope == "summary":
         return run_dir / "summary" / execution.step_name
     base = run_dir
-    if execution.condition_label is not None:
-        base = base / "conditions" / (
-            f"{execution.condition_index:02d}_{execution.condition_label}"
+    if execution.condition_label is not None and execution.condition_index is not None:
+        base = base / "conditions" / condition_dir_name(
+            execution.condition_index, execution.condition_label
         )
     if execution.scope == "repeat" and not collapse_repeats and execution.repeat_label:
         base = base / execution.repeat_label
     return base / execution.step_name
+
+
+def resolve_condition_cfg(base: dict[str, Any], values: dict[str, Any]) -> Config:
+    """Overlay this condition's swept values onto the base config.
+
+    Each dotted path in `values` names a leaf under `parameters`; the overlay
+    walks (creating intermediate mappings as needed) to that leaf and sets it,
+    so a `condition`- or `repeat`-scoped step reads exactly this condition's
+    value without ever mentioning the sweep that produced it.
+    """
+    doc = copy.deepcopy(base)
+    for path, value in values.items():
+        node = doc.setdefault("parameters", {})
+        *heads, leaf = path.split(".")
+        for head in heads:
+            node = node.setdefault(head, {})
+        node[leaf] = value
+    return Config(doc)
+
+
+def resolve_wide_cfg(base: dict[str, Any], swept_paths: set[str]) -> Config:
+    """A config for `run`/`summary` scope, with every swept path made unreadable.
+
+    Those scopes have no single condition to draw a swept value from, so each
+    leaf `sweep` varies is replaced by a `SweptAway` marker: `Node.__getattr__`
+    raises `E-STEP-SWEPT-PARAM` the moment such a step reads it, rather than
+    silently handing back a value that could only be wrong for every condition
+    but one.
+
+    Walks with `setdefault`, exactly as `resolve_condition_cfg` does, rather
+    than `get` — a swept path whose parent is absent from `base` must still end
+    up marked. Skipping it there (as an earlier version of this function did)
+    fails in the unsafe direction: the value stays readable, and a `run`- or
+    `summary`-scoped step would silently get a value that could only be wrong
+    for every condition but one. Planting the marker instead means the worst
+    case is a step getting `E-STEP-SWEPT-PARAM` for a path `validate` should
+    have already rejected as unresolvable — a refusal either way, and the more
+    accurate one, since the path *is* swept.
+    """
+    doc = copy.deepcopy(base)
+    for path in swept_paths:
+        node = doc.setdefault("parameters", {})
+        *heads, leaf = path.split(".")
+        for head in heads:
+            node = node.setdefault(head, {})
+        node[leaf] = SweptAway(f"parameters.{path}")
+    return Config(doc)
 
 
 def execute_plan(
@@ -156,7 +210,7 @@ def execute_plan(
     plan: list[Execution],
     run_dir: Path,
     input_dir: Path,
-    cfg: Any,
+    cfgs: dict[int, Any],
     repeats: list[Repeat],
     digest: str,
     units: UnitList | None = None,
@@ -176,6 +230,22 @@ def execute_plan(
     seeds = {r.label: r.seed for r in repeats}
     ledger = run_dir / "executions.jsonl"
     results: list[ExecutionResult] = []
+
+    # Derived once from the plan itself, not threaded in as extra parameters:
+    # `io.conditions`/`io.repeats`/`io.read_condition` are a `summary`-scoped
+    # step's read surface, and the plan already carries every condition and
+    # repeat label the run resolved. A no-`sweep` run still has one resolved
+    # condition — index 0, label `None` — and it belongs in this list: `None`
+    # is what tells `read_condition` there is no `conditions/` level to nest
+    # under, not "this index doesn't exist."
+    conditions_list: list[tuple[int, str | None]] = []
+    seen_conditions: set[int] = set()
+    for e in plan:
+        if e.condition_index is not None and e.condition_index not in seen_conditions:
+            seen_conditions.add(e.condition_index)
+            conditions_list.append((e.condition_index, e.condition_label))
+    repeats_list = [r.label for r in repeats]
+    step_scopes = {e.step_name: e.scope for e in plan}
 
     for execution in plan:
         started = datetime.now(UTC)
@@ -205,11 +275,30 @@ def execute_plan(
             input_dir=input_dir,
             run_dir=run_dir,
             units=units,
+            scope=execution.scope,
+            conditions=conditions_list,
+            repeats=repeats_list,
+            step_scopes=step_scopes,
         )
         io.step_dir.mkdir(parents=True, exist_ok=True)
         recorded: frozenset[str] = frozenset()
         skipped: frozenset[str] = frozenset()
         rows: tuple[dict[str, Any], ...] = ()
+        cfg_key = execution.condition_index if execution.condition_index is not None else -1
+        if cfg_key not in cfgs:
+            # Not a step failure — the plan and the resolved configs disagree,
+            # which means core built an inconsistent plan. Continuing would
+            # write a run record that looks partially fine while resting on a
+            # bug, so this is deliberately not caught by the per-execution
+            # `try` below: only a step's own failure is allowed to leave the
+            # rest of the plan running.
+            raise ContractError(
+                f"no cfg was resolved for condition index {cfg_key!r}, needed by "
+                f"{execution.step_name!r} at {execution.scope!r} scope; the plan and "
+                "the resolved `cfgs` disagree",
+                code="E-RUN-CFG-MISSING",
+            )
+        cfg = cfgs[cfg_key]
         try:
             returned = step.run(cfg, io)
             if returned is None:
