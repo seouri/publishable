@@ -56,7 +56,7 @@ def _execution_block(results: list[ExecutionResult]) -> dict[str, Any]:
 
 def _results_block(
     results: list[ExecutionResult],
-    aggregated: dict[str, dict[str, Any]] | None,
+    aggregated: dict[int, dict[str, dict[str, Any]]] | None,
 ) -> dict[str, Any]:
     # A "run"-scoped step's return has nowhere to land here (§ The two files gives
     # `results` only `conditions` and `summary`), and the same is true of a
@@ -90,9 +90,18 @@ def _results_block(
     # `reference.md` § "Every threshold..." / the condition-entry example never
     # shows a plain `n` beside `per_repeat` — inventing one here would be a
     # schema key the docs don't have.
+    #
+    # `aggregated` is keyed by condition index, and each condition receives ONLY
+    # its own slice — never the same mapping object handed to another condition.
+    # Core aggregates within each condition and never pools across conditions
+    # (`reference.md` § Statistical reporting); sharing one object across two
+    # condition entries would be that pooling by aliasing, invisible until a
+    # reader noticed two conditions reporting identical numbers (or PyYAML's
+    # `&id001`/`*id001` anchors gave it away). A condition absent from
+    # `aggregated` gets its own empty mapping, not another condition's.
     if aggregated is not None:
-        for cond in conditions.values():
-            cond["aggregated"] = aggregated
+        for index, cond in conditions.items():
+            cond["aggregated"] = aggregated[index] if index in aggregated else {}
     return {
         "conditions": [conditions[k] for k in sorted(conditions)],
         "summary": summary,
@@ -130,7 +139,7 @@ def assemble_run_yaml(
     results: list[ExecutionResult],
     repeats: list[Repeat],
     draft: bool = False,
-    aggregated: dict[str, dict[str, Any]] | None = None,
+    aggregated: dict[int, dict[str, dict[str, Any]]] | None = None,
 ) -> dict[str, Any]:
     # There is no `counts` parameter here: `summarize_step` already embeds the
     # per-unit counts as `n` inside each metric under `aggregated`, and the

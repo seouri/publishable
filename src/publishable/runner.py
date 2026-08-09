@@ -27,23 +27,37 @@ class ExecutionResult:
     rows: tuple[dict[str, Any], ...] = ()
 
 
-def attrition(results: list[ExecutionResult], roster: "UnitList | None") -> dict[str, int]:
-    """The four counts. A failed unit has no row anywhere, so failure is derived.
+def attrition(
+    results: list[ExecutionResult], roster: "UnitList | None", condition_index: int
+) -> dict[str, int]:
+    """The four counts, scoped to one condition. A failed unit has no row anywhere,
+    so failure is derived.
+
+    `condition_index` is required, not defaulted: core aggregates within each
+    condition and never pools across conditions, and a caller that forgot to scope
+    this would get a right-looking `n` computed over the wrong condition's
+    executions — the same silent mismatch `collapse_repeats` refuses by requiring
+    the same parameter. S2 always has exactly one condition and always passes `0`.
 
     Both `completed` and `ineligible` are the INTERSECTION across the repeat-scoped
-    executions a unit was handed to — not the union. `completed` intersects because
-    the collapse averages per unit, and a unit present in three of five seeds would
-    otherwise enter that average on a different number of observations than its
-    neighbours. `ineligible` intersects for the mirrored reason: eligibility is a
-    property of the design, so a unit skipped in one repeat and completed (or simply
-    unrecorded) in another did not get a consistent eligibility answer, and that
-    inconsistency is exactly the `failed` case, not a design exclusion. Only a unit
-    skipped in EVERY recording execution — a consistent answer — is `ineligible`.
+    executions of this condition a unit was handed to — not the union. `completed`
+    intersects because the collapse averages per unit, and a unit present in three
+    of five seeds would otherwise enter that average on a different number of
+    observations than its neighbours. `ineligible` intersects for the mirrored
+    reason: eligibility is a property of the design, so a unit skipped in one
+    repeat and completed (or simply unrecorded) in another did not get a
+    consistent eligibility answer, and that inconsistency is exactly the `failed`
+    case, not a design exclusion. Only a unit skipped in EVERY recording execution
+    of this condition — a consistent answer — is `ineligible`.
     """
     if roster is None:
         return {"resolved": 0, "completed": 0, "ineligible": 0, "failed": 0}
     keys = {u.key for u in roster}
-    recording = [r for r in results if r.execution.scope == "repeat"]
+    recording = [
+        r
+        for r in results
+        if r.execution.scope == "repeat" and (r.execution.condition_index or 0) == condition_index
+    ]
     if not recording:
         return {"resolved": len(keys), "completed": 0, "ineligible": 0, "failed": len(keys)}
     completed = set(keys)
@@ -185,7 +199,7 @@ def execute_plan(
             )
 
         if max_failed_fraction is not None and units is not None:
-            counts = attrition(results, units)
+            counts = attrition(results, units, execution.condition_index or 0)
             if counts["resolved"] and counts["failed"] / counts["resolved"] > max_failed_fraction:
                 break
     return results

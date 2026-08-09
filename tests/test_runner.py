@@ -215,7 +215,7 @@ def test_attrition_reconciles_exactly(tmp_path: Path):
             return {}
 
     _, results, _ = harness(tmp_path, [Partial], units=roster)
-    counts = attrition(results, roster)
+    counts = attrition(results, roster, condition_index=0)
     assert counts == {"resolved": 10, "completed": 7, "ineligible": 1, "failed": 2}
     assert counts["resolved"] == counts["completed"] + counts["ineligible"] + counts["failed"]
 
@@ -239,7 +239,7 @@ def test_completion_is_the_intersection_across_repeats(tmp_path: Path):
         units=roster,
         repeats=[Repeat("seed", "seed17", 17), Repeat("seed", "seed42", 42)],
     )
-    assert attrition(results, roster)["completed"] == 2
+    assert attrition(results, roster, condition_index=0)["completed"] == 2
 
 
 def test_ineligibility_is_also_the_intersection_across_repeats(tmp_path: Path):
@@ -266,7 +266,7 @@ def test_ineligibility_is_also_the_intersection_across_repeats(tmp_path: Path):
         units=roster,
         repeats=[Repeat("seed", "seed17", 17), Repeat("seed", "seed42", 42)],
     )
-    counts = attrition(results, roster)
+    counts = attrition(results, roster, condition_index=0)
     assert counts == {"resolved": 2, "completed": 0, "ineligible": 0, "failed": 2}
     assert counts["resolved"] == counts["completed"] + counts["ineligible"] + counts["failed"]
 
@@ -288,7 +288,7 @@ def test_a_unit_skipped_in_every_repeat_is_ineligible(tmp_path: Path):
         units=roster,
         repeats=[Repeat("seed", "seed17", 17), Repeat("seed", "seed42", 42)],
     )
-    counts = attrition(results, roster)
+    counts = attrition(results, roster, condition_index=0)
     assert counts == {"resolved": 2, "completed": 1, "ineligible": 1, "failed": 0}
     assert counts["resolved"] == counts["completed"] + counts["ineligible"] + counts["failed"]
 
@@ -316,7 +316,7 @@ def test_skipped_in_one_repeat_and_unrecorded_in_another_is_failed(tmp_path: Pat
         units=roster,
         repeats=[Repeat("seed", "seed17", 17), Repeat("seed", "seed42", 42)],
     )
-    counts = attrition(results, roster)
+    counts = attrition(results, roster, condition_index=0)
     assert counts == {"resolved": 2, "completed": 1, "ineligible": 0, "failed": 1}
     assert counts["resolved"] == counts["completed"] + counts["ineligible"] + counts["failed"]
 
@@ -336,7 +336,7 @@ def test_a_single_repeat_skip_is_still_ineligible(tmp_path: Path):
     _, results, _ = harness(
         tmp_path, [SkipOne], units=roster, repeats=[Repeat("seed", "seed17", 17)]
     )
-    counts = attrition(results, roster)
+    counts = attrition(results, roster, condition_index=0)
     assert counts == {"resolved": 2, "completed": 1, "ineligible": 1, "failed": 0}
     assert counts["resolved"] == counts["completed"] + counts["ineligible"] + counts["failed"]
 
@@ -418,7 +418,7 @@ def test_a_raising_step_still_does_not_stop_the_run(tmp_path: Path):
 def test_attrition_with_no_units_declared_is_zeroed_not_a_crash(tmp_path: Path):
     """`units=None` (no `data.units`) is legal and must not divide by zero or disable the check."""
     _, results, _ = harness(tmp_path, [Load, Analyze], max_failed_fraction=0.2)
-    assert attrition(results, None) == {
+    assert attrition(results, None, condition_index=0) == {
         "resolved": 0,
         "completed": 0,
         "ineligible": 0,
@@ -455,12 +455,12 @@ def test_aggregated_sits_beside_per_repeat_without_altering_it(tmp_path: Path):
 
     _, results, repeats = harness(tmp_path, [Record], units=roster)
     collapsed = collapse_repeats(results, "record", condition_index=0)
-    counts = attrition(results, roster)
+    counts = attrition(results, roster, condition_index=0)
     summary = summarize_step(collapsed, counts)
     doc = assemble_run_yaml(
         run_id="run_x", status="completed", config={"a": 1}, code_hash="sha256:c",
         parameters_hash="sha256:p", provenance={}, results=results, repeats=repeats,
-        aggregated={"record": summary},
+        aggregated={0: {"record": summary}},
     )
     condition = doc["results"]["conditions"][0]
     assert condition["per_repeat"]["record"] == {"seed17": {"r": 0.5}, "seed42": {"r": 0.5}}
@@ -484,3 +484,117 @@ def test_no_aggregated_means_no_aggregated_key(tmp_path: Path):
     condition = doc["results"]["conditions"][0]
     assert "aggregated" not in condition
     assert "n" not in condition
+
+
+def _two_condition_results(tmp_path: Path, roster: "UnitList"):
+    """Two conditions of the same step recording one unit at starkly different
+    values — 1.0 and 100.0 — so pooling would be unmistakable rather than a
+    rounding-sized difference."""
+
+    class Record(BaseStep):
+        scope = "repeat"
+
+        def run(self, cfg, io):
+            io.record("p0", {"pred": 1.0 if self.condition == 0 else 100.0})
+            return {}
+
+    class P(BaseExperiment):
+        pass
+
+    P.steps = [Record]
+    repeats = [Repeat("seed", "seed17", 17), Repeat("seed", "seed42", 42)]
+    plan = build_plan(
+        P(), conditions=[(0, "c0"), (1, "c1")], repeat_labels=[r.label for r in repeats]
+    )
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "input").mkdir(parents=True, exist_ok=True)
+    results = execute_plan(
+        plan=plan, run_dir=run_dir, input_dir=tmp_path / "input",
+        cfg=Config({"parameters": {}}), repeats=repeats, digest="sha256:abc", units=roster,
+    )
+    return results, repeats
+
+
+def test_aggregated_is_scoped_per_condition_not_shared(tmp_path: Path):
+    from publishable.stats import collapse_repeats, summarize_step
+
+    roster = UnitList([Unit(key="p0")])
+    results, repeats = _two_condition_results(tmp_path, roster)
+
+    aggregated = {}
+    for index in (0, 1):
+        collapsed = collapse_repeats(results, "record", condition_index=index)
+        counts = attrition(results, roster, condition_index=index)
+        aggregated[index] = {"record": summarize_step(collapsed, counts)}
+
+    doc = assemble_run_yaml(
+        run_id="run_x", status="completed", config={"a": 1}, code_hash="sha256:c",
+        parameters_hash="sha256:p", provenance={}, results=results, repeats=repeats,
+        aggregated=aggregated,
+    )
+    conds = doc["results"]["conditions"]
+    assert conds[0]["aggregated"]["record"]["pred"]["value"] == 1.0
+    assert conds[1]["aggregated"]["record"]["pred"]["value"] == 100.0
+    assert conds[0]["aggregated"] is not conds[1]["aggregated"]
+
+    import yaml
+
+    dumped = yaml.safe_dump(doc, sort_keys=False)
+    assert "&id" not in dumped and "*id" not in dumped
+
+
+def test_a_condition_absent_from_aggregated_gets_an_empty_mapping(tmp_path: Path):
+    from publishable.stats import collapse_repeats, summarize_step
+
+    roster = UnitList([Unit(key="p0")])
+    results, repeats = _two_condition_results(tmp_path, roster)
+
+    collapsed = collapse_repeats(results, "record", condition_index=0)
+    counts = attrition(results, roster, condition_index=0)
+    aggregated = {0: {"record": summarize_step(collapsed, counts)}}  # nothing for condition 1
+
+    doc = assemble_run_yaml(
+        run_id="run_x", status="completed", config={"a": 1}, code_hash="sha256:c",
+        parameters_hash="sha256:p", provenance={}, results=results, repeats=repeats,
+        aggregated=aggregated,
+    )
+    conds = doc["results"]["conditions"]
+    assert conds[0]["aggregated"]["record"]["pred"]["value"] == 1.0
+    assert conds[1]["aggregated"] == {}
+
+
+def test_attrition_is_scoped_per_condition(tmp_path: Path):
+    roster = UnitList([Unit(key="p0"), Unit(key="p1")])
+
+    class Record(BaseStep):
+        scope = "repeat"
+
+        def run(self, cfg, io):
+            io.record("p0", {"v": 1.0})
+            if self.condition == 1:
+                io.record("p1", {"v": 1.0})  # only condition 1 completes p1
+            return {}
+
+    class P(BaseExperiment):
+        pass
+
+    P.steps = [Record]
+    repeats = [Repeat("seed", "seed17", 17), Repeat("seed", "seed42", 42)]
+    plan = build_plan(
+        P(), conditions=[(0, "c0"), (1, "c1")], repeat_labels=[r.label for r in repeats]
+    )
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "input").mkdir(parents=True, exist_ok=True)
+    results = execute_plan(
+        plan=plan, run_dir=run_dir, input_dir=tmp_path / "input",
+        cfg=Config({"parameters": {}}), repeats=repeats, digest="sha256:abc", units=roster,
+    )
+    assert attrition(results, roster, condition_index=0)["completed"] == 1
+    assert attrition(results, roster, condition_index=1)["completed"] == 2
+
+
+def test_attrition_requires_condition_index():
+    with pytest.raises(TypeError):
+        attrition([], None)  # type: ignore[call-arg]
