@@ -13,6 +13,7 @@ from publishable.config import Config, SweptAway
 from publishable.errors import ContractError
 from publishable.replication import Repeat
 from publishable.scope import Execution
+from publishable.stats import handed_to
 from publishable.sweep import condition_dir_name
 from publishable.units import UnitList
 
@@ -35,6 +36,7 @@ def attrition(
     roster: "UnitList | None",
     step_name: str,
     condition_index: int,
+    fold_members: dict[str, frozenset[str]] | None = None,
 ) -> dict[str, int]:
     """The four counts, scoped to one step within one condition. A failed unit has
     no row anywhere, so failure is derived.
@@ -53,17 +55,27 @@ def attrition(
     executions — the same silent mismatch `collapse_repeats` refuses by requiring
     the same parameter. S2 always has exactly one condition and always passes `0`.
 
-    Both `completed` and `ineligible` are the INTERSECTION across the repeat-scoped
-    executions of this step, in this condition, a unit was handed to — not the
-    union. `completed` intersects because the collapse averages per unit, and a
-    unit present in three of five seeds would otherwise enter that average on a
-    different number of observations than its neighbours. `ineligible` intersects
-    for the mirrored reason: eligibility is a property of the design, so a unit
-    skipped in one repeat and completed (or simply unrecorded) in another did not
-    get a consistent eligibility answer, and that inconsistency is exactly the
-    `failed` case, not a design exclusion. Only a unit skipped in EVERY recording
-    execution of this step, in this condition — a consistent answer — is
-    `ineligible`.
+    `completed` and `ineligible` are computed per unit over the repeats
+    `stats.handed_to` says that unit actually received — not, as with no fold,
+    every repeat-scoped execution of this step. Without a fold every unit is
+    handed to every repeat, so the two coincide and this is the same intersection
+    as before: `completed` intersects because the collapse averages per unit, and
+    a unit present in three of five seeds would otherwise enter that average on a
+    different number of observations than its neighbours; `ineligible` intersects
+    for the mirrored reason, since eligibility is a property of the design and a
+    unit skipped in one repeat and completed (or simply unrecorded) in another did
+    not get a consistent eligibility answer — that inconsistency is exactly the
+    `failed` case, not a design exclusion. With a fold, intersecting across EVERY
+    repeat-scoped execution would report `completed: 0` for any design containing
+    one, because no unit is ever in more than one fold (`reference.md` § The
+    per-unit tables); `handed_to` scopes the intersection to just the fold — and,
+    under fold × seed, to every seed of that unit's own fold — so only a unit
+    skipped or missing within its own group is `ineligible` or `failed`.
+
+    `resolved` counts what the execution was handed, not the cohort: without a
+    fold that is the full roster, since every execution receives it whole; with a
+    fold it is the union of what the recording executions actually received —
+    smaller than the roster, and not a shortfall against units the fold never saw.
 
     This is the per-step, per-condition breakdown `stats.summarize_step` attaches
     as a metric's `n`. It is deliberately not what guards `max_failed_fraction`:
@@ -86,24 +98,26 @@ def attrition(
     ]
     if not recording:
         return {"resolved": len(keys), "completed": 0, "ineligible": 0, "failed": len(keys)}
-    completed = set(keys)
-    for r in recording:
-        completed &= r.recorded
-    ineligible = set(keys)
-    for r in recording:
-        ineligible &= r.skipped
+    labels = [r.execution.repeat_label or "" for r in recording]
+    by_label = {r.execution.repeat_label or "": r for r in recording}
+    if fold_members is None:
+        handed = keys  # every unit, to every repeat — the no-fold rule
+    else:
+        handed = {k for s in fold_members.values() for k in s} & keys
+    completed, ineligible = set(), set()
+    for key in handed:
+        mine = handed_to(key, labels, fold_members)
+        if not mine:
+            continue
+        if all(key in by_label[lb].recorded for lb in mine):
+            completed.add(key)
+        elif all(key in by_label[lb].skipped for lb in mine):
+            ineligible.add(key)
     return {
-        # `resolved` always equals `len(io.units)` for the execution
-        # (reference.md § "resolved counts what the execution was handed, not the
-        # cohort"). It equals the full roster here only because S2 has no `fold` or
-        # group axis that would narrow `io.units` below it — every execution is
-        # handed the whole roster, so the two coincide. The day a fold or group
-        # axis lands, this must become the union of what the recording executions
-        # were actually given, not `len(keys)` unconditionally.
-        "resolved": len(keys),
+        "resolved": len(handed),
         "completed": len(completed),
         "ineligible": len(ineligible),
-        "failed": len(keys) - len(completed) - len(ineligible),
+        "failed": len(handed) - len(completed) - len(ineligible),
     }
 
 

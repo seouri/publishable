@@ -2,6 +2,7 @@ import copy
 from pathlib import Path
 
 import pytest
+from tests.test_stats import _repeat_result
 
 from publishable import BaseExperiment, BaseStep
 from publishable.config import Config
@@ -428,6 +429,57 @@ def test_skipped_in_one_repeat_and_unrecorded_in_another_is_failed(tmp_path: Pat
     counts = attrition(results, roster, "skip_then_silently_drop", condition_index=0)
     assert counts == {"resolved": 2, "completed": 1, "ineligible": 0, "failed": 1}
     assert counts["resolved"] == counts["completed"] + counts["ineligible"] + counts["failed"]
+
+
+def _roster2() -> UnitList:
+    return UnitList([Unit(key="u1"), Unit(key="u2")])
+
+
+def _roster4() -> UnitList:
+    return UnitList([Unit(key="u1"), Unit(key="u2"), Unit(key="u3"), Unit(key="u4")])
+
+
+def test_a_fold_reports_its_partition_as_resolved_not_the_cohort():
+    members = {"fold01": frozenset({"u1", "u2"}), "fold02": frozenset({"u3", "u4"})}
+    results = [
+        _repeat_result("analyze", "fold01", 0, {"u1": {}, "u2": {}}),
+        _repeat_result("analyze", "fold02", 0, {"u3": {}, "u4": {}}),
+    ]
+    counts = attrition(results, _roster4(), "analyze", 0, members)
+    assert counts == {"resolved": 4, "completed": 4, "ineligible": 0, "failed": 0}
+
+
+def test_the_third_row_a_unit_missing_from_one_seed_of_its_fold():
+    """The case a rewrite that groups by fold but forgets to intersect WITHIN the
+    group gets wrong, while the fold-alone case still passes."""
+    members = {"fold01": frozenset({"u1", "u2"})}
+    results = [
+        _repeat_result("analyze", "fold01_seed01", 0, {"u1": {}, "u2": {}}),
+        _repeat_result("analyze", "fold01_seed02", 0, {"u1": {}}),
+    ]
+    counts = attrition(results, _roster2(), "analyze", 0, members)
+    assert counts["completed"] == 1
+    assert counts["failed"] == 1
+
+
+def test_without_folds_the_intersection_is_unchanged():
+    results = [
+        _repeat_result("analyze", "seed01", 0, {"u1": {}, "u2": {}}),
+        _repeat_result("analyze", "seed02", 0, {"u1": {}}),
+    ]
+    counts = attrition(results, _roster2(), "analyze", 0, None)
+    assert counts["completed"] == 1
+    assert counts["failed"] == 1
+
+
+def test_the_identity_reconciles_under_a_fold():
+    members = {"fold01": frozenset({"u1", "u2"}), "fold02": frozenset({"u3", "u4"})}
+    results = [
+        _repeat_result("analyze", "fold01", 0, {"u1": {}}),
+        _repeat_result("analyze", "fold02", 0, {"u3": {}, "u4": {}}),
+    ]
+    c = attrition(results, _roster4(), "analyze", 0, members)
+    assert c["resolved"] == c["completed"] + c["ineligible"] + c["failed"]
 
 
 def test_a_single_repeat_skip_is_still_ineligible(tmp_path: Path):
