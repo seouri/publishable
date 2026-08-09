@@ -449,7 +449,7 @@ statistics:
 
 **Execution and cost.** 6 × 3 = **18 executions**, no compilations. **≤ $252, ≈ 3.2 h** at the most expensive deployment's rate.
 
-**A blocking constraint.** The apparatus probe is permitted — and here required — to read a parameter the sweep varies, so each deployment is gated against its own first observation. But `required_env` is a **class** attribute, static across the run, and a sweep spanning providers has provider-dependent credentials. The Ollama cell the source evaluates cannot join this config unless a single gateway serves every level. Split it into a per-provider run and join the runs in a `study`, or route everything through one endpoint.
+**Credentials follow the swept value.** The apparatus probe is permitted — and here required — to read a parameter the sweep varies, so each deployment is gated against its own first observation. The credentials reaching those deployments differ too, and a static `required_env` could not express that: it would demand an Azure key from a run that only touches Ollama, or stay silent about one a later condition needs. [`Param(requires_env=...)`](reference.md#a-credential-can-belong-to-a-parameter-value) on `llm.provider` puts the requirement on the value, so `validate` checks the union over the conditions this sweep resolves — which is what lets the source's local-Gemma cell join the same config as the Azure cells rather than needing a run of its own. Provider and model have to move together, so that cell enters as a `sweep.paired` entry coupling `llm.provider` with `llm.model` rather than as a fourth `grid` level — a cross of the two would emit conditions pointing an Azure deployment name at an Ollama endpoint.
 
 ---
 
@@ -772,12 +772,13 @@ def probe(cfg) -> Apparatus:
 
 ```python
 apparatus_probe = "llm_deployment"
-apparatus_facts = ["provider", "model_id", "api_version", "endpoint_host_sha256"]
+apparatus_facts = ["provider", "model_id", "api_version",
+                   "endpoint_host_sha256", "deployment_revision"]
 ```
 
-**Three consequences, all blocking, all worth stating before a run is scheduled.**
+**Three consequences worth stating before a run is scheduled.**
 
-1. **`deployment_revision` is deliberately not in `apparatus_facts`.** Azure does not contractually return an immutable revision, and a declared fact must be yielded or core rejects the probe. It is emitted so it lands in `provenance.apparatus.facts`, and the spec is presently ambiguous about whether an undeclared fact participates in the change gate — see [Gaps](#gaps-this-analysis-found-in-the-specification).
+1. **`deployment_revision` is declared even though Azure does not contractually return one.** A declared fact must be *supplied as a key*, not answered: the probe returns `None` where the provider omits a fingerprint, core records `null`, and [the gate compares observations](reference.md#the-apparatus-core-can-only-observe) — so `null → "fp_a3c1"` is the field becoming available rather than the deployment moving. What declaring it buys is the `dry-run` warning and the `unobserved` count, which is exactly the disclosure the source protocol asks for in prose when it says to "state explicitly if the provider does not return an immutable model revision."
 2. **The probe runs before *every* execution.** A hosted deployment re-tuned during the E4 benchmark's 4.4 hours, or the C3 run's 12 hours, fails the run with no policy knob. That is correct — two deployment states are not one dataset — but it is an operational precondition, not a footnote. The ledger keeps both observations, so the evaluable earlier period stays reportable.
 3. **Probes cost quota.** They run at `dry-run`, at run start, and before every execution, never at `validate`. Budget one authenticated call per execution on top of the cohort passes.
 
@@ -788,7 +789,7 @@ Grouped by what they control. Every one is under `parameters`; a template declar
 | Path | Type | Default | Why it is a parameter and not an apparatus fact |
 |---|---|---|---|
 | `llm.model` | str | required, `pattern=^[A-Za-z0-9._+-]+$` | You choose the deployment. The pattern is what makes it sweepable as a condition label |
-| `llm.provider` | str | `azure_openai`, choices | Chosen |
+| `llm.provider` | str | `azure_openai`, choices, `requires_env` | Chosen — and it carries its own credential per value, so a sweep spanning providers validates |
 | `llm.api_version` | str | `null`, nullable | Chosen; the *served* version is an apparatus fact |
 | `request.temperature` | float | `0.0`, ge 0 le 2 | Chosen |
 | `request.max_output_tokens` | int | `512`, ge 1 | Chosen |
@@ -817,7 +818,7 @@ Grouped by what they control. Every one is under `parameters`; a template declar
 
 `default_repeats = 3`. Three is the smallest count at which `repeat_spread` is a number rather than an anecdote, and it is affordable because compilation is condition-scoped so a repeat costs one evaluation pass. A floor of 5 — the spec's generic convention-class example — would be a 5× metered-API cost default nobody chose; a floor of 1 would let a nondeterministic pipeline report no dispersion at all and draw no warning.
 
-`required_env = ["LLM_API_KEY"]`. Static, which is [the constraint E6 runs into](#e6--compiled-program-transfer).
+`required_env = []`. Nothing this template needs *unconditionally* — every credential it uses is selected by `llm.provider`, so all of them are declared in that parameter's `requires_env` and checked per condition.
 
 ### `report.metrics` exists because of the correction family
 
@@ -892,11 +893,11 @@ Retry ledgers, execution manifests, timestamped run directories, `reproduce` com
 
 ## Gaps this analysis found in the specification
 
-Three, in descending order of consequence. None blocks the designs above; each would need an argument against `design-principles.md` to resolve.
+Three, all now closed in the specification. Each is recorded here with the case that surfaced it, because a gap's motivating example is the thing a later reader needs and the fixed text no longer carries.
 
-1. **`apparatus_facts` conflates "must be yielded" with "gated on change."** For a hosted deployment these have to separate: a `system_fingerprint` that the provider sometimes omits must not fail the run for being absent, but must fail it for changing. Presently the only way to get the gate is to declare the fact, and declaring it makes absence fatal. `reference.md` § The apparatus core can only observe does not say whether an *undeclared* returned fact participates in the gate.
-2. **`required_env` is static, but a sweep can span providers.** [E6](#e6--compiled-program-transfer) is the concrete case. A sweep over `llm.model` whose levels sit behind different credentials cannot declare its environment requirement, and `validate` will either fail on a credential no condition needs or pass on one a condition does.
-3. **`limits` has no cost or quota threshold.** `max_executions` warns on a count; nothing warns on 213 million prompt tokens. Both source projects budget in tokens and dollars before committing, and `dry-run` is where such a check would belong.
+1. **`apparatus_facts` conflated "must be yielded" with "gated on change."** A hosted deployment's revision fingerprint is returned on most calls and omitted on some. Declaring it made absence fatal; not declaring it left the change gate ambiguous, and the only safe move was to stop declaring a pin the study depends on. *Resolved* in `reference.md` § The apparatus core can only observe: a declared fact must be supplied as a **key**, `null` is a legal value meaning the apparatus did not answer, the gate compares two *observations* so an absence is never a change, and declaring the fact buys a `dry-run` warning plus an `unobserved` count. Every returned fact is gated whether declared or not, so there is no longer any reason to leave one out.
+2. **`required_env` was static, but a sweep can span providers.** [E6](#e6--compiled-program-transfer) is the case: `validate` would either demand an Azure key from a run that never selects Azure or stay silent about one a later condition needs. *Resolved* by `reference.md` § A credential can belong to a parameter value — `Param(requires_env={...})` keyed by the parameter's `choices`, checked over the conditions the sweep actually resolves. The requirement travels with the decision that creates it, which is the same boundary `apparatus_facts` sits on read from the other side.
+3. **Nothing showed the metered quantity before a run.** `limits.max_executions` warns on an execution count, which is not what a metered run is billed by: 20 executions over a 100,000-unit corpus is cheap by that measure and ruinous in practice. *Resolved* in `reference.md` § Before you spend it — `dry-run` now prints **unit-executions**, the sum of `len(io.units)` over every planned execution. Deliberately *not* resolved with a `limits` field: core has no price list and cannot count tokens, and a threshold in a currency it cannot measure would be the "looks handled and isn't" failure the correction family is held against. A budget that must be pre-registered is a template parameter, hashed with everything else.
 
 ---
 
@@ -928,4 +929,4 @@ Every run is far below `limits.max_executions: 500`, so the binding constraint i
 - **Condition-scoped compilation.** Moving compilation to repeat scope would multiply the five compilations by every repeat and add ≈ $1,900.
 - **Five inference passes in the shortcut runs.** Required by the source's own non-determinism rule, and they are `{kind: batch}`, which is what makes the resulting dispersion attributable rather than anonymous.
 
-`publishable dry-run` prints the resolved condition list, the execution count, and where every artifact will land, and it runs the apparatus probe — so all three numbers above are checkable before any quota is spent.
+`publishable dry-run` prints the resolved condition list, the execution count, the **unit-executions** the plan will produce, and where every artifact will land, and it runs the apparatus probe — so every number above is checkable before any quota is spent. Unit-executions is the one to multiply: at the sources' observed ~6,300 prompt tokens per patient, C3's 12 × 5 × 330 = 19,800 unit-executions is ~125 million prompt tokens, and that arithmetic is the budget check core deliberately leaves to you.
