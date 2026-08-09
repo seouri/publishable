@@ -49,15 +49,25 @@ The `run_usage_report.json` row is the sharpest. Both projects treat token use a
 
 ### Shared roster and pipeline
 
-Every screening config below resolves the same roster through a plugin resolver, and runs the same four steps:
+Every screening config below resolves the same roster through a plugin resolver and draws its steps from one package. **E1 is shown in full; every config after it shows only the blocks that differ.**
 
 ```
-src/growth_screen/steps/
-├── step01_serialize.py        scope: run         # censoring + trajectory serialization
-├── step02_compile_program.py  scope: condition   # MIPROv2 over io.units.train; no-op when optimizer.name == none
-├── step03_screen.py           scope: repeat      # one request per unit; nondeterministic = True
-└── step04_compare.py          scope: summary
+src/growth_screen/
+├── experiment.py                  # two BaseExperiment classes; `entrypoint` selects one
+└── steps/
+    ├── step01_serialize.py        scope: run        # censoring + trajectory serialization
+    ├── step02_compile_program.py  scope: condition  # MIPROv2 over io.units.train; no-op when optimizer.name == none
+    ├── step03_screen.py           scope: repeat     # one request per unit; nondeterministic = True
+    ├── step04_compare.py          scope: summary    # compares conditions
+    └── step05_agreement.py        scope: summary    # compares repeats of one condition
 ```
+
+| Experiment class | Steps | Used by |
+|---|---|---|
+| `GrowthScreenExperiment` | 01 → 02 → 03 → 04 | E1, E2, E3, E4, E6 |
+| `RepeatabilityExperiment` | 01 → 03 → 05 | E5 |
+
+**Two classes rather than one, because E5 measures something else.** `step04_compare` compares conditions and E5 has exactly one; `step05_agreement` compares *repeats* within a condition, which no other run wants. A `BaseExperiment` is [the ordered `steps` list and nothing else](reference.md#the-importable-surface), so two classes in one `experiment.py` cost nothing and each config's `entrypoint` picks between them. The `stepNN_` prefixes number the files rather than either pipeline's positions, so E5 legitimately runs 01 → 03 → 05.
 
 **Compilation is `condition`-scoped, and that is the decision the cost hinges on.** A `seed` repeat then re-executes only the evaluation, so three repeats cost three evaluations (~$14 each) rather than three MIPRO compilations (~$95 each). The consequence is honest and must be stated in the paper: **optimizer stochasticity is not measured by a `seed` repeat under this structure.** To measure it, `optimizer.seed` becomes a `sweep.grid` axis and each draw is its own condition, at full compile cost.
 
@@ -366,13 +376,15 @@ statistics:
 
 **Problem.** Estimate agreement between fresh executions of one frozen program on one cohort — a property of the apparatus, not of accuracy.
 
-**Design.** One condition, ten batches. Agreement across repeats is not something core computes: core averages repeats per unit before any interval. The agreement bound is therefore a `scope: "summary"` step reading each repeat's per-unit table through `io.read_condition(condition, step, name, repeat=r)` and returning an [`Estimate`](reference.md#estimate-carries-your-interval-without-core-claiming-it). The hypothesis names it and takes no `compare`.
+**Design.** One condition, ten batches, and its own `entrypoint` — this is the run that swaps `step04_compare` for `step05_agreement`. Agreement across repeats is not something core computes: core averages repeats per unit before any interval. The agreement bound is therefore a `scope: "summary"` step reading each repeat's per-unit table through `io.read_condition(condition, step, name, repeat=r)` and returning an [`Estimate`](reference.md#estimate-carries-your-interval-without-core-claiming-it). The hypothesis names it and takes no `compare`.
 
 ```yaml
 # configs/screen-repeatability/config.yaml
 metadata:
   name: screen-repeatability
   description: "Within-block safe agreement of the frozen binary screen across fresh executions"
+
+entrypoint: "growth_screen.experiment:RepeatabilityExperiment"   # not the four-step class
 
 sweep:
   baseline: null
@@ -455,7 +467,7 @@ statistics:
 
 ## Shortcut: three runs
 
-The shortcut project's roster is the 450-patient benchmark, resolved with the sampling weight the source retains for population-weighted estimates and the pre-existing development/confirmation partition:
+These three runs are a **second experiment package**, `src/growth_shortcut/`, not a variant of the screening one — the pipeline builds counterfactual trajectories and fits the two regression baselines. It shares no code with `growth_screen`, and some step names anyway: `step03_screen` below is `growth_shortcut`'s own request step, not the screening package's, and a metric path like `step03_screen.auroc` is only ever read within its own run. As above, only the blocks that differ are shown, starting with the roster: the 450-patient benchmark, resolved with the sampling weight the source retains for population-weighted estimates and the pre-existing development/confirmation partition.
 
 ```yaml
 data:
