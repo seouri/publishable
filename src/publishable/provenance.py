@@ -28,6 +28,16 @@ def _git(repo: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
+def resolves_inside_repo(resolved: Path, repo_root: Path) -> bool:
+    """Whether an already-resolved absolute path sits at or under `repo_root`.
+
+    Shared by `validate._check_data` and `generators.experiment.generate_experiment`
+    so the containment rule — `input_dir`/`output_dir` may never resolve inside the
+    git repo — cannot drift between the two call sites that enforce it.
+    """
+    return resolved == repo_root or repo_root in resolved.parents
+
+
 def find_repo_root(start: Path) -> Path:
     """Walk up from the path the command was given, never from the cwd."""
     current = start.resolve()

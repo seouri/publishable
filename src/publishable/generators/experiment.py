@@ -4,6 +4,7 @@ from pathlib import Path
 
 from publishable.errors import ContractError
 from publishable.materialize import materialize_config
+from publishable.provenance import resolves_inside_repo
 from publishable.templates.registry import get_template
 
 STARTER_STEP = '''\
@@ -53,7 +54,7 @@ def generate_experiment(
     root = repo_root.resolve()
     for label, raw in (("input_dir", input_dir), ("output_dir", output_dir)):
         resolved = Path(raw).expanduser().resolve()
-        if resolved == root or root in resolved.parents:
+        if resolves_inside_repo(resolved, root):
             raise ContractError(
                 f"{label} {resolved} resolves inside the git repository at {root}",
                 code="E-DATA-IN-REPO",

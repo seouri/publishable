@@ -11,8 +11,12 @@ from publishable.errors import ContractError
 from publishable.manifest import POLICIES
 from publishable.materialize import TEMPLATE_VERSION
 from publishable.param import MISSING
-from publishable.provenance import find_repo_root
+from publishable.provenance import find_repo_root, resolves_inside_repo
 from publishable.templates.registry import get_template, template_names
+
+# `sweep`'s six axis keys, per reference.md § The one config file. A key present
+# but empty (`groups: []`, `ablate: null`) declares no axis and is not a sweep.
+SWEEP_AXIS_KEYS = ("baseline", "grid", "paired", "ablate", "sample", "groups")
 
 REQUIRED_METADATA = ("description", "authors")
 
@@ -55,6 +59,7 @@ def validate_config(config_path: Path, c: Collector) -> dict[str, Any] | None:
     _check_versions(doc, c)
     _check_data(doc, config_path, c)
     _check_replication(doc, template, c)
+    _check_unimplemented(doc, c)
     for message in template.validate(doc):
         c.error("E-TEMPLATE-RULE", "parameters", message)
     return doc
@@ -146,29 +151,47 @@ def _check_data(doc: dict[str, Any], config_path: Path, c: Collector) -> None:
             f"is `{policy}`, which is not one of {', '.join(POLICIES)}",
         )
 
+    # `E-DATA-REQUIRED` and `E-DATA-UNREADABLE` have nothing to do with the repo
+    # either — same reasoning as the policy check above — so they must not sit
+    # behind the repo-existence early return below. Only `E-DATA-IN-REPO`
+    # legitimately needs a repo root to compare against.
+    resolvable: dict[str, Path] = {}
+    for field in ("input_dir", "output_dir"):
+        raw = data.get(field)
+        if not raw:
+            c.error("E-DATA-REQUIRED", f"data.{field}", "is empty, and is required")
+            continue
+        path = Path(raw).expanduser()
+        if not path.is_absolute():
+            c.error(
+                "E-DATA-NOT-ABSOLUTE",
+                f"data.{field}",
+                f"is `{raw}`, which is not an absolute path — reference.md requires "
+                "input_dir/output_dir to be absolute so the config means the same "
+                "location regardless of the directory a command is run from",
+            )
+            continue
+        resolvable[field] = path.resolve()
+
+    input_dir = data.get("input_dir")
+    if input_dir:
+        path = Path(input_dir).expanduser()
+        if not path.is_dir() or not any(path.iterdir()):
+            c.error("E-DATA-UNREADABLE", "data.input_dir", f"{path} is unreadable or empty")
+
     try:
         repo_root = find_repo_root(config_path).resolve()
     except ContractError as exc:
         if exc.code == "E-GIT-NO-REPO":
             return  # not in a repo, so "inside the repo" doesn't arise
         raise
-    for field in ("input_dir", "output_dir"):
-        raw = data.get(field)
-        if not raw:
-            c.error("E-DATA-REQUIRED", f"data.{field}", "is empty, and is required")
-            continue
-        resolved = Path(raw).expanduser().resolve()
-        if resolved == repo_root or repo_root in resolved.parents:
+    for field, resolved in resolvable.items():
+        if resolves_inside_repo(resolved, repo_root):
             c.error(
                 "E-DATA-IN-REPO",
                 f"data.{field}",
                 f"resolves inside the git repository at {repo_root}",
             )
-    input_dir = data.get("input_dir")
-    if input_dir:
-        path = Path(input_dir).expanduser()
-        if not path.is_dir() or not any(path.iterdir()):
-            c.error("E-DATA-UNREADABLE", "data.input_dir", f"{path} is unreadable or empty")
 
 
 def _check_replication(doc: dict[str, Any], template: Any, c: Collector) -> None:
@@ -198,4 +221,47 @@ def _check_replication(doc: dict[str, Any], template: Any, c: Collector) -> None
             "replication.repeats",
             f"total of {total} is below this convention class's default of "
             f"{template.default_repeats}",
+        )
+
+
+def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
+    """Declared-but-unimplemented blocks, refused rather than silently ignored.
+
+    This build hardcodes one condition, resolves no unit roster, and executes
+    repeats `as_declared` regardless of what is written here. Each of these
+    would otherwise validate clean and then run something other than what the
+    config describes — the exact failure `E-REPL-KIND-UNSUPPORTED` already
+    refuses for `batch`/`fold`/nested repeat levels. Each message says plainly
+    that the block is honored in a later slice, so a user does not read this as
+    their config being malformed.
+    """
+    sweep = doc.get("sweep") or {}
+    declared_axes = [key for key in SWEEP_AXIS_KEYS if sweep.get(key)]
+    if declared_axes:
+        c.error(
+            "E-SWEEP-UNSUPPORTED",
+            "sweep",
+            f"declares {', '.join(declared_axes)}, which is specified but not implemented "
+            "in this build — every run executes exactly one condition regardless of what "
+            "is declared here; sweep execution will be honored in a later slice",
+        )
+
+    units = (doc.get("data") or {}).get("units")
+    if units:
+        c.error(
+            "E-DATA-UNITS-UNSUPPORTED",
+            "data.units",
+            "is specified but not implemented in this build — no unit roster is resolved "
+            "from it, though it is already folded into design_digest; unit resolution "
+            "will be honored in a later slice",
+        )
+
+    order = (doc.get("replication") or {}).get("order")
+    if order is not None and order != "as_declared":
+        c.error(
+            "E-REPL-ORDER-UNSUPPORTED",
+            "replication.order",
+            f"is `{order}`, which is specified but not implemented in this build — "
+            "execution always proceeds as_declared regardless of what is declared here; "
+            "`order` will be honored in a later slice",
         )

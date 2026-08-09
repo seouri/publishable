@@ -225,6 +225,95 @@ def test_a_required_data_dir_left_empty_is_reported(write_config):
     assert found[0].path == "data.output_dir"
 
 
+def test_a_relative_input_dir_is_rejected(write_config):
+    assert "E-DATA-NOT-ABSOLUTE" in codes(write_config({"data.input_dir": "./secret"}))
+
+
+def test_a_relative_output_dir_is_rejected(write_config):
+    assert "E-DATA-NOT-ABSOLUTE" in codes(write_config({"data.output_dir": "results"}))
+
+
+def test_a_missing_data_dir_is_reported_even_outside_any_repo(write_config, monkeypatch):
+    """The previous fix wave hoisted `E-DATA-IN-REPO`'s policy check above the
+    repo-existence early return but left `E-DATA-REQUIRED` and `E-DATA-UNREADABLE`
+    behind it under identical reasoning — neither has anything to do with the repo
+    either, so a repo-less config missing `input_dir` must still be caught."""
+    import publishable.validate as validate_mod
+    from publishable.errors import ContractError
+
+    def _no_repo(path):
+        raise ContractError("no git repository found", code="E-GIT-NO-REPO")
+
+    monkeypatch.setattr(validate_mod, "find_repo_root", _no_repo)
+    found = codes(write_config({"data.input_dir": _DELETE}))
+    assert "E-DATA-REQUIRED" in found
+
+
+def _with_doc_change(write_config, change) -> Path:
+    """Set a top-level key the base fixture does not declare at all — the dotted
+    override helper needs the parent key to preexist, which `sweep` and
+    `data.units` deliberately do not in the base fixture."""
+    path = write_config()
+    doc = yaml.safe_load(path.read_text())
+    change(doc)
+    path.write_text(yaml.safe_dump(doc))
+    return path
+
+
+def test_a_declared_sweep_axis_is_refused_not_silently_ignored(write_config):
+    """S1 hardcodes one condition; a config declaring `sweep.grid` must not
+    validate clean and then run one condition while `run.yaml` records the sweep
+    verbatim, describing an experiment that never ran."""
+    sweep = {"grid": {"analysis.method": ["pearson", "spearman"]}}
+    path = _with_doc_change(write_config, lambda doc: doc.update(sweep=sweep))
+    assert "E-SWEEP-UNSUPPORTED" in codes(path)
+
+
+def test_an_empty_sweep_block_is_not_a_sweep(write_config):
+    """An empty or all-null `sweep` (the shape a generated config ships with)
+    declares no axis and must not trip the refusal meant for an actual sweep."""
+    path = _with_doc_change(
+        write_config,
+        lambda doc: doc.update(
+            sweep={
+                "grid": None,
+                "groups": [],
+                "ablate": None,
+                "baseline": None,
+                "paired": [],
+                "sample": None,
+            }
+        ),
+    )
+    assert "E-SWEEP-UNSUPPORTED" not in codes(path)
+
+
+def test_a_declared_unit_roster_is_refused_not_silently_ignored(write_config):
+    """`data.units` is read into `design_digest` (redrawing every seed) but no
+    roster is actually resolved from it in this build — declaring it must be a
+    refusal, not a config that quietly changes seeds while resolving no units."""
+    units = {"source": "index.csv", "key": "patient_id"}
+    path = _with_doc_change(write_config, lambda doc: doc["data"].update(units=units))
+    assert "E-DATA-UNITS-UNSUPPORTED" in codes(path)
+
+
+def test_a_non_default_replication_order_is_refused_not_silently_ignored(write_config):
+    """`replication.order: randomized` currently validates clean and then executes
+    `as_declared` anyway — the record would say randomized while the run wasn't."""
+    found = codes(write_config({"replication.order": "randomized"}))
+    assert "E-REPL-ORDER-UNSUPPORTED" in found
+
+
+def test_a_config_without_unimplemented_blocks_still_validates_clean(write_config):
+    """The base fixture declares no sweep axis, no `data.units`, and
+    `replication.order: as_declared` — none of the three new refusals should fire
+    against it."""
+    found = codes(write_config())
+    assert "E-SWEEP-UNSUPPORTED" not in found
+    assert "E-DATA-UNITS-UNSUPPORTED" not in found
+    assert "E-REPL-ORDER-UNSUPPORTED" not in found
+
+
 def test_a_missing_entrypoint_is_reported(write_config):
     """A config `validate` blesses must be one `run` can actually execute — deleting
     `entrypoint` used to pass validation and then die inside `run` with a bare
