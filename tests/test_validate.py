@@ -458,6 +458,51 @@ def test_an_unrelated_unsupported_field_does_not_suppress_a_real_roster_defect(
     assert "E-UNITS-KEY-DUPLICATE" in found
 
 
+def test_a_string_units_block_is_reported_not_raised(write_config):
+    """`data.units: "index.csv"` is an easy typo for the `from` key one level down —
+    `validate_config` must return a diagnostic, not let an `AttributeError` escape."""
+    path = _with_doc_change(
+        write_config, lambda doc: doc["data"].update(units="index.csv")
+    )
+    c = Collector()
+    result = validate_config(path, c)
+    assert result is not None
+    assert "E-DATA-UNITS-SHAPE" in {f.code for f in c.findings}
+
+
+def test_a_list_units_block_is_reported_not_raised(write_config):
+    path = _with_doc_change(
+        write_config, lambda doc: doc["data"].update(units=["index.csv"])
+    )
+    c = Collector()
+    result = validate_config(path, c)
+    assert result is not None
+    assert "E-DATA-UNITS-SHAPE" in {f.code for f in c.findings}
+
+
+def test_a_malformed_units_block_is_reported_exactly_once(write_config):
+    """`_check_units` and `_check_unimplemented` both derive `data.units`; a bad shape
+    must not produce the diagnostic twice just because two functions look at it."""
+    path = _with_doc_change(
+        write_config, lambda doc: doc["data"].update(units="index.csv")
+    )
+    c = Collector()
+    validate_config(path, c)
+    shape_findings = [f for f in c.findings if f.code == "E-DATA-UNITS-SHAPE"]
+    assert len(shape_findings) == 1
+
+
+def test_check_unimplemented_alone_does_not_raise_on_a_malformed_units_block():
+    """Exercised directly, the way `_check_unimplemented`'s other rules are —
+    a non-mapping `data.units` reaching this function on its own (not just through
+    `validate_config`) must still produce a diagnostic rather than an `AttributeError`."""
+    from publishable.validate import _check_unimplemented
+
+    c = Collector()
+    _check_unimplemented({"data": {"units": "index.csv"}}, c)
+    assert "E-DATA-UNITS-SHAPE" in {f.code for f in c.findings}
+
+
 def test_a_missing_entrypoint_is_reported(write_config):
     """A config `validate` blesses must be one `run` can actually execute — deleting
     `entrypoint` used to pass validation and then die inside `run` with a bare

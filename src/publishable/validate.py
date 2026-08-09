@@ -196,6 +196,33 @@ def _check_data(doc: dict[str, Any], config_path: Path, c: Collector) -> None:
             )
 
 
+def _units_declaration(data: dict[str, Any], c: Collector) -> dict[str, Any] | None:
+    """`data.units`, or `None` if there is no declaration or its shape is wrong.
+
+    A hand-edited config can put a string, a list, or a number where `data.units`
+    should be a mapping — `"units": "index.csv"` is an easy typo for the `from` key
+    one level down. Reported once as `E-DATA-UNITS-SHAPE` regardless of which of
+    `_check_units` / `_check_unimplemented` calls this first: the second call finds
+    the diagnostic already in `c.findings` and does not repeat it.
+    """
+    units_decl = data.get("units")
+    if not units_decl:
+        return None
+    if not isinstance(units_decl, dict):
+        already_reported = any(
+            f.code == "E-DATA-UNITS-SHAPE" and f.path == "data.units" for f in c.findings
+        )
+        if not already_reported:
+            c.error(
+                "E-DATA-UNITS-SHAPE",
+                "data.units",
+                f"is a {type(units_decl).__name__} (`{units_decl!r}`); expected a mapping "
+                "with a `from` key, e.g. `{from: index.csv, key: patient_id}`",
+            )
+        return None
+    return units_decl
+
+
 def _check_units(doc: dict[str, Any], c: Collector) -> None:
     """Resolve the roster so unit checks are real rather than deferred to run time.
 
@@ -222,8 +249,8 @@ def _check_units(doc: dict[str, Any], c: Collector) -> None:
     rather than noise about the same problem twice.
     """
     data = doc.get("data") or {}
-    units_decl = data.get("units")
-    if not units_decl:
+    units_decl = _units_declaration(data, c)
+    if units_decl is None:
         return
     input_dir = data.get("input_dir")
     if not input_dir:
@@ -295,7 +322,7 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
             "is declared here; sweep execution will be honored in a later slice",
         )
 
-    units = (doc.get("data") or {}).get("units") or {}
+    units = _units_declaration(doc.get("data") or {}, c) or {}
     source = units.get("from")
     if isinstance(source, dict) and "resolver" in source:
         c.error(
