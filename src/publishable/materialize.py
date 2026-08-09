@@ -46,7 +46,7 @@ def _scalar(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, str):
-        return _quote(value)
+        return _quote(value) if _needs_quoting(value) else value
     return repr(value)
 
 

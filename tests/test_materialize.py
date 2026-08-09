@@ -132,6 +132,19 @@ def test_a_number_lookalike_key_round_trips_as_a_string():
     assert type(key) is str
 
 
+def test_generic_method_value_emits_bare_matching_the_specification():
+    text = rendered()
+    assert "method: pearson" in text
+    assert 'method: "pearson"' not in text
+
+
+def test_generic_non_string_values_emit_bare():
+    text = rendered()
+    assert "min_samples: 30" in text
+    assert "confidence: 0.95" in text
+    assert "drop_missing: true" in text
+
+
 def test_generic_keys_that_need_no_quoting_still_emit_bare():
     text = rendered()
     assert "  analysis:" in text
