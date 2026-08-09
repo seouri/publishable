@@ -8,6 +8,37 @@ from publishable.templates.base import BaseTemplate
 TEMPLATE_VERSION = "1.0.0"
 INIT_REPEATS = 5  # what `init` writes; `default_repeats` is the warning floor
 
+# YAML 1.1 booleans/null that would swallow an otherwise-plain scalar if left bare.
+_YAML_BARE_WORDS = {
+    "y", "n", "yes", "no", "true", "false", "on", "off", "null", "~", "",
+}
+
+
+def _quote(s: str) -> str:
+    escaped = s.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+def _needs_quoting(s: str) -> bool:
+    """Would `s`, written bare, fail to re-parse back to the string `s`?"""
+    if s.strip() != s:
+        return True
+    if s.lower() in _YAML_BARE_WORDS:
+        return True
+    try:
+        float(s)
+    except ValueError:
+        pass
+    else:
+        return True
+    if s[:1] in "!&*-?:,[]{}#|>'\"%@`":
+        return True
+    return ": " in s or s.endswith(":") or "#" in s
+
+
+def _key(name: str) -> str:
+    return _quote(name) if _needs_quoting(name) else name
+
 
 def _scalar(value: Any) -> str:
     if value is None:
@@ -15,8 +46,7 @@ def _scalar(value: Any) -> str:
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, str):
-        escaped = value.replace("\\", "\\\\").replace('"', '\\"')
-        return f'"{escaped}"'
+        return _quote(value)
     return repr(value)
 
 
@@ -38,10 +68,10 @@ def _parameters_block(spec: dict[str, Param]) -> list[str]:
         tree.setdefault(head, {})[leaf] = param
     lines: list[str] = []
     for head, leaves in tree.items():
-        lines.append(f"  {head}:")
+        lines.append(f"  {_key(head)}:")
         for leaf, param in leaves.items():
             value = "" if param.default is MISSING else _scalar(param.default)
-            entry = f"    {leaf}: {value}"
+            entry = f"    {_key(leaf)}: {value}"
             comment = param.comment()
             if comment:
                 pad = " " * max(1, 36 - len(entry))

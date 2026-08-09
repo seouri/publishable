@@ -101,6 +101,45 @@ def test_a_default_containing_colon_space_still_parses_intact():
     assert doc["parameters"]["analysis"]["value"] == "ratio: 1"
 
 
+class _KeysTemplate(BaseTemplate):
+    def __init__(self, *paths: str) -> None:
+        self.parameter_spec = {path: Param(int, default=1) for path in paths}
+
+
+def _rendered_with_keys(*paths: str) -> str:
+    return materialize_config(
+        template=_KeysTemplate(*paths),
+        template_name="keys",
+        name="keys-pilot",
+        input_dir="/secure/data",
+        output_dir="/secure/results",
+        entrypoint="keys.experiment:KeysExperiment",
+    )
+
+
+def test_bool_and_null_lookalike_keys_round_trip_as_strings():
+    doc = yaml.safe_load(_rendered_with_keys("t.yes", "t.null"))
+    keys = list(doc["parameters"]["t"])
+    assert set(keys) == {"yes", "null"}
+    for key in keys:
+        assert type(key) is str
+
+
+def test_a_number_lookalike_key_round_trips_as_a_string():
+    doc = yaml.safe_load(_rendered_with_keys("t.2024"))
+    (key,) = doc["parameters"]["t"]
+    assert key == "2024"
+    assert type(key) is str
+
+
+def test_generic_keys_that_need_no_quoting_still_emit_bare():
+    text = rendered()
+    assert "  analysis:" in text
+    assert any(
+        line.strip().startswith("method:") for line in text.splitlines()
+    ), "method: must render bare, not \"method\":"
+
+
 def test_a_non_two_segment_parameter_path_fails_loudly():
     class BadTemplate(BaseTemplate):
         parameter_spec = {"threshold": Param(int, default=1)}
