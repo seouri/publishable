@@ -18,7 +18,7 @@ Work in this repo is therefore documentation work: refining the design, keeping 
 | `docs/design-principles.md` | **Normative.** Why each rule is what it is |
 | `docs/experimental-designs.md` | How each experimental design is expressed; what core prevents and refuses |
 | `docs/reference.md` | Config schema, CLI, `io` API, templates, sweeps, artifact layout |
-| `docs/feasibility-*.md` | **Non-normative.** One feasibility analysis each; carries its own examples — see § Feasibility analyses |
+| `docs/feasibility-*.md` — currently [`llm-growth-studies`](docs/feasibility-llm-growth-studies.md) | **Non-normative.** One feasibility analysis each; carries its own examples — see § Feasibility analyses |
 
 The first four are *the four documents* everywhere below: the invariants, the consistency passes, and the worked example govern those and only those. A `feasibility-*.md` is analysis output, not specification, and nothing in it is authoritative over them.
 

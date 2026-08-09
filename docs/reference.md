@@ -225,7 +225,7 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Clusters enough to resample | `statistics.resample` with `cluster_by: animal_id` over 4 animals bootstraps 4 draws; below `limits.min_clusters` (warning) |
 | Technical replicates | `{kind: technical}` is not a repeat kind — declare `data.units.measurements` instead |
 | Collapse rule fits the column | `measurements.collapse: mean` over `site`, which is a string — use `first` or `mode`, or a per-column map |
-| Grid size sane | 6 conditions × 10 folds × 3 seeds = 180 executions exceeds `limits.max_executions` |
+| Grid size sane | 20 conditions × 10 folds × 3 seeds = 600 executions exceeds `limits.max_executions` |
 | Leave-one-out is affordable | `{kind: fold, k: all}` over 240 units × 3 conditions = 720 executions exceeds `limits.max_executions` |
 | Credentials present | `INSTRUMENT_API_TOKEN` is not set in `.env` |
 | Credentials a swept value needs | `AZURE_OPENAI_API_KEY` is [required by](#a-credential-can-belong-to-a-parameter-value) `llm.provider: azure_openai`, selected in condition `01_model=azure.gpt-4.1`, and is not set in `.env` |
