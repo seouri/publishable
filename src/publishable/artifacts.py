@@ -437,18 +437,22 @@ class StepIO:
                 "those executions have not happened",
                 code="E-STEP-READ-DIRECTION",
             )
-        if (
-            self._scope == "summary"
-            and target in ("condition", "repeat")
-            and any(label is not None for _, label in (self._conditions or []))
-        ):
-            raise ContractError(
-                f"`{step}` is `{target}`-scoped and this run's sweep labels its "
-                "conditions, so a `summary` step sitting above all of them has no "
-                "single condition `io.read_upstream` could resolve to; name the "
-                "condition explicitly with `io.read_condition` instead",
-                code="E-STEP-READ-AMBIGUOUS",
-            )
+        if self._scope == "summary" and target in ("condition", "repeat"):
+            labeled_sweep = any(label is not None for _, label in (self._conditions or []))
+            several_repeats = target == "repeat" and len(self._repeats or []) > 1
+            if labeled_sweep or several_repeats:
+                reason = (
+                    "this run's sweep labels its conditions"
+                    if labeled_sweep
+                    else "this run resolved more than one repeat"
+                )
+                raise ContractError(
+                    f"`{step}` is `{target}`-scoped and {reason}, so a `summary` step "
+                    "sitting above all of them has no single condition `io.read_upstream` "
+                    "could resolve to; name the condition explicitly with "
+                    "`io.read_condition` instead",
+                    code="E-STEP-READ-AMBIGUOUS",
+                )
         if target == "run" or target is None:
             base = self.run_dir / "shared"
         elif target == "summary":

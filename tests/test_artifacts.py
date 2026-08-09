@@ -647,6 +647,47 @@ def test_a_summary_step_cannot_read_upstream_from_a_labeled_sweep(
     assert exc.value.code == "E-STEP-READ-AMBIGUOUS"
 
 
+def test_a_summary_step_cannot_read_upstream_from_a_repeat_scoped_step_with_several_repeats(
+    tmp_path: Path,
+):
+    """The sibling ambiguity one level down from the labeled-sweep case above: with
+    no `sweep` block at all, a run can still resolve more than one repeat, and a
+    `summary` step sits above every one of them. `read_upstream` has no single
+    repeat to resolve a `repeat`-scoped target to, so it must refuse exactly as the
+    labeled-condition case does, pointing at `io.read_condition(..., repeat=...)`
+    instead."""
+    io = make_io(
+        tmp_path,
+        scope="summary",
+        conditions=[(0, None)],
+        repeats=["seed1", "seed2"],
+        step_scopes={"analyze": "repeat"},
+    )
+    with pytest.raises(ContractError) as exc:
+        io.read_upstream("analyze", "a.json")
+    assert exc.value.code == "E-STEP-READ-AMBIGUOUS"
+    assert "io.read_condition" in str(exc.value)
+
+
+def test_a_summary_step_reads_upstream_from_a_repeat_scoped_step_with_one_repeat(
+    tmp_path: Path,
+):
+    """The case a careless fix breaks: with exactly one repeat the repeat directory
+    collapses (`runner.step_dir_for` adds no segment), so `run_dir/step/name` is
+    genuinely where the target wrote its output, and the read must still succeed."""
+    io = make_io(
+        tmp_path,
+        scope="summary",
+        conditions=[(0, None)],
+        repeats=["seed1"],
+        step_scopes={"analyze": "repeat"},
+    )
+    upstream_dir = io.run_dir / "analyze"
+    upstream_dir.mkdir(parents=True)
+    (upstream_dir / "a.json").write_text('{"x": 1}\n')
+    assert io.read_upstream("analyze", "a.json") == {"x": 1}
+
+
 def test_a_summary_step_reads_another_summary_step(tmp_path: Path):
     """Direct coverage of the `target == "summary"` branch: a summary step reading
     an upstream step that is itself summary-scoped resolves under `summary/`, not
