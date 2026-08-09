@@ -39,3 +39,39 @@ def test_comments_render_the_constraint_that_claims_them():
     assert Param(int, default=30, ge=2).comment() == "integer >= 2"
     assert Param(float, default=0.95, gt=0, lt=1).comment() == "float in (0, 1)"
     assert Param(bool, default=True, help="Drop missing rows").comment() == "Drop missing rows"
+
+
+def test_pattern_requires_a_str_type():
+    with pytest.raises(ValueError, match="pattern") as exc_info:
+        Param(int, default=5, pattern=r"\d+")
+    assert "pattern" in str(exc_info.value)
+    assert "int" in str(exc_info.value)
+
+
+def test_pattern_still_works_on_str():
+    p = Param(str, default="ok", pattern=r"^[a-z]+$")
+    assert p.check("ok") is None
+    result = p.check("OK")
+    assert result is not None
+    assert "match" in result
+
+
+def test_bounds_require_int_or_float_type():
+    with pytest.raises(ValueError, match="ge/gt/le/lt"):
+        Param(str, default="a", ge=2)
+    with pytest.raises(ValueError, match="ge/gt/le/lt"):
+        Param(list, default=[], le=5)
+    with pytest.raises(ValueError, match="ge/gt/le/lt"):
+        Param(bool, default=True, gt=0)
+
+
+@pytest.mark.parametrize("bad_value", [123, None, []])
+def test_check_never_raises_on_a_mistyped_value(bad_value):
+    for param in (
+        Param(str, default="ok", pattern=r"^[a-z]+$"),
+        Param(int, default=5, ge=0),
+        Param(float, default=0.5, gt=0, lt=1),
+        Param(list, item_type=float, default=[0.1]),
+    ):
+        result = param.check(bad_value)
+        assert result is None or isinstance(result, str)

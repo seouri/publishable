@@ -33,6 +33,15 @@ class Param:
             raise ValueError(f"unsupported Param type {type_!r}")
         if default is None and not nullable:
             raise ValueError("default=None requires nullable=True")
+        if pattern is not None and type_ is not str:
+            raise ValueError(f"pattern requires type_=str, not {_TYPE_NAMES[type_]}")
+        if (ge is not None or gt is not None or le is not None or lt is not None) and type_ not in (
+            int,
+            float,
+        ):
+            raise ValueError(
+                f"ge/gt/le/lt require type_=int or type_=float, not {_TYPE_NAMES[type_]}"
+            )
         self.type_ = type_
         self.default = default
         self.choices = choices
@@ -65,7 +74,11 @@ class Param:
         for bound, op, sym in bounds:
             if bound is not None and not op(value, bound):
                 return f"is {value!r}, expected {sym} {bound}"
-        if self.pattern is not None and not re.match(self.pattern, value):
+        if (
+            self.pattern is not None
+            and isinstance(value, str)
+            and not re.match(self.pattern, value)
+        ):
             return f"is {value!r}, expected to match {self.pattern}"
         if self.type_ is list:
             return self._check_list(value)
