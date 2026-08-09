@@ -57,6 +57,33 @@ def test_parameters_hash_is_insensitive_to_key_order():
     assert parameters_hash(a) == parameters_hash(b)
 
 
+def test_code_hash_skip_list_matches_relative_path_not_absolute(tmp_path: Path):
+    # A repo checked out beneath a directory literally named "__pycache__" must
+    # not have its skip-list matched against components ABOVE repo_root — only
+    # components inside src/**  or templates/** may be excluded.
+    repo = tmp_path / "__pycache__" / "repo"
+    write(repo, "src/pkg/step.py", "a = 1\n")
+    empty_digest = code_hash(tmp_path / "nonexistent_empty_repo")
+    h = code_hash(repo)
+    assert h != empty_digest
+    write(repo, "src/pkg/step.py", "a = 2\n")
+    assert code_hash(repo) != h
+
+
+def test_code_hash_still_skips_a_genuine_pycache_dir_inside_the_tree(tmp_path: Path):
+    write(tmp_path, "src/pkg/step.py", "a = 1\n")
+    before = code_hash(tmp_path)
+    write(tmp_path, "src/pkg/__pycache__/step.cpython-311.pyc", "junk")
+    assert code_hash(tmp_path) == before
+
+
+def test_code_hash_handles_a_dot_git_intermediate_path_component(tmp_path: Path):
+    repo = tmp_path / ".git" / "repo"
+    write(repo, "src/pkg/step.py", "a = 1\n")
+    empty_digest = code_hash(tmp_path / "nonexistent_empty_repo")
+    assert code_hash(repo) != empty_digest
+
+
 def test_parameters_hash_does_not_mutate_input():
     config = {
         "metadata": {"name": "a"},

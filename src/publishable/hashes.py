@@ -28,7 +28,8 @@ def hashed_files(repo_root: Path) -> list[tuple[str, Path]]:
         for path in base.rglob("*"):
             if not path.is_file():
                 continue
-            if any(part in _SKIP_DIRS for part in path.parts):
+            rel_to_tree = path.relative_to(base)
+            if any(part in _SKIP_DIRS for part in rel_to_tree.parts):
                 continue
             if path.suffix in _SKIP_SUFFIXES:
                 continue
