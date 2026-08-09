@@ -155,21 +155,56 @@ def sweep_document(
     conditions: list[Condition],
     repeats: list["Repeat"],
     digest: str,
-    order: list[tuple[int, str]],
+    order: str,
+    execution_order: list[tuple[int, str]],
+    order_seed: int | None = None,
 ) -> dict[str, Any]:
     """The `sweep.yaml` payload: the resolved plan, as plain YAML-safe data.
 
-    Fold membership belongs here too per § The other files a run writes; folds
-    are a later slice and the key is absent rather than empty, so its absence
-    is not read as "no folds were drawn".
+    Matches `docs/reference.md` § "`sweep.yaml` — the resolved plan" exactly.
+    `order` and `execution_order` are two different things and stay two
+    parameters: `order` is the scalar *mode* (`as_declared` | `randomized`) —
+    the rule — while `execution_order` is the realized sequence of
+    `(condition index, repeat label)` pairs actually run — the fact. The mode
+    is derivable from the config; what happened is not, which is why both are
+    recorded rather than one re-deriving the other.
+
+    `order_seed` is the seed `order: randomized`'s shuffle used, and is
+    written only when given — its absence under `as_declared` says nothing
+    was shuffled, not that the seed was lost.
+
+    `repeats` groups by kind (only `seed` exists before fold membership lands
+    in a later slice): each entry carries the resolved `seeds`, whether they
+    came from `auto` or were listed explicitly. `labels` is the separate,
+    top-level list of each repeat's composed label, outer to inner — under a
+    `fold` × `seed` nesting this is where `fold03_seed42` would appear.
+
+    Fold membership (`partitions`) belongs here too per § The other files a
+    run writes; folds are a later slice and the key is absent rather than
+    empty, so its absence is not read as "no folds were drawn".
     """
-    return {
+    kinds_seen: list[str] = []
+    seeds_by_kind: dict[str, list[int]] = {}
+    for r in repeats:
+        if r.kind not in seeds_by_kind:
+            seeds_by_kind[r.kind] = []
+            kinds_seen.append(r.kind)
+        seeds_by_kind[r.kind].append(r.seed)
+
+    doc: dict[str, Any] = {
         "design_digest": digest,
         "conditions": [
             {"index": c.index, "label": c.label, "values": dict(c.values),
              "is_baseline": c.is_baseline}
             for c in conditions
         ],
-        "repeats": [{"kind": r.kind, "label": r.label, "seed": r.seed} for r in repeats],
-        "order": [[index, label] for index, label in order],
+        "repeats": [{"kind": kind, "seeds": seeds_by_kind[kind]} for kind in kinds_seen],
+        "labels": [r.label for r in repeats],
+        "order": order,
+        "execution_order": [
+            {"condition": index, "repeat": label} for index, label in execution_order
+        ],
     }
+    if order_seed is not None:
+        doc["order_seed"] = order_seed
+    return doc

@@ -144,14 +144,18 @@ def test_every_generated_label_body_matches_the_selector_pattern():
 
 
 def test_the_sweep_document_records_the_resolved_plan():
+    """Matches `docs/reference.md` § "`sweep.yaml` — the resolved plan" exactly:
+    `repeats` groups by kind with resolved `seeds`, `labels` is the separate
+    composed-label list, `order` is the scalar mode, and `execution_order` is
+    the realized `{condition, repeat}` sequence — never re-derived."""
     from publishable.replication import Repeat
     from publishable.sweep import expand, sweep_document
 
     conds = expand({"sweep": {"baseline": {"analysis.method": "pearson"},
                               "grid": {"analysis.method": ["spearman"]}}})
     repeats = [Repeat("seed", "seed17", 17), Repeat("seed", "seed42", 42)]
-    order = [(0, "seed17"), (0, "seed42"), (1, "seed17"), (1, "seed42")]
-    doc = sweep_document(conds, repeats, "sha256:abc", order)
+    execution_order = [(0, "seed17"), (0, "seed42"), (1, "seed17"), (1, "seed42")]
+    doc = sweep_document(conds, repeats, "sha256:abc", "as_declared", execution_order)
 
     assert doc["design_digest"] == "sha256:abc"
     assert doc["conditions"] == [
@@ -160,9 +164,30 @@ def test_the_sweep_document_records_the_resolved_plan():
         {"index": 1, "label": "method=spearman", "values": {"analysis.method": "spearman"},
          "is_baseline": False},
     ]
-    assert doc["repeats"] == [{"kind": "seed", "label": "seed17", "seed": 17},
-                              {"kind": "seed", "label": "seed42", "seed": 42}]
-    assert doc["order"] == [[0, "seed17"], [0, "seed42"], [1, "seed17"], [1, "seed42"]]
+    assert doc["repeats"] == [{"kind": "seed", "seeds": [17, 42]}]
+    assert doc["labels"] == ["seed17", "seed42"]
+    assert doc["order"] == "as_declared"
+    assert "order_seed" not in doc
+    assert doc["execution_order"] == [
+        {"condition": 0, "repeat": "seed17"},
+        {"condition": 0, "repeat": "seed42"},
+        {"condition": 1, "repeat": "seed17"},
+        {"condition": 1, "repeat": "seed42"},
+    ]
+
+
+def test_a_randomized_order_records_its_seed():
+    """`order_seed` is present only under `order: randomized` — its absence
+    under `as_declared` says nothing was shuffled, not that a seed is missing."""
+    from publishable.replication import Repeat
+    from publishable.sweep import expand, sweep_document
+
+    conds = expand({"sweep": {"grid": {"a.x": [1]}}})
+    doc = sweep_document(conds, [Repeat("seed", "seed01", 1)], "sha256:r",
+                         "randomized", [(0, "seed01")], order_seed=4417029)
+
+    assert doc["order"] == "randomized"
+    assert doc["order_seed"] == 4417029
 
 
 def test_the_document_is_plain_yaml_safe_data():
@@ -173,20 +198,25 @@ def test_the_document_is_plain_yaml_safe_data():
     from publishable.sweep import expand, sweep_document
 
     doc = sweep_document(expand({"sweep": {"grid": {"a.x": [1]}}}),
-                         [Repeat("seed", "seed01", 1)], "sha256:d", [(0, "seed01")])
+                         [Repeat("seed", "seed01", 1)], "sha256:d",
+                         "as_declared", [(0, "seed01")])
     assert yaml.safe_load(yaml.safe_dump(doc)) == doc
 
 
 def test_the_document_round_trips_a_float_and_a_boolean_condition_value():
     """The failure mode this artifact cannot afford: a value that serializes
-    to something that doesn't parse back, or parses back to a different type."""
+    to something that doesn't parse back, or parses back to a different type.
+    Also exercises the new nesting — `repeats`/`labels`/`execution_order` —
+    not just the top-level keys."""
     import yaml
 
     from publishable.replication import Repeat
     from publishable.sweep import expand, sweep_document
 
     conds = expand({"sweep": {"grid": {"analysis.threshold": [0.5], "analysis.strict": [True]}}})
-    doc = sweep_document(conds, [Repeat("seed", "seed01", 1)], "sha256:e", [(0, "seed01")])
+    repeats = [Repeat("seed", "seed01", 1), Repeat("seed", "seed02", 2)]
+    doc = sweep_document(conds, repeats, "sha256:e", "as_declared",
+                         [(0, "seed01"), (0, "seed02")])
     round_tripped = yaml.safe_load(yaml.safe_dump(doc))
 
     assert round_tripped == doc
@@ -195,3 +225,12 @@ def test_the_document_round_trips_a_float_and_a_boolean_condition_value():
     assert isinstance(values["analysis.threshold"], float)
     assert values["analysis.strict"] is True
     assert isinstance(values["analysis.strict"], bool)
+
+    seeds = round_tripped["repeats"][0]["seeds"]
+    assert seeds == [1, 2]
+    assert all(isinstance(s, int) for s in seeds)
+    assert round_tripped["labels"] == ["seed01", "seed02"]
+    assert round_tripped["execution_order"] == [
+        {"condition": 0, "repeat": "seed01"},
+        {"condition": 0, "repeat": "seed02"},
+    ]
