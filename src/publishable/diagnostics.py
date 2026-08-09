@@ -45,6 +45,10 @@ class Collector:
         n_err = sum(1 for f in self.findings if f.level == "error")
         n_warn = len(self.findings) - n_err
         total = len(self.findings)
-        noun = "problem" if total == 1 else "problems"
-        lines.append(f"{total} {noun} ({n_err} error, {n_warn} warnings)")
+        problem_noun = "problem" if total == 1 else "problems"
+        error_noun = "error" if n_err == 1 else "errors"
+        warning_noun = "warning" if n_warn == 1 else "warnings"
+        lines.append(
+            f"{total} {problem_noun} ({n_err} {error_noun}, {n_warn} {warning_noun})"
+        )
         return "\n".join(lines)
