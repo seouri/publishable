@@ -419,6 +419,9 @@ def _check_units(doc: dict[str, Any], c: Collector) -> None:
 # Refusals that are properties of the DECLARATION, so `validate` reports them as
 # findings. Anything else `resolve_repeats` raises is a genuine fault and still
 # propagates — swallowing all of them is how a real error becomes a silent pass.
+# This set is deliberately narrow: a future code `resolve_repeats` raises that is
+# not added here propagates rather than being silently absorbed into a finding.
+# `test_an_unresolved_repl_code_is_not_swallowed` pins that escape path.
 REPL_DECLARATION_CODES = frozenset(
     {
         "E-REPL-FOLD-UNSUPPORTED",

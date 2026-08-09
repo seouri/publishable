@@ -270,6 +270,38 @@ def test_an_unknown_order_is_refused(write_config):
     )
 
 
+def test_an_unresolved_repl_code_is_not_swallowed(write_config, monkeypatch):
+    """`REPL_DECLARATION_CODES` is deliberately narrow: it is today's complete list
+    of refusals that are properties of the declaration, not a catch-all. A future
+    code `resolve_repeats` raises that nobody has added to the set must propagate
+    out of `validate_config` rather than being silently absorbed into a finding —
+    this pins the `else: raise` branch, which no code exercises today."""
+    import publishable.validate as validate_mod
+    from publishable.errors import ContractError
+
+    def _boom(doc, digest):
+        raise ContractError("a future refusal nobody has classified yet", code="E-REPL-FUTURE")
+
+    monkeypatch.setattr(validate_mod, "resolve_repeats", _boom)
+    with pytest.raises(ContractError):
+        validate_config(write_config(), Collector())
+
+
+def test_an_unknown_repeat_kind_is_refused_through_validate(write_config):
+    assert "E-REPL-KIND" in codes(
+        write_config({"replication": {"repeats": [{"kind": "unknown_kind", "n": 2}]}})
+    )
+
+
+def test_colliding_seeds_are_refused_through_validate(write_config, monkeypatch):
+    import publishable.replication as replication
+
+    monkeypatch.setattr(replication, "_seed_for", lambda digest, index: 42)
+    assert "E-REPL-SEED-COLLISION" in codes(
+        write_config({"replication": {"repeats": [{"kind": "seed", "n": 3}]}})
+    )
+
+
 def test_an_unrecognised_sweep_key_is_refused(write_config):
     """A typo'd mode expands to zero conditions and would otherwise run nothing.
     Same argument as the unknown-parameter check: `init` writes every valid key,
