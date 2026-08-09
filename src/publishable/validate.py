@@ -13,6 +13,7 @@ from publishable.materialize import TEMPLATE_VERSION
 from publishable.param import MISSING
 from publishable.provenance import find_repo_root, resolves_inside_repo
 from publishable.templates.registry import get_template, template_names
+from publishable.units import resolve_units
 
 # `sweep`'s six axis keys, per reference.md § The one config file. A key present
 # but empty (`groups: []`, `ablate: null`) declares no axis and is not a sweep.
@@ -58,6 +59,7 @@ def validate_config(config_path: Path, c: Collector) -> dict[str, Any] | None:
     _check_parameters(doc, template, c)
     _check_versions(doc, c)
     _check_data(doc, config_path, c)
+    _check_units(doc, c)
     _check_replication(doc, template, c)
     _check_unimplemented(doc, c)
     for message in template.validate(doc):
@@ -192,6 +194,50 @@ def _check_data(doc: dict[str, Any], config_path: Path, c: Collector) -> None:
                 f"data.{field}",
                 f"resolves inside the git repository at {repo_root}",
             )
+
+
+def _check_units(doc: dict[str, Any], c: Collector) -> None:
+    """Resolve the roster so unit checks are real rather than deferred to run time.
+
+    A `ContractError` from resolution becomes a diagnostic carrying the SAME
+    identifier, so a user sees one code for one problem whether it surfaced here
+    or during a run.
+
+    Two things skip resolution outright rather than piling a second error onto a
+    config `_check_data`/`_check_unimplemented` has already flagged:
+
+    - `input_dir` missing, not absolute, or unreadable — `_check_data` already
+      reported the real problem, and resolving would only add a confusing
+      "file not found" on top of a directory that does not exist.
+    - `data.units.from.resolver` — resolvers are plugin artifacts and already
+      refused as `E-DATA-RESOLVER-UNSUPPORTED`; `resolve_units` cannot execute a
+      resolver either, and without this skip it raises `E-UNITS-SOURCE-MISSING`
+      for the same declaration, describing a resolver as a missing file.
+
+    No other `-UNSUPPORTED` field is skipped on: `allocation`, `assign`,
+    `cluster_by`, `weight_by`, `measurements`, and `holdout` are not read by
+    `resolve_units` at all, so resolving against a real table or glob alongside
+    one of those refusals adds a genuine, independent finding — a duplicate key
+    in the roster is a real defect whether or not `holdout` is also declared —
+    rather than noise about the same problem twice.
+    """
+    data = doc.get("data") or {}
+    units_decl = data.get("units")
+    if not units_decl:
+        return
+    input_dir = data.get("input_dir")
+    if not input_dir:
+        return  # E-DATA-REQUIRED already reported by _check_data
+    path = Path(input_dir).expanduser()
+    if not path.is_absolute() or not path.is_dir() or not any(path.iterdir()):
+        return  # E-DATA-NOT-ABSOLUTE / E-DATA-UNREADABLE already reported by _check_data
+    source = units_decl.get("from")
+    if isinstance(source, dict) and "resolver" in source:
+        return  # E-DATA-RESOLVER-UNSUPPORTED already reported by _check_unimplemented
+    try:
+        resolve_units(units_decl, path)
+    except ContractError as exc:
+        c.error(exc.code, "data.units", str(exc))
 
 
 def _check_replication(doc: dict[str, Any], template: Any, c: Collector) -> None:

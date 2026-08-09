@@ -380,6 +380,84 @@ def test_a_null_subfield_is_not_a_declaration(write_config):
     assert not [c for c in found if c.endswith("-UNSUPPORTED")]
 
 
+def test_a_resolvable_roster_validates_clean(write_config, tmp_path):
+    (tmp_path / "input" / "index.csv").write_text("patient_id,label\np1,0\np2,1\n")
+    assert (
+        codes(
+            write_config(
+                {
+                    "data.units": {
+                        "from": "index.csv",
+                        "key": "patient_id",
+                        "attributes": ["label"],
+                    }
+                }
+            )
+        )
+        == set()
+    )
+
+
+def test_duplicate_keys_are_reported_as_a_diagnostic_not_an_exception(write_config, tmp_path):
+    (tmp_path / "input" / "index.csv").write_text("patient_id\np1\np1\n")
+    found = codes(write_config({"data.units": {"from": "index.csv", "key": "patient_id"}}))
+    assert "E-UNITS-KEY-DUPLICATE" in found
+
+
+def test_a_missing_key_column_is_reported_at_validate(write_config, tmp_path):
+    (tmp_path / "input" / "index.csv").write_text("subject_id\ns1\n")
+    assert "E-UNITS-KEY-MISSING" in codes(
+        write_config({"data.units": {"from": "index.csv", "key": "patient_id"}})
+    )
+
+
+def test_a_reserved_attribute_name_is_reported_at_validate(write_config, tmp_path):
+    (tmp_path / "input" / "index.csv").write_text("patient_id,paths\np1,x\n")
+    assert "E-UNITS-ATTR-RESERVED" in codes(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv",
+                    "key": "patient_id",
+                    "attributes": ["paths"],
+                }
+            }
+        )
+    )
+
+
+def test_no_units_block_still_validates_clean(write_config):
+    """`data.units` is optional; a pipeline with no unit table is legal."""
+    assert codes(write_config()) == set()
+
+
+def test_a_resolver_source_does_not_also_raise_source_missing(write_config):
+    """`data.units.from.resolver` is already refused as `E-DATA-RESOLVER-UNSUPPORTED`;
+    resolution must not also fire `E-UNITS-SOURCE-MISSING` for the same declaration —
+    that would describe a resolver as a missing file rather than an unbuilt feature."""
+    units = {"from": {"resolver": "plate_wells"}, "key": "well"}
+    found = codes(write_config({"data.units": units}))
+    assert "E-DATA-RESOLVER-UNSUPPORTED" in found
+    assert "E-UNITS-SOURCE-MISSING" not in found
+
+
+def test_an_unrelated_unsupported_field_does_not_suppress_a_real_roster_defect(
+    write_config, tmp_path
+):
+    """`holdout` is refused, but it is not read by `resolve_units` at all — a
+    duplicate key in the roster is a real, independent defect and must still be
+    reported alongside the refusal, not swallowed by it."""
+    (tmp_path / "input" / "index.csv").write_text("patient_id\np1\np1\n")
+    units = {
+        "from": "index.csv",
+        "key": "patient_id",
+        "holdout": {"method": "random", "frac": 0.2},
+    }
+    found = codes(write_config({"data.units": units}))
+    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
+    assert "E-UNITS-KEY-DUPLICATE" in found
+
+
 def test_a_missing_entrypoint_is_reported(write_config):
     """A config `validate` blesses must be one `run` can actually execute — deleting
     `entrypoint` used to pass validation and then die inside `run` with a bare
