@@ -359,6 +359,46 @@ def test_the_writer_and_reader_tables_stay_in_step():
     assert ".parquet" in WRITERS
 
 
+def test_a_mixed_int_and_float_column_promotes_to_float_deliberately():
+    """Numeric promotion within a column is columnar-format behavior, not a defect.
+
+    A per-unit metric that is whole for some units and fractional for others is
+    ordinary (a score, a rate, a duration); requiring a step to pre-float its own
+    values to dodge a spurious error would be worse. The promoted column is a
+    truthful representation of the values it holds, and the next task collapses
+    such columns to floats before any interval is computed anyway — see
+    docs/superpowers/spec-defects.md.
+    """
+    from publishable.artifacts import _decode_parquet, _encode_parquet
+
+    encoded = _encode_parquet([{"v": 1}, {"v": 1.5}])
+    decoded = _decode_parquet(encoded)
+    assert decoded == [{"v": 1.0}, {"v": 1.5}]
+    assert all(isinstance(row["v"], float) for row in decoded)
+
+
+def test_a_bool_and_int_column_clash_raises_rather_than_coercing():
+    """A bool/int mix is a real type confusion, not ordinary numeric variation —
+    silently unifying it would hide a bug, so pyarrow's refusal is the right boundary."""
+    import pyarrow as pa
+
+    from publishable.artifacts import _encode_parquet
+
+    with pytest.raises(pa.lib.ArrowInvalid):
+        _encode_parquet([{"v": True}, {"v": 1}])
+
+
+def test_a_str_and_int_column_clash_raises_rather_than_coercing():
+    """Same boundary as the bool/int case: a string/int mix is a type confusion that
+    must surface, not silently become strings."""
+    import pyarrow as pa
+
+    from publishable.artifacts import _encode_parquet
+
+    with pytest.raises(pa.lib.ArrowTypeError):
+        _encode_parquet([{"v": "x"}, {"v": 1}])
+
+
 def test_rows_returns_deep_enough_copies_that_mutating_a_row_does_not_corrupt_state(
     tmp_path: Path,
 ):
