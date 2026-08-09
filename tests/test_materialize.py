@@ -7,6 +7,11 @@ from publishable.templates.base import BaseTemplate
 from publishable.templates.registry import get_template
 
 
+class _OneParamTemplate(BaseTemplate):
+    def __init__(self, default: str) -> None:
+        self.parameter_spec = {"analysis.value": Param(str, default=default)}
+
+
 def rendered() -> str:
     return materialize_config(
         template=get_template("generic"),
@@ -65,6 +70,35 @@ def test_replication_defaults_to_five_seed_repeats():
     doc = yaml.safe_load(rendered())
     assert doc["replication"]["repeats"] == [{"kind": "seed", "n": 5}]
     assert doc["replication"]["order"] == "as_declared"
+
+
+def _rendered_with_default(default: str) -> str:
+    return materialize_config(
+        template=_OneParamTemplate(default),
+        template_name="one-param",
+        name="one-param-pilot",
+        input_dir="/secure/data",
+        output_dir="/secure/results",
+        entrypoint="one_param.experiment:OneParamExperiment",
+    )
+
+
+def test_an_empty_string_default_round_trips_to_empty_string_not_null():
+    doc = yaml.safe_load(_rendered_with_default(""))
+    assert doc["parameters"]["analysis"]["value"] == ""
+
+
+@pytest.mark.parametrize("default", ["yes", "null", "1.5"])
+def test_yaml_lookalike_string_defaults_round_trip_as_strings(default: str):
+    doc = yaml.safe_load(_rendered_with_default(default))
+    value = doc["parameters"]["analysis"]["value"]
+    assert value == default
+    assert isinstance(value, str)
+
+
+def test_a_default_containing_colon_space_still_parses_intact():
+    doc = yaml.safe_load(_rendered_with_default("ratio: 1"))
+    assert doc["parameters"]["analysis"]["value"] == "ratio: 1"
 
 
 def test_a_non_two_segment_parameter_path_fails_loudly():
