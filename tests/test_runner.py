@@ -253,6 +253,9 @@ def test_crossing_the_attrition_threshold_stops_the_run(tmp_path: Path):
             return {}
 
     class AlsoBad(Bad):
+        # A distinct class, not `Bad` reused: `build_plan` now refuses the same class
+        # object listed twice (E-STEP-NAME-COLLISION, "appears more than once"), so two
+        # repeat-scoped executions with this behavior need two differently-named steps.
         pass
 
     _, results, _ = harness(
@@ -278,6 +281,8 @@ def test_staying_under_the_threshold_runs_to_the_end(tmp_path: Path):
             return {}
 
     class AlsoMostlyGood(MostlyGood):
+        # Same reasoning as `AlsoBad` above: `MostlyGood` reused verbatim would now be
+        # refused by `build_plan` as a duplicate line, not just collide on `step_dir`.
         pass
 
     _, results, _ = harness(

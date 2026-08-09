@@ -112,6 +112,18 @@ def test_a_step_name_collision_across_modules_is_refused():
     ) in message
 
 
+def test_the_same_class_listed_twice_is_refused_as_a_duplicate_not_a_collision():
+    class DuplicatedPipeline(BaseExperiment):
+        steps = [Analyze, Analyze]
+
+    with pytest.raises(ContractError) as e:
+        build_plan(DuplicatedPipeline(), conditions=[(0, None)], repeat_labels=["seed17"])
+    assert e.value.code == "E-STEP-NAME-COLLISION"
+    message = str(e.value)
+    assert f"{Analyze.__module__}.{Analyze.__qualname__}" in message
+    assert "more than once" in message
+
+
 def test_condition_index_0_is_distinguished_from_no_condition():
     step = Fit()
     step._bind(condition=0, repeat=None, digest="sha256:abc", seed=17)

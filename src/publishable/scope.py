@@ -39,17 +39,24 @@ def build_plan(
                 + ", ".join(SCOPES),
                 code="E-STEP-SCOPE-UNKNOWN",
             )
-    names_by_cls = {cls: step_name(cls) for cls in experiment.steps}
     seen: dict[str, type[BaseStep]] = {}
-    for cls, name in names_by_cls.items():
+    for cls in experiment.steps:
+        name = step_name(cls)
         other = seen.get(name)
-        if other is not None and other is not cls:
+        if other is cls:
+            raise ContractError(
+                f"{cls.__module__}.{cls.__qualname__} appears more than once in `steps`; "
+                "delete the duplicate line",
+                code="E-STEP-NAME-COLLISION",
+            )
+        if other is not None:
             raise ContractError(
                 f"{other.__module__}.{other.__qualname__} and "
                 f"{cls.__module__}.{cls.__qualname__} both derive step name {name!r}",
                 code="E-STEP-NAME-COLLISION",
             )
         seen[name] = cls
+    names_by_cls = {cls: step_name(cls) for cls in experiment.steps}
     plan: list[Execution] = []
     for cls in (c for c in experiment.steps if c.scope == "run"):
         plan.append(Execution(cls, names_by_cls[cls], "run", None, None, None))
