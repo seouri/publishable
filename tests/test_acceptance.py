@@ -1,0 +1,146 @@
+"""S1's whole promise: `reference.md` § The starter step runs."""
+
+import subprocess
+from pathlib import Path
+
+import yaml
+
+from publishable.cli import main
+from publishable.diagnostics import EXIT_OK, EXIT_WRONG
+
+
+def build(tmp_path: Path) -> tuple[Path, Path, Path]:
+    root = tmp_path / "my-study"
+    data = tmp_path / "data"
+    results = tmp_path / "results"
+    data.mkdir()
+    (data / "index.csv").write_text("patient_id\np1\np2\n")
+    assert main(["new", str(root)]) == EXIT_OK
+    from publishable.generators.experiment import generate_experiment
+
+    cfg = generate_experiment(
+        repo_root=root,
+        name="cohort-pilot",
+        template_name="generic",
+        input_dir=str(data),
+        output_dir=str(results),
+    )
+    doc = yaml.safe_load(cfg.read_text())
+    doc["metadata"]["description"] = "the spine's acceptance run"
+    doc["metadata"]["authors"] = ["Kyungjoon Lee"]
+    cfg.write_text(yaml.safe_dump(doc))
+    for args in (
+        ["add", "."],
+        ["-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "experiment"],
+    ):
+        subprocess.run(["git", *args], cwd=root, check=True)
+    return root, cfg, results
+
+
+def test_scaffold_then_run_produces_a_real_record(tmp_path: Path):
+    root, cfg, results = build(tmp_path)
+    assert main(["validate", str(cfg)]) == EXIT_OK
+    assert main(["run", str(cfg)]) == EXIT_OK
+
+    run_dir = next(results.glob("run_*"))
+    doc = yaml.safe_load((run_dir / "run.yaml").read_text())
+
+    assert doc["status"] == "completed"
+    assert doc["draft"] is False
+    assert doc["code_hash"].startswith("sha256:")
+    assert doc["parameters_hash"].startswith("sha256:")
+    assert doc["provenance"]["input_manifest_hash"].startswith("sha256:")
+    assert doc["config"]["metadata"]["name"] == "cohort-pilot"
+    assert doc["config"] == yaml.safe_load(cfg.read_text())  # embedded verbatim
+
+    commit = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    assert doc["provenance"]["git"]["commit"] == commit
+    assert doc["provenance"]["git"]["code_dirty"] is False
+
+    assert run_dir.name.startswith("run_")
+    assert run_dir.name.endswith(doc["code_hash"].split(":")[1][:7])
+    assert (run_dir / "executions.jsonl").is_file()
+    assert (run_dir / "manifest" / "input.json").is_file()
+    assert not (run_dir / "lock").exists()
+
+
+def test_five_seed_repeats_land_in_a_collapsed_layout(tmp_path: Path):
+    _, cfg, results = build(tmp_path)
+    assert main(["run", str(cfg)]) == EXIT_OK
+    run_dir = next(results.glob("run_*"))
+    assert not (run_dir / "conditions").exists(), "no sweep means no conditions level"
+    repeat_dirs = sorted(p.name for p in run_dir.glob("seed*") if p.is_dir())
+    assert len(repeat_dirs) == 5
+    doc = yaml.safe_load((run_dir / "run.yaml").read_text())
+    per_repeat = doc["results"]["conditions"][0]["per_repeat"]["step01_summarize_units"]
+    assert len(per_repeat) == 5
+    assert all(v == {"scaffold_ok": True} for v in per_repeat.values())
+
+
+def test_run_refuses_a_dirty_code_tree(tmp_path: Path, capsys):
+    root, cfg, _ = build(tmp_path)
+    (root / "src" / "cohort_pilot" / "experiment.py").write_text("# edited\n")
+    assert main(["run", str(cfg)]) == EXIT_WRONG
+    # `E-CODE-DIRTY` prints to stdout, like every other `Collector`-rendered finding —
+    # this is what distinguishes the dirty-tree gate from a downstream import failure
+    # that would produce the same exit code for a different reason.
+    assert "E-CODE-DIRTY" in capsys.readouterr().out
+
+
+def test_run_refuses_data_inside_the_repo(tmp_path: Path, capsys):
+    root, cfg, _ = build(tmp_path)
+    doc = yaml.safe_load(cfg.read_text())
+    doc["data"]["output_dir"] = str(root / "results")
+    cfg.write_text(yaml.safe_dump(doc))
+    assert main(["run", str(cfg)]) == EXIT_WRONG
+    assert "E-DATA-IN-REPO" in capsys.readouterr().out
+
+
+def test_run_refuses_an_entrypoint_that_does_not_import(tmp_path: Path, capsys):
+    _, cfg, _ = build(tmp_path)
+    doc = yaml.safe_load(cfg.read_text())
+    doc["entrypoint"] = "cohort_pilot.experiment:NoSuchClass"
+    cfg.write_text(yaml.safe_dump(doc))
+    # Only `configs/**` changed — `src/**`/`templates/**` stay clean, so this exercises
+    # phase 3's entrypoint-import gate specifically, not the dirty-tree gate.
+    assert main(["run", str(cfg)]) == EXIT_WRONG
+    assert "E-ENTRYPOINT-IMPORT" in capsys.readouterr().err
+
+
+def test_a_stale_cached_module_does_not_leak_between_same_named_projects(tmp_path: Path):
+    """`_load_experiment` purges the entrypoint's root package from `sys.modules` first.
+
+    Two projects here both scaffold a `cohort_pilot` package (`build`'s fixed name).
+    Project B's step is hand-edited to return a distinguishable value. If the purge
+    were missing, running A first would leave `cohort_pilot.steps.step01_summarize_units`
+    cached, and B's run would silently report A's value instead of its own.
+    """
+    a_dir, b_dir = tmp_path / "a", tmp_path / "b"
+    a_dir.mkdir()
+    b_dir.mkdir()
+    _, cfg_a, _ = build(a_dir)
+    root_b, cfg_b, results_b = build(b_dir)
+
+    step_b = root_b / "src" / "cohort_pilot" / "steps" / "step01_summarize_units.py"
+    step_b.write_text(
+        "from publishable import BaseStep\n\n\n"
+        'class Step(BaseStep):\n    scope = "repeat"\n\n'
+        "    def run(self, cfg, io):\n"
+        '        return {"scaffold_ok": "second-project"}\n'
+    )
+    subprocess.run(["git", "add", "."], cwd=root_b, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e.com", "-c", "user.name=t",
+         "commit", "-qm", "distinguish"],
+        cwd=root_b, check=True,
+    )
+
+    assert main(["run", str(cfg_a)]) == EXIT_OK
+    assert main(["run", str(cfg_b)]) == EXIT_OK
+
+    run_dir_b = next(results_b.glob("run_*"))
+    doc_b = yaml.safe_load((run_dir_b / "run.yaml").read_text())
+    per_repeat = doc_b["results"]["conditions"][0]["per_repeat"]["step01_summarize_units"]
+    assert all(v == {"scaffold_ok": "second-project"} for v in per_repeat.values())
