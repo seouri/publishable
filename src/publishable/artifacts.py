@@ -112,10 +112,10 @@ class StepIO:
         self.input_dir = input_dir
         self.run_dir = run_dir
         self.resumed = False
-        self.recorded_keys: set[str] = set()
+        self._recorded_keys: set[str] = set()
         self._units = units
         self._rows: dict[str, dict[str, Any]] = {}
-        self.skipped: dict[str, str] = {}
+        self._skipped: dict[str, str] = {}
 
     @property
     def units(self) -> "UnitList":
@@ -127,30 +127,57 @@ class StepIO:
             )
         return self._units
 
+    @property
+    def recorded_keys(self) -> set[str]:
+        return set(self._recorded_keys)
+
+    @property
+    def skipped(self) -> dict[str, str]:
+        return dict(self._skipped)
+
     def _settle(self, unit_key: str) -> None:
         if self._units is not None and unit_key not in {u.key for u in self._units}:
             raise ContractError(
                 f"{unit_key!r} is not in this execution's roster",
                 code="E-STEP-UNIT-UNKNOWN",
             )
-        if unit_key in self._rows or unit_key in self.skipped:
+        if unit_key in self._rows or unit_key in self._skipped:
             raise ContractError(
                 f"{unit_key!r} was already recorded or skipped in this execution",
                 code="E-STEP-UNIT-SETTLED",
             )
+
+    def _declared_attributes(self) -> set[str]:
+        if self._units is None or len(self._units) == 0:
+            return set()
+        return set(self._units[0].attributes)
 
     def record(self, unit_key: str, values: dict[str, Any]) -> None:
         """Append one row to this step's per-unit table, keyed by unit."""
         if unit_key in self._rows:
             return  # first write wins, matching io.append's idempotency
         self._settle(unit_key)
+        if "unit" in values:
+            raise ContractError(
+                "`unit` collides with the unit key column: a recorded column may not "
+                "be named `unit`",
+                code="E-STEP-KEY-COLLISION",
+            )
+        collision = self._declared_attributes() & values.keys()
+        if collision:
+            name = sorted(collision)[0]
+            raise ContractError(
+                f"{name!r} collides with a declared unit attribute of the same name: "
+                "a recorded column may not shadow it",
+                code="E-STEP-KEY-COLLISION",
+            )
         self._rows[unit_key] = {"unit": unit_key, **values}
-        self.recorded_keys.add(unit_key)
+        self._recorded_keys.add(unit_key)
 
     def skip(self, unit_key: str, reason: str) -> None:
         """Declare that this unit admits no result by design — `ineligible`, not `failed`."""
         self._settle(unit_key)
-        self.skipped[unit_key] = reason
+        self._skipped[unit_key] = reason
 
     def rows(self) -> list[dict[str, Any]]:
         return list(self._rows.values())

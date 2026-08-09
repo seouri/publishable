@@ -240,3 +240,67 @@ def test_a_unit_cannot_be_both_recorded_and_skipped(tmp_path: Path):
     with pytest.raises(ContractError) as e:
         io.skip("p0", "changed my mind")
     assert e.value.code == "E-STEP-UNIT-SETTLED"
+
+
+def test_recording_a_column_named_unit_is_a_key_collision(tmp_path: Path):
+    from publishable.units import Unit, UnitList
+
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    io = StepIO(
+        step_dir=sd,
+        input_dir=tmp_path / "in",
+        run_dir=tmp_path / "run",
+        units=UnitList([Unit(key="p0")]),
+    )
+    with pytest.raises(ContractError) as e:
+        io.record("p0", {"unit": "IMPOSTER"})
+    assert e.value.code == "E-STEP-KEY-COLLISION"
+    assert "unit" in str(e.value)
+
+
+def test_recording_a_column_matching_a_declared_attribute_is_a_key_collision(
+    tmp_path: Path,
+):
+    from publishable.units import Unit, UnitList
+
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    roster = UnitList([Unit(key="p0", attributes={"site": "A"})])
+    io = StepIO(step_dir=sd, input_dir=tmp_path / "in", run_dir=tmp_path / "run", units=roster)
+    with pytest.raises(ContractError) as e:
+        io.record("p0", {"site": "x"})
+    assert e.value.code == "E-STEP-KEY-COLLISION"
+    assert "site" in str(e.value)
+    io.record("p0", {"pred": 1})
+    assert io.rows() == [{"unit": "p0", "pred": 1}]
+
+
+def test_recorded_keys_skipped_and_rows_are_not_live_handles(tmp_path: Path):
+    from publishable.units import Unit, UnitList
+
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    io = StepIO(
+        step_dir=sd,
+        input_dir=tmp_path / "in",
+        run_dir=tmp_path / "run",
+        units=UnitList([Unit(key="p0"), Unit(key="p1")]),
+    )
+    io.record("p0", {"v": 1})
+    io.skip("p1", "n/a")
+
+    keys = io.recorded_keys
+    keys.add("ghost")
+    assert io.recorded_keys == {"p0"}
+
+    skipped = io.skipped
+    skipped["x"] = "hack"
+    assert io.skipped == {"p1": "n/a"}
+
+    rows = io.rows()
+    rows.append({"unit": "ghost", "v": 99})
+    assert io.rows() == [{"unit": "p0", "v": 1}]
