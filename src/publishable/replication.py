@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from publishable.errors import ContractError
+from publishable.units import Unit
 
 SUPPORTED_KINDS = ("seed", "batch", "fold")
 LABEL_JOIN = "_"
@@ -300,3 +301,21 @@ def realize_order(
         rng.shuffle(shuffled)
         out.extend(shuffled)
     return out
+
+
+def fold_members_for(
+    levels: list[RepeatLevel], partitions: list[list[Unit]]
+) -> dict[str, frozenset[str]] | None:
+    """Fold label -> the unit keys in that fold's test partition, or None.
+
+    `None` when no `fold` level is declared, which is what keeps every
+    downstream rule — the collapse, attrition, and the failure fraction —
+    byte-for-byte identical to a run without folds.
+    """
+    fold = next((lv for lv in levels if lv.kind == "fold"), None)
+    if fold is None:
+        return None
+    return {
+        m.label: frozenset(u.key for u in part)
+        for m, part in zip(fold.members, partitions, strict=True)
+    }

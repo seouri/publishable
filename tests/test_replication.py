@@ -5,13 +5,19 @@ from publishable.replication import (
     LABEL_JOIN,
     RepeatMember,
     cross_levels,
+    fold_members_for,
     realize_order,
     resolve_repeats,
 )
+from publishable.units import Unit
 
 
 def cfg(repeats):
     return {"replication": {"repeats": repeats}}
+
+
+def _u(key):
+    return Unit(key=key, paths=(), attributes={})
 
 
 def test_no_replication_block_yields_one_anonymous_seed_level():
@@ -313,3 +319,25 @@ def test_a_pair_matching_no_resolved_batch_is_a_contract_error():
     with pytest.raises(ContractError) as excinfo:
         realize_order(pairs, levels, "randomized", 7)
     assert excinfo.value.code == "E-REPL-ORDER-UNRESOLVED"
+
+
+def test_no_fold_level_yields_none():
+    levels = resolve_repeats(cfg([{"kind": "seed", "n": 3}]), "d")
+    assert fold_members_for(levels, []) is None
+
+
+def test_a_fold_level_maps_each_label_to_its_partition():
+    levels = resolve_repeats(cfg([{"kind": "fold", "k": 2}]), "d", unit_count=4)
+    parts = [[_u("a"), _u("b")], [_u("c"), _u("d")]]
+    assert fold_members_for(levels, parts) == {
+        "fold01": frozenset({"a", "b"}),
+        "fold02": frozenset({"c", "d"}),
+    }
+
+
+def test_the_map_covers_every_unit_exactly_once():
+    levels = resolve_repeats(cfg([{"kind": "fold", "k": 3}]), "d", unit_count=9)
+    parts = [[_u(f"u{i}") for i in grp] for grp in ([0, 1, 2], [3, 4, 5], [6, 7, 8])]
+    members = fold_members_for(levels, parts)
+    allk = [k for s in members.values() for k in s]
+    assert len(allk) == 9 and len(set(allk)) == 9
