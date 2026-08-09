@@ -67,6 +67,35 @@ def test_a_missing_attribute_column_is_refused(input_dir: Path):
     assert e.value.code == "E-UNITS-ATTR-MISSING"
 
 
+def test_a_glob_matching_nothing_is_refused(input_dir: Path):
+    with pytest.raises(ContractError) as e:
+        resolve_units({"from": {"glob": "**/*.nonexistent"}, "key": "path"}, input_dir)
+    assert e.value.code == "E-UNITS-EMPTY"
+    assert "*.nonexistent" in str(e.value)
+
+
+def test_a_header_only_table_is_refused_as_empty_not_key_missing(input_dir: Path):
+    (input_dir / "empty.csv").write_text("patient_id,label\n")
+    with pytest.raises(ContractError) as e:
+        resolve_units({"from": "empty.csv", "key": "patient_id"}, input_dir)
+    assert e.value.code == "E-UNITS-EMPTY"
+
+
+def test_a_genuinely_missing_key_column_with_real_rows_still_reports_key_missing(
+    input_dir: Path,
+):
+    with pytest.raises(ContractError) as e:
+        resolve_units({"from": "index.csv", "key": "subject_id"}, input_dir)
+    assert e.value.code == "E-UNITS-KEY-MISSING"
+
+
+def test_a_one_unit_roster_still_resolves(input_dir: Path):
+    (input_dir / "single.csv").write_text("patient_id\np1\n")
+    units = resolve_units({"from": "single.csv", "key": "patient_id"}, input_dir)
+    assert len(units) == 1
+    assert units[0].key == "p1"
+
+
 def test_a_missing_table_is_refused(input_dir: Path):
     with pytest.raises(ContractError) as e:
         resolve_units({"from": "absent.csv", "key": "patient_id"}, input_dir)

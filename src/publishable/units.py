@@ -89,9 +89,15 @@ def _from_table(decl: dict[str, Any], input_dir: Path, source: str) -> list[Unit
             code="E-UNITS-SOURCE-MISSING",
         )
     rows = _rows_from_table(path)
+    if not rows:
+        raise ContractError(
+            f"`data.units.from` names {source}, which has no data rows; "
+            "a run measuring zero units has nothing to report",
+            code="E-UNITS-EMPTY",
+        )
     key_col = decl.get("key")
     attrs = list(decl.get("attributes") or [])
-    columns = set(rows[0]) if rows else set()
+    columns = set(rows[0])
     if key_col not in columns:
         raise ContractError(
             f"`data.units.key` names {key_col!r}, which {source} does not have "
@@ -124,6 +130,12 @@ def _from_glob(pattern: str, input_dir: Path) -> list[Unit]:
         for p in input_dir.glob(pattern)
         if p.is_file()
     )
+    if not rels:
+        raise ContractError(
+            f"`data.units.from.glob` {pattern!r} matched no files under {input_dir}; "
+            "a run measuring zero units has nothing to report",
+            code="E-UNITS-EMPTY",
+        )
     return [Unit(key=rel, paths=(rel,), attributes={}) for rel in rels]
 
 
