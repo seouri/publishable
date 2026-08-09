@@ -1,10 +1,18 @@
+import copy
+import re
+from pathlib import Path
+
 import pytest
 import yaml
 
+from publishable.diagnostics import Collector
+from publishable.errors import ContractError
 from publishable.materialize import materialize_config
 from publishable.param import Param
+from publishable.replication import resolve_repeats
 from publishable.templates.base import BaseTemplate
 from publishable.templates.registry import get_template
+from publishable.validate import validate_config
 
 
 class _OneParamTemplate(BaseTemplate):
@@ -74,7 +82,100 @@ def test_the_generated_config_declares_a_unit_roster():
 def test_the_generated_units_block_carries_its_comments():
     text = rendered()
     assert '# index.csv | {glob: "*.dcm"}' in text
-    assert "# within | between" in text
+    assert "# within  (between: later slice)" in text
+
+
+_MARKED_LATER_SLICE = re.compile(
+    r"#\s*(?P<live>[\w.]+)\s*\(\s*(?P<later>[^:]+):\s*later slice\s*\)"
+)
+
+# Where a marked field lives in the parsed doc, and how to ask core whether a
+# given value there is refused. `allocation`/`order` are refused by
+# `validate_config`; `kind` is only refused at `resolve_repeats` (it is not
+# read by `validate_config` at all), so it gets its own probe.
+_MARKED_FIELD_PATHS: dict[str, tuple[object, ...]] = {
+    "allocation": ("data", "units", "allocation"),
+    "kind": ("replication", "repeats", 0, "kind"),
+    "order": ("replication", "order"),
+}
+
+
+def _refusal_codes(key: str, doc: dict, config_path: Path) -> list[str]:
+    if key == "kind":
+        try:
+            resolve_repeats(doc, "digest")
+        except ContractError as exc:
+            return [exc.code]
+        return []
+    config_path.write_text(yaml.safe_dump(doc))
+    c = Collector()
+    validate_config(config_path, c)
+    return [f.code for f in c.findings]
+
+
+def test_no_enum_comment_names_a_value_validate_or_run_would_refuse(git_repo, tmp_path):
+    """Every `(x: later slice)` marking must be honored by core, and the value
+
+    `init` actually writes must never be one of the marked ones — a comment
+    that lies in either direction sends a user into a refusal for nothing.
+    """
+    input_dir = tmp_path / "input"
+    input_dir.mkdir()
+    (input_dir / "index.csv").write_text("patient_id\np1\n")
+    output_dir = tmp_path / "output"
+
+    text = materialize_config(
+        template=get_template("generic"),
+        template_name="generic",
+        name="cohort-pilot",
+        input_dir=str(input_dir),
+        output_dir=str(output_dir),
+        entrypoint="cohort_pilot.experiment:CohortPilotExperiment",
+    )
+    base_doc = yaml.safe_load(text)
+    base_doc["metadata"]["description"] = "a pilot"
+    base_doc["metadata"]["authors"] = ["A"]
+
+    config_path = git_repo / "configs" / "cohort-pilot" / "config.yaml"
+    config_path.parent.mkdir(parents=True)
+
+    # The config `init` actually writes must validate and run clean.
+    assert _refusal_codes("allocation", base_doc, config_path) == []
+    assert _refusal_codes("kind", base_doc, config_path) == []
+    assert _refusal_codes("order", base_doc, config_path) == []
+
+    marked_keys_seen = set()
+    for line in text.splitlines():
+        m = _MARKED_LATER_SLICE.search(line)
+        if not m:
+            continue
+        pre = line.split("#")[0]
+        key_match = re.search(r"(\w+):\s*\S", pre)
+        assert key_match, f"could not find a key on the marked line: {line!r}"
+        key = key_match.group(1)
+        assert key in _MARKED_FIELD_PATHS, (
+            f"`{key}` marks a value as a later slice but has no path registered in "
+            f"this test — add one to _MARKED_FIELD_PATHS"
+        )
+        marked_keys_seen.add(key)
+        path = _MARKED_FIELD_PATHS[key]
+        for value in (v.strip() for v in m["later"].split(",")):
+            doc = copy.deepcopy(base_doc)
+            node = doc
+            for step in path[:-1]:
+                node = node[step]
+            node[path[-1]] = value
+            codes = _refusal_codes(key, doc, config_path)
+            assert codes, (
+                f"comment marks `{key}={value}` as refused later, but core accepted "
+                f"it silently — the marking is stale (or the value is supported now, "
+                f"and the comment should say so instead of hiding it)"
+            )
+
+    assert marked_keys_seen == set(_MARKED_FIELD_PATHS), (
+        "expected a `(...: later slice)` marking for each of "
+        f"{sorted(_MARKED_FIELD_PATHS)}; saw {sorted(marked_keys_seen)}"
+    )
 
 
 def test_replication_defaults_to_five_seed_repeats():
