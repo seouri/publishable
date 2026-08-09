@@ -242,6 +242,105 @@ def test_completion_is_the_intersection_across_repeats(tmp_path: Path):
     assert attrition(results, roster)["completed"] == 2
 
 
+def test_ineligibility_is_also_the_intersection_across_repeats(tmp_path: Path):
+    """A unit skipped in one repeat and completed in another is FAILED, not ineligible:
+    eligibility is a property of the design, so an inconsistent answer across repeats is
+    not a design exclusion — it is the same defect `failed` exists to surface."""
+    roster = UnitList([Unit(key="p0"), Unit(key="p1")])
+
+    class InconsistentEligibility(BaseStep):
+        scope = "repeat"
+
+        def run(self, cfg, io):
+            if self.repeat == "seed17":
+                io.skip("p0", "excluded this repeat")
+                io.record("p1", {"v": 1.0})
+            else:
+                io.record("p0", {"v": 1.0})
+                io.skip("p1", "excluded this repeat")
+            return {}
+
+    _, results, _ = harness(
+        tmp_path,
+        [InconsistentEligibility],
+        units=roster,
+        repeats=[Repeat("seed", "seed17", 17), Repeat("seed", "seed42", 42)],
+    )
+    counts = attrition(results, roster)
+    assert counts == {"resolved": 2, "completed": 0, "ineligible": 0, "failed": 2}
+    assert counts["resolved"] == counts["completed"] + counts["ineligible"] + counts["failed"]
+
+
+def test_a_unit_skipped_in_every_repeat_is_ineligible(tmp_path: Path):
+    roster = UnitList([Unit(key="p0"), Unit(key="p1")])
+
+    class AlwaysSkip(BaseStep):
+        scope = "repeat"
+
+        def run(self, cfg, io):
+            io.skip("p0", "excluded by design")
+            io.record("p1", {"v": 1.0})
+            return {}
+
+    _, results, _ = harness(
+        tmp_path,
+        [AlwaysSkip],
+        units=roster,
+        repeats=[Repeat("seed", "seed17", 17), Repeat("seed", "seed42", 42)],
+    )
+    counts = attrition(results, roster)
+    assert counts == {"resolved": 2, "completed": 1, "ineligible": 1, "failed": 0}
+    assert counts["resolved"] == counts["completed"] + counts["ineligible"] + counts["failed"]
+
+
+def test_skipped_in_one_repeat_and_unrecorded_in_another_is_failed(tmp_path: Path):
+    """Neither skipped in every recording execution (so not `ineligible`, which needs a
+    consistent design answer) nor recorded in every one (so not `completed` either) —
+    the unit falls through to `failed`, the same place a step that silently drops a unit
+    without skipping or recording it would land."""
+    roster = UnitList([Unit(key="p0"), Unit(key="p1")])
+
+    class SkipThenSilentlyDrop(BaseStep):
+        scope = "repeat"
+
+        def run(self, cfg, io):
+            io.record("p1", {"v": 1.0})
+            if self.repeat == "seed17":
+                io.skip("p0", "excluded this repeat")
+            # else: p0 is neither recorded nor skipped this repeat
+            return {}
+
+    _, results, _ = harness(
+        tmp_path,
+        [SkipThenSilentlyDrop],
+        units=roster,
+        repeats=[Repeat("seed", "seed17", 17), Repeat("seed", "seed42", 42)],
+    )
+    counts = attrition(results, roster)
+    assert counts == {"resolved": 2, "completed": 1, "ineligible": 0, "failed": 1}
+    assert counts["resolved"] == counts["completed"] + counts["ineligible"] + counts["failed"]
+
+
+def test_a_single_repeat_skip_is_still_ineligible(tmp_path: Path):
+    """With one repeat, intersection over a single set is that set — unchanged behavior."""
+    roster = UnitList([Unit(key="p0"), Unit(key="p1")])
+
+    class SkipOne(BaseStep):
+        scope = "repeat"
+
+        def run(self, cfg, io):
+            io.skip("p0", "excluded by design")
+            io.record("p1", {"v": 1.0})
+            return {}
+
+    _, results, _ = harness(
+        tmp_path, [SkipOne], units=roster, repeats=[Repeat("seed", "seed17", 17)]
+    )
+    counts = attrition(results, roster)
+    assert counts == {"resolved": 2, "completed": 1, "ineligible": 1, "failed": 0}
+    assert counts["resolved"] == counts["completed"] + counts["ineligible"] + counts["failed"]
+
+
 def test_crossing_the_attrition_threshold_stops_the_run(tmp_path: Path):
     roster = UnitList([Unit(key=f"p{i}") for i in range(10)])
 

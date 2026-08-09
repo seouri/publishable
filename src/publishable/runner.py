@@ -29,10 +29,15 @@ class ExecutionResult:
 def attrition(results: list[ExecutionResult], roster: "UnitList | None") -> dict[str, int]:
     """The four counts. A failed unit has no row anywhere, so failure is derived.
 
-    Completion is the INTERSECTION across the repeat-scoped executions a unit was
-    handed to: the collapse averages per unit, and a unit present in three of five
-    seeds would otherwise enter that average on a different number of observations
-    than its neighbours — a ragged table dressed as a rectangular one.
+    Both `completed` and `ineligible` are the INTERSECTION across the repeat-scoped
+    executions a unit was handed to — not the union. `completed` intersects because
+    the collapse averages per unit, and a unit present in three of five seeds would
+    otherwise enter that average on a different number of observations than its
+    neighbours. `ineligible` intersects for the mirrored reason: eligibility is a
+    property of the design, so a unit skipped in one repeat and completed (or simply
+    unrecorded) in another did not get a consistent eligibility answer, and that
+    inconsistency is exactly the `failed` case, not a design exclusion. Only a unit
+    skipped in EVERY recording execution — a consistent answer — is `ineligible`.
     """
     if roster is None:
         return {"resolved": 0, "completed": 0, "ineligible": 0, "failed": 0}
@@ -43,10 +48,9 @@ def attrition(results: list[ExecutionResult], roster: "UnitList | None") -> dict
     completed = set(keys)
     for r in recording:
         completed &= r.recorded
-    ineligible: set[str] = set()
+    ineligible = set(keys)
     for r in recording:
-        ineligible |= r.skipped
-    ineligible -= completed
+        ineligible &= r.skipped
     return {
         "resolved": len(keys),
         "completed": len(completed),
