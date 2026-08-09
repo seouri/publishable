@@ -125,6 +125,23 @@ def test_a_unit_is_frozen_and_hashable_by_key():
     assert hash(u) == hash(Unit(key="p1", paths=(), attributes={"label": "0"}))
 
 
+def test_attributes_cannot_be_mutated_in_place():
+    u = Unit(key="p1", paths=(), attributes={"label": "1"})
+    with pytest.raises(TypeError):
+        u.attributes["x"] = 1  # type: ignore[index]
+    assert u.attributes["label"] == "1"
+    assert u.label == "1"
+
+
+def test_mutating_the_original_dict_after_construction_does_not_leak_in():
+    original = {"label": "1"}
+    u = Unit(key="p1", paths=(), attributes=original)
+    original["label"] = "tampered"
+    original["extra"] = "new"
+    assert u.attributes["label"] == "1"
+    assert "extra" not in u.attributes
+
+
 def test_the_unit_list_is_exactly_four_operations(input_dir: Path):
     units = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
     assert len(list(units)) == 3          # iterate, repeatably
@@ -133,6 +150,32 @@ def test_the_unit_list_is_exactly_four_operations(input_dir: Path):
     assert units[1].key == "p1"           # index
     for absent in ("append", "index", "count", "sort", "__contains__"):
         assert not hasattr(units, absent), f"{absent} would make this a list"
+
+
+def test_slicing_is_rejected_not_silently_returning_a_list(input_dir: Path):
+    units = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
+    with pytest.raises(ContractError) as e:
+        _ = units[0:2]
+    assert e.value.code == "E-STEP-UNITS-CONTRACT"
+    assert units[0].key == "p3"  # integer indexing still works
+
+
+def test_a_string_index_is_rejected(input_dir: Path):
+    units = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
+    with pytest.raises(ContractError) as e:
+        _ = units["p1"]  # type: ignore[call-overload]
+    assert e.value.code == "E-STEP-UNITS-CONTRACT"
+
+
+def test_membership_and_reversed_are_deliberately_permitted(input_dir: Path):
+    # Not part of the promised three operations, but both derive entirely from
+    # `__iter__` (membership) and `len` + integer indexing (`reversed`), so any
+    # backing that satisfies the contract satisfies these for free — unlike
+    # slicing, which would return a foreign type. See spec-defects.md.
+    units = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
+    first = units[0]
+    assert first in units
+    assert [u.key for u in reversed(units)] == ["p2", "p1", "p3"]
 
 
 def test_train_raises_when_no_partition_is_declared(input_dir: Path):

@@ -9,9 +9,10 @@ directory and no step for an `io` to belong to.
 import csv
 import hashlib
 import json
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from types import MappingProxyType
 from typing import Any
 
 from publishable.errors import ContractError
@@ -25,7 +26,14 @@ class Unit:
 
     key: str
     paths: tuple[str, ...] = ()
-    attributes: dict[str, Any] = field(default_factory=dict)
+    attributes: Mapping[str, Any] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        # A dict copy first, so a caller holding the original mapping cannot mutate
+        # this unit's attributes through it after construction. The proxy over that
+        # copy is what makes `attributes["x"] = ...` raise rather than silently
+        # changing what a later condition measures.
+        object.__setattr__(self, "attributes", MappingProxyType(dict(self.attributes)))
 
     def __getattr__(self, name: str) -> Any:
         # Only reached when normal lookup fails, so it never shadows the three fields.
@@ -63,6 +71,14 @@ class UnitList:
         return len(self._units)
 
     def __getitem__(self, index: int) -> Unit:
+        if not isinstance(index, int) or isinstance(index, bool):
+            raise ContractError(
+                "`io.units` supports iteration, `len`, and integer indexing only; "
+                f"{index!r} is not an integer index — filter with ordinary Python "
+                "over the iteration instead, which costs nothing measurable at "
+                "cohort scale",
+                code="E-STEP-UNITS-CONTRACT",
+            )
         return self._units[index]
 
     @property
@@ -166,7 +182,10 @@ def units_hash(units: UnitList) -> str:
     """Covers the list in resolved order — two runs that resolved the same units in a
     different sequence did not allocate the same trial."""
     payload = json.dumps(
-        [{"key": u.key, "paths": list(u.paths), "attributes": u.attributes} for u in units],
+        [
+            {"key": u.key, "paths": list(u.paths), "attributes": dict(u.attributes)}
+            for u in units
+        ],
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,
