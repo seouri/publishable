@@ -5,12 +5,16 @@ from collections import namedtuple
 from pathlib import Path
 from typing import Any
 
+import pytest
 import yaml
 
-from publishable.cli import main
+from publishable import BaseStep
+from publishable.cli import _apply_execution_order, main
 from publishable.diagnostics import EXIT_INVOCATION, EXIT_OK, EXIT_WRONG
+from publishable.errors import ContractError
 from publishable.generators.experiment import generate_experiment
 from publishable.replication import LABEL_JOIN
+from publishable.scope import Execution
 
 Ran = namedtuple("Ran", ["condition_index", "repeat_label"])
 
@@ -168,7 +172,7 @@ def test_sweep_yaml_records_the_order_mode_and_seed(tmp_path: Path):
     ]
     recorded = [(e["condition"], e["repeat"]) for e in sweep["execution_order"]]
     assert recorded != declared, "the shuffle must actually move something"
-    batches = [r.split("_")[0] for _, r in recorded]
+    batches = [r.split(LABEL_JOIN)[0] for _, r in recorded]
     assert batches == sorted(batches), "batch01 pairs must all precede batch02 pairs"
 
 
@@ -177,6 +181,30 @@ def test_as_declared_records_no_order_seed(tmp_path: Path):
     sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
     assert sweep["order"] == "as_declared"
     assert sweep.get("order_seed") is None
+
+
+class _RepeatStep(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        return {}
+
+
+def test_a_plan_pair_missing_from_execution_order_is_a_core_bug():
+    """`_apply_execution_order`'s invariant: every repeat-scope execution `build_plan`
+    produced must have a home among `execution_order`'s pairs. `command_run` builds
+    both from the same `conditions`/`repeats`, so this should be unreachable there —
+    pinned directly, the way `tests/test_runner.py` pins `E-RUN-CFG-MISSING` and
+    `E-RUN-SEED-MISSING` by constructing a mismatch `execute_plan` never resolves
+    itself.
+    """
+    plan = [
+        Execution(_RepeatStep, "repeat_step", "repeat", 0, None, "seedA"),
+        Execution(_RepeatStep, "repeat_step", "repeat", 0, None, "seedB"),
+    ]
+    with pytest.raises(ContractError) as excinfo:
+        _apply_execution_order(plan, [(0, "seedA")])  # "seedB" has no home
+    assert excinfo.value.code == "E-RUN-ORDER-MISMATCH"
 
 
 def test_the_recorded_order_is_the_order_that_ran(tmp_path: Path):

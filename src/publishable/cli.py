@@ -23,7 +23,7 @@ from publishable.diagnostics import (
     EXIT_WRONG,
     Collector,
 )
-from publishable.errors import PublishableError
+from publishable.errors import ContractError, PublishableError
 from publishable.generators.experiment import generate_experiment
 from publishable.generators.step import generate_step
 from publishable.hashes import code_hash, design_digest, parameters_hash
@@ -64,6 +64,52 @@ def _preloaded_experiment(config_path: Path) -> BaseExperiment | None:
         return load_experiment(find_repo_root(config_path), entrypoint)
     except Exception:  # reported by `validate_config`, which collects rather than raises
         return None
+
+
+def _apply_execution_order(
+    plan: list[Execution], execution_order: list[tuple[int, str]]
+) -> list[Execution]:
+    """Reorder `plan`'s repeat-scope executions to match `execution_order` exactly.
+
+    `execution_order` is a fact about the run, not a rule to re-derive, so the plan
+    actually executed must match it rather than merely being recorded beside it.
+    `execution_order` orders `(condition, repeat label)` pairs — the grain
+    `reference.md`'s example records — so each pair's own repeat-scope steps are
+    kept together, in the order `experiment.steps` declares them, and the pairs
+    themselves are laid out in `execution_order`'s sequence. `condition`-scope
+    executions are left where `build_plan` put them (ahead of every repeat, one
+    condition's steps before the next) since nothing in `execution_order` orders
+    them.
+
+    Raises `E-RUN-ORDER-MISMATCH` if a repeat-scope execution in `plan` has no
+    home among `execution_order`'s pairs — the plan and the resolved order
+    disagree, the same invariant class `execute_plan` raises `E-RUN-CFG-MISSING`
+    for when the plan and the resolved `cfgs` disagree. Both are core bugs, not
+    user mistakes: `declared_pairs` and `plan`'s repeat labels are built from the
+    same `conditions`/`repeats` in `command_run`, so this should be unreachable —
+    but a silently dropped pair here would run fewer executions than the plan
+    declared while `sweep.yaml` recorded the fuller set, which is worse than
+    recording nothing.
+    """
+    by_pair: dict[tuple[int, str], list[Execution]] = {}
+    for e in plan:
+        if e.scope == "repeat":
+            by_pair.setdefault((e.condition_index or 0, e.repeat_label or ""), []).append(e)
+    reordered_repeats = [e for pair in execution_order for e in by_pair.get(pair, [])]
+    n_repeat = sum(1 for e in plan if e.scope == "repeat")
+    if len(reordered_repeats) != n_repeat:
+        raise ContractError(
+            f"{n_repeat} repeat-scope executions are in the plan, but only "
+            f"{len(reordered_repeats)} were found among execution_order's "
+            f"{len(execution_order)} pairs; the plan and the resolved order disagree",
+            code="E-RUN-ORDER-MISMATCH",
+        )
+    summary_executions = [e for e in plan if e.scope == "summary"]
+    return (
+        [e for e in plan if e.scope not in ("repeat", "summary")]
+        + reordered_repeats
+        + summary_executions
+    )
 
 
 def command_validate(config_path: Path) -> int:
@@ -174,33 +220,7 @@ def command_run(config_path: Path) -> int:
         order_seed = order_seed_for(digest) if mode == "randomized" else None
         declared_pairs = [(c.index, lf.label) for c in conditions for lf in repeats]
         execution_order = realize_order(declared_pairs, levels, mode, order_seed or 0)
-
-        # `execution_order` is a fact about the run, not a rule to re-derive, so the
-        # plan actually executed must match it rather than merely being recorded
-        # beside it. `execution_order` orders (condition, repeat label) pairs — the
-        # grain `reference.md`'s example records — so each pair's own repeat-scope
-        # steps are kept together, in the order `experiment.steps` declares them,
-        # and the pairs themselves are laid out in `execution_order`'s sequence.
-        # `condition`-scope executions are left where `build_plan` put them (ahead
-        # of every repeat, one condition's steps before the next) since nothing in
-        # `execution_order` says anything about them.
-        by_pair: dict[tuple[int, str], list[Execution]] = {}
-        for e in plan:
-            if e.scope == "repeat":
-                by_pair.setdefault((e.condition_index or 0, e.repeat_label or ""), []).append(e)
-        reordered_repeats = [e for pair in execution_order for e in by_pair.get(pair, [])]
-        # Every repeat-scope execution `build_plan` produced must land somewhere in
-        # `reordered_repeats` — a pair silently dropped here would run fewer
-        # executions than the plan declared, and `sweep.yaml` would record more
-        # than actually ran, which is exactly the failure mode this task exists to
-        # rule out.
-        assert len(reordered_repeats) == sum(1 for e in plan if e.scope == "repeat")
-        summary_executions = [e for e in plan if e.scope == "summary"]
-        plan = (
-            [e for e in plan if e.scope not in ("repeat", "summary")]
-            + reordered_repeats
-            + summary_executions
-        )
+        plan = _apply_execution_order(plan, execution_order)
 
         (run_dir / "sweep.yaml").write_text(
             yaml.safe_dump(
