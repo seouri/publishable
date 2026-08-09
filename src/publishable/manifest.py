@@ -32,7 +32,7 @@ def build_manifest(
         )
         files[rel] = {
             "size": stat.st_size,
-            "mtime": int(stat.st_mtime),
+            "mtime": stat.st_mtime_ns,
             "sha256": _sha256(path) if hash_it else None,
         }
     return {"policy": policy, "files": files}
@@ -61,6 +61,6 @@ def verify_manifest(input_dir: Path, manifest: dict[str, Any]) -> list[str]:
         if entry["sha256"] is not None:
             if _sha256(path) != entry["sha256"]:
                 changed.append(rel)
-        elif stat.st_size != entry["size"] or int(stat.st_mtime) != entry["mtime"]:
+        elif stat.st_size != entry["size"] or stat.st_mtime_ns != entry["mtime"]:
             changed.append(rel)
     return sorted(changed)
