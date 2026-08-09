@@ -79,15 +79,21 @@ def test_the_last_path_component_alone_decides_the_extension(io: StepIO):
 
 
 def test_compound_extension_dispatches_on_the_longer_registered_suffix(io: StepIO, tmp_path):
-    from publishable.artifacts import WRITERS
+    from publishable.artifacts import READERS, WRITERS
 
     WRITERS[".fastq.gz"] = lambda obj: obj if isinstance(obj, bytes) else obj.encode()
+    READERS[".fastq.gz"] = lambda data: data
     try:
         target = io.write("reads.fastq.gz", b"seqdata")
         assert target.name == "reads.fastq.gz"
         assert target.read_bytes() == b"seqdata"
+
+        # The write side and the read side must agree on the longest-suffix rule.
+        (io.step_dir / "upstream.fastq.gz").write_bytes(b"more seqdata")
+        assert io.read_upstream("step01", "upstream.fastq.gz") == b"more seqdata"
     finally:
         del WRITERS[".fastq.gz"]
+        del READERS[".fastq.gz"]
 
 
 def test_encode_csv_with_differing_keys_and_empty_rows():
@@ -140,3 +146,24 @@ def test_read_input_reaches_the_input_dir_read_only(io: StepIO, tmp_path: Path):
     (tmp_path / "input" / "index.csv").write_text("patient_id\np1\n")
     rows = io.read_input("index.csv")
     assert rows == [{"patient_id": "p1"}]
+
+
+@pytest.mark.parametrize(
+    ("name", "written", "expected"),
+    [
+        ("out.json", {"x": 1, "y": [1, 2]}, {"x": 1, "y": [1, 2]}),
+        ("out.yaml", {"x": 1, "y": [1, 2]}, {"x": 1, "y": [1, 2]}),
+        ("out.jsonl", [{"i": 1}, {"i": 2}], [{"i": 1}, {"i": 2}]),
+        ("out.csv", [{"k": "p1", "v": "1"}], [{"k": "p1", "v": "1"}]),
+    ],
+)
+def test_read_upstream_inverts_what_write_wrote_for_every_registered_extension(
+    io: StepIO, name: object, written: object, expected: object
+):
+    io.write(str(name), written)
+    assert io.read_upstream("step01", str(name)) == expected
+
+
+def test_read_upstream_of_an_unregistered_extension_round_trips_as_bytes(io: StepIO):
+    io.write("model.pkl", b"\x80\x04binarydata")
+    assert io.read_upstream("step01", "model.pkl") == b"\x80\x04binarydata"

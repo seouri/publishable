@@ -55,11 +55,34 @@ def _encode_csv(rows: Any) -> bytes:
     return buf.getvalue().encode()
 
 
+def _decode_json(data: bytes) -> Any:
+    return json.loads(data.decode())
+
+
+def _decode_yaml(data: bytes) -> Any:
+    return yaml.safe_load(data.decode())
+
+
+def _decode_jsonl(data: bytes) -> Any:
+    return [json.loads(line) for line in data.decode().splitlines() if line]
+
+
+def _decode_csv(data: bytes) -> Any:
+    return list(csv.DictReader(_io.StringIO(data.decode())))
+
+
 WRITERS = {
     ".json": _encode_json,
     ".yaml": _encode_yaml,
     ".jsonl": _encode_jsonl,
     ".csv": _encode_csv,
+}
+
+READERS = {
+    ".json": _decode_json,
+    ".yaml": _decode_yaml,
+    ".jsonl": _decode_jsonl,
+    ".csv": _decode_csv,
 }
 
 
@@ -137,13 +160,8 @@ class StepIO:
 
     @staticmethod
     def _read(path: Path) -> Any:
-        low = path.name.lower()
-        if low.endswith(".json"):
-            return json.loads(path.read_text())
-        if low.endswith(".yaml"):
-            return yaml.safe_load(path.read_text())
-        if low.endswith(".jsonl"):
-            return [json.loads(line) for line in path.read_text().splitlines() if line]
-        if low.endswith(".csv"):
-            return list(csv.DictReader(_io.StringIO(path.read_text())))
+        """Inverts the same table `write` dispatches through — see `WRITERS`/`READERS`."""
+        suffix = _suffix_for(path.name)
+        if suffix is not None:
+            return READERS[suffix](path.read_bytes())
         return path.read_bytes()
