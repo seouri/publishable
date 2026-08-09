@@ -16,7 +16,10 @@ class Step(BaseStep):
     scope = "repeat"
 
     def run(self, cfg, io):
-        return {{"scaffold_ok": True}}      # TODO: replace with your analysis
+        units = list(io.units)
+        for unit in units:
+            io.record(unit.key, {{"present": True}})
+        return {{"n_units": len(units)}}    # TODO: replace with your analysis
 '''
 
 EXPERIMENT_PY = '''\

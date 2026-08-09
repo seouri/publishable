@@ -32,9 +32,11 @@ from publishable.provenance import find_repo_root, git_provenance
 from publishable.replication import resolve_repeats
 from publishable.run_identity import RunLock, allocate_run_dir, point_latest
 from publishable.run_record import assemble_run_yaml, run_status
-from publishable.runner import execute_plan
+from publishable.runner import attrition, execute_plan
 from publishable.scaffold import scaffold_project
 from publishable.scope import build_plan
+from publishable.stats import collapse_repeats, summarize_step
+from publishable.units import resolve_units, units_hash
 from publishable.uv_support import uv_lock_info
 from publishable.validate import validate_config
 
@@ -114,6 +116,8 @@ def command_run(config_path: Path) -> int:
     ch = code_hash(repo_root)
     ph = parameters_hash(doc)
     manifest = build_manifest(input_dir, doc["data"]["input_manifest_policy"])
+    units_decl: dict[str, Any] | None = (doc.get("data") or {}).get("units")
+    roster = resolve_units(units_decl, input_dir) if units_decl else None  # phase 5: roster
     lock_path, lock_hash = uv_lock_info(repo_root)
     if lock_path is None:
         # A warning, not an error: it must not change the exit code. There are
@@ -150,9 +154,30 @@ def command_run(config_path: Path) -> int:
             cfg=Config(doc),
             repeats=repeats,
             digest=digest,
+            units=roster,
+            max_failed_fraction=(doc.get("limits") or {}).get("max_failed_fraction"),
         )
 
         status = run_status(results)
+        # S2 always resolves a single condition, so every aggregation below is
+        # scoped to condition_index=0 — never pooled across conditions. No roster
+        # means nothing to aggregate over, so `aggregated` stays `None` rather than
+        # an empty dict — `assemble_run_yaml` omits the key entirely in that case,
+        # instead of every condition reporting a misleading empty `aggregated: {}`.
+        aggregated: dict[int, dict[str, dict[str, Any]]] | None = None
+        if roster is not None:
+            counts = attrition(results, roster, 0)
+            recording_steps = {
+                r.execution.step_name
+                for r in results
+                if r.execution.scope == "repeat" and r.rows
+            }
+            aggregated = {
+                0: {
+                    step_name: summarize_step(collapse_repeats(results, step_name, 0), counts)
+                    for step_name in sorted(recording_steps)
+                }
+            }
         changed_inputs = verify_manifest(input_dir, manifest)  # phase 8: re-verify
         if changed_inputs:
             status = "failed"
@@ -187,6 +212,15 @@ def command_run(config_path: Path) -> int:
             "input_manifest_changed": changed_inputs,
             "publishable_version": importlib.metadata.version("publishable"),
             "plugin_versions": {},
+            # A run over a roster whose identity is not pinned is a run whose `n`
+            # means nothing later: `units` and `units_hash` are `None` together
+            # exactly when there is no `data.units` declaration to pin.
+            "units": (
+                {"n": len(roster), "key": units_decl["key"]}
+                if roster is not None and units_decl is not None
+                else None
+            ),
+            "units_hash": units_hash(roster) if roster is not None else None,
         }
         doc_out = assemble_run_yaml(  # phase 9: assemble and write
             run_id=run_dir.name,
@@ -197,6 +231,7 @@ def command_run(config_path: Path) -> int:
             provenance=provenance,
             results=results,
             repeats=repeats,
+            aggregated=aggregated,
         )
         (run_dir / "run.yaml").write_text(yaml.safe_dump(doc_out, sort_keys=False))
         # `with` block exit releases the lock.

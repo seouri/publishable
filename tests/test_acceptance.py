@@ -1,8 +1,10 @@
 """S1's whole promise: `reference.md` § The starter step runs."""
 
+import math
 import subprocess
 from pathlib import Path
 
+import pytest
 import yaml
 
 from publishable.cli import main
@@ -116,7 +118,7 @@ def test_five_seed_repeats_land_in_a_collapsed_layout(tmp_path: Path):
     doc = yaml.safe_load((run_dir / "run.yaml").read_text())
     per_repeat = doc["results"]["conditions"][0]["per_repeat"]["step01_summarize_units"]
     assert len(per_repeat) == 5
-    assert all(v == {"scaffold_ok": True} for v in per_repeat.values())
+    assert all(v == {"n_units": 2} for v in per_repeat.values())
     # The S1 journey sweeps nothing (no `conditions/` level) but resolves 5 seed
     # repeats (a real repeat level) — `run.yaml`'s recorded layout must say exactly
     # that, per `reference.md` § How artifacts are organized.
@@ -228,3 +230,123 @@ def test_manifest_drift_mid_run_names_the_changed_path(tmp_path: Path, capsys):
     # diagnostic and its own recorded reason.
     step_entries = doc["execution"]["conditions"][0]["steps"]["step01_summarize_units"]
     assert all(e["status"] == "completed" for e in step_entries.values())
+
+
+def build_with_units(tmp_path: Path, n_units: int) -> tuple[Path, Path, Path, Path]:
+    """Scaffold a project over an `n_units`-row roster and generate the experiment.
+
+    Returns `(root, cfg_path, results_dir, data_dir)`, uncommitted — so a test can
+    replace the starter step before the first commit. Mirrors `build` above, but
+    with a roster sized for attrition rather than the fixed two-row one.
+    """
+    root = tmp_path / "my-study"
+    data = tmp_path / "data"
+    results = tmp_path / "results"
+    data.mkdir()
+    rows = "\n".join(f"p{i}" for i in range(n_units))
+    (data / "index.csv").write_text(f"patient_id\n{rows}\n")
+    assert main(["new", str(root)]) == EXIT_OK
+    from publishable.generators.experiment import generate_experiment
+
+    cfg = generate_experiment(
+        repo_root=root,
+        name="cohort-pilot",
+        template_name="generic",
+        input_dir=str(data),
+        output_dir=str(results),
+    )
+    doc = yaml.safe_load(cfg.read_text())
+    doc["metadata"]["description"] = "the inference base's acceptance run"
+    doc["metadata"]["authors"] = ["Kyungjoon Lee"]
+    cfg.write_text(yaml.safe_dump(doc))
+    return root, cfg, results, data
+
+
+def write_step(root: Path, *, recorded: int, skipped: int) -> None:
+    """Overwrite the generated starter step: the first `recorded` units (in
+    roster order) get a deterministic `score`, the next `skipped` are
+    `io.skip`ped, and the rest are left untouched entirely — unrecorded, so they
+    land in `failed` rather than `ineligible` or `completed`.
+    """
+    step_path = root / "src" / "cohort_pilot" / "steps" / "step01_summarize_units.py"
+    step_path.write_text(
+        "from publishable import BaseStep\n\n\n"
+        "class Step(BaseStep):\n"
+        '    scope = "repeat"\n\n'
+        "    def run(self, cfg, io):\n"
+        f"        recorded, skipped = {recorded}, {skipped}\n"
+        "        for i, unit in enumerate(io.units):\n"
+        "            if i < recorded:\n"
+        '                io.record(unit.key, {"score": 1.0 + 0.01 * i})\n'
+        "            elif i < recorded + skipped:\n"
+        '                io.skip(unit.key, "ineligible for this acceptance fixture")\n'
+        "        return {}\n"
+    )
+
+
+def commit(root: Path, message: str = "acceptance fixture") -> None:
+    for args in (
+        ["add", "."],
+        ["-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", message],
+    ):
+        subprocess.run(["git", *args], cwd=root, check=True)
+
+
+def test_the_inference_base_is_real(tmp_path: Path):
+    """240 units resolve, some are skipped, 12 go unrecorded, and n reports what
+    actually completed — closing the defect where a `data.units` declaration
+    validated and ran without the roster ever reaching the runner.
+    """
+    root, cfg, results_dir, _ = build_with_units(tmp_path, n_units=240)
+    write_step(root, recorded=226, skipped=2)
+    commit(root)
+    assert main(["run", str(cfg)]) == EXIT_OK
+
+    doc = yaml.safe_load((next(results_dir.glob("run_*")) / "run.yaml").read_text())
+    metric = doc["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["score"]
+    counts = metric["n"]
+    assert counts["resolved"] == 240
+    assert counts["completed"] == 226
+    assert counts["ineligible"] == 2
+    assert counts["failed"] == 12
+    assert counts["resolved"] == counts["completed"] + counts["ineligible"] + counts["failed"]
+
+    assert metric["basis"] == "units"
+    assert metric["method"] == "t_over_units"
+    low, high = metric["ci95"]
+    assert low < metric["value"] < high
+
+    assert doc["provenance"]["units"]["n"] == 240
+    assert doc["provenance"]["units"]["key"] == "patient_id"
+    assert doc["provenance"]["units_hash"].startswith("sha256:")
+
+
+def test_the_interval_matches_an_independent_computation(tmp_path: Path):
+    """Recompute the interval from `units.parquet` by hand and compare — verifying
+    the interval against an independent computation, never against itself.
+    """
+    root, cfg, results_dir, _ = build_with_units(tmp_path, n_units=40)
+    write_step(root, recorded=40, skipped=0)
+    commit(root)
+    assert main(["run", str(cfg)]) == EXIT_OK
+    run_dir = next(results_dir.glob("run_*"))
+    doc = yaml.safe_load((run_dir / "run.yaml").read_text())
+    metric = doc["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["score"]
+
+    import pyarrow.parquet as pq
+
+    tables = sorted(run_dir.glob("*/step01_summarize_units/units.parquet"))
+    per_unit: dict[str, list[float]] = {}
+    for t in tables:
+        for row in pq.read_table(t).to_pylist():
+            per_unit.setdefault(row["unit"], []).append(row["score"])
+    values = [sum(v) / len(v) for v in per_unit.values()]
+    n = len(values)
+    mean = sum(values) / n
+    sd = math.sqrt(sum((v - mean) ** 2 for v in values) / (n - 1))
+    from scipy import stats as sp
+
+    half = float(sp.t.ppf(0.975, df=n - 1)) * sd / math.sqrt(n)
+    assert metric["value"] == pytest.approx(mean)
+    assert metric["ci95"][0] == pytest.approx(mean - half)
+    assert metric["ci95"][1] == pytest.approx(mean + half)
