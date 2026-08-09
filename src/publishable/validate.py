@@ -496,6 +496,18 @@ def _check_sweep(doc: dict[str, Any], template: Any, c: Collector) -> None:
     an enumerated sweep creates. `sweep.expand` is the single source of the
     condition count — re-deriving it here is exactly the drift Task 4 was
     told not to reintroduce.
+
+    `E-SWEEP-EXPANDS-EMPTY` is a backstop beneath the per-axis checks above,
+    not a replacement for them: it refuses on the *result* of `expand(doc)`
+    being zero conditions, whatever shape of `sweep` produced that — an empty
+    `grid` axis still gets the specific `E-SWEEP-AXIS-EMPTY` diagnosis (this
+    check runs after, so it never displaces that one), but a declared `sweep`
+    with no shape anyone enumerated here — `{grid: {}}`, or a hand-written
+    block of falsy keys — is still caught, because it is checked mechanically
+    against what would actually execute rather than against a list of shapes
+    someone thought of. A run that would otherwise execute zero conditions
+    while reporting `status: completed` is exactly the failure this project
+    treats as worst: a record describing an experiment nobody performed.
     """
     import difflib
 
@@ -542,6 +554,15 @@ def _check_sweep(doc: dict[str, Any], template: Any, c: Collector) -> None:
                 c.error("E-SWEEP-VALUE-UNNAMEABLE", f"sweep.grid.{path}[{i}]", unnameable)
 
     conditions = expand(doc)
+    if sweep and not conditions:
+        c.error(
+            "E-SWEEP-EXPANDS-EMPTY",
+            "sweep",
+            "expands to zero conditions, so the run would execute nothing while "
+            "reporting success — declare `baseline`, a non-empty `grid`, or remove "
+            "`sweep` entirely",
+        )
+
     executions = len(conditions) * _repeat_total(doc)
     budget = (doc.get("limits") or {}).get("max_executions")
     if isinstance(budget, int) and executions > budget:

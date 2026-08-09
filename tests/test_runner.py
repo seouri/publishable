@@ -61,14 +61,18 @@ class ReturnsNone(BaseStep):
         return None
 
 
-def harness(tmp_path: Path, steps, *, units=None, repeats=None, max_failed_fraction=None):
+def harness(
+    tmp_path: Path, steps, *, units=None, repeats=None, max_failed_fraction=None, conditions=None
+):
     class P(BaseExperiment):
         pass
 
     P.steps = steps
     if repeats is None:
         repeats = [Repeat("seed", "seed17", 17), Repeat("seed", "seed42", 42)]
-    plan = build_plan(P(), conditions=[(0, None)], repeat_labels=[r.label for r in repeats])
+    if conditions is None:
+        conditions = [(0, None)]
+    plan = build_plan(P(), conditions=conditions, repeat_labels=[r.label for r in repeats])
     run_dir = tmp_path / "run"
     run_dir.mkdir(parents=True, exist_ok=True)
     (tmp_path / "input").mkdir(parents=True, exist_ok=True)
@@ -91,6 +95,21 @@ def test_no_sweep_means_no_conditions_level(tmp_path: Path):
     assert not (run_dir / "conditions").exists()
     assert (run_dir / "seed17").is_dir()
     assert (run_dir / "seed42").is_dir()
+
+
+def test_a_bare_baseline_still_gets_the_conditions_level(tmp_path: Path):
+    """`docs/reference.md` § How artifacts are organized: the `conditions/` level
+    appears when a sweep is *declared*, not when N > 1. A bare `sweep.baseline`
+    with no `grid` expands to one condition (`sweep.expand`'s
+    `test_a_bare_baseline_is_one_condition_but_labelled`), but unlike the no-sweep
+    case it is labelled `"baseline"`, and `step_dir_for` nests under
+    `conditions/00_baseline/` rather than collapsing the level — the opposite of
+    `test_no_sweep_means_no_conditions_level` right above."""
+    run_dir, _, _ = harness(tmp_path, [Load, Analyze], conditions=[(0, "baseline")])
+    assert (run_dir / "shared" / "load" / "cohort.json").is_file()
+    assert (run_dir / "conditions" / "00_baseline" / "seed17" / "analyze").is_dir()
+    assert (run_dir / "conditions" / "00_baseline" / "seed42" / "analyze").is_dir()
+    assert not (run_dir / "seed17").exists()
 
 
 def test_a_failed_execution_is_recorded_and_the_run_continues(tmp_path: Path):

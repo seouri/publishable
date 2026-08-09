@@ -186,6 +186,41 @@ def test_an_axis_declaring_no_values_is_refused(write_config):
     )
 
 
+def test_an_empty_grid_block_is_refused_by_the_backstop(write_config):
+    """`sweep: {grid: {}}` never enters the per-axis loop in `_check_sweep` — that
+    loop iterates `grid.items()`, which is empty — so nothing there can catch it.
+    The backstop refuses on `expand(doc)` returning zero conditions, whatever
+    shape of `sweep` produced that."""
+    found = codes(write_config({"sweep": {"grid": {}}}))
+    assert "E-SWEEP-EXPANDS-EMPTY" in found
+
+
+def test_an_empty_axis_still_gets_the_specific_diagnosis_not_just_the_backstop(write_config):
+    """The backstop sits beneath E-SWEEP-AXIS-EMPTY, not in place of it: a config
+    with an empty axis must still receive the specific diagnosis."""
+    found = codes(write_config({"sweep": {"grid": {"analysis.method": []}}}))
+    assert "E-SWEEP-AXIS-EMPTY" in found
+    assert "E-SWEEP-EXPANDS-EMPTY" in found
+
+
+def test_no_sweep_at_all_still_validates_clean(write_config):
+    """The critical negative: no `sweep` block is the ordinary case, and a result
+    check written carelessly (e.g. `if not conditions`, without the `sweep and`
+    guard) would refuse it. `expand({})` returns exactly one condition."""
+    found = codes(write_config({}))
+    assert "E-SWEEP-EXPANDS-EMPTY" not in found
+
+
+def test_a_normal_baseline_plus_grid_config_still_validates_clean(write_config):
+    found = codes(write_config({
+        "sweep": {
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman", "kendall"]},
+        }
+    }))
+    assert not [c for c in found if c.startswith("E-SWEEP")]
+
+
 def test_a_swept_path_must_be_a_real_parameter(write_config):
     assert "E-SWEEP-PATH-UNKNOWN" in codes(
         write_config({"sweep": {"grid": {"analysis.methd": ["spearman"]}}})
