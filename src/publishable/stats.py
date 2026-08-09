@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING, Any
 
 from scipy import stats as _scipy_stats
 
+from publishable.replication import LABEL_JOIN
+
 if TYPE_CHECKING:
     from publishable.runner import ExecutionResult
 
@@ -51,8 +53,34 @@ def _is_numeric(value: object) -> bool:
     return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
+def handed_to(
+    unit_key: str, labels: list[str], fold_members: dict[str, frozenset[str]] | None
+) -> list[str]:
+    """The repeat labels this unit was actually given.
+
+    Without a fold, every repeat — the S2 rule, and the reason `fold_members=None`
+    leaves every existing path byte-for-byte as it was. With a fold, only the
+    labels whose fold component holds this unit: `reference.md` § The per-unit
+    tables is explicit that intersecting over *every* repeat "would report
+    `completed: 0` for any design containing a fold, because no unit is ever in
+    more than one of them."
+
+    A composed label is split on `LABEL_JOIN`, so `fold02_seed17` is handed to a
+    unit of `fold02` regardless of which level the fold was declared at. Fold
+    member labels are single tokens (`fold01`, from `replication._seed_members`),
+    which is what makes that split safe.
+    """
+    if fold_members is None:
+        return list(labels)
+    mine = {f for f, keys in fold_members.items() if unit_key in keys}
+    return [lb for lb in labels if set(lb.split(LABEL_JOIN)) & mine]
+
+
 def collapse_repeats(
-    results: "list[ExecutionResult]", step_name: str, condition_index: int
+    results: "list[ExecutionResult]",
+    step_name: str,
+    condition_index: int,
+    fold_members: dict[str, frozenset[str]] | None = None,
 ) -> dict[str, dict[str, float]]:
     """Average each unit's numeric columns across the repeats that recorded it,
     within one condition.
@@ -73,15 +101,30 @@ def collapse_repeats(
     `condition`- or `run`-scoped step's rows, another step's rows, and another
     condition's rows never enter this table.
 
-    Only a unit recorded in *every* repeat-scoped execution of this step (within
-    this condition) enters the table at all — the same intersection
-    `runner.attrition` takes for `completed`, and for the same reason: a unit
-    present in three of five seeds would otherwise enter the average on a
-    different number of observations than its neighbours, which is a ragged
-    table dressed as a rectangular one. A unit recorded in some repeats and not
-    others is dropped here exactly as it is excluded from `completed` there, so
-    the `n` reported beside this table's interval is never a lie about how many
-    observations went into it.
+    Only a unit recorded in every repeat it was *handed* (within this condition)
+    enters the table at all — the same intersection `runner.attrition` takes for
+    `completed`, and for the same reason: a unit present in three of five seeds
+    would otherwise enter the average on a different number of observations than
+    its neighbours, which is a ragged table dressed as a rectangular one. A unit
+    recorded in some of the repeats it was handed and not others is dropped here
+    exactly as it is excluded from `completed` there, so the `n` reported beside
+    this table's interval is never a lie about how many observations went into it.
+
+    "Handed" is what `fold_members` narrows. Without a fold it is every repeat,
+    which is the rule above unchanged. With one, `reference.md` § The per-unit
+    tables is explicit that intersecting over *every* repeat "would report
+    `completed: 0` for any design containing a fold, because no unit is ever in
+    more than one of them" — so the intersection is taken over that unit's own
+    fold's repeats instead. The average follows from the same set, which is what
+    makes the collapse **inner-to-outer** (`reference.md` § How a metric becomes
+    a number): under `fold` alone a unit has one handed label and its value
+    passes through unchanged, so folds *concatenate* into the union of the
+    partitions; under `fold × seed` the handed labels are that fold's seeds, so
+    the seeds average within the fold before the folds are combined. Flattening
+    all 30 executions of a 10 × 3 design would average numbers that are not
+    exchangeable, and averaging across folds would divide each unit's single
+    observation by one — both produce plausible values and neither raises, which
+    is why this is stated at length.
 
     A non-numeric value (a string, or a bool — `bool` is an `int` subclass but
     never a quantity to average) is dropped from the column for that unit rather
@@ -101,20 +144,39 @@ def collapse_repeats(
     ]
     if not recording:
         return {}
-    completed = set(recording[0].recorded)
-    for r in recording[1:]:
-        completed &= r.recorded
+    # Accumulated rather than built by comprehension: two executions sharing one
+    # repeat label (a resumed leaf re-reported, say) must merge, not overwrite.
+    # A dict comprehension would drop the earlier rows while `labels` still held
+    # the label once per execution, counting the survivor twice in the mean —
+    # a wrong average that looks entirely plausible.
+    rows_by_label: dict[str, list[dict[str, Any]]] = {}
+    recorded_by_label: dict[str, set[str]] = {}
+    for r in recording:
+        label = r.execution.repeat_label or ""
+        rows_by_label.setdefault(label, []).extend(r.rows)
+        recorded_by_label.setdefault(label, set()).update(r.recorded)
+    labels = list(recorded_by_label)  # unique, in execution order
+
+    candidates: set[str] = set()
+    for keys in recorded_by_label.values():
+        candidates |= keys
 
     gathered: dict[str, dict[str, list[float]]] = {}
-    for r in recording:
-        for row in r.rows:
-            key = row["unit"]
-            if key not in completed:
-                continue
-            for column, value in row.items():
-                if column == "unit" or not _is_numeric(value):
+    for key in sorted(candidates):
+        mine = handed_to(key, labels, fold_members)
+        # The intersection, scoped to what this unit was handed. `not mine` drops
+        # a unit no repeat was given — under a fold, one whose key is in no
+        # partition — rather than letting `all()` over an empty set admit it.
+        if not mine or any(key not in recorded_by_label[lb] for lb in mine):
+            continue
+        for lb in mine:
+            for row in rows_by_label[lb]:
+                if row["unit"] != key:
                     continue
-                gathered.setdefault(key, {}).setdefault(column, []).append(float(value))
+                for column, value in row.items():
+                    if column == "unit" or not _is_numeric(value):
+                        continue
+                    gathered.setdefault(key, {}).setdefault(column, []).append(float(value))
     return {
         key: {col: sum(vals) / len(vals) for col, vals in cols.items()}
         for key, cols in gathered.items()

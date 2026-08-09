@@ -2,7 +2,7 @@ import math
 
 import pytest
 
-from publishable.stats import collapse_repeats, mean_of, summarize_step, t_over_units
+from publishable.stats import collapse_repeats, handed_to, mean_of, summarize_step, t_over_units
 
 
 def _result(repeat_label, rows, *, step_name="analyze", scope="repeat"):
@@ -32,6 +32,143 @@ def _result(repeat_label, rows, *, step_name="analyze", scope="repeat"):
         skipped=frozenset(),
         rows=tuple(rows),
     )
+
+
+def _repeat_result(step, repeat_label, condition_index, rows_by_unit):
+    """A repeat-scoped `ExecutionResult` from `{unit_key: {column: value}}`.
+
+    The keyed form the fold tests read best in; `_result` above is the positional
+    row-list form the earlier tests use. Both build the same object.
+    """
+    from publishable.runner import ExecutionResult
+    from publishable.scope import Execution
+
+    class _Step:
+        pass
+
+    rows = tuple({"unit": key, **cols} for key, cols in rows_by_unit.items())
+    ex = Execution(
+        step_cls=_Step,  # type: ignore[arg-type]
+        step_name=step,
+        scope="repeat",
+        condition_index=condition_index,
+        condition_label=None,
+        repeat_label=repeat_label,
+    )
+    return ExecutionResult(
+        execution=ex,
+        status="completed",
+        started_at="2026-08-09T00:00:00Z",
+        wall_seconds=0.0,
+        returned={},
+        error=None,
+        recorded=frozenset(r["unit"] for r in rows),
+        skipped=frozenset(),
+        rows=rows,
+    )
+
+
+def test_without_folds_a_unit_is_handed_to_every_repeat():
+    assert handed_to("u1", ["seed01", "seed02"], None) == ["seed01", "seed02"]
+
+
+def test_with_folds_a_unit_is_handed_only_to_its_own_fold():
+    members = {"fold01": frozenset({"u1"}), "fold02": frozenset({"u2"})}
+    assert handed_to("u1", ["fold01", "fold02"], members) == ["fold01"]
+
+
+def test_under_fold_times_seed_a_unit_is_handed_to_every_seed_of_its_fold():
+    members = {"fold01": frozenset({"u1"}), "fold02": frozenset({"u2"})}
+    labels = ["fold01_seed01", "fold01_seed02", "fold02_seed01", "fold02_seed02"]
+    assert handed_to("u1", labels, members) == ["fold01_seed01", "fold01_seed02"]
+
+
+def test_seeds_average_and_the_table_has_one_row_per_unit():
+    results = [
+        _repeat_result("analyze", "seed01", 0, {"u1": {"score": 1.0}, "u2": {"score": 3.0}}),
+        _repeat_result("analyze", "seed02", 0, {"u1": {"score": 3.0}, "u2": {"score": 5.0}}),
+    ]
+    table = collapse_repeats(results, "analyze", 0, None)
+    assert set(table) == {"u1", "u2"}
+    assert table["u1"]["score"] == 2.0
+    assert table["u2"]["score"] == 4.0
+
+
+def test_folds_concatenate_rather_than_average():
+    """Each unit is tested once per fold sweep, so the collapsed table is the
+    union of the partitions — not an average that would divide by one."""
+    members = {"fold01": frozenset({"u1"}), "fold02": frozenset({"u2"})}
+    results = [
+        _repeat_result("analyze", "fold01", 0, {"u1": {"score": 1.0}}),
+        _repeat_result("analyze", "fold02", 0, {"u2": {"score": 5.0}}),
+    ]
+    table = collapse_repeats(results, "analyze", 0, members)
+    assert set(table) == {"u1", "u2"}  # both units present — the S2 rule dropped both
+    assert table["u1"]["score"] == 1.0
+    assert table["u2"]["score"] == 5.0
+
+
+def test_fold_times_seed_averages_seeds_within_a_fold_then_concatenates():
+    members = {"fold01": frozenset({"u1"}), "fold02": frozenset({"u2"})}
+    results = [
+        _repeat_result("analyze", "fold01_seed01", 0, {"u1": {"score": 1.0}}),
+        _repeat_result("analyze", "fold01_seed02", 0, {"u1": {"score": 3.0}}),
+        _repeat_result("analyze", "fold02_seed01", 0, {"u2": {"score": 4.0}}),
+        _repeat_result("analyze", "fold02_seed02", 0, {"u2": {"score": 6.0}}),
+    ]
+    table = collapse_repeats(results, "analyze", 0, members)
+    assert set(table) == {"u1", "u2"}
+    assert table["u1"]["score"] == 2.0  # averaged WITHIN fold01, not concatenated
+    assert table["u2"]["score"] == 5.0
+
+
+def test_a_unit_missing_from_one_seed_of_its_fold_is_dropped():
+    """The intersection still applies — within the repeats the unit was handed."""
+    members = {"fold01": frozenset({"u1", "u2"})}
+    results = [
+        _repeat_result("analyze", "fold01_seed01", 0, {"u1": {"score": 1.0}, "u2": {"score": 2.0}}),
+        _repeat_result("analyze", "fold01_seed02", 0, {"u1": {"score": 3.0}}),
+    ]
+    table = collapse_repeats(results, "analyze", 0, members)
+    assert set(table) == {"u1"}
+
+
+def test_two_units_per_fold_under_fold_times_seed_keeps_every_unit():
+    """The widest shape check: 2 folds × 2 seeds, two units per fold. Every wrong
+    collapse lands on a different number, so the table distinguishes all of them.
+    A too-wide intersection gives `{}` (4 rows expected); the per-unit mean is
+    2.0, distinct from 1.0 (first seed only), 3.0 (last write wins), 4.0 (summed)
+    and 0.5 (averaged across folds, dividing by a fold count)."""
+    members = {"fold01": frozenset({"u1", "u2"}), "fold02": frozenset({"u3", "u4"})}
+    results = [
+        _repeat_result("analyze", "fold01_seed01", 0, {"u1": {"s": 1.0}, "u2": {"s": 1.0}}),
+        _repeat_result("analyze", "fold01_seed02", 0, {"u1": {"s": 3.0}, "u2": {"s": 3.0}}),
+        _repeat_result("analyze", "fold02_seed01", 0, {"u3": {"s": 1.0}, "u4": {"s": 1.0}}),
+        _repeat_result("analyze", "fold02_seed02", 0, {"u3": {"s": 3.0}, "u4": {"s": 3.0}}),
+    ]
+    table = collapse_repeats(results, "analyze", 0, members)
+    assert len(table) == 4
+    assert set(table) == {"u1", "u2", "u3", "u4"}
+    assert all(row["s"] == 2.0 for row in table.values())
+
+
+def test_a_unit_in_no_fold_partition_is_dropped_rather_than_admitted():
+    """`handed_to` returns nothing for it, and an empty handed set must not pass
+    the `all()`-over-nothing intersection as vacuously complete."""
+    members = {"fold01": frozenset({"u1"})}
+    results = [_repeat_result("analyze", "fold01", 0, {"u1": {"s": 1.0}, "stray": {"s": 9.0}})]
+    table = collapse_repeats(results, "analyze", 0, members)
+    assert set(table) == {"u1"}
+
+
+def test_fold_members_defaults_to_none_and_leaves_the_s2_path_unchanged():
+    """No caller passes `fold_members` yet; the default must be today's behaviour."""
+    results = [
+        _repeat_result("analyze", "seed01", 0, {"u1": {"score": 1.0}, "u2": {"score": 1.0}}),
+        _repeat_result("analyze", "seed02", 0, {"u1": {"score": 3.0}}),
+    ]
+    assert collapse_repeats(results, "analyze", 0) == collapse_repeats(results, "analyze", 0, None)
+    assert collapse_repeats(results, "analyze", 0) == {"u1": {"score": 2.0}}
 
 
 def test_collapse_averages_a_unit_across_repeats():
