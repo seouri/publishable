@@ -266,32 +266,67 @@ def _with_doc_change(write_config, change) -> Path:
     return path
 
 
-def test_a_declared_sweep_axis_is_refused_not_silently_ignored(write_config):
-    """S1 hardcodes one condition; a config declaring `sweep.grid` must not
-    validate clean and then run one condition while `run.yaml` records the sweep
-    verbatim, describing an experiment that never ran."""
-    sweep = {"grid": {"analysis.method": ["pearson", "spearman"]}}
-    path = _with_doc_change(write_config, lambda doc: doc.update(sweep=sweep))
-    assert "E-SWEEP-UNSUPPORTED" in codes(path)
-
-
-def test_an_empty_sweep_block_is_not_a_sweep(write_config):
-    """An empty or all-null `sweep` (the shape a generated config ships with)
-    declares no axis and must not trip the refusal meant for an actual sweep."""
-    path = _with_doc_change(
-        write_config,
-        lambda doc: doc.update(
-            sweep={
-                "grid": None,
-                "groups": [],
-                "ablate": None,
-                "baseline": None,
-                "paired": [],
-                "sample": None,
+def test_baseline_and_grid_are_now_accepted(write_config):
+    """S3a implements `baseline` and `grid` expansion; a config declaring only
+    those must validate clean rather than tripping any sweep refusal."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"analysis.method": "pearson"},
+                    "grid": {"analysis.method": ["spearman"]},
+                }
             }
-        ),
+        )
     )
-    assert "E-SWEEP-UNSUPPORTED" not in codes(path)
+    assert not [c for c in found if c.startswith("E-SWEEP")]
+
+
+@pytest.mark.parametrize(
+    "mode,value,code",
+    [
+        ("paired", [{"analysis.method": "pearson"}], "E-SWEEP-PAIRED-UNSUPPORTED"),
+        ("ablate", {"from": "baseline", "remove": ["a.b"]}, "E-SWEEP-ABLATE-UNSUPPORTED"),
+        ("sample", {"n": 40, "ranges": {}}, "E-SWEEP-SAMPLE-UNSUPPORTED"),
+        ("groups", [{"by": "arm", "levels": ["a", "b"]}], "E-SWEEP-GROUPS-UNSUPPORTED"),
+    ],
+)
+def test_each_unimplemented_mode_is_refused_on_its_own(write_config, mode, value, code):
+    """`paired`, `ablate`, `sample`, and `groups` each get their own refusal now that
+    the old blanket sweep refusal is retired — otherwise each would fall through
+    into silence the moment `baseline`/`grid` stopped covering the whole block."""
+    assert code in codes(write_config({"sweep": {mode: value}}))
+
+
+def test_an_empty_or_null_mode_is_not_a_declaration(write_config):
+    """`init` may write these absent or null; only a truthy value is refused."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {
+                    "grid": {"analysis.method": ["spearman"]},
+                    "paired": [],
+                    "ablate": None,
+                    "sample": None,
+                    "groups": [],
+                }
+            }
+        )
+    )
+    assert not [c for c in found if c.endswith("-UNSUPPORTED")]
+
+
+def test_every_sweep_refusal_message_defers_rather_than_scolds(write_config):
+    for mode, value, code in [
+        ("paired", [{"a.b": 1}], "E-SWEEP-PAIRED-UNSUPPORTED"),
+        ("ablate", {"from": "baseline"}, "E-SWEEP-ABLATE-UNSUPPORTED"),
+        ("sample", {"n": 1}, "E-SWEEP-SAMPLE-UNSUPPORTED"),
+        ("groups", [{"by": "arm"}], "E-SWEEP-GROUPS-UNSUPPORTED"),
+    ]:
+        c = Collector()
+        validate_config(write_config({"sweep": {mode: value}}), c)
+        message = next(f.message for f in c.findings if f.code == code)
+        assert "later slice" in message, f"{code} must defer, not scold"
 
 
 def test_a_non_default_replication_order_is_refused_not_silently_ignored(write_config):
@@ -306,7 +341,6 @@ def test_a_config_without_unimplemented_blocks_still_validates_clean(write_confi
     `replication.order: as_declared` — none of the new refusals should fire
     against it."""
     found = codes(write_config())
-    assert "E-SWEEP-UNSUPPORTED" not in found
     assert "E-REPL-ORDER-UNSUPPORTED" not in found
     assert not [c for c in found if c.endswith("-UNSUPPORTED")]
 

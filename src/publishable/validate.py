@@ -15,10 +15,6 @@ from publishable.provenance import find_repo_root, resolves_inside_repo
 from publishable.templates.registry import get_template, template_names
 from publishable.units import resolve_units
 
-# `sweep`'s six axis keys, per reference.md § The one config file. A key present
-# but empty (`groups: []`, `ablate: null`) declares no axis and is not a sweep.
-SWEEP_AXIS_KEYS = ("baseline", "grid", "paired", "ablate", "sample", "groups")
-
 REQUIRED_METADATA = ("description", "authors")
 
 # The shape of every top-level block, checked once before any `_check_*` reads one —
@@ -383,27 +379,47 @@ def _check_replication(doc: dict[str, Any], template: Any, c: Collector) -> None
 def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     """Declared-but-unimplemented blocks, refused rather than silently ignored.
 
-    This build hardcodes one condition and executes repeats `as_declared`
-    regardless of what is written here. It now resolves a unit roster, but
-    several `data.units` sub-fields — allocation other than `within`,
-    `assign`, `cluster_by`, `weight_by`, `measurements`, `holdout`, and a
-    `resolver` source — are read by nothing yet. Each of these would
-    otherwise validate clean and then run something other than what the
+    This build expands `sweep.baseline` and `sweep.grid` only, and executes
+    repeats `as_declared` regardless of what is written here. `sweep.paired`,
+    `.ablate`, `.sample`, and `.groups` are read by nothing yet. It resolves a
+    unit roster, but several `data.units` sub-fields — allocation other than
+    `within`, `assign`, `cluster_by`, `weight_by`, `measurements`, `holdout`,
+    and a `resolver` source — are read by nothing yet either. Each of these
+    would otherwise validate clean and then run something other than what the
     config describes — the exact failure `E-REPL-KIND-UNSUPPORTED` already
     refuses for `batch`/`fold`/nested repeat levels. Each message says plainly
     that the block is honored in a later slice, so a user does not read this as
     their config being malformed.
     """
     sweep = doc.get("sweep") or {}
-    declared_axes = [key for key in SWEEP_AXIS_KEYS if sweep.get(key)]
-    if declared_axes:
-        c.error(
-            "E-SWEEP-UNSUPPORTED",
-            "sweep",
-            f"declares {', '.join(declared_axes)}, which is specified but not implemented "
-            "in this build — every run executes exactly one condition regardless of what "
-            "is declared here; sweep execution will be honored in a later slice",
-        )
+    for mode, code, why in (
+        ("paired", "E-SWEEP-PAIRED-UNSUPPORTED", "couples parameters into one axis"),
+        (
+            "ablate",
+            "E-SWEEP-ABLATE-UNSUPPORTED",
+            "emits 1 + n one-change conditions and reads the baseline rather than "
+            "re-emitting it",
+        ),
+        (
+            "sample",
+            "E-SWEEP-SAMPLE-UNSUPPORTED",
+            "draws continuous ranges and labels its conditions `NN_sample`",
+        ),
+        (
+            "groups",
+            "E-SWEEP-GROUPS-UNSUPPORTED",
+            "is an axis over units rather than parameters, so it needs "
+            "`data.units.allocation` and `data.units.assign`",
+        ),
+    ):
+        if sweep.get(mode):
+            c.error(
+                code,
+                f"sweep.{mode}",
+                f"{why}, and is specified but not implemented in this build — this build "
+                "expands `baseline` and `grid` only; the other modes will be honored in a "
+                "later slice",
+            )
 
     units = _units_declaration(doc.get("data") or {}, c) or {}
     source = units.get("from")
