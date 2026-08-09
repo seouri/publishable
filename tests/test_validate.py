@@ -162,6 +162,70 @@ def test_two_bad_repeat_levels_are_both_reported():
     assert not any(f.code == "W-REPL-FLOOR" for f in c.findings)
 
 
+def test_a_fold_level_is_refused_by_name(write_config):
+    assert "E-REPL-FOLD-UNSUPPORTED" in codes(
+        write_config({"replication": {"repeats": [{"kind": "fold", "k": 5}]}})
+    )
+
+
+def test_two_levels_of_one_kind_are_refused(write_config):
+    assert "E-REPL-LEVEL-DUPLICATE" in codes(
+        write_config(
+            {
+                "replication": {
+                    "repeats": [{"kind": "seed", "n": 2}, {"kind": "seed", "n": 3}]
+                }
+            }
+        )
+    )
+
+
+def test_three_levels_are_refused(write_config):
+    assert "E-REPL-LEVEL-DEPTH" in codes(
+        write_config(
+            {
+                "replication": {
+                    "repeats": [
+                        {"kind": "batch", "n": 2},
+                        {"kind": "seed", "n": 2},
+                        {"kind": "seed", "n": 2},
+                    ]
+                }
+            }
+        )
+    )
+
+
+def test_two_levels_of_different_kinds_validate_clean(write_config):
+    found = codes(
+        write_config(
+            {
+                "replication": {
+                    "repeats": [{"kind": "batch", "n": 2}, {"kind": "seed", "n": 2}]
+                }
+            }
+        )
+    )
+    assert not [c for c in found if c.startswith("E-REPL")]
+
+
+def test_randomized_order_is_accepted(write_config):
+    found = codes(
+        write_config(
+            {"replication": {"repeats": [{"kind": "seed", "n": 2}], "order": "randomized"}}
+        )
+    )
+    assert "E-REPL-ORDER" not in found
+
+
+def test_an_unknown_order_is_refused(write_config):
+    assert "E-REPL-ORDER" in codes(
+        write_config(
+            {"replication": {"repeats": [{"kind": "seed", "n": 2}], "order": "sideways"}}
+        )
+    )
+
+
 def test_an_unrecognised_sweep_key_is_refused(write_config):
     """A typo'd mode expands to zero conditions and would otherwise run nothing.
     Same argument as the unknown-parameter check: `init` writes every valid key,
@@ -479,11 +543,10 @@ def test_every_sweep_refusal_message_defers_rather_than_scolds(write_config):
         assert "later slice" in message, f"{code} must defer, not scold"
 
 
-def test_a_non_default_replication_order_is_refused_not_silently_ignored(write_config):
-    """`replication.order: randomized` currently validates clean and then executes
-    `as_declared` anyway — the record would say randomized while the run wasn't."""
+def test_randomized_replication_order_validates_clean(write_config):
+    """`as_declared` and `randomized` both ship in this build — neither is refused."""
     found = codes(write_config({"replication.order": "randomized"}))
-    assert "E-REPL-ORDER-UNSUPPORTED" in found
+    assert "E-REPL-ORDER" not in found
 
 
 def test_a_config_without_unimplemented_blocks_still_validates_clean(write_config):
@@ -491,7 +554,6 @@ def test_a_config_without_unimplemented_blocks_still_validates_clean(write_confi
     `replication.order: as_declared` — none of the new refusals should fire
     against it."""
     found = codes(write_config())
-    assert "E-REPL-ORDER-UNSUPPORTED" not in found
     assert not [c for c in found if c.endswith("-UNSUPPORTED")]
 
 
@@ -770,11 +832,12 @@ def test_a_repeats_block_that_is_not_a_list_is_reported_not_raised(write_config,
 
 def test_a_correctly_shaped_repeats_list_still_validates_clean(write_config):
     """The new container check must not become a false refusal against a `repeats`
-    that is legitimately a list of mappings."""
+    that is legitimately a list of mappings. `fold` is a genuine refusal now that
+    `_check_replication` calls `resolve_repeats`, so this uses two supported kinds."""
     path = _with_doc_change(
         write_config,
         lambda doc: doc["replication"].update(
-            repeats=[{"kind": "seed", "n": 5}, {"kind": "fold", "n": 2}]
+            repeats=[{"kind": "batch", "n": 2}, {"kind": "seed", "n": 5}]
         ),
     )
     assert codes(path) == set()

@@ -138,7 +138,7 @@ def materialize_config(
         "replication:",
         "  repeats:",
         f"    - {{kind: seed, n: {INIT_REPEATS}}}          # seed  (fold: later slice)",
-        "  order: as_declared               # as_declared  (randomized: later slice)",
+        "  order: as_declared               # as_declared | randomized",
         '  rationale: ""',
         "",
         "statistics:",

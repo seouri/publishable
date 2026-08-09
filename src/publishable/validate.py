@@ -12,6 +12,7 @@ from publishable.manifest import POLICIES
 from publishable.materialize import TEMPLATE_VERSION
 from publishable.param import MISSING
 from publishable.provenance import find_repo_root, resolves_inside_repo
+from publishable.replication import resolve_repeats
 from publishable.sweep import check_swept_value, expand
 from publishable.templates.registry import get_template, template_names
 from publishable.units import resolve_units
@@ -368,6 +369,21 @@ def _check_units(doc: dict[str, Any], c: Collector) -> None:
         c.error(exc.code, "data.units", str(exc))
 
 
+# Refusals that are properties of the DECLARATION, so `validate` reports them as
+# findings. Anything else `resolve_repeats` raises is a genuine fault and still
+# propagates — swallowing all of them is how a real error becomes a silent pass.
+REPL_DECLARATION_CODES = frozenset(
+    {
+        "E-REPL-FOLD-UNSUPPORTED",
+        "E-REPL-LEVEL-DUPLICATE",
+        "E-REPL-LEVEL-DEPTH",
+        "E-REPL-KIND",
+        "E-REPL-N",
+        "E-REPL-SEED-COLLISION",
+    }
+)
+
+
 def _check_replication(doc: dict[str, Any], template: Any, c: Collector) -> None:
     levels = ((doc.get("replication") or {}).get("repeats")) or []
     total = 1
@@ -395,6 +411,27 @@ def _check_replication(doc: dict[str, Any], template: Any, c: Collector) -> None
             "replication.repeats",
             f"total of {total} is below this convention class's default of "
             f"{template.default_repeats}",
+        )
+
+    # `resolve_repeats` raises for refusals that are properties of the declaration
+    # itself — fold, duplicate kinds, and depth past two levels among them. At run
+    # time raising is right; here `validate` collects, so translate rather than let
+    # it escape. The digest is a placeholder: seeds are irrelevant to a declaration
+    # check, only the shape of `replication.repeats` is.
+    try:
+        resolve_repeats(doc, "validate")
+    except ContractError as exc:
+        if exc.code in REPL_DECLARATION_CODES:
+            c.error(exc.code, "replication.repeats", str(exc))
+        else:
+            raise
+
+    order = (doc.get("replication") or {}).get("order")
+    if order is not None and order not in ("as_declared", "randomized"):
+        c.error(
+            "E-REPL-ORDER",
+            "replication.order",
+            f"is `{order}`; the only orders are `as_declared` and `randomized`",
         )
 
 
@@ -505,16 +542,6 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
                 "here, and a declaration that changes no behavior is the failure this "
                 "refusal exists to prevent; it will be honored in a later slice",
             )
-
-    order = (doc.get("replication") or {}).get("order")
-    if order is not None and order != "as_declared":
-        c.error(
-            "E-REPL-ORDER-UNSUPPORTED",
-            "replication.order",
-            f"is `{order}`, which is specified but not implemented in this build — "
-            "execution always proceeds as_declared regardless of what is declared here; "
-            "`order` will be honored in a later slice",
-        )
 
 
 def _repeat_total(doc: dict[str, Any]) -> int:
