@@ -279,6 +279,8 @@ def execute_plan(
             conditions=conditions_list,
             repeats=repeats_list,
             step_scopes=step_scopes,
+            condition_index=execution.condition_index,
+            condition_label=execution.condition_label,
         )
         io.step_dir.mkdir(parents=True, exist_ok=True)
         recorded: frozenset[str] = frozenset()

@@ -178,6 +178,8 @@ class StepIO:
         conditions: list[tuple[int, str | None]] | None = None,
         repeats: list[str] | None = None,
         step_scopes: dict[str, str] | None = None,
+        condition_index: int | None = None,
+        condition_label: str | None = None,
     ) -> None:
         self.step_dir = step_dir
         self.input_dir = input_dir
@@ -191,6 +193,8 @@ class StepIO:
         self._conditions = conditions
         self._repeats = repeats
         self._step_scopes = step_scopes
+        self._condition_index = condition_index
+        self._condition_label = condition_label
 
     @property
     def units(self) -> "UnitList":
@@ -413,7 +417,20 @@ class StepIO:
                 "those executions have not happened",
                 code="E-STEP-READ-DIRECTION",
             )
-        return self._read(self.run_dir / "shared" / step / name)
+        if target == "run" or target is None:
+            base = self.run_dir / "shared"
+        elif target == "summary":
+            base = self.run_dir / "summary"
+        else:
+            # A condition-scoped target lives under the caller's own condition:
+            # `read_upstream` reads WIDER steps, and the only condition wider
+            # than this execution's is the one it is running in.
+            base = self.run_dir
+            if self._condition_label is not None and self._condition_index is not None:
+                base = base / "conditions" / condition_dir_name(
+                    self._condition_index, self._condition_label
+                )
+        return self._read(base / step / name)
 
     @staticmethod
     def _read(path: Path) -> Any:
