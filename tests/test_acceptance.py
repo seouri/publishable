@@ -37,7 +37,7 @@ def build(tmp_path: Path) -> tuple[Path, Path, Path]:
     return root, cfg, results
 
 
-def test_scaffold_then_run_produces_a_real_record(tmp_path: Path):
+def test_scaffold_then_run_produces_a_real_record(tmp_path: Path, capsys):
     root, cfg, results = build(tmp_path)
     assert main(["validate", str(cfg)]) == EXIT_OK
     assert main(["run", str(cfg)]) == EXIT_OK
@@ -64,6 +64,38 @@ def test_scaffold_then_run_produces_a_real_record(tmp_path: Path):
     assert (run_dir / "executions.jsonl").is_file()
     assert (run_dir / "manifest" / "input.json").is_file()
     assert not (run_dir / "lock").exists()
+
+    # `root` scaffolds with no `uv.lock` (publishable isn't published, so `uv lock`
+    # can't resolve inside a generated project yet) — `pyproject.toml` is still always
+    # captured, and the run says out loud that it isn't pinned rather than staying quiet.
+    assert (run_dir / "environment" / "pyproject.toml").read_bytes() == (
+        root / "pyproject.toml"
+    ).read_bytes()
+    assert not (run_dir / "environment" / "uv.lock").exists()
+    assert doc["provenance"]["environment"]["uv_lock"] is None
+    assert doc["provenance"]["environment"]["uv_lock_hash"] is None
+    assert "W-ENV-UNLOCKED" in capsys.readouterr().out
+
+
+def test_a_present_lockfile_is_captured_and_hashed_with_no_warning(tmp_path: Path, capsys):
+    root, cfg, results = build(tmp_path)
+    (root / "uv.lock").write_text("# a stand-in lockfile; uv_support only hashes and copies it\n")
+    subprocess.run(["git", "add", "uv.lock"], cwd=root, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "lock"],
+        cwd=root,
+        check=True,
+    )
+
+    assert main(["run", str(cfg)]) == EXIT_OK
+    run_dir = next(results.glob("run_*"))
+    doc = yaml.safe_load((run_dir / "run.yaml").read_text())
+
+    assert (run_dir / "environment" / "uv.lock").read_bytes() == (root / "uv.lock").read_bytes()
+    assert (run_dir / "environment" / "pyproject.toml").is_file()
+    assert doc["provenance"]["environment"]["uv_lock"] == "environment/uv.lock"
+    assert doc["provenance"]["environment"]["uv_lock_hash"].startswith("sha256:")
+    assert "W-ENV-UNLOCKED" not in capsys.readouterr().out
 
 
 def test_five_seed_repeats_land_in_a_collapsed_layout(tmp_path: Path):

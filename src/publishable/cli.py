@@ -113,12 +113,31 @@ def command_run(config_path: Path) -> int:
     ph = parameters_hash(doc)
     manifest = build_manifest(input_dir, doc["data"]["input_manifest_policy"])
     lock_path, lock_hash = uv_lock_info(repo_root)
+    if lock_path is None:
+        # A warning, not an error: it must not change the exit code. There are
+        # legitimate reasons to proceed unpinned — including the bootstrapping case
+        # this project is in right now, where a scaffolded project cannot resolve a
+        # lockfile until `publishable` is published to an index (see
+        # docs/superpowers/spec-defects.md).
+        warn_c = Collector()
+        warn_c.warn(
+            "W-ENV-UNLOCKED",
+            "environment",
+            f"no uv.lock found at {repo_root}; the environment is not pinned, and "
+            "`reproduce` will not be able to restore it",
+        )
+        print(warn_c.render())
 
     run_dir = allocate_run_dir(output_dir, ch, datetime.now(UTC))  # phase 6: first creation
     with RunLock(run_dir):
         (run_dir / "manifest").mkdir()
         (run_dir / "manifest" / "input.json").write_text(json.dumps(manifest, indent=2))
         (run_dir / "environment").mkdir()
+        # `pyproject.toml` always exists (uv is mandatory) so it is always captured;
+        # `uv.lock` is copied only when one was found.
+        (run_dir / "environment" / "pyproject.toml").write_bytes(
+            (repo_root / "pyproject.toml").read_bytes()
+        )
         if lock_path is not None:
             (run_dir / "environment" / "uv.lock").write_bytes(lock_path.read_bytes())
 
