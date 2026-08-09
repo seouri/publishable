@@ -783,3 +783,46 @@ def test_per_condition_cfgs_are_not_the_same_object(tmp_path: Path):
     assert cfg0.parameters.analysis.method == "pearson"
     assert cfg1.parameters.analysis.method == "spearman"
     assert BASE_PARAMS == before
+
+
+def test_resolve_wide_cfg_plants_the_marker_even_when_the_parent_is_absent(tmp_path: Path):
+    """`resolve_wide_cfg` must fail in the safe direction: if a swept path's
+    parent doesn't already exist in `base`, the marker still has to be
+    planted, not skipped. Skipping it would leave the value readable at
+    `run`/`summary` scope — exactly the wrong value for every condition but
+    one, handed over silently instead of refused."""
+    cfg = resolve_wide_cfg({"parameters": {}}, {"analysis.method"})
+    with pytest.raises(ContractError) as excinfo:
+        _ = cfg.parameters.analysis.method
+    assert excinfo.value.code == "E-STEP-SWEPT-PARAM"
+
+
+def test_execute_plan_raises_explicitly_when_a_cfg_is_missing(tmp_path: Path):
+    """A condition index absent from `cfgs` is not a step failing — it is core
+    having built an inconsistent plan — so it must not be swallowed as a
+    per-execution failure, and the error must name what's missing rather than
+    surfacing as a bare `KeyError`."""
+
+    class Analyze(BaseStep):
+        def run(self, cfg, io):
+            return {}
+
+    class P(BaseExperiment):
+        pass
+
+    P.steps = [Analyze]
+    plan = build_plan(P(), conditions=[(0, None)], repeat_labels=[""])
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "input").mkdir(parents=True, exist_ok=True)
+    with pytest.raises(ContractError) as excinfo:
+        execute_plan(
+            plan=plan,
+            run_dir=run_dir,
+            input_dir=tmp_path / "input",
+            cfgs={},  # missing key 0
+            repeats=[Repeat("seed", "", 17)],
+            digest="sha256:abc",
+        )
+    assert excinfo.value.code == "E-RUN-CFG-MISSING"
+    assert "0" in str(excinfo.value)

@@ -179,17 +179,24 @@ def resolve_wide_cfg(base: dict[str, Any], swept_paths: set[str]) -> Config:
     raises `E-STEP-SWEPT-PARAM` the moment such a step reads it, rather than
     silently handing back a value that could only be wrong for every condition
     but one.
+
+    Walks with `setdefault`, exactly as `resolve_condition_cfg` does, rather
+    than `get` — a swept path whose parent is absent from `base` must still end
+    up marked. Skipping it there (as an earlier version of this function did)
+    fails in the unsafe direction: the value stays readable, and a `run`- or
+    `summary`-scoped step would silently get a value that could only be wrong
+    for every condition but one. Planting the marker instead means the worst
+    case is a step getting `E-STEP-SWEPT-PARAM` for a path `validate` should
+    have already rejected as unresolvable — a refusal either way, and the more
+    accurate one, since the path *is* swept.
     """
     doc = copy.deepcopy(base)
     for path in swept_paths:
-        node = doc.get("parameters", {})
+        node = doc.setdefault("parameters", {})
         *heads, leaf = path.split(".")
         for head in heads:
-            node = node.get(head)
-            if node is None:
-                break
-        else:
-            node[leaf] = SweptAway(f"parameters.{path}")
+            node = node.setdefault(head, {})
+        node[leaf] = SweptAway(f"parameters.{path}")
     return Config(doc)
 
 
@@ -252,7 +259,21 @@ def execute_plan(
         recorded: frozenset[str] = frozenset()
         skipped: frozenset[str] = frozenset()
         rows: tuple[dict[str, Any], ...] = ()
-        cfg = cfgs[execution.condition_index if execution.condition_index is not None else -1]
+        cfg_key = execution.condition_index if execution.condition_index is not None else -1
+        if cfg_key not in cfgs:
+            # Not a step failure — the plan and the resolved configs disagree,
+            # which means core built an inconsistent plan. Continuing would
+            # write a run record that looks partially fine while resting on a
+            # bug, so this is deliberately not caught by the per-execution
+            # `try` below: only a step's own failure is allowed to leave the
+            # rest of the plan running.
+            raise ContractError(
+                f"no cfg was resolved for condition index {cfg_key!r}, needed by "
+                f"{execution.step_name!r} at {execution.scope!r} scope; the plan and "
+                "the resolved `cfgs` disagree",
+                code="E-RUN-CFG-MISSING",
+            )
+        cfg = cfgs[cfg_key]
         try:
             returned = step.run(cfg, io)
             if returned is None:
