@@ -304,3 +304,23 @@ def test_recorded_keys_skipped_and_rows_are_not_live_handles(tmp_path: Path):
     rows = io.rows()
     rows.append({"unit": "ghost", "v": 99})
     assert io.rows() == [{"unit": "p0", "v": 1}]
+
+
+def test_rows_returns_deep_enough_copies_that_mutating_a_row_does_not_corrupt_state(
+    tmp_path: Path,
+):
+    from publishable.units import Unit, UnitList
+
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    io = StepIO(
+        step_dir=sd,
+        input_dir=tmp_path / "in",
+        run_dir=tmp_path / "run",
+        units=UnitList([Unit(key="p0")]),
+    )
+    io.record("p0", {"v": 1})
+    rows = io.rows()
+    rows[0]["v"] = 999
+    assert io.rows() == [{"unit": "p0", "v": 1}]

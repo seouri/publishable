@@ -180,7 +180,7 @@ class StepIO:
         self._skipped[unit_key] = reason
 
     def rows(self) -> list[dict[str, Any]]:
-        return list(self._rows.values())
+        return [dict(row) for row in self._rows.values()]
 
     def _resolve(self, name: str) -> Path:
         candidate = (self.step_dir / name).resolve()
