@@ -645,6 +645,7 @@ Two levels, and only one leaf, because only one of these is ever a *state* rathe
 | [`io.write`](#steps-and-artifacts) or `io.path` onto a target that exists | `ArtifactExistsError` · `E-ARTIFACT-EXISTS` |
 | A `name` that escapes the step's directory, an `io.append` onto anything but `.jsonl`, or an extension [no writer claims](#steps-and-artifacts) handed an object that isn't `bytes` or `str` | `ArtifactError` · `E-ARTIFACT-NAME`, `E-ARTIFACT-APPEND`, `E-ARTIFACT-UNWRITABLE` |
 | [Reading a step narrower than the caller](#step-scope) | `ContractError` · `E-STEP-READ-DIRECTION` |
+| [`io.read_upstream` from `summary` scope naming a condition- or repeat-scoped step, once the sweep labels its conditions](#step-scope) | `ContractError` · `E-STEP-READ-AMBIGUOUS` |
 | [Reading a swept parameter](#step-scope) at `"run"` or `"summary"` scope | `ContractError` · `E-STEP-SWEPT-PARAM` |
 | [`io.units` or `io.units.train`](#a-fold-repeat-puts-the-units-out-of-reach-of-the-wider-scopes) where the declarations put no such list | `ContractError` · `E-STEP-UNITS-UNAVAILABLE` |
 | `self.condition` or `self.repeat` at a [scope that has none](#using-them-in-step-code) | `ContractError` · `E-STEP-CONTEXT-ABSENT` |
@@ -1081,6 +1082,8 @@ class CompareMethods(BaseStep):
 One ordered `steps` list expresses the whole pipeline, and core derives the execution plan from the declared scopes. A cross-condition comparison needs no separate list of its own — it's simply the outermost scope.
 
 Reading across scopes is directional and read-only: a narrower step reads wider ones via `io.read_upstream(step, name)` regardless of scope, and a `summary` step additionally gets `io.conditions` and `io.read_condition(condition, step, name, repeat=None)`, whose `repeat` is required when the step it names is repeat-scoped. A wider step can never read a narrower one, because at the time it runs those executions haven't happened. Which step a call names is an argument rather than a declaration, so this is enforced where the call is made: `io.read_upstream` raises when the step it names is narrower than the caller, naming both scopes. Same effect check as the two below.
+
+A `summary` step sits above every condition, so once a sweep labels its conditions, `io.read_upstream` naming a condition- or repeat-scoped step has no single condition to resolve to — that ambiguity is exactly what `io.read_condition` exists to name explicitly. With no sweep declared there is exactly one, unlabeled condition, and `io.read_upstream` still resolves it directly.
 
 **A swept parameter is unreadable from the scopes where it has no value.** A `"run"`-scoped step that read `analysis.method` would produce output silently wrong for every condition but one, and a `"summary"`-scoped step that read it would be picking a value no single condition owns. Neither is something core can catch by reading the config: which parameters a step reads is a fact about its body. So core doesn't ask — it owns `cfg`, and at `"run"` and `"summary"` scope, reading a path that `sweep` varies raises, naming the path and the axis that varies it. Unswept paths read normally at every scope, which is most of what a wider step wants a parameter for.
 

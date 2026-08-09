@@ -556,28 +556,60 @@ def test_a_step_reads_another_step_at_its_own_scope(tmp_path: Path):
 
 
 @pytest.mark.parametrize("target_scope", ["run", "condition", "repeat"])
-def test_a_summary_step_reads_upstream_from_every_narrower_scope(
+def test_a_summary_step_reads_upstream_from_every_narrower_scope_in_a_no_sweep_run(
     tmp_path: Path, target_scope: str
 ):
     """`summary` sits above `run`, `condition`, and `repeat` alike — every one of
     them is a read of something wider, and none may raise E-STEP-READ-DIRECTION.
-    Nothing else exercises read_upstream from a summary caller, so a bug in how
-    `summary` itself is ranked (as opposed to the separate summary-only guard on
-    io.conditions/io.read_condition) would otherwise go undetected."""
+    `scope.py::build_plan` gives a real summary `Execution` no condition context
+    at all (`condition_index=None, condition_label=None`), so this test doesn't
+    inject any — that state is unreachable in production and a test that
+    manufactures it proves nothing. With no sweep declared there is exactly one,
+    unlabeled condition and no `conditions/` level, so `run_dir/step/name` (or
+    `shared/`, for a run-scoped target) is genuinely where the target's writer
+    left its output."""
     io = make_io(
         tmp_path,
         scope="summary",
+        conditions=[(0, None)],
         step_scopes={"upstream": target_scope},
-        condition_index=0,
-        condition_label="baseline",
     )
     if target_scope == "run":
         upstream_dir = io.run_dir / "shared" / "upstream"
     else:
-        upstream_dir = io.run_dir / "conditions" / "00_baseline" / "upstream"
+        upstream_dir = io.run_dir / "upstream"
     upstream_dir.mkdir(parents=True)
     (upstream_dir / "a.json").write_text('{"x": 1}\n')
     assert io.read_upstream("upstream", "a.json") == {"x": 1}
+
+
+@pytest.mark.parametrize("target_scope", ["condition", "repeat"])
+def test_a_summary_step_cannot_read_upstream_from_a_labeled_sweep(
+    tmp_path: Path, target_scope: str
+):
+    """Once a sweep labels its conditions, `io.read_upstream` from `summary` scope
+    has no single condition to resolve a condition- or repeat-scoped target to —
+    that ambiguity is exactly what `io.read_condition` exists to resolve instead."""
+    io = make_io(
+        tmp_path,
+        scope="summary",
+        conditions=[(0, "baseline"), (1, "method=spearman")],
+        step_scopes={"upstream": target_scope},
+    )
+    with pytest.raises(ContractError) as exc:
+        io.read_upstream("upstream", "a.json")
+    assert exc.value.code == "E-STEP-READ-AMBIGUOUS"
+
+
+def test_a_summary_step_reads_another_summary_step(tmp_path: Path):
+    """Direct coverage of the `target == "summary"` branch: a summary step reading
+    an upstream step that is itself summary-scoped resolves under `summary/`, not
+    `shared/` or a condition directory."""
+    io = make_io(tmp_path, scope="summary", step_scopes={"earlier": "summary"})
+    summary_dir = io.run_dir / "summary" / "earlier"
+    summary_dir.mkdir(parents=True)
+    (summary_dir / "a.json").write_text('{"x": 1}\n')
+    assert io.read_upstream("earlier", "a.json") == {"x": 1}
 
 
 def test_read_condition_requires_a_repeat_for_a_repeat_scoped_step(tmp_path: Path):
