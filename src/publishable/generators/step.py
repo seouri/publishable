@@ -25,6 +25,13 @@ def generate_step(*, repo_root: Path, experiment: str, step_name: str) -> Path:
             f"no experiment package at src/{pkg}/", code="E-EXPERIMENT-UNKNOWN"
         )
     existing = sorted(steps_dir.glob("step[0-9][0-9]_*.py"))
+    for prior in existing:
+        if prior.stem.split("_", 1)[1] == step_name:
+            raise ContractError(
+                f"step `{step_name}` already exists at {prior} — `generate step` never "
+                "renumbers or replaces an existing step",
+                code="E-STEP-EXISTS",
+            )
     number = len(existing) + 1
     path = steps_dir / f"step{number:02d}_{step_name}.py"
     path.write_text(STEP_PY.format(step_name=step_name))

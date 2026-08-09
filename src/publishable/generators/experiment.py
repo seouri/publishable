@@ -62,6 +62,12 @@ def generate_experiment(
     pkg = package_name(name)
     entrypoint = f"{pkg}.experiment:{class_name(name)}"
     pkg_dir = repo_root / "src" / pkg
+    if pkg_dir.exists():
+        raise ContractError(
+            f"src/{pkg}/ already exists — `generate experiment` never modifies an "
+            "existing package",
+            code="E-EXPERIMENT-EXISTS",
+        )
     (pkg_dir / "steps").mkdir(parents=True, exist_ok=False)
     (pkg_dir / "__init__.py").touch()
     (pkg_dir / "steps" / "__init__.py").touch()

@@ -1,7 +1,9 @@
 from pathlib import Path
 
+import pytest
 import yaml
 
+from publishable import ContractError
 from publishable.generators.experiment import generate_experiment, package_name
 from publishable.generators.step import generate_step
 from publishable.scaffold import scaffold_project
@@ -60,13 +62,48 @@ def test_generate_step_numbers_the_next_file_and_registers_it(tmp_path: Path):
 
 def test_generate_experiment_refuses_paths_inside_the_repo(tmp_path: Path):
     root = scaffold_project(tmp_path / "my-study")
-    import pytest
-
-    from publishable import ContractError
-
     with pytest.raises(ContractError) as e:
         generate_experiment(
             repo_root=root, name="cohort-pilot", template_name="generic",
             input_dir=str(root / "data"), output_dir=str(tmp_path / "results"),
         )
     assert e.value.code == "E-DATA-IN-REPO"
+
+
+def test_generate_step_refuses_a_duplicate_name(tmp_path: Path):
+    root = scaffold_project(tmp_path / "my-study")
+    generate_experiment(
+        repo_root=root, name="cohort-pilot", template_name="generic",
+        input_dir=str(tmp_path / "data"), output_dir=str(tmp_path / "results"),
+    )
+    generate_step(repo_root=root, experiment="cohort-pilot", step_name="analyze")
+    experiment_py = root / "src" / "cohort_pilot" / "experiment.py"
+    before = experiment_py.read_text()
+    steps_dir = root / "src" / "cohort_pilot" / "steps"
+    before_files = sorted(p.name for p in steps_dir.glob("step[0-9][0-9]_*.py"))
+
+    with pytest.raises(ContractError) as e:
+        generate_step(repo_root=root, experiment="cohort-pilot", step_name="analyze")
+    assert e.value.code == "E-STEP-EXISTS"
+
+    after_files = sorted(p.name for p in steps_dir.glob("step[0-9][0-9]_*.py"))
+    assert after_files == before_files
+    assert experiment_py.read_text() == before
+
+
+def test_generate_experiment_refuses_to_overwrite_an_existing_package(tmp_path: Path):
+    root = scaffold_project(tmp_path / "my-study")
+    generate_experiment(
+        repo_root=root, name="cohort-pilot", template_name="generic",
+        input_dir=str(tmp_path / "data"), output_dir=str(tmp_path / "results"),
+    )
+    pkg_dir = root / "src" / "cohort_pilot"
+    before_experiment_py = (pkg_dir / "experiment.py").read_text()
+
+    with pytest.raises(ContractError) as e:
+        generate_experiment(
+            repo_root=root, name="cohort-pilot", template_name="generic",
+            input_dir=str(tmp_path / "data2"), output_dir=str(tmp_path / "results2"),
+        )
+    assert e.value.code == "E-EXPERIMENT-EXISTS"
+    assert (pkg_dir / "experiment.py").read_text() == before_experiment_py
