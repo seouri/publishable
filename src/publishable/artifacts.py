@@ -74,11 +74,35 @@ def _decode_csv(data: bytes) -> Any:
     return list(csv.DictReader(_io.StringIO(data.decode())))
 
 
+def _encode_parquet(rows: Any) -> bytes:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    rows = list(rows)
+    columns: list[str] = []
+    for row in rows:
+        for key in row:
+            if key not in columns:
+                columns.append(key)
+    table = pa.table({c: [r.get(c) for r in rows] for c in columns})
+    buf = _io.BytesIO()
+    pq.write_table(table, buf)
+    return buf.getvalue()
+
+
+def _decode_parquet(data: bytes) -> Any:
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+
+    return pq.read_table(pa.BufferReader(data)).to_pylist()
+
+
 WRITERS = {
     ".json": _encode_json,
     ".yaml": _encode_yaml,
     ".jsonl": _encode_jsonl,
     ".csv": _encode_csv,
+    ".parquet": _encode_parquet,
 }
 
 READERS = {
@@ -86,6 +110,7 @@ READERS = {
     ".yaml": _decode_yaml,
     ".jsonl": _decode_jsonl,
     ".csv": _decode_csv,
+    ".parquet": _decode_parquet,
 }
 
 
@@ -181,6 +206,42 @@ class StepIO:
 
     def rows(self) -> list[dict[str, Any]]:
         return [dict(row) for row in self._rows.values()]
+
+    def finalize(self) -> None:
+        """Write this execution's per-unit tables. Called by the runner when a step returns.
+
+        Columns are the unit key, then every declared attribute, then the union of
+        every key any row recorded — docs/reference.md § The per-unit tables. A
+        failed unit has no row anywhere: `units.parquet` holds one row per completed
+        (recorded) unit, `ineligible.jsonl` one line per skipped unit, and nothing is
+        written for either table when there is nothing to put in it.
+        """
+        if self._rows:
+            attribute_names: list[str] = []
+            if self._units is not None:
+                for unit in self._units:
+                    for name in unit.attributes:
+                        if name not in attribute_names:
+                            attribute_names.append(name)
+            by_key = {u.key: u for u in self._units} if self._units is not None else {}
+            recorded: list[str] = []
+            for row in self._rows.values():
+                for key in row:
+                    if key != "unit" and key not in recorded:
+                        recorded.append(key)
+            columns = ["unit", *attribute_names, *recorded]
+            rows = []
+            for key, row in self._rows.items():
+                owner = by_key.get(key)
+                merged: dict[str, Any] = {"unit": key}
+                for name in attribute_names:
+                    merged[name] = owner.attributes.get(name) if owner else None
+                for name in recorded:
+                    merged[name] = row.get(name)
+                rows.append({c: merged.get(c) for c in columns})
+            self.write("units.parquet", rows)
+        for key, reason in self._skipped.items():
+            self.append("ineligible.jsonl", {"unit": key, "reason": reason})
 
     def _resolve(self, name: str) -> Path:
         candidate = (self.step_dir / name).resolve()

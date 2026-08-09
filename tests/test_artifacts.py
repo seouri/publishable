@@ -1,4 +1,5 @@
 # tests/test_artifacts.py
+import json
 from pathlib import Path
 
 import pytest
@@ -304,6 +305,58 @@ def test_recorded_keys_skipped_and_rows_are_not_live_handles(tmp_path: Path):
     rows = io.rows()
     rows.append({"unit": "ghost", "v": 99})
     assert io.rows() == [{"unit": "p0", "v": 1}]
+
+
+def test_finalize_writes_a_parquet_table_and_an_ineligible_ledger(tmp_path: Path):
+    from publishable.units import Unit, UnitList
+
+    roster = UnitList([Unit(key=f"p{i}", attributes={"site": "a"}) for i in range(3)])
+    sd = tmp_path / "run" / "shared" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    io = StepIO(step_dir=sd, input_dir=tmp_path / "in", run_dir=tmp_path / "run", units=roster)
+    io.record("p0", {"pred": 0.5})
+    io.record("p1", {"pred": 0.7, "extra": 9})
+    io.skip("p2", "no baseline visit")
+    io.finalize()
+    rows = io.read_upstream("s", "units.parquet")
+    assert [r["unit"] for r in rows] == ["p0", "p1"]
+    assert rows[0]["extra"] is None, "a column absent from a row reads as null"
+    lines = (sd / "ineligible.jsonl").read_text().splitlines()
+    assert json.loads(lines[0]) == {"unit": "p2", "reason": "no baseline visit"}
+
+
+def test_no_files_are_written_when_nothing_was_recorded_or_skipped(tmp_path: Path):
+    from publishable.units import Unit, UnitList
+
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    io = StepIO(
+        step_dir=sd,
+        input_dir=tmp_path / "in",
+        run_dir=tmp_path / "run",
+        units=UnitList([Unit(key="p0")]),
+    )
+    io.finalize()
+    assert not (sd / "units.parquet").exists()
+    assert not (sd / "ineligible.jsonl").exists()
+
+
+def test_parquet_round_trips_through_the_registered_reader(tmp_path: Path):
+    sd = tmp_path / "run" / "shared" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    io = StepIO(step_dir=sd, input_dir=tmp_path / "in", run_dir=tmp_path / "run")
+    io.write("t.parquet", [{"a": 1, "b": "x"}, {"a": 2, "b": "y"}])
+    assert io.read_upstream("s", "t.parquet") == [{"a": 1, "b": "x"}, {"a": 2, "b": "y"}]
+
+
+def test_the_writer_and_reader_tables_stay_in_step():
+    from publishable.artifacts import READERS, WRITERS
+
+    assert sorted(WRITERS) == sorted(READERS)
+    assert ".parquet" in WRITERS
 
 
 def test_rows_returns_deep_enough_copies_that_mutating_a_row_does_not_corrupt_state(
