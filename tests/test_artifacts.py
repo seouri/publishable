@@ -379,24 +379,29 @@ def test_a_mixed_int_and_float_column_promotes_to_float_deliberately():
 
 def test_a_bool_and_int_column_clash_raises_rather_than_coercing():
     """A bool/int mix is a real type confusion, not ordinary numeric variation —
-    silently unifying it would hide a bug, so pyarrow's refusal is the right boundary."""
-    import pyarrow as pa
-
+    silently unifying it would hide a bug, so it must surface as a diagnosable
+    ContractError naming the column and both types, not a bare pyarrow exception."""
     from publishable.artifacts import _encode_parquet
 
-    with pytest.raises(pa.lib.ArrowInvalid):
+    with pytest.raises(ContractError) as e:
         _encode_parquet([{"v": True}, {"v": 1}])
+    assert e.value.code == "E-STEP-RETURN-TYPE"
+    assert "'v'" in str(e.value)
+    assert "bool" in str(e.value)
+    assert "int" in str(e.value)
 
 
 def test_a_str_and_int_column_clash_raises_rather_than_coercing():
     """Same boundary as the bool/int case: a string/int mix is a type confusion that
-    must surface, not silently become strings."""
-    import pyarrow as pa
-
+    must surface as a named, diagnosable ContractError, not silently become strings."""
     from publishable.artifacts import _encode_parquet
 
-    with pytest.raises(pa.lib.ArrowTypeError):
+    with pytest.raises(ContractError) as e:
         _encode_parquet([{"v": "x"}, {"v": 1}])
+    assert e.value.code == "E-STEP-RETURN-TYPE"
+    assert "'v'" in str(e.value)
+    assert "str" in str(e.value)
+    assert "int" in str(e.value)
 
 
 def test_rows_returns_deep_enough_copies_that_mutating_a_row_does_not_corrupt_state(

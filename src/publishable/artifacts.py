@@ -74,6 +74,44 @@ def _decode_csv(data: bytes) -> Any:
     return list(csv.DictReader(_io.StringIO(data.decode())))
 
 
+def _article(name: str) -> str:
+    return "an" if name[0].lower() in "aeiou" else "a"
+
+
+def _check_column_types(rows: list[dict[str, Any]], columns: list[str]) -> None:
+    """Refuse a column mixing incompatible types, naming the column and a unit for each.
+
+    int/float mixing within a column is the deliberate promotion pinned by
+    `test_a_mixed_int_and_float_column_promotes_to_float_deliberately` and is not a
+    conflict here. Anything else — bool/int, str/int, and so on — is the same
+    contract `io.record`'s `values` is already checked against, so it raises the same
+    `E-STEP-RETURN-TYPE` a step's return or a template's `aggregate` would.
+    """
+    for col in columns:
+        groups: dict[type, tuple[type, Any]] = {}
+        for i, row in enumerate(rows):
+            if col not in row:
+                continue
+            value = row[col]
+            if value is None:
+                continue
+            actual = type(value)
+            normalized = float if actual in (int, float) else actual
+            if normalized not in groups:
+                groups[normalized] = (actual, row.get("unit", f"row {i}"))
+        if len(groups) > 1:
+            (type_a, unit_a), (type_b, unit_b) = list(groups.values())[:2]
+            name_a, name_b = f"{type_a.__name__}", f"{type_b.__name__}"
+            raise ContractError(
+                f"column {col!r} recorded both {_article(name_a)} {name_a} "
+                f"(unit {unit_a!r}) and {_article(name_b)} {name_b} (unit "
+                f"{unit_b!r}); io.record's values, a step's return, and a "
+                "template's aggregate take the same scalars under the same "
+                "coercion, and this build cannot record a column mixing those types",
+                code="E-STEP-RETURN-TYPE",
+            )
+
+
 def _encode_parquet(rows: Any) -> bytes:
     import pyarrow as pa
     import pyarrow.parquet as pq
@@ -84,6 +122,7 @@ def _encode_parquet(rows: Any) -> bytes:
         for key in row:
             if key not in columns:
                 columns.append(key)
+    _check_column_types(rows, columns)
     table = pa.table({c: [r.get(c) for r in rows] for c in columns})
     buf = _io.BytesIO()
     pq.write_table(table, buf)
