@@ -119,6 +119,16 @@ def label_for(values: dict[str, Any], grid: dict[str, Any], is_baseline: bool) -
     )
 
 
+def condition_dir_name(index: int, label: str) -> str:
+    """The `<nn>_<label>` name a condition nests under, in `run_dir/conditions/`.
+
+    Single source of truth for the format: `runner.step_dir_for` and
+    `artifacts.StepIO.read_condition` both nest here, and a second implementation
+    of this string is how they drift apart.
+    """
+    return f"{index:02d}_{label}"
+
+
 def expand(config: dict[str, Any]) -> list[Condition]:
     """Ordered conditions: a declared baseline as 00, then the grid product.
 

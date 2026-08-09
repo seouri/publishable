@@ -13,6 +13,7 @@ from publishable.config import Config, SweptAway
 from publishable.errors import ContractError
 from publishable.replication import Repeat
 from publishable.scope import Execution
+from publishable.sweep import condition_dir_name
 from publishable.units import UnitList
 
 
@@ -144,9 +145,9 @@ def step_dir_for(run_dir: Path, execution: Execution, collapse_repeats: bool) ->
     if execution.scope == "summary":
         return run_dir / "summary" / execution.step_name
     base = run_dir
-    if execution.condition_label is not None:
-        base = base / "conditions" / (
-            f"{execution.condition_index:02d}_{execution.condition_label}"
+    if execution.condition_label is not None and execution.condition_index is not None:
+        base = base / "conditions" / condition_dir_name(
+            execution.condition_index, execution.condition_label
         )
     if execution.scope == "repeat" and not collapse_repeats and execution.repeat_label:
         base = base / execution.repeat_label
