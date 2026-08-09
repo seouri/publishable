@@ -227,9 +227,12 @@ def _check_replication(doc: dict[str, Any], template: Any, c: Collector) -> None
 def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     """Declared-but-unimplemented blocks, refused rather than silently ignored.
 
-    This build hardcodes one condition, resolves no unit roster, and executes
-    repeats `as_declared` regardless of what is written here. Each of these
-    would otherwise validate clean and then run something other than what the
+    This build hardcodes one condition and executes repeats `as_declared`
+    regardless of what is written here. It now resolves a unit roster, but
+    several `data.units` sub-fields — allocation other than `within`,
+    `assign`, `cluster_by`, `weight_by`, `measurements`, `holdout`, and a
+    `resolver` source — are read by nothing yet. Each of these would
+    otherwise validate clean and then run something other than what the
     config describes — the exact failure `E-REPL-KIND-UNSUPPORTED` already
     refuses for `batch`/`fold`/nested repeat levels. Each message says plainly
     that the block is honored in a later slice, so a user does not read this as
@@ -246,15 +249,40 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
             "is declared here; sweep execution will be honored in a later slice",
         )
 
-    units = (doc.get("data") or {}).get("units")
-    if units:
+    units = (doc.get("data") or {}).get("units") or {}
+    source = units.get("from")
+    if isinstance(source, dict) and "resolver" in source:
         c.error(
-            "E-DATA-UNITS-UNSUPPORTED",
-            "data.units",
-            "is specified but not implemented in this build — no unit roster is resolved "
-            "from it, though it is already folded into design_digest; unit resolution "
-            "will be honored in a later slice",
+            "E-DATA-RESOLVER-UNSUPPORTED",
+            "data.units.from.resolver",
+            f"names `{source['resolver']}`, but resolvers are plugin artifacts and the "
+            "plugin registry is not implemented in this build; resolvers will be honored "
+            "in a later slice. Use a table or a glob for now",
         )
+    if units.get("allocation") not in (None, "within"):
+        c.error(
+            "E-DATA-ALLOCATION-UNSUPPORTED",
+            "data.units.allocation",
+            f"is `{units['allocation']}`, which needs a `sweep.groups` axis to say what the "
+            "arms are; group axes are not implemented in this build. `within` is the "
+            "supported value and is what a single-condition run means anyway",
+        )
+    for field, code in (
+        ("assign", "E-DATA-ASSIGN-UNSUPPORTED"),
+        ("cluster_by", "E-DATA-CLUSTER-UNSUPPORTED"),
+        ("weight_by", "E-DATA-WEIGHT-UNSUPPORTED"),
+        ("measurements", "E-DATA-MEASUREMENTS-UNSUPPORTED"),
+        ("holdout", "E-DATA-HOLDOUT-UNSUPPORTED"),
+    ):
+        # `init` writes these as null; only a real declaration is refused.
+        if units.get(field):
+            c.error(
+                code,
+                f"data.units.{field}",
+                "is specified but not implemented in this build — it is read by nothing "
+                "here, and a declaration that changes no behavior is the failure this "
+                "refusal exists to prevent; it will be honored in a later slice",
+            )
 
     order = (doc.get("replication") or {}).get("order")
     if order is not None and order != "as_declared":

@@ -288,15 +288,6 @@ def test_an_empty_sweep_block_is_not_a_sweep(write_config):
     assert "E-SWEEP-UNSUPPORTED" not in codes(path)
 
 
-def test_a_declared_unit_roster_is_refused_not_silently_ignored(write_config):
-    """`data.units` is read into `design_digest` (redrawing every seed) but no
-    roster is actually resolved from it in this build — declaring it must be a
-    refusal, not a config that quietly changes seeds while resolving no units."""
-    units = {"source": "index.csv", "key": "patient_id"}
-    path = _with_doc_change(write_config, lambda doc: doc["data"].update(units=units))
-    assert "E-DATA-UNITS-UNSUPPORTED" in codes(path)
-
-
 def test_a_non_default_replication_order_is_refused_not_silently_ignored(write_config):
     """`replication.order: randomized` currently validates clean and then executes
     `as_declared` anyway — the record would say randomized while the run wasn't."""
@@ -306,12 +297,58 @@ def test_a_non_default_replication_order_is_refused_not_silently_ignored(write_c
 
 def test_a_config_without_unimplemented_blocks_still_validates_clean(write_config):
     """The base fixture declares no sweep axis, no `data.units`, and
-    `replication.order: as_declared` — none of the three new refusals should fire
+    `replication.order: as_declared` — none of the new refusals should fire
     against it."""
     found = codes(write_config())
     assert "E-SWEEP-UNSUPPORTED" not in found
-    assert "E-DATA-UNITS-UNSUPPORTED" not in found
     assert "E-REPL-ORDER-UNSUPPORTED" not in found
+    assert not [c for c in found if c.endswith("-UNSUPPORTED")]
+
+
+def test_a_plain_units_block_is_now_accepted(write_config):
+    """The blanket refusal is retired: S2 resolves a roster."""
+    found = codes(write_config({"data.units": {"from": "index.csv", "key": "patient_id"}}))
+    assert not [c for c in found if c.endswith("-UNSUPPORTED")]
+
+
+@pytest.mark.parametrize(
+    "field,value,code",
+    [
+        ("allocation", "between", "E-DATA-ALLOCATION-UNSUPPORTED"),
+        ("assign", {"arm": {"method": "random"}}, "E-DATA-ASSIGN-UNSUPPORTED"),
+        ("cluster_by", "site", "E-DATA-CLUSTER-UNSUPPORTED"),
+        ("weight_by", "sampling_weight", "E-DATA-WEIGHT-UNSUPPORTED"),
+        ("measurements", {"by": "read_id"}, "E-DATA-MEASUREMENTS-UNSUPPORTED"),
+        ("holdout", {"method": "random", "frac": 0.2}, "E-DATA-HOLDOUT-UNSUPPORTED"),
+    ],
+)
+def test_each_unimplemented_units_subfield_is_refused_on_its_own(write_config, field, value, code):
+    units = {"from": "index.csv", "key": "patient_id", field: value}
+    assert code in codes(write_config({"data.units": units}))
+
+
+def test_allocation_within_is_accepted_because_it_is_a_no_op_here(write_config):
+    units = {"from": "index.csv", "key": "patient_id", "allocation": "within"}
+    assert "E-DATA-ALLOCATION-UNSUPPORTED" not in codes(write_config({"data.units": units}))
+
+
+def test_a_resolver_source_is_refused_until_plugins_exist(write_config):
+    units = {"from": {"resolver": "plate_wells"}, "key": "well"}
+    assert "E-DATA-RESOLVER-UNSUPPORTED" in codes(write_config({"data.units": units}))
+
+
+def test_a_null_subfield_is_not_a_declaration(write_config):
+    """`init` writes these as null; null must not trip a refusal."""
+    units = {
+        "from": "index.csv",
+        "key": "patient_id",
+        "cluster_by": None,
+        "weight_by": None,
+        "measurements": None,
+        "holdout": None,
+    }
+    found = codes(write_config({"data.units": units}))
+    assert not [c for c in found if c.endswith("-UNSUPPORTED")]
 
 
 def test_a_missing_entrypoint_is_reported(write_config):
