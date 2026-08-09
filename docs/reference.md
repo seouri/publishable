@@ -291,7 +291,7 @@ The unknown-key check matters more than it looks: a mistyped key in a hand-edite
 
 Four things deliberately absent from that table: the unit failure rate and the ineligible fraction are both enforced by `run` as it goes — `limits.max_failed_fraction` fails the run and `limits.max_ineligible_fraction` warns, as when condition `03_arm=velocity_1.0` turns out to be buildable for 96 of 330 units — lockfile drift is checked by `resume` against the run it's resuming, and whether the [apparatus](#the-apparatus-core-can-only-observe) is reachable is checked by `dry-run`. The first three need a run to have happened, and `validate` takes a config path: eligibility in particular is a fact about what a step [declared](#what-isnt-a-repeat) once it ran, which no declaration in the config predicts. The fourth could be checked here and deliberately isn't: `validate` may read your config and your input, and may not reach anything outside the machine, because it's the command you run in a loop while editing YAML and a probe is metered by somebody else.
 
-None of that makes `validate` a read-only pass over YAML. It imports your `entrypoint`, because [it has to](#generators) — the execution plan is a property of the step classes — and that is what lets the batch row above read a step's declared `nondeterministic`, and what makes a package that won't import a `validate` failure rather than a surprise four hours into a `run`.
+None of that makes `validate` a read-only pass over YAML. It imports your `entrypoint`, because [it has to](#generators) — the execution plan is a property of the step classes — and that is what lets the batch row above read a step's declared `nondeterministic`, and what makes a package that won't import a `validate` failure rather than a surprise four hours into a `run`. The cost is worth naming beside the promise above: an import executes your package's module scope, so the *reach nothing outside the machine* guarantee is one core makes about its own behavior, not one it can enforce over your code — a module that opens a socket at import time reaches the network on every `validate`. Keep module scope to definitions and the two claims coincide, which is what the generated package does.
 
 **A fifth class is absent for a harder reason: what a step reads, calls, and returns is not a declaration.** Core [never inspects the body of your Python](design-principles.md#greenfield-only), so which parameter a step reads, which step it names in a call, and which keys it returns all exist nowhere until it runs. Those are enforced as it does, by the objects core owns — `cfg`, `io`, and the returned mapping — and each fails that execution the way any other error in it would:
 
@@ -507,6 +507,21 @@ execution_order:                         # realized, always recorded — the fac
   - {condition: 0, repeat: seed42}
   # …
 ```
+
+**`repeats` is one entry per declared level, outer to inner** — the same list `replication.repeats` declares, resolved. Each entry carries its `kind` plus exactly the fields [that kind takes](#repeat-kinds): a `seed` level its resolved `seeds`, a `batch` level its `n` and nothing else, because a batch has no parameter of its own and that is the point. Nesting is therefore read off the list's order rather than recovered by splitting `labels` apart, which would put the run's design at the mercy of a label format:
+
+This is the [`batch` × `seed` design](#a-batch-says-when-not-what) above — five separated blocks, three seeds within each — as `sweep.yaml` records it:
+
+```yaml
+repeats:                                 # outer to inner, one entry per level
+  - {kind: batch, n: 5}                  # `n` alone — a batch varies nothing else
+  - kind: seed
+    seeds: [17, 42, 137]
+labels: [batch01_seed17, batch01_seed42, batch01_seed137,
+         batch02_seed17, …]              # 5 × 3 = 15 composed
+```
+
+The `seeds` a level records are its own three, not one per execution: fifteen leaves over three resolved seeds is the [documented consequence](#a-batch-says-when-not-what) of `batch01_seed42` and `batch02_seed42` drawing alike, and a flattened list of fifteen would assert fifteen streams that don't exist.
 
 A `fold` level adds `partitions` — the unit keys in each fold's train and test side, and the realized fold sizes when [`cluster_by`](#clustered-units) makes them uneven. A `sample` sweep adds the drawn `values` per condition and the seed they came from. `order: randomized` adds the `order_seed` its shuffle used, beside the `execution_order` that shuffle produced — the seed so the plan is derivable, the order because [what happened is not a thing to re-derive](#resuming):
 

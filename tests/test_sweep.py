@@ -148,14 +148,15 @@ def test_the_sweep_document_records_the_resolved_plan():
     `repeats` groups by kind with resolved `seeds`, `labels` is the separate
     composed-label list, `order` is the scalar mode, and `execution_order` is
     the realized `{condition, repeat}` sequence — never re-derived."""
-    from publishable.replication import Repeat
+    from publishable.replication import Repeat, RepeatLevel, RepeatMember
     from publishable.sweep import expand, sweep_document
 
     conds = expand({"sweep": {"baseline": {"analysis.method": "pearson"},
                               "grid": {"analysis.method": ["spearman"]}}})
     repeats = [Repeat("seed", "seed17", 17), Repeat("seed", "seed42", 42)]
+    levels = [RepeatLevel("seed", (RepeatMember("seed17", 17), RepeatMember("seed42", 42)))]
     execution_order = [(0, "seed17"), (0, "seed42"), (1, "seed17"), (1, "seed42")]
-    doc = sweep_document(conds, repeats, "sha256:abc", "as_declared", execution_order)
+    doc = sweep_document(conds, levels, repeats, "sha256:abc", "as_declared", execution_order)
 
     assert doc["design_digest"] == "sha256:abc"
     assert doc["conditions"] == [
@@ -179,11 +180,12 @@ def test_the_sweep_document_records_the_resolved_plan():
 def test_a_randomized_order_records_its_seed():
     """`order_seed` is present only under `order: randomized` — its absence
     under `as_declared` says nothing was shuffled, not that a seed is missing."""
-    from publishable.replication import Repeat
+    from publishable.replication import Repeat, RepeatLevel, RepeatMember
     from publishable.sweep import expand, sweep_document
 
     conds = expand({"sweep": {"grid": {"a.x": [1]}}})
-    doc = sweep_document(conds, [Repeat("seed", "seed01", 1)], "sha256:r",
+    levels = [RepeatLevel("seed", (RepeatMember("seed01", 1),))]
+    doc = sweep_document(conds, levels, [Repeat("seed", "seed01", 1)], "sha256:r",
                          "randomized", [(0, "seed01")], order_seed=4417029)
 
     assert doc["order"] == "randomized"
@@ -194,10 +196,11 @@ def test_the_document_is_plain_yaml_safe_data():
     """It is written with the artifact writer, so it must hold no custom types."""
     import yaml
 
-    from publishable.replication import Repeat
+    from publishable.replication import Repeat, RepeatLevel, RepeatMember
     from publishable.sweep import expand, sweep_document
 
     doc = sweep_document(expand({"sweep": {"grid": {"a.x": [1]}}}),
+                         [RepeatLevel("seed", (RepeatMember("seed01", 1),))],
                          [Repeat("seed", "seed01", 1)], "sha256:d",
                          "as_declared", [(0, "seed01")])
     assert yaml.safe_load(yaml.safe_dump(doc)) == doc
@@ -210,12 +213,13 @@ def test_the_document_round_trips_a_float_and_a_boolean_condition_value():
     not just the top-level keys."""
     import yaml
 
-    from publishable.replication import Repeat
+    from publishable.replication import Repeat, RepeatLevel, RepeatMember
     from publishable.sweep import expand, sweep_document
 
     conds = expand({"sweep": {"grid": {"analysis.threshold": [0.5], "analysis.strict": [True]}}})
     repeats = [Repeat("seed", "seed01", 1), Repeat("seed", "seed02", 2)]
-    doc = sweep_document(conds, repeats, "sha256:e", "as_declared",
+    levels = [RepeatLevel("seed", (RepeatMember("seed01", 1), RepeatMember("seed02", 2)))]
+    doc = sweep_document(conds, levels, repeats, "sha256:e", "as_declared",
                          [(0, "seed01"), (0, "seed02")])
     round_tripped = yaml.safe_load(yaml.safe_dump(doc))
 
@@ -233,4 +237,36 @@ def test_the_document_round_trips_a_float_and_a_boolean_condition_value():
     assert round_tripped["execution_order"] == [
         {"condition": 0, "repeat": "seed01"},
         {"condition": 0, "repeat": "seed02"},
+    ]
+
+
+def test_the_document_records_one_repeats_entry_per_level():
+    """The level structure is what `sweep.yaml` records, not the crossed leaves.
+
+    Handed the leaves, this grouped them by `r.kind` — and every leaf carries the
+    *inner* level's kind, so a `batch` × `seed` run recorded no `batch` entry at
+    all and a `seeds:` list with each seed repeated once per batch. The level
+    survived only inside `labels:`, recoverable only by splitting label strings,
+    which is the derived-by-parsing the level model exists to eliminate.
+    """
+    from publishable.replication import RepeatLevel, RepeatMember, cross_levels
+    from publishable.sweep import expand, sweep_document
+
+    levels = [
+        RepeatLevel("batch", tuple(RepeatMember(f"batch{i:02d}", 900 + i) for i in (1, 2, 3))),
+        RepeatLevel("seed", (RepeatMember("seed17", 17), RepeatMember("seed42", 42))),
+    ]
+    leaves = cross_levels(levels)
+    conds = expand({"sweep": {"grid": {"a.x": [1]}}})
+    doc = sweep_document(conds, levels, leaves, "sha256:n", "as_declared",
+                         [(0, lf.label) for lf in leaves])
+
+    assert doc["repeats"] == [
+        {"kind": "batch", "n": 3},                 # `n` alone — a batch has no parameter
+        {"kind": "seed", "seeds": [17, 42]},       # its own two, not one per execution
+    ]
+    assert doc["labels"] == [
+        "batch01_seed17", "batch01_seed42",
+        "batch02_seed17", "batch02_seed42",
+        "batch03_seed17", "batch03_seed42",
     ]

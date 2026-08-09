@@ -240,7 +240,9 @@ def command_run(config_path: Path) -> int:
 
         (run_dir / "sweep.yaml").write_text(
             yaml.safe_dump(
-                sweep_document(conditions, repeats, digest, mode, execution_order, order_seed),
+                sweep_document(
+                    conditions, levels, repeats, digest, mode, execution_order, order_seed
+                ),
                 sort_keys=False,
             )
         )
