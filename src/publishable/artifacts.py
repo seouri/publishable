@@ -180,6 +180,7 @@ class StepIO:
         step_scopes: dict[str, str] | None = None,
         condition_index: int | None = None,
         condition_label: str | None = None,
+        repeat_label: str | None = None,
     ) -> None:
         self.step_dir = step_dir
         self.input_dir = input_dir
@@ -195,6 +196,11 @@ class StepIO:
         self._step_scopes = step_scopes
         self._condition_index = condition_index
         self._condition_label = condition_label
+        # This execution's own repeat label, not the run's list — `_repeats` holds
+        # the latter and cannot say which one is running. `read_upstream` needs it
+        # to resolve a `repeat`-scoped target to the directory that step actually
+        # wrote, the same segment `read_condition` takes as an argument.
+        self._repeat_label = repeat_label
 
     @property
     def units(self) -> "UnitList":
@@ -403,10 +409,24 @@ class StepIO:
         base = self.run_dir if label is None else (
             self.run_dir / "conditions" / condition_dir_name(index, label)
         )
-        collapsed = len(self._repeats or []) <= 1
-        if target == "repeat" and repeat is not None and not collapsed:
-            base = base / repeat
-        return self._read(base / step / name)
+        return self._read(self._nest_repeat(base, target, repeat) / step / name)
+
+    def _nest_repeat(self, base: Path, target: str | None, repeat: str | None) -> Path:
+        """The repeat-label segment a `repeat`-scoped target's directory carries.
+
+        One rule, two callers: `read_condition` takes the repeat as an argument and
+        `read_upstream` uses this execution's own. Writing it twice is how the two
+        drift — which is exactly what had happened, `read_upstream` omitting the
+        segment entirely and resolving to a path nothing writes.
+
+        A degenerate repeat level collapses — `runner.step_dir_for` adds no segment
+        when the run resolved one repeat — so the segment appears exactly when there
+        is more than one, which is also why the omission was invisible until a
+        design had a second seed.
+        """
+        if target == "repeat" and repeat and len(self._repeats or []) > 1:
+            return base / repeat
+        return base
 
     def read_upstream(self, step: str, name: str) -> Any:
         target = (self._step_scopes or {}).get(step)
@@ -434,14 +454,19 @@ class StepIO:
         elif target == "summary":
             base = self.run_dir / "summary"
         else:
-            # A condition-scoped target lives under the caller's own condition:
-            # `read_upstream` reads WIDER steps, and the only condition wider
-            # than this execution's is the one it is running in.
+            # A condition- or repeat-scoped target lives under the caller's own
+            # condition: `read_upstream` reads WIDER steps (or, at equal scope, a
+            # step earlier in the same execution), and the only condition wider
+            # than this execution's is the one it is running in. A `repeat`-scoped
+            # target then nests one level further, under this execution's own
+            # repeat — the direction check permits a same-scope read, so this is
+            # the ordinary "second repeat step reads the first's artifact" case.
             base = self.run_dir
             if self._condition_label is not None and self._condition_index is not None:
                 base = base / "conditions" / condition_dir_name(
                     self._condition_index, self._condition_label
                 )
+            base = self._nest_repeat(base, target, self._repeat_label)
         return self._read(base / step / name)
 
     @staticmethod

@@ -25,6 +25,7 @@ def make_io(
     step_scopes: dict[str, str] | None = None,
     condition_index: int | None = None,
     condition_label: str | None = None,
+    repeat_label: str | None = None,
 ) -> StepIO:
     step_dir = tmp_path / "run" / "step"
     step_dir.mkdir(parents=True, exist_ok=True)
@@ -39,6 +40,7 @@ def make_io(
         step_scopes=step_scopes,
         condition_index=condition_index,
         condition_label=condition_label,
+        repeat_label=repeat_label,
     )
 
 
@@ -548,6 +550,50 @@ def test_a_step_reads_another_step_at_its_own_scope(tmp_path: Path):
         step_scopes={"fit": "condition"},
         condition_index=0,
         condition_label="baseline",
+    )
+    fit_dir = io.run_dir / "conditions" / "00_baseline" / "fit"
+    fit_dir.mkdir(parents=True)
+    (fit_dir / "model.json").write_text('{"k": 1}\n')
+    assert io.read_upstream("fit", "model.json") == {"k": 1}
+
+
+def test_a_repeat_step_reads_another_repeat_step_at_its_own_scope(tmp_path: Path):
+    """The fourth scope. `read_upstream` resolved `run`, `condition`, and `summary`;
+    a `repeat`-scoped target fell into the condition branch with its repeat-label
+    segment omitted, so an entirely ordinary pipeline — two repeat-scope steps, the
+    second reading the first's artifact — crashed with a bare `FileNotFoundError`
+    naming a path nothing writes. With exactly one repeat the directory collapses
+    and it happened to work, so it appeared the day a user added a second seed.
+    Two repeats here for that reason.
+    """
+    io = make_io(
+        tmp_path,
+        scope="repeat",
+        step_scopes={"fit": "repeat"},
+        conditions=[(0, "baseline")],
+        repeats=["seed17", "seed42"],
+        condition_index=0,
+        condition_label="baseline",
+        repeat_label="seed42",
+    )
+    fit_dir = io.run_dir / "conditions" / "00_baseline" / "seed42" / "fit"
+    fit_dir.mkdir(parents=True)
+    (fit_dir / "model.json").write_text('{"k": 2}\n')
+    assert io.read_upstream("fit", "model.json") == {"k": 2}
+
+
+def test_a_repeat_step_reading_a_condition_step_adds_no_repeat_segment(tmp_path: Path):
+    """The segment is a property of the TARGET's scope, not the caller's: a
+    condition-scoped artifact is written once per condition, above every repeat."""
+    io = make_io(
+        tmp_path,
+        scope="repeat",
+        step_scopes={"fit": "condition"},
+        conditions=[(0, "baseline")],
+        repeats=["seed17", "seed42"],
+        condition_index=0,
+        condition_label="baseline",
+        repeat_label="seed42",
     )
     fit_dir = io.run_dir / "conditions" / "00_baseline" / "fit"
     fit_dir.mkdir(parents=True)
