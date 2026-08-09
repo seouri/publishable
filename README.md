@@ -303,7 +303,7 @@ Creation commands take a name and what's needed to create it. **Everything else 
 | `new` · `plugin new` · `generate` · `init` | Scaffold a project, a plugin, an experiment, a step |
 | `validate` · `dry-run` | Check values, ranges, and the full execution plan before spending a run |
 | `run` · `draft` · `resume` | Execute; `draft` permits a dirty tree, `resume` continues an interrupted run |
-| `report` · `diff` · `freeze` | Render results, compare two runs hash by hash, snapshot the environment |
+| `report` · `diff` · `freeze` | Render results, compare two runs hash by hash, re-check the apparatus mid-run |
 | `reproduce` | Clone the recorded commit and prepare it to run — no git commands typed |
 | `study new` · `study add` | Assemble the runs a paper reports, outside the repo |
 | `docs` · `list-templates` | Regenerate the managed README regions; list every installed template and its parameters |
