@@ -542,7 +542,7 @@ Unit keys, never row numbers — a roster that gains a unit renumbers rows and w
 
 ### `manifest/input.json` — what was read
 
-Written at run start, re-verified after the run, and compared by `reproduce`. [`dry-run`](#before-you-spend-it) *builds* the same manifest without writing it, which is how it can tell you the input is unreadable while still creating nothing. Its shape follows [`input_manifest_policy`](#three-hashes), and it records which policy produced it so a reader isn't left inferring the strength of the claim:
+Written at run start, re-verified after the run, and carried into a [reproduction](#reproducing-on-another-device) as the manifest its own `run` is checked against. [`dry-run`](#before-you-spend-it) *builds* the same manifest without writing it, which is how it can tell you the input is unreadable while still creating nothing. Its shape follows [`input_manifest_policy`](#three-hashes), and it records which policy produced it so a reader isn't left inferring the strength of the claim:
 
 ```json
 {
@@ -2120,7 +2120,7 @@ A hash that two machines compute differently is not an identity claim, so the co
 | `hash_index` | Content hashes for the files `data.units.from` resolves — the index and whatever it names — plus path, size, and mtime for the rest | The archive is too large to read whole, but the table driving the run isn't |
 | `none` | Paths, sizes, and mtimes only | Input lives on storage whose contents you can't read exhaustively, and you accept a weaker claim |
 
-The three make different promises, and `run.yaml` records which one was in force so a reader isn't left inferring it. Only `hash_all` supports "the data was identical" without qualification; under `hash_index` the claim is "the units were identical and nothing else moved size or timestamp"; under `none` it's a change *detector*, not a verification. Verification after the run, and `reproduce`'s comparison against the recorded manifest, both operate at whatever depth the policy captured.
+The three make different promises, and `run.yaml` records which one was in force so a reader isn't left inferring it. Only `hash_all` supports "the data was identical" without qualification; under `hash_index` the claim is "the units were identical and nothing else moved size or timestamp"; under `none` it's a change *detector*, not a verification. Verification after the run, and the comparison a [reproduction](#reproducing-on-another-device) makes against the recorded manifest when it runs, both operate at whatever depth the policy captured.
 
 **What `parameters_hash` covers is stated once, here, because four guarantees read it.** The rule is subtractive: **everything in the config except `metadata` and `data.input_dir`/`data.output_dir`.**
 
