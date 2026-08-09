@@ -195,6 +195,21 @@ def test_the_genuine_no_repo_case_returns_quietly(write_config, monkeypatch):
     assert codes(write_config()) == set()
 
 
+def test_the_policy_check_still_runs_with_no_repo_at_all(write_config, monkeypatch):
+    """`input_manifest_policy` has nothing to do with the repo, so it must not be
+    gated behind the repo-existence early-return `_check_data` takes for the
+    in-repo-only checks."""
+    import publishable.validate as validate_mod
+    from publishable.errors import ContractError
+
+    def _no_repo(path):
+        raise ContractError("no git repository found", code="E-GIT-NO-REPO")
+
+    monkeypatch.setattr(validate_mod, "find_repo_root", _no_repo)
+    codes_found = codes(write_config({"data.input_manifest_policy": "bogus"}))
+    assert "E-DATA-POLICY" in codes_found
+
+
 def test_a_config_that_does_not_parse_is_fatal(git_repo: Path):
     path = git_repo / "configs" / "cohort-pilot" / "config.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -208,6 +223,29 @@ def test_a_required_data_dir_left_empty_is_reported(write_config):
     found = [f for f in c.findings if f.code == "E-DATA-REQUIRED"]
     assert len(found) == 1
     assert found[0].path == "data.output_dir"
+
+
+def test_a_missing_entrypoint_is_reported(write_config):
+    """A config `validate` blesses must be one `run` can actually execute — deleting
+    `entrypoint` used to pass validation and then die inside `run` with a bare
+    `KeyError`."""
+    assert "E-ENTRYPOINT-REQUIRED" in codes(write_config({"entrypoint": _DELETE}))
+
+
+def test_an_empty_entrypoint_is_reported(write_config):
+    assert "E-ENTRYPOINT-REQUIRED" in codes(write_config({"entrypoint": ""}))
+
+
+def test_a_missing_input_manifest_policy_is_reported(write_config):
+    """Same gap, different field: deleting `data.input_manifest_policy` used to pass
+    validation and then die inside `run` with a bare `KeyError`."""
+    assert "E-DATA-POLICY" in codes(write_config({"data.input_manifest_policy": _DELETE}))
+
+
+def test_an_unknown_input_manifest_policy_is_reported(write_config):
+    """Setting it to a value outside `manifest.POLICIES` used to reach `manifest.py`
+    and raise a bare `ValueError` that `main` does not catch."""
+    assert "E-DATA-POLICY" in codes(write_config({"data.input_manifest_policy": "bogus"}))
 
 
 def test_a_template_cross_field_rule_is_reported(write_config, monkeypatch):

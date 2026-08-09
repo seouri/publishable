@@ -8,6 +8,7 @@ import yaml
 
 from publishable.diagnostics import Collector
 from publishable.errors import ContractError
+from publishable.manifest import POLICIES
 from publishable.materialize import TEMPLATE_VERSION
 from publishable.param import MISSING
 from publishable.provenance import find_repo_root
@@ -49,6 +50,7 @@ def validate_config(config_path: Path, c: Collector) -> dict[str, Any] | None:
         return None  # every later check reads the spec
 
     _check_metadata(doc, config_path, template, c)
+    _check_entrypoint(doc, c)
     _check_parameters(doc, template, c)
     _check_versions(doc, c)
     _check_data(doc, config_path, c)
@@ -77,6 +79,16 @@ def _check_metadata(doc: dict[str, Any], config_path: Path, template: Any, c: Co
             "E-NAME-DIR",
             "metadata.name",
             f"is `{name}` under `configs/{directory}/`; the two name one experiment",
+        )
+
+
+def _check_entrypoint(doc: dict[str, Any], c: Collector) -> None:
+    entrypoint = doc.get("entrypoint")
+    if not entrypoint or not isinstance(entrypoint, str):
+        c.error(
+            "E-ENTRYPOINT-REQUIRED",
+            "entrypoint",
+            "is empty, and is required — `run` cannot import a step without it",
         )
 
 
@@ -116,6 +128,24 @@ def _check_versions(doc: dict[str, Any], c: Collector) -> None:
 
 def _check_data(doc: dict[str, Any], config_path: Path, c: Collector) -> None:
     data = doc.get("data") or {}
+
+    # Checked first and unconditionally: `input_manifest_policy` has nothing to do
+    # with the repo, so it must not be gated behind the repo-existence check below —
+    # a repo-less config still has to be one `manifest.build_manifest` can execute.
+    policy = data.get("input_manifest_policy")
+    if not policy:
+        c.error(
+            "E-DATA-POLICY",
+            "data.input_manifest_policy",
+            "is empty, and is required",
+        )
+    elif policy not in POLICIES:
+        c.error(
+            "E-DATA-POLICY",
+            "data.input_manifest_policy",
+            f"is `{policy}`, which is not one of {', '.join(POLICIES)}",
+        )
+
     try:
         repo_root = find_repo_root(config_path).resolve()
     except ContractError as exc:

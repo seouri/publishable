@@ -4,6 +4,7 @@ See docs/reference.md § Exit codes and diagnostics, § Generators, § Scaffoldi
 """
 
 import importlib
+import importlib.metadata
 import json
 import sys
 from datetime import UTC, datetime
@@ -95,10 +96,11 @@ def command_run(config_path: Path) -> int:
     repo_root = find_repo_root(config_path)
     git = git_provenance(config_path, config_path)  # phase 3: clean src/**+templates/**
     if git.code_dirty:
-        print(
-            "  error   E-CODE-DIRTY          src/** or templates/**\n"
-            "          uncommitted changes; commit them first"
+        dirty_c = Collector()
+        dirty_c.error(
+            "E-CODE-DIRTY", "src/** or templates/**", "uncommitted changes; commit them first"
         )
+        print(dirty_c.render())
         return EXIT_WRONG
     experiment = _load_experiment(repo_root, doc["entrypoint"])  # phase 3: entrypoint imports
 
@@ -151,8 +153,18 @@ def command_run(config_path: Path) -> int:
         )
 
         status = run_status(results)
-        if verify_manifest(input_dir, manifest):  # phase 8: re-verify
+        changed_inputs = verify_manifest(input_dir, manifest)  # phase 8: re-verify
+        if changed_inputs:
             status = "failed"
+            drift_c = Collector()
+            noun = "path" if len(changed_inputs) == 1 else "paths"
+            drift_c.error(
+                "E-INPUT-CHANGED",
+                "data.input_dir",
+                f"{len(changed_inputs)} {noun} changed since the manifest was built "
+                f"at run start: {', '.join(changed_inputs)}",
+            )
+            print(drift_c.render())
 
         provenance: dict[str, Any] = {
             "git": {
@@ -172,7 +184,8 @@ def command_run(config_path: Path) -> int:
             "apparatus": None,
             "input_manifest": "manifest/input.json",
             "input_manifest_hash": manifest_hash(manifest),
-            "publishable_version": "0.1.0",
+            "input_manifest_changed": changed_inputs,
+            "publishable_version": importlib.metadata.version("publishable"),
             "plugin_versions": {},
         }
         doc_out = assemble_run_yaml(  # phase 9: assemble and write
@@ -183,6 +196,7 @@ def command_run(config_path: Path) -> int:
             parameters_hash=ph,
             provenance=provenance,
             results=results,
+            repeats=repeats,
         )
         (run_dir / "run.yaml").write_text(yaml.safe_dump(doc_out, sort_keys=False))
         # `with` block exit releases the lock.
@@ -270,10 +284,12 @@ def main(argv: list[str] | None = None) -> int:
         # 5 for something outside the machine, and a local filesystem refusal
         # (permissions, a read-only mount, no space left) is not that.
         detail = exc.strerror or str(exc)
-        print(
-            f"  error   E-IO-FAILED           {detail}\n"
-            "          the filesystem refused this operation — check permissions, "
+        io_c = Collector()
+        io_c.error(
+            "E-IO-FAILED",
+            detail,
+            "the filesystem refused this operation — check permissions, "
             "free space, and that the path exists",
-            file=sys.stderr,
         )
+        print(io_c.render(), file=sys.stderr)
         return EXIT_WRONG

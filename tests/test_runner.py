@@ -72,11 +72,11 @@ def harness(tmp_path: Path, steps):
         repeats=repeats,
         digest="sha256:abc",
     )
-    return run_dir, results
+    return run_dir, results, repeats
 
 
 def test_no_sweep_means_no_conditions_level(tmp_path: Path):
-    run_dir, _ = harness(tmp_path, [Load, Analyze])
+    run_dir, _, _ = harness(tmp_path, [Load, Analyze])
     assert (run_dir / "shared" / "load" / "cohort.json").is_file()
     assert not (run_dir / "conditions").exists()
     assert (run_dir / "seed17").is_dir()
@@ -84,7 +84,7 @@ def test_no_sweep_means_no_conditions_level(tmp_path: Path):
 
 
 def test_a_failed_execution_is_recorded_and_the_run_continues(tmp_path: Path):
-    _, results = harness(tmp_path, [Boom, Analyze])
+    _, results, _ = harness(tmp_path, [Boom, Analyze])
     statuses = [r.status for r in results]
     assert statuses.count("failed") == 2
     assert statuses.count("completed") == 2
@@ -92,34 +92,34 @@ def test_a_failed_execution_is_recorded_and_the_run_continues(tmp_path: Path):
 
 
 def test_status_is_partial_when_some_failed(tmp_path: Path):
-    _, results = harness(tmp_path, [Boom, Analyze])
+    _, results, _ = harness(tmp_path, [Boom, Analyze])
     assert run_status(results) == "partial"
-    _, ok = harness(tmp_path / "b", [Load, Analyze])
+    _, ok, _ = harness(tmp_path / "b", [Load, Analyze])
     assert run_status(ok) == "completed"
 
 
 def test_executions_jsonl_gets_one_record_per_finished_execution(tmp_path: Path):
-    run_dir, results = harness(tmp_path, [Load, Analyze])
+    run_dir, results, _ = harness(tmp_path, [Load, Analyze])
     lines = (run_dir / "executions.jsonl").read_text().splitlines()
     assert len(lines) == len(results)
 
 
 def test_per_repeat_holds_exactly_what_the_step_returned(tmp_path: Path):
-    _, results = harness(tmp_path, [Load, Analyze])
+    _, results, repeats = harness(tmp_path, [Load, Analyze])
     doc = assemble_run_yaml(
         run_id="run_x", status="completed", config={"a": 1}, code_hash="sha256:c",
-        parameters_hash="sha256:p", provenance={}, results=results,
+        parameters_hash="sha256:p", provenance={}, results=results, repeats=repeats,
     )
     per_repeat = doc["results"]["conditions"][0]["per_repeat"]["analyze"]
     assert per_repeat == {"seed17": {"r": 0.5}, "seed42": {"r": 0.5}}
 
 
 def test_run_yaml_carries_the_three_hashes_and_the_config_verbatim(tmp_path: Path):
-    _, results = harness(tmp_path, [Load, Analyze])
+    _, results, repeats = harness(tmp_path, [Load, Analyze])
     doc = assemble_run_yaml(
         run_id="run_x", status="completed", config={"metadata": {"name": "c"}},
         code_hash="sha256:c", parameters_hash="sha256:p",
-        provenance={"input_manifest_hash": "sha256:m"}, results=results,
+        provenance={"input_manifest_hash": "sha256:m"}, results=results, repeats=repeats,
     )
     assert doc["code_hash"] == "sha256:c"
     assert doc["parameters_hash"] == "sha256:p"
@@ -172,7 +172,7 @@ def test_an_unlabelled_single_repeat_still_resolves_its_seed(tmp_path: Path):
 
 
 def test_a_non_mapping_return_fails_that_execution_and_the_run_continues(tmp_path: Path):
-    run_dir, results = harness(tmp_path, [ReturnsString, Analyze])
+    run_dir, results, _ = harness(tmp_path, [ReturnsString, Analyze])
     string_result = next(r for r in results if r.execution.step_name == "returns_string")
     analyze_result = next(r for r in results if r.execution.step_name == "analyze")
     assert string_result.status == "failed"
@@ -182,14 +182,14 @@ def test_a_non_mapping_return_fails_that_execution_and_the_run_continues(tmp_pat
 
 
 def test_a_falsy_non_mapping_return_also_fails_rather_than_being_swallowed(tmp_path: Path):
-    _, results = harness(tmp_path, [ReturnsList, Analyze])
+    _, results, _ = harness(tmp_path, [ReturnsList, Analyze])
     list_result = next(r for r in results if r.execution.step_name == "returns_list")
     assert list_result.status == "failed"
     assert "E-STEP-RETURN-TYPE" in (list_result.error or "")
 
 
 def test_a_none_return_still_completes_with_an_empty_mapping_recorded(tmp_path: Path):
-    _, results = harness(tmp_path, [ReturnsNone])
+    _, results, _ = harness(tmp_path, [ReturnsNone])
     none_results = [r for r in results if r.execution.step_name == "returns_none"]
     assert none_results
     for result in none_results:
@@ -198,10 +198,10 @@ def test_a_none_return_still_completes_with_an_empty_mapping_recorded(tmp_path: 
 
 
 def test_a_condition_entry_carries_values_and_no_per_condition_key(tmp_path: Path):
-    _, results = harness(tmp_path, [Load, Analyze])
+    _, results, repeats = harness(tmp_path, [Load, Analyze])
     doc = assemble_run_yaml(
         run_id="run_x", status="completed", config={"a": 1}, code_hash="sha256:c",
-        parameters_hash="sha256:p", provenance={}, results=results,
+        parameters_hash="sha256:p", provenance={}, results=results, repeats=repeats,
     )
     condition = doc["results"]["conditions"][0]
     assert condition["values"] == {}

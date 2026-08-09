@@ -44,7 +44,12 @@ def find_repo_root(start: Path) -> Path:
 def git_provenance(start: Path, config_path: Path) -> GitInfo:
     repo = find_repo_root(start)
     dirty = bool(_git(repo, "status", "--porcelain", "--", *HASHED_TREES))
-    tracked = _git(repo, "ls-files", "--error-unmatch", str(config_path))
+    # `config_path` is resolved before being handed to git: `_git` runs with
+    # `cwd=repo`, so a path that is relative to some OTHER cwd (e.g. the caller
+    # invoked from outside the repo) would be resolved against `repo` instead and
+    # miss the file that is actually tracked, silently reporting
+    # `config_committed=False` for a config that is in fact committed.
+    tracked = _git(repo, "ls-files", "--error-unmatch", str(config_path.resolve()))
     # --verify (not bare `rev-parse HEAD`) matters here: on a repo with no commits,
     # plain `git rev-parse HEAD` writes the literal string "HEAD" to stdout as part
     # of its usage hint even though it fails, which would make `_git`'s

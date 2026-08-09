@@ -5,6 +5,7 @@ See docs/reference.md § The two files.
 
 from typing import Any
 
+from publishable.replication import Repeat
 from publishable.runner import ExecutionResult
 
 SCHEMA_VERSION = "1.0"
@@ -82,6 +83,26 @@ def _results_block(results: list[ExecutionResult]) -> dict[str, Any]:
     }
 
 
+def _layout_block(results: list[ExecutionResult], repeats: list[Repeat]) -> dict[str, bool]:
+    """Which degenerate levels survived collapse, per `reference.md` § How artifacts
+    are organized: "No sweep means no `conditions/` level; a single repeat means no
+    repeat level ... The active layout is recorded in `run.yaml` so tooling can rely
+    on it."
+
+    Shape: `{"conditions": bool, "repeats": bool}`. `"conditions"` is `True` when any
+    execution carries a real condition label (i.e. `sweep` produced more than the
+    single unlabeled condition `run`/`command_run` always builds the plan with).
+    `"repeats"` is `True` when more than one repeat was resolved — the same
+    threshold `runner.execute_plan` uses to decide whether a repeat directory
+    (`seed42/`, `fold03_seed17/`, ...) is created at all. A tool that wants to build
+    a path into `<run_dir>/` can read these two booleans instead of re-deriving
+    `runner`'s collapse rule from `sweep.yaml` and the repeat count.
+    """
+    has_conditions = any(r.execution.condition_label is not None for r in results)
+    has_repeats = len(repeats) > 1
+    return {"conditions": has_conditions, "repeats": has_repeats}
+
+
 def assemble_run_yaml(
     *,
     run_id: str,
@@ -91,6 +112,7 @@ def assemble_run_yaml(
     parameters_hash: str,
     provenance: dict[str, Any],
     results: list[ExecutionResult],
+    repeats: list[Repeat],
     draft: bool = False,
 ) -> dict[str, Any]:
     return {
@@ -102,6 +124,7 @@ def assemble_run_yaml(
         "parameters_hash": parameters_hash,
         "code_hash": code_hash,
         "provenance": provenance,
+        "layout": _layout_block(results, repeats),
         "execution": _execution_block(results),
         "results": _results_block(results),
     }

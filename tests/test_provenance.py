@@ -47,6 +47,26 @@ def test_config_committed_is_recorded_not_required(git_repo: Path):
     assert git_provenance(git_repo, cfg).config_committed is True
 
 
+def test_config_committed_is_correct_for_a_relative_path_from_elsewhere(
+    git_repo: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """`_git` runs with `cwd=repo`, so a relative `config_path` must be resolved
+    against the caller's cwd before being handed to git — not left to be resolved
+    against `repo`, which would miss the tracked file and report `False`.
+    """
+    cfg = git_repo / "configs" / "c.yaml"
+    cfg.parent.mkdir()
+    cfg.write_text("x: 1\n")
+    git("add", "configs", cwd=git_repo)
+    git("commit", "-qm", "add config", cwd=git_repo)
+
+    elsewhere = git_repo.parent
+    monkeypatch.chdir(elsewhere)
+    relative = Path("repo") / "configs" / "c.yaml"
+    assert not relative.is_absolute()
+    assert git_provenance(git_repo, relative).config_committed is True
+
+
 def test_zero_commits_is_an_error_not_an_empty_string(tmp_path: Path):
     repo = tmp_path / "repo"
     (repo / "src").mkdir(parents=True)

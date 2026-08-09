@@ -6,7 +6,7 @@ from pathlib import Path
 import yaml
 
 from publishable.cli import main
-from publishable.diagnostics import EXIT_OK, EXIT_WRONG
+from publishable.diagnostics import EXIT_FAILED, EXIT_OK, EXIT_WRONG
 
 
 def build(tmp_path: Path) -> tuple[Path, Path, Path]:
@@ -52,6 +52,14 @@ def test_scaffold_then_run_produces_a_real_record(tmp_path: Path, capsys):
     assert doc["provenance"]["input_manifest_hash"].startswith("sha256:")
     assert doc["config"]["metadata"]["name"] == "cohort-pilot"
     assert doc["config"] == yaml.safe_load(cfg.read_text())  # embedded verbatim
+
+    # Read from installed package metadata, not hardcoded, so it cannot drift from
+    # `pyproject.toml` and `CITATION.cff`.
+    import importlib.metadata
+
+    assert doc["provenance"]["publishable_version"] == importlib.metadata.version(
+        "publishable"
+    )
 
     commit = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True
@@ -109,13 +117,17 @@ def test_five_seed_repeats_land_in_a_collapsed_layout(tmp_path: Path):
     per_repeat = doc["results"]["conditions"][0]["per_repeat"]["step01_summarize_units"]
     assert len(per_repeat) == 5
     assert all(v == {"scaffold_ok": True} for v in per_repeat.values())
+    # The S1 journey sweeps nothing (no `conditions/` level) but resolves 5 seed
+    # repeats (a real repeat level) — `run.yaml`'s recorded layout must say exactly
+    # that, per `reference.md` § How artifacts are organized.
+    assert doc["layout"] == {"conditions": False, "repeats": True}
 
 
 def test_run_refuses_a_dirty_code_tree(tmp_path: Path, capsys):
     root, cfg, _ = build(tmp_path)
     (root / "src" / "cohort_pilot" / "experiment.py").write_text("# edited\n")
     assert main(["run", str(cfg)]) == EXIT_WRONG
-    # `E-CODE-DIRTY` prints to stdout, like every other `Collector`-rendered finding —
+    # `E-CODE-DIRTY` is rendered through `Collector`, like every other diagnostic —
     # this is what distinguishes the dirty-tree gate from a downstream import failure
     # that would produce the same exit code for a different reason.
     assert "E-CODE-DIRTY" in capsys.readouterr().out
@@ -176,3 +188,43 @@ def test_a_stale_cached_module_does_not_leak_between_same_named_projects(tmp_pat
     doc_b = yaml.safe_load((run_dir_b / "run.yaml").read_text())
     per_repeat = doc_b["results"]["conditions"][0]["per_repeat"]["step01_summarize_units"]
     assert all(v == {"scaffold_ok": "second-project"} for v in per_repeat.values())
+
+
+def test_manifest_drift_mid_run_names_the_changed_path(tmp_path: Path, capsys):
+    """`run` builds the input manifest at start and re-verifies it after execution.
+    A step that mutates a file under `input_dir` while it runs makes that
+    re-verification fail — and the failure must be visible: a diagnostic naming the
+    changed path, and the same path recorded in `run.yaml`'s provenance, not a
+    `status: failed` run with every execution entry reading `completed` and no clue
+    why.
+    """
+    root, cfg, results = build(tmp_path)
+    step_path = root / "src" / "cohort_pilot" / "steps" / "step01_summarize_units.py"
+    step_path.write_text(
+        "from publishable import BaseStep\n\n\n"
+        'class Step(BaseStep):\n    scope = "repeat"\n\n'
+        "    def run(self, cfg, io):\n"
+        '        (io.input_dir / "index.csv").write_text("patient_id\\np1\\np2\\np3\\n")\n'
+        '        return {"scaffold_ok": True}\n'
+    )
+    subprocess.run(["git", "add", "."], cwd=root, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e.com", "-c", "user.name=t",
+         "commit", "-qm", "mutate input mid-run"],
+        cwd=root, check=True,
+    )
+
+    assert main(["run", str(cfg)]) == EXIT_FAILED
+    out = capsys.readouterr().out
+    assert "E-INPUT-CHANGED" in out
+    assert "index.csv" in out
+
+    run_dir = next(results.glob("run_*"))
+    doc = yaml.safe_load((run_dir / "run.yaml").read_text())
+    assert doc["status"] == "failed"
+    assert doc["provenance"]["input_manifest_changed"] == ["index.csv"]
+    # Every execution entry still reads "completed" — the drift is a run-level
+    # verdict, not a per-execution failure, which is exactly why it needs its own
+    # diagnostic and its own recorded reason.
+    step_entries = doc["execution"]["conditions"][0]["steps"]["step01_summarize_units"]
+    assert all(e["status"] == "completed" for e in step_entries.values())
