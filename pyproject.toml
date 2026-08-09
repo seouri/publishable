@@ -3,7 +3,7 @@ name = "publishable"
 version = "0.1.0"
 description = "Run experiments so the record is publishable by default"
 requires-python = ">=3.11"
-dependencies = ["pyyaml>=6.0"]
+dependencies = ["pyyaml>=6.0", "numpy>=1.26", "scipy>=1.11", "pyarrow>=15.0"]
 
 [project.scripts]
 publishable = "publishable.cli:main"
@@ -29,6 +29,10 @@ select = ["E", "F", "I", "UP", "B"]
 files = ["src"]
 python_version = "3.11"
 strict = true
+
+[[tool.mypy.overrides]]
+module = "scipy.*"
+ignore_missing_imports = true
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
