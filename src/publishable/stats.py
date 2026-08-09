@@ -162,5 +162,10 @@ def summarize_step(
             "n": {**counts, "completed": len(values)},
             "ci95": [interval.low, interval.high] if interval else None,
             "method": interval.method if interval else None,
+            # `W-STATS-FAMILY` warns the person; this null tells the record. The
+            # generated config declares `statistics.correction: holm` by default,
+            # so a metric that said nothing here could be misread as corrected —
+            # multiplicity correction across conditions is not implemented yet.
+            "correction": None,
         }
     return out

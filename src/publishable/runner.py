@@ -227,6 +227,22 @@ def execute_plan(
     ledger = run_dir / "executions.jsonl"
     results: list[ExecutionResult] = []
 
+    # Derived once from the plan itself, not threaded in as extra parameters:
+    # `io.conditions`/`io.repeats`/`io.read_condition` are a `summary`-scoped
+    # step's read surface, and the plan already carries every condition and
+    # repeat label the run resolved. `conditions_list` keeps only labeled
+    # conditions — with no `sweep`, every execution's `condition_label` is
+    # `None` and this stays empty, matching "no sweep, no `conditions/` level."
+    conditions_list: list[tuple[int, str]] = []
+    seen_conditions: set[int] = set()
+    for e in plan:
+        if e.condition_index is not None and e.condition_label is not None:
+            if e.condition_index not in seen_conditions:
+                seen_conditions.add(e.condition_index)
+                conditions_list.append((e.condition_index, e.condition_label))
+    repeats_list = [r.label for r in repeats]
+    step_scopes = {e.step_name: e.scope for e in plan}
+
     for execution in plan:
         started = datetime.now(UTC)
         clock = time.monotonic()
@@ -255,6 +271,10 @@ def execute_plan(
             input_dir=input_dir,
             run_dir=run_dir,
             units=units,
+            scope=execution.scope,
+            conditions=conditions_list,
+            repeats=repeats_list,
+            step_scopes=step_scopes,
         )
         io.step_dir.mkdir(parents=True, exist_ok=True)
         recorded: frozenset[str] = frozenset()

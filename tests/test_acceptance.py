@@ -8,7 +8,7 @@ import pytest
 import yaml
 
 from publishable.cli import main
-from publishable.diagnostics import EXIT_FAILED, EXIT_OK, EXIT_WRONG
+from publishable.diagnostics import EXIT_FAILED, EXIT_OK, EXIT_PARTIAL, EXIT_WRONG
 
 
 def build(tmp_path: Path) -> tuple[Path, Path, Path]:
@@ -319,6 +319,186 @@ def test_the_inference_base_is_real(tmp_path: Path):
     assert doc["provenance"]["units"]["n"] == 240
     assert doc["provenance"]["units"]["key"] == "patient_id"
     assert doc["provenance"]["units_hash"].startswith("sha256:")
+
+
+def write_sweep_step(root: Path) -> None:
+    """Overwrite the starter step with one whose recorded `score` depends on
+    `cfg.parameters.analysis.method` — so the three conditions a sweep over that
+    axis produces genuinely differ, not just in label.
+    """
+    step_path = root / "src" / "cohort_pilot" / "steps" / "step01_summarize_units.py"
+    step_path.write_text(
+        "from publishable import BaseStep\n\n\n"
+        "class Step(BaseStep):\n"
+        '    scope = "repeat"\n\n'
+        "    def run(self, cfg, io):\n"
+        '        by_method = {"pearson": 1.0, "spearman": 2.0, "kendall": 3.0}\n'
+        "        score = by_method[cfg.parameters.analysis.method]\n"
+        "        for unit in io.units:\n"
+        '            io.record(unit.key, {"score": score})\n'
+        "        return {}\n"
+    )
+
+
+def build_sweep_project(tmp_path: Path, n_units: int) -> tuple[Path, Path, Path]:
+    """A project swept over `analysis.method`: a declared baseline (pearson) plus
+    a grid of the other two — 3 conditions × 5 seed repeats over one shared roster.
+    """
+    root, cfg, results_dir, _ = build_with_units(tmp_path, n_units)
+    write_sweep_step(root)
+    doc = yaml.safe_load(cfg.read_text())
+    doc["sweep"] = {
+        "baseline": {"analysis.method": "pearson"},
+        "grid": {"analysis.method": ["spearman", "kendall"]},
+    }
+    cfg.write_text(yaml.safe_dump(doc))
+    commit(root, "declare the sweep")
+    return root, cfg, results_dir
+
+
+def build_project_without_sweep(tmp_path: Path, n_units: int) -> tuple[Path, Path, Path]:
+    """The regression baseline: no `sweep` block at all, so `expand` resolves the
+    single unlabeled condition and no `conditions/` level should appear.
+    """
+    root, cfg, results_dir, _ = build_with_units(tmp_path, n_units)
+    commit(root, "no sweep")
+    return root, cfg, results_dir
+
+
+def test_a_sweep_runs_every_condition_over_one_roster(tmp_path: Path):
+    """3 conditions × 5 seed repeats = 15 executions, in the right tree."""
+    root, cfg, results_dir = build_sweep_project(tmp_path, n_units=240)
+    assert main(["run", str(cfg)]) == EXIT_OK
+
+    run_dir = next(results_dir.glob("run_*"))
+    doc = yaml.safe_load((run_dir / "run.yaml").read_text())
+
+    conds = doc["results"]["conditions"]
+    assert [c["label"] for c in conds] == ["baseline", "method=spearman", "method=kendall"]
+    assert conds[0]["is_baseline"] is True
+
+    # the tree: a conditions/ level, five repeat dirs under each
+    labels = sorted(p.name for p in (run_dir / "conditions").iterdir())
+    assert labels == ["00_baseline", "01_method=spearman", "02_method=kendall"]
+    for label in labels:
+        seeds = [p for p in (run_dir / "conditions" / label).iterdir() if p.is_dir()]
+        assert len(seeds) == 5, label
+
+    lines = (run_dir / "executions.jsonl").read_text().splitlines()
+    assert len(lines) == 15
+
+
+def test_each_condition_reports_its_own_numbers(tmp_path: Path):
+    """The headline test: two conditions must not share an aggregated block."""
+    root, cfg, results_dir = build_sweep_project(tmp_path, n_units=240)
+    assert main(["run", str(cfg)]) == EXIT_OK
+    doc = yaml.safe_load((next(results_dir.glob("run_*")) / "run.yaml").read_text())
+
+    blocks = [
+        c["aggregated"]["step01_summarize_units"]["score"] for c in doc["results"]["conditions"]
+    ]
+    values = [b["value"] for b in blocks]
+    assert len(set(values)) == 3, f"conditions must differ, got {values}"
+    assert blocks[0] is not blocks[1], "aggregated must not be a shared object"
+    for b in blocks:
+        assert b["basis"] == "units"
+        assert b["correction"] is None, "an uncorrected interval must say so"
+        assert b["n"]["resolved"] == 240
+
+
+def test_sweep_yaml_records_the_resolved_plan(tmp_path: Path):
+    root, cfg, results_dir = build_sweep_project(tmp_path, n_units=40)
+    assert main(["run", str(cfg)]) == EXIT_OK
+    sweep_doc = yaml.safe_load((next(results_dir.glob("run_*")) / "sweep.yaml").read_text())
+    assert [c["label"] for c in sweep_doc["conditions"]] == [
+        "baseline", "method=spearman", "method=kendall",
+    ]
+    # `repeats` groups by kind (only `seed` exists yet), so one entry whose
+    # `seeds` list carries all five — not five entries. See `sweep.sweep_document`.
+    assert len(sweep_doc["repeats"]) == 1
+    assert len(sweep_doc["repeats"][0]["seeds"]) == 5
+    assert len(sweep_doc["execution_order"]) == 15
+
+
+def test_a_single_condition_run_is_unchanged(tmp_path: Path):
+    """The regression risk of adding a level is that it appears where it should not."""
+    root, cfg, results_dir = build_project_without_sweep(tmp_path, n_units=40)
+    assert main(["run", str(cfg)]) == EXIT_OK
+    run_dir = next(results_dir.glob("run_*"))
+    assert not (run_dir / "conditions").exists()
+
+
+def test_a_summary_step_reading_a_swept_parameter_is_refused_in_a_real_run(tmp_path: Path):
+    """`resolve_wide_cfg` plants `SweptAway` for every swept path in the config the
+    `run`/`summary`-scoped cfg is built from — proved here through an actual `run`,
+    not only by calling `execute_plan` directly with a hand-built `cfgs`.
+    """
+    from publishable.generators.step import generate_step
+
+    root, cfg, results_dir, _ = build_with_units(tmp_path, n_units=40)
+    write_sweep_step(root)
+    generate_step(repo_root=root, experiment="cohort-pilot", step_name="check_swept")
+    step_path = root / "src" / "cohort_pilot" / "steps" / "step02_check_swept.py"
+    step_path.write_text(
+        "from publishable import BaseStep\n\n\n"
+        "class Step(BaseStep):\n"
+        '    scope = "summary"\n\n'
+        "    def run(self, cfg, io):\n"
+        "        return {\"method\": cfg.parameters.analysis.method}\n"
+    )
+    doc = yaml.safe_load(cfg.read_text())
+    doc["sweep"] = {
+        "baseline": {"analysis.method": "pearson"},
+        "grid": {"analysis.method": ["spearman", "kendall"]},
+    }
+    cfg.write_text(yaml.safe_dump(doc))
+    commit(root, "add a summary step that reads the swept parameter")
+
+    assert main(["run", str(cfg)]) == EXIT_PARTIAL
+    run_dir = next(results_dir.glob("run_*"))
+    run_doc = yaml.safe_load((run_dir / "run.yaml").read_text())
+    assert run_doc["status"] == "partial"
+    error = run_doc["execution"]["summary"]["step02_check_swept"]["error"]
+    assert "E-STEP-SWEPT-PARAM" in error
+
+
+def test_a_summary_step_reads_every_condition_in_a_real_run(tmp_path: Path):
+    """`io.conditions`/`io.read_condition` are wired through `runner.execute_plan`'s
+    `StepIO` construction — proved here by a `summary`-scoped step that actually
+    reads each condition's own `step01_summarize_units` output back, in a real run.
+    """
+    from publishable.generators.step import generate_step
+
+    root, cfg, results_dir, _ = build_with_units(tmp_path, n_units=40)
+    write_sweep_step(root)
+    generate_step(repo_root=root, experiment="cohort-pilot", step_name="compare_conditions")
+    step_path = root / "src" / "cohort_pilot" / "steps" / "step02_compare_conditions.py"
+    step_path.write_text(
+        "from publishable import BaseStep\n\n\n"
+        "class Step(BaseStep):\n"
+        '    scope = "summary"\n\n'
+        "    def run(self, cfg, io):\n"
+        "        seen = {}\n"
+        "        for condition in io.conditions:\n"
+        "            table = io.read_condition(\n"
+        '                condition, "step01_summarize_units", "units.parquet",\n'
+        "                repeat=io.repeats[0],\n"
+        "            )\n"
+        '            seen[condition[1]] = table[0]["score"]\n'
+        "        return seen\n"
+    )
+    doc = yaml.safe_load(cfg.read_text())
+    doc["sweep"] = {
+        "baseline": {"analysis.method": "pearson"},
+        "grid": {"analysis.method": ["spearman", "kendall"]},
+    }
+    cfg.write_text(yaml.safe_dump(doc))
+    commit(root, "add a summary step that reads across conditions")
+
+    assert main(["run", str(cfg)]) == EXIT_OK
+    run_doc = yaml.safe_load((next(results_dir.glob("run_*")) / "run.yaml").read_text())
+    seen = run_doc["results"]["summary"]["step02_compare_conditions"]
+    assert seen == {"baseline": 1.0, "method=spearman": 2.0, "method=kendall": 3.0}
 
 
 def test_the_interval_matches_an_independent_computation(tmp_path: Path):
