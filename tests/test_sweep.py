@@ -75,3 +75,47 @@ def test_conditions_are_frozen():
     c = expand({"sweep": {"grid": {"a.x": [1]}}})[0]
     with pytest.raises(Exception):  # noqa: B017 — frozen dataclass raises FrozenInstanceError
         c.index = 5  # type: ignore[misc]
+
+
+def test_a_single_axis_uses_the_shortest_suffix():
+    conds = expand({"sweep": {"grid": {"analysis.method": ["spearman"]}}})
+    assert conds[0].label == "method=spearman"
+
+
+def test_a_shared_leaf_forces_both_keys_to_keep_a_segment():
+    """The rule is shortest UNIQUE suffix, not shortest suffix."""
+    conds = expand({
+        "sweep": {"grid": {"analysis.method": ["pearson"], "scoring.method": ["auc"]}}
+    })
+    assert conds[0].label == "analysis.method=pearson__scoring.method=auc"
+
+
+def test_a_three_segment_path_disambiguates_only_as_far_as_needed():
+    conds = expand({
+        "sweep": {"grid": {"a.b.method": ["x"], "c.d.method": ["y"]}}
+    })
+    assert conds[0].label == "b.method=x__d.method=y"
+
+
+def test_axes_appear_in_declaration_order_never_sorted():
+    conds = expand({"sweep": {"grid": {"z.one": ["a"], "a.two": ["b"]}}})
+    assert conds[0].label == "one=a__two=b"
+
+
+def test_booleans_and_floats_render_readably():
+    conds = expand({"sweep": {"grid": {"f.flag": [True, False], "g.rate": [0.5]}}})
+    assert [c.label for c in conds] == ["flag=true__rate=0.5", "flag=false__rate=0.5"]
+
+
+def test_every_generated_label_body_matches_the_selector_pattern():
+    import re
+
+    from publishable.sweep import SWEPT_VALUE_PATTERN
+    conds = expand({
+        "sweep": {"baseline": {"analysis.method": "pearson"},
+                  "grid": {"analysis.method": ["spearman", "kendall"]}}
+    })
+    for c in conds:
+        for part in c.label.split("__"):
+            value = part.split("=")[-1]
+            assert re.match(SWEPT_VALUE_PATTERN, value), part

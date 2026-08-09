@@ -35,10 +35,46 @@ class Condition:
         object.__setattr__(self, "values", MappingProxyType(dict(self.values)))
 
 
+SWEPT_VALUE_PATTERN = r"^[A-Za-z0-9._+-]+$"
+
+
+def render_value(value: Any) -> str:
+    """As written in the config: `true`/`false` for booleans, shortest round-trip float."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, float):
+        return repr(value)
+    return str(value)
+
+
+def _keys_for(paths: list[str]) -> dict[str, str]:
+    """The shortest suffix of each dotted path that is unique among them all.
+
+    A label is also a selector, so the key has to be something a reader can
+    type without opening the directory — but it must still identify one axis.
+    """
+    keys: dict[str, str] = {}
+    for path in paths:
+        segments = path.split(".")
+        for depth in range(1, len(segments) + 1):
+            candidate = ".".join(segments[-depth:])
+            others = [p for p in paths if p != path]
+            if not any(p == candidate or p.endswith("." + candidate) for p in others):
+                keys[path] = candidate
+                break
+        else:
+            keys[path] = path
+    return keys
+
+
 def label_for(values: dict[str, Any], grid: dict[str, Any], is_baseline: bool) -> str:
     if is_baseline:
         return "baseline"
-    return "__".join(f"{path.rsplit('.', 1)[-1]}={value}" for path, value in values.items())
+    keys = _keys_for(list(grid))
+    return "__".join(
+        f"{keys.get(path, path.rsplit('.', 1)[-1])}={render_value(value)}"
+        for path, value in values.items()
+    )
 
 
 def expand(config: dict[str, Any]) -> list[Condition]:
