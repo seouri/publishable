@@ -54,7 +54,10 @@ def _execution_block(results: list[ExecutionResult]) -> dict[str, Any]:
     }
 
 
-def _results_block(results: list[ExecutionResult]) -> dict[str, Any]:
+def _results_block(
+    results: list[ExecutionResult],
+    aggregated: dict[str, dict[str, Any]] | None,
+) -> dict[str, Any]:
     # A "run"-scoped step's return has nowhere to land here (§ The two files gives
     # `results` only `conditions` and `summary`), and the same is true of a
     # "condition"-scoped step's return — both are dropped rather than given an
@@ -77,6 +80,19 @@ def _results_block(results: list[ExecutionResult]) -> dict[str, Any]:
         # e.scope == "condition": the return is dropped; the condition's entry still
         # exists (with `values` and an empty/partial `per_repeat`) so its identity is
         # on record even though its own return is not.
+    # `aggregated` is computed separately from `per_repeat` and placed beside it,
+    # never inside it: `per_repeat` stays verbatim what the step returned, and no
+    # derived value — an averaged column, a `basis`, an interval — ever appears
+    # there. Recording both side by side is deliberate so a disagreement between
+    # what a repeat returned and what the collapsed table reports is visible
+    # rather than reconciled behind the user's back. `n` is not duplicated here:
+    # `summarize_step` already embeds it per metric under `aggregated`, and
+    # `reference.md` § "Every threshold..." / the condition-entry example never
+    # shows a plain `n` beside `per_repeat` — inventing one here would be a
+    # schema key the docs don't have.
+    if aggregated is not None:
+        for cond in conditions.values():
+            cond["aggregated"] = aggregated
     return {
         "conditions": [conditions[k] for k in sorted(conditions)],
         "summary": summary,
@@ -114,7 +130,16 @@ def assemble_run_yaml(
     results: list[ExecutionResult],
     repeats: list[Repeat],
     draft: bool = False,
+    aggregated: dict[str, dict[str, Any]] | None = None,
+    counts: dict[str, int] | None = None,
 ) -> dict[str, Any]:
+    # `counts` is accepted for interface symmetry with `aggregated` but not written
+    # anywhere here: `summarize_step` already embeds it as `n` inside each metric
+    # under `aggregated`, and the condition entry's documented shape
+    # (`reference.md`'s worked example) has no plain `n` sibling to `per_repeat`.
+    # A future caller that wants it recorded elsewhere should say where, rather
+    # than this function inventing a key the docs don't have.
+    del counts
     return {
         "schema_version": SCHEMA_VERSION,
         "run_id": run_id,
@@ -126,5 +151,5 @@ def assemble_run_yaml(
         "provenance": provenance,
         "layout": _layout_block(results, repeats),
         "execution": _execution_block(results),
-        "results": _results_block(results),
+        "results": _results_block(results, aggregated),
     }

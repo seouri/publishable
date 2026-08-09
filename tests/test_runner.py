@@ -435,3 +435,52 @@ def test_a_condition_entry_carries_values_and_no_per_condition_key(tmp_path: Pat
     condition = doc["results"]["conditions"][0]
     assert condition["values"] == {}
     assert "per_condition" not in condition
+
+
+def test_aggregated_sits_beside_per_repeat_without_altering_it(tmp_path: Path):
+    """`per_repeat` stays exactly what the step returned; `aggregated` is a
+    separately-computed sibling, never merged into it."""
+    from publishable.stats import collapse_repeats, summarize_step
+
+    roster = UnitList([Unit(key="p0"), Unit(key="p1")])
+
+    class Record(BaseStep):
+        scope = "repeat"
+
+        def run(self, cfg, io):
+            base = 0.2 if self.repeat == "seed17" else 0.4
+            io.record("p0", {"pred": base})
+            io.record("p1", {"pred": base * 5})
+            return {"r": 0.5}
+
+    _, results, repeats = harness(tmp_path, [Record], units=roster)
+    collapsed = collapse_repeats(results, "record")
+    counts = attrition(results, roster)
+    summary = summarize_step(collapsed, counts)
+    doc = assemble_run_yaml(
+        run_id="run_x", status="completed", config={"a": 1}, code_hash="sha256:c",
+        parameters_hash="sha256:p", provenance={}, results=results, repeats=repeats,
+        aggregated={"record": summary}, counts=counts,
+    )
+    condition = doc["results"]["conditions"][0]
+    assert condition["per_repeat"]["record"] == {"seed17": {"r": 0.5}, "seed42": {"r": 0.5}}
+    assert condition["aggregated"]["record"]["pred"]["basis"] == "units"
+    assert condition["aggregated"]["record"]["pred"]["value"] == pytest.approx(0.9)
+    assert condition["aggregated"]["record"]["pred"]["n"] == counts
+    # `counts` on its own is accepted for interface symmetry but not placed anywhere;
+    # `summarize_step` already embedded it as `n` inside each metric, and the
+    # condition entry has no plain `n` sibling to `per_repeat` in the documented shape.
+    assert "n" not in condition
+
+
+def test_no_aggregated_means_no_aggregated_key(tmp_path: Path):
+    """A caller that never computed anything over units gets no `aggregated` key
+    rather than an empty or null placeholder."""
+    _, results, repeats = harness(tmp_path, [Load, Analyze])
+    doc = assemble_run_yaml(
+        run_id="run_x", status="completed", config={"a": 1}, code_hash="sha256:c",
+        parameters_hash="sha256:p", provenance={}, results=results, repeats=repeats,
+    )
+    condition = doc["results"]["conditions"][0]
+    assert "aggregated" not in condition
+    assert "n" not in condition

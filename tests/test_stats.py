@@ -2,7 +2,161 @@ import math
 
 import pytest
 
-from publishable.stats import mean_of, t_over_units
+from publishable.stats import collapse_repeats, mean_of, summarize_step, t_over_units
+
+
+def _result(repeat_label, rows, *, step_name="analyze", scope="repeat"):
+    """An ExecutionResult carrying rows, as execute_plan would produce."""
+    from publishable.runner import ExecutionResult
+    from publishable.scope import Execution
+
+    class _Step:
+        pass
+
+    ex = Execution(
+        step_cls=_Step,  # type: ignore[arg-type]
+        step_name=step_name,
+        scope=scope,
+        condition_index=0,
+        condition_label=None,
+        repeat_label=repeat_label,
+    )
+    return ExecutionResult(
+        execution=ex,
+        status="completed",
+        started_at="2026-08-09T00:00:00Z",
+        wall_seconds=0.0,
+        returned={},
+        error=None,
+        recorded=frozenset(r["unit"] for r in rows),
+        skipped=frozenset(),
+        rows=tuple(rows),
+    )
+
+
+def test_collapse_averages_a_unit_across_repeats():
+    results = [
+        _result("seed17", [{"unit": "p0", "pred": 0.2}, {"unit": "p1", "pred": 1.0}]),
+        _result("seed42", [{"unit": "p0", "pred": 0.4}, {"unit": "p1", "pred": 2.0}]),
+    ]
+    collapsed = collapse_repeats(results, "analyze")
+    assert collapsed["p0"]["pred"] == pytest.approx(0.3)
+    assert collapsed["p1"]["pred"] == pytest.approx(1.5)
+
+
+def test_collapse_drops_a_unit_not_recorded_in_every_repeat():
+    """A unit present in some repeats and not others must not enter the average on
+    a different number of observations than its neighbours — the same intersection
+    `runner.attrition` takes for `completed`, and for the same reason: the `n`
+    reported beside this table's interval must not undercount what actually went
+    into it."""
+    results = [
+        _result("seed17", [{"unit": "p0", "pred": 1.0}, {"unit": "p1", "pred": 1.0}]),
+        _result("seed42", [{"unit": "p0", "pred": 3.0}]),  # p1 missing this repeat
+    ]
+    collapsed = collapse_repeats(results, "analyze")
+    assert collapsed == {"p0": {"pred": 2.0}}
+    assert "p1" not in collapsed
+
+
+def test_collapse_ignores_other_steps_and_non_repeat_scopes():
+    results = [_result("seed17", [{"unit": "p0", "pred": 0.2}])]
+    assert collapse_repeats(results, "some_other_step") == {}
+    condition_scoped = [
+        _result(None, [{"unit": "p0", "pred": 9.0}], step_name="analyze", scope="condition")
+    ]
+    assert collapse_repeats(condition_scoped, "analyze") == {}
+
+
+def test_collapse_drops_a_bool_column_rather_than_averaging_it():
+    results = [
+        _result("seed17", [{"unit": "p0", "flag": True}]),
+        _result("seed42", [{"unit": "p0", "flag": False}]),
+    ]
+    collapsed = collapse_repeats(results, "analyze")
+    assert "flag" not in collapsed.get("p0", {})
+
+
+def test_collapse_does_not_partition_by_condition_known_limitation():
+    """`collapse_repeats` filters by step name and repeat scope only, not by
+    `condition_index` — so rows from two different conditions of the same step
+    are pooled into one table rather than kept separate. `summarize_step` then
+    can only summarize that pooled table. `reference.md` § "Sweeps and repeats"
+    requires aggregation *within* each condition and never across them, so this
+    is a known gap in this slice, pinned here rather than silently shipped: a
+    caller with more than one condition must not pass this function's output
+    straight to `assemble_run_yaml`'s `aggregated` for every condition, which
+    is exactly what `test_aggregated_sits_beside_per_repeat_without_altering_it`
+    in `tests/test_runner.py` does for the single-condition case this task
+    covers, and exactly what a future multi-condition caller must not copy."""
+    from publishable.runner import ExecutionResult
+    from publishable.scope import Execution
+
+    def cond_result(condition_index, repeat_label, rows):
+        class _Step:
+            pass
+
+        ex = Execution(
+            step_cls=_Step,  # type: ignore[arg-type]
+            step_name="analyze",
+            scope="repeat",
+            condition_index=condition_index,
+            condition_label=f"cond{condition_index}",
+            repeat_label=repeat_label,
+        )
+        return ExecutionResult(
+            execution=ex, status="completed", started_at="2026-08-09T00:00:00Z",
+            wall_seconds=0.0, returned={}, error=None,
+            recorded=frozenset(r["unit"] for r in rows), skipped=frozenset(), rows=tuple(rows),
+        )
+
+    results = [
+        cond_result(0, "seed17", [{"unit": "p0", "pred": 1.0}]),
+        cond_result(0, "seed42", [{"unit": "p0", "pred": 1.0}]),
+        cond_result(1, "seed17", [{"unit": "p0", "pred": 9.0}]),
+        cond_result(1, "seed42", [{"unit": "p0", "pred": 9.0}]),
+    ]
+    collapsed = collapse_repeats(results, "analyze")
+    # Pooled across both conditions, not condition 0's true answer of 1.0.
+    assert collapsed["p0"]["pred"] == pytest.approx(5.0)
+
+
+def test_a_recorded_column_is_basis_units_and_carries_an_interval():
+    collapsed = {f"p{i}": {"pred": float(i)} for i in range(10)}
+    out = summarize_step(
+        collapsed, {"resolved": 10, "completed": 10, "ineligible": 0, "failed": 0}
+    )
+    assert out["pred"]["basis"] == "units"
+    assert out["pred"]["n"] == {"resolved": 10, "completed": 10, "ineligible": 0, "failed": 0}
+    assert out["pred"]["method"] == "t_over_units"
+    low, high = out["pred"]["ci95"]
+    assert low < out["pred"]["value"] < high
+
+
+def test_a_single_completed_unit_reports_a_value_with_no_interval():
+    """Answers the ledger's open question: one observation has no dispersion."""
+    out = summarize_step(
+        {"p0": {"pred": 1.0}}, {"resolved": 1, "completed": 1, "ineligible": 0, "failed": 0}
+    )
+    assert out["pred"]["value"] == 1.0
+    assert out["pred"]["ci95"] is None
+    assert out["pred"]["method"] is None
+
+
+def test_a_non_numeric_column_is_not_summarized():
+    out = summarize_step(
+        {"p0": {"site": "a"}, "p1": {"site": "b"}},
+        {"resolved": 2, "completed": 2, "ineligible": 0, "failed": 0},
+    )
+    assert "site" not in out
+
+
+def test_a_bool_column_is_not_silently_averaged_to_a_proportion():
+    out = summarize_step(
+        {"p0": {"flag": True}, "p1": {"flag": False}},
+        {"resolved": 2, "completed": 2, "ineligible": 0, "failed": 0},
+    )
+    assert "flag" not in out
 
 
 def test_interval_matches_a_published_critical_value():

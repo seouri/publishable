@@ -24,6 +24,7 @@ class ExecutionResult:
     error: str | None
     recorded: frozenset[str] = frozenset()
     skipped: frozenset[str] = frozenset()
+    rows: tuple[dict[str, Any], ...] = ()
 
 
 def attrition(results: list[ExecutionResult], roster: "UnitList | None") -> dict[str, int]:
@@ -133,6 +134,7 @@ def execute_plan(
         io.step_dir.mkdir(parents=True, exist_ok=True)
         recorded: frozenset[str] = frozenset()
         skipped: frozenset[str] = frozenset()
+        rows: tuple[dict[str, Any], ...] = ()
         try:
             returned = step.run(cfg, io)
             if returned is None:
@@ -146,6 +148,7 @@ def execute_plan(
             io.finalize()
             recorded = frozenset(io.recorded_keys)
             skipped = frozenset(io.skipped)
+            rows = tuple(io.rows())
             status, error = "completed", None
         except Exception as exc:  # a failed execution never stops the run
             code = getattr(exc, "code", None)
@@ -161,6 +164,7 @@ def execute_plan(
             error=error,
             recorded=recorded,
             skipped=skipped,
+            rows=rows,
         )
         results.append(result)
         with ledger.open("a", encoding="utf-8") as fh:
