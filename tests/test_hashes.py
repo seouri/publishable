@@ -1,0 +1,84 @@
+from pathlib import Path
+
+from publishable.hashes import code_hash, design_digest, parameters_hash, short
+
+
+def write(root: Path, rel: str, text: str) -> None:
+    p = root / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    p.write_text(text)
+
+
+def test_code_hash_covers_src_and_templates_only(tmp_path: Path):
+    write(tmp_path, "src/pkg/step.py", "a = 1\n")
+    write(tmp_path, "templates/mine.py", "b = 2\n")
+    before = code_hash(tmp_path)
+    write(tmp_path, "docs/notes.md", "unrelated\n")
+    write(tmp_path, "configs/c/config.yaml", "x: 1\n")
+    assert code_hash(tmp_path) == before, "changes outside the two trees must not move it"
+    write(tmp_path, "src/pkg/step.py", "a = 2\n")
+    assert code_hash(tmp_path) != before
+
+
+def test_code_hash_ignores_pycache(tmp_path: Path):
+    write(tmp_path, "src/pkg/step.py", "a = 1\n")
+    before = code_hash(tmp_path)
+    write(tmp_path, "src/pkg/__pycache__/step.cpython-311.pyc", "junk")
+    assert code_hash(tmp_path) == before
+
+
+def test_code_hash_is_prefixed_and_short_takes_seven(tmp_path: Path):
+    write(tmp_path, "src/pkg/step.py", "a = 1\n")
+    h = code_hash(tmp_path)
+    assert h.startswith("sha256:")
+    assert len(short(h)) == 7
+
+
+def test_parameters_hash_excludes_metadata_and_the_two_paths():
+    base = {
+        "experiment_type": "generic",
+        "metadata": {"name": "a", "description": "one"},
+        "data": {"input_dir": "/x", "output_dir": "/y", "input_manifest_policy": "hash_all"},
+        "parameters": {"analysis": {"method": "pearson"}},
+    }
+    retitled = {**base, "metadata": {"name": "b", "description": "two"}}
+    moved = {**base, "data": {**base["data"], "input_dir": "/elsewhere"}}
+    changed = {**base, "parameters": {"analysis": {"method": "spearman"}}}
+    assert parameters_hash(base) == parameters_hash(retitled)
+    assert parameters_hash(base) == parameters_hash(moved)
+    assert parameters_hash(base) != parameters_hash(changed)
+    policy = {**base, "data": {**base["data"], "input_manifest_policy": "none"}}
+    assert parameters_hash(base) != parameters_hash(policy), "policy is inside the hash"
+
+
+def test_parameters_hash_is_insensitive_to_key_order():
+    a = {"parameters": {"x": 1, "y": 2}, "limits": {"max_executions": 500}}
+    b = {"limits": {"max_executions": 500}, "parameters": {"y": 2, "x": 1}}
+    assert parameters_hash(a) == parameters_hash(b)
+
+
+def test_parameters_hash_does_not_mutate_input():
+    config = {
+        "metadata": {"name": "a"},
+        "data": {"input_dir": "/x", "output_dir": "/y", "input_manifest_policy": "hash_all"},
+        "parameters": {"analysis": {"method": "pearson"}},
+    }
+    before = {
+        "metadata": {"name": "a"},
+        "data": {"input_dir": "/x", "output_dir": "/y", "input_manifest_policy": "hash_all"},
+        "parameters": {"analysis": {"method": "pearson"}},
+    }
+    parameters_hash(config)
+    assert config == before
+
+
+def test_design_digest_covers_units_and_groups_only():
+    base = {
+        "data": {"units": {"key": "patient_id"}},
+        "sweep": {"groups": [], "grid": {"analysis.method": ["spearman"]}},
+        "parameters": {"analysis": {"min_samples": 30}},
+    }
+    edited = {**base, "parameters": {"analysis": {"min_samples": 50}}}
+    assert design_digest(base) == design_digest(edited), "editing a parameter must not redraw"
+    roster = {**base, "data": {"units": {"key": "sample_id"}}}
+    assert design_digest(base) != design_digest(roster)
