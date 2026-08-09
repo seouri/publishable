@@ -12,6 +12,7 @@ from publishable.manifest import POLICIES
 from publishable.materialize import TEMPLATE_VERSION
 from publishable.param import MISSING
 from publishable.provenance import find_repo_root, resolves_inside_repo
+from publishable.sweep import check_swept_value, expand
 from publishable.templates.registry import get_template, template_names
 from publishable.units import resolve_units
 
@@ -137,6 +138,7 @@ def validate_config(config_path: Path, c: Collector) -> dict[str, Any] | None:
     _check_units(doc, c)
     _check_replication(doc, template, c)
     _check_unimplemented(doc, c)
+    _check_sweep(doc, template, c)
     for message in template.validate(doc):
         c.error("E-TEMPLATE-RULE", "parameters", message)
     return doc
@@ -466,4 +468,96 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
             f"is `{order}`, which is specified but not implemented in this build — "
             "execution always proceeds as_declared regardless of what is declared here; "
             "`order` will be honored in a later slice",
+        )
+
+
+def _repeat_total(doc: dict[str, Any]) -> int:
+    """The product of every repeat level's count, permissively: an invalid level
+    (`n < 1`) is already reported by `_check_replication` under its own identifier,
+    so this treats it as absent rather than reporting the same defect twice under
+    `W-EXEC-BUDGET`.
+    """
+    levels = ((doc.get("replication") or {}).get("repeats")) or []
+    total = 1
+    for level in levels:
+        count = level.get("n")
+        if count is None:
+            count = level.get("k")
+        if isinstance(count, int) and count >= 1:
+            total *= count
+    return total
+
+
+def _check_sweep(doc: dict[str, Any], template: Any, c: Collector) -> None:
+    """Checks that only become reachable once a sweep actually expands: an
+    unrecognised mode, an axis with nothing in it, a swept path the template
+    doesn't declare, a value the spec itself rejects, a value that can't render
+    into a condition label, the execution budget, and the multiplicity family
+    an enumerated sweep creates. `sweep.expand` is the single source of the
+    condition count — re-deriving it here is exactly the drift Task 4 was
+    told not to reintroduce.
+    """
+    import difflib
+
+    sweep = doc.get("sweep") or {}
+    known = {"baseline", "grid", "paired", "ablate", "sample", "groups"}
+    for key in sweep:
+        if key not in known:
+            near = difflib.get_close_matches(key, sorted(known), n=1)
+            hint = f" — did you mean `{near[0]}`?" if near else ""
+            c.error(
+                "E-SWEEP-KEY-UNKNOWN",
+                f"sweep.{key}",
+                f"is not a sweep mode{hint} — `expand` understands only `baseline` and "
+                "`grid` in this build, so an unrecognised key would expand to zero "
+                "conditions and the run would execute nothing while reporting success",
+            )
+
+    grid = sweep.get("grid") or {}
+    spec = template.parameter_spec
+    for path, values in grid.items():
+        if not values:
+            c.error(
+                "E-SWEEP-AXIS-EMPTY",
+                f"sweep.grid.{path}",
+                "declares no values, so the sweep expands to zero conditions and the run "
+                "would execute nothing while reporting success",
+            )
+            continue
+        if path not in spec:
+            near = difflib.get_close_matches(path, list(spec), n=1)
+            hint = f" — did you mean `{near[0]}`?" if near else ""
+            c.error(
+                "E-SWEEP-PATH-UNKNOWN",
+                f"sweep.grid.{path}",
+                f"is not a parameter of this template{hint}",
+            )
+            continue
+        for i, value in enumerate(values):
+            problem = spec[path].check(value)
+            if problem:
+                c.error("E-PARAM-VALUE", f"sweep.grid.{path}[{i}]", problem)
+            unnameable = check_swept_value(value)
+            if unnameable:
+                c.error("E-SWEEP-VALUE-UNNAMEABLE", f"sweep.grid.{path}[{i}]", unnameable)
+
+    conditions = expand(doc)
+    executions = len(conditions) * _repeat_total(doc)
+    budget = (doc.get("limits") or {}).get("max_executions")
+    if isinstance(budget, int) and executions > budget:
+        c.warn(
+            "W-EXEC-BUDGET",
+            "limits.max_executions",
+            f"{len(conditions)} conditions × {_repeat_total(doc)} repeats = {executions} "
+            f"executions exceeds {budget}",
+        )
+
+    if len(conditions) > 1:
+        c.warn(
+            "W-STATS-FAMILY",
+            "statistics.correction",
+            f"{len(conditions)} conditions form a family of {len(conditions) - 1} baseline "
+            "comparisons per metric, and multiplicity correction is not implemented in this "
+            "build — every interval reported is uncorrected, and each records "
+            "`correction: null` to say so",
         )

@@ -162,6 +162,121 @@ def test_two_bad_repeat_levels_are_both_reported():
     assert not any(f.code == "W-REPL-FLOOR" for f in c.findings)
 
 
+def test_an_unrecognised_sweep_key_is_refused(write_config):
+    """A typo'd mode expands to zero conditions and would otherwise run nothing.
+    Same argument as the unknown-parameter check: `init` writes every valid key,
+    so an unrecognised one is a typo by construction."""
+    found = codes(write_config({"sweep": {"gird": {"analysis.method": ["spearman"]}}}))
+    assert "E-SWEEP-KEY-UNKNOWN" in found
+
+
+def test_the_four_refused_modes_are_known_keys_not_unknown_ones(write_config):
+    """`paired`/`ablate`/`sample`/`groups` are refused by `_check_unimplemented` under
+    their own identifiers; `_check_sweep` must not double-report them as unknown."""
+    for mode in ("paired", "ablate", "sample", "groups"):
+        found = codes(write_config({"sweep": {mode: {"analysis.method": ["pearson"]}}}))
+        assert "E-SWEEP-KEY-UNKNOWN" not in found
+
+
+def test_an_axis_declaring_no_values_is_refused(write_config):
+    """Zero conditions is a run that executes nothing while reporting success —
+    the same reasoning as E-UNITS-EMPTY: zero is not a small study."""
+    assert "E-SWEEP-AXIS-EMPTY" in codes(
+        write_config({"sweep": {"grid": {"analysis.method": []}}})
+    )
+
+
+def test_a_swept_path_must_be_a_real_parameter(write_config):
+    assert "E-SWEEP-PATH-UNKNOWN" in codes(
+        write_config({"sweep": {"grid": {"analysis.methd": ["spearman"]}}})
+    )
+
+
+def test_a_swept_path_that_resolves_is_not_flagged(write_config):
+    found = codes(
+        write_config({"sweep": {"grid": {"analysis.method": ["pearson", "spearman"]}}})
+    )
+    assert "E-SWEEP-PATH-UNKNOWN" not in found
+
+
+def test_a_swept_value_must_be_checkable_against_the_spec(write_config):
+    assert "E-PARAM-VALUE" in codes(
+        write_config({"sweep": {"grid": {"analysis.method": ["spearmann"]}}})
+    )
+
+
+def test_a_swept_value_must_render_as_a_nameable_label(write_config):
+    """A label is a selector; a value needing escaping is not a name anyone can type."""
+    assert "E-SWEEP-VALUE-UNNAMEABLE" in codes(
+        write_config({"sweep": {"grid": {"analysis.method": ["a long sentence"]}}})
+    )
+
+
+def test_a_value_with_a_single_underscore_is_accepted(write_config):
+    """`_` alone stays legal — only `__`, the axis separator, is refused. The value
+    here is not one of the template's choices, so `E-PARAM-VALUE` still fires; what
+    matters is that the label check itself does not also flag it."""
+    found = codes(write_config({"sweep": {"grid": {"analysis.method": ["pearson_x"]}}}))
+    assert "E-SWEEP-VALUE-UNNAMEABLE" not in found
+
+
+def test_the_execution_budget_is_checked_against_the_real_expansion(write_config):
+    found = codes(write_config({
+        "sweep": {"grid": {"analysis.method": ["pearson", "spearman", "kendall"]}},
+        "replication": {"repeats": [{"kind": "seed", "n": 5}]},
+        "limits": {"max_executions": 10},          # 3 × 5 = 15 > 10
+    }))
+    assert "W-EXEC-BUDGET" in found
+
+
+def test_the_budget_does_not_warn_when_the_expansion_fits(write_config):
+    found = codes(write_config({
+        "sweep": {"grid": {"analysis.method": ["pearson", "spearman"]}},
+        "replication": {"repeats": [{"kind": "seed", "n": 2}]},
+        "limits": {"max_executions": 500},
+    }))
+    assert "W-EXEC-BUDGET" not in found
+
+
+def test_the_budget_passes_at_exactly_the_limit_and_fails_one_over(write_config):
+    found_at = codes(write_config({
+        "sweep": {"grid": {"analysis.method": ["pearson", "spearman"]}},
+        "replication": {"repeats": [{"kind": "seed", "n": 5}]},
+        "limits": {"max_executions": 10},           # 2 × 5 = 10, exactly at budget
+    }))
+    assert "W-EXEC-BUDGET" not in found_at
+
+    found_over = codes(write_config({
+        "sweep": {"grid": {"analysis.method": ["pearson", "spearman", "kendall"]}},
+        "replication": {"repeats": [{"kind": "seed", "n": 5}]},
+        "limits": {"max_executions": 14},            # 3 × 5 = 15 > 14
+    }))
+    assert "W-EXEC-BUDGET" in found_over
+
+
+def test_a_multi_condition_sweep_warns_about_the_uncorrected_family(write_config):
+    c = Collector()
+    validate_config(write_config({
+        "sweep": {"grid": {"analysis.method": ["pearson", "spearman", "kendall"]}}
+    }), c)
+    warning = next(f for f in c.findings if f.code == "W-STATS-FAMILY")
+    assert "3" in warning.message
+    assert "not implemented" in warning.message
+
+
+def test_a_single_condition_run_has_no_family(write_config):
+    assert "W-STATS-FAMILY" not in codes(write_config())
+
+
+def test_warnings_alone_leave_the_exit_code_at_zero(write_config):
+    c = Collector()
+    validate_config(write_config({
+        "sweep": {"grid": {"analysis.method": ["pearson", "spearman"]}}
+    }), c)
+    assert not c.has_errors
+    assert c.exit_code() == 0
+
+
 def test_an_unexpected_error_finding_the_repo_root_is_not_swallowed(write_config, monkeypatch):
     """`_check_data`'s repo-root lookup narrows its exception handling to the one case
     that legitimately means 'the inside-the-repo question does not arise' — anything
