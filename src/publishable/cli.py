@@ -71,6 +71,10 @@ def _apply_execution_order(
 ) -> list[Execution]:
     """Reorder `plan`'s repeat-scope executions to match `execution_order` exactly.
 
+    Called only under `order: randomized` — see the call site. Under `as_declared`
+    nothing was shuffled, so there is no realized order for the plan to match and
+    `build_plan`'s step-major layout stands unchanged.
+
     `execution_order` is a fact about the run, not a rule to re-derive, so the plan
     actually executed must match it rather than merely being recorded beside it.
     `execution_order` orders `(condition, repeat label)` pairs — the grain
@@ -220,7 +224,19 @@ def command_run(config_path: Path) -> int:
         order_seed = order_seed_for(digest) if mode == "randomized" else None
         declared_pairs = [(c.index, lf.label) for c in conditions for lf in repeats]
         execution_order = realize_order(declared_pairs, levels, mode, order_seed or 0)
-        plan = _apply_execution_order(plan, execution_order)
+        # Only when an order was actually realized. `realize_order` is the identity
+        # under `as_declared`, but `_apply_execution_order` is not: it regroups
+        # repeat executions pair-major, where `build_plan` lays them out step-major
+        # (for each step, for each repeat). Applying it unconditionally silently
+        # changed the execution order of every `as_declared` design with ≥2
+        # repeat-scope steps and ≥2 repeats — a different `started_at` sequence and
+        # a differently ordered `executions.jsonl` for a run that declared no
+        # shuffle at all. Pair-major is the right grain once an order has been
+        # realized, because `execution_order` records `(condition, repeat)` pairs
+        # and the plan must match the record; under `as_declared` there is no
+        # record to match and the plan's own layout stands.
+        if mode == "randomized":
+            plan = _apply_execution_order(plan, execution_order)
 
         (run_dir / "sweep.yaml").write_text(
             yaml.safe_dump(

@@ -218,8 +218,11 @@ def test_the_anonymous_single_repeat_keeps_its_empty_label():
 
 
 def test_as_declared_is_the_identity():
-    levels = resolve_repeats({"replication": {"repeats": [{"kind": "seed", "n": 2}]}}, "d")
-    pairs = [(0, lf.label) for lf in cross_levels(levels)]
+    # Six pairs, not two: with two, a mutant that shuffled unconditionally would
+    # return the input order roughly half the time and pass.
+    levels = resolve_repeats({"replication": {"repeats": [{"kind": "seed", "n": 3}]}}, "d")
+    pairs = [(c, lf.label) for c in (0, 1) for lf in cross_levels(levels)]
+    assert len(pairs) == 6
     assert realize_order(pairs, levels, "as_declared", 7) == pairs
 
 

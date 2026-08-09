@@ -13,6 +13,7 @@ from publishable.cli import _apply_execution_order, main
 from publishable.diagnostics import EXIT_INVOCATION, EXIT_OK, EXIT_WRONG
 from publishable.errors import ContractError
 from publishable.generators.experiment import generate_experiment
+from publishable.generators.step import generate_step
 from publishable.replication import LABEL_JOIN
 from publishable.scope import Execution
 
@@ -24,6 +25,7 @@ def run_a_project(
     *,
     replication: dict[str, Any] | None = None,
     capsys: pytest.CaptureFixture[str] | None = None,
+    extra_steps: list[str] | None = None,
     **overrides: Any,
 ) -> dict[str, Any]:
     """Scaffold, configure, commit, and `run` a project end to end.
@@ -47,6 +49,12 @@ def run_a_project(
     reads for `E-IO-FAILED`). When given, the captured text lands in the
     returned dict under `"stdout"`/`"stderr"`; existing callers that don't pass
     it are unaffected.
+
+    `extra_steps` names additional generated steps, appended after the scaffold's
+    one. Every generated step is `repeat`-scoped, so this is how a caller gets a
+    pipeline with more than one repeat-scope step — the shape that distinguishes
+    step-major from pair-major execution, and which the single-step scaffold
+    cannot express at all.
     """
     tmp_path.mkdir(parents=True, exist_ok=True)
     root = tmp_path / "proj"
@@ -62,6 +70,8 @@ def run_a_project(
         input_dir=str(data),
         output_dir=str(results_dir),
     )
+    for step_name in extra_steps or []:
+        generate_step(repo_root=root, experiment="cohort-pilot", step_name=step_name)
     doc = yaml.safe_load(cfg.read_text())
     doc["metadata"]["description"] = "an end-to-end helper run"
     doc["metadata"]["authors"] = ["Kyungjoon Lee"]
@@ -189,6 +199,36 @@ def test_sweep_yaml_records_the_order_mode_and_seed(tmp_path: Path):
     assert recorded != declared, "the shuffle must actually move something"
     batches = [r.split(LABEL_JOIN)[0] for _, r in recorded]
     assert batches == sorted(batches), "batch01 pairs must all precede batch02 pairs"
+
+
+def test_as_declared_executes_step_major(tmp_path: Path):
+    """`as_declared` must leave `build_plan`'s layout alone — step-major within a
+    condition (for each step, for each repeat), which is what S3a executed.
+
+    `_apply_execution_order` regroups repeat executions pair-major, which is the
+    right grain once an order has been *realized*; applied to the default path it
+    silently reordered every design with ≥2 repeat-scope steps and ≥2 repeats.
+    Two repeat-scope steps are the whole point of the fixture: with the scaffold's
+    single step the two layouts are indistinguishable, which is why nothing caught
+    this.
+    """
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 2}]},
+        extra_steps=["second_pass"],
+    )
+    repeat_runs = [
+        (e["step"], e["repeat"])
+        for e in (json.loads(line) for line in
+                  (doc["run_dir"] / "executions.jsonl").read_text().splitlines())
+        if e["scope"] == "repeat"
+    ]
+    steps = [step for step, _ in repeat_runs]
+    assert len(set(steps)) == 2, "the fixture must have two repeat-scope steps"
+    # Step-major: each step's repeats run consecutively, so the step name changes
+    # exactly once. Pair-major would alternate, changing it on every row but one.
+    changes = sum(1 for a, b in zip(steps, steps[1:], strict=False) if a != b)
+    assert changes == 1, f"expected step-major, got {repeat_runs!r}"
 
 
 def test_as_declared_records_no_order_seed(tmp_path: Path):

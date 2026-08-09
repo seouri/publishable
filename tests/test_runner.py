@@ -868,3 +868,50 @@ def test_execute_plan_raises_explicitly_when_a_cfg_is_missing(tmp_path: Path):
         )
     assert excinfo.value.code == "E-RUN-CFG-MISSING"
     assert "0" in str(excinfo.value)
+
+
+def test_io_conditions_is_ascending_by_index_whatever_the_plan_order(tmp_path: Path):
+    """`io.conditions` is a documented `summary`-scope read surface, and nothing in
+    `reference.md` says the list is unordered — so it is ordered.
+
+    Derived from the plan, it used to follow first appearance. With ≥1
+    condition-scope step those executions sit ahead of every repeat and the order
+    happens to be ascending; with **zero** condition-scope steps — a legal
+    pipeline — the first mention of each index comes from the repeat executions,
+    whose order `order: randomized` shuffles. A summary step building a comparison
+    table would then emit rows in an order set by an RNG draw. The plan here is
+    reversed rather than shuffled: a fixed permutation nothing about ordering
+    accidentally satisfies.
+    """
+    seen: list[list[tuple[int, str | None]]] = []
+
+    class Sum(BaseStep):
+        scope = "summary"
+
+        def run(self, cfg, io):
+            seen.append(io.conditions)
+            return {}
+
+    class P(BaseExperiment):
+        pass
+
+    P.steps = [Analyze, Sum]
+    repeats = [Repeat("seed", "seed17", 17), Repeat("seed", "seed42", 42)]
+    conditions = [(0, "a"), (1, "b"), (2, "c")]
+    plan = build_plan(P(), conditions=conditions, repeat_labels=[r.label for r in repeats])
+    repeat_executions = [e for e in plan if e.scope == "repeat"]
+    others = [e for e in plan if e.scope != "repeat"]
+    plan = list(reversed(repeat_executions)) + others
+
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "input").mkdir(parents=True, exist_ok=True)
+    execute_plan(
+        plan=plan,
+        run_dir=run_dir,
+        input_dir=tmp_path / "input",
+        cfgs={i: Config({"parameters": {}}) for i in (-1, 0, 1, 2)},
+        repeats=repeats,
+        digest="sha256:abc",
+    )
+    assert seen == [[(0, "a"), (1, "b"), (2, "c")]]

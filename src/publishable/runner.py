@@ -238,12 +238,22 @@ def execute_plan(
     # condition — index 0, label `None` — and it belongs in this list: `None`
     # is what tells `read_condition` there is no `conditions/` level to nest
     # under, not "this index doesn't exist."
-    conditions_list: list[tuple[int, str | None]] = []
-    seen_conditions: set[int] = set()
+    #
+    # Ascending by index, never by first appearance in the plan. Under
+    # `order: randomized` a pipeline with zero condition-scope steps has its first
+    # mention of each condition come from the shuffled repeat executions, so
+    # first-appearance order would make `io.conditions` — a documented `summary`
+    # read surface — depend on an RNG draw, and a summary step building a
+    # comparison table from it would emit rows in a different order per design
+    # digest. Nothing in `reference.md` warns that the list is unordered, so it
+    # is ordered.
+    by_index: dict[int, str | None] = {}
     for e in plan:
-        if e.condition_index is not None and e.condition_index not in seen_conditions:
-            seen_conditions.add(e.condition_index)
-            conditions_list.append((e.condition_index, e.condition_label))
+        if e.condition_index is not None and e.condition_index not in by_index:
+            by_index[e.condition_index] = e.condition_label
+    conditions_list: list[tuple[int, str | None]] = sorted(
+        by_index.items(), key=lambda entry: entry[0]
+    )
     repeats_list = [r.label for r in repeats]
     step_scopes = {e.step_name: e.scope for e in plan}
 
