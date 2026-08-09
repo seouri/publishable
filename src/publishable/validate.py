@@ -81,17 +81,27 @@ def _check_shape(doc: dict[str, Any], c: Collector) -> bool:
             _bad(block, value, kind)
 
     # Nested shapes a later check indexes into directly, folded into the same
-    # `E-CONFIG-SHAPE` identifier rather than a second code for one condition.
+    # `E-CONFIG-SHAPE` identifier rather than a second code for one condition. Each
+    # container is checked before its items — a container of the wrong shape (a
+    # mapping in place of a list, most plausibly a forgotten `-` on `repeats`) must
+    # be caught here too, or the per-item loop below is simply skipped and the crash
+    # just moves one level down, into whichever `_check_*` reads it next.
     data = doc.get("data")
     if isinstance(data, dict):
         units = data.get("units")
         if units is not None and not isinstance(units, dict):
             _bad("data.units", units, "mapping")
+        elif isinstance(units, dict):
+            attributes = units.get("attributes")
+            if attributes is not None and not isinstance(attributes, list):
+                _bad("data.units.attributes", attributes, "list")
 
     replication = doc.get("replication")
     if isinstance(replication, dict):
         repeats = replication.get("repeats")
-        if isinstance(repeats, list):
+        if repeats is not None and not isinstance(repeats, list):
+            _bad("replication.repeats", repeats, "list")
+        elif isinstance(repeats, list):
             for i, level in enumerate(repeats):
                 if not isinstance(level, dict):
                     _bad(f"replication.repeats[{i}]", level, "mapping")

@@ -560,6 +560,60 @@ def test_a_repeats_item_that_is_not_a_mapping_is_reported_not_raised(write_confi
     assert "E-CONFIG-SHAPE" in {f.code for f in c.findings}
 
 
+@pytest.mark.parametrize(
+    "bad_repeats",
+    [
+        {"kind": "seed", "n": 5},  # the forgotten `-` on `repeats`: a mapping, not a list
+        "seed",
+        5,
+    ],
+)
+def test_a_repeats_block_that_is_not_a_list_is_reported_not_raised(write_config, bad_repeats):
+    """`_check_shape` guarded the ITEMS of `replication.repeats` but not the container
+    itself — when `repeats` is a mapping, a string, or a number, the per-item loop is
+    simply skipped, no finding fires, and `_check_replication` then crashes on
+    `level.get("n")`. This is the single most plausible YAML mistake in this file: a
+    user writes `repeats:` followed by an indented mapping, forgetting the `-` that
+    would make it a list item."""
+    path = _with_doc_change(
+        write_config, lambda doc: doc["replication"].update(repeats=bad_repeats)
+    )
+    c = Collector()
+    result = validate_config(path, c)
+    assert result is None
+    assert "E-CONFIG-SHAPE" in {f.code for f in c.findings}
+
+
+def test_a_correctly_shaped_repeats_list_still_validates_clean(write_config):
+    """The new container check must not become a false refusal against a `repeats`
+    that is legitimately a list of mappings."""
+    path = _with_doc_change(
+        write_config,
+        lambda doc: doc["replication"].update(
+            repeats=[{"kind": "seed", "n": 5}, {"kind": "fold", "n": 2}]
+        ),
+    )
+    assert codes(path) == set()
+
+
+def test_a_non_list_attributes_block_is_reported_not_raised(write_config, tmp_path):
+    """`data.units.attributes` is iterated and indexed by `resolve_units` — a
+    non-iterable scalar (e.g. an int) raises a bare `TypeError` there, which
+    `_check_units`'s `except ContractError` does not catch. Caught here instead,
+    before resolution ever runs."""
+    (tmp_path / "input" / "index.csv").write_text("patient_id,label\np1,0\n")
+    path = _with_doc_change(
+        write_config,
+        lambda doc: doc["data"].update(
+            units={"from": "index.csv", "key": "patient_id", "attributes": 5}
+        ),
+    )
+    c = Collector()
+    result = validate_config(path, c)
+    assert result is None
+    assert "E-CONFIG-SHAPE" in {f.code for f in c.findings}
+
+
 def test_a_fully_valid_config_still_validates_completely_clean(write_config):
     """The new shape gate must not become a false refusal against the config every
     other test in this file already treats as valid."""
