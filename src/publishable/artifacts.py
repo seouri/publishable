@@ -7,11 +7,14 @@ import json
 import os
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
-from publishable.errors import ArtifactError, ArtifactExistsError
+from publishable.errors import ArtifactError, ArtifactExistsError, ContractError
+
+if TYPE_CHECKING:
+    from publishable.units import UnitList
 
 
 def write_atomic(path: Path, data: bytes) -> None:
@@ -97,12 +100,60 @@ def _suffix_for(name: str) -> str | None:
 
 
 class StepIO:
-    def __init__(self, *, step_dir: Path, input_dir: Path, run_dir: Path) -> None:
+    def __init__(
+        self,
+        *,
+        step_dir: Path,
+        input_dir: Path,
+        run_dir: Path,
+        units: "UnitList | None" = None,
+    ) -> None:
         self.step_dir = step_dir
         self.input_dir = input_dir
         self.run_dir = run_dir
         self.resumed = False
         self.recorded_keys: set[str] = set()
+        self._units = units
+        self._rows: dict[str, dict[str, Any]] = {}
+        self.skipped: dict[str, str] = {}
+
+    @property
+    def units(self) -> "UnitList":
+        if self._units is None:
+            raise ContractError(
+                "`io.units` needs a `data.units` declaration; none is present, and an "
+                "empty list would let a step report results about nothing",
+                code="E-STEP-UNITS-UNAVAILABLE",
+            )
+        return self._units
+
+    def _settle(self, unit_key: str) -> None:
+        if self._units is not None and unit_key not in {u.key for u in self._units}:
+            raise ContractError(
+                f"{unit_key!r} is not in this execution's roster",
+                code="E-STEP-UNIT-UNKNOWN",
+            )
+        if unit_key in self._rows or unit_key in self.skipped:
+            raise ContractError(
+                f"{unit_key!r} was already recorded or skipped in this execution",
+                code="E-STEP-UNIT-SETTLED",
+            )
+
+    def record(self, unit_key: str, values: dict[str, Any]) -> None:
+        """Append one row to this step's per-unit table, keyed by unit."""
+        if unit_key in self._rows:
+            return  # first write wins, matching io.append's idempotency
+        self._settle(unit_key)
+        self._rows[unit_key] = {"unit": unit_key, **values}
+        self.recorded_keys.add(unit_key)
+
+    def skip(self, unit_key: str, reason: str) -> None:
+        """Declare that this unit admits no result by design — `ineligible`, not `failed`."""
+        self._settle(unit_key)
+        self.skipped[unit_key] = reason
+
+    def rows(self) -> list[dict[str, Any]]:
+        return list(self._rows.values())
 
     def _resolve(self, name: str) -> Path:
         candidate = (self.step_dir / name).resolve()

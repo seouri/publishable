@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from publishable import ArtifactError, ArtifactExistsError
+from publishable import ArtifactError, ArtifactExistsError, ContractError
 from publishable.artifacts import StepIO, write_atomic
 
 
@@ -167,3 +167,76 @@ def test_read_upstream_inverts_what_write_wrote_for_every_registered_extension(
 def test_read_upstream_of_an_unregistered_extension_round_trips_as_bytes(io: StepIO):
     io.write("model.pkl", b"\x80\x04binarydata")
     assert io.read_upstream("step01", "model.pkl") == b"\x80\x04binarydata"
+
+
+def test_units_raises_when_no_roster_was_declared(io: StepIO):
+    with pytest.raises(ContractError) as e:
+        _ = io.units
+    assert e.value.code == "E-STEP-UNITS-UNAVAILABLE"
+
+
+def test_record_and_skip_accumulate_by_key(tmp_path: Path):
+    from publishable.units import Unit, UnitList
+
+    roster = UnitList([Unit(key=f"p{i}") for i in range(3)])
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    io = StepIO(step_dir=sd, input_dir=tmp_path / "in", run_dir=tmp_path / "run", units=roster)
+    assert len(io.units) == 3
+    io.record("p0", {"pred": 0.5, "truth": 1})
+    io.skip("p1", "no baseline visit")
+    assert io.recorded_keys == {"p0"}
+    assert io.skipped == {"p1": "no baseline visit"}
+
+
+def test_a_second_record_under_one_key_is_discarded_first_write_wins(tmp_path: Path):
+    from publishable.units import Unit, UnitList
+
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    io = StepIO(
+        step_dir=sd,
+        input_dir=tmp_path / "in",
+        run_dir=tmp_path / "run",
+        units=UnitList([Unit(key="p0")]),
+    )
+    io.record("p0", {"v": 1})
+    io.record("p0", {"v": 2})
+    assert io.rows() == [{"unit": "p0", "v": 1}]
+
+
+def test_recording_a_key_not_in_the_roster_is_refused(tmp_path: Path):
+    from publishable.units import Unit, UnitList
+
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    io = StepIO(
+        step_dir=sd,
+        input_dir=tmp_path / "in",
+        run_dir=tmp_path / "run",
+        units=UnitList([Unit(key="p0")]),
+    )
+    with pytest.raises(ContractError) as e:
+        io.record("ghost", {"v": 1})
+    assert e.value.code == "E-STEP-UNIT-UNKNOWN"
+
+
+def test_a_unit_cannot_be_both_recorded_and_skipped(tmp_path: Path):
+    from publishable.units import Unit, UnitList
+
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    io = StepIO(
+        step_dir=sd,
+        input_dir=tmp_path / "in",
+        run_dir=tmp_path / "run",
+        units=UnitList([Unit(key="p0")]),
+    )
+    io.record("p0", {"v": 1})
+    with pytest.raises(ContractError) as e:
+        io.skip("p0", "changed my mind")
+    assert e.value.code == "E-STEP-UNIT-SETTLED"
