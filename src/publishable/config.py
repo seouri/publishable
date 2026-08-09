@@ -17,6 +17,20 @@ def _wrap(value: Any, path: str) -> Any:
     return value
 
 
+class SweptAway:
+    """Marks a parameter that `sweep` varies, at a scope with no single value for it.
+
+    `Node.__getattr__` raises when it resolves one, so the refusal fires on the read
+    itself. A bare sentinel returned to the caller would not — the raise would land
+    on some later attribute access, under the wrong identifier.
+    """
+
+    __slots__ = ("path",)
+
+    def __init__(self, path: str) -> None:
+        self.path = path
+
+
 class Node:
     """Dot-access and nothing else, so no parameter name can be shadowed."""
 
@@ -36,7 +50,14 @@ class Node:
             raise ContractError(
                 f"{full} is not a path this config holds{hint}", code="E-STEP-PARAM-UNKNOWN"
             )
-        return _wrap(data[name], full)
+        value = data[name]
+        if isinstance(value, SweptAway):
+            raise ContractError(
+                f"`{value.path}` is varied by `sweep`, so it has no single value at this "
+                "scope; read it from a `condition`- or `repeat`-scoped step",
+                code="E-STEP-SWEPT-PARAM",
+            )
+        return _wrap(value, full)
 
 
 class Config(Node):

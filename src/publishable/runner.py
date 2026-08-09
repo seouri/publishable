@@ -1,5 +1,6 @@
 """The execution loop. One execution at a time, in the recorded order."""
 
+import copy
 import json
 import time
 from dataclasses import dataclass
@@ -8,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from publishable.artifacts import StepIO
+from publishable.config import Config, SweptAway
 from publishable.errors import ContractError
 from publishable.replication import Repeat
 from publishable.scope import Execution
@@ -151,12 +153,52 @@ def step_dir_for(run_dir: Path, execution: Execution, collapse_repeats: bool) ->
     return base / execution.step_name
 
 
+def resolve_condition_cfg(base: dict[str, Any], values: dict[str, Any]) -> Config:
+    """Overlay this condition's swept values onto the base config.
+
+    Each dotted path in `values` names a leaf under `parameters`; the overlay
+    walks (creating intermediate mappings as needed) to that leaf and sets it,
+    so a `condition`- or `repeat`-scoped step reads exactly this condition's
+    value without ever mentioning the sweep that produced it.
+    """
+    doc = copy.deepcopy(base)
+    for path, value in values.items():
+        node = doc.setdefault("parameters", {})
+        *heads, leaf = path.split(".")
+        for head in heads:
+            node = node.setdefault(head, {})
+        node[leaf] = value
+    return Config(doc)
+
+
+def resolve_wide_cfg(base: dict[str, Any], swept_paths: set[str]) -> Config:
+    """A config for `run`/`summary` scope, with every swept path made unreadable.
+
+    Those scopes have no single condition to draw a swept value from, so each
+    leaf `sweep` varies is replaced by a `SweptAway` marker: `Node.__getattr__`
+    raises `E-STEP-SWEPT-PARAM` the moment such a step reads it, rather than
+    silently handing back a value that could only be wrong for every condition
+    but one.
+    """
+    doc = copy.deepcopy(base)
+    for path in swept_paths:
+        node = doc.get("parameters", {})
+        *heads, leaf = path.split(".")
+        for head in heads:
+            node = node.get(head)
+            if node is None:
+                break
+        else:
+            node[leaf] = SweptAway(f"parameters.{path}")
+    return Config(doc)
+
+
 def execute_plan(
     *,
     plan: list[Execution],
     run_dir: Path,
     input_dir: Path,
-    cfg: Any,
+    cfgs: dict[int, Any],
     repeats: list[Repeat],
     digest: str,
     units: UnitList | None = None,
@@ -210,6 +252,7 @@ def execute_plan(
         recorded: frozenset[str] = frozenset()
         skipped: frozenset[str] = frozenset()
         rows: tuple[dict[str, Any], ...] = ()
+        cfg = cfgs[execution.condition_index if execution.condition_index is not None else -1]
         try:
             returned = step.run(cfg, io)
             if returned is None:

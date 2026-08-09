@@ -151,7 +151,7 @@ def command_run(config_path: Path) -> int:
             plan=plan,
             run_dir=run_dir,
             input_dir=input_dir,
-            cfg=Config(doc),
+            cfgs={0: Config(doc), -1: Config(doc)},
             repeats=repeats,
             digest=digest,
             units=roster,
