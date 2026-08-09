@@ -33,14 +33,23 @@ def allocate_run_dir(output_dir: Path, code_hash: str, when: datetime) -> Path:
 
 
 def point_latest(output_dir: Path, run_dir: Path) -> None:
-    """A pointer, not an artifact. Falls back to latest.txt without symlinks."""
+    """A pointer, not an artifact. Falls back to latest.txt without symlinks.
+
+    Exactly one pointer form exists after a call: whichever one succeeds
+    clears the other, so a caller reading either never resolves to a run
+    left behind by an earlier call that took the other path.
+    """
     link = output_dir / "latest"
+    text = output_dir / "latest.txt"
     try:
         if link.is_symlink() or link.exists():
             link.unlink()
         link.symlink_to(run_dir.name)
+        text.unlink(missing_ok=True)
     except (OSError, NotImplementedError):
-        (output_dir / "latest.txt").write_text(run_dir.name + "\n")
+        text.write_text(run_dir.name + "\n")
+        if link.is_symlink() or link.exists():
+            link.unlink()
 
 
 class RunLock:
@@ -53,8 +62,12 @@ class RunLock:
         try:
             fd = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
         except FileExistsError:
+            try:
+                holder = self.path.read_text().strip()
+            except OSError:
+                holder = "unknown (lock file unreadable or removed)"
             raise ContractError(
-                f"{self.path} is held: {self.path.read_text().strip()}. "
+                f"{self.path} is held: {holder}. "
                 "A lock left by a killed process is reported, never assumed dead.",
                 code="E-RUN-LOCKED",
             ) from None

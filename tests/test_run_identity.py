@@ -51,17 +51,21 @@ def test_a_held_lock_is_reported_rather_than_assumed_dead(tmp_path: Path):
         assert e.value.code == "E-RUN-LOCKED"
 
 
-@pytest.mark.xfail(
-    reason=(
-        "point_latest's two pointer forms can disagree: a run on a "
-        "symlink-capable filesystem does not clear a stale latest.txt left "
-        "by an earlier fallback run, so a caller reading latest.txt sees "
-        "the old run while a caller reading the `latest` symlink sees the "
-        "new one. See task-13-report.md."
-    ),
-    strict=True,
-)
-def test_point_latest_does_not_leave_disagreeing_pointers(tmp_path: Path, monkeypatch):
+def _sole_pointer_target(tmp_path: Path) -> str:
+    """Assert exactly one pointer form exists and return the run id it names."""
+    link = tmp_path / "latest"
+    text = tmp_path / "latest.txt"
+    link_there = link.is_symlink() or link.exists()
+    text_there = text.exists()
+    assert link_there != text_there, "exactly one pointer form must exist"
+    if link_there:
+        return link.resolve().name
+    return text.read_text().strip()
+
+
+def test_a_fallback_run_followed_by_a_symlink_run_leaves_one_pointer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
     first = allocate_run_dir(tmp_path, HASH, WHEN)
     second = allocate_run_dir(tmp_path, HASH, WHEN)
 
@@ -72,14 +76,41 @@ def test_point_latest_does_not_leave_disagreeing_pointers(tmp_path: Path, monkey
 
     monkeypatch.setattr(Path, "symlink_to", failing_symlink_to)
     point_latest(tmp_path, first)
-    assert (tmp_path / "latest.txt").read_text().strip() == first.name
+    assert _sole_pointer_target(tmp_path) == first.name
 
     monkeypatch.setattr(Path, "symlink_to", real_symlink_to)
     point_latest(tmp_path, second)
+    assert _sole_pointer_target(tmp_path) == second.name
 
-    latest_link = tmp_path / "latest"
-    latest_txt = tmp_path / "latest.txt"
-    assert latest_link.is_symlink()
-    assert latest_link.resolve().name == second.name
-    # The stale latest.txt from the fallback run should not still claim `first`.
-    assert not latest_txt.exists() or latest_txt.read_text().strip() == second.name
+
+def test_a_symlink_run_followed_by_a_fallback_run_leaves_one_pointer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    first = allocate_run_dir(tmp_path, HASH, WHEN)
+    second = allocate_run_dir(tmp_path, HASH, WHEN)
+
+    point_latest(tmp_path, first)
+    assert _sole_pointer_target(tmp_path) == first.name
+
+    def failing_symlink_to(self: Path, *args: object, **kwargs: object) -> None:
+        raise OSError("symlinks unavailable")
+
+    monkeypatch.setattr(Path, "symlink_to", failing_symlink_to)
+    point_latest(tmp_path, second)
+    assert _sole_pointer_target(tmp_path) == second.name
+
+
+def test_a_held_locks_message_survives_a_vanished_lock_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    run_dir = allocate_run_dir(tmp_path, HASH, WHEN)
+    with RunLock(run_dir):
+
+        def unreadable(self: Path, *args: object, **kwargs: object) -> str:
+            raise OSError("lock file vanished mid-read")
+
+        monkeypatch.setattr(Path, "read_text", unreadable)
+        with pytest.raises(ContractError) as e:
+            with RunLock(run_dir):
+                pass
+        assert e.value.code == "E-RUN-LOCKED"
