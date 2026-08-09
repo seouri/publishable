@@ -1,38 +1,82 @@
 import pytest
 
 from publishable import ContractError
-from publishable.replication import resolve_repeats
+from publishable.replication import RepeatMember, resolve_repeats
 
 
 def cfg(repeats):
     return {"replication": {"repeats": repeats}}
 
 
-def test_five_seed_repeats_resolve_to_five_labelled_repeats():
-    reps = resolve_repeats(cfg([{"kind": "seed", "n": 5}]), "sha256:abc")
-    assert len(reps) == 5
-    assert all(r.kind == "seed" for r in reps)
-    assert len({r.label for r in reps}) == 5
-    assert all(r.label.startswith("seed") for r in reps)
+def test_no_replication_block_yields_one_anonymous_seed_level():
+    levels = resolve_repeats({}, "d")
+    assert len(levels) == 1
+    assert levels[0].kind == "seed"
+    assert levels[0].n == 1
+    assert levels[0].members[0].label == ""
+
+
+def test_a_single_seed_level_resolves_as_before():
+    levels = resolve_repeats(cfg([{"kind": "seed", "n": 3}]), "d")
+    assert len(levels) == 1
+    assert levels[0].kind == "seed"
+    assert levels[0].n == 3
+    assert all(m.label.startswith("seed") for m in levels[0].members)
+    assert len({m.seed for m in levels[0].members}) == 3
+    assert len({m.label for m in levels[0].members}) == 3
+
+
+def test_a_batch_level_labels_positionally_from_one():
+    levels = resolve_repeats(cfg([{"kind": "batch", "n": 3}]), "d")
+    assert [m.label for m in levels[0].members] == ["batch01", "batch02", "batch03"]
+
+
+def test_two_levels_resolve_outer_to_inner():
+    levels = resolve_repeats(cfg([{"kind": "batch", "n": 3}, {"kind": "seed", "n": 2}]), "d")
+    assert [lv.kind for lv in levels] == ["batch", "seed"]
+    assert [lv.n for lv in levels] == [3, 2]
+
+
+def test_members_are_not_mutable_through_the_level():
+    levels = resolve_repeats(cfg([{"kind": "seed", "n": 2}]), "d")
+    with pytest.raises((AttributeError, TypeError)):
+        levels[0].members.append(RepeatMember(label="x", seed=1))
+
+
+def test_two_levels_may_share_a_seed_across_levels():
+    """A batch varies nothing, so the same seed re-run later is the point —
+    a collision check spanning levels would reject the design `batch` exists for."""
+    levels = resolve_repeats(cfg([{"kind": "batch", "n": 2}, {"kind": "seed", "n": 2}]), "d")
+    outer = {m.seed for m in levels[0].members}
+    inner = {m.seed for m in levels[1].members}
+    assert len(outer) == 2 and len(inner) == 2  # distinct WITHIN each level
+
+
+def test_five_seed_repeats_resolve_to_five_labelled_members():
+    levels = resolve_repeats(cfg([{"kind": "seed", "n": 5}]), "sha256:abc")
+    assert levels[0].n == 5
+    assert levels[0].kind == "seed"
+    assert len({m.label for m in levels[0].members}) == 5
+    assert all(m.label.startswith("seed") for m in levels[0].members)
 
 
 def test_labels_and_seeds_are_stable_for_one_digest():
     a = resolve_repeats(cfg([{"kind": "seed", "n": 3}]), "sha256:abc")
     b = resolve_repeats(cfg([{"kind": "seed", "n": 3}]), "sha256:abc")
-    assert [r.label for r in a] == [r.label for r in b]
-    assert [r.seed for r in a] == [r.seed for r in b]
+    assert [m.label for m in a[0].members] == [m.label for m in b[0].members]
+    assert [m.seed for m in a[0].members] == [m.seed for m in b[0].members]
 
 
 def test_seeds_move_with_the_design_digest_not_with_parameters():
     a = resolve_repeats(cfg([{"kind": "seed", "n": 3}]), "sha256:abc")
     b = resolve_repeats(cfg([{"kind": "seed", "n": 3}]), "sha256:def")
-    assert [r.seed for r in a] != [r.seed for r in b]
+    assert [m.seed for m in a[0].members] != [m.seed for m in b[0].members]
 
 
 def test_no_replication_block_means_one_unlabelled_repeat():
-    reps = resolve_repeats({}, "sha256:abc")
-    assert len(reps) == 1
-    assert reps[0].label == ""
+    levels = resolve_repeats({}, "sha256:abc")
+    assert levels[0].n == 1
+    assert levels[0].members[0].label == ""
 
 
 @pytest.mark.parametrize(
@@ -52,10 +96,37 @@ def test_rejected_kinds_are_refused_by_name_with_a_pointer(kind, pointer):
     assert pointer in str(e.value)
 
 
-def test_s1_does_not_yet_implement_batch_or_fold():
+def test_fold_is_not_yet_implemented():
     with pytest.raises(ContractError) as e:
         resolve_repeats(cfg([{"kind": "fold", "k": 10}]), "sha256:abc")
-    assert e.value.code == "E-REPL-KIND-UNSUPPORTED"
+    assert e.value.code == "E-REPL-FOLD-UNSUPPORTED"
+
+
+def test_batch_is_now_supported():
+    levels = resolve_repeats(cfg([{"kind": "batch", "n": 3}]), "sha256:abc")
+    assert levels[0].kind == "batch"
+    assert levels[0].n == 3
+
+
+def test_more_than_two_levels_is_refused():
+    with pytest.raises(ContractError) as e:
+        resolve_repeats(
+            cfg(
+                [
+                    {"kind": "batch", "n": 2},
+                    {"kind": "seed", "n": 2},
+                    {"kind": "seed", "n": 2},
+                ]
+            ),
+            "sha256:abc",
+        )
+    assert e.value.code == "E-REPL-LEVEL-DEPTH"
+
+
+def test_two_levels_of_the_same_kind_are_refused():
+    with pytest.raises(ContractError) as e:
+        resolve_repeats(cfg([{"kind": "seed", "n": 2}, {"kind": "seed", "n": 3}]), "sha256:abc")
+    assert e.value.code == "E-REPL-LEVEL-DUPLICATE"
 
 
 def test_colliding_seeds_are_refused_rather_than_silently_perturbed(monkeypatch):
@@ -69,10 +140,11 @@ def test_colliding_seeds_are_refused_rather_than_silently_perturbed(monkeypatch)
 
 
 def test_five_seed_repeats_have_no_collisions_on_a_real_digest():
-    reps = resolve_repeats(cfg([{"kind": "seed", "n": 5}]), "sha256:abc")
-    assert len(reps) == 5
-    assert len({r.seed for r in reps}) == 5
-    assert len({r.label for r in reps}) == 5
-    for r in reps:
-        assert r.label[:4] == "seed"
-        assert r.label[4:].isdigit()
+    levels = resolve_repeats(cfg([{"kind": "seed", "n": 5}]), "sha256:abc")
+    members = levels[0].members
+    assert len(members) == 5
+    assert len({m.seed for m in members}) == 5
+    assert len({m.label for m in members}) == 5
+    for m in members:
+        assert m.label[:4] == "seed"
+        assert m.label[4:].isdigit()
