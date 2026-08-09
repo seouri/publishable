@@ -66,6 +66,12 @@ def codes(path: Path) -> set[str]:
     return {f.code for f in c.findings}
 
 
+def messages_by_code(path: Path) -> dict[str, str]:
+    c = Collector()
+    validate_config(path, c)
+    return {f.code: f.message for f in c.findings}
+
+
 def test_a_valid_config_reports_nothing(write_config):
     assert codes(write_config()) == set()
 
@@ -335,6 +341,29 @@ def test_allocation_within_is_accepted_because_it_is_a_no_op_here(write_config):
 def test_a_resolver_source_is_refused_until_plugins_exist(write_config):
     units = {"from": {"resolver": "plate_wells"}, "key": "well"}
     assert "E-DATA-RESOLVER-UNSUPPORTED" in codes(write_config({"data.units": units}))
+
+
+@pytest.mark.parametrize(
+    "units",
+    [
+        {"from": {"resolver": "plate_wells"}, "key": "well"},
+        {"from": "index.csv", "key": "patient_id", "allocation": "between"},
+        {"from": "index.csv", "key": "patient_id", "assign": {"arm": {"method": "random"}}},
+        {"from": "index.csv", "key": "patient_id", "cluster_by": "site"},
+        {"from": "index.csv", "key": "patient_id", "weight_by": "sampling_weight"},
+        {"from": "index.csv", "key": "patient_id", "measurements": {"by": "read_id"}},
+        {"from": "index.csv", "key": "patient_id", "holdout": {"method": "random", "frac": 0.2}},
+    ],
+)
+def test_every_unsupported_message_defers_rather_than_scolds(write_config, units):
+    """The `-UNSUPPORTED` family exists so a refusal reads as 'not built yet', not as
+    'your config is wrong'. Every message in this family must say so explicitly, or a
+    user has no way to tell a refusal from a validation error."""
+    found = messages_by_code(write_config({"data.units": units}))
+    unsupported = {code: msg for code, msg in found.items() if code.endswith("-UNSUPPORTED")}
+    assert unsupported, f"expected an -UNSUPPORTED finding for {units}"
+    for code, message in unsupported.items():
+        assert "later slice" in message, f"{code} message does not defer: {message!r}"
 
 
 def test_a_null_subfield_is_not_a_declaration(write_config):

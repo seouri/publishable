@@ -263,9 +263,11 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
         c.error(
             "E-DATA-ALLOCATION-UNSUPPORTED",
             "data.units.allocation",
-            f"is `{units['allocation']}`, which needs a `sweep.groups` axis to say what the "
-            "arms are; group axes are not implemented in this build. `within` is the "
-            "supported value and is what a single-condition run means anyway",
+            f"`{units['allocation']}` allocation is specified but not implemented in this "
+            "build — it needs a `sweep.groups` axis to say what the arms are, and group "
+            "axes are not implemented either; both will be honored in a later slice. "
+            "`within`, the default, is the supported value and is what a single-condition "
+            "run means regardless",
         )
     for field, code in (
         ("assign", "E-DATA-ASSIGN-UNSUPPORTED"),
