@@ -460,14 +460,16 @@ def test_an_unrelated_unsupported_field_does_not_suppress_a_real_roster_defect(
 
 def test_a_string_units_block_is_reported_not_raised(write_config):
     """`data.units: "index.csv"` is an easy typo for the `from` key one level down —
-    `validate_config` must return a diagnostic, not let an `AttributeError` escape."""
+    `validate_config` must return, with a diagnostic, not let an `AttributeError`
+    escape. `_check_shape` catches this before any later check indexes into it, so
+    the whole config is refused rather than partially validated."""
     path = _with_doc_change(
         write_config, lambda doc: doc["data"].update(units="index.csv")
     )
     c = Collector()
     result = validate_config(path, c)
-    assert result is not None
-    assert "E-DATA-UNITS-SHAPE" in {f.code for f in c.findings}
+    assert result is None
+    assert "E-CONFIG-SHAPE" in {f.code for f in c.findings}
 
 
 def test_a_list_units_block_is_reported_not_raised(write_config):
@@ -476,31 +478,102 @@ def test_a_list_units_block_is_reported_not_raised(write_config):
     )
     c = Collector()
     result = validate_config(path, c)
-    assert result is not None
-    assert "E-DATA-UNITS-SHAPE" in {f.code for f in c.findings}
+    assert result is None
+    assert "E-CONFIG-SHAPE" in {f.code for f in c.findings}
 
 
 def test_a_malformed_units_block_is_reported_exactly_once(write_config):
-    """`_check_units` and `_check_unimplemented` both derive `data.units`; a bad shape
-    must not produce the diagnostic twice just because two functions look at it."""
+    """`_check_shape` alone reports the bad `data.units` shape; `_check_units` and
+    `_check_unimplemented` never even run because `validate_config` returns early —
+    a bad shape must not produce the diagnostic twice."""
     path = _with_doc_change(
         write_config, lambda doc: doc["data"].update(units="index.csv")
     )
     c = Collector()
     validate_config(path, c)
-    shape_findings = [f for f in c.findings if f.code == "E-DATA-UNITS-SHAPE"]
+    shape_findings = [f for f in c.findings if f.code == "E-CONFIG-SHAPE"]
     assert len(shape_findings) == 1
 
 
 def test_check_unimplemented_alone_does_not_raise_on_a_malformed_units_block():
     """Exercised directly, the way `_check_unimplemented`'s other rules are —
-    a non-mapping `data.units` reaching this function on its own (not just through
-    `validate_config`) must still produce a diagnostic rather than an `AttributeError`."""
+    a non-mapping `data.units` reaching this function on its own (bypassing
+    `_check_shape`, which normally would have stopped `validate_config` first) must
+    still produce a diagnostic rather than an `AttributeError`."""
     from publishable.validate import _check_unimplemented
 
     c = Collector()
     _check_unimplemented({"data": {"units": "index.csv"}}, c)
-    assert "E-DATA-UNITS-SHAPE" in {f.code for f in c.findings}
+    assert "E-CONFIG-SHAPE" in {f.code for f in c.findings}
+
+
+@pytest.mark.parametrize(
+    "block,bad_value",
+    [
+        ("metadata", "not-a-mapping"),
+        ("metadata", ["a", "list"]),
+        ("data", "not-a-mapping"),
+        ("data", ["a", "list"]),
+        ("parameters", "not-a-mapping"),
+        ("parameters", ["a", "list"]),
+        ("sweep", "not-a-mapping"),
+        ("sweep", ["a", "list"]),
+        ("replication", "not-a-mapping"),
+        ("replication", ["a", "list"]),
+        ("statistics", "not-a-mapping"),
+        ("statistics", ["a", "list"]),
+        ("limits", "not-a-mapping"),
+        ("limits", ["a", "list"]),
+        ("hypotheses", "not-a-list"),
+        ("hypotheses", {"a": "mapping"}),
+        ("schema_version", ["a", "list"]),
+        ("schema_version", {"a": "mapping"}),
+        ("experiment_type", ["a", "list"]),
+        ("template_version", ["a", "list"]),
+        ("entrypoint", ["a", "list"]),
+        ("plugin", ["a", "list"]),
+    ],
+)
+def test_a_top_level_block_with_the_wrong_shape_is_reported_not_raised(
+    write_config, block, bad_value
+):
+    """Every block `_check_shape` guards, exercised with a string where a mapping/list
+    is expected and a list where a string/mapping is expected — the same crash class
+    the review found in `data.units`, one level up. `validate_config` must return
+    `None` rather than let the type error escape into a later `_check_*`."""
+    path = _with_doc_change(write_config, lambda doc: doc.update({block: bad_value}))
+    c = Collector()
+    result = validate_config(path, c)
+    assert result is None
+    assert "E-CONFIG-SHAPE" in {f.code for f in c.findings}
+
+
+def test_a_repeats_item_that_is_not_a_mapping_is_reported_not_raised(write_config):
+    """`replication.repeats: [1, 2]` crashed `_check_replication`'s `level.get("n")`
+    before this guard existed."""
+    path = _with_doc_change(
+        write_config, lambda doc: doc["replication"].update(repeats=[1, 2])
+    )
+    c = Collector()
+    result = validate_config(path, c)
+    assert result is None
+    assert "E-CONFIG-SHAPE" in {f.code for f in c.findings}
+
+
+def test_a_fully_valid_config_still_validates_completely_clean(write_config):
+    """The new shape gate must not become a false refusal against the config every
+    other test in this file already treats as valid."""
+    assert codes(write_config()) == set()
+
+
+def test_an_absent_optional_block_is_not_a_shape_error(write_config):
+    """`sweep` and `statistics` are optional and absent in the base fixture; absence
+    must not be confused with the wrong shape."""
+    path = write_config()
+    loaded = yaml.safe_load(path.read_text())
+    assert "sweep" not in loaded
+    assert "statistics" not in loaded
+    assert codes(path) == set()
 
 
 def test_a_missing_entrypoint_is_reported(write_config):

@@ -21,6 +21,19 @@ SWEEP_AXIS_KEYS = ("baseline", "grid", "paired", "ablate", "sample", "groups")
 
 REQUIRED_METADATA = ("description", "authors")
 
+# The shape of every top-level block, checked once before any `_check_*` reads one —
+# a property of the config format, not of whichever check happens to read a block
+# first. `statistics`, `limits`, and `hypotheses` are included even though nothing
+# reads them yet in this build, so the next reader inherits the guard rather than
+# the crash a hand-edited config would otherwise produce.
+_MAPPING_BLOCKS = (
+    "metadata", "data", "parameters", "sweep", "replication", "statistics", "limits",
+)
+_LIST_BLOCKS = ("hypotheses",)
+_STRING_BLOCKS = ("schema_version", "experiment_type", "template_version", "entrypoint", "plugin")
+
+_KIND_LABEL = {"mapping": "a mapping", "list": "a list", "string": "a string"}
+
 
 def _flatten(node: Any, prefix: str = "") -> dict[str, Any]:
     flat: dict[str, Any] = {}
@@ -33,6 +46,59 @@ def _flatten(node: Any, prefix: str = "") -> dict[str, Any]:
     return flat
 
 
+def _check_shape(doc: dict[str, Any], c: Collector) -> bool:
+    """Every top-level block's type, checked once before any later `_check_*` indexes
+    into one. Returns whether the doc is shaped well enough to keep validating —
+    `validate_config` returns early when it is not, the same pattern it already uses
+    for an unparseable config and an unknown template: every later check indexes into
+    these blocks, so continuing would cascade into confusing secondary errors about a
+    config whose shape is already known wrong.
+
+    An absent key is not a shape error — optional blocks stay optional, and required
+    ones are already reported by their own check. A key present but `null` is treated
+    the same as absent, matching the rest of this module (`doc.get("x") or {}`): a
+    hand-edited `sweep: null` is not a declaration, and shouldn't become a new kind of
+    error just because this check now runs first.
+    """
+    ok = True
+
+    def _bad(key: str, value: Any, kind: str) -> None:
+        nonlocal ok
+        c.error(
+            "E-CONFIG-SHAPE",
+            key,
+            f"is a {type(value).__name__} (`{value!r}`); expected {_KIND_LABEL[kind]}",
+        )
+        ok = False
+
+    for block, kind, isa in (
+        *((k, "mapping", dict) for k in _MAPPING_BLOCKS),
+        *((k, "list", list) for k in _LIST_BLOCKS),
+        *((k, "string", str) for k in _STRING_BLOCKS),
+    ):
+        value = doc.get(block)
+        if value is not None and not isinstance(value, isa):
+            _bad(block, value, kind)
+
+    # Nested shapes a later check indexes into directly, folded into the same
+    # `E-CONFIG-SHAPE` identifier rather than a second code for one condition.
+    data = doc.get("data")
+    if isinstance(data, dict):
+        units = data.get("units")
+        if units is not None and not isinstance(units, dict):
+            _bad("data.units", units, "mapping")
+
+    replication = doc.get("replication")
+    if isinstance(replication, dict):
+        repeats = replication.get("repeats")
+        if isinstance(repeats, list):
+            for i, level in enumerate(repeats):
+                if not isinstance(level, dict):
+                    _bad(f"replication.repeats[{i}]", level, "mapping")
+
+    return ok
+
+
 def validate_config(config_path: Path, c: Collector) -> dict[str, Any] | None:
     try:
         doc = yaml.safe_load(config_path.read_text())
@@ -42,6 +108,9 @@ def validate_config(config_path: Path, c: Collector) -> dict[str, Any] | None:
     if not isinstance(doc, dict):
         c.error("E-CONFIG-PARSE", str(config_path), "does not parse as a mapping")
         return None
+
+    if not _check_shape(doc, c):
+        return None  # every later check indexes into a block already known malformed
 
     name = doc.get("experiment_type", "")
     template = get_template(name)
@@ -199,22 +268,26 @@ def _check_data(doc: dict[str, Any], config_path: Path, c: Collector) -> None:
 def _units_declaration(data: dict[str, Any], c: Collector) -> dict[str, Any] | None:
     """`data.units`, or `None` if there is no declaration or its shape is wrong.
 
-    A hand-edited config can put a string, a list, or a number where `data.units`
-    should be a mapping — `"units": "index.csv"` is an easy typo for the `from` key
-    one level down. Reported once as `E-DATA-UNITS-SHAPE` regardless of which of
-    `_check_units` / `_check_unimplemented` calls this first: the second call finds
-    the diagnostic already in `c.findings` and does not repeat it.
+    In the normal pipeline this shape is already guaranteed by `_check_shape`, which
+    runs first in `validate_config` and stops the whole check before `_check_units` /
+    `_check_unimplemented` are ever called. This guard exists for the two of them
+    being exercised directly (as several `_check_*` functions already are in tests),
+    so neither crashes on a non-mapping `data.units` reached on its own. Reported —
+    under the same `E-CONFIG-SHAPE` identifier `_check_shape` uses, so a bad shape is
+    never two different codes — only if that exact diagnostic is not already in
+    `c.findings`, which is what keeps a direct call from double-reporting one
+    `_check_shape` already caught.
     """
     units_decl = data.get("units")
     if not units_decl:
         return None
     if not isinstance(units_decl, dict):
         already_reported = any(
-            f.code == "E-DATA-UNITS-SHAPE" and f.path == "data.units" for f in c.findings
+            f.code == "E-CONFIG-SHAPE" and f.path == "data.units" for f in c.findings
         )
         if not already_reported:
             c.error(
-                "E-DATA-UNITS-SHAPE",
+                "E-CONFIG-SHAPE",
                 "data.units",
                 f"is a {type(units_decl).__name__} (`{units_decl!r}`); expected a mapping "
                 "with a `from` key, e.g. `{from: index.csv, key: patient_id}`",
