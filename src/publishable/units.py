@@ -9,6 +9,7 @@ directory and no step for an `io` to belong to.
 import csv
 import hashlib
 import json
+import random
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -176,6 +177,25 @@ def resolve_units(units_decl: dict[str, Any], input_dir: Path) -> UnitList:
             )
         seen[u.key] = 1
     return UnitList(units)
+
+
+def partition_units(roster: UnitList, k: int, digest: str) -> list[list[Unit]]:
+    """Split the roster into `k` test partitions, each unit in exactly one.
+
+    Drawn from the design digest rather than `parameters_hash`: editing an
+    unrelated parameter must not redraw every fold boundary (reference.md
+    § What auto-derives from). Sizes differ by at most one, so no fold is
+    systematically smaller than its neighbours.
+    """
+    units = list(roster)
+    rng = random.Random(_seed_from(digest))
+    shuffled = list(units)
+    rng.shuffle(shuffled)
+    return [shuffled[i::k] for i in range(k)]
+
+
+def _seed_from(digest: str) -> int:
+    return int.from_bytes(hashlib.sha256(f"{digest}|folds".encode()).digest()[:4], "big")
 
 
 def units_hash(units: UnitList) -> str:

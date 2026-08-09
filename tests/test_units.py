@@ -4,7 +4,7 @@ from pathlib import Path
 import pytest
 
 from publishable import ContractError
-from publishable.units import Unit, resolve_units, units_hash
+from publishable.units import Unit, UnitList, partition_units, resolve_units, units_hash
 
 
 @pytest.fixture
@@ -193,3 +193,43 @@ def test_units_hash_follows_order_and_content(input_dir: Path):
     (input_dir / "index.csv").write_text("patient_id,label,site\np1,0,b\np3,1,a\np2,1,a\n")
     reordered = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
     assert units_hash(reordered) != units_hash(a), "order is part of the identity"
+
+
+def _roster(n: int) -> UnitList:
+    return UnitList([Unit(key=f"u{i:03d}", paths=(), attributes={}) for i in range(n)])
+
+
+def test_every_unit_appears_in_exactly_one_partition():
+    parts = partition_units(_roster(240), 10, "d")
+    seen = [u.key for p in parts for u in p]
+    assert len(seen) == 240
+    assert len(set(seen)) == 240
+
+
+def test_partitions_cover_the_roster():
+    parts = partition_units(_roster(240), 10, "d")
+    assert {u.key for p in parts for u in p} == {f"u{i:03d}" for i in range(240)}
+
+
+def test_partition_sizes_differ_by_at_most_one():
+    parts = partition_units(_roster(241), 10, "d")
+    sizes = sorted(len(p) for p in parts)
+    assert sizes[-1] - sizes[0] <= 1
+    assert len(parts) == 10
+
+
+def test_k_equal_to_n_yields_one_unit_each():
+    parts = partition_units(_roster(7), 7, "d")
+    assert [len(p) for p in parts] == [1] * 7
+
+
+def test_the_same_digest_reproduces_the_same_split():
+    a = partition_units(_roster(50), 5, "d")
+    b = partition_units(_roster(50), 5, "d")
+    assert [[u.key for u in p] for p in a] == [[u.key for u in p] for p in b]
+
+
+def test_a_different_digest_gives_a_different_split():
+    a = partition_units(_roster(50), 5, "d")
+    b = partition_units(_roster(50), 5, "other")
+    assert [[u.key for u in p] for p in a] != [[u.key for u in p] for p in b]
