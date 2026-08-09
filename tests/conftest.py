@@ -20,5 +20,5 @@ def git_repo(tmp_path: Path) -> Path:
     git("config", "user.email", "test@example.com", cwd=repo)
     git("config", "user.name", "Test", cwd=repo)
     git("add", ".", cwd=repo)
-    git("commit", "-qm", "initial", cwd=repo)
+    git("-c", "commit.gpgsign=false", "commit", "-qm", "initial", cwd=repo)
     return repo
