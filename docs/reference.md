@@ -2731,7 +2731,7 @@ class Step(BaseStep):
         return {"n_units": len(units)}          # TODO: replace with your analysis
 ```
 
-Trivial, but it means `publishable run` succeeds immediately after scaffolding. You get a real `run.yaml`, a real artifact tree, and a real set of provenance hashes before writing a line of your own code — so the shape of the whole loop is visible while you're still deciding whether to adopt it. Replace the body when you're ready; the `TODO` is the only thing that needs to change.
+Trivial, but it means `publishable run` succeeds immediately after scaffolding. You get a real `run.yaml`, a real artifact tree, and a real set of provenance hashes before writing a line of your own code — so the shape of the whole loop is visible while you're still deciding whether to adopt it. Replace the body when you're ready: the `TODO` marks the only line that *must* change, and a real pipeline usually renames the file and picks its own [scope](#step-scope) besides — the worked example's first step is `step01_load_cohort` at `scope = "run"`, which is what loading a cohort once should be.
 
 **What "immediately" presumes is the `data.units` block `init` wrote** — a table at `input_dir/index.csv` whose key column is the one the config names — since [`io.units` raises when no units are declared](#steps-and-artifacts) and `validate` fails when they don't resolve. Input shaped some other way means editing that one declaration first, which is [one line and one `validate` away](#where-units-come-from); a pipeline with no unit table at all edits the step too, which is the `TODO` it already carries.
 
