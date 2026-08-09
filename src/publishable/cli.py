@@ -29,7 +29,7 @@ from publishable.generators.step import generate_step
 from publishable.hashes import code_hash, design_digest, parameters_hash
 from publishable.manifest import build_manifest, manifest_hash, verify_manifest
 from publishable.provenance import find_repo_root, git_provenance
-from publishable.replication import Repeat, resolve_repeats
+from publishable.replication import cross_levels, resolve_repeats
 from publishable.run_identity import RunLock, allocate_run_dir, point_latest
 from publishable.run_record import assemble_run_yaml, run_status
 from publishable.runner import attrition, execute_plan, resolve_condition_cfg, resolve_wide_cfg
@@ -108,11 +108,8 @@ def command_run(config_path: Path) -> int:
     experiment = _load_experiment(repo_root, doc["entrypoint"])  # phase 3: entrypoint imports
 
     digest = design_digest(doc)  # phase 5: pin hashes
-    # resolve_repeats now returns list[RepeatLevel] (S3b Task 1). Task 2 replaces this
-    # flattening with real crossing across levels; for now take only the outermost
-    # level so every downstream shape stays exactly as it was before this change.
     levels = resolve_repeats(doc, digest)
-    repeats = [Repeat(kind=levels[0].kind, label=m.label, seed=m.seed) for m in levels[0].members]
+    repeats = cross_levels(levels)
     labels = [r.label for r in repeats if r.label] or [""]
 
     conditions = expand(doc)

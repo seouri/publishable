@@ -1,7 +1,7 @@
 import pytest
 
 from publishable import ContractError
-from publishable.replication import RepeatMember, resolve_repeats
+from publishable.replication import RepeatMember, cross_levels, resolve_repeats
 
 
 def cfg(repeats):
@@ -148,3 +148,34 @@ def test_five_seed_repeats_have_no_collisions_on_a_real_digest():
     for m in members:
         assert m.label[:4] == "seed"
         assert m.label[4:].isdigit()
+
+
+def test_one_level_crosses_to_its_own_members():
+    levels = resolve_repeats(cfg([{"kind": "seed", "n": 3}]), "d")
+    leaves = cross_levels(levels)
+    assert [lf.label for lf in leaves] == [m.label for m in levels[0].members]
+
+
+def test_two_levels_cross_with_the_inner_varying_fastest():
+    levels = resolve_repeats(cfg([{"kind": "batch", "n": 3}, {"kind": "seed", "n": 2}]), "d")
+    leaves = cross_levels(levels)
+    assert len(leaves) == 6
+    inner = [m.label for m in levels[1].members]
+    assert [lf.label for lf in leaves] == [
+        f"batch01_{inner[0]}", f"batch01_{inner[1]}",
+        f"batch02_{inner[0]}", f"batch02_{inner[1]}",
+        f"batch03_{inner[0]}", f"batch03_{inner[1]}",
+    ]
+
+
+def test_a_leaf_takes_the_innermost_seed_and_kind():
+    levels = resolve_repeats(cfg([{"kind": "batch", "n": 2}, {"kind": "seed", "n": 2}]), "d")
+    leaves = cross_levels(levels)
+    inner = levels[1].members
+    assert [lf.seed for lf in leaves] == [inner[0].seed, inner[1].seed] * 2
+    assert {lf.kind for lf in leaves} == {"seed"}
+
+
+def test_the_anonymous_single_repeat_keeps_its_empty_label():
+    leaves = cross_levels(resolve_repeats({}, "d"))
+    assert [lf.label for lf in leaves] == [""]

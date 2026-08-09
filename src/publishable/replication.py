@@ -6,6 +6,7 @@ See docs/reference.md § Repeat kinds.
 """
 
 import hashlib
+import itertools
 from dataclasses import dataclass
 from typing import Any
 
@@ -115,6 +116,22 @@ def resolve_repeats(config: dict[str, Any], digest: str) -> list[RepeatLevel]:
     for lv in resolved:
         _check_no_collisions(lv, digest)
     return resolved
+
+
+def cross_levels(levels: list[RepeatLevel]) -> list[Repeat]:
+    """Cross the levels outer-to-inner into one leaf per execution.
+
+    The inner level varies fastest, so the sequence reads like nested loops
+    written in declaration order — the same rule `sweep.expand` follows for
+    conditions. A leaf takes the innermost level's kind and seed because the
+    inner level is what differs between consecutive executions.
+    """
+    leaves: list[Repeat] = []
+    inner = levels[-1]
+    for combo in itertools.product(*[lv.members for lv in levels]):
+        label = "_".join(m.label for m in combo if m.label)
+        leaves.append(Repeat(kind=inner.kind, label=label, seed=combo[-1].seed))
+    return leaves
 
 
 def _check_no_collisions(level: RepeatLevel, digest: str) -> None:
