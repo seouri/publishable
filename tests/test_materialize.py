@@ -60,10 +60,21 @@ def test_limits_carry_the_documented_defaults():
     }
 
 
-def test_s1_omits_the_units_block_because_resolution_is_s2():
+def test_the_generated_config_declares_a_unit_roster():
     doc = yaml.safe_load(rendered())
-    assert "units" not in doc["data"]
-    assert doc["data"]["input_manifest_policy"] == "hash_all"
+    units = doc["data"]["units"]
+    assert units["from"] == "index.csv"
+    assert units["key"] == "patient_id"
+    assert units["attributes"] == []
+    assert units["allocation"] == "within"
+    for optional in ("cluster_by", "weight_by", "measurements", "holdout"):
+        assert units[optional] is None, f"{optional} must be null, not absent or declared"
+
+
+def test_the_generated_units_block_carries_its_comments():
+    text = rendered()
+    assert '# index.csv | {glob: "*.dcm"}' in text
+    assert "# within | between" in text
 
 
 def test_replication_defaults_to_five_seed_repeats():
