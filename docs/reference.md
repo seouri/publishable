@@ -228,6 +228,8 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Grid size sane | 6 conditions × 10 folds × 3 seeds = 180 executions exceeds `limits.max_executions` |
 | Leave-one-out is affordable | `{kind: fold, k: all}` over 240 units × 3 conditions = 720 executions exceeds `limits.max_executions` |
 | Credentials present | `INSTRUMENT_API_TOKEN` is not set in `.env` |
+| Credentials a swept value needs | `AZURE_OPENAI_API_KEY` is [required by](#a-credential-can-belong-to-a-parameter-value) `llm.provider: azure_openai`, selected in condition `01_model=azure.gpt-4.1`, and is not set in `.env` |
+| `requires_env` covers its choices | `llm.provider` declares `requires_env` for `azure_openai`, `openai`; `choices` also lists `ollama` — a value that needs no credential declares `[]` |
 | Probe is installed | template `my_assay` declares `apparatus_probe: assay_instrument`, which no installed plugin registers |
 | Data outside repo | `output_dir` resolves inside the git repository |
 | Manifest readable | `input_dir` is unreadable or empty |
@@ -426,7 +428,7 @@ An execution that raises is recorded `failed` and the run **continues to the nex
 
 **`failed` means there is nothing to report**, which is why it isn't simply "the plan didn't finish." Three things produce it. A `scope: "run"` step that raises takes every condition with it — there is no shared cohort for them to condition on, so continuing would mean executing a plan whose first premise is missing. `limits.max_failed_fraction` being exceeded stops the run where it stands: unit failures only accumulate, so once the fraction is past the threshold no later execution can bring it back, and spending the remaining compute to confirm that is waste. And the [input manifest failing its re-verification](#steps-and-artifacts) after the last execution fails a run that otherwise reached the end of its plan — the inputs moved underneath it, so every number in it is over a dataset that no longer exists, and there is no honest way to report that as `partial`.
 
-**A run that stops early can still be `partial`**, and one thing produces that: core losing the ability to certify the [apparatus](#the-apparatus-core-can-only-observe). A probe that stops answering — the service down, a credential expired mid-run — leaves the gate with nothing to compare before the next execution, so the run stops there rather than executing uncertified. Everything up to that point ran under recorded facts, so there is a record worth reading and `failed`'s "nothing to report" doesn't fit it. The exit code is nevertheless [`5`](#exit-codes-and-diagnostics) rather than `3`, per the precedence stated there.
+**A run that stops early can still be `partial`**, and one thing produces that: core losing the ability to certify the [apparatus](#the-apparatus-core-can-only-observe). A probe that stops responding altogether — the service down, a credential expired mid-run, which is a different thing from [a fact it returns unanswered](#the-apparatus-core-can-only-observe) — leaves the gate with nothing to compare before the next execution, so the run stops there rather than executing uncertified. Everything up to that point ran under recorded facts, so there is a record worth reading and `failed`'s "nothing to report" doesn't fit it. The exit code is nevertheless [`5`](#exit-codes-and-diagnostics) rather than `3`, per the precedence stated there.
 
 A `scope: "summary"` step that raises is *not* one of these — every condition ran, and its own execution is one failure among the others, so the run is `partial` and the conditions are readable without it.
 
@@ -579,7 +581,7 @@ Each recording step's directory holds the table its [`io.record`](#units-the-thi
  "probe": "llm_deployment", "facts": {"model_revision": "gpt-5.5-2026-06-11"}}
 ```
 
-`provenance.apparatus.facts` in `run.yaml` is the first observation per condition — what the [gate](#the-apparatus-core-can-only-observe) compares against — and the ledger is every observation, so a run that failed on a moved apparatus still shows the evaluable earlier period. [`apparatus.expected.json`](#reproducing-on-another-device), written by `reproduce` into the checkout rather than into a run directory, is that same per-condition mapping with nothing else in it: `{"probe": …, "facts": {"00_baseline": {…}}}`. It is the one file here you are expected to edit.
+`provenance.apparatus.facts` in `run.yaml` is the first *answered* observation of each fact — what the [gate](#the-apparatus-core-can-only-observe) compares against, per fact rather than per probe, since a probe that answered three of four facts pinned three of them. A fact still unanswered when the run ends stays `null` there, and `provenance.apparatus.unobserved` counts how many probes left it so. The ledger is every observation, nulls included, so a run that failed on a moved apparatus still shows the evaluable earlier period, and a fact that only started answering halfway through is visible as exactly that. [`apparatus.expected.json`](#reproducing-on-another-device), written by `reproduce` into the checkout rather than into a run directory, is that same per-condition mapping with nothing else in it: `{"probe": …, "facts": {"00_baseline": {…}}}`. It is the one file here you are expected to edit.
 
 ---
 
@@ -1110,7 +1112,7 @@ class GenericTemplate(BaseTemplate):
     default_repeats = 1
     required_env = []
     apparatus_probe = None            # see "The apparatus core can only observe"
-    apparatus_facts = []              # what the probe must yield, if one is declared
+    apparatus_facts = []              # which keys the probe must supply, if one is declared
 
     # One spec drives all three jobs: what `init` writes, what its comments say,
     # and what `validate` enforces. There is no second source of truth.
@@ -1175,7 +1177,7 @@ def aggregate(self, units, cfg) -> dict:
 
 **One call per recording step, attributed to that step.** A pipeline can have several steps that call `io.record`, so there is no single unit table to hand over. Core calls `aggregate` once per step that recorded one, over that step's collapsed table, and files the result under that step — which is why the worked example's derived `r` appears at `aggregated.step03_analyze.r` rather than at the top of the condition. A template that only knows how to derive metrics from some tables returns `{}` for the rest.
 
-`Param` carries type, default, constraints, and help text — so `init` renders the file with accurate inline comments, and `validate` enforces exactly what was documented. Adding a parameter in one place makes it appear in newly-initialized configs and become enforceable at once.
+`Param` carries type, default, constraints, help text, and any [credential a chosen value requires](#a-credential-can-belong-to-a-parameter-value) — so `init` renders the file with accurate inline comments, and `validate` enforces exactly what was documented. Adding a parameter in one place makes it appear in newly-initialized configs and become enforceable at once.
 
 **The constraint vocabulary is closed**, because `parameter_spec` is the schema `validate` enforces and a spec whose vocabulary is open-ended can't be checked or rendered into a comment:
 
@@ -1208,6 +1210,34 @@ There is no `validator=` hook: a rule that needs code is a cross-field rule, and
 Omitting `default` is what makes a parameter required, which is why `default=None` is not the way to spell it — `null` is a legal value for some parameters and the absence of one is a different claim. A `Param` declaring `default=None` without `nullable=True` is rejected when the template loads, rather than at the first config that leaves it alone. Nullability is load-bearing beyond this: [`sweep.ablate.remove`](#expansion-modes) sets a boolean to `false` or a nullable parameter to `null`, and `validate` needs to know which parameters those are.
 
 Required parameters get the same treatment `metadata.description` does — materialized with an empty value and a `# REQUIRED` marker, so the file `init` produced is complete and fails validation until you fill it in, rather than being silently short a key. **The marker is what fails**: `validate` rejects a required parameter still holding its type's empty value, exactly as it rejects an empty `metadata.description`. The consequence is worth knowing before you declare one — an empty string can never be a legal value for a required `str`, because there is no way to distinguish the value you meant from the placeholder you didn't fill in. If empty is legitimate, the parameter has a default and isn't required.
+
+### A credential can belong to a parameter value
+
+[`required_env`](#secrets--credentials) is a template-level list, so it says what an experiment *type* always needs — and that is the wrong shape whenever the credential follows a choice. A sweep across model deployments, instrument vendors, or scoring services is a sweep across the things being authenticated to, and a static list has to either demand a key for a provider no condition selects or stay silent about one every condition needs. Neither is a check worth running.
+
+**So a value can carry its own credential requirement, declared beside the choices it belongs to:**
+
+```python
+"llm.provider": Param(str, default="azure_openai",
+                      choices=["azure_openai", "openai", "ollama"],
+                      requires_env={"azure_openai": ["AZURE_OPENAI_API_KEY"],
+                                    "openai":       ["OPENAI_API_KEY"],
+                                    "ollama":       []}),
+```
+
+`validate` then checks **the union over the conditions the sweep actually resolves**, so the config above demands `AZURE_OPENAI_API_KEY` when a condition selects Azure and says nothing about it when none does. `[]` is how a value that needs no credential says so, and it is not the same as omitting the key.
+
+**`init` renders the requirement into the `choices` comment, against every value rather than the one it wrote**, because [nothing ever writes back into a config](#the-one-config-file) and a comment describing the *current* value would be wrong the first time you edited it. Attaching each variable to its own choice keeps the comment true whatever the file holds, which is the property every other inline comment already has:
+
+```yaml
+  llm:
+    provider: azure_openai
+    # choices: azure_openai (needs AZURE_OPENAI_API_KEY) | openai (needs OPENAI_API_KEY) | ollama
+```
+
+**`requires_env` needs `choices`, and the mapping must be total over them.** A credential requirement is only checkable if the set of values is closed, which is exactly what `choices` declares; and a partial mapping would leave "this value needs nothing" and "nobody wrote this value down" spelled identically, which is the [defaults-file problem](#there-is-no-separate-defaults-file) inside one dict. `validate` rejects a mapping with a missing or unknown key when the template loads, naming both sets. The consequence to plan for is real and is the point: **adding a choice breaks every template that declared `requires_env` until the new value states its requirement.** A new provider whose credentials nobody wrote down is a bug, and finding it at load beats finding it four hours into a sweep.
+
+This is not a constraint, so it isn't in the closed vocabulary above — it constrains the *environment* a value may be used in, not the value. It's the same boundary [`apparatus_facts`](#the-apparatus-core-can-only-observe) sits on, read from the other side: the provider is something you decide, so it's a `Param`, and what that decision requires travels with it rather than with the template that happens to offer the choice.
 
 ---
 
@@ -2081,10 +2111,15 @@ steps: step01_load_cohort (run) -> step02_fit_model (condition)
        -> step03_analyze (repeat) -> step04_compare_methods (summary)
 statistics: basis units (n=240 resolved); r derived by template aggregate()
             percentile CI per condition; paired delta vs 00_baseline
+scale:  3,600 unit-executions (15 executions × 240 units handed to each)
 would write 64 artifacts under /secure/results/cohort-pilot/run_.../
 ```
 
 Grid sizes multiply quietly, and nested repeats multiply on top of them. `validate` warns past `limits.max_executions`, and `dry-run` prints the full expansion, because "6 conditions × 10 folds × 3 seeds" is easy to write and slow to discover.
+
+**`unit-executions` is the line to read before a metered run, and it is not the execution count.** It's the sum of `len(io.units)` over every planned execution — one count per unit per (condition, repeat), which core can state exactly because it computed the partitions. The two numbers come apart in both directions: under `{kind: fold, k: 10} × {kind: seed, n: 3}` each execution gets a tenth of the roster, so a condition's 30 executions are 720 unit-executions rather than 7,200, and a 20-execution sweep over a 100,000-unit corpus is cheap by `max_executions` and ruinous in practice. Where a step makes one request, one assay, or one simulation per unit, this is the count the bill is proportional to.
+
+**There is deliberately no token or currency limit, and `limits` gains no field here.** Core has no price list and no way to count tokens, so a threshold in either would be a number it cannot measure — the same standard the [correction family](#sweeps-and-repeats) is held to, where a count that looks handled and isn't is worse than an honest one, and the same reason [`default_repeats` is a plain integer](#naming-conventions--repeat-defaults) rather than a derived one. What core owns is the multiplier; the per-unit cost is yours, and multiplying two numbers is not a feature worth a config field. Where a budget must be part of the pre-registered record, declare it as a template parameter — `pricing.prompt_per_mtok`, `budget.max_usd` — so it is hashed with everything else, and check it in the template's [`validate`](#templates-where-parameters-are-defined) or report it from a [`summary` step](#steps-that-need-every-condition).
 
 **`dry-run` is the command that reaches outward, so it needs what a run needs minus the compute.** It builds the input manifest and [probes the apparatus](#the-apparatus-core-can-only-observe), which means real credentials and a reachable apparatus — for a sweep over six model deployments, all six, including any local one actually running. That is the point of the split rather than a cost of it: [`validate`](#cli-reference) stays free to run in a loop while you edit YAML, and everything expensive happens once, in a command you invoke when you think you're ready. Develop a wide sweep against one level of the axis and widen it last; `dry-run` is where a config you can't afford to run announces itself.
 
@@ -2178,13 +2213,13 @@ class MyAssayTemplate(BaseTemplate):
     apparatus_facts = ["model", "firmware", "calibration_id", "reagent_lot"]
 ```
 
-`apparatus_facts` is the same projection rule as `data.units.attributes`: core enforces that the probe yields every declared fact and rejects one that doesn't, without knowing what any of them mean. **The plugin decides how the apparatus is interrogated; core decides what is required of it, records the answer, and refuses to continue when it changes.**
+`apparatus_facts` is the same projection rule as `data.units.attributes`: core enforces that the probe yields every declared *key* and rejects one that doesn't, without knowing what any of them mean. **The plugin decides how the apparatus is interrogated; core decides what is required of it, records the answer, and refuses to continue when it changes.**
 
 **A probe emits non-secret, non-identifying facts, and that's a rule rather than a convention.** A revision string, a firmware version, and a calibration ID are safe to publish; an endpoint URL or an instrument serial can identify an institution on its own, so a probe emits a *hash* of one instead of the value — which is what makes `provenance.apparatus` publishable as-is and is why [`study add`](#what-study-add-redacts) has nothing to redact from it. Credentials never appear, for the same reason [they never appear anywhere else](#secrets--credentials).
 
-**It runs at `dry-run`, at run start, and before every execution — never at `validate`.** An unreachable apparatus or a missing fact is worth learning before you spend the run, which is why it isn't deferred to `run`; and before every execution is the only placement that catches a revision changing *during* a long run, which is when it actually happens. But `validate` is the cheap command you invoke in a loop while editing YAML, and a probe is an authenticated request to something metered by somebody else.
+**It runs at `dry-run`, at run start, and before every execution — never at `validate`.** An unreachable apparatus, a fact the probe doesn't supply, or one it supplies unanswered is worth learning before you spend the run, which is why it isn't deferred to `run`; and before every execution is the only placement that catches a revision changing *during* a long run, which is when it actually happens. But `validate` is the cheap command you invoke in a loop while editing YAML, and a probe is an authenticated request to something metered by somebody else.
 
-So the split follows what is answerable without a call. **`validate` checks that the named probe is registered by an installed plugin — the only apparatus question that needs no request.** Everything about what a probe *yields* takes calling it, so `dry-run` is where it runs, and where core checks that every fact in `apparatus_facts` came back and that no returned value matches a credential.
+So the split follows what is answerable without a call. **`validate` checks that the named probe is registered by an installed plugin — the only apparatus question that needs no request.** Everything about what a probe *yields* takes calling it, so `dry-run` is where it runs, where core checks that every key in `apparatus_facts` came back and that no returned value matches a credential, and where it warns for a declared fact that came back `null`.
 
 That line is worth stating in general, because unit resolution sits on the other side of it: **`validate` may read your config and your input, and may not reach anything outside the machine.** A resolver walking a local archive costs you time on your own disk; a probe costs you quota, money, and possibly a rate limit on a service someone else operates. Both are "pre-flight," and only one of them is free to repeat.
 
@@ -2199,10 +2234,18 @@ provenance:
         model: "seq-4000"
         firmware: "3.11.2"
         calibration_id: "CAL-2026-07-19"
-        reagent_lot: "LOT-88231"
+        reagent_lot: null                      # declared, unanswered — no lot was loaded
+    unobserved:                                # per fact, over the run's probes
+      reagent_lot: {null_probes: 3, total_probes: 15}
 ```
 
 **A changed fact fails the run, with no policy knob.** Same line as a dirty code tree, a lockfile mismatch, or an input file that moved: data gathered under two different apparatus states is not one dataset, and a flag to permit it would only ever be used to paper over the moment a result stopped being interpretable. Restarting under a changed apparatus is a new run — [`resume`](#resuming) refuses it too, and the ledger keeps both observations so the evaluable earlier period is still reportable.
+
+**A key is not a value, though, and the change that fails is a change between two *observations*.** An apparatus answers unevenly: a hosted deployment returns a revision fingerprint on most calls and omits it on some, and an instrument reports a reagent lot only when one is loaded. So `null` is a legal fact value meaning *the apparatus did not answer*, and the three states are the three [`Param`](#templates-where-parameters-are-defined) already has — a value, a declared absence, and a key that isn't there at all. Only the third is an error, because only the third is the plugin and the template disagreeing about what this probe supplies.
+
+`null → "LOT-88231"` and `"LOT-88231" → null` are that fact becoming available and becoming unavailable. Neither is evidence the apparatus moved, and failing on them would make an unevenly-reported field more dangerous than no field at all — the one honest thing to do with a flaky pin would be to stop declaring it, which is the opposite of what this section is for. `"LOT-88231" → "LOT-90114"` is two states and fails, exactly as before. Read the other way, the same rule is why the gate is worth having at all: an apparatus that never answers can never contradict itself, so an unobserved fact is a pin you don't have rather than a pin that held.
+
+**That is also the whole of what declaring a fact buys, which is worth being plain about.** Every fact a probe returns is recorded and gated on these terms, named in `apparatus_facts` or not — a probe wouldn't return it if it didn't describe the apparatus. What the declaration adds is a **warning at `dry-run` when the fact comes back `null`**, and an `unobserved` count in the record so a reader can see how often it did. So declaring a fact you may not be able to observe is the right move rather than a mistake: the warning is the point, and leaving it undeclared to avoid one would trade a gap you can see for a gap you can't.
 
 **Unlike a resolver, a probe *may* read parameters the sweep varies**, and usually must: a sweep over `llm.model` or `instrument.model` is a sweep across apparatus. The unit table has to be one table for the whole run, which is why a resolver is [condition-independent](#where-units-come-from); the apparatus has no such obligation. So facts are recorded per condition and the gate is per condition — a deployment is compared against its own first observation, never against another condition's.
 
@@ -2657,7 +2700,7 @@ you the two things you must supply yourself — your own `.env` and your own cop
 of the data — before you run it. Core transmits neither.
 ````
 
-The `<!-- publishable:begin ... -->` regions are **managed**: generators rewrite them, and everything outside them is yours and never touched. `generate experiment` adds a row to the experiments table and merges any new `required_env` into the credentials table, so the README doesn't drift as the project grows. Most scaffolding tools write a README once and leave it; here the README is part of what a reviewer reads to reproduce the work, so keeping it accurate is worth the machinery.
+The `<!-- publishable:begin ... -->` regions are **managed**: generators rewrite them, and everything outside them is yours and never touched. `generate experiment` adds a row to the experiments table and merges any new `required_env` into the credentials table — with a `requires_env` variable naming the value that needs it in the "Needed by" column — so the README doesn't drift as the project grows. Most scaffolding tools write a README once and leave it; here the README is part of what a reviewer reads to reproduce the work, so keeping it accurate is worth the machinery.
 
 `publishable docs` regenerates every managed region on demand — useful after editing a template's `parameter_spec` or `required_env`.
 
@@ -2826,8 +2869,9 @@ Convention class `wet_lab` · default repeats 3 · naming `kebab-case`
 |---|---|---|---|---|
 | `instrument.model` | str | — | required | Instrument model identifier |
 | `instrument.gain` | float | 1.0 | > 0 | Detector gain multiplier |
+| `instrument.vendor` | str | `vendor_a` | choices: vendor_a \| vendor_b | Which vendor's API the readings come through |
 
-**Required credentials:** `INSTRUMENT_API_TOKEN`
+**Required credentials:** `INSTRUMENT_API_TOKEN`; `VENDOR_B_TOKEN` when `instrument.vendor: vendor_b`
 
 **Apparatus probe:** `assay_instrument` — records `model`, `firmware`, `calibration_id`, `reagent_lot`
 <!-- publishable:end templates -->
@@ -2858,7 +2902,7 @@ parameters:
     credential_env_var: "INSTRUMENT_API_TOKEN"   # the NAME, never the value
 ```
 
-A template lists what it needs in `required_env`; `validate` confirms each is set without printing or logging it. Steps read `os.environ[cfg.parameters.instrument.credential_env_var]` normally. This is why `report` and `diff` output is safe to send as-is: there's nothing secret to redact, because there was never anything secret in it.
+A template lists what it always needs in `required_env`, and a parameter value lists what *it* needs in [`requires_env`](#a-credential-can-belong-to-a-parameter-value); `validate` confirms each is set — the second only for the conditions a sweep actually resolves — without printing or logging it. Steps read `os.environ[cfg.parameters.instrument.credential_env_var]` normally. This is why `report` and `diff` output is safe to send as-is: there's nothing secret to redact, because there was never anything secret in it.
 
 ---
 
@@ -2915,7 +2959,7 @@ Then:
 
 Verification of the input data still happens: `run` builds the manifest from whatever `input_dir` you set and compares it to the recorded one, reporting a data mismatch as loudly as a lockfile mismatch. Pointing at the wrong data is caught, just at run time rather than at clone time.
 
-**The apparatus is verified the same way, and it has to be.** A reproduction that ran the recorded code, in the recorded environment, over the recorded data, through a *different* model revision or a recalibrated instrument is not a reproduction — and it is the one substitution that leaves every hash matching. So the first probe compares against the facts `reproduce` wrote out and fails on any difference, at the same volume as a lockfile mismatch.
+**The apparatus is verified the same way, and it has to be.** A reproduction that ran the recorded code, in the recorded environment, over the recorded data, through a *different* model revision or a recalibrated instrument is not a reproduction — and it is the one substitution that leaves every hash matching. So the first probe compares against the facts `reproduce` wrote out and fails on any difference, at the same volume as a lockfile mismatch — on the same terms the [gate](#the-apparatus-core-can-only-observe) uses everywhere else, so a fact the original run never got an answer for doesn't fail a reproduction that does get one. That asymmetry is worth reading as what it is: the reproduction pinned something the original didn't, which is more evidence rather than less.
 
 The worked example above has no apparatus, because template `generic` declares no probe. A run that does gets a third thing to arrange, listed alongside the other two:
 
