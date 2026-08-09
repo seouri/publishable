@@ -56,3 +56,23 @@ def test_s1_does_not_yet_implement_batch_or_fold():
     with pytest.raises(ContractError) as e:
         resolve_repeats(cfg([{"kind": "fold", "k": 10}]), "sha256:abc")
     assert e.value.code == "E-REPL-KIND-UNSUPPORTED"
+
+
+def test_colliding_seeds_are_refused_rather_than_silently_perturbed(monkeypatch):
+    import publishable.replication as replication
+
+    monkeypatch.setattr(replication, "_seed_for", lambda digest, index: 42)
+    with pytest.raises(ContractError) as e:
+        replication.resolve_repeats(cfg([{"kind": "seed", "n": 3}]), "sha256:abc")
+    assert e.value.code == "E-REPL-SEED-COLLISION"
+    assert "42" in str(e.value)
+
+
+def test_five_seed_repeats_have_no_collisions_on_a_real_digest():
+    reps = resolve_repeats(cfg([{"kind": "seed", "n": 5}]), "sha256:abc")
+    assert len(reps) == 5
+    assert len({r.seed for r in reps}) == 5
+    assert len({r.label for r in reps}) == 5
+    for r in reps:
+        assert r.label[:4] == "seed"
+        assert r.label[4:].isdigit()
