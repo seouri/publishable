@@ -7,8 +7,9 @@ from publishable.config import Config
 from publishable.errors import ContractError
 from publishable.replication import Repeat
 from publishable.run_record import assemble_run_yaml, run_status
-from publishable.runner import execute_plan
+from publishable.runner import attrition, execute_plan
 from publishable.scope import build_plan
+from publishable.units import Unit, UnitList
 
 
 class Load(BaseStep):
@@ -54,12 +55,13 @@ class ReturnsNone(BaseStep):
         return None
 
 
-def harness(tmp_path: Path, steps):
+def harness(tmp_path: Path, steps, *, units=None, repeats=None, max_failed_fraction=None):
     class P(BaseExperiment):
         pass
 
     P.steps = steps
-    repeats = [Repeat("seed", "seed17", 17), Repeat("seed", "seed42", 42)]
+    if repeats is None:
+        repeats = [Repeat("seed", "seed17", 17), Repeat("seed", "seed42", 42)]
     plan = build_plan(P(), conditions=[(0, None)], repeat_labels=[r.label for r in repeats])
     run_dir = tmp_path / "run"
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -71,6 +73,8 @@ def harness(tmp_path: Path, steps):
         cfg=Config({"parameters": {}}),
         repeats=repeats,
         digest="sha256:abc",
+        units=units,
+        max_failed_fraction=max_failed_fraction,
     )
     return run_dir, results, repeats
 
@@ -195,6 +199,127 @@ def test_a_none_return_still_completes_with_an_empty_mapping_recorded(tmp_path: 
     for result in none_results:
         assert result.status == "completed"
         assert result.returned == {}
+
+
+def test_attrition_reconciles_exactly(tmp_path: Path):
+    """resolved == completed + ineligible + failed, in every scenario."""
+    roster = UnitList([Unit(key=f"p{i}") for i in range(10)])
+
+    class Partial(BaseStep):
+        scope = "repeat"
+
+        def run(self, cfg, io):
+            for u in list(io.units)[:7]:
+                io.record(u.key, {"v": 1.0})
+            io.skip("p9", "by design")
+            return {}
+
+    _, results, _ = harness(tmp_path, [Partial], units=roster)
+    counts = attrition(results, roster)
+    assert counts == {"resolved": 10, "completed": 7, "ineligible": 1, "failed": 2}
+    assert counts["resolved"] == counts["completed"] + counts["ineligible"] + counts["failed"]
+
+
+def test_completion_is_the_intersection_across_repeats(tmp_path: Path):
+    """A unit recorded in one repeat but not another is NOT completed."""
+    roster = UnitList([Unit(key=f"p{i}") for i in range(4)])
+
+    class Flaky(BaseStep):
+        scope = "repeat"
+
+        def run(self, cfg, io):
+            keep = list(io.units) if self.repeat == "seed17" else list(io.units)[:2]
+            for u in keep:
+                io.record(u.key, {"v": 1.0})
+            return {}
+
+    _, results, _ = harness(
+        tmp_path,
+        [Flaky],
+        units=roster,
+        repeats=[Repeat("seed", "seed17", 17), Repeat("seed", "seed42", 42)],
+    )
+    assert attrition(results, roster)["completed"] == 2
+
+
+def test_crossing_the_attrition_threshold_stops_the_run(tmp_path: Path):
+    roster = UnitList([Unit(key=f"p{i}") for i in range(10)])
+
+    class Bad(BaseStep):
+        scope = "repeat"
+
+        def run(self, cfg, io):
+            io.record("p0", {"v": 1.0})  # 9 of 10 fail
+            return {}
+
+    class AlsoBad(Bad):
+        pass
+
+    _, results, _ = harness(
+        tmp_path,
+        [Bad, AlsoBad],
+        units=roster,
+        max_failed_fraction=0.2,
+        repeats=[Repeat("seed", "s1", 1), Repeat("seed", "s2", 2)],
+    )
+    assert len(results) < 4, "the plan must stop rather than run to its end"
+    assert results[-1].status in ("completed", "failed")
+
+
+def test_staying_under_the_threshold_runs_to_the_end(tmp_path: Path):
+    roster = UnitList([Unit(key=f"p{i}") for i in range(10)])
+
+    class MostlyGood(BaseStep):
+        scope = "repeat"
+
+        def run(self, cfg, io):
+            for u in list(io.units)[:9]:
+                io.record(u.key, {"v": 1.0})
+            return {}
+
+    class AlsoMostlyGood(MostlyGood):
+        pass
+
+    _, results, _ = harness(
+        tmp_path,
+        [MostlyGood, AlsoMostlyGood],
+        units=roster,
+        max_failed_fraction=0.2,
+        repeats=[Repeat("seed", "s1", 1), Repeat("seed", "s2", 2)],
+    )
+    assert len(results) == 4
+
+
+def test_a_raising_step_still_does_not_stop_the_run(tmp_path: Path):
+    """S1's guarantee is intact — only the threshold stops a run."""
+    roster = UnitList([Unit(key="p0")])
+
+    class Boom2(BaseStep):
+        scope = "repeat"
+
+        def run(self, cfg, io):
+            raise ValueError("broken")
+
+    class Fine(BaseStep):
+        scope = "repeat"
+
+        def run(self, cfg, io):
+            io.record("p0", {"v": 1.0})
+            return {}
+
+    _, results, _ = harness(tmp_path, [Boom2, Fine], units=roster, repeats=[Repeat("seed", "", 1)])
+    assert [r.status for r in results] == ["failed", "completed"]
+
+
+def test_attrition_with_no_units_declared_is_zeroed_not_a_crash(tmp_path: Path):
+    """`units=None` (no `data.units`) is legal and must not divide by zero or disable the check."""
+    _, results, _ = harness(tmp_path, [Load, Analyze], max_failed_fraction=0.2)
+    assert attrition(results, None) == {
+        "resolved": 0,
+        "completed": 0,
+        "ineligible": 0,
+        "failed": 0,
+    }
 
 
 def test_a_condition_entry_carries_values_and_no_per_condition_key(tmp_path: Path):

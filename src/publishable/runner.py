@@ -11,6 +11,7 @@ from publishable.artifacts import StepIO
 from publishable.errors import ContractError
 from publishable.replication import Repeat
 from publishable.scope import Execution
+from publishable.units import UnitList
 
 
 @dataclass(frozen=True)
@@ -21,6 +22,37 @@ class ExecutionResult:
     wall_seconds: float
     returned: dict[str, Any]
     error: str | None
+    recorded: frozenset[str] = frozenset()
+    skipped: frozenset[str] = frozenset()
+
+
+def attrition(results: list[ExecutionResult], roster: "UnitList | None") -> dict[str, int]:
+    """The four counts. A failed unit has no row anywhere, so failure is derived.
+
+    Completion is the INTERSECTION across the repeat-scoped executions a unit was
+    handed to: the collapse averages per unit, and a unit present in three of five
+    seeds would otherwise enter that average on a different number of observations
+    than its neighbours — a ragged table dressed as a rectangular one.
+    """
+    if roster is None:
+        return {"resolved": 0, "completed": 0, "ineligible": 0, "failed": 0}
+    keys = {u.key for u in roster}
+    recording = [r for r in results if r.execution.scope == "repeat"]
+    if not recording:
+        return {"resolved": len(keys), "completed": 0, "ineligible": 0, "failed": len(keys)}
+    completed = set(keys)
+    for r in recording:
+        completed &= r.recorded
+    ineligible: set[str] = set()
+    for r in recording:
+        ineligible |= r.skipped
+    ineligible -= completed
+    return {
+        "resolved": len(keys),
+        "completed": len(completed),
+        "ineligible": len(ineligible),
+        "failed": len(keys) - len(completed) - len(ineligible),
+    }
 
 
 def step_dir_for(run_dir: Path, execution: Execution, collapse_repeats: bool) -> Path:
@@ -47,7 +79,19 @@ def execute_plan(
     cfg: Any,
     repeats: list[Repeat],
     digest: str,
+    units: UnitList | None = None,
+    max_failed_fraction: float | None = None,
 ) -> list[ExecutionResult]:
+    """Run every execution in the plan, in order, one at a time.
+
+    A failed execution never stops the run — the plan runs to its end, because
+    abandoning it throws away every execution still pending and `resume` cannot
+    un-abort a plan that was never attempted. `max_failed_fraction` is the one
+    documented exception: unit failures only accumulate, so once the fraction of
+    the roster that has failed in at least one execution crosses the threshold, no
+    later execution can bring it back, and spending the remaining compute to
+    confirm that is waste.
+    """
     collapse = len(repeats) <= 1
     seeds = {r.label: r.seed for r in repeats}
     ledger = run_dir / "executions.jsonl"
@@ -80,8 +124,11 @@ def execute_plan(
             step_dir=step_dir_for(run_dir, execution, collapse),
             input_dir=input_dir,
             run_dir=run_dir,
+            units=units,
         )
         io.step_dir.mkdir(parents=True, exist_ok=True)
+        recorded: frozenset[str] = frozenset()
+        skipped: frozenset[str] = frozenset()
         try:
             returned = step.run(cfg, io)
             if returned is None:
@@ -92,6 +139,9 @@ def execute_plan(
                     "a step's `run` must return a mapping or None",
                     code="E-STEP-RETURN-TYPE",
                 )
+            io.finalize()
+            recorded = frozenset(io.recorded_keys)
+            skipped = frozenset(io.skipped)
             status, error = "completed", None
         except Exception as exc:  # a failed execution never stops the run
             code = getattr(exc, "code", None)
@@ -105,6 +155,8 @@ def execute_plan(
             wall_seconds=round(time.monotonic() - clock, 3),
             returned=returned,
             error=error,
+            recorded=recorded,
+            skipped=skipped,
         )
         results.append(result)
         with ledger.open("a", encoding="utf-8") as fh:
@@ -123,4 +175,9 @@ def execute_plan(
                 )
                 + "\n"
             )
+
+        if max_failed_fraction is not None and units is not None:
+            counts = attrition(results, units)
+            if counts["resolved"] and counts["failed"] / counts["resolved"] > max_failed_fraction:
+                break
     return results
