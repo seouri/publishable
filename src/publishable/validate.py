@@ -6,6 +6,7 @@ from typing import Any
 
 import yaml
 
+from publishable.base_experiment import load_experiment
 from publishable.diagnostics import Collector
 from publishable.errors import ContractError
 from publishable.manifest import POLICIES
@@ -127,14 +128,36 @@ def _check_shape(doc: dict[str, Any], c: Collector) -> bool:
     return ok
 
 
-def validate_config(config_path: Path, c: Collector) -> dict[str, Any] | None:
+def load_document(config_path: Path, c: Collector | None = None) -> dict[str, Any] | None:
+    """Parse the config and confirm it is a mapping — the two things every later check
+    presumes. `c` is optional so a caller that only wants the entrypoint out of the file
+    (`command_run`, so it can import once rather than twice) can parse without reporting:
+    `validate_config` re-parses and reports, and one fault must produce one finding.
+    """
     try:
         doc = yaml.safe_load(config_path.read_text())
     except yaml.YAMLError as exc:
-        c.error("E-CONFIG-PARSE", str(config_path), f"does not parse: {exc}")
+        if c is not None:
+            c.error("E-CONFIG-PARSE", str(config_path), f"does not parse: {exc}")
         return None
     if not isinstance(doc, dict):
-        c.error("E-CONFIG-PARSE", str(config_path), "does not parse as a mapping")
+        if c is not None:
+            c.error("E-CONFIG-PARSE", str(config_path), "does not parse as a mapping")
+        return None
+    return doc
+
+
+def validate_config(
+    config_path: Path, c: Collector, *, experiment: Any | None = None
+) -> dict[str, Any] | None:
+    """Validate one config. `experiment` is the already-imported entrypoint, when the
+    caller has one — `command_run` passes what it loaded so a run imports user code once.
+    When it is absent and the config names an entrypoint, `validate` imports it itself:
+    `W-REPL-DETERMINISTIC` reads `nondeterministic` off the step classes, and warning at
+    run time instead would spend exactly the compute the warning is about.
+    """
+    doc = load_document(config_path, c)
+    if doc is None:
         return None
 
     if not _check_shape(doc, c):
@@ -151,13 +174,37 @@ def validate_config(config_path: Path, c: Collector) -> dict[str, Any] | None:
         )
         return None  # every later check reads the spec
 
+    entrypoint = doc.get("entrypoint")
+    if experiment is None and isinstance(entrypoint, str) and entrypoint:
+        try:
+            repo_root: Path | None = find_repo_root(config_path)
+        except ContractError:
+            # No repo at all. That is `_check_data`'s finding to make (or not), and
+            # there is no `src/` to import from, so the entrypoint check is skipped
+            # rather than reported as an import failure it did not cause.
+            repo_root = None
+        try:
+            if repo_root is not None:
+                experiment = load_experiment(repo_root, entrypoint)
+        except Exception as exc:
+            # Deliberately broad. Importing user code can fail every way user code
+            # can fail — a syntax error, a missing dependency, a module-scope raise —
+            # and `validate` reports rather than raises, so each of those is one
+            # finding. Letting any of them propagate would turn a diagnosable config
+            # into a traceback, which is the whole reason this import moved earlier.
+            c.error(
+                "E-ENTRYPOINT-IMPORT",
+                "entrypoint",
+                f"could not be imported: {type(exc).__name__}: {exc}",
+            )
+
     _check_metadata(doc, config_path, template, c)
     _check_entrypoint(doc, c)
     _check_parameters(doc, template, c)
     _check_versions(doc, c)
     _check_data(doc, config_path, c)
     _check_units(doc, c)
-    _check_replication(doc, template, c)
+    _check_replication(doc, template, c, experiment=experiment)
     _check_unimplemented(doc, c)
     _check_sweep(doc, template, c)
     for message in template.validate(doc):
@@ -384,7 +431,9 @@ REPL_DECLARATION_CODES = frozenset(
 )
 
 
-def _check_replication(doc: dict[str, Any], template: Any, c: Collector) -> None:
+def _check_replication(
+    doc: dict[str, Any], template: Any, c: Collector, *, experiment: Any | None = None
+) -> None:
     levels = ((doc.get("replication") or {}).get("repeats")) or []
     total = 1
     any_invalid = False
@@ -425,6 +474,22 @@ def _check_replication(doc: dict[str, Any], template: Any, c: Collector) -> None
             c.error(exc.code, "replication.repeats", str(exc))
         else:
             raise
+
+    # A `batch` says *when*, not *what*: it re-executes the pipeline to capture the
+    # apparatus drifting between blocks. If nothing in the pipeline declares itself
+    # nondeterministic, there is no drift to capture. `experiment is not None` is
+    # load-bearing — when the import failed, `E-ENTRYPOINT-IMPORT` is already
+    # reported, and a second finding about a pipeline nobody could load is noise.
+    kinds = {lv.get("kind") for lv in levels if isinstance(lv, dict)}
+    if "batch" in kinds and experiment is not None:
+        if not any(getattr(s, "nondeterministic", False) for s in experiment.steps):
+            c.warn(
+                "W-REPL-DETERMINISTIC",
+                "replication.repeats",
+                "declares a `batch` level, but no step sets `nondeterministic = True`; "
+                "under a fully deterministic pipeline a batch recomputes the same answer "
+                "each time, so its dispersion is a row of zeros bought with n× the compute",
+            )
 
     order = (doc.get("replication") or {}).get("order")
     if order is not None and order not in ("as_declared", "randomized"):

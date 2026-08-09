@@ -127,7 +127,12 @@ def test_five_seed_repeats_land_in_a_collapsed_layout(tmp_path: Path):
 
 def test_run_refuses_a_dirty_code_tree(tmp_path: Path, capsys):
     root, cfg, _ = build(tmp_path)
-    (root / "src" / "cohort_pilot" / "experiment.py").write_text("# edited\n")
+    # Appended, not overwritten: the edit must dirty `src/**` while leaving the
+    # entrypoint importable. `validate` now imports it, and it runs before this
+    # gate, so an edit that also broke the import would be caught as
+    # `E-ENTRYPOINT-IMPORT` first and never reach the dirty-tree gate at all.
+    experiment_py = root / "src" / "cohort_pilot" / "experiment.py"
+    experiment_py.write_text(experiment_py.read_text() + "\n# edited\n")
     assert main(["run", str(cfg)]) == EXIT_WRONG
     # `E-CODE-DIRTY` is rendered through `Collector`, like every other diagnostic —
     # this is what distinguishes the dirty-tree gate from a downstream import failure
@@ -150,13 +155,15 @@ def test_run_refuses_an_entrypoint_that_does_not_import(tmp_path: Path, capsys):
     doc["entrypoint"] = "cohort_pilot.experiment:NoSuchClass"
     cfg.write_text(yaml.safe_dump(doc))
     # Only `configs/**` changed — `src/**`/`templates/**` stay clean, so this exercises
-    # phase 3's entrypoint-import gate specifically, not the dirty-tree gate.
+    # the entrypoint-import gate specifically, not the dirty-tree gate. `validate` now
+    # imports the entrypoint, so the refusal arrives as a collected finding on stdout
+    # rather than as a raised `ContractError` printed to stderr.
     assert main(["run", str(cfg)]) == EXIT_WRONG
-    assert "E-ENTRYPOINT-IMPORT" in capsys.readouterr().err
+    assert "E-ENTRYPOINT-IMPORT" in capsys.readouterr().out
 
 
 def test_a_stale_cached_module_does_not_leak_between_same_named_projects(tmp_path: Path):
-    """`_load_experiment` purges the entrypoint's root package from `sys.modules` first.
+    """`load_experiment` purges the entrypoint's root package from `sys.modules` first.
 
     Two projects here both scaffold a `cohort_pilot` package (`build`'s fixed name).
     Project B's step is hand-edited to return a distinguishable value. If the purge
@@ -617,3 +624,24 @@ def test_run_yaml_records_what_each_condition_varied(tmp_path: Path):
         {"analysis.method": "kendall"},
     ]
     assert [c["is_baseline"] for c in conditions] == [True, False, False]
+
+
+def test_a_run_imports_the_entrypoint_once(tmp_path: Path):
+    """`validate` imports the entrypoint now, and so does `run`. `command_run` loads it
+    first and hands it to `validate_config`, so user code is imported once per run —
+    a module with an expensive or side-effecting import must not pay twice."""
+    root, cfg, _ = build(tmp_path)
+    tally = tmp_path / "imports.log"  # outside the repo, so `src/**` stays clean
+    experiment_py = root / "src" / "cohort_pilot" / "experiment.py"
+    experiment_py.write_text(
+        experiment_py.read_text()
+        + f'\nwith open({str(tally)!r}, "a") as _f:\n    _f.write("imported\\n")\n'
+    )
+    for args in (
+        ["add", "."],
+        ["-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "tally"],
+    ):
+        subprocess.run(["git", *args], cwd=root, check=True)
+
+    assert main(["run", str(cfg)]) == EXIT_OK
+    assert tally.read_text().count("imported") == 1
