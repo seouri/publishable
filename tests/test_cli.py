@@ -1,4 +1,5 @@
 import json
+import re
 import subprocess
 from collections import namedtuple
 from pathlib import Path
@@ -9,6 +10,7 @@ import yaml
 from publishable.cli import main
 from publishable.diagnostics import EXIT_INVOCATION, EXIT_OK, EXIT_WRONG
 from publishable.generators.experiment import generate_experiment
+from publishable.replication import LABEL_JOIN
 
 Ran = namedtuple("Ran", ["condition_index", "repeat_label"])
 
@@ -30,6 +32,7 @@ def run_a_project(
     `sweep.yaml` recorded," read from the ledger rather than re-derived from
     the plan the way the thing under test builds `execution_order`.
     """
+    tmp_path.mkdir(parents=True, exist_ok=True)
     root = tmp_path / "proj"
     data = tmp_path / "data"
     results_dir = tmp_path / "results"
@@ -193,3 +196,64 @@ def test_the_recorded_order_is_the_order_that_ran(tmp_path: Path):
     recorded = [(e["condition"], e["repeat"]) for e in sweep["execution_order"]]
     ran = [(r.condition_index, r.repeat_label) for r in doc["results"] if r.repeat_label]
     assert recorded == ran
+
+
+# --- Task 9: the acceptance test — a nested batch × seed design, end to end -----
+
+
+def test_a_nested_batch_seed_run_end_to_end(tmp_path):
+    doc = run_a_project(
+        tmp_path,
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+        replication={
+            "repeats": [{"kind": "batch", "n": 3}, {"kind": "seed", "n": 2}],
+            "order": "randomized",
+        },
+    )
+    run_dir = doc["run_dir"]
+    repeat_dirs = sorted(p.name for p in (run_dir / "conditions").glob("*/*") if p.is_dir())
+    # 2 conditions × 6 composed repeat labels each = 12 directories; the same 6
+    # labels recur under both condition directories, so the set is 6 wide.
+    assert len(repeat_dirs) == 2 * 3 * 2
+    assert len(set(repeat_dirs)) == 3 * 2
+    label_pattern = re.escape(LABEL_JOIN).join([r"batch0\d", r"seed\d+"])
+    assert all(re.fullmatch(label_pattern, n) for n in set(repeat_dirs))
+    sweep = yaml.safe_load((run_dir / "sweep.yaml").read_text())
+    declared = [(c["index"], label) for c in sweep["conditions"] for label in sweep["labels"]]
+    recorded = [(e["condition"], e["repeat"]) for e in sweep["execution_order"]]
+    assert recorded != declared, "the shuffle must actually move something"
+    batches = [e["repeat"].split(LABEL_JOIN)[0] for e in sweep["execution_order"]]
+    assert batches == sorted(batches), "batches must run in declared order"
+    assert len(sweep["execution_order"]) == 12
+
+
+def test_the_recorded_order_seed_reproduces_the_order(tmp_path):
+    a = run_a_project(
+        tmp_path / "a",
+        replication={
+            "repeats": [{"kind": "batch", "n": 2}, {"kind": "seed", "n": 3}],
+            "order": "randomized",
+        },
+    )
+    b = run_a_project(
+        tmp_path / "b",
+        replication={
+            "repeats": [{"kind": "batch", "n": 2}, {"kind": "seed", "n": 3}],
+            "order": "randomized",
+        },
+    )
+    sa = yaml.safe_load((a["run_dir"] / "sweep.yaml").read_text())
+    sb = yaml.safe_load((b["run_dir"] / "sweep.yaml").read_text())
+    assert sa["order_seed"] == sb["order_seed"]
+    assert sa["execution_order"] == sb["execution_order"]
+
+
+def test_a_single_level_seed_run_has_no_composed_labels(tmp_path):
+    """The regression risk of introducing a level is that it appears where it should not."""
+    doc = run_a_project(tmp_path, replication={"repeats": [{"kind": "seed", "n": 2}]})
+    dirs = [p.name for p in doc["run_dir"].rglob("*") if p.is_dir()]
+    assert not any(f"{LABEL_JOIN}seed" in d for d in dirs)
+    assert not any(d.startswith("batch") for d in dirs)
