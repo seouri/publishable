@@ -241,3 +241,12 @@ def test_with_no_batch_level_the_whole_run_is_one_block():
     pairs = [(c, lf.label) for c in (0, 1, 2) for lf in cross_levels(levels)]
     out = realize_order(pairs, levels, "randomized", 7)
     assert sorted(out) == sorted(pairs) and out != pairs
+
+
+def test_a_pair_matching_no_resolved_batch_is_a_contract_error():
+    levels = resolve_repeats({"replication": {"repeats": [
+        {"kind": "batch", "n": 2}, {"kind": "seed", "n": 2}]}}, "d")
+    pairs = [(0, "no-such-batch_seed01")]
+    with pytest.raises(ContractError) as excinfo:
+        realize_order(pairs, levels, "randomized", 7)
+    assert excinfo.value.code == "E-REPL-ORDER-UNRESOLVED"

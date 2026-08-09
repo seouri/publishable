@@ -14,6 +14,11 @@ from typing import Any
 from publishable.errors import ContractError
 
 SUPPORTED_KINDS = ("seed", "batch")
+LABEL_JOIN = "_"
+"""The separator `cross_levels` composes labels with. `realize_order` groups pairs
+by splitting on this same character, so the two must never drift apart — changing
+one without the other silently breaks either the composed label or the grouping
+that reads it back."""
 MAX_LEVELS = 2
 REJECTED_KINDS = {
     "bootstrap": "declare `statistics.resample` instead",
@@ -130,7 +135,7 @@ def cross_levels(levels: list[RepeatLevel]) -> list[Repeat]:
     leaves: list[Repeat] = []
     inner = levels[-1]
     for combo in itertools.product(*[lv.members for lv in levels]):
-        label = "_".join(m.label for m in combo if m.label)
+        label = LABEL_JOIN.join(m.label for m in combo if m.label)
         leaves.append(Repeat(kind=inner.kind, label=label, seed=combo[-1].seed))
     return leaves
 
@@ -188,10 +193,23 @@ def realize_order(
     else:
         by_batch: dict[str, list[tuple[int, str]]] = {m.label: [] for m in batch_level.members}
         for pair in pairs:
-            # The batch member's label is a segment of the composed leaf label;
-            # matching against the resolved members keeps the label FORMAT out
-            # of this function, so changing it cannot silently regroup a run.
-            member = next(m.label for m in batch_level.members if m.label in pair[1].split("_"))
+            # The batch member's label is a segment of the composed leaf label,
+            # split on LABEL_JOIN — the same separator `cross_levels` composes
+            # with, so this must stay in step with that function. Matching
+            # against the resolved members (rather than parsing a fixed prefix)
+            # keeps the label FORMAT out of this function.
+            member = next(
+                (m.label for m in batch_level.members if m.label in pair[1].split(LABEL_JOIN)),
+                None,
+            )
+            if member is None:
+                raise ContractError(
+                    f"pair {pair!r} does not belong to any resolved batch "
+                    f"({[m.label for m in batch_level.members]!r}); realize_order "
+                    "requires every pair's label to have been produced by the same "
+                    "levels it is passed",
+                    code="E-REPL-ORDER-UNRESOLVED",
+                )
             by_batch[member].append(pair)
         blocks = [by_batch[m.label] for m in batch_level.members]
     rng = random.Random(order_seed)
