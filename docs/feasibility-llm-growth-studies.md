@@ -14,6 +14,7 @@ This document is non-normative and carries its own examples. It is **not** part 
 ## Contents
 
 - [What both projects hand-rolled that core already owns](#what-both-projects-hand-rolled-that-core-already-owns)
+- [Three repositories, and what decides the seams](#three-repositories-and-what-decides-the-seams)
 - [Screening: six runs](#screening-six-runs)
 - [Shortcut: three runs](#shortcut-three-runs)
 - [What is not an experiment](#what-is-not-an-experiment)
@@ -45,14 +46,42 @@ The `run_usage_report.json` row is the sharpest. Both projects treat token use a
 
 ---
 
+## Three repositories, and what decides the seams
+
+Nine runs, two pipelines, one plugin. How many git repositories that is has a mechanical answer rather than a stylistic one, because a repository boundary is exactly what [`code_hash`](reference.md#how-the-three-are-computed) is scoped to.
+
+| Repository | Holds | How its code is pinned |
+|---|---|---|
+| `growth-screen` | `src/growth_screen/`, `configs/screen-*` — E1 through E6 | Its own `code_hash`, over `src/**` and `templates/**` |
+| `growth-shortcut` | `src/growth_shortcut/`, `configs/shortcut-*` — C1 through C3 | Its own `code_hash` |
+| `publishable-llm` | The `llm_screen` template, the `patient_trajectory` resolver, the `llm_deployment` probe, and the reusable steps | `uv.lock`, in each of the two above |
+
+**The plugin is a separate repository, and not by preference.** Only a template can live locally: [§ Creating a plugin](reference.md#creating-a-plugin-publishable-plugin-new) finds a local `templates/*.py` by path, and everything else registers through an entry point, which needs an installed package. This design needs a resolver and a probe, so it needs one. Vendoring it as a `uv` path dependency inside an experiment repo would be the worst available option: at `plugins/` it sits outside `src/**` and `templates/**` so `code_hash` doesn't cover it, and a path dependency doesn't pin content either — it would be the one piece of code producing these numbers that nothing pins at all.
+
+**The two experiment repositories are separate for the reason the specification names itself.** [§ How the three are computed](reference.md#how-the-three-are-computed) states the boundary and its remedy in one breath: `src/**` covers every experiment package in the repository, so "adding or editing `src/other_pilot/` moves the `code_hash` of a run that never imported it," and "an experiment whose `code_hash` has to hold still against unrelated work belongs in its own repository." That is this case exactly. One repository would still *work* — `generate experiment` is built for it — and here is the bill:
+
+| Mechanism | What it does across these nine runs |
+|---|---|
+| `code_hash` spans `src/**` | Every commit to `growth_shortcut` changes the recorded code identity of screening runs that never imported it |
+| `run` refuses a dirty `src/**` | E4 (4.4 h) and C3 (12 h) cannot start while the other package has uncommitted edits. [`draft`](reference.md#draft-runs) permits it and marks the run non-citable, which is no use for a confirmation run |
+| `resume` refuses a moved `uv.lock` | One lockfile serves both, so a dependency added for the shortcut makes an in-flight twelve-hour screening run unresumable |
+
+**What that costs is the claim the screening sequence is built on.** E1 freezes the objective, E2 spends it, and E3, E4, and E6 all evaluate the same frozen program — a sequence spread over weeks whose reviewer-facing claim is [same code, different parameters](design-principles.md#same-code-different-parameters): identical `code_hash`, differing `parameters_hash`. Shortcut development inside that window destroys the first half of it. Sharpest is the pair of roster-variant runs [§ Cost and execution summary](#cost-and-execution-summary) sets aside, which exist *only* to be compared against E1 through E3 in a study — and [`report study.yaml`](reference.md#studies-what-a-paper-reports) cross-checks that runs claiming the same code really do share a `code_hash`.
+
+**Shared code goes into the plugin, and that is the point rather than the price.** Both projects censor at the diagnosis age and both need growth-reference percentiles, so the pull toward one repository is really a pull toward one `src/common/`. The specification rejects per-package hashing on precisely that case — "a rule that hashed one package while a shared `src/common/` module produced half the numbers would be a hash claiming more than it covers." A plugin is the version of sharing that survives the check: `uv.lock` pins it, both repositories record which version they used, and `diff` can tell two runs apart on it. Less is shared than it first looks, anyway — the screening serializer emits raw and percentile pairs where the shortcut's emits z-scores under a transform, so the genuine overlap is the resolver, the request step, and the probe, which is what the plugin already holds.
+
+**Nothing in these nine runs crosses the seam, which is the check worth running on any proposed split.** E3, E4, and E6 read their frozen program from a screening run; the shortcut's confirmation runs read the fine-tuned artifact from the shortcut development run. Every [`io.reuse_from`](reference.md#lineage-between-runs) stays inside its own repository's lineage, so no `provenance.upstream` chain is cut — a seam that cut one would be in the wrong place. Output directories are [outside every repository](design-principles.md#code-and-data-never-share-a-repo) regardless, so the split changes nothing about where results land. And the paper is unaffected either way: a [study](design-principles.md#ontology) is a bundle beside the manuscript and never in a repository at all, which makes it the thing that reassembles the three.
+
+---
+
 ## Screening: six runs
 
 ### Shared roster and pipeline
 
-Every screening config below resolves the same roster through a plugin resolver and draws its steps from one package. **E1 is shown in full; every config after it shows only the blocks that differ.**
+All six live in the `growth-screen` repository, resolve the same roster through a plugin resolver, and draw their steps from one package. **E1 is shown in full; every config after it shows only the blocks that differ.**
 
 ```
-src/growth_screen/
+growth-screen/src/growth_screen/
 ├── experiment.py                  # two BaseExperiment classes; `entrypoint` selects one
 └── steps/
     ├── step01_serialize.py        scope: run        # censoring + trajectory serialization
@@ -467,7 +496,7 @@ statistics:
 
 ## Shortcut: three runs
 
-These three runs are a **second experiment package**, `src/growth_shortcut/`, not a variant of the screening one — the pipeline builds counterfactual trajectories and fits the two regression baselines. It shares no code with `growth_screen`, and some step names anyway: `step03_screen` below is `growth_shortcut`'s own request step, not the screening package's, and a metric path like `step03_screen.auroc` is only ever read within its own run. As above, only the blocks that differ are shown, starting with the roster: the 450-patient benchmark, resolved with the sampling weight the source retains for population-weighted estimates and the pre-existing development/confirmation partition.
+These three live in the **`growth-shortcut` repository**, whose pipeline builds counterfactual trajectories and fits the two regression baselines. It shares no code with `growth_screen` — and some step names anyway: `step03_screen` below is `growth_shortcut`'s own request step, not the screening package's, and a metric path like `step03_screen.auroc` is only ever read within its own run. As above, only the blocks that differ are shown, starting with the roster: the 450-patient benchmark, resolved with the sampling weight the source retains for population-weighted estimates and the pre-existing development/confirmation partition.
 
 ```yaml
 data:
@@ -732,6 +761,8 @@ Three substantial pieces of both projects are not runs, and calling them runs wo
 ## Proposed plugin: `publishable-llm`
 
 **Core-versus-plugin test.** Would "one request per unit against a hosted model, with a parsed output contract, token accounting, and a screening objective" be identical for a wet-lab assay, a simulation sweep, and an LLM benchmark? No. It is a plugin. Everything under `sweep`, `replication`, and `statistics` stays in core and the plugin declares nothing outside `parameters`.
+
+This is the [third repository](#three-repositories-and-what-decides-the-seams), and it carries everything both experiment repos would otherwise have shared through an unpinned `src/common/`.
 
 ### Package
 
