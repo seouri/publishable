@@ -454,22 +454,22 @@ def test_aggregated_sits_beside_per_repeat_without_altering_it(tmp_path: Path):
             return {"r": 0.5}
 
     _, results, repeats = harness(tmp_path, [Record], units=roster)
-    collapsed = collapse_repeats(results, "record")
+    collapsed = collapse_repeats(results, "record", condition_index=0)
     counts = attrition(results, roster)
     summary = summarize_step(collapsed, counts)
     doc = assemble_run_yaml(
         run_id="run_x", status="completed", config={"a": 1}, code_hash="sha256:c",
         parameters_hash="sha256:p", provenance={}, results=results, repeats=repeats,
-        aggregated={"record": summary}, counts=counts,
+        aggregated={"record": summary},
     )
     condition = doc["results"]["conditions"][0]
     assert condition["per_repeat"]["record"] == {"seed17": {"r": 0.5}, "seed42": {"r": 0.5}}
     assert condition["aggregated"]["record"]["pred"]["basis"] == "units"
     assert condition["aggregated"]["record"]["pred"]["value"] == pytest.approx(0.9)
     assert condition["aggregated"]["record"]["pred"]["n"] == counts
-    # `counts` on its own is accepted for interface symmetry but not placed anywhere;
-    # `summarize_step` already embedded it as `n` inside each metric, and the
-    # condition entry has no plain `n` sibling to `per_repeat` in the documented shape.
+    # `assemble_run_yaml` has no `counts` parameter at all: `summarize_step` already
+    # embedded the counts as `n` inside each metric, and the condition entry has no
+    # plain `n` sibling to `per_repeat` in the documented shape.
     assert "n" not in condition
 
 

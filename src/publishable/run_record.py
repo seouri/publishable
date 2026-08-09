@@ -131,15 +131,12 @@ def assemble_run_yaml(
     repeats: list[Repeat],
     draft: bool = False,
     aggregated: dict[str, dict[str, Any]] | None = None,
-    counts: dict[str, int] | None = None,
 ) -> dict[str, Any]:
-    # `counts` is accepted for interface symmetry with `aggregated` but not written
-    # anywhere here: `summarize_step` already embeds it as `n` inside each metric
-    # under `aggregated`, and the condition entry's documented shape
-    # (`reference.md`'s worked example) has no plain `n` sibling to `per_repeat`.
-    # A future caller that wants it recorded elsewhere should say where, rather
-    # than this function inventing a key the docs don't have.
-    del counts
+    # There is no `counts` parameter here: `summarize_step` already embeds the
+    # per-unit counts as `n` inside each metric under `aggregated`, and the
+    # condition entry's documented shape (`reference.md`'s worked example) has no
+    # plain `n` sibling to `per_repeat`. A parameter this function would only
+    # discard is worse than not having it.
     return {
         "schema_version": SCHEMA_VERSION,
         "run_id": run_id,

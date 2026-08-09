@@ -52,25 +52,36 @@ def _is_numeric(value: object) -> bool:
 
 
 def collapse_repeats(
-    results: "list[ExecutionResult]", step_name: str
+    results: "list[ExecutionResult]", step_name: str, condition_index: int
 ) -> dict[str, dict[str, float]]:
-    """Average each unit's numeric columns across the repeats that recorded it.
+    """Average each unit's numeric columns across the repeats that recorded it,
+    within one condition.
 
     This is the collapse the inference base rests on: repeats are a variance
     component, not the inference base, so a unit's repeats are averaged into one
     row *before* any interval is computed over units.
 
-    Reads only `repeat`-scoped executions of `step_name` — a `condition`- or
-    `run`-scoped step's rows, and any other step's rows, never enter this table.
+    `condition_index` is required, not defaulted, on purpose: core aggregates
+    within each condition and never pools across conditions, which would be
+    meaningless (`reference.md` § Statistical reporting). Making the parameter
+    required turns a caller that forgets it into a `TypeError` at the call site
+    rather than a silently pooled mean in a `run.yaml` no reviewer could catch —
+    S2 always has exactly one condition and always passes `0`, but the signature
+    must not invite the mistake on the day a sweep adds a second one.
 
-    Only a unit recorded in *every* repeat-scoped execution of this step enters
-    the table at all — the same intersection `runner.attrition` takes for
-    `completed`, and for the same reason: a unit present in three of five seeds
-    would otherwise enter the average on a different number of observations
-    than its neighbours, which is a ragged table dressed as a rectangular one.
-    A unit recorded in some repeats and not others is dropped here exactly as
-    it is excluded from `completed` there, so the `n` reported beside this
-    table's interval is never a lie about how many observations went into it.
+    Reads only `repeat`-scoped executions of `step_name` in this condition — a
+    `condition`- or `run`-scoped step's rows, another step's rows, and another
+    condition's rows never enter this table.
+
+    Only a unit recorded in *every* repeat-scoped execution of this step (within
+    this condition) enters the table at all — the same intersection
+    `runner.attrition` takes for `completed`, and for the same reason: a unit
+    present in three of five seeds would otherwise enter the average on a
+    different number of observations than its neighbours, which is a ragged
+    table dressed as a rectangular one. A unit recorded in some repeats and not
+    others is dropped here exactly as it is excluded from `completed` there, so
+    the `n` reported beside this table's interval is never a lie about how many
+    observations went into it.
 
     A non-numeric value (a string, or a bool — `bool` is an `int` subclass but
     never a quantity to average) is dropped from the column for that unit rather
@@ -79,7 +90,11 @@ def collapse_repeats(
     `summarize_step` then correctly omits rather than reporting a bogus mean.
     """
     recording = [
-        r for r in results if r.execution.step_name == step_name and r.execution.scope == "repeat"
+        r
+        for r in results
+        if r.execution.step_name == step_name
+        and r.execution.scope == "repeat"
+        and (r.execution.condition_index or 0) == condition_index
     ]
     if not recording:
         return {}

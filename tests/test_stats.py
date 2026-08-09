@@ -39,7 +39,7 @@ def test_collapse_averages_a_unit_across_repeats():
         _result("seed17", [{"unit": "p0", "pred": 0.2}, {"unit": "p1", "pred": 1.0}]),
         _result("seed42", [{"unit": "p0", "pred": 0.4}, {"unit": "p1", "pred": 2.0}]),
     ]
-    collapsed = collapse_repeats(results, "analyze")
+    collapsed = collapse_repeats(results, "analyze", condition_index=0)
     assert collapsed["p0"]["pred"] == pytest.approx(0.3)
     assert collapsed["p1"]["pred"] == pytest.approx(1.5)
 
@@ -54,18 +54,18 @@ def test_collapse_drops_a_unit_not_recorded_in_every_repeat():
         _result("seed17", [{"unit": "p0", "pred": 1.0}, {"unit": "p1", "pred": 1.0}]),
         _result("seed42", [{"unit": "p0", "pred": 3.0}]),  # p1 missing this repeat
     ]
-    collapsed = collapse_repeats(results, "analyze")
+    collapsed = collapse_repeats(results, "analyze", condition_index=0)
     assert collapsed == {"p0": {"pred": 2.0}}
     assert "p1" not in collapsed
 
 
 def test_collapse_ignores_other_steps_and_non_repeat_scopes():
     results = [_result("seed17", [{"unit": "p0", "pred": 0.2}])]
-    assert collapse_repeats(results, "some_other_step") == {}
+    assert collapse_repeats(results, "some_other_step", condition_index=0) == {}
     condition_scoped = [
         _result(None, [{"unit": "p0", "pred": 9.0}], step_name="analyze", scope="condition")
     ]
-    assert collapse_repeats(condition_scoped, "analyze") == {}
+    assert collapse_repeats(condition_scoped, "analyze", condition_index=0) == {}
 
 
 def test_collapse_drops_a_bool_column_rather_than_averaging_it():
@@ -73,22 +73,17 @@ def test_collapse_drops_a_bool_column_rather_than_averaging_it():
         _result("seed17", [{"unit": "p0", "flag": True}]),
         _result("seed42", [{"unit": "p0", "flag": False}]),
     ]
-    collapsed = collapse_repeats(results, "analyze")
+    collapsed = collapse_repeats(results, "analyze", condition_index=0)
     assert "flag" not in collapsed.get("p0", {})
 
 
-def test_collapse_does_not_partition_by_condition_known_limitation():
-    """`collapse_repeats` filters by step name and repeat scope only, not by
-    `condition_index` — so rows from two different conditions of the same step
-    are pooled into one table rather than kept separate. `summarize_step` then
-    can only summarize that pooled table. `reference.md` § "Sweeps and repeats"
-    requires aggregation *within* each condition and never across them, so this
-    is a known gap in this slice, pinned here rather than silently shipped: a
-    caller with more than one condition must not pass this function's output
-    straight to `assemble_run_yaml`'s `aggregated` for every condition, which
-    is exactly what `test_aggregated_sits_beside_per_repeat_without_altering_it`
-    in `tests/test_runner.py` does for the single-condition case this task
-    covers, and exactly what a future multi-condition caller must not copy."""
+def test_collapse_never_pools_across_conditions():
+    """Core aggregates within each condition and never pools across conditions,
+    which would be meaningless (`reference.md` § Statistical reporting). Two
+    conditions recording the same unit key with a stark contrast — 1.0 vs.
+    100.0 — must each collapse to their own true mean; a regression that pools
+    them (e.g. dropping the `condition_index` filter) would land on something
+    between the two, unmistakably wrong rather than off by a rounding error."""
     from publishable.runner import ExecutionResult
     from publishable.scope import Execution
 
@@ -113,12 +108,18 @@ def test_collapse_does_not_partition_by_condition_known_limitation():
     results = [
         cond_result(0, "seed17", [{"unit": "p0", "pred": 1.0}]),
         cond_result(0, "seed42", [{"unit": "p0", "pred": 1.0}]),
-        cond_result(1, "seed17", [{"unit": "p0", "pred": 9.0}]),
-        cond_result(1, "seed42", [{"unit": "p0", "pred": 9.0}]),
+        cond_result(1, "seed17", [{"unit": "p0", "pred": 100.0}]),
+        cond_result(1, "seed42", [{"unit": "p0", "pred": 100.0}]),
     ]
-    collapsed = collapse_repeats(results, "analyze")
-    # Pooled across both conditions, not condition 0's true answer of 1.0.
-    assert collapsed["p0"]["pred"] == pytest.approx(5.0)
+    assert collapse_repeats(results, "analyze", condition_index=0)["p0"]["pred"] == 1.0
+    assert collapse_repeats(results, "analyze", condition_index=1)["p0"]["pred"] == 100.0
+
+
+def test_collapse_requires_condition_index():
+    """`condition_index` has no default: a caller that forgets it gets a
+    `TypeError` at the call site, not a silently pooled mean."""
+    with pytest.raises(TypeError):
+        collapse_repeats([], "analyze")  # type: ignore[call-arg]
 
 
 def test_a_recorded_column_is_basis_units_and_carries_an_interval():
