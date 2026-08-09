@@ -3,10 +3,18 @@
 Pure: a config dict in, an ordered condition list out. No filesystem, no
 `Config` object, no git — expansion is a function of the declaration alone,
 so it can be tested exhaustively without a repository.
+
+A `baseline` whose values happen to coincide with a grid cell produces two
+conditions with identical `values` — `00_baseline` and the matching grid
+row — and `expand` deliberately does not dedup them: the baseline is
+declared and the grid is mechanical, and reconciling the two is not
+`expand`'s job.
 """
 
 import itertools
+from collections.abc import Mapping
 from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Any
 
 
@@ -14,8 +22,17 @@ from typing import Any
 class Condition:
     index: int
     label: str | None
-    values: dict[str, Any] = field(default_factory=dict)
+    values: Mapping[str, Any] = field(default_factory=dict)
     is_baseline: bool = False
+
+    def __post_init__(self) -> None:
+        # `values` is a plain dict handed in by `expand`; without wrapping it, a
+        # caller could mutate a condition's values after the fact, or reach back
+        # through the dict it originally passed in. The proxy over a copy is what
+        # makes `values["x"] = ...` raise rather than silently drift out of sync
+        # with `sweep.yaml`, written from these same objects. Same fix as
+        # `Unit.attributes` in `units.py`, same reason.
+        object.__setattr__(self, "values", MappingProxyType(dict(self.values)))
 
 
 def label_for(values: dict[str, Any], grid: dict[str, Any], is_baseline: bool) -> str:

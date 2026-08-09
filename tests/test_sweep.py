@@ -1,3 +1,5 @@
+import pytest
+
 from publishable.sweep import Condition, expand
 
 
@@ -55,8 +57,21 @@ def test_an_empty_grid_axis_still_expands_to_nothing_here():
     assert expand({"sweep": {"grid": {"a.x": []}}}) == []
 
 
+def test_condition_values_are_immutable():
+    conds = expand({"sweep": {"baseline": {"analysis.method": "pearson"}}})
+    assert conds[0].values["analysis.method"] == "pearson"
+    with pytest.raises(TypeError):
+        conds[0].values["x"] = 1
+
+
+def test_condition_values_are_copied_not_aliased():
+    source = {"analysis.method": "pearson"}
+    conds = expand({"sweep": {"baseline": source}})
+    source["analysis.method"] = "spearman"
+    assert conds[0].values["analysis.method"] == "pearson"
+
+
 def test_conditions_are_frozen():
-    import pytest
     c = expand({"sweep": {"grid": {"a.x": [1]}}})[0]
     with pytest.raises(Exception):  # noqa: B017 — frozen dataclass raises FrozenInstanceError
         c.index = 5  # type: ignore[misc]
