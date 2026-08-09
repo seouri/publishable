@@ -134,6 +134,67 @@ def test_a_repeat_count_below_one_executes_nothing_and_is_an_error(write_config)
     assert "E-REPL-N" in codes(write_config({"replication.repeats": [{"kind": "seed", "n": 0}]}))
 
 
+def test_two_bad_repeat_levels_are_both_reported():
+    """`_check_replication` collects rather than stopping, so a config with two invalid
+    levels must not report only the first."""
+    from publishable.templates.builtin.generic import GenericTemplate
+    from publishable.validate import _check_replication
+
+    doc = {
+        "replication": {
+            "repeats": [
+                {"kind": "seed", "n": 0},
+                {"kind": "fold", "n": -1},
+            ]
+        }
+    }
+    c = Collector()
+    _check_replication(doc, GenericTemplate(), c)
+    found = [f for f in c.findings if f.code == "E-REPL-N"]
+    assert len(found) == 2
+    # an invalid design must not also produce a floor warning on top of the errors
+    assert not any(f.code == "W-REPL-FLOOR" for f in c.findings)
+
+
+def test_an_unexpected_error_finding_the_repo_root_is_not_swallowed(write_config, monkeypatch):
+    """`_check_data`'s repo-root lookup narrows its exception handling to the one case
+    that legitimately means 'the inside-the-repo question does not arise' — anything
+    else must propagate rather than presenting a safety check as a clean pass."""
+    import publishable.validate as validate_mod
+
+    def _boom(path):
+        raise RuntimeError("disk fell off")
+
+    monkeypatch.setattr(validate_mod, "find_repo_root", _boom)
+    with pytest.raises(RuntimeError):
+        validate_config(write_config(), Collector())
+
+
+def test_a_contract_error_other_than_no_repo_is_not_swallowed(write_config, monkeypatch):
+    import publishable.validate as validate_mod
+    from publishable.errors import ContractError
+
+    def _boom(path):
+        raise ContractError("something else went wrong", code="E-SOMETHING-ELSE")
+
+    monkeypatch.setattr(validate_mod, "find_repo_root", _boom)
+    with pytest.raises(ContractError):
+        validate_config(write_config(), Collector())
+
+
+def test_the_genuine_no_repo_case_returns_quietly(write_config, monkeypatch):
+    """The one case the narrowed handler is for: no repo at all is not a data-in-repo
+    problem, so it must return without a spurious finding rather than propagating."""
+    import publishable.validate as validate_mod
+    from publishable.errors import ContractError
+
+    def _no_repo(path):
+        raise ContractError("no git repository found", code="E-GIT-NO-REPO")
+
+    monkeypatch.setattr(validate_mod, "find_repo_root", _no_repo)
+    assert codes(write_config()) == set()
+
+
 def test_a_config_that_does_not_parse_is_fatal(git_repo: Path):
     path = git_repo / "configs" / "cohort-pilot" / "config.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)

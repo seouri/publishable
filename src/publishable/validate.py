@@ -7,6 +7,7 @@ from typing import Any
 import yaml
 
 from publishable.diagnostics import Collector
+from publishable.errors import ContractError
 from publishable.materialize import TEMPLATE_VERSION
 from publishable.param import MISSING
 from publishable.provenance import find_repo_root
@@ -117,8 +118,10 @@ def _check_data(doc: dict[str, Any], config_path: Path, c: Collector) -> None:
     data = doc.get("data") or {}
     try:
         repo_root = find_repo_root(config_path).resolve()
-    except Exception:
-        return
+    except ContractError as exc:
+        if exc.code == "E-GIT-NO-REPO":
+            return  # not in a repo, so "inside the repo" doesn't arise
+        raise
     for field in ("input_dir", "output_dir"):
         raw = data.get(field)
         if not raw:
@@ -141,6 +144,7 @@ def _check_data(doc: dict[str, Any], config_path: Path, c: Collector) -> None:
 def _check_replication(doc: dict[str, Any], template: Any, c: Collector) -> None:
     levels = ((doc.get("replication") or {}).get("repeats")) or []
     total = 1
+    any_invalid = False
     for level in levels:
         # `or` would read a declared 0 as "absent" and silently substitute 1,
         # which is the difference between warning about an empty design and not.
@@ -153,8 +157,11 @@ def _check_replication(doc: dict[str, Any], template: Any, c: Collector) -> None
                 "replication.repeats",
                 f"declares {count}, which executes nothing; the count must be at least 1",
             )
-            return
+            any_invalid = True
+            continue
         total *= 1 if count is None else int(count)
+    if any_invalid:
+        return  # a floor warning derived from an invalid design would be noise
     if total < template.default_repeats:
         c.warn(
             "W-REPL-FLOOR",
