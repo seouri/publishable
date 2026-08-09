@@ -1,7 +1,73 @@
+import json
+import subprocess
+from collections import namedtuple
 from pathlib import Path
+from typing import Any
+
+import yaml
 
 from publishable.cli import main
-from publishable.diagnostics import EXIT_INVOCATION, EXIT_WRONG
+from publishable.diagnostics import EXIT_INVOCATION, EXIT_OK, EXIT_WRONG
+from publishable.generators.experiment import generate_experiment
+
+Ran = namedtuple("Ran", ["condition_index", "repeat_label"])
+
+
+def run_a_project(
+    tmp_path: Path, *, replication: dict[str, Any] | None = None, **overrides: Any
+) -> dict[str, Any]:
+    """Scaffold, configure, commit, and `run` a project end to end.
+
+    The one end-to-end driver `test_cli.py` has: every test in this module that
+    needs a real run through `main(["run", ...])` builds on this rather than
+    inventing its own scaffold-and-commit dance. `overrides` lands as top-level
+    keys merged onto the generated `config.yaml` (`sweep`, for instance);
+    `replication` is named explicitly since every caller in this file sets it.
+
+    Returns the run directory, the resolved paths, and `results`: one `Ran`
+    entry per line of `executions.jsonl`, in the order execution actually
+    produced them — the ground truth for "did the plan run in the order
+    `sweep.yaml` recorded," read from the ledger rather than re-derived from
+    the plan the way the thing under test builds `execution_order`.
+    """
+    root = tmp_path / "proj"
+    data = tmp_path / "data"
+    results_dir = tmp_path / "results"
+    data.mkdir()
+    (data / "index.csv").write_text("patient_id\np1\np2\n")
+    assert main(["new", str(root)]) == EXIT_OK
+    cfg = generate_experiment(
+        repo_root=root,
+        name="cohort-pilot",
+        template_name="generic",
+        input_dir=str(data),
+        output_dir=str(results_dir),
+    )
+    doc = yaml.safe_load(cfg.read_text())
+    doc["metadata"]["description"] = "an end-to-end helper run"
+    doc["metadata"]["authors"] = ["Kyungjoon Lee"]
+    if replication is not None:
+        doc["replication"] = replication
+    doc.update(overrides)
+    cfg.write_text(yaml.safe_dump(doc))
+    for args in (
+        ["add", "."],
+        ["-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "helper run"],
+    ):
+        subprocess.run(["git", *args], cwd=root, check=True)
+
+    assert main(["run", str(cfg)]) == EXIT_OK
+    run_dir = next(results_dir.glob("run_*"))
+    lines = (run_dir / "executions.jsonl").read_text().splitlines()
+    ledger = [json.loads(line) for line in lines]
+    results = [Ran(e["condition"], e["repeat"]) for e in ledger]
+    return {
+        "root": root,
+        "cfg": cfg,
+        "results_dir": results_dir,
+        "run_dir": run_dir,
+        "results": results,
+    }
 
 
 def test_an_unknown_command_is_an_invocation_error(capsys):
@@ -64,3 +130,66 @@ def test_an_unwritable_output_dir_is_a_diagnostic_not_a_traceback(tmp_path: Path
     assert main(["run", str(cfg)]) == EXIT_WRONG
     err = capsys.readouterr().err
     assert "E-IO-FAILED" in err
+
+
+RANDOMIZED_ACROSS_CONDITIONS: dict[str, Any] = {
+    "sweep": {
+        "baseline": {"analysis.method": "pearson"},
+        "grid": {"analysis.method": ["spearman"]},
+    },
+    "replication": {
+        "repeats": [{"kind": "batch", "n": 2}, {"kind": "seed", "n": 3}],
+        "order": "randomized",
+    },
+}
+"""2 conditions × 2 batches × 3 seeds = 12 pairs — enough that `rng.shuffle` landing on the
+identity permutation is vanishingly unlikely, and with 2 conditions the shuffle actually has
+condition boundaries to cross. A single-condition, 2-seed fixture doesn't exercise either
+risk: it can't interleave conditions, and a 2-element shuffle has a 50% chance of doing
+nothing, which would let a broken reorder pass silently.
+"""
+
+
+def test_sweep_yaml_records_the_order_mode_and_seed(tmp_path: Path):
+    doc = run_a_project(
+        tmp_path,
+        sweep=RANDOMIZED_ACROSS_CONDITIONS["sweep"],
+        replication=RANDOMIZED_ACROSS_CONDITIONS["replication"],
+    )
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+    assert sweep["order"] == "randomized"
+    assert isinstance(sweep["order_seed"], int)
+    assert len(sweep["execution_order"]) == len(sweep["labels"]) * len(sweep["conditions"])
+    declared = [
+        (c["index"], label) for c in sweep["conditions"] for label in sweep["labels"]
+    ]
+    recorded = [(e["condition"], e["repeat"]) for e in sweep["execution_order"]]
+    assert recorded != declared, "the shuffle must actually move something"
+    batches = [r.split("_")[0] for _, r in recorded]
+    assert batches == sorted(batches), "batch01 pairs must all precede batch02 pairs"
+
+
+def test_as_declared_records_no_order_seed(tmp_path: Path):
+    doc = run_a_project(tmp_path, replication={"repeats": [{"kind": "seed", "n": 2}]})
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+    assert sweep["order"] == "as_declared"
+    assert sweep.get("order_seed") is None
+
+
+def test_the_recorded_order_is_the_order_that_ran(tmp_path: Path):
+    """The realized order is a fact about the run, not a rule to re-derive.
+
+    Uses `RANDOMIZED_ACROSS_CONDITIONS` (2 conditions) rather than a single-condition
+    fixture: with one condition there is no condition boundary for a batch to cross,
+    so the plan-reordering this test exists to catch could be missing entirely and
+    a single-condition run would still pass.
+    """
+    doc = run_a_project(
+        tmp_path,
+        sweep=RANDOMIZED_ACROSS_CONDITIONS["sweep"],
+        replication=RANDOMIZED_ACROSS_CONDITIONS["replication"],
+    )
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+    recorded = [(e["condition"], e["repeat"]) for e in sweep["execution_order"]]
+    ran = [(r.condition_index, r.repeat_label) for r in doc["results"] if r.repeat_label]
+    assert recorded == ran
