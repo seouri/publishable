@@ -16,7 +16,7 @@ build-backend = "hatchling.build"
 packages = ["src/publishable"]
 
 [dependency-groups]
-dev = ["pytest>=8.0", "ruff>=0.6", "mypy>=1.11"]
+dev = ["pytest>=8.0", "ruff>=0.6", "mypy>=1.11", "types-pyyaml>=6.0"]
 
 [tool.ruff]
 line-length = 100
