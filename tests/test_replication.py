@@ -1,7 +1,12 @@
 import pytest
 
 from publishable import ContractError
-from publishable.replication import RepeatMember, cross_levels, resolve_repeats
+from publishable.replication import (
+    RepeatMember,
+    cross_levels,
+    realize_order,
+    resolve_repeats,
+)
 
 
 def cfg(repeats):
@@ -193,3 +198,46 @@ def test_a_leaf_takes_the_innermost_seed_and_kind():
 def test_the_anonymous_single_repeat_keeps_its_empty_label():
     leaves = cross_levels(resolve_repeats({}, "d"))
     assert [lf.label for lf in leaves] == [""]
+
+
+def test_as_declared_is_the_identity():
+    levels = resolve_repeats({"replication": {"repeats": [{"kind": "seed", "n": 2}]}}, "d")
+    pairs = [(0, lf.label) for lf in cross_levels(levels)]
+    assert realize_order(pairs, levels, "as_declared", 7) == pairs
+
+
+def test_randomized_keeps_batches_in_declared_order():
+    levels = resolve_repeats({"replication": {"repeats": [
+        {"kind": "batch", "n": 3}, {"kind": "seed", "n": 2}]}}, "d")
+    pairs = [(c, lf.label) for c in (0, 1) for lf in cross_levels(levels)]
+    out = realize_order(pairs, levels, "randomized", 7)
+    batches = [lb.split("_")[0] for _, lb in out]
+    assert batches == sorted(batches), "batches must not be shuffled against each other"
+    assert len(out) == len(pairs) and sorted(out) == sorted(pairs)
+
+
+def test_randomized_shuffles_within_a_batch():
+    levels = resolve_repeats({"replication": {"repeats": [
+        {"kind": "batch", "n": 2}, {"kind": "seed", "n": 4}]}}, "d")
+    pairs = [(c, lf.label) for c in (0, 1, 2) for lf in cross_levels(levels)]
+    out = realize_order(pairs, levels, "randomized", 7)
+    assert out != pairs, "some batch's interior must have been reordered"
+
+
+def test_the_same_order_seed_reproduces_the_same_order():
+    levels = resolve_repeats({"replication": {"repeats": [
+        {"kind": "batch", "n": 2}, {"kind": "seed", "n": 3}]}}, "d")
+    pairs = [(c, lf.label) for c in (0, 1) for lf in cross_levels(levels)]
+    assert realize_order(pairs, levels, "randomized", 7) == \
+           realize_order(pairs, levels, "randomized", 7)
+    assert realize_order(pairs, levels, "randomized", 7) != \
+           realize_order(pairs, levels, "randomized", 99)
+
+
+def test_with_no_batch_level_the_whole_run_is_one_block():
+    """The documents describe the shuffle only in terms of batches; the spec pins
+    this case: no batch boundary means nothing bounds the shuffle."""
+    levels = resolve_repeats({"replication": {"repeats": [{"kind": "seed", "n": 4}]}}, "d")
+    pairs = [(c, lf.label) for c in (0, 1, 2) for lf in cross_levels(levels)]
+    out = realize_order(pairs, levels, "randomized", 7)
+    assert sorted(out) == sorted(pairs) and out != pairs

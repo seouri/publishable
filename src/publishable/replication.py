@@ -7,6 +7,7 @@ See docs/reference.md § Repeat kinds.
 
 import hashlib
 import itertools
+import random
 from dataclasses import dataclass
 from typing import Any
 
@@ -156,3 +157,47 @@ def _check_no_collisions(level: RepeatLevel, digest: str) -> None:
                 code="E-REPL-SEED-COLLISION",
             )
         labels_seen[m.label] = index
+
+
+def order_seed_for(digest: str) -> int:
+    """From the design digest, never from `parameters_hash`.
+
+    Editing any parameter would otherwise redraw the execution order of a run
+    that varied nothing about it — see reference.md § What auto-derives from.
+    """
+    return _seed_for(f"{digest}|order", 0)
+
+
+def realize_order(
+    pairs: list[tuple[int, str]],
+    levels: list[RepeatLevel],
+    mode: str,
+    order_seed: int,
+) -> list[tuple[int, str]]:
+    """Shuffle within each batch; never across them.
+
+    A batch is a position in time, so shuffling batches against each other would
+    destroy the thing being declared. With no `batch` level the whole run is one
+    block, because there is no boundary to shuffle inside.
+    """
+    if mode != "randomized":
+        return list(pairs)
+    batch_level = next((lv for lv in levels if lv.kind == "batch"), None)
+    if batch_level is None:
+        blocks: list[list[tuple[int, str]]] = [list(pairs)]
+    else:
+        by_batch: dict[str, list[tuple[int, str]]] = {m.label: [] for m in batch_level.members}
+        for pair in pairs:
+            # The batch member's label is a segment of the composed leaf label;
+            # matching against the resolved members keeps the label FORMAT out
+            # of this function, so changing it cannot silently regroup a run.
+            member = next(m.label for m in batch_level.members if m.label in pair[1].split("_"))
+            by_batch[member].append(pair)
+        blocks = [by_batch[m.label] for m in batch_level.members]
+    rng = random.Random(order_seed)
+    out: list[tuple[int, str]] = []
+    for block in blocks:
+        shuffled = list(block)
+        rng.shuffle(shuffled)
+        out.extend(shuffled)
+    return out
