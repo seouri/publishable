@@ -1,0 +1,105 @@
+from pathlib import Path
+
+from publishable import BaseExperiment, BaseStep
+from publishable.config import Config
+from publishable.replication import Repeat
+from publishable.run_record import assemble_run_yaml, run_status
+from publishable.runner import execute_plan
+from publishable.scope import build_plan
+
+
+class Load(BaseStep):
+    scope = "run"
+
+    def run(self, cfg, io):
+        io.write("cohort.json", {"loaded": True})
+        return {"n": 2}
+
+
+class Analyze(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        return {"r": 0.5}
+
+
+class Boom(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        raise ValueError("this execution is broken")
+
+
+def harness(tmp_path: Path, steps):
+    class P(BaseExperiment):
+        pass
+
+    P.steps = steps
+    repeats = [Repeat("seed", "seed17", 17), Repeat("seed", "seed42", 42)]
+    plan = build_plan(P(), conditions=[(0, None)], repeat_labels=[r.label for r in repeats])
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "input").mkdir(parents=True, exist_ok=True)
+    results = execute_plan(
+        plan=plan,
+        run_dir=run_dir,
+        input_dir=tmp_path / "input",
+        cfg=Config({"parameters": {}}),
+        repeats=repeats,
+        digest="sha256:abc",
+    )
+    return run_dir, results
+
+
+def test_no_sweep_means_no_conditions_level(tmp_path: Path):
+    run_dir, _ = harness(tmp_path, [Load, Analyze])
+    assert (run_dir / "shared" / "load" / "cohort.json").is_file()
+    assert not (run_dir / "conditions").exists()
+    assert (run_dir / "seed17").is_dir()
+    assert (run_dir / "seed42").is_dir()
+
+
+def test_a_failed_execution_is_recorded_and_the_run_continues(tmp_path: Path):
+    _, results = harness(tmp_path, [Boom, Analyze])
+    statuses = [r.status for r in results]
+    assert statuses.count("failed") == 2
+    assert statuses.count("completed") == 2
+    assert any("this execution is broken" in (r.error or "") for r in results)
+
+
+def test_status_is_partial_when_some_failed(tmp_path: Path):
+    _, results = harness(tmp_path, [Boom, Analyze])
+    assert run_status(results) == "partial"
+    _, ok = harness(tmp_path / "b", [Load, Analyze])
+    assert run_status(ok) == "completed"
+
+
+def test_executions_jsonl_gets_one_record_per_finished_execution(tmp_path: Path):
+    run_dir, results = harness(tmp_path, [Load, Analyze])
+    lines = (run_dir / "executions.jsonl").read_text().splitlines()
+    assert len(lines) == len(results)
+
+
+def test_per_repeat_holds_exactly_what_the_step_returned(tmp_path: Path):
+    _, results = harness(tmp_path, [Load, Analyze])
+    doc = assemble_run_yaml(
+        run_id="run_x", status="completed", config={"a": 1}, code_hash="sha256:c",
+        parameters_hash="sha256:p", provenance={}, results=results,
+    )
+    per_repeat = doc["results"]["conditions"][0]["per_repeat"]["analyze"]
+    assert per_repeat == {"seed17": {"r": 0.5}, "seed42": {"r": 0.5}}
+
+
+def test_run_yaml_carries_the_three_hashes_and_the_config_verbatim(tmp_path: Path):
+    _, results = harness(tmp_path, [Load, Analyze])
+    doc = assemble_run_yaml(
+        run_id="run_x", status="completed", config={"metadata": {"name": "c"}},
+        code_hash="sha256:c", parameters_hash="sha256:p",
+        provenance={"input_manifest_hash": "sha256:m"}, results=results,
+    )
+    assert doc["code_hash"] == "sha256:c"
+    assert doc["parameters_hash"] == "sha256:p"
+    assert doc["provenance"]["input_manifest_hash"] == "sha256:m"
+    assert doc["config"] == {"metadata": {"name": "c"}}
+    assert doc["draft"] is False
+    assert doc["schema_version"] == "1.0"
