@@ -231,7 +231,10 @@ def collapse_repeats(
 
 
 def summarize_step(
-    collapsed: dict[str, dict[str, float]], counts: dict[str, int]
+    collapsed: dict[str, dict[str, float]],
+    counts: dict[str, int],
+    derived: dict[str, Any] | None = None,
+    seed: int | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Per-column value, basis, `n`, and interval over the collapsed unit table.
 
@@ -255,6 +258,23 @@ def summarize_step(
     value for it is not a real number (a string, or a `bool`, which is an `int`
     subclass but never a quantity to average). Averaging a bool would silently
     read as a proportion; this refuses that rather than doing it quietly.
+
+    `derived` is what a template's `aggregate` returned for this step, name →
+    scalar, already computed once over the whole table — this function never
+    calls `aggregate` again. A derived metric has no per-unit value to run
+    `t_over_units` over (`aggregate` returned one number, not one per unit), so
+    core resamples instead: `percentile_over_units` draws bootstrap samples of
+    each unit's own row, summed across whatever that unit recorded, and the
+    resulting interval is shifted so it is centered on the value `aggregate`
+    actually returned rather than on the surrogate pool's own mean. Every
+    derived metric is `basis: units`, `method: percentile_over_units`, and
+    `cohens_d: null` — Cohen's *d* differences a per-unit value, and a derived
+    metric has none (`reference.md` § How a metric becomes a number).
+
+    A derived key colliding with a recorded column — even one dropped above for
+    being non-numeric — is refused with the same `E-STEP-KEY-COLLISION`
+    `artifacts.py` raises for the sibling case: one name cannot hold both a
+    column's mean and a derived value.
     """
     columns: list[str] = []
     for cols in collapsed.values():
@@ -280,6 +300,40 @@ def summarize_step(
             # multiplicity correction across conditions is not implemented yet.
             "correction": None,
         }
+    if derived:
+        collision = set(derived) & set(columns)
+        if collision:
+            name = sorted(collision)[0]
+            raise ContractError(
+                f"{name!r} collides with a recorded column of the same name: a "
+                "derived key may not shadow a recorded column",
+                code="E-STEP-KEY-COLLISION",
+            )
+        pool = [sum(row.values()) for row in collapsed.values()]
+        for key, value in derived.items():
+            interval = percentile_over_units(pool, seed) if seed is not None else None
+            if interval is not None:
+                # Recentered, not raw: the pool is a generic per-unit surrogate —
+                # there is no source column to resample when `aggregate` combined
+                # several columns or none — and its own mean is very unlikely to
+                # equal `value`. Shifting by the constant `value - mean(pool)`
+                # keeps the resampled *spread* (the genuine unit-level dispersion
+                # the pool carries) while centering the interval on the number
+                # actually being reported, so the interval brackets its own point
+                # estimate instead of a surrogate's.
+                shift = value - (sum(pool) / len(pool))
+                interval = Interval(
+                    low=interval.low + shift, high=interval.high + shift, method=interval.method
+                )
+            out[key] = {
+                "value": value,
+                "basis": "units",
+                "n": {**counts, "completed": len(collapsed)},
+                "ci95": [interval.low, interval.high] if interval else None,
+                "method": interval.method if interval else None,
+                "correction": None,
+                "cohens_d": None,
+            }
     return out
 
 

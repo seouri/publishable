@@ -416,3 +416,59 @@ def test_a_numpy_scalar_return_produces_a_run_yaml_that_serializes(tmp_path, mon
     per_repeat = run["results"]["conditions"][0]["per_repeat"]["step01_summarize_units"]
     score = next(iter(per_repeat.values()))["score"]
     assert type(score) is float
+
+
+# --- Task 6 (derived-metrics): a template's `aggregate` reaches the record -----
+
+_AGGREGATE_STEP = '''\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        units = list(io.units)
+        for i, unit in enumerate(units):
+            io.record(unit.key, {{"pred": float(i)}})
+        return {{"n_units": len(units)}}
+'''
+
+
+def test_a_derived_metric_reaches_run_yaml_with_a_resampled_interval(tmp_path, monkeypatch):
+    """The integration this task closes: a template's `aggregate` actually runs
+    once per recording step, over that step's collapsed unit table, and its
+    return reaches `run.yaml` as `basis: units` with a resampled `ci95` — not
+    a scalar `aggregate` computed and core silently discarded."""
+    import publishable.generators.experiment as experiment_gen
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    monkeypatch.setattr(
+        GenericTemplate, "aggregate", lambda self, units, cfg: {"total": sum(units.pred)}
+    )
+    doc = run_a_project(tmp_path)
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "completed"
+    metric = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["total"]
+    assert metric["basis"] == "units"
+    assert metric["method"] == "percentile_over_units"
+    assert metric["ci95"] is not None
+    low, high = metric["ci95"]
+    assert low < metric["value"] < high
+    assert metric["cohens_d"] is None
+
+
+def test_a_project_without_aggregate_reports_no_derived_metric(tmp_path, monkeypatch):
+    """The regression guard: a run whose template never overrides `aggregate`
+    (the base's `{}`) must record only the recorded column, exactly as before
+    this task — no `total`, no empty placeholder, nothing new in `aggregated`."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    doc = run_a_project(tmp_path)
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert "total" not in aggregated
+    assert set(aggregated) == {"pred"}

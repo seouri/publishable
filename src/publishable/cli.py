@@ -14,6 +14,7 @@ from typing import Any
 import yaml
 
 from publishable.base_experiment import BaseExperiment, load_experiment
+from publishable.coercion import coerce_scalars
 from publishable.config import Config
 from publishable.diagnostics import (
     EXIT_FAILED,
@@ -41,8 +42,9 @@ from publishable.run_record import assemble_run_yaml, run_status
 from publishable.runner import attrition, execute_plan, resolve_condition_cfg, resolve_wide_cfg
 from publishable.scaffold import scaffold_project
 from publishable.scope import Execution, build_plan
-from publishable.stats import collapse_repeats, summarize_step
+from publishable.stats import UnitTable, collapse_repeats, resample_seed, summarize_step
 from publishable.sweep import expand, sweep_document
+from publishable.templates.registry import get_template
 from publishable.units import Unit, partition_units, resolve_units, units_hash
 from publishable.uv_support import uv_lock_info
 from publishable.validate import load_document, validate_config
@@ -309,6 +311,8 @@ def command_run(config_path: Path) -> int:
             # each condition and never pools across conditions — an unguarded
             # filter would let a same-named step from another condition mark this
             # one as having a recording step it never ran.
+            template = get_template(doc.get("experiment_type", ""))
+            resample_seed_value = resample_seed(digest)
             aggregated = {}
             for cond in conditions:
                 recording_steps = {
@@ -318,17 +322,27 @@ def command_run(config_path: Path) -> int:
                     and r.execution.condition_index == cond.index
                     and r.rows
                 }
-                aggregated[cond.index] = {
-                    step_name: summarize_step(
-                        collapse_repeats(
-                            results, step_name, cond.index, fold_members=fold_members
-                        ),
-                        attrition(
-                            results, roster, step_name, cond.index, fold_members=fold_members
-                        ),
+                aggregated[cond.index] = {}
+                for step_name in sorted(recording_steps):
+                    collapsed = collapse_repeats(
+                        results, step_name, cond.index, fold_members=fold_members
                     )
-                    for step_name in sorted(recording_steps)
-                }
+                    counts = attrition(
+                        results, roster, step_name, cond.index, fold_members=fold_members
+                    )
+                    derived = None
+                    if template is not None:
+                        # Once per recording step, on this condition's own resolved
+                        # `cfg` — the same object a step in this condition receives —
+                        # so one `aggregate` can compute a different metric under a
+                        # different swept value (`reference.md` § Templates).
+                        derived = coerce_scalars(
+                            template.aggregate(UnitTable(collapsed), cfgs[cond.index]),
+                            where=f"{doc.get('experiment_type', '')}.aggregate",
+                        )
+                    aggregated[cond.index][step_name] = summarize_step(
+                        collapsed, counts, derived=derived, seed=resample_seed_value
+                    )
         changed_inputs = verify_manifest(input_dir, manifest)  # phase 8: re-verify
         if changed_inputs:
             status = "failed"

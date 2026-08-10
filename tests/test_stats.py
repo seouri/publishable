@@ -367,6 +367,52 @@ def test_a_bool_column_is_not_silently_averaged_to_a_proportion():
     assert "flag" not in out
 
 
+def test_a_derived_metric_is_reported_over_units():
+    collapsed = {f"u{i}": {"pred": float(i)} for i in range(20)}
+    out = summarize_step(collapsed, {"completed": 20}, derived={"total": 190.0}, seed=7)
+    assert out["total"]["basis"] == "units"
+    assert out["total"]["method"] == "percentile_over_units"
+    assert out["total"]["ci95"] is not None
+    assert out["total"]["cohens_d"] is None
+
+
+def test_a_derived_key_colliding_with_a_recorded_column_is_refused():
+    collapsed = {f"u{i}": {"r": float(i)} for i in range(5)}
+    with pytest.raises(ContractError) as exc:
+        summarize_step(collapsed, {"completed": 5}, derived={"r": 1.0}, seed=7)
+    assert exc.value.code == "E-STEP-KEY-COLLISION"
+
+
+def test_no_derived_metrics_leaves_the_output_unchanged():
+    collapsed = {f"u{i}": {"pred": float(i)} for i in range(5)}
+    assert summarize_step(collapsed, {"completed": 5}) == summarize_step(
+        collapsed, {"completed": 5}, derived=None, seed=7
+    )
+
+
+def test_a_derived_intervals_brackets_its_own_point_estimate():
+    """The recentering this slice chose: the surrogate pool's own mean is almost
+    never the derived value, so an un-shifted percentile interval would not
+    contain the number it is printed beside. Shifting by the constant offset
+    keeps the surrogate's spread while guaranteeing the interval brackets the
+    value `aggregate` actually returned."""
+    collapsed = {f"u{i}": {"pred": float(i)} for i in range(20)}
+    out = summarize_step(collapsed, {"completed": 20}, derived={"total": 190.0}, seed=7)
+    low, high = out["total"]["ci95"]
+    assert low < 190.0 < high
+
+
+def test_a_derived_key_colliding_with_a_dropped_non_numeric_column_is_refused():
+    """The collision check runs against every recorded column, including one
+    dropped from `out` for being non-numeric — otherwise a bool column named
+    `r` plus a derived `r` would silently coexist as two different meanings
+    under one key."""
+    collapsed = {f"u{i}": {"r": True} for i in range(5)}
+    with pytest.raises(ContractError) as exc:
+        summarize_step(collapsed, {"completed": 5}, derived={"r": 1.0}, seed=7)
+    assert exc.value.code == "E-STEP-KEY-COLLISION"
+
+
 def test_interval_matches_a_published_critical_value():
     """t(0.975, df=9) = 2.262. Ten values, mean 10, sample sd exactly 1."""
     values = [10 + d for d in (-1.5, -1.5, -0.5, -0.5, 0.0, 0.0, 0.5, 0.5, 1.5, 1.5)]
