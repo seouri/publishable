@@ -1191,14 +1191,27 @@ def command_run(config_path: Path) -> int:
                     # wins: it is a real measurement over the units, while the
                     # strata are a re-presentation of numbers already in the
                     # record.
-                    if by_block and "by" in step_summary:
+                    #
+                    # The disclosure follows the COLUMN, not the strata block:
+                    # `_comparison_step_blocks` drops `by` from every
+                    # comparison's metric set unconditionally, so a column of
+                    # that name loses its `vs_baseline` delta and its seat in
+                    # the correction family whether or not `report_by` was
+                    # declared. Gating on `by_block` would leave the case where
+                    # nothing was stratified — the case where the author has no
+                    # other hint that the name is reserved — entirely silent.
+                    # `aggregate_where`, not `statistics.report_by`: the fault
+                    # is the recorded column, and there may be no `report_by`
+                    # key in the file to point at.
+                    if "by" in step_summary:
                         aggregate_c.warn(
                             "W-STATS-STRATUM-SHADOWED",
-                            "statistics.report_by",
-                            f"condition {cond.index} step {step_name!r}: a recorded "
-                            "column named 'by' holds the key the reporting strata "
-                            "are attached under; keeping the column and reporting "
-                            "no strata for this step",
+                            aggregate_where,
+                            f"condition {cond.index} step {step_name!r}: 'by' is a "
+                            "reserved metric name — it holds the key the reporting "
+                            "strata are attached under — so the recorded column of "
+                            "that name keeps its value but gets no contrast delta, "
+                            "and no strata are reported for this step",
                         )
                     # Absent, not empty, the rule `vs_baseline` and `contrasts`
                     # already follow: a `by: {}` would claim a stratification

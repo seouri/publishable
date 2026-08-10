@@ -2237,6 +2237,31 @@ def test_a_level_that_completed_nothing_gets_no_block(tmp_path, capsys, monkeypa
     assert step_block["by"]["cohort"]["b"]["pred"]["n"]["completed"] == 20
 
 
+def test_levels_are_reported_in_sorted_order(tmp_path, capsys, monkeypatch):
+    """`levels_for` returns a plain dict in roster first-seen order, and
+    `run.yaml` is dumped with `sort_keys=False` — so level order in the
+    published record is whatever the level loop iterates. Sorting it is what
+    makes two runs over the same roster produce byte-comparable records.
+
+    The fixture discriminates because `run_a_project` writes `'ab'[i % 2]` with
+    `i` starting at 1: `p1` is cohort `b`, so first-seen order is `b, a` — the
+    reverse of alphabetical. A roster whose first unit were cohort `a` would
+    pass this test with the sort removed."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
+        statistics={"report_by": ["cohort"]},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    step_block = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert list(step_block["by"]["cohort"]) == ["a", "b"]
+
+
 def test_a_derived_metric_named_by_is_refused_not_silently_overwritten(
     tmp_path, capsys, monkeypatch
 ):
@@ -2293,6 +2318,46 @@ def test_a_recorded_column_named_by_keeps_its_metric_and_warns(
     assert step_block["by"]["basis"] == "units"
     assert step_block["by"]["value"] == pytest.approx(39.0)
     assert "cohort" not in step_block["by"]
+
+
+def test_a_recorded_by_column_warns_even_with_no_report_by_declared(
+    tmp_path, capsys, monkeypatch
+):
+    """The disclosure follows the column, not the strata block. `by` is dropped
+    from every comparison's metric set unconditionally
+    (`_comparison_step_blocks`), so a recorded column of that name loses its
+    `vs_baseline` delta whether or not `report_by` was declared — and the
+    undeclared case is the one where the author has no other hint that the name
+    is reserved. Gating the warning on a non-empty `by` block left it silent
+    exactly there."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _RECORDS_A_BY_COLUMN_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+    )
+    assert "W-STATS-STRATUM-SHADOWED" in doc["stdout"]
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    step_block = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    # The column is a real measurement and keeps its own number, warning or not.
+    assert step_block["by"]["value"] == pytest.approx(39.0)
+    # And the consequence the warning now names: no delta, no seat in the family.
+    compared = next(
+        c for c in run["results"]["conditions"] if c.get("label") == "method=spearman"
+    )
+    metrics = sorted(
+        name
+        for step_block in compared["vs_baseline"].values()
+        for name in step_block
+    )
+    assert metrics == ["pred"]
+    assert _first_contrast(run, "method=spearman")["family_size"] == 1
 
 
 # --- Task 6: `W-STATS-STRATUM-THIN` at run time --------------------------------

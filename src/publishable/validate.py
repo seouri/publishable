@@ -1200,7 +1200,7 @@ def _check_report_by(doc: dict[str, Any], c: Collector, roster: UnitList | None)
             c.error(
                 "E-STATS-REPORTBY-UNKNOWN",
                 f"statistics.report_by[{i}]",
-                f"names `{name!r}`, which is not in `data.units.attributes`",
+                f"names `{name}`, which is not in `data.units.attributes`",
             )
 
     floor = (doc.get("limits") or {}).get("min_reported_n")
