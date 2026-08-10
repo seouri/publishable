@@ -31,6 +31,21 @@ class Interval:
     method: str
 
 
+@dataclass(frozen=True)
+class PairedResample:
+    """A paired percentile interval and the pool it was read from.
+
+    The pool travels so a caller can build the *corrected* interval at a
+    smaller α off the same draws (`interval_at`). It is deliberately not a
+    third tuple element: a positional `[2]` at a call site says nothing about
+    what it holds, and this value must never reach `run.yaml`.
+    """
+
+    interval: Interval | None
+    draws_used: int
+    pool: list[float]
+
+
 def mean_of(values: Sequence[float]) -> float | None:
     return sum(values) / len(values) if values else None
 
@@ -106,6 +121,26 @@ def _percentile_ranks(draws: int, confidence: float) -> tuple[int, int]:
     return lo, hi
 
 
+def interval_at(pool: Sequence[float], confidence: float) -> tuple[float, float] | None:
+    """The endpoints a sorted draw pool implies at `confidence`.
+
+    Factored out so a corrected interval is a second rank pair off the *same*
+    pool the raw interval was read from, rather than a fresh resample that
+    happens to share a seed. That makes `corrected ⊇ raw` a property of the
+    arithmetic instead of a property of two RNG calls agreeing — and a
+    corrected interval narrower than its raw one is the kind of number a reader
+    cannot detect is wrong.
+
+    `None` below `min_honest_draws(confidence)`: a correction that pushes the
+    level past what the pool can support has no honest interval to report, and
+    the caller records `ci95_corrected: null` rather than a too-narrow number.
+    """
+    if len(pool) < min_honest_draws(confidence):
+        return None
+    lo, hi = _percentile_ranks(len(pool), confidence)
+    return pool[lo], pool[hi]
+
+
 def min_honest_draws(confidence: float = 0.95) -> int:
     """The fewest resample draws a percentile interval may be read off.
 
@@ -138,6 +173,8 @@ def percentile_over_units(
     recomputed on each draw instead, which is what `percentile_of_derived` does.
     """
     if len(values) < 2:
+        return None
+    if draws < min_honest_draws(confidence):
         return None
     rng = random.Random(seed)
     # Sorted, not just `list(values)`: with a fixed seed, `rng.randrange(n)` draws
@@ -297,7 +334,7 @@ def paired_percentile_of_derived(
     seed: int,
     draws: int = 2000,
     confidence: float = 0.95,
-) -> tuple[Interval | None, int]:
+) -> PairedResample:
     """Percentiles of the resampled difference, one draw applied to both sides.
 
     Drawing each side independently would resample the two conditions apart and
@@ -323,7 +360,7 @@ def paired_percentile_of_derived(
     case this function has to detect.
     """
     if len(keys) < 2:
-        return None, 0
+        return PairedResample(interval=None, draws_used=0, pool=[])
     rng = random.Random(seed)
     n = len(keys)
     values: list[float] = []
@@ -343,12 +380,13 @@ def paired_percentile_of_derived(
             continue
         values.append(diff)
     if len(values) < min_honest_draws(confidence):
-        return None, len(values)
+        return PairedResample(interval=None, draws_used=len(values), pool=sorted(values))
     values.sort()
     lo, hi = _percentile_ranks(len(values), confidence)
-    return (
-        Interval(low=values[lo], high=values[hi], method="paired_percentile_over_units"),
-        len(values),
+    return PairedResample(
+        interval=Interval(low=values[lo], high=values[hi], method="paired_percentile_over_units"),
+        draws_used=len(values),
+        pool=values,
     )
 
 

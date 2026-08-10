@@ -6,11 +6,13 @@ from publishable.errors import ContractError
 from publishable.replication import resolve_repeats
 from publishable.stats import (
     Interval,
+    PairedResample,
     UnitTable,
     _percentile_ranks,
     cohens_dz,
     collapse_repeats,
     handed_to,
+    interval_at,
     mean_of,
     min_honest_draws,
     paired_delta_of_derived,
@@ -1082,6 +1084,16 @@ def test_one_value_has_no_interval():
     assert percentile_over_units([1.0], seed=7) is None
 
 
+def test_percentile_over_units_refuses_a_pool_below_the_honest_floor():
+    """The gap `spec-defects.md` recorded: `percentile_of_derived` got a survivor
+    floor in S4a and its sibling did not, so this one returns a zero-width
+    interval at two draws. Unreachable today (`statistics.resample` is refused),
+    which is exactly why it must be closed before the slice that reaches it."""
+    values = [float(i) for i in range(60)]
+    assert percentile_over_units(values, seed=7, draws=10) is None
+    assert percentile_over_units(values, seed=7, draws=2000) is not None
+
+
 def test_resample_seed_depends_on_the_digest():
     assert resample_seed("a") != resample_seed("b")
     assert resample_seed("a") == resample_seed("a")
@@ -1125,6 +1137,47 @@ def _mean_m(t):
     return sum(vals) / len(vals) if vals else None
 
 
+def test_interval_at_reads_a_wider_pair_of_ranks_at_a_smaller_alpha():
+    """A corrected interval is an interval at a smaller α. Read off the same
+    pool, a smaller α must reach further into both tails — that is the whole
+    mechanism, and the nesting it produces is what makes a corrected interval
+    honest beside its raw one."""
+    pool = [float(i) for i in range(2000)]
+    raw = interval_at(pool, 0.95)
+    corrected = interval_at(pool, 1.0 - 0.025)
+    assert raw is not None and corrected is not None
+    assert corrected[0] < raw[0]
+    assert corrected[1] > raw[1]
+
+
+def test_interval_at_refuses_a_pool_too_small_for_the_level():
+    """`min_honest_draws` is the floor below which both percentile ranks are not
+    interior and the interval is systematically too narrow. At α/40 the floor is
+    3201 draws, so a 2000-draw pool has no honest interval at that level — and a
+    number would be worse than a null."""
+    pool = [float(i) for i in range(2000)]
+    assert min_honest_draws(1.0 - 0.00125) > 2000
+    assert interval_at(pool, 1.0 - 0.00125) is None
+    assert interval_at(pool, 0.95) is not None
+
+
+def test_the_paired_resample_carries_the_pool_it_read_its_interval_from():
+    """The corrected interval comes from this pool, so the raw interval's own
+    endpoints must be in it at the raw ranks. Returning a pool that is not the
+    one the interval was read off would make every corrected interval a
+    different construction's answer."""
+    of = {f"u{i}": {"m": float(i) + (1.0 if i % 2 == 0 else 0.0)} for i in range(60)}
+    against = {f"u{i}": {"m": float(i)} for i in range(60)}
+    got = paired_percentile_of_derived(of, against, sorted(of), _mean_m, _mean_m, seed=7)
+    assert isinstance(got, PairedResample)
+    assert got.interval is not None
+    assert len(got.pool) == got.draws_used
+    assert got.pool == sorted(got.pool)
+    lo, hi = _percentile_ranks(len(got.pool), 0.95)
+    assert got.pool[lo] == got.interval.low
+    assert got.pool[hi] == got.interval.high
+
+
 def test_the_paired_interval_is_narrower_than_two_independent_draws():
     """The property that makes pairing worth doing. Two conditions that move
     together have a stable difference even when each side is highly variable —
@@ -1138,7 +1191,7 @@ def test_the_paired_interval_is_narrower_than_two_independent_draws():
     of = {f"u{i}": {"m": float(i) + (1.0 if i % 2 == 0 else 0.0)} for i in range(60)}
     against = {f"u{i}": {"m": float(i)} for i in range(60)}
     keys = sorted(of)
-    paired, _ = paired_percentile_of_derived(of, against, keys, _mean_m, _mean_m, seed=7)
+    paired = paired_percentile_of_derived(of, against, keys, _mean_m, _mean_m, seed=7).interval
     a, _ = percentile_of_derived(of, _mean_m, seed=7)
     b, _ = percentile_of_derived(against, _mean_m, seed=7)
     independent_width = (a.high - a.low) + (b.high - b.low)
@@ -1148,14 +1201,14 @@ def test_the_paired_interval_is_narrower_than_two_independent_draws():
 def test_the_interval_brackets_the_observed_difference():
     of = {f"u{i}": {"m": float(i) + (1.0 if i % 2 == 0 else 0.0)} for i in range(60)}
     against = {f"u{i}": {"m": float(i)} for i in range(60)}
-    got, _ = paired_percentile_of_derived(of, against, sorted(of), _mean_m, _mean_m, seed=7)
+    got = paired_percentile_of_derived(of, against, sorted(of), _mean_m, _mean_m, seed=7).interval
     assert got.low < 0.5 < got.high
 
 
 def test_it_names_its_own_method_paired_percentile():
     of = {f"u{i}": {"m": float(i) + 1.0} for i in range(60)}
     against = {f"u{i}": {"m": float(i)} for i in range(60)}
-    got, _ = paired_percentile_of_derived(of, against, sorted(of), _mean_m, _mean_m, seed=7)
+    got = paired_percentile_of_derived(of, against, sorted(of), _mean_m, _mean_m, seed=7).interval
     assert got.method == "paired_percentile_over_units"
 
 
@@ -1172,9 +1225,9 @@ def test_the_same_seed_reproduces_and_a_different_one_does_not_paired():
 def test_below_the_survivor_floor_there_is_no_interval_paired():
     of = {f"u{i}": {"m": float(i)} for i in range(60)}
     against = {f"u{i}": {"m": float(i)} for i in range(60)}
-    got, used = paired_percentile_of_derived(
+    result = paired_percentile_of_derived(
         of, against, sorted(of), lambda t: None, lambda t: None, seed=7, draws=200)
-    assert got is None and used == 0
+    assert result.interval is None and result.draws_used == 0
 
 
 def test_a_constant_offset_gives_a_genuinely_zero_width_interval():
@@ -1187,7 +1240,7 @@ def test_a_constant_offset_gives_a_genuinely_zero_width_interval():
     rather than a merely large one."""
     of = {f"u{i}": {"m": float(i) + 0.5} for i in range(60)}
     against = {f"u{i}": {"m": float(i)} for i in range(60)}
-    got, _ = paired_percentile_of_derived(of, against, sorted(of), _mean_m, _mean_m, seed=7)
+    got = paired_percentile_of_derived(of, against, sorted(of), _mean_m, _mean_m, seed=7).interval
     assert got is not None
     assert got.high - got.low < 1e-9
 
@@ -1199,10 +1252,10 @@ def test_a_raising_compute_is_treated_as_degenerate_not_propagated_paired():
     def always_raises(units):
         raise ZeroDivisionError("degenerate draw")
 
-    got, used = paired_percentile_of_derived(
+    result = paired_percentile_of_derived(
         of, against, sorted(of), always_raises, always_raises, seed=7, draws=20)
-    assert got is None
-    assert used == 0
+    assert result.interval is None
+    assert result.draws_used == 0
 
 
 def test_a_nan_compute_is_treated_as_degenerate_paired():
@@ -1212,10 +1265,10 @@ def test_a_nan_compute_is_treated_as_degenerate_paired():
     def always_nan(units):
         return float("nan")
 
-    got, used = paired_percentile_of_derived(
+    result = paired_percentile_of_derived(
         of, against, sorted(of), always_nan, always_nan, seed=7, draws=20)
-    assert got is None
-    assert used == 0
+    assert result.interval is None
+    assert result.draws_used == 0
 
 
 def test_a_one_sided_raise_drops_the_whole_draw_not_half():
@@ -1238,10 +1291,10 @@ def test_a_one_sided_raise_drops_the_whole_draw_not_half():
         return float(sum(v for v in units.m if v is not None)) / len(units.m)
 
     draws = 200
-    got, used = paired_percentile_of_derived(
+    result = paired_percentile_of_derived(
         of, against, sorted(of), flaky_against_only, flaky_against_only, seed=7, draws=draws)
-    assert used == draws // 2
-    assert got is not None
+    assert result.draws_used == draws // 2
+    assert result.interval is not None
 
 
 def test_a_one_sided_none_drops_the_whole_draw_not_half():
@@ -1260,10 +1313,10 @@ def test_a_one_sided_none_drops_the_whole_draw_not_half():
         return float(sum(v for v in units.m if v is not None)) / len(units.m)
 
     draws = 200
-    got, used = paired_percentile_of_derived(
+    result = paired_percentile_of_derived(
         of, against, sorted(of), flaky_against_only, flaky_against_only, seed=7, draws=draws)
-    assert used == draws // 2
-    assert got is not None
+    assert result.draws_used == draws // 2
+    assert result.interval is not None
 
 
 def test_two_different_computes_over_identical_tables_yield_a_real_interval():
@@ -1291,7 +1344,8 @@ def test_two_different_computes_over_identical_tables_yield_a_real_interval():
         return sum(vals) / len(vals) if vals else None
 
     point_estimate = total(UnitTable(table)) - mean(UnitTable(table))
-    got, used = paired_percentile_of_derived(table, table, sorted(table), total, mean, seed=7)
+    result = paired_percentile_of_derived(table, table, sorted(table), total, mean, seed=7)
+    got, used = result.interval, result.draws_used
     assert got is not None
     assert used > 0
     assert got.high - got.low > 0  # non-degenerate: the two formulas disagree

@@ -6,7 +6,7 @@ import yaml
 from tests.conftest import write_experiment_module
 
 from publishable.diagnostics import Collector
-from publishable.validate import validate_config
+from publishable.validate import _check_contrasts, validate_config
 
 
 def base_config(tmp_path: Path) -> dict:
@@ -636,14 +636,32 @@ def test_a_seed_declaring_k_is_refused_the_same_way(write_config):
 
 
 def test_a_multi_condition_sweep_warns_about_the_uncorrected_family(write_config):
+    """A grid-only sweep with no `sweep.baseline` publishes no baseline
+    comparison, so the retired formula `max(len(conditions) - 1, 0) + declared`
+    and the current `len(resolve_contrasts(doc, conditions))` disagree here: two
+    grid conditions and one declared contrast between them give the old formula
+    `(2 - 1) + 1 = 2` and the new one exactly `1` (the declared contrast alone —
+    there is no baseline to compare against). A fixture where both formulas
+    agree — such as one with a real `sweep.baseline` — would pass even if the
+    recount reverted to the retired formula, which is what made the previous
+    version of this test lose its discriminating power."""
     c = Collector()
     validate_config(
-        write_config({"sweep": {"grid": {"analysis.method": ["pearson", "spearman", "kendall"]}}}),
+        write_config(
+            {
+                "sweep": {"grid": {"analysis.method": ["spearman", "kendall"]}},
+                "statistics": {
+                    "correction": "none",
+                    "contrasts": [
+                        {"id": "x", "of": "method=spearman", "against": "method=kendall"}
+                    ],
+                },
+            }
+        ),
         c,
     )
     warning = next(f for f in c.findings if f.code == "W-STATS-FAMILY")
-    assert "3" in warning.message
-    assert "not implemented" in warning.message
+    assert "1 comparisons per metric form a family" in warning.message
 
 
 def test_a_single_condition_run_has_no_family(write_config):
@@ -1539,6 +1557,27 @@ def test_a_null_grid_or_baseline_is_absent_not_malformed(write_config):
     assert "E-CONFIG-SHAPE" not in found
 
 
+def test_check_contrasts_still_refuses_a_non_list_when_called_directly():
+    """`_check_contrasts`'s own `isinstance(entries, list)` guard is kept even
+    though `_check_shape` now refuses that shape first in the normal pipeline
+    (`validate_config` early-returns before `_check_contrasts` ever runs for a
+    non-list block). The guard is still live for a caller that reaches
+    `_check_contrasts` directly, which is exactly why it was kept rather than
+    deleted as newly redundant."""
+    c = Collector()
+    _check_contrasts({"statistics": {"contrasts": {"id": "x"}}}, c)
+    assert "E-STATS-CONTRAST-SHAPE" in {f.code for f in c.findings}
+
+
+def test_a_scalar_contrasts_block_is_refused_once_in_the_shape_pass(write_config):
+    """`_check_shape` runs first and `validate_config` early-returns on it, so a
+    nested key refused there is refused for every later reader at once. Its own
+    comment says an unguarded container means "the crash just moves one level
+    down, into whichever `_check_*` reads it next" — which is what R11 was."""
+    found = codes(write_config({"statistics": {"contrasts": 5}}))
+    assert "E-CONFIG-SHAPE" in found
+
+
 # --- `validate` loads the experiment, so it can answer W-REPL-DETERMINISTIC -----
 
 
@@ -1633,6 +1672,54 @@ def test_a_contrast_with_an_unresolvable_side_is_unknown_not_same_sides(write_co
     assert "E-STATS-CONTRAST-SAME-SIDES" not in found
 
 
+def test_an_unhashable_side_inside_a_well_shaped_contrast_is_refused_not_a_crash(write_config):
+    """`of`/`against` naming a list rather than a condition label: `_check_shape`
+    accepts this (`statistics.contrasts` is a list of mappings, so the container
+    shape is fine), and before this fix `_check_contrasts` raised `TypeError:
+    unhashable type: 'list'` from `value in ids` — a set membership test with no
+    `isinstance` guard, unlike the `E-STATS-CORRECTION-UNKNOWN` check ~130 lines
+    above that does guard it. `validate.py` collects findings and never raises,
+    so this has to come back as a diagnostic through `validate_config` end to
+    end, not merely from a function called directly."""
+    found = codes(
+        write_config(
+            {
+                "sweep": _TWO_CONDITIONS,
+                "statistics": {
+                    "contrasts": [{"id": "x", "of": ["a", "b"], "against": "baseline"}]
+                },
+            }
+        )
+    )
+    assert "E-STATS-CONTRAST-UNKNOWN" in found
+
+
+@pytest.mark.parametrize("bad_id", [{"name": "sensitivity"}, ["sensitivity"]])
+def test_an_unhashable_contrast_id_is_refused_not_a_crash(write_config, bad_id):
+    """The sibling of the `of`/`against` fix above, at the two sites that read
+    `id`: the `ids` **set construction** that collects every entry's `id` before
+    the loop, and the `in seen_ids` repeat check inside it. Both hash whatever
+    `id` holds, so a mapping (one bad indent under `id:`) or a list raised
+    `TypeError: unhashable type` out of `validate_config` before any finding was
+    collected — and because `run` validates first, `run` got the traceback too.
+    `validate.py` collects findings and never raises, so a non-string `id` has
+    to come back as the diagnostic the missing/non-string branch already gives
+    it, through `validate_config` end to end."""
+    found = codes(
+        write_config(
+            {
+                "sweep": _TWO_CONDITIONS,
+                "statistics": {
+                    "contrasts": [
+                        {"id": bad_id, "of": "method=spearman", "against": "baseline"}
+                    ]
+                },
+            }
+        )
+    )
+    assert "E-STATS-CONTRAST-SHAPE" in found
+
+
 def test_a_contrast_entry_that_is_not_a_mapping_is_refused(write_config):
     """A list of condition labels where a list of contrast entries belongs.
     `resolve_contrasts` reads `entry["of"]` off whatever this holds, so before
@@ -1650,6 +1737,10 @@ def test_a_contrast_entry_that_is_not_a_mapping_is_refused(write_config):
 
 
 def test_a_non_list_contrasts_block_is_refused(write_config):
+    """A mapping where `statistics.contrasts` wants a list: refused in `_check_shape`
+    now, upstream of `_check_contrasts`, so this is `E-CONFIG-SHAPE` rather than
+    `E-STATS-CONTRAST-SHAPE` — `validate_config` early-returns on the shape pass
+    before `_check_contrasts` ever runs."""
     found = codes(
         write_config(
             {
@@ -1658,7 +1749,7 @@ def test_a_non_list_contrasts_block_is_refused(write_config):
             }
         )
     )
-    assert "E-STATS-CONTRAST-SHAPE" in found
+    assert "E-CONFIG-SHAPE" in found
 
 
 def test_a_contrast_without_an_id_is_refused(write_config):
@@ -1710,27 +1801,101 @@ def test_declared_contrasts_are_counted_in_the_uncorrected_family(write_config):
             {
                 "sweep": _TWO_CONDITIONS,
                 "statistics": {
+                    "correction": "none",
                     "contrasts": [
                         {"id": "a", "of": "method=spearman", "against": "baseline"},
                         {"id": "b", "of": "baseline", "against": "method=spearman"},
-                    ]
+                    ],
                 },
             }
         ),
         c,
     )
     warning = next(f for f in c.findings if f.code == "W-STATS-FAMILY")
-    assert "family of 3" in warning.message
+    assert "3 comparisons" in warning.message
 
 
 def test_a_scalar_contrasts_block_is_refused_without_raising(write_config):
     """A *scalar* where a list belongs, not a mapping: `len()` works on a mapping
-    and raises on a bool or an int, and the family count in `_check_sweep` reads
-    the block before `_check_contrasts` refuses its shape. `validate.py`
-    collects findings and never raises, so this has to come back as a
-    diagnostic — the assertion is that `validate_config` returns at all."""
+    and raises on a bool or an int, and the family count in `_check_sweep` used to
+    read the block before `_check_contrasts` refused its shape. `_check_shape` now
+    refuses any non-list `statistics.contrasts` upstream of both, so this comes
+    back as `E-CONFIG-SHAPE` — the assertion is still that `validate_config`
+    returns a diagnostic rather than raising."""
     for block in (5, True, "method=spearman"):
         found = codes(
             write_config({"sweep": _TWO_CONDITIONS, "statistics": {"contrasts": block}})
         )
-        assert "E-STATS-CONTRAST-SHAPE" in found
+        assert "E-CONFIG-SHAPE" in found
+
+
+def test_the_default_correction_does_not_warn_about_the_family(write_config):
+    """`materialize.py` writes `correction: holm` into every generated config, so
+    a warning on the default is a warning nearly every run gets. It fires for
+    `none` — `reference.md` § Validation: "Correction declared for a family ...
+    with `statistics.correction: none` (warning)"."""
+    found = codes(write_config({"sweep": _TWO_CONDITIONS, "statistics": {"correction": "holm"}}))
+    assert "W-STATS-FAMILY" not in found
+
+
+def test_an_uncorrected_family_still_warns(write_config):
+    found = codes(write_config({"sweep": _TWO_CONDITIONS, "statistics": {"correction": "none"}}))
+    assert "W-STATS-FAMILY" in found
+
+
+def test_a_sweep_with_no_baseline_and_no_contrasts_has_no_family(write_config):
+    """The overcount recorded in `spec-defects.md`: a grid-only sweep declares no
+    baseline, so `resolve_contrasts` returns `[]` and the run publishes no
+    comparison at all. Counting `len(conditions) - 1` told the author they had a
+    family of two."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {"grid": {"analysis.method": ["pearson", "spearman", "kendall"]}},
+                "statistics": {"correction": "none"},
+            }
+        )
+    )
+    assert "W-STATS-FAMILY" not in found
+
+
+def test_fdr_bh_over_a_family_with_no_p_value_warns(write_config):
+    """`reference.md`: `fdr_bh` "needs a p-value it can't always get. Declared
+    over a family whose metrics carry none, it leaves every member with a `null`
+    `ci95_corrected` and no `p_value_corrected` either — a correction declared
+    and not applied, which is the state this section exists to prevent." No
+    comparison in this build can carry one: `statistics.null_test` is refused."""
+    found = codes(
+        write_config({"sweep": _TWO_CONDITIONS, "statistics": {"correction": "fdr_bh"}})
+    )
+    assert "W-STATS-CORRECTION-INAPPLICABLE" in found
+
+
+def test_holm_over_the_same_family_does_not_warn_about_applicability(write_config):
+    """Holm's correction is interval-shaped, so it applies without a p-value.
+    A warning here would read as "no correction is possible", which is false."""
+    found = codes(write_config({"sweep": _TWO_CONDITIONS, "statistics": {"correction": "holm"}}))
+    assert "W-STATS-CORRECTION-INAPPLICABLE" not in found
+
+
+def test_a_non_string_correction_is_refused_without_raising(write_config):
+    """`validate.py` collects findings and never raises — including on a config
+    value of the wrong type. The family block reads `correction` before anything
+    checks its shape, which is the class of the R11 regression in S4b."""
+    for value in (5, True, ["holm"], {"method": "holm"}):
+        found = codes(write_config({"sweep": _TWO_CONDITIONS, "statistics": {"correction": value}}))
+        assert "E-STATS-CORRECTION-UNKNOWN" in found
+
+
+def test_an_out_of_enum_correction_string_is_refused(write_config):
+    """`bonferonni` is a plausible typo of `bonferroni`. Left unchecked it
+    collects zero findings, and `corrected_for` downstream returns
+    `ci95_corrected: null`, `correction: "bonferonni"`, `correction_level: null`,
+    `thin: false` — a correction recorded as applied while none was, and `thin:
+    false` suppresses the one signal that would otherwise flag it. `reference.md`
+    § The one config file enumerates `none | bonferroni | holm | fdr_bh` and
+    nothing else is a legal value."""
+    found = codes(
+        write_config({"sweep": _TWO_CONDITIONS, "statistics": {"correction": "bonferonni"}})
+    )
+    assert "E-STATS-CORRECTION-UNKNOWN" in found

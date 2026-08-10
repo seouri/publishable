@@ -7,6 +7,7 @@ from typing import Any
 import yaml
 
 from publishable.base_experiment import load_experiment
+from publishable.contrasts import resolve_contrasts
 from publishable.diagnostics import Collector
 from publishable.errors import ContractError
 from publishable.manifest import POLICIES
@@ -130,6 +131,22 @@ def _check_shape(doc: dict[str, Any], c: Collector) -> bool:
             for i, level in enumerate(repeats):
                 if not isinstance(level, dict):
                     _bad(f"replication.repeats[{i}]", level, "mapping")
+
+    # `statistics.contrasts` is read by two `_check_*` functions and by
+    # `contrasts.resolve_contrasts`, so it belongs here rather than being guarded
+    # three times. Verified against the pre-this-change code directly (not
+    # assumed): a scalar here does not currently crash `validate` — `_check_sweep`
+    # already contains `resolve_contrasts`'s `TypeError` in a `try/except`, and
+    # `_check_contrasts` already has its own `isinstance(entries, list)` guard, so
+    # the two together already report `E-STATS-CONTRAST-SHAPE` cleanly. What this
+    # block buys instead is what every other entry in this pass buys: one refusal,
+    # here, under the shared `E-CONFIG-SHAPE` identifier, so a future third reader
+    # of this block inherits the guard rather than needing its own.
+    statistics = doc.get("statistics")
+    if isinstance(statistics, dict):
+        contrasts = statistics.get("contrasts")
+        if contrasts is not None and not isinstance(contrasts, list):
+            _bad("statistics.contrasts", contrasts, "list")
 
     return ok
 
@@ -624,10 +641,13 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     a pre-registered hypothesis that runs and reports success while honoring
     neither is the same silent-no-op class. `statistics.contrasts` is no longer in
     this family: `_check_contrasts` now resolves and checks each declared entry
-    instead of refusing the block wholesale. `statistics.correction` is the
-    deliberate exception: it is disclosed via `W-STATS-FAMILY` and a `correction: null`
-    recorded on every metric, not refused, since a warned-and-marked declaration is not
-    a declaration that changes nothing while claiming otherwise. Each message says
+    instead of refusing the block wholesale. Neither is `statistics.correction`,
+    which `cli.py` now applies: every comparison carries `ci95_corrected`,
+    `correction_level`, `family_size`, and `family`, so what this module owes it
+    is the value checks below (`E-STATS-CORRECTION-UNKNOWN`,
+    `W-STATS-CORRECTION-INAPPLICABLE`) plus `W-STATS-FAMILY` on the one value that
+    opts out — `none`, which corrects nothing and records `correction: null` to
+    say so. Each remaining message says
     plainly that the block is honored in a later slice, so a user does not read this as
     their config being malformed.
     """
@@ -725,10 +745,11 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     # block all validate clean today and are read by nothing — the same
     # silent-no-op class as the fields above. `statistics.contrasts` used to be in
     # this list too; it is now checked for real by `_check_contrasts` instead of
-    # being refused wholesale. `statistics.correction` is deliberately NOT refused
-    # here: it is disclosed instead, via `W-STATS-FAMILY` plus a `correction: null`
-    # recorded on every aggregated metric, so it is not a case of a declaration
-    # that changes nothing while claiming otherwise. Of these four keys
+    # being refused wholesale. `statistics.correction` is not in it either, and no
+    # longer for a disclosure reason: `cli.py` applies it, so a declared correction
+    # changes the record — the correction checks further down this module check
+    # its *value* instead, and warn only on `none`, which corrects nothing by
+    # request. Of these four keys
     # `materialize.py` writes only two into a generated config — `statistics.correction`
     # and a top-level `hypotheses: []` — so the other two are simply absent there;
     # each check below fires on a real declaration either way, never on a key's mere
@@ -933,33 +954,61 @@ def _check_sweep(
                 f"executions exceeds {budget}",
             )
 
-    # Declared contrasts count too. `reference.md` § Contrasts: "Declared
-    # contrasts join the correction family alongside baseline comparisons,
-    # because a reader shown both is exposed to both." They were refused
-    # wholesale until this slice, so the count was accurate while it ignored
-    # them and is not any more. The baseline half deliberately still counts
-    # `len(conditions) - 1` even for a sweep with no `sweep.baseline`, which
-    # produces no baseline comparisons at all — a separate overcount, recorded
-    # in `docs/superpowers/spec-defects.md` for the slice that implements the
-    # correction rather than fixed here.
-    #
-    # The `isinstance` guard is load-bearing: this runs *before*
-    # `_check_contrasts`, so a scalar `contrasts: 5` reaches it ahead of the
-    # shape refusal, and `len()` on it would raise a `TypeError` out of a
-    # module whose whole contract is that it collects findings and never
-    # raises. An unusable declaration counts as no declared contrasts here and
-    # is diagnosed as `E-STATS-CONTRAST-SHAPE` there.
-    contrasts_block = ((doc.get("statistics") or {}).get("contrasts")) or []
-    declared = len(contrasts_block) if isinstance(contrasts_block, list) else 0
-    family = max(len(conditions) - 1, 0) + declared
-    if family > 0:
+    # The family is what `resolve_contrasts` will actually build — every
+    # baseline comparison plus every declared contrast — not `len(conditions)`.
+    # A grid-only sweep declares no baseline, so it publishes no comparison at
+    # all, and telling its author they have a family of two was a false
+    # positive rather than a backstop (`spec-defects.md`).
+    correction = (doc.get("statistics") or {}).get("correction")
+    known_corrections = {"none", "bonferroni", "holm", "fdr_bh"}
+    # An out-of-enum *string* is the more likely mistake in practice — a typo
+    # like `bonferonni` — and left unchecked it collects zero findings while
+    # `corrected_for` downstream returns `ci95_corrected: null` with `thin:
+    # false` and `correction: "bonferonni"` recorded on every member: a
+    # correction named as applied while none was, and `thin: false`
+    # suppresses the one signal that would otherwise flag it (`reference.md` §
+    # Statistical reporting). Checking `isinstance` before the set membership
+    # test is deliberate, not stylistic — `in` on a `set` raises `TypeError`
+    # for an unhashable value (a `list` or `dict`), and `and` short-circuits
+    # before that ever runs.
+    if correction is not None and not (
+        isinstance(correction, str) and correction in known_corrections
+    ):
+        shown = f"`{correction}`" if isinstance(correction, str) else type(correction).__name__
+        c.error(
+            "E-STATS-CORRECTION-UNKNOWN",
+            "statistics.correction",
+            f"is {shown}, not one of `none`, `bonferroni`, `holm` or `fdr_bh`",
+        )
+        correction = None
+    # `resolve_contrasts` trusts its caller to have refused an unusable
+    # `statistics.contrasts` block first (`contrasts.py`'s own comment leans on
+    # this), and `_check_contrasts` is the check that does that — but it runs
+    # *after* this one, so a malformed block (a scalar, a non-mapping entry, an
+    # unresolvable or nested label) reaches this call first. `validate.py`
+    # collects findings and never raises, so a block that cannot be resolved
+    # yet counts as no resolvable family here; `_check_contrasts` reports the
+    # shape or label fault under its own, more specific code.
+    try:
+        comparisons = len(resolve_contrasts(doc, conditions))
+    except (TypeError, KeyError, AttributeError, ValueError):
+        comparisons = 0
+    if comparisons > 0 and (correction or "holm") == "none":
         c.warn(
             "W-STATS-FAMILY",
             "statistics.correction",
-            f"{len(conditions)} conditions and {declared} declared contrasts form a family of "
-            f"{family} comparisons per metric, and multiplicity correction is not implemented "
-            "in this build — every interval reported is uncorrected, and each records "
-            "`correction: null` to say so",
+            f"{comparisons} comparisons per metric form a family, and "
+            "`statistics.correction` is `none` — every interval reported is uncorrected, and "
+            "each records `correction: null` to say so",
+        )
+    if comparisons > 0 and correction == "fdr_bh":
+        c.warn(
+            "W-STATS-CORRECTION-INAPPLICABLE",
+            "statistics.correction",
+            "`fdr_bh` adjusts p-values, and no comparison in this family will carry one "
+            "(`statistics.null_test` is undeclared, and a parameter-axis contrast cannot "
+            "supply one) — every `ci95_corrected` will be null. Use `holm` or `bonferroni`, "
+            "whose corrections are interval-shaped",
         )
 
 
@@ -1024,7 +1073,18 @@ def _check_contrasts(doc: dict[str, Any], c: Collector) -> None:
         )
         return
 
-    ids = {entry.get("id") for entry in entries if isinstance(entry, dict) and entry.get("id")}
+    # `isinstance(..., str)` before the value enters a `set`, for the reason the
+    # `of`/`against` loop below states: building a `set` hashes every element, so
+    # an `id` holding a mapping or a list (one bad indent under `id:`) raised
+    # `TypeError` out of `validate_config` here, before a single finding was
+    # collected. A non-string `id` is not a name a contrast can be published
+    # under, so dropping it from `ids` routes it to the missing-or-not-a-string
+    # branch below rather than minting an identifier.
+    ids = {
+        entry["id"]
+        for entry in entries
+        if isinstance(entry, dict) and isinstance(entry.get("id"), str) and entry["id"]
+    }
     conditions = expand(doc)
     labels = {cond.label for cond in conditions if cond.label is not None}
     declared_attrs = set(((doc.get("data") or {}).get("units") or {}).get("attributes") or [])
@@ -1039,17 +1099,23 @@ def _check_contrasts(doc: dict[str, Any], c: Collector) -> None:
                 "list of condition labels is not a list of contrasts",
             )
             continue
-        if entry.get("id") in seen_ids:
+        # The second site that hashes `id`: `in seen_ids` raises for an
+        # unhashable value exactly as the `ids` construction above did, so the
+        # `isinstance` guard has to come first here too. A non-string `id` is
+        # never a repeat of anything — it gets the shape error below instead.
+        raw_id = entry.get("id")
+        is_named = isinstance(raw_id, str) and raw_id
+        if is_named and raw_id in seen_ids:
             c.error(
                 "E-STATS-CONTRAST-SHAPE",
                 f"statistics.contrasts[{i}].id",
-                f"repeats `{entry.get('id')}`, which an earlier entry already uses; two "
+                f"repeats `{raw_id}`, which an earlier entry already uses; two "
                 "contrasts under one name are indistinguishable in `results.contrasts` and "
                 "in a hypothesis naming it",
             )
-        elif isinstance(entry.get("id"), str) and entry.get("id"):
+        elif is_named:
             seen_ids.add(entry["id"])
-        if not isinstance(entry.get("id"), str) or not entry.get("id"):
+        if not is_named:
             c.error(
                 "E-STATS-CONTRAST-SHAPE",
                 f"statistics.contrasts[{i}].id",
@@ -1059,7 +1125,14 @@ def _check_contrasts(doc: dict[str, Any], c: Collector) -> None:
         for field in ("of", "against"):
             value = entry.get(field)
             where = f"statistics.contrasts[{i}].{field}"
-            if value in ids and value not in labels:
+            # `isinstance` before either membership test, the same guard
+            # `E-STATS-CORRECTION-UNKNOWN` uses above: `in` on `ids`/`labels` (both
+            # `set`s) raises `TypeError` for an unhashable `value` (a `list` or a
+            # `dict`), and `and`/`not (... and ...)` short-circuits before that ever
+            # runs. A non-string `of`/`against` is simply not a condition's label,
+            # so it falls into the same `E-STATS-CONTRAST-UNKNOWN` branch a
+            # resolvable-but-wrong string would.
+            if isinstance(value, str) and value in ids and value not in labels:
                 c.error(
                     "E-STATS-CONTRAST-NESTED",
                     where,
@@ -1069,13 +1142,14 @@ def _check_contrasts(doc: dict[str, Any], c: Collector) -> None:
                     "cells) is an interaction, and stays a `summary`-step `Estimate` rather "
                     "than a declared contrast",
                 )
-            elif value not in labels:
+            elif not (isinstance(value, str) and value in labels):
                 c.error(
                     "E-STATS-CONTRAST-UNKNOWN",
                     where,
-                    f"names `{value}`, which no condition's label matches",
+                    f"names `{value!r}`, which no condition's label matches",
                 )
-        if entry.get("of") in labels and entry.get("of") == entry.get("against"):
+        of_value = entry.get("of")
+        if isinstance(of_value, str) and of_value in labels and of_value == entry.get("against"):
             c.error(
                 "E-STATS-CONTRAST-SAME-SIDES",
                 f"statistics.contrasts[{i}]",
