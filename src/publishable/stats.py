@@ -245,6 +245,50 @@ def percentile_of_derived(
     )
 
 
+def paired_percentile_of_derived(
+    of: dict[str, dict[str, float]],
+    against: dict[str, dict[str, float]],
+    keys: list[str],
+    compute: "Callable[[UnitTable], float | None]",
+    seed: int,
+    draws: int = 2000,
+    confidence: float = 0.95,
+) -> tuple[Interval | None, int]:
+    """Percentiles of the resampled difference, one draw applied to both sides.
+
+    Drawing each side independently would resample the two conditions apart and
+    destroy the pairing — the same error as differencing the two sides' own
+    intervals. Both spellings produce a plausible interval; only this one is
+    narrower, which is what `allocation: within` buys.
+    """
+    if len(keys) < 2:
+        return None, 0
+    rng = random.Random(seed)
+    n = len(keys)
+    values: list[float] = []
+    for _ in range(draws):
+        drawn = [keys[rng.randrange(n)] for _ in range(n)]
+        try:
+            a = compute(_unit_table_from_rows([{"unit": k, **of[k]} for k in drawn]))
+            b = compute(_unit_table_from_rows([{"unit": k, **against[k]} for k in drawn]))
+        except Exception:  # a degenerate draw, not a fault; see percentile_of_derived
+            continue
+        if a is None or b is None:
+            continue
+        diff = float(a) - float(b)
+        if math.isnan(diff):
+            continue
+        values.append(diff)
+    if len(values) < min_honest_draws(confidence):
+        return None, len(values)
+    values.sort()
+    lo, hi = _percentile_ranks(len(values), confidence)
+    return (
+        Interval(low=values[lo], high=values[hi], method="paired_percentile_over_units"),
+        len(values),
+    )
+
+
 def _is_numeric(value: object) -> bool:
     """`bool` is a `int` subclass in Python but is never a quantity to average."""
     return isinstance(value, (int, float)) and not isinstance(value, bool)

@@ -14,6 +14,7 @@ from publishable.stats import (
     mean_of,
     min_honest_draws,
     paired_keys,
+    paired_percentile_of_derived,
     paired_t_over_units,
     percentile_of_derived,
     percentile_over_units,
@@ -1116,3 +1117,60 @@ def test_the_rank_indices_are_symmetric_not_off_by_one(monkeypatch):
     monkeypatch.setattr("publishable.stats.random.Random", _FakeRandom)
     result = percentile_over_units([0.0, 1.0], seed=7, draws=2000, confidence=0.95)
     assert result == Interval(low=0.0, high=0.5, method="percentile_over_units")
+
+
+def _mean_m(t):
+    vals = [v for v in t.m if v is not None]
+    return sum(vals) / len(vals) if vals else None
+
+
+def test_the_paired_interval_is_narrower_than_two_independent_draws():
+    """The property that makes pairing worth doing. Two conditions that move
+    together have a stable difference even when each side is highly variable —
+    an implementation drawing independently loses exactly that.
+
+    The per-unit difference alternates 1.0/0.0 (mean 0.5) rather than being a
+    constant 0.5 offset: a constant offset makes the paired difference exactly
+    0.5 on *every* resample regardless of which units are drawn, which would
+    demonstrate the narrowing with a degenerate zero-width interval instead of
+    a real one."""
+    of = {f"u{i}": {"m": float(i) + (1.0 if i % 2 == 0 else 0.0)} for i in range(60)}
+    against = {f"u{i}": {"m": float(i)} for i in range(60)}
+    keys = sorted(of)
+    paired, _ = paired_percentile_of_derived(of, against, keys, _mean_m, seed=7)
+    a, _ = percentile_of_derived(of, _mean_m, seed=7)
+    b, _ = percentile_of_derived(against, _mean_m, seed=7)
+    independent_width = (a.high - a.low) + (b.high - b.low)
+    assert (paired.high - paired.low) < independent_width / 4
+
+
+def test_the_interval_brackets_the_observed_difference():
+    of = {f"u{i}": {"m": float(i) + (1.0 if i % 2 == 0 else 0.0)} for i in range(60)}
+    against = {f"u{i}": {"m": float(i)} for i in range(60)}
+    got, _ = paired_percentile_of_derived(of, against, sorted(of), _mean_m, seed=7)
+    assert got.low < 0.5 < got.high
+
+
+def test_it_names_its_own_method_paired_percentile():
+    of = {f"u{i}": {"m": float(i) + 1.0} for i in range(60)}
+    against = {f"u{i}": {"m": float(i)} for i in range(60)}
+    got, _ = paired_percentile_of_derived(of, against, sorted(of), _mean_m, seed=7)
+    assert got.method == "paired_percentile_over_units"
+
+
+def test_the_same_seed_reproduces_and_a_different_one_does_not_paired():
+    of = {f"u{i}": {"m": float(i) + (1.0 if i % 2 == 0 else 0.0)} for i in range(60)}
+    against = {f"u{i}": {"m": float(i)} for i in range(60)}
+    k = sorted(of)
+    assert paired_percentile_of_derived(of, against, k, _mean_m, seed=7) == \
+        paired_percentile_of_derived(of, against, k, _mean_m, seed=7)
+    assert paired_percentile_of_derived(of, against, k, _mean_m, seed=7) != \
+        paired_percentile_of_derived(of, against, k, _mean_m, seed=99)
+
+
+def test_below_the_survivor_floor_there_is_no_interval_paired():
+    of = {f"u{i}": {"m": float(i)} for i in range(60)}
+    against = {f"u{i}": {"m": float(i)} for i in range(60)}
+    got, used = paired_percentile_of_derived(
+        of, against, sorted(of), lambda t: None, seed=7, draws=200)
+    assert got is None and used == 0
