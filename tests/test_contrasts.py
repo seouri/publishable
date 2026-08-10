@@ -62,6 +62,33 @@ def test_declared_contrasts_come_after_the_baseline_ones():
     assert [c.id for c in resolve_contrasts(cfg, conds)] == ["method=spearman", "extra"]
 
 
+def test_a_declared_entry_is_marked_declared_even_when_it_looks_generated():
+    """The one case no identity test on `id`/`against` can get right: a declared
+    entry whose `id` is its own `of` condition's label and whose `against` is
+    the baseline is field-for-field identical to the generated comparison, so
+    only `declared` separates them. Misfiling it puts it in `vs_baseline`,
+    where it overwrites the genuine baseline block and never reaches
+    `results.contrasts`."""
+    conds = [_cond(0, "baseline", baseline=True), _cond(1, "method=spearman")]
+    cfg = {
+        "statistics": {
+            "contrasts": [
+                {
+                    "id": "method=spearman",
+                    "of": "method=spearman",
+                    "against": "baseline",
+                    "within": {"sex": "f"},
+                }
+            ]
+        }
+    }
+    got = resolve_contrasts(cfg, conds)
+    assert [(c.id, c.of, c.against, c.declared) for c in got] == [
+        ("method=spearman", 1, 0, False),
+        ("method=spearman", 1, 0, True),
+    ]
+
+
 def _roster(*specs):
     return UnitList([Unit(key=k, paths=(), attributes=a) for k, a in specs])
 

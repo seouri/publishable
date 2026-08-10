@@ -28,6 +28,7 @@ def run_a_project(
     extra_steps: list[str] | None = None,
     aggregate_returns: str | None = None,
     units: int = 10,
+    unit_attributes: list[str] | None = None,
     **overrides: Any,
 ) -> dict[str, Any]:
     """Scaffold, configure, commit, and `run` a project end to end.
@@ -65,6 +66,15 @@ def run_a_project(
     rather than assuming the caller already has a denominator. Patched in via
     `pytest.MonkeyPatch.context()`, self-contained so no caller needs its own
     `monkeypatch` fixture, and undone before this function returns.
+
+    `unit_attributes` names columns to declare under `data.units.attributes`.
+    The roster file always carries a `cohort` column (alternating `a`/`b`), so
+    a caller wanting a `within` stratum passes `unit_attributes=["cohort"]` —
+    `validate` refuses a `within` naming an attribute the config never declared
+    (`E-STATS-CONTRAST-WITHIN`), and unit resolution refuses one the table
+    doesn't have (`E-UNITS-ATTR-MISSING`), so both halves have to be present.
+    The column is written unconditionally because an undeclared column is
+    simply never read.
     """
     tmp_path.mkdir(parents=True, exist_ok=True)
     root = tmp_path / "proj"
@@ -77,8 +87,8 @@ def run_a_project(
     # caller-set override — a thin-pairing test wants a roster small enough that
     # `n_paired` trips `limits.min_reported_n` without inflating every other
     # caller's fixture to match.
-    patients = "\n".join(f"p{i}" for i in range(1, units + 1))
-    (data / "index.csv").write_text(f"patient_id\n{patients}\n")
+    patients = "\n".join(f"p{i},{'ab'[i % 2]}" for i in range(1, units + 1))
+    (data / "index.csv").write_text(f"patient_id,cohort\n{patients}\n")
     assert main(["new", str(root)]) == EXIT_OK
     with pytest.MonkeyPatch.context() as mp:
         if aggregate_returns is not None:
@@ -109,6 +119,8 @@ def run_a_project(
         if replication is not None:
             doc["replication"] = replication
         doc.update(overrides)
+        if unit_attributes is not None:
+            doc["data"]["units"]["attributes"] = list(unit_attributes)
         cfg.write_text(yaml.safe_dump(doc))
         for args in (
             ["add", "."],
@@ -809,6 +821,148 @@ def test_a_baseline_sweep_reports_a_delta(tmp_path, capsys, monkeypatch):
     assert isinstance(entry["cohens_d"], float)
 
 
+def _named_contrast(run: dict[str, Any], label: str, metric: str) -> dict[str, Any] | None:
+    """One *named* metric in the condition labeled `label`'s `vs_baseline`
+    block. `_first_contrast` takes whichever metric comes first, which is the
+    recorded column when a step records one and its `aggregate` derives another
+    — so a caller after the derived one has to say which."""
+    for condition in run["results"]["conditions"]:
+        if condition.get("label") != label:
+            continue
+        for step_block in condition.get("vs_baseline", {}).values():
+            if metric in step_block:
+                found = step_block[metric]
+                assert isinstance(found, dict)
+                return found
+    return None
+
+
+def test_a_derived_contrast_resamples_each_side_with_its_own_formula(
+    tmp_path, capsys, monkeypatch
+):
+    """The end-to-end guard on the shared-closure cancellation. The step records
+    an identical `pred` under both conditions and only the *formula* differs by
+    `analysis.method` — the documented worked example's shape, where
+    `analysis.method` changes what `aggregate` computes rather than what the
+    step records. Evaluating one side's closure against both sides' draws makes
+    the difference cancel on every draw: a zero-width `ci95` at zero beside a
+    nonzero point-estimate `delta`, an interval that does not contain its own
+    estimate. `tests/test_stats.py` pins this inside
+    `paired_percentile_of_derived`; only a run through `main(["run", ...])`
+    pins the *call site*, where passing `compute_of` for both sides
+    reintroduces it with every unit test green.
+    """
+    import publishable.generators.experiment as experiment_gen
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    monkeypatch.setattr(
+        GenericTemplate,
+        "aggregate",
+        lambda self, units, cfg: {
+            "score": (
+                2.0 if cfg.parameters.analysis.method == "spearman" else 1.0
+            )
+            * sum(units.pred)
+            / len(units)
+        },
+    )
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    entry = _named_contrast(run, "method=spearman", "score")
+    assert entry is not None
+    assert entry["method"] == "paired_percentile_over_units"
+    # `pred` is 0.0..39.0, so the baseline's mean is 19.5 and spearman's is
+    # 39.0 — a delta of exactly 19.5, which the interval has to bracket.
+    assert entry["delta"] == pytest.approx(19.5)
+    low, high = entry["ci95"]
+    assert low < entry["delta"] < high
+    # A derived metric has no per-unit value to difference, so no Cohen's d —
+    # the reason the worked example carries `cohens_d: null` for `r`.
+    assert entry["cohens_d"] is None
+
+
+def _declared_contrast_run(tmp_path, capsys, monkeypatch, **kwargs):
+    """A run declaring one `statistics.contrasts` entry that is field-for-field
+    indistinguishable from the auto-generated baseline comparison — same `of`,
+    same `against`, and an `id` equal to `of`'s own label — except for its
+    `within` stratum. `validate` permits every part of that, so it is the shape
+    that separates reading `Comparison.declared` from reconstructing
+    "auto-generated?" out of `id`/`against`.
+    """
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        unit_attributes=["cohort"],
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+        statistics={
+            "contrasts": [
+                {
+                    "id": "method=spearman",
+                    "of": "method=spearman",
+                    "against": "baseline",
+                    "within": {"cohort": "a"},
+                }
+            ]
+        },
+        **kwargs,
+    )
+    return yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+
+
+def test_a_declared_contrast_lands_beside_the_conditions_not_inside_one(
+    tmp_path, capsys, monkeypatch
+):
+    """`reference.md` § Contrasts: a contrast belongs to neither of its sides, so
+    a declared entry is `results.contrasts`, never a condition's `vs_baseline`.
+    Reconstructing "auto-generated?" as `against == baseline and id ==
+    label_of(of)` misfiles this entry into `vs_baseline` — where, because
+    declared entries are resolved second, it *overwrites* the genuine
+    unrestricted block — and it never reaches `results.contrasts` at all.
+    """
+    run = _declared_contrast_run(tmp_path, capsys, monkeypatch)
+    contrasts = run["results"]["contrasts"]
+    assert [c["id"] for c in contrasts] == ["method=spearman"]
+    assert contrasts[0]["of"] == "01_method=spearman"
+    assert contrasts[0]["against"] == "00_baseline"
+
+
+def test_a_declared_contrast_does_not_displace_the_baseline_block(
+    tmp_path, capsys, monkeypatch
+):
+    """The data-loss half of the same defect, and the half that a placement
+    assertion alone would miss: the condition's own `vs_baseline` must still
+    hold the *unrestricted* comparison over all 10 units, not the declared
+    entry's `cohort: a` half of them.
+    """
+    run = _declared_contrast_run(tmp_path, capsys, monkeypatch)
+    unrestricted = _first_contrast(run, "method=spearman")
+    assert unrestricted is not None
+    assert unrestricted["n_paired"] == 10
+    restricted = run["results"]["contrasts"][0]
+    n_paired = {
+        metric["n_paired"]
+        for step_block in restricted.values()
+        if isinstance(step_block, dict)
+        for metric in step_block.values()
+    }
+    assert n_paired == {5}  # the `cohort: a` half, and it did not land above
+
+
 def test_a_run_with_no_baseline_has_no_vs_baseline_block(tmp_path, capsys):
     """Absent, not empty. An empty block would claim a comparison was made and
     found nothing."""
@@ -873,7 +1027,16 @@ def test_a_paired_delta_is_narrower_than_the_conditions_it_compares(
     tmp_path, capsys, monkeypatch
 ):
     """The contrast that `allocation: within` buys, end to end: per-condition
-    intervals are wide and the delta's is narrow, over the same units."""
+    intervals are wide and the delta's is narrow, over the same units.
+
+    The margin is a ratio, not `<`. Measured on this fixture the delta's width
+    is ≈0.181 against a per-condition ≈12.577 — about 70× — so a bare `width <
+    per_condition` passes at 12.5 and would stay green for an implementation
+    that had lost almost all of the pairing benefit (an unpaired construction
+    over the same two conditions is *wider* than either side, not narrower).
+    `/10` keeps a 7× margin over what the fixture actually produces while
+    refusing anything that isn't recognisably paired.
+    """
     import publishable.generators.experiment as experiment_gen
 
     monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
@@ -891,12 +1054,23 @@ def test_a_paired_delta_is_narrower_than_the_conditions_it_compares(
     assert delta is not None
     width = delta["ci95"][1] - delta["ci95"][0]
     per_condition = _first_metric_width(run, condition_index=1)
-    assert width < per_condition
+    assert width < per_condition / 10
 
 
-def test_the_delta_half_width_is_not_implausibly_narrow(tmp_path, capsys, monkeypatch):
-    """CLAUDE.md records ≈0.033 as unreachable for a linear-versus-rank contrast
-    at n≈228; a fixture producing far less has lost the resampling."""
+def test_the_delta_interval_matches_this_fixture_s_own_arithmetic(tmp_path, capsys, monkeypatch):
+    """The lower half of the bracket, and it is computed from this fixture
+    rather than borrowed. `_METHOD_VARYING_STEP` shifts every unit by exactly
+    +1.0 between the two conditions and alternates a further ±0.5, so the 120
+    per-unit differences are 60 at 1.5 and 60 at 0.5: mean 1.0, sample sd
+    0.5·√(120/119) = 0.502096, standard error 0.045836, and with
+    t(0.975, 119) = 1.980100 a half-width of 0.090767 — a width of 0.181534.
+
+    A bare `high > low` is what stood here, and it rejects only a zero-width
+    interval; CLAUDE.md's ≈0.033 floor, which the old docstring cited, is an
+    n≈228 linear-versus-rank number that says nothing about this fixture. The
+    exact value is assertable because a *t* interval over a deterministic
+    column involves no drawing at all — nothing here is seed-dependent.
+    """
     import publishable.generators.experiment as experiment_gen
 
     monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
@@ -913,4 +1087,6 @@ def test_the_delta_half_width_is_not_implausibly_narrow(tmp_path, capsys, monkey
     entry = _first_contrast(run, "method=spearman")
     assert entry is not None
     lo, hi = entry["ci95"]
-    assert hi > lo  # a real interval, not a point
+    assert hi - lo == pytest.approx(0.1815155, rel=1e-5)
+    assert lo == pytest.approx(1.0 - 0.0907577, rel=1e-5)
+    assert hi == pytest.approx(1.0 + 0.0907577, rel=1e-5)

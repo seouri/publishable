@@ -151,42 +151,28 @@ def _baseline_comparisons(
     `resolve_contrasts` also returns declared `statistics.contrasts` entries —
     an arbitrary `of`/`against` pair under a custom `id` — and those are
     `results.contrasts` (`_declared_comparisons`, `_compute_declared_contrasts`),
-    not this run's `vs_baseline`. The auto-generated baseline comparisons this
-    function keeps are exactly the ones `resolve_contrasts` built with
-    `id=<condition's own label>` and `against=<the baseline's index>` — the
-    same identity test, run again here (and inverted in `_declared_comparisons`)
-    rather than threaded through as a fourth field on `Comparison`, since only
-    these two callers need it.
+    not this run's `vs_baseline`. Which source produced a comparison is read off
+    `Comparison.declared` rather than reconstructed from `id`/`against`: a
+    declared entry may name the baseline as its `against` and carry an `id`
+    equal to its `of` condition's own label — `validate` permits both — and an
+    identity test on those fields misfiles it here, where it silently replaces
+    the genuine unrestricted baseline block and never reaches
+    `results.contrasts` at all.
     """
-    baseline = next((c for c in conditions if c.is_baseline), None)
-    if baseline is None:
+    if not any(c.is_baseline for c in conditions):
         return []
-    label_by_index = {c.index: c.label for c in conditions}
-    return [
-        comp
-        for comp in resolve_contrasts(doc, conditions)
-        if comp.against == baseline.index and comp.id == label_by_index.get(comp.of)
-    ]
+    return [comp for comp in resolve_contrasts(doc, conditions) if not comp.declared]
 
 
 def _declared_comparisons(doc: dict[str, Any], conditions: "list[Condition]") -> "list[Comparison]":
     """The complement of `_baseline_comparisons`: every `resolve_contrasts` entry
     that is *not* an auto-generated baseline comparison — i.e. a declared
     `statistics.contrasts` entry, headed for `results.contrasts` rather than
-    `vs_baseline`. Same identity test as `_baseline_comparisons`, inverted,
-    kept as its own function so a caller never has to remember to negate the
-    other one correctly.
+    `vs_baseline`. Reads the same `Comparison.declared` flag, inverted, kept as
+    its own function so a caller never has to remember to negate the other one
+    correctly.
     """
-    baseline = next((c for c in conditions if c.is_baseline), None)
-    label_by_index = {c.index: c.label for c in conditions}
-    all_comparisons = resolve_contrasts(doc, conditions)
-    if baseline is None:
-        return all_comparisons
-    return [
-        comp
-        for comp in all_comparisons
-        if not (comp.against == baseline.index and comp.id == label_by_index.get(comp.of))
-    ]
+    return [comp for comp in resolve_contrasts(doc, conditions) if comp.declared]
 
 
 def _comparison_step_blocks(

@@ -15,10 +15,23 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class Comparison:
+    """One comparison of two conditions.
+
+    `declared` records which of the two sources produced it: `False` for a
+    condition-against-baseline comparison this module generates, `True` for a
+    `statistics.contrasts` entry the config wrote down. The two land in
+    different places in the record — `vs_baseline` inside a condition versus
+    `results.contrasts` beside them — and the distinction cannot be
+    reconstructed from the other fields: a declared entry may legitimately name
+    the baseline as its `against` and carry an `id` equal to its `of`
+    condition's own label, which is exactly a generated comparison's shape.
+    """
+
     id: str
     of: int
     against: int
     within: dict[str, str] | None = None
+    declared: bool = False
 
 
 def resolve_contrasts(
@@ -36,7 +49,9 @@ def resolve_contrasts(
     if baseline is not None:
         for c in conditions:
             if c.index != baseline.index and c.label is not None:
-                out.append(Comparison(id=c.label, of=c.index, against=baseline.index))
+                out.append(
+                    Comparison(id=c.label, of=c.index, against=baseline.index, declared=False)
+                )
     for entry in (config.get("statistics") or {}).get("contrasts") or []:
         # by_label[...] raises KeyError on an unresolvable label. That is
         # acceptable only because validate (Task 6) refuses an unresolvable
@@ -48,6 +63,7 @@ def resolve_contrasts(
                 of=by_label[entry["of"]],
                 against=by_label[entry["against"]],
                 within=entry.get("within"),
+                declared=True,
             )
         )
     return out
