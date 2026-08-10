@@ -4,6 +4,7 @@ import pytest
 
 from publishable.errors import ContractError
 from publishable.stats import (
+    Interval,
     UnitTable,
     collapse_repeats,
     handed_to,
@@ -527,8 +528,8 @@ def test_it_converges_toward_the_analytic_interval_for_a_mean():
     values = [float(i % 10) for i in range(400)]
     boot = percentile_over_units(values, seed=7, draws=4000)
     analytic = t_over_units(values)
-    assert abs(boot.low - analytic.low) < 0.15
-    assert abs(boot.high - analytic.high) < 0.15
+    assert abs(boot.low - analytic.low) < 0.02
+    assert abs(boot.high - analytic.high) < 0.02
 
 
 def test_one_value_has_no_interval():
@@ -538,3 +539,36 @@ def test_one_value_has_no_interval():
 def test_resample_seed_depends_on_the_digest():
     assert resample_seed("a") != resample_seed("b")
     assert resample_seed("a") == resample_seed("a")
+
+
+class _FakeRandom:
+    """Replaces `random.Random` so the exact index picked at each draw is known,
+    which pins the rank the low/high formulas select rather than trusting a real
+    RNG's output. With pool `[0.0, 1.0]`, `randrange` returning `(0, 0)` for a draw
+    yields mean 0.0, `(0, 1)` yields 0.5, `(1, 1)` yields 1.0 — so a fixed sequence
+    of index-pairs fixes exactly which of three values each of the 2000 draws lands
+    on, and therefore which value sits at every rank of the sorted means."""
+
+    def __init__(self, seed: int) -> None:
+        # 100 draws of (0, 0) -> 0.0, then 1850 of (0, 1) -> 0.5, then 50 of
+        # (1, 1) -> 1.0. Sorted means: ranks 0-99 are 0.0, 100-1949 are 0.5,
+        # 1950-1999 are 1.0.
+        self._seq = [0, 0] * 100 + [0, 1] * 1850 + [1, 1] * 50
+        self._i = 0
+
+    def randrange(self, n: int) -> int:
+        v = self._seq[self._i]
+        self._i += 1
+        return v
+
+
+def test_the_rank_indices_are_symmetric_not_off_by_one(monkeypatch):
+    """At draws=2000, confidence=0.95, tail=0.025: the intended ranks are 49 (the
+    50th-smallest, 2.5%) and 1949 (the 1950th-smallest, 97.5% — symmetric with 49
+    about the two ends). Rank 1949 sits in the middle (0.5) block; the bare
+    asymmetric form `int((1 - tail) * draws)` would instead pick rank 1950, one
+    past the boundary into the top (1.0) block — a real, detectable difference,
+    not a rounding wash."""
+    monkeypatch.setattr("publishable.stats.random.Random", _FakeRandom)
+    result = percentile_over_units([0.0, 1.0], seed=7, draws=2000, confidence=0.95)
+    assert result == Interval(low=0.0, high=0.5, method="percentile_over_units")

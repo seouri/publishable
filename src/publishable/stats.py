@@ -81,9 +81,12 @@ def percentile_over_units(
     n = len(pool)
     means = sorted(sum(pool[rng.randrange(n)] for _ in range(n)) / n for _ in range(draws))
     tail = (1.0 - confidence) / 2.0
-    lo = means[max(0, int(tail * draws) - 1)]
-    hi = means[min(draws - 1, int((1.0 - tail) * draws))]
-    return Interval(low=lo, high=hi, method="percentile_over_units")
+    lo = max(0, int(tail * draws) - 1)
+    # Symmetric with `lo` in rank, not `int((1.0 - tail) * draws)` bare: that form
+    # overshoots the upper rank by one on every interval. Floored at `lo` because
+    # the symmetric form alone gives -1 at draws=1.
+    hi = max(lo, min(draws - 1, int((1.0 - tail) * draws) - 1))
+    return Interval(low=means[lo], high=means[hi], method="percentile_over_units")
 
 
 def _is_numeric(value: object) -> bool:
