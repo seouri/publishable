@@ -2081,7 +2081,8 @@ results:
         prob: {delta: 0.012, basis: units, paired: true,
                method: paired_t_over_units, n_paired: 412,
                ci95: [0.004, 0.021], ci95_corrected: [0.001, 0.024],
-               correction: holm, correction_level: 0.0071, family_size: 7}
+               correction: holm, correction_level: 0.0071,
+               family_size: 7, family: {comparisons: 7, metrics: 1}}
 ```
 
 **`n_paired` is the intersection, and it has to be recorded.** Two conditions can complete on different units — a transform that isn't constructible for every patient, an assay that failed on a subset, an arm whose eligibility differs — and a paired comparison exists only for units that completed in *both*. Differencing the two condition means instead would not be a paired comparison at all, however carefully `paired: true` was derived. The condition-level `n` can't carry this, because it belongs to one condition and the contrast spans two, so the contrast records its own. A contrast whose intersection is empty is reported as such rather than as a delta of zero.
