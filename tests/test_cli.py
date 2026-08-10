@@ -26,6 +26,7 @@ def run_a_project(
     replication: dict[str, Any] | None = None,
     capsys: pytest.CaptureFixture[str] | None = None,
     extra_steps: list[str] | None = None,
+    aggregate_returns: str | None = None,
     **overrides: Any,
 ) -> dict[str, Any]:
     """Scaffold, configure, commit, and `run` a project end to end.
@@ -55,6 +56,14 @@ def run_a_project(
     pipeline with more than one repeat-scope step — the shape that distinguishes
     step-major from pair-major execution, and which the single-step scaffold
     cannot express at all.
+
+    `aggregate_returns` names a derived metric to produce end to end: when set,
+    the scaffolded step records a `pred` column (one float per unit, `0.0`..
+    `n-1`) and the template's `aggregate` returns `{aggregate_returns: mean(pred)}`
+    over the collapsed unit table — a mean, not a sum, since it needs `len(units)`
+    rather than assuming the caller already has a denominator. Patched in via
+    `pytest.MonkeyPatch.context()`, self-contained so no caller needs its own
+    `monkeypatch` fixture, and undone before this function returns.
     """
     tmp_path.mkdir(parents=True, exist_ok=True)
     root = tmp_path / "proj"
@@ -67,30 +76,44 @@ def run_a_project(
     patients = "\n".join(f"p{i}" for i in range(1, 11))
     (data / "index.csv").write_text(f"patient_id\n{patients}\n")
     assert main(["new", str(root)]) == EXIT_OK
-    cfg = generate_experiment(
-        repo_root=root,
-        name="cohort-pilot",
-        template_name="generic",
-        input_dir=str(data),
-        output_dir=str(results_dir),
-    )
-    for step_name in extra_steps or []:
-        generate_step(repo_root=root, experiment="cohort-pilot", step_name=step_name)
-    doc = yaml.safe_load(cfg.read_text())
-    doc["metadata"]["description"] = "an end-to-end helper run"
-    doc["metadata"]["authors"] = ["Kyungjoon Lee"]
-    if replication is not None:
-        doc["replication"] = replication
-    doc.update(overrides)
-    cfg.write_text(yaml.safe_dump(doc))
-    for args in (
-        ["add", "."],
-        ["-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "helper run"],
-    ):
-        subprocess.run(["git", *args], cwd=root, check=True)
+    with pytest.MonkeyPatch.context() as mp:
+        if aggregate_returns is not None:
+            import publishable.generators.experiment as experiment_gen
+            from publishable.templates.builtin.generic import GenericTemplate
 
-    assert main(["run", str(cfg)]) == EXIT_OK
-    captured = capsys.readouterr() if capsys is not None else None
+            metric_name = aggregate_returns
+            mp.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+            mp.setattr(
+                GenericTemplate,
+                "aggregate",
+                lambda self, units, cfg, _name=metric_name: {
+                    _name: sum(units.pred) / len(units)
+                },
+            )
+        cfg = generate_experiment(
+            repo_root=root,
+            name="cohort-pilot",
+            template_name="generic",
+            input_dir=str(data),
+            output_dir=str(results_dir),
+        )
+        for step_name in extra_steps or []:
+            generate_step(repo_root=root, experiment="cohort-pilot", step_name=step_name)
+        doc = yaml.safe_load(cfg.read_text())
+        doc["metadata"]["description"] = "an end-to-end helper run"
+        doc["metadata"]["authors"] = ["Kyungjoon Lee"]
+        if replication is not None:
+            doc["replication"] = replication
+        doc.update(overrides)
+        cfg.write_text(yaml.safe_dump(doc))
+        for args in (
+            ["add", "."],
+            ["-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "helper run"],
+        ):
+            subprocess.run(["git", *args], cwd=root, check=True)
+
+        assert main(["run", str(cfg)]) == EXIT_OK
+        captured = capsys.readouterr() if capsys is not None else None
     run_dir = next(results_dir.glob("run_*"))
     lines = (run_dir / "executions.jsonl").read_text().splitlines()
     ledger = [json.loads(line) for line in lines]
@@ -460,7 +483,7 @@ def test_a_derived_metric_reaches_run_yaml_with_a_resampled_interval(tmp_path, m
     assert metric["cohens_d"] is None
 
 
-def test_a_project_without_aggregate_reports_no_derived_metric(tmp_path, monkeypatch):
+def test_a_project_without_aggregate_records_only_the_recorded_column(tmp_path, monkeypatch):
     """The regression guard: a run whose template never overrides `aggregate`
     (the base's `{}`) must record only the recorded column, exactly as before
     this task — no `total`, no empty placeholder, nothing new in `aggregated`."""
@@ -472,6 +495,48 @@ def test_a_project_without_aggregate_reports_no_derived_metric(tmp_path, monkeyp
     aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
     assert "total" not in aggregated
     assert set(aggregated) == {"pred"}
+
+
+# --- Task 9 (derived-metrics): acceptance — a derived metric reaches `run.yaml`
+# from `main(["run", ...])`, via `run_a_project`'s new `aggregate_returns` --------
+
+
+def _first_metric(run: dict[str, Any], name: str) -> dict[str, Any] | None:
+    """The metric named `name`, wherever in `results.conditions[*].aggregated`
+    it landed — a small local helper, since every caller here already knows
+    which step it expects but the acceptance tests don't need to name it."""
+    for condition in run["results"]["conditions"]:
+        for step_aggregated in condition["aggregated"].values():
+            if name in step_aggregated:
+                metric = step_aggregated[name]
+                assert isinstance(metric, dict)
+                return metric
+    return None
+
+
+def test_a_derived_metric_end_to_end(tmp_path, capsys):
+    doc = run_a_project(tmp_path, capsys=capsys, aggregate_returns="mean_pred")
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    metric = _first_metric(run, "mean_pred")
+    assert metric["basis"] == "units"
+    assert metric["method"] == "percentile_over_units"
+    assert metric["ci95"] is not None
+    assert metric["cohens_d"] is None
+    assert metric["correction"] is None  # S4b's job; disclosed, not silently corrected
+
+
+def test_the_same_digest_reproduces_the_derived_interval(tmp_path, capsys):
+    a = run_a_project(tmp_path / "a", capsys=capsys, aggregate_returns="mean_pred")
+    b = run_a_project(tmp_path / "b", capsys=capsys, aggregate_returns="mean_pred")
+    ra = yaml.safe_load((a["run_dir"] / "run.yaml").read_text())
+    rb = yaml.safe_load((b["run_dir"] / "run.yaml").read_text())
+    assert _first_metric(ra, "mean_pred")["ci95"] == _first_metric(rb, "mean_pred")["ci95"]
+
+
+def test_a_project_without_aggregate_reports_no_derived_metric(tmp_path, capsys):
+    doc = run_a_project(tmp_path, capsys=capsys)
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert _first_metric(run, "mean_pred") is None
 
 
 def test_a_failing_aggregate_does_not_cost_the_run_its_record(tmp_path, monkeypatch, capsys):
