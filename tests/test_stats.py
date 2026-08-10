@@ -8,6 +8,8 @@ from publishable.stats import (
     collapse_repeats,
     handed_to,
     mean_of,
+    percentile_over_units,
+    resample_seed,
     summarize_step,
     t_over_units,
 )
@@ -466,3 +468,54 @@ def test_an_unknown_column_raises():
 def test_iteration_is_repeatable():
     t = UnitTable({"u1": {"pred": 1.0}})
     assert [r["unit"] for r in t] == [r["unit"] for r in t]
+
+
+def test_the_interval_brackets_the_point_estimate():
+    values = [float(i) for i in range(50)]
+    got = percentile_over_units(values, seed=7)
+    assert got.low < sum(values) / len(values) < got.high
+
+
+def test_it_names_its_method():
+    assert percentile_over_units([float(i) for i in range(50)], seed=7).method == (
+        "percentile_over_units"
+    )
+
+
+def test_the_same_seed_reproduces_the_interval():
+    values = [float(i) for i in range(50)]
+    assert percentile_over_units(values, seed=7) == percentile_over_units(values, seed=7)
+
+
+def test_a_different_seed_gives_a_different_interval():
+    values = [float(i) for i in range(50)]
+    assert percentile_over_units(values, seed=7) != percentile_over_units(values, seed=99)
+
+
+def test_it_is_invariant_to_row_order():
+    """A bootstrap resamples with replacement, so the order units arrive in must
+    not change the interval — only the multiset of values may."""
+    values = [float(i) for i in range(50)]
+    assert percentile_over_units(values, seed=7) == percentile_over_units(
+        list(reversed(values)), seed=7
+    )
+
+
+def test_it_converges_toward_the_analytic_interval_for_a_mean():
+    """Verified against something other than itself: for a mean over many units the
+    percentile interval should sit close to Student's t, which is computed by
+    entirely different code."""
+    values = [float(i % 10) for i in range(400)]
+    boot = percentile_over_units(values, seed=7, draws=4000)
+    analytic = t_over_units(values)
+    assert abs(boot.low - analytic.low) < 0.15
+    assert abs(boot.high - analytic.high) < 0.15
+
+
+def test_one_value_has_no_interval():
+    assert percentile_over_units([1.0], seed=7) is None
+
+
+def test_resample_seed_depends_on_the_digest():
+    assert resample_seed("a") != resample_seed("b")
+    assert resample_seed("a") == resample_seed("a")

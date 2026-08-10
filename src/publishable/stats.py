@@ -7,7 +7,9 @@ entangled with I/O, and purity is what lets this be tested exhaustively.
 See docs/reference.md § Statistical reporting.
 """
 
+import hashlib
 import math
+import random
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
@@ -47,6 +49,41 @@ def t_over_units(values: Sequence[float], confidence: float = 0.95) -> Interval 
     critical = float(_scipy_stats.t.ppf(1 - (1 - confidence) / 2, df=n - 1))
     half = critical * sem
     return Interval(low=mean - half, high=mean + half, method="t_over_units")
+
+
+def resample_seed(digest: str) -> int:
+    """From the design digest, never `parameters_hash`.
+
+    Editing an unrelated parameter must not redraw a resample — the same rule
+    fold partitions and `order_seed` follow (reference.md § What auto-derives from).
+    """
+    return int.from_bytes(hashlib.sha256(f"{digest}|resample".encode()).digest()[:4], "big")
+
+
+def percentile_over_units(
+    values: Sequence[float], seed: int, draws: int = 2000, confidence: float = 0.95
+) -> Interval | None:
+    """A percentile interval over the units, by resampling with replacement.
+
+    This is what gives a derived metric its `ci95`: a value computed from the
+    whole table has no per-unit spread to run a t-interval over, so core
+    resamples the units it was computed from (reference.md § How a metric becomes
+    a number).
+    """
+    if len(values) < 2:
+        return None
+    rng = random.Random(seed)
+    # Sorted, not just `list(values)`: with a fixed seed, `rng.randrange(n)` draws
+    # the same sequence of *indices* regardless of input order, so drawing from an
+    # unsorted pool would make the resample depend on row order — the multiset of
+    # values must be all that matters.
+    pool = sorted(values)
+    n = len(pool)
+    means = sorted(sum(pool[rng.randrange(n)] for _ in range(n)) / n for _ in range(draws))
+    tail = (1.0 - confidence) / 2.0
+    lo = means[max(0, int(tail * draws) - 1)]
+    hi = means[min(draws - 1, int((1.0 - tail) * draws))]
+    return Interval(low=lo, high=hi, method="percentile_over_units")
 
 
 def _is_numeric(value: object) -> bool:
