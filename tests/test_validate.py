@@ -909,6 +909,60 @@ def test_a_null_subfield_is_not_a_declaration(write_config):
     assert not [c for c in found if c.endswith("-UNSUPPORTED")]
 
 
+def test_declared_contrasts_are_refused(write_config):
+    assert "E-STATS-CONTRASTS-UNSUPPORTED" in codes(
+        write_config({"statistics": {"contrasts": [{"id": "s", "of": "a", "against": "b"}]}})
+    )
+
+
+def test_a_declared_resample_is_refused(write_config):
+    assert "E-STATS-RESAMPLE-UNSUPPORTED" in codes(
+        write_config({"statistics": {"resample": {"method": "bootstrap", "n": 2000}}})
+    )
+
+
+def test_a_declared_null_test_is_refused(write_config):
+    assert "E-STATS-NULLTEST-UNSUPPORTED" in codes(
+        write_config({"statistics": {"null_test": {"method": "permutation", "n": 5000}}})
+    )
+
+
+def test_declared_report_by_is_refused(write_config):
+    assert "E-STATS-REPORTBY-UNSUPPORTED" in codes(
+        write_config({"statistics": {"report_by": ["sex"]}})
+    )
+
+
+def test_a_declared_hypothesis_is_refused(write_config):
+    assert "E-HYPOTHESIS-UNSUPPORTED" in codes(
+        write_config({"hypotheses": [{"id": "h1", "metric": "r", "direction": "greater"}]})
+    )
+
+
+def test_empty_declarations_are_not_refused(write_config):
+    """The generated config ships these keys empty; only a real declaration is
+    refused, or every scaffolded project would fail to validate."""
+    found = codes(
+        write_config(
+            {
+                "statistics": {
+                    "contrasts": [],
+                    "resample": None,
+                    "null_test": None,
+                    "report_by": [],
+                },
+                "hypotheses": [],
+            }
+        )
+    )
+    assert not [c for c in found if "UNSUPPORTED" in c and ("STATS" in c or "HYPOTHESIS" in c)]
+
+
+def test_correction_is_still_not_refused(write_config):
+    found = codes(write_config({"statistics": {"correction": "holm"}}))
+    assert not [c for c in found if c.startswith("E-STATS")]
+
+
 def test_a_resolvable_roster_validates_clean(write_config, tmp_path):
     (tmp_path / "input" / "index.csv").write_text("patient_id,label\np1,0\np2,1\n")
     assert (
