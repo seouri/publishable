@@ -1615,3 +1615,32 @@ def test_a_condition_skipping_too_many_units_warns(tmp_path, capsys, monkeypatch
         tmp_path, capsys=capsys, units=10, limits={"max_ineligible_fraction": 0.2}
     )
     assert "W-DATA-INELIGIBLE" in doc["stdout"]
+
+
+def test_a_string_ineligible_limit_does_not_raise_or_warn(tmp_path, capsys, monkeypatch):
+    """`limits` is user-written YAML, and `command_run` must not raise on a
+    string threshold. `isinstance(max_ineligible, (int, float))` fails for a
+    string, so the whole guard is skipped — no warning, no traceback — even
+    though 8 of 10 units are ineligible, which would trip a numeric threshold
+    below 0.8."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _SKIP_MOST_STEP)
+    doc = run_a_project(
+        tmp_path, capsys=capsys, units=10, limits={"max_ineligible_fraction": "half"}
+    )
+    assert "W-DATA-INELIGIBLE" not in doc["stdout"]
+
+
+def test_a_boolean_ineligible_limit_does_not_warn(tmp_path, capsys, monkeypatch):
+    """`bool` is excluded even though it is an `int` subclass: `True` compares
+    equal to `1`, and a fraction can never exceed `1`, so an un-excluded `True`
+    would silently never fire — exactly the kind of malformed-but-quiet config
+    value this guard exists to keep from masquerading as a real threshold."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _SKIP_MOST_STEP)
+    doc = run_a_project(
+        tmp_path, capsys=capsys, units=10, limits={"max_ineligible_fraction": True}
+    )
+    assert "W-DATA-INELIGIBLE" not in doc["stdout"]

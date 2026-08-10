@@ -1672,6 +1672,28 @@ def test_a_contrast_with_an_unresolvable_side_is_unknown_not_same_sides(write_co
     assert "E-STATS-CONTRAST-SAME-SIDES" not in found
 
 
+def test_an_unhashable_side_inside_a_well_shaped_contrast_is_refused_not_a_crash(write_config):
+    """`of`/`against` naming a list rather than a condition label: `_check_shape`
+    accepts this (`statistics.contrasts` is a list of mappings, so the container
+    shape is fine), and before this fix `_check_contrasts` raised `TypeError:
+    unhashable type: 'list'` from `value in ids` — a set membership test with no
+    `isinstance` guard, unlike the `E-STATS-CORRECTION-UNKNOWN` check ~130 lines
+    above that does guard it. `validate.py` collects findings and never raises,
+    so this has to come back as a diagnostic through `validate_config` end to
+    end, not merely from a function called directly."""
+    found = codes(
+        write_config(
+            {
+                "sweep": _TWO_CONDITIONS,
+                "statistics": {
+                    "contrasts": [{"id": "x", "of": ["a", "b"], "against": "baseline"}]
+                },
+            }
+        )
+    )
+    assert "E-STATS-CONTRAST-UNKNOWN" in found
+
+
 def test_a_contrast_entry_that_is_not_a_mapping_is_refused(write_config):
     """A list of condition labels where a list of contrast entries belongs.
     `resolve_contrasts` reads `entry["of"]` off whatever this holds, so before

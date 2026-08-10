@@ -134,11 +134,14 @@ def _check_shape(doc: dict[str, Any], c: Collector) -> bool:
 
     # `statistics.contrasts` is read by two `_check_*` functions and by
     # `contrasts.resolve_contrasts`, so it belongs here rather than being guarded
-    # three times. This block's own comment above says why: a container of the
-    # wrong shape means "the crash just moves one level down, into whichever
-    # `_check_*` reads it next", which is exactly what a scalar here did — the
-    # family count in `_check_sweep` reached it before `_check_contrasts` refused
-    # its shape, and `len()` on an int raised out of `validate`.
+    # three times. Verified against the pre-this-change code directly (not
+    # assumed): a scalar here does not currently crash `validate` — `_check_sweep`
+    # already contains `resolve_contrasts`'s `TypeError` in a `try/except`, and
+    # `_check_contrasts` already has its own `isinstance(entries, list)` guard, so
+    # the two together already report `E-STATS-CONTRAST-SHAPE` cleanly. What this
+    # block buys instead is what every other entry in this pass buys: one refusal,
+    # here, under the shared `E-CONFIG-SHAPE` identifier, so a future third reader
+    # of this block inherits the guard rather than needing its own.
     statistics = doc.get("statistics")
     if isinstance(statistics, dict):
         contrasts = statistics.get("contrasts")
@@ -1105,7 +1108,14 @@ def _check_contrasts(doc: dict[str, Any], c: Collector) -> None:
         for field in ("of", "against"):
             value = entry.get(field)
             where = f"statistics.contrasts[{i}].{field}"
-            if value in ids and value not in labels:
+            # `isinstance` before either membership test, the same guard
+            # `E-STATS-CORRECTION-UNKNOWN` uses above: `in` on `ids`/`labels` (both
+            # `set`s) raises `TypeError` for an unhashable `value` (a `list` or a
+            # `dict`), and `and`/`not (... and ...)` short-circuits before that ever
+            # runs. A non-string `of`/`against` is simply not a condition's label,
+            # so it falls into the same `E-STATS-CONTRAST-UNKNOWN` branch a
+            # resolvable-but-wrong string would.
+            if isinstance(value, str) and value in ids and value not in labels:
                 c.error(
                     "E-STATS-CONTRAST-NESTED",
                     where,
@@ -1115,13 +1125,14 @@ def _check_contrasts(doc: dict[str, Any], c: Collector) -> None:
                     "cells) is an interaction, and stays a `summary`-step `Estimate` rather "
                     "than a declared contrast",
                 )
-            elif value not in labels:
+            elif not (isinstance(value, str) and value in labels):
                 c.error(
                     "E-STATS-CONTRAST-UNKNOWN",
                     where,
-                    f"names `{value}`, which no condition's label matches",
+                    f"names `{value!r}`, which no condition's label matches",
                 )
-        if entry.get("of") in labels and entry.get("of") == entry.get("against"):
+        of_value = entry.get("of")
+        if isinstance(of_value, str) and of_value in labels and of_value == entry.get("against"):
             c.error(
                 "E-STATS-CONTRAST-SAME-SIDES",
                 f"statistics.contrasts[{i}]",
