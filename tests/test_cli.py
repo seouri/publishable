@@ -68,13 +68,17 @@ def run_a_project(
     `monkeypatch` fixture, and undone before this function returns.
 
     `unit_attributes` names columns to declare under `data.units.attributes`.
-    The roster file always carries a `cohort` column (alternating `a`/`b`), so
-    a caller wanting a `within` stratum passes `unit_attributes=["cohort"]` —
-    `validate` refuses a `within` naming an attribute the config never declared
-    (`E-STATS-CONTRAST-WITHIN`), and unit resolution refuses one the table
-    doesn't have (`E-UNITS-ATTR-MISSING`), so both halves have to be present.
-    The column is written unconditionally because an undeclared column is
-    simply never read.
+    The roster file always carries a `cohort` column (alternating `a`/`b`) and
+    an `arm` column (`x`/`y`, in pairs so its membership genuinely differs from
+    `cohort`'s rather than being the same split under a second name — two
+    perfectly correlated attributes would make a `report_by: [cohort, arm]`
+    test pass on byte-identical blocks), so a caller wanting a `within` stratum
+    passes `unit_attributes=["cohort"]` — `validate` refuses a `within` naming
+    an attribute the config never declared (`E-STATS-CONTRAST-WITHIN`), and
+    unit resolution refuses one the table doesn't have
+    (`E-UNITS-ATTR-MISSING`), so both halves have to be present. Both columns
+    are written unconditionally because an undeclared column is simply never
+    read.
     """
     tmp_path.mkdir(parents=True, exist_ok=True)
     root = tmp_path / "proj"
@@ -87,8 +91,10 @@ def run_a_project(
     # caller-set override — a thin-pairing test wants a roster small enough that
     # `n_paired` trips `limits.min_reported_n` without inflating every other
     # caller's fixture to match.
-    patients = "\n".join(f"p{i},{'ab'[i % 2]}" for i in range(1, units + 1))
-    (data / "index.csv").write_text(f"patient_id,cohort\n{patients}\n")
+    patients = "\n".join(
+        f"p{i},{'ab'[i % 2]},{'xy'[(i // 2) % 2]}" for i in range(1, units + 1)
+    )
+    (data / "index.csv").write_text(f"patient_id,cohort,arm\n{patients}\n")
     assert main(["new", str(root)]) == EXIT_OK
     with pytest.MonkeyPatch.context() as mp:
         if aggregate_returns is not None:
@@ -2009,3 +2015,120 @@ def test_a_derived_metric_is_corrected_off_its_own_draw_pool(tmp_path, capsys, m
         assert entry["ci95_corrected"][0] < entry["ci95"][0]
         assert entry["ci95_corrected"][1] > entry["ci95"][1]
     assert "W-STATS-CORRECTED-THIN" not in doc["stdout"]
+
+
+def test_a_reporting_stratum_repeats_the_metric_over_its_own_units(
+    tmp_path, capsys, monkeypatch
+):
+    """`reference.md` § Reporting strata: core "repeats the aggregation it already
+    performs, over the subsets of the per-unit table each level picks out". Each
+    level's `n` and `ci95` are its own — computed over that level's units, not
+    the condition's. A stratum whose numbers equal the parent's is the defect
+    this test exists to catch."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
+        statistics={"report_by": ["cohort"]},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    step_block = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    by = step_block["by"]["cohort"]
+    assert set(by) == {"a", "b"}
+    for level in ("a", "b"):
+        entry = by[level]["pred"]
+        assert entry["basis"] == "units"
+        assert entry["n"]["completed"] == 20
+        # `completed` is computed per column from the table handed to
+        # `summarize_step`, but `resolved` comes from the `counts` beside it —
+        # so this is the assertion that catches a level's rows reported against
+        # the condition's denominator, the S4b Critical's exact shape.
+        assert entry["n"]["resolved"] == 20
+        assert entry["ci95"] is not None
+        # `repeat_spread` is the parent block's, not a stratum's: the documented
+        # example carries value, basis, n and ci95 and nothing else, and `cli`
+        # attaches spread outside `summarize_step`.
+        assert "repeat_spread" not in entry
+    # The parent block is unchanged and covers every unit.
+    assert step_block["pred"]["n"]["completed"] == 40
+    # Each level's interval is its own, not a copy of the parent's.
+    assert by["a"]["pred"]["ci95"] != step_block["pred"]["ci95"]
+
+
+def test_two_attributes_are_two_marginal_splits_not_their_cross(
+    tmp_path, capsys, monkeypatch
+):
+    """`reference.md` § Reporting strata: "`report_by: [sex, site]` adds a `by.sex`
+    block and a `by.site` block, each over the whole table; it does not produce a
+    `f × site_03` cell." The cartesian product is the thing that section exists to
+    avoid — five reporting attributes would be a cell explosion of subgroups
+    nobody asked for."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort", "arm"],
+        statistics={"report_by": ["cohort", "arm"]},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    by = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["by"]
+    assert set(by) == {"cohort", "arm"}
+    assert set(by["cohort"]) == {"a", "b"}
+    # Each marginal covers the whole table, so the two levels sum to every unit.
+    assert sum(by["cohort"][lv]["pred"]["n"]["completed"] for lv in by["cohort"]) == 40
+    # No cell of the cross exists anywhere.
+    assert "a__x" not in by["cohort"]
+    assert not any(isinstance(v, dict) and "arm" in v for v in by["cohort"].values())
+
+
+def test_a_run_without_report_by_has_no_by_block(tmp_path, capsys, monkeypatch):
+    """Absent, not empty — the rule `vs_baseline` and `contrasts` already follow.
+    An empty `by: {}` would claim a stratification was performed and found
+    nothing."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+    doc = run_a_project(tmp_path, capsys=capsys, units=40)
+    text = (doc["run_dir"] / "run.yaml").read_text()
+    # A word boundary, not a bare `"by:" not in text`: the echoed config always
+    # carries `cluster_by:` and `weight_by:`, so the bare substring is present in
+    # every run.yaml ever written and would fail here for a reason that has
+    # nothing to do with strata — and, worse, could not distinguish an
+    # unconditional `by: {}` from its absence.
+    assert re.search(r"\bby:", text) is None
+
+
+def test_strata_do_not_join_the_correction_family(tmp_path, capsys, monkeypatch):
+    """`reference.md` § Reporting strata: "Strata don't join the correction
+    family, because a stratum is a description rather than a comparison a reader
+    acts on." If they did, adding `report_by` would enlarge the family, shrink α,
+    and silently tighten every real comparison in the run."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+    sweep = {
+        "baseline": {"analysis.method": "pearson"},
+        "grid": {"analysis.method": ["spearman"]},
+    }
+    without = run_a_project(tmp_path / "a", capsys=capsys, units=40, sweep=sweep)
+    with_strata = run_a_project(
+        tmp_path / "b",
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
+        sweep=sweep,
+        statistics={"report_by": ["cohort"]},
+    )
+    sizes = []
+    for doc in (without, with_strata):
+        run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+        entry = _first_contrast(run, "method=spearman")
+        sizes.append((entry["family_size"], entry["family"]))
+    assert sizes[0] == sizes[1]
