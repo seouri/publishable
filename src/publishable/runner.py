@@ -11,8 +11,9 @@ from typing import Any
 from publishable.artifacts import StepIO
 from publishable.config import Config, SweptAway
 from publishable.errors import ContractError
-from publishable.replication import Repeat
+from publishable.replication import LABEL_JOIN, Repeat
 from publishable.scope import Execution
+from publishable.stats import handed_to
 from publishable.sweep import condition_dir_name
 from publishable.units import UnitList
 
@@ -35,6 +36,7 @@ def attrition(
     roster: "UnitList | None",
     step_name: str,
     condition_index: int,
+    fold_members: dict[str, frozenset[str]] | None = None,
 ) -> dict[str, int]:
     """The four counts, scoped to one step within one condition. A failed unit has
     no row anywhere, so failure is derived.
@@ -53,17 +55,37 @@ def attrition(
     executions — the same silent mismatch `collapse_repeats` refuses by requiring
     the same parameter. S2 always has exactly one condition and always passes `0`.
 
-    Both `completed` and `ineligible` are the INTERSECTION across the repeat-scoped
-    executions of this step, in this condition, a unit was handed to — not the
-    union. `completed` intersects because the collapse averages per unit, and a
-    unit present in three of five seeds would otherwise enter that average on a
-    different number of observations than its neighbours. `ineligible` intersects
-    for the mirrored reason: eligibility is a property of the design, so a unit
-    skipped in one repeat and completed (or simply unrecorded) in another did not
-    get a consistent eligibility answer, and that inconsistency is exactly the
-    `failed` case, not a design exclusion. Only a unit skipped in EVERY recording
-    execution of this step, in this condition — a consistent answer — is
-    `ineligible`.
+    `completed` and `ineligible` are computed per unit over the repeats
+    `stats.handed_to` says that unit actually received — not, as with no fold,
+    every repeat-scoped execution of this step. Without a fold every unit is
+    handed to every repeat, so the two coincide and this is the same intersection
+    as before: `completed` intersects because the collapse averages per unit, and
+    a unit present in three of five seeds would otherwise enter that average on a
+    different number of observations than its neighbours; `ineligible` intersects
+    for the mirrored reason, since eligibility is a property of the design and a
+    unit skipped in one repeat and completed (or simply unrecorded) in another did
+    not get a consistent eligibility answer — that inconsistency is exactly the
+    `failed` case, not a design exclusion. With a fold, intersecting across EVERY
+    repeat-scoped execution would report `completed: 0` for any design containing
+    one, because no unit is ever in more than one fold (`reference.md` § The
+    per-unit tables); `handed_to` scopes the intersection to just the fold — and,
+    under fold × seed, to every seed of that unit's own fold — so only a unit
+    skipped or missing within its own group is `ineligible` or `failed`.
+
+    `resolved` counts what was handed out across this condition, not the cohort:
+    without a fold that is the full roster, since every execution receives it
+    whole. With a fold it is the union over every *declared* fold's members
+    intersected with the roster — which the partitions cover exactly, so it is
+    the full roster again, whether or not each fold's execution ran. That is the
+    right answer at this scope: the counts a condition reports are against the
+    cohort the condition was run over, and a fold whose execution is missing
+    leaves its units genuinely unsettled, so they land in `failed` rather than
+    vanishing from the denominator. The smaller-than-roster figure is a fact
+    about one *execution* — `reference.md` § Repeat kinds states it at that
+    level, "`n: {resolved: 1, completed: 1}` per execution" under `k: all` — and
+    this function is per-condition, so it is not the number to expect here. No
+    per-execution `n` is written in this build: `run.yaml`'s `per_repeat` stays
+    verbatim what each step returned (see `run_record.assemble_run_yaml`).
 
     This is the per-step, per-condition breakdown `stats.summarize_step` attaches
     as a metric's `n`. It is deliberately not what guards `max_failed_fraction`:
@@ -86,28 +108,81 @@ def attrition(
     ]
     if not recording:
         return {"resolved": len(keys), "completed": 0, "ineligible": 0, "failed": len(keys)}
-    completed = set(keys)
+    # Accumulated per label, exactly as `stats.collapse_repeats` accumulates its
+    # rows: two executions sharing one repeat label (a resumed leaf re-reported,
+    # say) must merge, not overwrite. A dict comprehension kept only the last
+    # while `labels` still held the duplicate, so the two readers of the same
+    # executions disagreed about a unit — the collapsed table carrying a row for
+    # a unit these counts called `failed`, which breaks the reconciliation
+    # `resolved == completed + ineligible + failed`. `labels` comes off the
+    # accumulator so it is unique and in execution order, the same list
+    # `collapse_repeats` hands `handed_to`.
+    recorded_by_label: dict[str, set[str]] = {}
+    skipped_by_label: dict[str, set[str]] = {}
     for r in recording:
-        completed &= r.recorded
-    ineligible = set(keys)
-    for r in recording:
-        ineligible &= r.skipped
+        label = r.execution.repeat_label or ""
+        recorded_by_label.setdefault(label, set()).update(r.recorded)
+        skipped_by_label.setdefault(label, set()).update(r.skipped)
+    labels = list(recorded_by_label)
+    if fold_members is None:
+        handed = keys  # every unit, to every repeat — the no-fold rule
+    else:
+        handed = {k for s in fold_members.values() for k in s} & keys
+    completed, ineligible = set(), set()
+    for key in handed:
+        mine = handed_to(key, labels, fold_members)
+        if not mine:
+            continue
+        if all(key in recorded_by_label[lb] for lb in mine):
+            completed.add(key)
+        elif all(key in skipped_by_label[lb] for lb in mine):
+            ineligible.add(key)
     return {
-        # `resolved` always equals `len(io.units)` for the execution
-        # (reference.md § "resolved counts what the execution was handed, not the
-        # cohort"). It equals the full roster here only because S2 has no `fold` or
-        # group axis that would narrow `io.units` below it — every execution is
-        # handed the whole roster, so the two coincide. The day a fold or group
-        # axis lands, this must become the union of what the recording executions
-        # were actually given, not `len(keys)` unconditionally.
-        "resolved": len(keys),
+        "resolved": len(handed),
         "completed": len(completed),
         "ineligible": len(ineligible),
-        "failed": len(keys) - len(completed) - len(ineligible),
+        "failed": len(handed) - len(completed) - len(ineligible),
     }
 
 
-def _units_failed_anywhere(results: list[ExecutionResult], roster: "UnitList") -> set[str]:
+def _handed_keys(
+    repeat_label: str, keys: set[str], fold_members: dict[str, frozenset[str]] | None
+) -> set[str]:
+    """The units an execution with this repeat label was actually given.
+
+    Subtracting from the whole roster instead is what made every fold run abort:
+    the k−1 partitions this execution never saw are neither recorded nor skipped,
+    and would each count as a failure.
+
+    A label carrying no fold component while `fold_members` is not `None` is not
+    a case to fall back on: `fold_members_for` returns `None` unless a `fold`
+    level was declared, and `cross_levels` composes every leaf label from every
+    declared level, so under a non-`None` `fold_members` every repeat label this
+    function is ever called with by `execute_plan` carries a fold token by
+    construction. Falling back to `keys` here would silently resurrect the exact
+    bug this function exists to fix — the whole roster subtracted against a
+    single execution's recorded units — so this is a core invariant violation,
+    raised loud rather than defaulted quiet.
+    """
+    if fold_members is None:
+        return keys
+    parts = set(repeat_label.split(LABEL_JOIN))
+    mine = [ks for f, ks in fold_members.items() if f in parts]
+    if not mine:
+        raise ContractError(
+            f"repeat label {repeat_label!r} carries no fold component, but "
+            f"fold_members ({sorted(fold_members)!r}) is not None; every label "
+            "composed under a declared fold must include one of its members",
+            code="E-RUN-FOLD-UNRESOLVED",
+        )
+    return set().union(*mine) & keys
+
+
+def _units_failed_anywhere(
+    results: list[ExecutionResult],
+    roster: "UnitList",
+    fold_members: dict[str, frozenset[str]] | None = None,
+) -> set[str]:
     """Units with no settled answer — neither recorded nor skipped — in at least
     one execution of a step that records units, across the whole run.
 
@@ -129,6 +204,11 @@ def _units_failed_anywhere(results: list[ExecutionResult], roster: "UnitList") -
     execution of every step, in every condition, over the whole resolved roster.
     `attrition`'s intersection is the right shape for one step's `n`; it is the
     wrong shape for this run-level union.
+
+    What changes under a fold is the membership set each execution's recorded and
+    skipped units are checked against: `_handed_keys` scopes it to the partition
+    that execution was actually given, not the entire resolved roster — the other
+    k−1 partitions were never handed to it and so cannot count as failures of it.
     """
     keys = {u.key for u in roster}
     recording_steps = {
@@ -138,7 +218,8 @@ def _units_failed_anywhere(results: list[ExecutionResult], roster: "UnitList") -
     for r in results:
         if r.execution.scope != "repeat" or r.execution.step_name not in recording_steps:
             continue
-        failed |= keys - (r.recorded | r.skipped)
+        handed = _handed_keys(r.execution.repeat_label or "", keys, fold_members)
+        failed |= handed - (r.recorded | r.skipped)
     return failed
 
 
@@ -215,6 +296,7 @@ def execute_plan(
     digest: str,
     units: UnitList | None = None,
     max_failed_fraction: float | None = None,
+    fold_members: dict[str, frozenset[str]] | None = None,
 ) -> list[ExecutionResult]:
     """Run every execution in the plan, in order, one at a time.
 
@@ -280,11 +362,33 @@ def execute_plan(
             digest=digest,
             seed=seed,
         )
+        # A fold repeat puts the units out of reach of the wider scopes: there is
+        # no fold at "run" or "condition" scope, since folds are repeats and
+        # repeats haven't happened yet, so a step fitting there would fit on units
+        # later folds test on. By "summary" scope every fold has already run, so
+        # there is nothing left to leak, and it keeps the whole roster like the
+        # no-fold case. `units` (the full roster, from the outer scope) stays
+        # untouched for `attrition`/`_units_failed_anywhere` below — only this
+        # execution's own `step_units` narrows.
+        if fold_members is None or units is None:
+            step_units = units
+        elif execution.scope in ("run", "condition"):
+            step_units = None  # no fold exists yet at these scopes
+        elif execution.scope == "repeat":
+            handed = _handed_keys(
+                execution.repeat_label or "", {u.key for u in units}, fold_members
+            )
+            step_units = UnitList(
+                [u for u in units if u.key in handed],
+                train=UnitList([u for u in units if u.key not in handed]),
+            )
+        else:
+            step_units = units  # "summary": every fold has already run
         io = StepIO(
             step_dir=step_dir_for(run_dir, execution, collapse),
             input_dir=input_dir,
             run_dir=run_dir,
-            units=units,
+            units=step_units,
             scope=execution.scope,
             conditions=conditions_list,
             repeats=repeats_list,
@@ -363,7 +467,7 @@ def execute_plan(
 
         if max_failed_fraction is not None and units is not None:
             resolved = len(units)
-            failed = _units_failed_anywhere(results, units)
+            failed = _units_failed_anywhere(results, units, fold_members)
             if resolved and len(failed) / resolved > max_failed_fraction:
                 break
     return results

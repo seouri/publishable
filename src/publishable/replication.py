@@ -1,6 +1,5 @@
-"""Repeat kinds. S1 implements `seed`; S3b adds `batch` and nests it with `seed`.
-
-`fold` is still unimplemented.
+"""Repeat kinds. S1 implements `seed`; S3b adds `batch` and nests it with `seed`;
+S3c adds `fold`.
 
 See docs/reference.md § Repeat kinds.
 """
@@ -12,8 +11,9 @@ from dataclasses import dataclass
 from typing import Any
 
 from publishable.errors import ContractError
+from publishable.units import Unit
 
-SUPPORTED_KINDS = ("seed", "batch")
+SUPPORTED_KINDS = ("seed", "batch", "fold")
 LABEL_JOIN = "_"
 """The separator `cross_levels` composes labels with. `realize_order` groups pairs
 by splitting on this same character, so the two must never drift apart — changing
@@ -66,15 +66,86 @@ def _seed_members(digest: str, kind: str, n: int) -> tuple[RepeatMember, ...]:
     a stream to draw from.
     """
     seeds = [_seed_for(f"{digest}|{kind}", i) for i in range(n)]
-    if kind == "batch":
-        return tuple(RepeatMember(label=f"batch{i + 1:02d}", seed=s) for i, s in enumerate(seeds))
+    if kind in ("batch", "fold"):
+        prefix = kind
+        return tuple(
+            RepeatMember(label=f"{prefix}{i + 1:02d}", seed=s) for i, s in enumerate(seeds)
+        )
     labels = [f"seed{s % 100:02d}" for s in seeds]
     if len(set(labels)) != n:
         labels = [f"seed{s}" for s in seeds]
     return tuple(RepeatMember(label=lb, seed=s) for lb, s in zip(labels, seeds, strict=True))
 
 
-def resolve_repeats(config: dict[str, Any], digest: str) -> list[RepeatLevel]:
+def _fold_k(level: dict[str, Any], unit_count: int | None) -> int:
+    """`k` is an integer >= 2, or `all` for leave-one-out.
+
+    `all` needs the roster, because "as many folds as there are things to leave
+    out" is a fact about the cohort rather than the config — which is the whole
+    reason reference.md § Repeat kinds prefers it to a hard-coded count.
+    """
+    if level.get("stratify_by") is not None:
+        raise ContractError(
+            "`fold.stratify_by` is specified but not implemented in this build; "
+            "stratified partitioning is a second partitioning rule with its own "
+            "cross-field checks, and will be honored in a later slice",
+            code="E-REPL-FOLD-STRATIFY-UNSUPPORTED",
+        )
+    k = level.get("k")
+    if k == "all":
+        if unit_count is None:
+            raise ContractError(
+                "`{kind: fold, k: all}` needs the resolved roster to know how many "
+                "folds to draw, and none was supplied",
+                code="E-REPL-FOLD-K",
+            )
+        k = unit_count
+    if not isinstance(k, int) or isinstance(k, bool) or k < 2:
+        raise ContractError(
+            f"`{{kind: fold, k: {k!r}}}` is not a fold count; `k` is an integer >= 2, "
+            "or `all` for leave-one-out",
+            code="E-REPL-FOLD-K",
+        )
+    if unit_count is not None and k > unit_count:
+        raise ContractError(
+            f"`{{kind: fold, k: {k}}}` over {unit_count} resolved units would leave a "
+            "fold with nothing to test; a fold with no units is a declaration error, "
+            "not a small fold",
+            code="E-REPL-FOLD-K-TOO-LARGE",
+        )
+    return k
+
+
+def _check_count_field(kind: str, level: dict[str, Any]) -> None:
+    """Each kind takes its own count field and no other's.
+
+    `reference.md` § Repeat kinds gives a `fold` its `k` and a `seed`/`batch`
+    their `n`, and says "and only these". Nothing enforced it, so
+    `{kind: fold, k: 2, n: 5}` was read as two folds by the executor and as five
+    repeats by `validate`'s budget arithmetic — a declaration that means two
+    different things to two readers, with the wrong number of the two written
+    into a recorded warning. Refused rather than resolved by precedence:
+    silently preferring one reading is what hid it.
+
+    Checked after the kind checks, so an unknown kind still gets `E-REPL-KIND`,
+    and before `_fold_k`, so `{kind: fold, n: 5}` is told its `n` was ignored
+    rather than that `k: None` is not a fold count.
+    """
+    wrong = "n" if kind == "fold" else "k"
+    right = "k" if kind == "fold" else "n"
+    if level.get(wrong) is not None:
+        raise ContractError(
+            f"`{{kind: {kind}}}` declares `{wrong}: {level[wrong]!r}`, which a "
+            f"`{kind}` level does not take — its count is `{right}`. A count the "
+            "executor ignores and the budget check believes is one declaration "
+            "meaning two different things",
+            code="E-REPL-LEVEL-FIELD",
+        )
+
+
+def resolve_repeats(
+    config: dict[str, Any], digest: str, unit_count: int | None = None
+) -> list[RepeatLevel]:
     levels = ((config.get("replication") or {}).get("repeats")) or []
     if not levels:
         return [
@@ -93,23 +164,21 @@ def resolve_repeats(config: dict[str, Any], digest: str) -> list[RepeatLevel]:
             raise ContractError(
                 f"`{kind}` is not a repeat kind — {REJECTED_KINDS[kind]}", code="E-REPL-KIND"
             )
-        if kind == "fold":
-            raise ContractError(
-                "repeat kind `fold` is specified but not implemented in this build; it "
-                "changes what `io.units` hands a step and how per-unit values combine, "
-                "and will be honored in a later slice",
-                code="E-REPL-FOLD-UNSUPPORTED",
-            )
         if kind not in SUPPORTED_KINDS:
             raise ContractError(f"`{kind}` is not a repeat kind", code="E-REPL-KIND")
-        n = int(level.get("n", 1))
-        if n < 1:
-            # Returning [] here would produce a run with no repeat executions at all,
-            # which reads as success. A design that repeats nothing is a declaration error.
-            raise ContractError(
-                f"`{{kind: {kind}, n: {n}}}` executes nothing; n must be at least 1",
-                code="E-REPL-N",
-            )
+        _check_count_field(kind, level)
+        if kind == "fold":
+            n = _fold_k(level, unit_count)
+        else:
+            n = int(level.get("n", 1))
+            if n < 1:
+                # Returning [] here would produce a run with no repeat executions at
+                # all, which reads as success. A design that repeats nothing is a
+                # declaration error.
+                raise ContractError(
+                    f"`{{kind: {kind}, n: {n}}}` executes nothing; n must be at least 1",
+                    code="E-REPL-N",
+                )
         resolved.append(RepeatLevel(kind=kind, members=_seed_members(digest, kind, n)))
     kinds = [lv.kind for lv in resolved]
     if len(set(kinds)) != len(kinds):
@@ -260,3 +329,21 @@ def realize_order(
         rng.shuffle(shuffled)
         out.extend(shuffled)
     return out
+
+
+def fold_members_for(
+    levels: list[RepeatLevel], partitions: list[list[Unit]]
+) -> dict[str, frozenset[str]] | None:
+    """Fold label -> the unit keys in that fold's test partition, or None.
+
+    `None` when no `fold` level is declared, which is what keeps every
+    downstream rule — the collapse, attrition, and the failure fraction —
+    byte-for-byte identical to a run without folds.
+    """
+    fold = next((lv for lv in levels if lv.kind == "fold"), None)
+    if fold is None:
+        return None
+    return {
+        m.label: frozenset(u.key for u in part)
+        for m, part in zip(fold.members, partitions, strict=True)
+    }

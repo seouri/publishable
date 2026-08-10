@@ -270,3 +270,54 @@ def test_the_document_records_one_repeats_entry_per_level():
         "batch02_seed17", "batch02_seed42",
         "batch03_seed17", "batch03_seed42",
     ]
+
+
+def test_a_fold_level_records_its_partitions():
+    from tests.test_replication import _u, cfg
+
+    from publishable.replication import cross_levels, resolve_repeats
+    from publishable.sweep import expand, sweep_document
+
+    levels = resolve_repeats(cfg([{"kind": "fold", "k": 2}]), "d", unit_count=4)
+    parts = [[_u("a"), _u("b")], [_u("c"), _u("d")]]
+    doc = sweep_document(expand({}), levels, cross_levels(levels), "sha256:x",
+                         "as_declared", [], None, partitions=parts)
+    assert doc["partitions"] == [
+        {"fold": "fold01", "test": ["a", "b"], "train": ["c", "d"]},
+        {"fold": "fold02", "test": ["c", "d"], "train": ["a", "b"]},
+    ]
+
+
+def test_no_fold_level_records_no_partitions_key():
+    """Absent, not empty — an empty list would read as `no folds were drawn`."""
+    from tests.test_replication import cfg
+
+    from publishable.replication import cross_levels, resolve_repeats
+    from publishable.sweep import expand, sweep_document
+
+    levels = resolve_repeats(cfg([{"kind": "seed", "n": 2}]), "d")
+    doc = sweep_document(expand({}), levels, cross_levels(levels), "sha256:x",
+                         "as_declared", [], None)
+    assert "partitions" not in doc
+
+
+def test_partitions_with_no_fold_level_raise_a_coded_error_rather_than_asserting():
+    """Core's resolved state disagreeing with itself: partitions were drawn, but
+    no `fold` level exists to supply the member labels they pair with.
+    Unreachable through `command_run` — `partitions` is built only when a fold
+    level was found — but guarded with a `ContractError` rather than an `assert`,
+    because an `assert` disappears under `python -O` and this is the only guard
+    on the condition (`reference.md` § Errors). Without it the failure is
+    `AttributeError` on `None.members`, carrying no code at all."""
+    import pytest
+    from tests.test_replication import _u, cfg
+
+    from publishable.errors import ContractError
+    from publishable.replication import cross_levels, resolve_repeats
+    from publishable.sweep import expand, sweep_document
+
+    levels = resolve_repeats(cfg([{"kind": "seed", "n": 2}]), "d")
+    with pytest.raises(ContractError) as excinfo:
+        sweep_document(expand({}), levels, cross_levels(levels), "sha256:x",
+                       "as_declared", [], None, partitions=[[_u("a")], [_u("b")]])
+    assert excinfo.value.code == "E-RUN-FOLD-UNRESOLVED"

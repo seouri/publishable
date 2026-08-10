@@ -2,6 +2,7 @@ import copy
 from pathlib import Path
 
 import pytest
+from tests.test_stats import _repeat_result
 
 from publishable import BaseExperiment, BaseStep
 from publishable.config import Config
@@ -9,6 +10,8 @@ from publishable.errors import ContractError
 from publishable.replication import Repeat
 from publishable.run_record import assemble_run_yaml, run_status
 from publishable.runner import (
+    _handed_keys,
+    _units_failed_anywhere,
     attrition,
     execute_plan,
     resolve_condition_cfg,
@@ -85,7 +88,14 @@ def test_a_collapsed_repeat_still_collapses_with_a_composed_label(tmp_path):
 
 
 def harness(
-    tmp_path: Path, steps, *, units=None, repeats=None, max_failed_fraction=None, conditions=None
+    tmp_path: Path,
+    steps,
+    *,
+    units=None,
+    repeats=None,
+    max_failed_fraction=None,
+    conditions=None,
+    fold_members=None,
 ):
     class P(BaseExperiment):
         pass
@@ -108,6 +118,7 @@ def harness(
         digest="sha256:abc",
         units=units,
         max_failed_fraction=max_failed_fraction,
+        fold_members=fold_members,
     )
     return run_dir, results, repeats
 
@@ -428,6 +439,266 @@ def test_skipped_in_one_repeat_and_unrecorded_in_another_is_failed(tmp_path: Pat
     counts = attrition(results, roster, "skip_then_silently_drop", condition_index=0)
     assert counts == {"resolved": 2, "completed": 1, "ineligible": 0, "failed": 1}
     assert counts["resolved"] == counts["completed"] + counts["ineligible"] + counts["failed"]
+
+
+def _roster2() -> UnitList:
+    return UnitList([Unit(key="u1"), Unit(key="u2")])
+
+
+def _roster4() -> UnitList:
+    return UnitList([Unit(key="u1"), Unit(key="u2"), Unit(key="u3"), Unit(key="u4")])
+
+
+def test_a_fold_reports_its_partition_as_resolved_not_the_cohort():
+    members = {"fold01": frozenset({"u1", "u2"}), "fold02": frozenset({"u3", "u4"})}
+    results = [
+        _repeat_result("analyze", "fold01", 0, {"u1": {}, "u2": {}}),
+        _repeat_result("analyze", "fold02", 0, {"u3": {}, "u4": {}}),
+    ]
+    counts = attrition(results, _roster4(), "analyze", 0, members)
+    assert counts == {"resolved": 4, "completed": 4, "ineligible": 0, "failed": 0}
+
+
+def test_the_third_row_a_unit_missing_from_one_seed_of_its_fold():
+    """The case a rewrite that groups by fold but forgets to intersect WITHIN the
+    group gets wrong, while the fold-alone case still passes."""
+    members = {"fold01": frozenset({"u1", "u2"})}
+    results = [
+        _repeat_result("analyze", "fold01_seed01", 0, {"u1": {}, "u2": {}}),
+        _repeat_result("analyze", "fold01_seed02", 0, {"u1": {}}),
+    ]
+    counts = attrition(results, _roster2(), "analyze", 0, members)
+    assert counts["completed"] == 1
+    assert counts["failed"] == 1
+
+
+def test_without_folds_the_intersection_is_unchanged():
+    results = [
+        _repeat_result("analyze", "seed01", 0, {"u1": {}, "u2": {}}),
+        _repeat_result("analyze", "seed02", 0, {"u1": {}}),
+    ]
+    counts = attrition(results, _roster2(), "analyze", 0, None)
+    assert counts["completed"] == 1
+    assert counts["failed"] == 1
+
+
+def test_the_identity_reconciles_under_a_fold():
+    members = {"fold01": frozenset({"u1", "u2"}), "fold02": frozenset({"u3", "u4"})}
+    results = [
+        _repeat_result("analyze", "fold01", 0, {"u1": {}}),
+        _repeat_result("analyze", "fold02", 0, {"u3": {}, "u4": {}}),
+    ]
+    c = attrition(results, _roster4(), "analyze", 0, members)
+    assert c["resolved"] == c["completed"] + c["ineligible"] + c["failed"]
+
+
+def test_two_executions_sharing_a_repeat_label_are_merged_the_way_the_collapse_merges_them():
+    """`collapse_repeats` accumulates `recorded` across executions sharing one
+    repeat label; `attrition` kept only the last (`{label: r for r in ...}`),
+    while its `labels` list still held the duplicate. The two readers of the
+    same executions then disagreed — the collapsed table carrying a row for `u1`
+    that the counts called `failed`, and `summarize_step` reporting an `n` whose
+    `resolved` no longer equals `completed + ineligible + failed`.
+
+    Built at unit level deliberately: `build_plan` emits one execution per
+    (step, condition, repeat label) and `_check_no_collisions` keeps member
+    labels unique, so a duplicate is unreachable through `cross_levels` today.
+    The point is that the two functions agree by construction rather than by the
+    caller never producing the input.
+    """
+    from publishable.stats import collapse_repeats
+
+    results = [
+        _repeat_result("analyze", "seed01", 0, {"u1": {"r": 1.0}}),
+        _repeat_result("analyze", "seed01", 0, {"u2": {"r": 3.0}}),
+    ]
+    counts = attrition(results, _roster2(), "analyze", 0, None)
+    collapsed = collapse_repeats(results, "analyze", 0, None)
+
+    assert set(collapsed) == {"u1", "u2"}  # the union, as the collapse merges it
+    assert counts == {"resolved": 2, "completed": 2, "ineligible": 0, "failed": 0}
+    # the row count and the completed count are the same fact, read two ways
+    assert counts["completed"] == len(collapsed)
+    assert counts["resolved"] == counts["completed"] + counts["ineligible"] + counts["failed"]
+
+
+def test_a_unit_skipped_in_every_repeat_of_its_own_fold_is_ineligible():
+    members = {"fold01": frozenset({"u1", "u2"}), "fold02": frozenset({"u3", "u4"})}
+    results = [
+        _repeat_result("analyze", "fold01", 0, {"u2": {}}, skipped=frozenset({"u1"})),
+        _repeat_result("analyze", "fold02", 0, {"u3": {}, "u4": {}}),
+    ]
+    counts = attrition(results, _roster4(), "analyze", 0, members)
+    assert counts == {"resolved": 4, "completed": 3, "ineligible": 1, "failed": 0}
+    assert counts["resolved"] == counts["completed"] + counts["ineligible"] + counts["failed"]
+
+
+def test_under_fold_times_seed_skipped_in_one_seed_and_recorded_in_the_other_is_failed():
+    """The sharp edge: eligibility must be a consistent answer across every seed of
+    a unit's own fold. Skipped in one seed and recorded in the other is neither a
+    consistent skip (so not `ineligible`) nor a consistent completion (so not
+    `completed`) — it falls through to `failed`, not `ineligible`."""
+    members = {"fold01": frozenset({"u1", "u2"})}
+    results = [
+        _repeat_result("analyze", "fold01_seed01", 0, {"u2": {}}, skipped=frozenset({"u1"})),
+        _repeat_result("analyze", "fold01_seed02", 0, {"u1": {}, "u2": {}}),
+    ]
+    counts = attrition(results, _roster2(), "analyze", 0, members)
+    assert counts["completed"] == 1  # u2, consistently recorded in both of its seeds
+    assert counts["ineligible"] == 0
+    assert counts["failed"] == 1  # u1: skipped in one seed, recorded in the other
+    assert counts["resolved"] == counts["completed"] + counts["ineligible"] + counts["failed"]
+
+
+def test_a_healthy_fold_run_does_not_trip_the_failure_fraction():
+    """Before this fix, every unit outside a fold's partition counted as failed on
+    that fold's execution, so a clean 10-fold run aborted on execution one."""
+    members = {"fold01": frozenset({"u1", "u2"}), "fold02": frozenset({"u3", "u4"})}
+    results = [
+        _repeat_result("analyze", "fold01", 0, {"u1": {}, "u2": {}}),
+        _repeat_result("analyze", "fold02", 0, {"u3": {}, "u4": {}}),
+    ]
+    assert _units_failed_anywhere(results, _roster4(), members) == set()
+
+
+def test_a_genuinely_failing_fold_still_counts():
+    members = {"fold01": frozenset({"u1", "u2"}), "fold02": frozenset({"u3", "u4"})}
+    results = [
+        _repeat_result("analyze", "fold01", 0, {"u1": {}}),  # u2 never settled
+        _repeat_result("analyze", "fold02", 0, {"u3": {}, "u4": {}}),
+    ]
+    assert _units_failed_anywhere(results, _roster4(), members) == {"u2"}
+
+
+def test_without_folds_the_union_is_unchanged():
+    results = [
+        _repeat_result("analyze", "seed01", 0, {"u1": {}}),
+        _repeat_result("analyze", "seed02", 0, {"u1": {}, "u2": {}}),
+    ]
+    assert _units_failed_anywhere(results, _roster2(), None) == {"u2"}
+
+
+def test_a_label_with_no_fold_component_raises_rather_than_falling_back():
+    """A repeat label composed under a declared fold always carries one of its
+    members (`cross_levels` guarantees it); a label that doesn't is a core
+    invariant violation, not a case to silently subtract the whole roster for —
+    that fallback is exactly the bug this task fixed."""
+    members = {"fold01": frozenset({"u1", "u2"}), "fold02": frozenset({"u3", "u4"})}
+    with pytest.raises(ContractError) as excinfo:
+        _handed_keys("seed01", {"u1", "u2", "u3", "u4"}, members)
+    assert excinfo.value.code == "E-RUN-FOLD-UNRESOLVED"
+
+
+def test_execute_plan_hands_each_fold_execution_its_own_partition(tmp_path: Path):
+    """A `repeat`-scoped step under a fold sees only its fold as `io.units`, with
+    the complement as `io.units.train` — this is the wiring `_handed_keys` exists
+    for, exercised through `execute_plan` rather than called directly."""
+    roster = UnitList([Unit(key="u1"), Unit(key="u2"), Unit(key="u3"), Unit(key="u4")])
+    members = {"fold01": frozenset({"u1", "u2"}), "fold02": frozenset({"u3", "u4"})}
+
+    class SeeYourFold(BaseStep):
+        scope = "repeat"
+
+        def run(self, cfg, io):
+            return {
+                "test_keys": ",".join(sorted(u.key for u in io.units)),
+                "train_keys": ",".join(sorted(u.key for u in io.units.train)),
+            }
+
+    _, results, _ = harness(
+        tmp_path,
+        [SeeYourFold],
+        units=roster,
+        repeats=[Repeat("fold", "fold01", 0), Repeat("fold", "fold02", 0)],
+        fold_members=members,
+    )
+    by_label = {r.execution.repeat_label: r for r in results}
+    assert by_label["fold01"].returned == {"test_keys": "u1,u2", "train_keys": "u3,u4"}
+    assert by_label["fold02"].returned == {"test_keys": "u3,u4", "train_keys": "u1,u2"}
+
+
+def test_execute_plan_withholds_units_at_condition_and_run_scope_under_a_fold(
+    tmp_path: Path,
+):
+    """There is no fold at `run` or `condition` scope — folds are repeats, and
+    repeats haven't happened yet — so both scopes get `io.units == None`'s raise
+    rather than the whole roster a condition-scoped fit could leak into."""
+    roster = UnitList([Unit(key="u1"), Unit(key="u2"), Unit(key="u3"), Unit(key="u4")])
+    members = {"fold01": frozenset({"u1", "u2"}), "fold02": frozenset({"u3", "u4"})}
+
+    class TouchesUnitsAtRun(BaseStep):
+        scope = "run"
+
+        def run(self, cfg, io):
+            _ = io.units
+            return {}
+
+    class TouchesUnitsAtCondition(BaseStep):
+        scope = "condition"
+
+        def run(self, cfg, io):
+            _ = io.units
+            return {}
+
+    _, results, _ = harness(
+        tmp_path,
+        [TouchesUnitsAtRun, TouchesUnitsAtCondition],
+        units=roster,
+        repeats=[Repeat("fold", "fold01", 0), Repeat("fold", "fold02", 0)],
+        fold_members=members,
+    )
+    statuses = {r.execution.step_name: r.status for r in results}
+    errors = {r.execution.step_name: r.error or "" for r in results}
+    assert statuses["touches_units_at_run"] == "failed"
+    assert statuses["touches_units_at_condition"] == "failed"
+    assert "E-STEP-UNITS-UNAVAILABLE" in errors["touches_units_at_run"]
+    assert "E-STEP-UNITS-UNAVAILABLE" in errors["touches_units_at_condition"]
+
+
+def test_execute_plan_without_a_fold_still_hands_the_whole_roster(tmp_path: Path):
+    """`fold_members=None` must leave the no-fold path byte-for-byte identical:
+    every execution still gets the whole roster, regardless of scope."""
+    roster = UnitList([Unit(key="u1"), Unit(key="u2")])
+
+    class TouchesUnitsAtCondition(BaseStep):
+        scope = "condition"
+
+        def run(self, cfg, io):
+            return {"keys": ",".join(sorted(u.key for u in io.units))}
+
+    _, results, _ = harness(
+        tmp_path,
+        [TouchesUnitsAtCondition],
+        units=roster,
+        repeats=[Repeat("seed", "seed17", 17)],
+    )
+    assert results[0].status == "completed"
+    assert results[0].returned == {"keys": "u1,u2"}
+
+
+def test_a_summary_step_under_a_fold_still_gets_the_full_roster(tmp_path: Path):
+    """By summary time every fold has already run, so there is nothing left to
+    leak — unlike `run`/`condition`, `summary` is deliberately not among the
+    scopes `reference.md` § A `fold` repeat puts the units out of reach of the
+    wider scopes names, and must keep receiving the whole roster unconditionally."""
+    roster = UnitList([Unit(key="u1"), Unit(key="u2"), Unit(key="u3"), Unit(key="u4")])
+    members = {"fold01": frozenset({"u1", "u2"}), "fold02": frozenset({"u3", "u4"})}
+
+    class TouchesUnitsAtSummary(BaseStep):
+        scope = "summary"
+
+        def run(self, cfg, io):
+            return {"keys": ",".join(sorted(u.key for u in io.units))}
+
+    _, results, _ = harness(
+        tmp_path,
+        [TouchesUnitsAtSummary],
+        units=roster,
+        repeats=[Repeat("fold", "fold01", 0), Repeat("fold", "fold02", 0)],
+        fold_members=members,
+    )
+    assert results[0].status == "completed"
+    assert results[0].returned == {"keys": "u1,u2,u3,u4"}
 
 
 def test_a_single_repeat_skip_is_still_ineligible(tmp_path: Path):

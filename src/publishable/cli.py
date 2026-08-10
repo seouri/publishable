@@ -29,7 +29,13 @@ from publishable.generators.step import generate_step
 from publishable.hashes import code_hash, design_digest, parameters_hash
 from publishable.manifest import build_manifest, manifest_hash, verify_manifest
 from publishable.provenance import find_repo_root, git_provenance
-from publishable.replication import cross_levels, order_seed_for, realize_order, resolve_repeats
+from publishable.replication import (
+    cross_levels,
+    fold_members_for,
+    order_seed_for,
+    realize_order,
+    resolve_repeats,
+)
 from publishable.run_identity import RunLock, allocate_run_dir, point_latest
 from publishable.run_record import assemble_run_yaml, run_status
 from publishable.runner import attrition, execute_plan, resolve_condition_cfg, resolve_wide_cfg
@@ -37,7 +43,7 @@ from publishable.scaffold import scaffold_project
 from publishable.scope import Execution, build_plan
 from publishable.stats import collapse_repeats, summarize_step
 from publishable.sweep import expand, sweep_document
-from publishable.units import resolve_units, units_hash
+from publishable.units import Unit, partition_units, resolve_units, units_hash
 from publishable.uv_support import uv_lock_info
 from publishable.validate import load_document, validate_config
 
@@ -154,9 +160,36 @@ def command_run(config_path: Path) -> int:
         experiment = load_experiment(repo_root, doc["entrypoint"])
 
     digest = design_digest(doc)  # phase 5: pin hashes
-    levels = resolve_repeats(doc, digest)
+    input_dir = Path(doc["data"]["input_dir"]).expanduser()
+    output_dir = Path(doc["data"]["output_dir"]).expanduser()
+    units_decl: dict[str, Any] | None = (doc.get("data") or {}).get("units")
+    roster = resolve_units(units_decl, input_dir) if units_decl else None  # phase 5: roster
+    # `unit_count` is what turns `{kind: fold, k: all}` into a real count and
+    # what `_fold_k` checks a declared `k` against — the same roster
+    # `_check_units`/`_check_replication` resolved at `validate` time, threaded
+    # through here rather than trusted blind, since `run` re-resolves it fresh.
+    levels = resolve_repeats(doc, digest, unit_count=len(roster) if roster is not None else None)
     repeats = cross_levels(levels)
     labels = [r.label for r in repeats if r.label] or [""]
+    fold_level = next((lv for lv in levels if lv.kind == "fold"), None)
+    partitions: list[list[Unit]] | None = None
+    if fold_level is not None:
+        # A `fold` level with no roster to partition is refused by `validate`
+        # (`E-REPL-FOLD-NO-UNITS`), which already returned above — so this is
+        # unreachable with `roster is None`. Raised, not asserted, and not an
+        # `or []` fallback: an `assert` disappears under `python -O`, which
+        # `reference.md` § Errors names as precisely the wrong property for the
+        # only guard on a condition nothing else detects. If the invariant is
+        # ever wrong, every fold would otherwise run against nothing.
+        if roster is None:
+            raise ContractError(
+                "a `fold` level is declared but no roster resolved; `validate` refuses "
+                "that config (`E-REPL-FOLD-NO-UNITS`), so core's resolved state "
+                "disagrees with itself about this fold",
+                code="E-RUN-FOLD-UNRESOLVED",
+            )
+        partitions = partition_units(roster, fold_level.n, digest)
+    fold_members = fold_members_for(levels, partitions) if partitions is not None else None
 
     conditions = expand(doc)
     # Every path any condition fixes, not just the grid's axes. A path
@@ -177,13 +210,9 @@ def command_run(config_path: Path) -> int:
     }
     cfgs[-1] = resolve_wide_cfg(doc, swept_paths)
 
-    input_dir = Path(doc["data"]["input_dir"]).expanduser()
-    output_dir = Path(doc["data"]["output_dir"]).expanduser()
     ch = code_hash(repo_root)
     ph = parameters_hash(doc)
     manifest = build_manifest(input_dir, doc["data"]["input_manifest_policy"])
-    units_decl: dict[str, Any] | None = (doc.get("data") or {}).get("units")
-    roster = resolve_units(units_decl, input_dir) if units_decl else None  # phase 5: roster
     lock_path, lock_hash = uv_lock_info(repo_root)
     if lock_path is None:
         # A warning, not an error: it must not change the exit code. There are
@@ -241,7 +270,8 @@ def command_run(config_path: Path) -> int:
         (run_dir / "sweep.yaml").write_text(
             yaml.safe_dump(
                 sweep_document(
-                    conditions, levels, repeats, digest, mode, execution_order, order_seed
+                    conditions, levels, repeats, digest, mode, execution_order, order_seed,
+                    partitions=partitions,
                 ),
                 sort_keys=False,
             )
@@ -256,6 +286,7 @@ def command_run(config_path: Path) -> int:
             digest=digest,
             units=roster,
             max_failed_fraction=(doc.get("limits") or {}).get("max_failed_fraction"),
+            fold_members=fold_members,
         )
 
         status = run_status(results)
@@ -289,8 +320,12 @@ def command_run(config_path: Path) -> int:
                 }
                 aggregated[cond.index] = {
                     step_name: summarize_step(
-                        collapse_repeats(results, step_name, cond.index),
-                        attrition(results, roster, step_name, cond.index),
+                        collapse_repeats(
+                            results, step_name, cond.index, fold_members=fold_members
+                        ),
+                        attrition(
+                            results, roster, step_name, cond.index, fold_members=fold_members
+                        ),
                     )
                     for step_name in sorted(recording_steps)
                 }

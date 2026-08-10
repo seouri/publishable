@@ -2,15 +2,22 @@ import pytest
 
 from publishable import ContractError
 from publishable.replication import (
+    LABEL_JOIN,
     RepeatMember,
     cross_levels,
+    fold_members_for,
     realize_order,
     resolve_repeats,
 )
+from publishable.units import Unit
 
 
 def cfg(repeats):
     return {"replication": {"repeats": repeats}}
+
+
+def _u(key):
+    return Unit(key=key, paths=(), attributes={})
 
 
 def test_no_replication_block_yields_one_anonymous_seed_level():
@@ -115,10 +122,52 @@ def test_rejected_kinds_are_refused_by_name_with_a_pointer(kind, pointer):
     assert pointer in str(e.value)
 
 
-def test_fold_is_not_yet_implemented():
-    with pytest.raises(ContractError) as e:
-        resolve_repeats(cfg([{"kind": "fold", "k": 10}]), "sha256:abc")
-    assert e.value.code == "E-REPL-FOLD-UNSUPPORTED"
+def test_a_fold_level_resolves_to_k_members():
+    levels = resolve_repeats(cfg([{"kind": "fold", "k": 5}]), "d", unit_count=240)
+    assert levels[0].kind == "fold"
+    assert [m.label for m in levels[0].members] == [
+        "fold01", "fold02", "fold03", "fold04", "fold05"
+    ]
+
+
+def test_k_all_resolves_against_the_roster():
+    levels = resolve_repeats(cfg([{"kind": "fold", "k": "all"}]), "d", unit_count=7)
+    assert levels[0].n == 7
+
+
+def test_k_larger_than_the_roster_is_refused():
+    with pytest.raises(ContractError) as exc:
+        resolve_repeats(cfg([{"kind": "fold", "k": 300}]), "d", unit_count=240)
+    assert exc.value.code == "E-REPL-FOLD-K-TOO-LARGE"
+
+
+def test_k_below_two_is_refused():
+    with pytest.raises(ContractError) as exc:
+        resolve_repeats(cfg([{"kind": "fold", "k": 1}]), "d", unit_count=240)
+    assert exc.value.code == "E-REPL-FOLD-K"
+
+
+def test_k_all_without_a_roster_is_refused():
+    with pytest.raises(ContractError) as exc:
+        resolve_repeats(cfg([{"kind": "fold", "k": "all"}]), "d")
+    assert exc.value.code == "E-REPL-FOLD-K"
+
+
+def test_stratify_by_is_refused():
+    with pytest.raises(ContractError) as exc:
+        resolve_repeats(
+            cfg([{"kind": "fold", "k": 5, "stratify_by": "site"}]), "d", unit_count=240
+        )
+    assert exc.value.code == "E-REPL-FOLD-STRATIFY-UNSUPPORTED"
+
+
+def test_fold_outside_seed_composes_labels_outer_to_inner():
+    levels = resolve_repeats(
+        cfg([{"kind": "fold", "k": 2}, {"kind": "seed", "n": 2}]), "d", unit_count=10
+    )
+    labels = [lf.label for lf in cross_levels(levels)]
+    assert labels[0].startswith("fold01" + LABEL_JOIN)
+    assert len(labels) == 4
 
 
 def test_batch_is_now_supported():
@@ -270,3 +319,41 @@ def test_a_pair_matching_no_resolved_batch_is_a_contract_error():
     with pytest.raises(ContractError) as excinfo:
         realize_order(pairs, levels, "randomized", 7)
     assert excinfo.value.code == "E-REPL-ORDER-UNRESOLVED"
+
+
+def test_no_fold_level_yields_none():
+    levels = resolve_repeats(cfg([{"kind": "seed", "n": 3}]), "d")
+    assert fold_members_for(levels, []) is None
+
+
+def test_a_fold_level_maps_each_label_to_its_partition():
+    levels = resolve_repeats(cfg([{"kind": "fold", "k": 2}]), "d", unit_count=4)
+    parts = [[_u("a"), _u("b")], [_u("c"), _u("d")]]
+    assert fold_members_for(levels, parts) == {
+        "fold01": frozenset({"a", "b"}),
+        "fold02": frozenset({"c", "d"}),
+    }
+
+
+def test_the_map_covers_every_unit_exactly_once():
+    levels = resolve_repeats(cfg([{"kind": "fold", "k": 3}]), "d", unit_count=9)
+    parts = [[_u(f"u{i}") for i in grp] for grp in ([0, 1, 2], [3, 4, 5], [6, 7, 8])]
+    members = fold_members_for(levels, parts)
+    allk = [k for s in members.values() for k in s]
+    assert len(allk) == 9 and len(set(allk)) == 9
+
+
+def test_a_fold_in_non_outermost_position_is_still_found_by_kind():
+    """`batch` is the only kind required to be outermost, so `[batch, fold]` is a
+    legitimate design with fold at position 1. A selector that grabbed `levels[0]`
+    would read the batch level's members here instead, and its labels
+    (`batch01`/`batch02`) would not match — this is what proves the selection is
+    by kind, not position."""
+    levels = resolve_repeats(
+        cfg([{"kind": "batch", "n": 2}, {"kind": "fold", "k": 2}]), "d", unit_count=4
+    )
+    parts = [[_u("a"), _u("b")], [_u("c"), _u("d")]]
+    assert fold_members_for(levels, parts) == {
+        "fold01": frozenset({"a", "b"}),
+        "fold02": frozenset({"c", "d"}),
+    }

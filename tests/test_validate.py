@@ -170,9 +170,7 @@ def test_data_may_not_resolve_inside_the_repo(write_config, git_repo: Path):
 
 
 def test_an_unreadable_input_dir_is_reported(write_config, tmp_path: Path):
-    assert "E-DATA-UNREADABLE" in codes(
-        write_config({"data.input_dir": str(tmp_path / "absent")})
-    )
+    assert "E-DATA-UNREADABLE" in codes(write_config({"data.input_dir": str(tmp_path / "absent")}))
 
 
 def test_a_moved_template_version_warns_rather_than_failing(write_config):
@@ -186,15 +184,20 @@ def test_a_repeat_count_below_one_executes_nothing_and_is_an_error(write_config)
 
 def test_two_bad_repeat_levels_are_both_reported():
     """`_check_replication` collects rather than stopping, so a config with two invalid
-    levels must not report only the first."""
+    levels must not report only the first.
+
+    Both levels carry `n`, the count field their kinds actually take — a `fold`
+    with an `n` is now refused outright as a field its kind does not take
+    (`E-REPL-LEVEL-FIELD`), so it is no longer a way to write a second invalid
+    count."""
     from publishable.templates.builtin.generic import GenericTemplate
     from publishable.validate import _check_replication
 
     doc = {
         "replication": {
             "repeats": [
+                {"kind": "batch", "n": -1},
                 {"kind": "seed", "n": 0},
-                {"kind": "fold", "n": -1},
             ]
         }
     }
@@ -206,20 +209,77 @@ def test_two_bad_repeat_levels_are_both_reported():
     assert not any(f.code == "W-REPL-FLOOR" for f in c.findings)
 
 
-def test_a_fold_level_is_refused_by_name(write_config):
-    assert "E-REPL-FOLD-UNSUPPORTED" in codes(
-        write_config({"replication": {"repeats": [{"kind": "fold", "k": 5}]}})
+def test_a_fold_level_now_resolves(write_config, tmp_path):
+    """`fold` was refused by name through S3b; S3c's replication.py resolves it, so
+    a plain `k` declares cleanly given a roster large enough to partition."""
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id\n" + "\n".join(f"p{i}" for i in range(1, 6)) + "\n"
     )
+    found = codes(
+        write_config(
+            {
+                "data.units": {"from": "index.csv", "key": "patient_id"},
+                "replication": {"repeats": [{"kind": "fold", "k": 5}]},
+            }
+        )
+    )
+    assert not [c for c in found if c.startswith("E-REPL")]
+
+
+def test_a_fold_level_with_no_units_declared_is_refused(write_config):
+    """A `fold` level partitions units; with no `data.units` there is no roster to
+    partition. Left unrefused, this validated clean and then either crashed at
+    `run` (`fold_members_for` zipping a fold's members against no partitions) or,
+    worse, ran `k` roster-less repeats to completion while `sweep.yaml`/`run.yaml`
+    described a k-fold cross-validation that never happened."""
+    found = codes(write_config({"replication": {"repeats": [{"kind": "fold", "k": 5}]}}))
+    assert "E-REPL-FOLD-NO-UNITS" in found
+
+
+def test_fold_stratify_by_is_refused_through_validate(write_config):
+    assert "E-REPL-FOLD-STRATIFY-UNSUPPORTED" in codes(
+        write_config(
+            {"replication": {"repeats": [{"kind": "fold", "k": 5, "stratify_by": "site"}]}}
+        )
+    )
+
+
+def test_fold_k_below_two_is_refused_through_validate(write_config):
+    assert "E-REPL-FOLD-K" in codes(
+        write_config({"replication": {"repeats": [{"kind": "fold", "k": 1}]}})
+    )
+
+
+def test_fold_k_too_large_is_refused_against_the_real_roster(write_config):
+    """`E-REPL-FOLD-K-TOO-LARGE` needs the resolved roster to know a ceiling
+    exists at all. `_check_units` resolves it and `validate_config` threads its
+    length into `_check_replication`, so this now goes end to end through
+    `validate_config` rather than calling `resolve_repeats` directly. The
+    fixture's `index.csv` resolves to exactly one unit (`p1`), so `k: 2` — the
+    smallest valid fold count — already exceeds it."""
+    found = codes(
+        write_config(
+            {
+                "data.units": {"from": "index.csv", "key": "patient_id"},
+                "replication": {"repeats": [{"kind": "fold", "k": 2}]},
+            }
+        )
+    )
+    assert "E-REPL-FOLD-K-TOO-LARGE" in found
+
+
+def test_fold_k_all_produces_a_finding_never_a_traceback(write_config):
+    """This is the exact config that crashed `validate` with an uncaught
+    `ValueError` before the arithmetic in `_check_replication`/`_repeat_total`
+    was taught to recognize an unresolved `k: all` rather than coerce it."""
+    found = codes(write_config({"replication": {"repeats": [{"kind": "fold", "k": "all"}]}}))
+    assert "E-REPL-FOLD-K" in found
 
 
 def test_two_levels_of_one_kind_are_refused(write_config):
     assert "E-REPL-LEVEL-DUPLICATE" in codes(
         write_config(
-            {
-                "replication": {
-                    "repeats": [{"kind": "seed", "n": 2}, {"kind": "seed", "n": 3}]
-                }
-            }
+            {"replication": {"repeats": [{"kind": "seed", "n": 2}, {"kind": "seed", "n": 3}]}}
         )
     )
 
@@ -227,11 +287,7 @@ def test_two_levels_of_one_kind_are_refused(write_config):
 def test_a_batch_inside_another_level_is_refused(write_config):
     assert "E-REPL-LEVEL-BATCH-INNER" in codes(
         write_config(
-            {
-                "replication": {
-                    "repeats": [{"kind": "seed", "n": 2}, {"kind": "batch", "n": 3}]
-                }
-            }
+            {"replication": {"repeats": [{"kind": "seed", "n": 2}, {"kind": "batch", "n": 3}]}}
         )
     )
 
@@ -255,11 +311,7 @@ def test_three_levels_are_refused(write_config):
 def test_two_levels_of_different_kinds_validate_clean(write_config):
     found = codes(
         write_config(
-            {
-                "replication": {
-                    "repeats": [{"kind": "batch", "n": 2}, {"kind": "seed", "n": 2}]
-                }
-            }
+            {"replication": {"repeats": [{"kind": "batch", "n": 2}, {"kind": "seed", "n": 2}]}}
         )
     )
     assert not [c for c in found if c.startswith("E-REPL")]
@@ -276,9 +328,7 @@ def test_randomized_order_is_accepted(write_config):
 
 def test_an_unknown_order_is_refused(write_config):
     assert "E-REPL-ORDER" in codes(
-        write_config(
-            {"replication": {"repeats": [{"kind": "seed", "n": 2}], "order": "sideways"}}
-        )
+        write_config({"replication": {"repeats": [{"kind": "seed", "n": 2}], "order": "sideways"}})
     )
 
 
@@ -291,7 +341,7 @@ def test_an_unresolved_repl_code_is_not_swallowed(write_config, monkeypatch):
     import publishable.validate as validate_mod
     from publishable.errors import ContractError
 
-    def _boom(doc, digest):
+    def _boom(doc, digest, unit_count=None):
         raise ContractError("a future refusal nobody has classified yet", code="E-REPL-FUTURE")
 
     monkeypatch.setattr(validate_mod, "resolve_repeats", _boom)
@@ -333,9 +383,7 @@ def test_the_four_refused_modes_are_known_keys_not_unknown_ones(write_config):
 def test_an_axis_declaring_no_values_is_refused(write_config):
     """Zero conditions is a run that executes nothing while reporting success —
     the same reasoning as E-UNITS-EMPTY: zero is not a small study."""
-    assert "E-SWEEP-AXIS-EMPTY" in codes(
-        write_config({"sweep": {"grid": {"analysis.method": []}}})
-    )
+    assert "E-SWEEP-AXIS-EMPTY" in codes(write_config({"sweep": {"grid": {"analysis.method": []}}}))
 
 
 def test_an_empty_grid_block_is_refused_by_the_backstop(write_config):
@@ -364,12 +412,16 @@ def test_no_sweep_at_all_still_validates_clean(write_config):
 
 
 def test_a_normal_baseline_plus_grid_config_still_validates_clean(write_config):
-    found = codes(write_config({
-        "sweep": {
-            "baseline": {"analysis.method": "pearson"},
-            "grid": {"analysis.method": ["spearman", "kendall"]},
-        }
-    }))
+    found = codes(
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"analysis.method": "pearson"},
+                    "grid": {"analysis.method": ["spearman", "kendall"]},
+                }
+            }
+        )
+    )
     assert not [c for c in found if c.startswith("E-SWEEP")]
 
 
@@ -380,9 +432,7 @@ def test_a_swept_path_must_be_a_real_parameter(write_config):
 
 
 def test_a_swept_path_that_resolves_is_not_flagged(write_config):
-    found = codes(
-        write_config({"sweep": {"grid": {"analysis.method": ["pearson", "spearman"]}}})
-    )
+    found = codes(write_config({"sweep": {"grid": {"analysis.method": ["pearson", "spearman"]}}}))
     assert "E-SWEEP-PATH-UNKNOWN" not in found
 
 
@@ -408,44 +458,189 @@ def test_a_value_with_a_single_underscore_is_accepted(write_config):
 
 
 def test_the_execution_budget_is_checked_against_the_real_expansion(write_config):
-    found = codes(write_config({
-        "sweep": {"grid": {"analysis.method": ["pearson", "spearman", "kendall"]}},
-        "replication": {"repeats": [{"kind": "seed", "n": 5}]},
-        "limits": {"max_executions": 10},          # 3 × 5 = 15 > 10
-    }))
+    found = codes(
+        write_config(
+            {
+                "sweep": {"grid": {"analysis.method": ["pearson", "spearman", "kendall"]}},
+                "replication": {"repeats": [{"kind": "seed", "n": 5}]},
+                "limits": {"max_executions": 10},  # 3 × 5 = 15 > 10
+            }
+        )
+    )
     assert "W-EXEC-BUDGET" in found
 
 
 def test_the_budget_does_not_warn_when_the_expansion_fits(write_config):
-    found = codes(write_config({
-        "sweep": {"grid": {"analysis.method": ["pearson", "spearman"]}},
-        "replication": {"repeats": [{"kind": "seed", "n": 2}]},
-        "limits": {"max_executions": 500},
-    }))
+    found = codes(
+        write_config(
+            {
+                "sweep": {"grid": {"analysis.method": ["pearson", "spearman"]}},
+                "replication": {"repeats": [{"kind": "seed", "n": 2}]},
+                "limits": {"max_executions": 500},
+            }
+        )
+    )
     assert "W-EXEC-BUDGET" not in found
 
 
 def test_the_budget_passes_at_exactly_the_limit_and_fails_one_over(write_config):
-    found_at = codes(write_config({
-        "sweep": {"grid": {"analysis.method": ["pearson", "spearman"]}},
-        "replication": {"repeats": [{"kind": "seed", "n": 5}]},
-        "limits": {"max_executions": 10},           # 2 × 5 = 10, exactly at budget
-    }))
+    found_at = codes(
+        write_config(
+            {
+                "sweep": {"grid": {"analysis.method": ["pearson", "spearman"]}},
+                "replication": {"repeats": [{"kind": "seed", "n": 5}]},
+                "limits": {"max_executions": 10},  # 2 × 5 = 10, exactly at budget
+            }
+        )
+    )
     assert "W-EXEC-BUDGET" not in found_at
 
-    found_over = codes(write_config({
-        "sweep": {"grid": {"analysis.method": ["pearson", "spearman", "kendall"]}},
-        "replication": {"repeats": [{"kind": "seed", "n": 5}]},
-        "limits": {"max_executions": 14},            # 3 × 5 = 15 > 14
-    }))
+    found_over = codes(
+        write_config(
+            {
+                "sweep": {"grid": {"analysis.method": ["pearson", "spearman", "kendall"]}},
+                "replication": {"repeats": [{"kind": "seed", "n": 5}]},
+                "limits": {"max_executions": 14},  # 3 × 5 = 15 > 14
+            }
+        )
+    )
     assert "W-EXEC-BUDGET" in found_over
+
+
+def test_an_unreadable_count_that_is_not_a_word_still_leaves_the_budget_computable(write_config):
+    """The skip is for a count declared as a *word* and unresolvable, not for
+    every count this module can't read as a number. `n: yes` is a bool under
+    `yaml.safe_load`; `resolve_repeats` runs it as one repeat, so treating it as
+    unknown would suppress `W-EXEC-BUDGET` for the whole config over a typo —
+    the silent-skip class this pass exists to end, reintroduced one layer up."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {"grid": {"analysis.method": ["pearson", "spearman", "kendall"]}},
+                "replication": {"repeats": [{"kind": "seed", "n": True}]},
+                "limits": {"max_executions": 2},  # 3 conditions × 1 repeat = 3 > 2
+            }
+        )
+    )
+    assert "W-EXEC-BUDGET" in found
+
+
+def test_the_budget_check_does_not_crash_or_guess_when_k_all_cannot_resolve(write_config):
+    """A `{kind: fold, k: all}` whose roster did NOT resolve makes the true
+    execution count unknown — not zero and not 1×. This config declares no
+    `data.units` at all, so there is no roster to count: the honest answer is to
+    report `E-REPL-FOLD-NO-UNITS`/`E-REPL-FOLD-K` and skip the budget check
+    rather than fold a guessed 1× into it, which would hide an overrun by a
+    factor of the roster size. Kept deliberately — the sibling test below is
+    what covers the resolvable case."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {"grid": {"analysis.method": ["pearson", "spearman", "kendall"]}},
+                "replication": {"repeats": [{"kind": "fold", "k": "all"}]},
+                "limits": {"max_executions": 1},
+            }
+        )
+    )
+    assert "W-EXEC-BUDGET" not in found
+
+
+def test_the_budget_check_fires_for_leave_one_out_against_the_real_roster(
+    write_config, tmp_path
+):
+    """Leave-one-out is the single design `W-EXEC-BUDGET` matters most for
+    (`reference.md` § Sweeps and repeats) — and it was the one design that could
+    not produce the warning, because `_repeat_total` returned `None` on any
+    string count while `_check_replication` had already been threaded a real
+    `unit_count`. A 60-unit roster under `k: all` is 60 executions against a
+    budget of 10, and it must warn exactly as `k: 60` does."""
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id\n" + "\n".join(f"p{i}" for i in range(1, 61)) + "\n"
+    )
+    overrides = {
+        "data.units": {"from": "index.csv", "key": "patient_id"},
+        "limits": {"max_executions": 10},
+    }
+    found_all = messages_by_code(
+        write_config({**overrides, "replication": {"repeats": [{"kind": "fold", "k": "all"}]}})
+    )
+    found_60 = messages_by_code(
+        write_config({**overrides, "replication": {"repeats": [{"kind": "fold", "k": 60}]}})
+    )
+    assert "W-EXEC-BUDGET" in found_all
+    assert found_all["W-EXEC-BUDGET"] == found_60["W-EXEC-BUDGET"]
+    assert "60 executions exceeds 10" in found_all["W-EXEC-BUDGET"]
+
+
+def test_the_floor_warning_also_resolves_k_all_against_the_roster():
+    """`W-REPL-FLOOR` was suppressed by the same unresolved-fold flag, so a
+    `k: all` over a small roster never warned below the convention floor. It is
+    checked here rather than through `validate_config` because `generic`'s
+    `default_repeats` is 1, which no positive count can fall below — the floor
+    only has a value to compare against under a template that sets one."""
+    from publishable.templates.builtin.generic import GenericTemplate
+    from publishable.validate import _check_replication
+
+    class ThreeRepeats(GenericTemplate):  # type: ignore[misc]
+        default_repeats = 3
+
+    doc = {"replication": {"repeats": [{"kind": "fold", "k": "all"}]}}
+    resolved = Collector()
+    _check_replication(doc, ThreeRepeats(), resolved, unit_count=2)
+    assert "W-REPL-FLOOR" in {f.code for f in resolved.findings}
+
+    # ...and still silent when the roster genuinely could not resolve.
+    unresolved = Collector()
+    _check_replication(doc, ThreeRepeats(), unresolved, unit_count=None)
+    assert "W-REPL-FLOOR" not in {f.code for f in unresolved.findings}
+
+
+def test_a_fold_declaring_n_is_refused_rather_than_read_two_ways(write_config, tmp_path):
+    """`{kind: fold, k: 2, n: 5}` validated clean, the budget reported five
+    executions, and the run executed two folds. `reference.md` § Repeat kinds
+    gives each kind its own fields and only these, so the count field the kind
+    does not take is refused rather than resolved by precedence — silently
+    preferring one reading is what hid the disagreement."""
+    (tmp_path / "input" / "index.csv").write_text("patient_id\np1\np2\np3\np4\n")
+    found = messages_by_code(
+        write_config(
+            {
+                "data.units": {"from": "index.csv", "key": "patient_id"},
+                "replication": {"repeats": [{"kind": "fold", "k": 2, "n": 5}]},
+                "limits": {"max_executions": 3},
+            }
+        )
+    )
+    assert "E-REPL-LEVEL-FIELD" in found
+    assert "`n: 5`" in found["E-REPL-LEVEL-FIELD"]
+    # and the budget arithmetic no longer believes the ignored count: two folds
+    # against a budget of three is under it, where `n: 5` would have warned.
+    assert "W-EXEC-BUDGET" not in found
+
+
+def test_a_seed_declaring_k_is_refused_the_same_way(write_config):
+    """The mirror: `k` is a fold's field, and a `seed` carrying one had it
+    silently accepted and ignored."""
+    found = messages_by_code(
+        write_config({"replication": {"repeats": [{"kind": "seed", "n": 2, "k": 9}]}})
+    )
+    assert "E-REPL-LEVEL-FIELD" in found
+    assert "`k: 9`" in found["E-REPL-LEVEL-FIELD"]
+
+    # and the `batch` half, which `reference.md` § Validation has listed as a
+    # check ("Batch takes no fields — `{kind: batch, k: 3}`") since before
+    # anything enforced it
+    assert "E-REPL-LEVEL-FIELD" in codes(
+        write_config({"replication": {"repeats": [{"kind": "batch", "k": 3}]}})
+    )
 
 
 def test_a_multi_condition_sweep_warns_about_the_uncorrected_family(write_config):
     c = Collector()
-    validate_config(write_config({
-        "sweep": {"grid": {"analysis.method": ["pearson", "spearman", "kendall"]}}
-    }), c)
+    validate_config(
+        write_config({"sweep": {"grid": {"analysis.method": ["pearson", "spearman", "kendall"]}}}),
+        c,
+    )
     warning = next(f for f in c.findings if f.code == "W-STATS-FAMILY")
     assert "3" in warning.message
     assert "not implemented" in warning.message
@@ -457,9 +652,9 @@ def test_a_single_condition_run_has_no_family(write_config):
 
 def test_warnings_alone_leave_the_exit_code_at_zero(write_config):
     c = Collector()
-    validate_config(write_config({
-        "sweep": {"grid": {"analysis.method": ["pearson", "spearman"]}}
-    }), c)
+    validate_config(
+        write_config({"sweep": {"grid": {"analysis.method": ["pearson", "spearman"]}}}), c
+    )
     assert not c.has_errors
     assert c.exit_code() == 0
 
@@ -797,9 +992,7 @@ def test_a_string_units_block_is_reported_not_raised(write_config):
     `validate_config` must return, with a diagnostic, not let an `AttributeError`
     escape. `_check_shape` catches this before any later check indexes into it, so
     the whole config is refused rather than partially validated."""
-    path = _with_doc_change(
-        write_config, lambda doc: doc["data"].update(units="index.csv")
-    )
+    path = _with_doc_change(write_config, lambda doc: doc["data"].update(units="index.csv"))
     c = Collector()
     result = validate_config(path, c)
     assert result is None
@@ -807,9 +1000,7 @@ def test_a_string_units_block_is_reported_not_raised(write_config):
 
 
 def test_a_list_units_block_is_reported_not_raised(write_config):
-    path = _with_doc_change(
-        write_config, lambda doc: doc["data"].update(units=["index.csv"])
-    )
+    path = _with_doc_change(write_config, lambda doc: doc["data"].update(units=["index.csv"]))
     c = Collector()
     result = validate_config(path, c)
     assert result is None
@@ -820,9 +1011,7 @@ def test_a_malformed_units_block_is_reported_exactly_once(write_config):
     """`_check_shape` alone reports the bad `data.units` shape; `_check_units` and
     `_check_unimplemented` never even run because `validate_config` returns early —
     a bad shape must not produce the diagnostic twice."""
-    path = _with_doc_change(
-        write_config, lambda doc: doc["data"].update(units="index.csv")
-    )
+    path = _with_doc_change(write_config, lambda doc: doc["data"].update(units="index.csv"))
     c = Collector()
     validate_config(path, c)
     shape_findings = [f for f in c.findings if f.code == "E-CONFIG-SHAPE"]
@@ -885,9 +1074,7 @@ def test_a_top_level_block_with_the_wrong_shape_is_reported_not_raised(
 def test_a_repeats_item_that_is_not_a_mapping_is_reported_not_raised(write_config):
     """`replication.repeats: [1, 2]` crashed `_check_replication`'s `level.get("n")`
     before this guard existed."""
-    path = _with_doc_change(
-        write_config, lambda doc: doc["replication"].update(repeats=[1, 2])
-    )
+    path = _with_doc_change(write_config, lambda doc: doc["replication"].update(repeats=[1, 2]))
     c = Collector()
     result = validate_config(path, c)
     assert result is None
@@ -1035,12 +1222,14 @@ def test_a_baseline_path_must_be_a_real_parameter(write_config):
     baseline path was planted verbatim into condition `00`'s config and the run
     reported success having executed the base config under a baseline label."""
     found = codes(
-        write_config({
-            "sweep": {
-                "baseline": {"analysis.methd": "pearson"},
-                "grid": {"analysis.methd": ["spearman", "kendall"]},
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"analysis.methd": "pearson"},
+                    "grid": {"analysis.methd": ["spearman", "kendall"]},
+                }
             }
-        })
+        )
     )
     assert "E-SWEEP-PATH-UNKNOWN" in found
 
@@ -1049,12 +1238,14 @@ def test_a_baseline_value_must_satisfy_its_param(write_config):
     """`reference.md`:218's own example: `sweep.baseline` sets `analysis.method:
     pearsonn`. Before this check the config validated with only `W-STATS-FAMILY`."""
     found = messages_by_code(
-        write_config({
-            "sweep": {
-                "baseline": {"analysis.method": "pearsonn"},
-                "grid": {"analysis.method": ["spearman", "kendall"]},
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"analysis.method": "pearsonn"},
+                    "grid": {"analysis.method": ["spearman", "kendall"]},
+                }
             }
-        })
+        )
     )
     assert "E-PARAM-VALUE" in found
 
@@ -1072,12 +1263,14 @@ def test_a_baseline_value_is_not_subject_to_the_nameability_check(write_config):
     asserted on the one config: the `Param` check *is* applied to a baseline entry
     (`reference.md`:218), the nameability check is not."""
     found = codes(
-        write_config({
-            "sweep": {
-                "baseline": {"analysis.method": "pear son"},
-                "grid": {"analysis.method": ["spearman", "kendall"]},
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"analysis.method": "pear son"},
+                    "grid": {"analysis.method": ["spearman", "kendall"]},
+                }
             }
-        })
+        )
     )
     assert "E-PARAM-VALUE" in found
     assert "E-SWEEP-VALUE-UNNAMEABLE" not in found
@@ -1088,15 +1281,17 @@ def test_a_baseline_that_leaves_a_grid_axis_free_is_refused(write_config):
     """`reference.md`:1415-1422 requires one baseline condition per cell of the
     unfixed axes; `expand` emits exactly one. Refused rather than diverging."""
     found = messages_by_code(
-        write_config({
-            "sweep": {
-                "baseline": {"analysis.method": "pearson"},
-                "grid": {
-                    "analysis.method": ["spearman", "kendall"],
-                    "analysis.min_samples": [10, 20],
-                },
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"analysis.method": "pearson"},
+                    "grid": {
+                        "analysis.method": ["spearman", "kendall"],
+                        "analysis.min_samples": [10, 20],
+                    },
+                }
             }
-        })
+        )
     )
     assert "E-SWEEP-BASELINE-PARTIAL" in found
     assert "analysis.min_samples" in found["E-SWEEP-BASELINE-PARTIAL"]
@@ -1106,12 +1301,14 @@ def test_a_baseline_that_leaves_a_grid_axis_free_is_refused(write_config):
 def test_a_baseline_fixing_every_axis_is_supported(write_config):
     """The row the slice's worked example uses, and it must keep working."""
     found = codes(
-        write_config({
-            "sweep": {
-                "baseline": {"analysis.method": "pearson", "analysis.min_samples": 10},
-                "grid": {"analysis.min_samples": [10, 20]},
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"analysis.method": "pearson", "analysis.min_samples": 10},
+                    "grid": {"analysis.min_samples": [10, 20]},
+                }
             }
-        })
+        )
     )
     assert "E-SWEEP-BASELINE-PARTIAL" not in found
 
@@ -1126,9 +1323,9 @@ def test_an_empty_baseline_beside_a_grid_is_not_a_partial_baseline(write_config)
     """`baseline: {}` declares nothing and yields no baseline condition; "present
     but empty is not a declaration" is this repo's convention elsewhere too."""
     found = codes(
-        write_config({
-            "sweep": {"baseline": {}, "grid": {"analysis.method": ["spearman", "kendall"]}}
-        })
+        write_config(
+            {"sweep": {"baseline": {}, "grid": {"analysis.method": ["spearman", "kendall"]}}}
+        )
     )
     assert "E-SWEEP-BASELINE-PARTIAL" not in found
 
@@ -1144,12 +1341,14 @@ def test_a_list_baseline_is_a_diagnostic_not_a_traceback(write_config):
     """`sweep.expand` calls `dict(baseline)`; without the guard this escaped as
     `ValueError: dictionary update sequence element #0 has length 15`."""
     found = codes(
-        write_config({
-            "sweep": {
-                "baseline": ["analysis.method"],
-                "grid": {"analysis.method": ["spearman"]},
+        write_config(
+            {
+                "sweep": {
+                    "baseline": ["analysis.method"],
+                    "grid": {"analysis.method": ["spearman"]},
+                }
             }
-        })
+        )
     )
     assert "E-CONFIG-SHAPE" in found
 

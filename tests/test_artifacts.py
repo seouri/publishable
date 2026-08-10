@@ -6,6 +6,11 @@ import pytest
 
 from publishable import ArtifactError, ArtifactExistsError, ContractError
 from publishable.artifacts import StepIO, write_atomic
+from publishable.units import Unit, UnitList
+
+
+def _u(key: str) -> Unit:
+    return Unit(key=key)
 
 
 @pytest.fixture
@@ -20,6 +25,7 @@ def make_io(
     tmp_path: Path,
     *,
     scope: str = "repeat",
+    units: "UnitList | None" = None,
     conditions: list[tuple[int, str]] | None = None,
     repeats: list[str] | None = None,
     step_scopes: dict[str, str] | None = None,
@@ -34,6 +40,7 @@ def make_io(
         step_dir=step_dir,
         input_dir=tmp_path / "input",
         run_dir=tmp_path / "run",
+        units=units,
         scope=scope,
         conditions=conditions,
         repeats=repeats,
@@ -202,6 +209,40 @@ def test_units_raises_when_no_roster_was_declared(io: StepIO):
     with pytest.raises(ContractError) as e:
         _ = io.units
     assert e.value.code == "E-STEP-UNITS-UNAVAILABLE"
+
+
+def test_a_repeat_step_sees_only_its_folds_test_partition(tmp_path):
+    io = make_io(
+        tmp_path,
+        scope="repeat",
+        units=UnitList([_u("u1")], train=UnitList([_u("u2"), _u("u3")])),
+    )
+    assert [u.key for u in io.units] == ["u1"]
+    assert [u.key for u in io.units.train] == ["u2", "u3"]
+
+
+def test_units_raises_at_condition_scope_under_a_fold(tmp_path):
+    io = make_io(tmp_path, scope="condition", units=None)
+    with pytest.raises(ContractError) as exc:
+        _ = io.units
+    assert exc.value.code == "E-STEP-UNITS-UNAVAILABLE"
+
+
+def test_train_raises_at_run_scope_under_a_fold(tmp_path):
+    io = make_io(tmp_path, scope="run", units=None)
+    with pytest.raises(ContractError) as exc:
+        _ = io.units.train
+    assert exc.value.code == "E-STEP-UNITS-UNAVAILABLE"
+
+
+def test_there_is_no_train_of_a_train(tmp_path):
+    io = make_io(
+        tmp_path,
+        scope="repeat",
+        units=UnitList([_u("u1")], train=UnitList([_u("u2")])),
+    )
+    with pytest.raises(ContractError):
+        _ = io.units.train.train
 
 
 def test_record_and_skip_accumulate_by_key(tmp_path: Path):

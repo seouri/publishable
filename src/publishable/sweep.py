@@ -2,7 +2,8 @@
 
 Pure: a config dict in, an ordered condition list out. No filesystem, no
 `Config` object, no git — expansion is a function of the declaration alone,
-so it can be tested exhaustively without a repository.
+so it can be tested exhaustively without a repository. Importing
+`publishable.errors` keeps that: it has no dependencies and no I/O of its own.
 
 A `baseline` whose values happen to coincide with a grid cell produces two
 conditions with identical `values` — `00_baseline` and the matching grid
@@ -18,8 +19,11 @@ from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
+from publishable.errors import ContractError
+
 if TYPE_CHECKING:
     from publishable.replication import Repeat, RepeatLevel
+    from publishable.units import Unit
 
 
 @dataclass(frozen=True)
@@ -169,6 +173,7 @@ def sweep_document(
     order: str,
     execution_order: list[tuple[int, str]],
     order_seed: int | None = None,
+    partitions: list[list["Unit"]] | None = None,
 ) -> dict[str, Any]:
     """The `sweep.yaml` payload: the resolved plan, as plain YAML-safe data.
 
@@ -205,8 +210,13 @@ def sweep_document(
     `fold03_seed42` appears.
 
     Fold membership (`partitions`) belongs here too per § The other files a
-    run writes; folds are a later slice and the key is absent rather than
-    empty, so its absence is not read as "no folds were drawn".
+    run writes. `partitions` is `None` exactly when no `fold` level is
+    declared, and the key is omitted rather than written as an empty list —
+    an empty list would read as "no folds were drawn", a different claim from
+    "this design has no folds". Each entry pairs a fold's label with the unit
+    keys on each side: `test` is that fold's own partition, `train` every
+    other partition concatenated in fold order — the same train/test split
+    `io.units`/`io.units.train` hand a repeat-scope step for that label.
     """
     repeat_entries: list[dict[str, Any]] = []
     for lv in levels:
@@ -231,4 +241,28 @@ def sweep_document(
     }
     if order_seed is not None:
         doc["order_seed"] = order_seed
+    if partitions is not None:
+        fold = next((lv for lv in levels if lv.kind == "fold"), None)
+        if fold is None:
+            # Raised rather than asserted: an `assert` disappears under
+            # `python -O`, leaving `zip(None.members, ...)` and an
+            # `AttributeError` carrying no code. Partitions with no fold level
+            # to label them is core's resolved state disagreeing with itself.
+            raise ContractError(
+                "partitions were drawn but no `fold` level is declared, so there are "
+                "no member labels to pair them with",
+                code="E-RUN-FOLD-UNRESOLVED",
+            )
+        doc["partitions"] = [
+            {
+                "fold": member.label,
+                "test": [u.key for u in part],
+                # `other is not part` composes `train` by object identity, which is
+                # safe rather than incidental: `partition_units` builds a fresh list
+                # per fold, so no two entries of `partitions` are the same object
+                # even when two folds hold equal units.
+                "train": [u.key for other in partitions if other is not part for u in other],
+            }
+            for member, part in zip(fold.members, partitions, strict=True)
+        ]
     return doc

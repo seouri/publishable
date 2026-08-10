@@ -16,7 +16,7 @@ from publishable.provenance import find_repo_root, resolves_inside_repo
 from publishable.replication import resolve_repeats
 from publishable.sweep import check_swept_value, expand
 from publishable.templates.registry import get_template, template_names
-from publishable.units import resolve_units
+from publishable.units import UnitList, resolve_units
 
 REQUIRED_METADATA = ("description", "authors")
 
@@ -26,7 +26,13 @@ REQUIRED_METADATA = ("description", "authors")
 # reads them yet in this build, so the next reader inherits the guard rather than
 # the crash a hand-edited config would otherwise produce.
 _MAPPING_BLOCKS = (
-    "metadata", "data", "parameters", "sweep", "replication", "statistics", "limits",
+    "metadata",
+    "data",
+    "parameters",
+    "sweep",
+    "replication",
+    "statistics",
+    "limits",
 )
 _LIST_BLOCKS = ("hypotheses",)
 _STRING_BLOCKS = ("schema_version", "experiment_type", "template_version", "entrypoint", "plugin")
@@ -209,10 +215,16 @@ def validate_config(
     _check_parameters(doc, template, c)
     _check_versions(doc, c)
     _check_data(doc, config_path, c)
-    _check_units(doc, c)
-    _check_replication(doc, template, c, experiment=experiment)
+    roster = _check_units(doc, c)
+    _check_replication(
+        doc,
+        template,
+        c,
+        experiment=experiment,
+        unit_count=len(roster) if roster is not None else None,
+    )
     _check_unimplemented(doc, c)
-    _check_sweep(doc, template, c)
+    _check_sweep(doc, template, c, unit_count=len(roster) if roster is not None else None)
     for message in template.validate(doc):
         c.error("E-TEMPLATE-RULE", "parameters", message)
     return doc
@@ -378,7 +390,7 @@ def _units_declaration(data: dict[str, Any], c: Collector) -> dict[str, Any] | N
     return units_decl
 
 
-def _check_units(doc: dict[str, Any], c: Collector) -> None:
+def _check_units(doc: dict[str, Any], c: Collector) -> UnitList | None:
     """Resolve the roster so unit checks are real rather than deferred to run time.
 
     A `ContractError` from resolution becomes a diagnostic carrying the SAME
@@ -402,24 +414,29 @@ def _check_units(doc: dict[str, Any], c: Collector) -> None:
     one of those refusals adds a genuine, independent finding — a duplicate key
     in the roster is a real defect whether or not `holdout` is also declared —
     rather than noise about the same problem twice.
+
+    Returns the resolved roster, or `None` when resolution did not happen or did
+    not succeed — `_check_replication` uses its length to check a `fold` count
+    against real units rather than resolving the roster a second time.
     """
     data = doc.get("data") or {}
     units_decl = _units_declaration(data, c)
     if units_decl is None:
-        return
+        return None
     input_dir = data.get("input_dir")
     if not input_dir:
-        return  # E-DATA-REQUIRED already reported by _check_data
+        return None  # E-DATA-REQUIRED already reported by _check_data
     path = Path(input_dir).expanduser()
     if not path.is_absolute() or not path.is_dir() or not any(path.iterdir()):
-        return  # E-DATA-NOT-ABSOLUTE / E-DATA-UNREADABLE already reported by _check_data
+        return None  # E-DATA-NOT-ABSOLUTE / E-DATA-UNREADABLE already reported by _check_data
     source = units_decl.get("from")
     if isinstance(source, dict) and "resolver" in source:
-        return  # E-DATA-RESOLVER-UNSUPPORTED already reported by _check_unimplemented
+        return None  # E-DATA-RESOLVER-UNSUPPORTED already reported by _check_unimplemented
     try:
-        resolve_units(units_decl, path)
+        return resolve_units(units_decl, path)
     except ContractError as exc:
         c.error(exc.code, "data.units", str(exc))
+        return None
 
 
 # Refusals that are properties of the DECLARATION, so `validate` reports them as
@@ -430,8 +447,11 @@ def _check_units(doc: dict[str, Any], c: Collector) -> None:
 # `test_an_unresolved_repl_code_is_not_swallowed` pins that escape path.
 REPL_DECLARATION_CODES = frozenset(
     {
-        "E-REPL-FOLD-UNSUPPORTED",
+        "E-REPL-FOLD-STRATIFY-UNSUPPORTED",
+        "E-REPL-FOLD-K",
+        "E-REPL-FOLD-K-TOO-LARGE",
         "E-REPL-LEVEL-DUPLICATE",
+        "E-REPL-LEVEL-FIELD",
         "E-REPL-LEVEL-DEPTH",
         "E-REPL-LEVEL-BATCH-INNER",
         "E-REPL-KIND",
@@ -441,18 +461,84 @@ REPL_DECLARATION_CODES = frozenset(
 )
 
 
+def _declared_count(level: dict[str, Any]) -> Any:
+    """The count key this level's kind actually takes, exactly as declared.
+
+    `reference.md` § Repeat kinds gives each kind its own fields *and only these*:
+    a `fold` takes `k` (and an optional `stratify_by`), a `seed` and a `batch`
+    take `n`. Reading `n` first and falling back to `k` for every kind is what let
+    `{kind: fold, k: 2, n: 5}` report a five-execution budget for a run that
+    executes two folds — one declaration meaning two different things to two
+    readers. `resolve_repeats` refuses that cross-talk outright
+    (`E-REPL-LEVEL-FIELD`); this function is the arithmetic half of the same
+    rule, so the number every check here derives is the number the run executes.
+    """
+    return level.get("k") if level.get("kind") == "fold" else level.get("n")
+
+
+def _level_count(level: dict[str, Any], unit_count: int | None) -> int | None:
+    """This level's count as a number, or `None` when there isn't one to have.
+
+    `None` covers two cases the callers separate with `_declared_count`: nothing
+    declared at all (which contributes 1×), and a count declared but unresolvable
+    — `{kind: fold, k: all}` against a roster that did not resolve, or any other
+    string `k`, which `resolve_repeats` reports by name. A resolvable `k: all` is
+    the roster size, the same number `_fold_k` gives the run.
+    """
+    count = _declared_count(level)
+    if count == "all" and level.get("kind") == "fold":
+        return unit_count
+    if isinstance(count, bool) or not isinstance(count, int | float):
+        return None
+    return int(count)
+
+
 def _check_replication(
-    doc: dict[str, Any], template: Any, c: Collector, *, experiment: Any | None = None
+    doc: dict[str, Any],
+    template: Any,
+    c: Collector,
+    *,
+    experiment: Any | None = None,
+    unit_count: int | None = None,
 ) -> None:
     levels = ((doc.get("replication") or {}).get("repeats")) or []
+    # A `fold` level partitions units into train/test splits; with no
+    # `data.units` declared there is no roster to partition at all. Left
+    # unchecked, `resolve_repeats` accepts a fixed `k` with `unit_count=None`
+    # (only `k: all` needs a count, and that already reports `E-REPL-FOLD-K`) —
+    # so a config with a fold and no units would validate clean and then, at
+    # `run`, either crash (`fold_members_for` zips a fold's members against no
+    # partitions) or, worse, complete: `k` roster-less repeats all executing
+    # against nothing while `sweep.yaml`/`run.yaml` describe a k-fold
+    # cross-validation that never happened. Caught here, at the declaration,
+    # rather than guarded at `run` — a config that validates clean must not
+    # then fail (see `docs/superpowers/spec-defects.md`).
+    if any(level.get("kind") == "fold" for level in levels) and not (
+        doc.get("data") or {}
+    ).get("units"):
+        c.error(
+            "E-REPL-FOLD-NO-UNITS",
+            "replication.repeats",
+            "a `fold` level partitions units, and `data.units` is not declared; "
+            "there is nothing to partition",
+        )
     total = 1
     any_invalid = False
+    has_unresolved_fold = False
     for level in levels:
-        # `or` would read a declared 0 as "absent" and silently substitute 1,
-        # which is the difference between warning about an empty design and not.
-        count = level.get("n")
-        if count is None:
-            count = level.get("k")
+        count = _level_count(level, unit_count)
+        if count is None and isinstance(_declared_count(level), str):
+            # The count is declared as a word rather than a number and could not
+            # be resolved — `{kind: fold, k: all}` with no roster, or any other
+            # string `k`, which `resolve_repeats` reports by name as
+            # `E-REPL-FOLD-K` below. The total from here on is not a fact: don't
+            # fold a guess into it, and don't derive a floor warning from it.
+            # Deliberately `str` rather than "not a number": a `n: yes` (a bool
+            # under YAML) is the one repeat `resolve_repeats` will execute, so
+            # treating it as unknown would suppress the budget check for the
+            # whole config over a typo — the silent skip this pass exists to end.
+            has_unresolved_fold = True
+            continue
         if count is not None and int(count) < 1:
             c.error(
                 "E-REPL-N",
@@ -464,7 +550,7 @@ def _check_replication(
         total *= 1 if count is None else int(count)
     if any_invalid:
         return  # a floor warning derived from an invalid design would be noise
-    if total < template.default_repeats:
+    if not has_unresolved_fold and total < template.default_repeats:
         c.warn(
             "W-REPL-FLOOR",
             "replication.repeats",
@@ -476,9 +562,14 @@ def _check_replication(
     # itself — fold, duplicate kinds, and depth past two levels among them. At run
     # time raising is right; here `validate` collects, so translate rather than let
     # it escape. The digest is a placeholder: seeds are irrelevant to a declaration
-    # check, only the shape of `replication.repeats` is.
+    # check, only the shape of `replication.repeats` is. `unit_count` is the roster
+    # `_check_units` already resolved, threaded through rather than resolved again —
+    # `k: all` and an oversized `k` can only be checked against a real count. When
+    # the roster failed to resolve, `unit_count` is `None` and `k: all` reports
+    # `E-REPL-FOLD-K`, which is honest: the fold count genuinely cannot be known,
+    # and the roster's own finding is already reported beside it.
     try:
-        resolve_repeats(doc, "validate")
+        resolve_repeats(doc, "validate", unit_count=unit_count)
     except ContractError as exc:
         if exc.code in REPL_DECLARATION_CODES:
             c.error(exc.code, "replication.repeats", str(exc))
@@ -522,12 +613,13 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     and a `resolver` source — are read by nothing yet either. Each of these
     would otherwise validate clean and then run something other than what the
     config describes — the same class of failure `resolve_repeats` already
-    refuses for repeat levels: `E-REPL-FOLD-UNSUPPORTED` for `fold`,
-    `E-REPL-LEVEL-DUPLICATE` for two levels of the same kind, and
-    `E-REPL-LEVEL-DEPTH` past two levels, and `E-REPL-LEVEL-BATCH-INNER` for a
-    `batch` that is not the outermost level. `batch` itself is no longer
-    refused — it is a supported kind. Each message says plainly that the block is honored in a
-    later slice, so a user does not read this as their config being malformed.
+    refuses for repeat levels: `E-REPL-FOLD-STRATIFY-UNSUPPORTED` for
+    `fold.stratify_by`, `E-REPL-LEVEL-DUPLICATE` for two levels of the same
+    kind, and `E-REPL-LEVEL-DEPTH` past two levels, and
+    `E-REPL-LEVEL-BATCH-INNER` for a `batch` that is not the outermost level.
+    `batch` and `fold` themselves are no longer refused — both are supported
+    kinds. Each message says plainly that the block is honored in a later
+    slice, so a user does not read this as their config being malformed.
     """
     sweep = doc.get("sweep") or {}
     for mode, code, why in (
@@ -535,8 +627,7 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
         (
             "ablate",
             "E-SWEEP-ABLATE-UNSUPPORTED",
-            "emits 1 + n one-change conditions and reads the baseline rather than "
-            "re-emitting it",
+            "emits 1 + n one-change conditions and reads the baseline rather than re-emitting it",
         ),
         (
             "sample",
@@ -621,24 +712,47 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
             )
 
 
-def _repeat_total(doc: dict[str, Any]) -> int:
+def _repeat_total(doc: dict[str, Any], unit_count: int | None) -> int | None:
     """The product of every repeat level's count, permissively: an invalid level
     (`n < 1`) is already reported by `_check_replication` under its own identifier,
     so this treats it as absent rather than reporting the same defect twice under
     `W-EXEC-BUDGET`.
+
+    `{kind: fold, k: all}` resolves against `unit_count` — the roster
+    `_check_units` already resolved — because leave-one-out is the single design
+    `W-EXEC-BUDGET` matters most for (`reference.md` § Sweeps and repeats), and
+    it was the one design that could not produce the warning while this function
+    read a string and gave up.
+
+    Returns `None` only when a count declared as a *word* cannot be resolved: a
+    `k: all` whose roster did not resolve, or a string `k` that is not `all`
+    (reported by name as `E-REPL-FOLD-K`). Anything else unreadable — a `n: yes`,
+    which YAML parses as a bool — executes 1× and is reported under its own
+    identifier, so it contributes 1× here rather than suppressing the check for
+    the whole config. Silently treating an unresolved level as
+    contributing 1× would understate the total by the roster size — a wrong
+    small number is worse than admitting the total is unknown, so the caller
+    skips the check rather than trust a guess.
     """
     levels = ((doc.get("replication") or {}).get("repeats")) or []
     total = 1
     for level in levels:
-        count = level.get("n")
+        count = _level_count(level, unit_count)
         if count is None:
-            count = level.get("k")
-        if isinstance(count, int) and count >= 1:
+            # A string count that did not resolve is genuinely unknown; anything
+            # else unreadable (a bool, a list) is reported under its own
+            # identifier and executes 1×, so it must not suppress this check.
+            if isinstance(_declared_count(level), str):
+                return None
+            continue
+        if count >= 1:
             total *= count
     return total
 
 
-def _check_sweep(doc: dict[str, Any], template: Any, c: Collector) -> None:
+def _check_sweep(
+    doc: dict[str, Any], template: Any, c: Collector, *, unit_count: int | None = None
+) -> None:
     """Checks that only become reachable once a sweep actually expands: an
     unrecognised mode, an axis with nothing in it, a swept path the template
     doesn't declare, a value the spec itself rejects, a value that can't render
@@ -742,15 +856,23 @@ def _check_sweep(doc: dict[str, Any], template: Any, c: Collector) -> None:
             "`sweep` entirely",
         )
 
-    executions = len(conditions) * _repeat_total(doc)
+    repeat_total = _repeat_total(doc, unit_count)
     budget = (doc.get("limits") or {}).get("max_executions")
-    if isinstance(budget, int) and executions > budget:
-        c.warn(
-            "W-EXEC-BUDGET",
-            "limits.max_executions",
-            f"{len(conditions)} conditions × {_repeat_total(doc)} repeats = {executions} "
-            f"executions exceeds {budget}",
-        )
+    # `repeat_total` is `None` only when a declared count cannot be resolved at
+    # all — a `k: all` whose roster did not resolve, or a string `k` that is not
+    # `all` — see `_repeat_total`. Skipping the check rather than computing
+    # against a guessed 1× is deliberate: an unknown total must not be reported
+    # as a small one. A `k: all` over a roster that DID resolve is a real number
+    # here, and warns like any other count.
+    if repeat_total is not None and isinstance(budget, int):
+        executions = len(conditions) * repeat_total
+        if executions > budget:
+            c.warn(
+                "W-EXEC-BUDGET",
+                "limits.max_executions",
+                f"{len(conditions)} conditions × {repeat_total} repeats = {executions} "
+                f"executions exceeds {budget}",
+            )
 
     if len(conditions) > 1:
         c.warn(
