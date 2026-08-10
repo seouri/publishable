@@ -129,12 +129,29 @@ def _handed_keys(
     Subtracting from the whole roster instead is what made every fold run abort:
     the k−1 partitions this execution never saw are neither recorded nor skipped,
     and would each count as a failure.
+
+    A label carrying no fold component while `fold_members` is not `None` is not
+    a case to fall back on: `fold_members_for` returns `None` unless a `fold`
+    level was declared, and `cross_levels` composes every leaf label from every
+    declared level, so under a non-`None` `fold_members` every repeat label this
+    function is ever called with by `execute_plan` carries a fold token by
+    construction. Falling back to `keys` here would silently resurrect the exact
+    bug this function exists to fix — the whole roster subtracted against a
+    single execution's recorded units — so this is a core invariant violation,
+    raised loud rather than defaulted quiet.
     """
     if fold_members is None:
         return keys
     parts = set(repeat_label.split(LABEL_JOIN))
     mine = [ks for f, ks in fold_members.items() if f in parts]
-    return (set().union(*mine) & keys) if mine else keys
+    if not mine:
+        raise ContractError(
+            f"repeat label {repeat_label!r} carries no fold component, but "
+            f"fold_members ({sorted(fold_members)!r}) is not None; every label "
+            "composed under a declared fold must include one of its members",
+            code="E-RUN-FOLD-UNRESOLVED",
+        )
+    return set().union(*mine) & keys
 
 
 def _units_failed_anywhere(

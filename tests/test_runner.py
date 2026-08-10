@@ -10,6 +10,7 @@ from publishable.errors import ContractError
 from publishable.replication import Repeat
 from publishable.run_record import assemble_run_yaml, run_status
 from publishable.runner import (
+    _handed_keys,
     _units_failed_anywhere,
     attrition,
     execute_plan,
@@ -537,6 +538,17 @@ def test_without_folds_the_union_is_unchanged():
         _repeat_result("analyze", "seed02", 0, {"u1": {}, "u2": {}}),
     ]
     assert _units_failed_anywhere(results, _roster2(), None) == {"u2"}
+
+
+def test_a_label_with_no_fold_component_raises_rather_than_falling_back():
+    """A repeat label composed under a declared fold always carries one of its
+    members (`cross_levels` guarantees it); a label that doesn't is a core
+    invariant violation, not a case to silently subtract the whole roster for —
+    that fallback is exactly the bug this task fixed."""
+    members = {"fold01": frozenset({"u1", "u2"}), "fold02": frozenset({"u3", "u4"})}
+    with pytest.raises(ContractError) as excinfo:
+        _handed_keys("seed01", {"u1", "u2", "u3", "u4"}, members)
+    assert excinfo.value.code == "E-RUN-FOLD-UNRESOLVED"
 
 
 def test_a_single_repeat_skip_is_still_ineligible(tmp_path: Path):
