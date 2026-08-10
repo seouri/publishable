@@ -1,3 +1,7 @@
+from decimal import Decimal
+from enum import IntEnum
+from fractions import Fraction
+
 import numpy as np
 import pytest
 
@@ -52,3 +56,42 @@ def test_the_message_names_the_key_and_the_type():
     with pytest.raises(ContractError) as exc:
         coerce_scalars({"weird": {"a": 1}}, "io.record")
     assert "weird" in str(exc.value) and "dict" in str(exc.value)
+
+
+def test_a_decimal_becomes_a_python_float():
+    out = coerce_scalars({"r": Decimal("1.5")}, "io.record")
+    assert out == {"r": 1.5}
+    assert type(out["r"]) is float
+
+
+def test_a_fraction_becomes_a_python_float():
+    out = coerce_scalars({"r": Fraction(3, 2)}, "io.record")
+    assert out == {"r": 1.5}
+    assert type(out["r"]) is float
+
+
+def test_an_int_enum_becomes_its_python_int_value():
+    class Status(IntEnum):
+        OK = 1
+
+    out = coerce_scalars({"status": Status.OK}, "io.record")
+    assert out == {"status": 1}
+    assert type(out["status"]) is int
+
+
+class _FloatyButSized:
+    """Implements `__float__` and `__len__` — the case the `__len__` refusal
+    fallback exists to catch: a structural object that could be talked into
+    serializing as a scalar must still be refused, not coerced."""
+
+    def __float__(self) -> float:
+        return 1.0
+
+    def __len__(self) -> int:
+        return 3
+
+
+def test_a_sized_object_is_refused_even_if_it_implements_float():
+    with pytest.raises(ContractError) as exc:
+        coerce_scalars({"r": _FloatyButSized()}, "io.record")
+    assert exc.value.code == "E-STEP-RETURN-TYPE"
