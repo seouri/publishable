@@ -636,14 +636,25 @@ def test_a_seed_declaring_k_is_refused_the_same_way(write_config):
 
 
 def test_a_multi_condition_sweep_warns_about_the_uncorrected_family(write_config):
+    """A grid-only sweep declares no baseline and publishes no comparison, so this
+    needs a `baseline` for `resolve_contrasts` to build a real family from, and
+    `correction: none` for `W-STATS-FAMILY` to fire under its new condition."""
     c = Collector()
     validate_config(
-        write_config({"sweep": {"grid": {"analysis.method": ["pearson", "spearman", "kendall"]}}}),
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"analysis.method": "pearson"},
+                    "grid": {"analysis.method": ["spearman", "kendall"]},
+                },
+                "statistics": {"correction": "none"},
+            }
+        ),
         c,
     )
     warning = next(f for f in c.findings if f.code == "W-STATS-FAMILY")
-    assert "3" in warning.message
-    assert "not implemented" in warning.message
+    assert "2" in warning.message
+    assert "correction" in warning.message.lower()
 
 
 def test_a_single_condition_run_has_no_family(write_config):
@@ -1710,17 +1721,18 @@ def test_declared_contrasts_are_counted_in_the_uncorrected_family(write_config):
             {
                 "sweep": _TWO_CONDITIONS,
                 "statistics": {
+                    "correction": "none",
                     "contrasts": [
                         {"id": "a", "of": "method=spearman", "against": "baseline"},
                         {"id": "b", "of": "baseline", "against": "method=spearman"},
-                    ]
+                    ],
                 },
             }
         ),
         c,
     )
     warning = next(f for f in c.findings if f.code == "W-STATS-FAMILY")
-    assert "family of 3" in warning.message
+    assert "3 comparisons" in warning.message
 
 
 def test_a_scalar_contrasts_block_is_refused_without_raising(write_config):
@@ -1734,3 +1746,61 @@ def test_a_scalar_contrasts_block_is_refused_without_raising(write_config):
             write_config({"sweep": _TWO_CONDITIONS, "statistics": {"contrasts": block}})
         )
         assert "E-STATS-CONTRAST-SHAPE" in found
+
+
+def test_the_default_correction_does_not_warn_about_the_family(write_config):
+    """`materialize.py` writes `correction: holm` into every generated config, so
+    a warning on the default is a warning nearly every run gets. It fires for
+    `none` — `reference.md` § Validation: "Correction declared for a family ...
+    with `statistics.correction: none` (warning)"."""
+    found = codes(write_config({"sweep": _TWO_CONDITIONS, "statistics": {"correction": "holm"}}))
+    assert "W-STATS-FAMILY" not in found
+
+
+def test_an_uncorrected_family_still_warns(write_config):
+    found = codes(write_config({"sweep": _TWO_CONDITIONS, "statistics": {"correction": "none"}}))
+    assert "W-STATS-FAMILY" in found
+
+
+def test_a_sweep_with_no_baseline_and_no_contrasts_has_no_family(write_config):
+    """The overcount recorded in `spec-defects.md`: a grid-only sweep declares no
+    baseline, so `resolve_contrasts` returns `[]` and the run publishes no
+    comparison at all. Counting `len(conditions) - 1` told the author they had a
+    family of two."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {"grid": {"analysis.method": ["pearson", "spearman", "kendall"]}},
+                "statistics": {"correction": "none"},
+            }
+        )
+    )
+    assert "W-STATS-FAMILY" not in found
+
+
+def test_fdr_bh_over_a_family_with_no_p_value_warns(write_config):
+    """`reference.md`: `fdr_bh` "needs a p-value it can't always get. Declared
+    over a family whose metrics carry none, it leaves every member with a `null`
+    `ci95_corrected` and no `p_value_corrected` either — a correction declared
+    and not applied, which is the state this section exists to prevent." No
+    comparison in this build can carry one: `statistics.null_test` is refused."""
+    found = codes(
+        write_config({"sweep": _TWO_CONDITIONS, "statistics": {"correction": "fdr_bh"}})
+    )
+    assert "W-STATS-CORRECTION-INAPPLICABLE" in found
+
+
+def test_holm_over_the_same_family_does_not_warn_about_applicability(write_config):
+    """Holm's correction is interval-shaped, so it applies without a p-value.
+    A warning here would read as "no correction is possible", which is false."""
+    found = codes(write_config({"sweep": _TWO_CONDITIONS, "statistics": {"correction": "holm"}}))
+    assert "W-STATS-CORRECTION-INAPPLICABLE" not in found
+
+
+def test_a_non_string_correction_is_refused_without_raising(write_config):
+    """`validate.py` collects findings and never raises — including on a config
+    value of the wrong type. The family block reads `correction` before anything
+    checks its shape, which is the class of the R11 regression in S4b."""
+    for value in (5, True, ["holm"], {"method": "holm"}):
+        found = codes(write_config({"sweep": _TWO_CONDITIONS, "statistics": {"correction": value}}))
+        assert "E-STATS-CORRECTION-UNKNOWN" in found

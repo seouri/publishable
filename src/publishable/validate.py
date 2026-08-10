@@ -7,6 +7,7 @@ from typing import Any
 import yaml
 
 from publishable.base_experiment import load_experiment
+from publishable.contrasts import resolve_contrasts
 from publishable.diagnostics import Collector
 from publishable.errors import ContractError
 from publishable.manifest import POLICIES
@@ -933,33 +934,48 @@ def _check_sweep(
                 f"executions exceeds {budget}",
             )
 
-    # Declared contrasts count too. `reference.md` § Contrasts: "Declared
-    # contrasts join the correction family alongside baseline comparisons,
-    # because a reader shown both is exposed to both." They were refused
-    # wholesale until this slice, so the count was accurate while it ignored
-    # them and is not any more. The baseline half deliberately still counts
-    # `len(conditions) - 1` even for a sweep with no `sweep.baseline`, which
-    # produces no baseline comparisons at all — a separate overcount, recorded
-    # in `docs/superpowers/spec-defects.md` for the slice that implements the
-    # correction rather than fixed here.
-    #
-    # The `isinstance` guard is load-bearing: this runs *before*
-    # `_check_contrasts`, so a scalar `contrasts: 5` reaches it ahead of the
-    # shape refusal, and `len()` on it would raise a `TypeError` out of a
-    # module whose whole contract is that it collects findings and never
-    # raises. An unusable declaration counts as no declared contrasts here and
-    # is diagnosed as `E-STATS-CONTRAST-SHAPE` there.
-    contrasts_block = ((doc.get("statistics") or {}).get("contrasts")) or []
-    declared = len(contrasts_block) if isinstance(contrasts_block, list) else 0
-    family = max(len(conditions) - 1, 0) + declared
-    if family > 0:
+    # The family is what `resolve_contrasts` will actually build — every
+    # baseline comparison plus every declared contrast — not `len(conditions)`.
+    # A grid-only sweep declares no baseline, so it publishes no comparison at
+    # all, and telling its author they have a family of two was a false
+    # positive rather than a backstop (`spec-defects.md`).
+    correction = (doc.get("statistics") or {}).get("correction")
+    if correction is not None and not isinstance(correction, str):
+        c.error(
+            "E-STATS-CORRECTION-UNKNOWN",
+            "statistics.correction",
+            f"is {type(correction).__name__}, not one of `none`, `bonferroni`, `holm` or "
+            "`fdr_bh`",
+        )
+        correction = None
+    # `resolve_contrasts` trusts its caller to have refused an unusable
+    # `statistics.contrasts` block first (`contrasts.py`'s own comment leans on
+    # this), and `_check_contrasts` is the check that does that — but it runs
+    # *after* this one, so a malformed block (a scalar, a non-mapping entry, an
+    # unresolvable or nested label) reaches this call first. `validate.py`
+    # collects findings and never raises, so a block that cannot be resolved
+    # yet counts as no resolvable family here; `_check_contrasts` reports the
+    # shape or label fault under its own, more specific code.
+    try:
+        comparisons = len(resolve_contrasts(doc, conditions))
+    except (TypeError, KeyError, AttributeError, ValueError):
+        comparisons = 0
+    if comparisons > 0 and (correction or "holm") == "none":
         c.warn(
             "W-STATS-FAMILY",
             "statistics.correction",
-            f"{len(conditions)} conditions and {declared} declared contrasts form a family of "
-            f"{family} comparisons per metric, and multiplicity correction is not implemented "
-            "in this build — every interval reported is uncorrected, and each records "
-            "`correction: null` to say so",
+            f"{comparisons} comparisons per metric form a family, and "
+            "`statistics.correction` is `none` — every interval reported is uncorrected, and "
+            "each records `correction: null` to say so",
+        )
+    if comparisons > 0 and correction == "fdr_bh":
+        c.warn(
+            "W-STATS-CORRECTION-INAPPLICABLE",
+            "statistics.correction",
+            "`fdr_bh` adjusts p-values, and no comparison in this family will carry one "
+            "(`statistics.null_test` is undeclared, and a parameter-axis contrast cannot "
+            "supply one) — every `ci95_corrected` will be null. Use `holm` or `bonferroni`, "
+            "whose corrections are interval-shaped",
         )
 
 
