@@ -1676,3 +1676,48 @@ def test_a_contrast_without_an_id_is_refused(write_config):
         )
     )
     assert "E-STATS-CONTRAST-SHAPE" in found
+
+
+def test_two_contrasts_cannot_share_one_id(write_config):
+    """`id` is how an entry is named in `results.contrasts` and in a hypothesis,
+    so two under one name are indistinguishable in both — which is what the
+    missing-`id` diagnostic already tells the author."""
+    found = codes(
+        write_config(
+            {
+                "sweep": _TWO_CONDITIONS,
+                "statistics": {
+                    "contrasts": [
+                        {"id": "same", "of": "method=spearman", "against": "baseline"},
+                        {"id": "same", "of": "baseline", "against": "method=spearman"},
+                    ]
+                },
+            }
+        )
+    )
+    assert "E-STATS-CONTRAST-SHAPE" in found
+
+
+def test_declared_contrasts_are_counted_in_the_uncorrected_family(write_config):
+    """`reference.md` § Contrasts: "Declared contrasts join the correction family
+    alongside baseline comparisons, because a reader shown both is exposed to
+    both." Counting only `len(conditions) - 1` was accurate while the block was
+    refused wholesale and is not any more — a two-condition run with two
+    declared contrasts publishes three comparisons per metric, not one."""
+    c = Collector()
+    validate_config(
+        write_config(
+            {
+                "sweep": _TWO_CONDITIONS,
+                "statistics": {
+                    "contrasts": [
+                        {"id": "a", "of": "method=spearman", "against": "baseline"},
+                        {"id": "b", "of": "baseline", "against": "method=spearman"},
+                    ]
+                },
+            }
+        ),
+        c,
+    )
+    warning = next(f for f in c.findings if f.code == "W-STATS-FAMILY")
+    assert "family of 3" in warning.message

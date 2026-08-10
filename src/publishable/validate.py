@@ -933,13 +933,25 @@ def _check_sweep(
                 f"executions exceeds {budget}",
             )
 
-    if len(conditions) > 1:
+    # Declared contrasts count too. `reference.md` § Contrasts: "Declared
+    # contrasts join the correction family alongside baseline comparisons,
+    # because a reader shown both is exposed to both." They were refused
+    # wholesale until this slice, so the count was accurate while it ignored
+    # them and is not any more. The baseline half deliberately still counts
+    # `len(conditions) - 1` even for a sweep with no `sweep.baseline`, which
+    # produces no baseline comparisons at all — a separate overcount, recorded
+    # in `docs/superpowers/spec-defects.md` for the slice that implements the
+    # correction rather than fixed here, where it would silently remove a
+    # warning this build still owes the reader.
+    declared = len(((doc.get("statistics") or {}).get("contrasts")) or [])
+    family = max(len(conditions) - 1, 0) + declared
+    if family > 0:
         c.warn(
             "W-STATS-FAMILY",
             "statistics.correction",
-            f"{len(conditions)} conditions form a family of {len(conditions) - 1} baseline "
-            "comparisons per metric, and multiplicity correction is not implemented in this "
-            "build — every interval reported is uncorrected, and each records "
+            f"{len(conditions)} conditions and {declared} declared contrasts form a family of "
+            f"{family} comparisons per metric, and multiplicity correction is not implemented "
+            "in this build — every interval reported is uncorrected, and each records "
             "`correction: null` to say so",
         )
 
@@ -1009,6 +1021,7 @@ def _check_contrasts(doc: dict[str, Any], c: Collector) -> None:
     conditions = expand(doc)
     labels = {cond.label for cond in conditions if cond.label is not None}
     declared_attrs = set(((doc.get("data") or {}).get("units") or {}).get("attributes") or [])
+    seen_ids: set[str] = set()
 
     for i, entry in enumerate(entries):
         if not isinstance(entry, dict):
@@ -1019,6 +1032,16 @@ def _check_contrasts(doc: dict[str, Any], c: Collector) -> None:
                 "list of condition labels is not a list of contrasts",
             )
             continue
+        if entry.get("id") in seen_ids:
+            c.error(
+                "E-STATS-CONTRAST-SHAPE",
+                f"statistics.contrasts[{i}].id",
+                f"repeats `{entry.get('id')}`, which an earlier entry already uses; two "
+                "contrasts under one name are indistinguishable in `results.contrasts` and "
+                "in a hypothesis naming it",
+            )
+        elif isinstance(entry.get("id"), str) and entry.get("id"):
+            seen_ids.add(entry["id"])
         if not isinstance(entry.get("id"), str) or not entry.get("id"):
             c.error(
                 "E-STATS-CONTRAST-SHAPE",
