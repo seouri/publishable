@@ -1,4 +1,4 @@
-from publishable.correction import ALPHA, Member, family_members, family_shape
+from publishable.correction import ALPHA, Member, family_members, family_shape, rank_family
 
 
 def _m(where="1", step="s", metric="r", delta=0.1, ci95=(0.0, 0.2), index=1):
@@ -96,3 +96,53 @@ def test_the_same_metric_name_in_two_steps_counts_as_two_metrics():
     size, shape = family_shape(family_members(members))
     assert shape == {"comparisons": 1, "metrics": 2}
     assert size == 2
+
+
+def test_the_family_ranks_by_estimate_over_half_width():
+    """`reference.md`: the ranking statistic is "the point estimate over half the
+    raw `ci95` width, largest first" — the one quantity every member has, since
+    Holm's own p-value is unavailable here (a `null_test` supplies one only where
+    `shuffle` names an attribute, which a parameter-axis contrast never is).
+
+    These are the worked example's two members: kendall at 0.169 over a
+    half-width of 0.044 is 3.84, spearman at 0.026 over 0.033 is 0.79. Ranking
+    on the raw *width* instead would order them the other way, since kendall's
+    interval is the wider of the two."""
+    kendall = _m(where="2", index=2, metric="r", delta=-0.169, ci95=(-0.213, -0.125))
+    spearman = _m(where="1", index=1, metric="r", delta=0.026, ci95=(-0.007, 0.059))
+    assert [m.where for m in rank_family([spearman, kendall])] == ["2", "1"]
+
+
+def test_the_ranking_statistic_uses_the_magnitude_not_the_signed_estimate():
+    """Kendall's delta is negative and it is the *strongest* member. Ranking on
+    the signed estimate puts every negative delta last regardless of its
+    evidence, which would silently hand the smallest correction to the members
+    that most need it."""
+    strong_negative = _m(where="a", index=0, delta=-0.169, ci95=(-0.213, -0.125))
+    weak_positive = _m(where="b", index=1, delta=0.026, ci95=(-0.007, 0.059))
+    assert [m.where for m in rank_family([weak_positive, strong_negative])] == ["a", "b"]
+
+
+def test_ties_break_by_condition_index_then_metric_name():
+    """`reference.md`: "Ties break by condition index, then by metric name in
+    declaration order, so a rank is a function of the record rather than of an
+    iteration order." Two members with identical evidence must rank the same way
+    whichever order they arrive in."""
+    a = _m(where="2", index=2, metric="auc", delta=0.1, ci95=(0.0, 0.2))
+    b = _m(where="1", index=1, metric="rmse", delta=0.1, ci95=(0.0, 0.2))
+    c = _m(where="1", index=1, metric="auc", delta=0.1, ci95=(0.0, 0.2))
+    assert [(m.condition_index, m.metric) for m in rank_family([a, b, c])] == [
+        (1, "auc"),
+        (1, "rmse"),
+        (2, "auc"),
+    ]
+    assert rank_family([a, b, c]) == rank_family([c, b, a])
+
+
+def test_a_zero_width_interval_ranks_first_rather_than_dividing_by_zero():
+    """A point-mass bootstrap is legitimate (S4b task 5 established it), so a
+    half-width of exactly 0.0 is reachable and must not raise. Infinite evidence
+    ranks first, which is also what the ratio's limit says."""
+    point_mass = _m(where="a", index=0, delta=0.5, ci95=(0.5, 0.5))
+    ordinary = _m(where="b", index=1, delta=0.169, ci95=(0.125, 0.213))
+    assert [m.where for m in rank_family([ordinary, point_mass])] == ["a", "b"]

@@ -66,3 +66,33 @@ def family_shape(members: Sequence[Member]) -> tuple[int, dict[str, int]]:
     comparisons = len({m.where for m in members})
     metrics = len({(m.step, m.metric) for m in members})
     return comparisons * metrics, {"comparisons": comparisons, "metrics": metrics}
+
+
+def _evidence_ratio(member: Member) -> float:
+    """`abs(delta)` over half the raw interval's width, the ranking statistic.
+
+    Monotone in the evidence each construction encodes, and defined whether the
+    interval was t-based or percentile — which is exactly what a p-value is not.
+    A zero-width interval (a point-mass bootstrap, which S4b established is
+    legitimate) has infinite evidence rather than a `ZeroDivisionError`.
+    """
+    assert member.ci95 is not None  # family_members dropped the others
+    half = (member.ci95[1] - member.ci95[0]) / 2.0
+    if half <= 0.0:
+        return float("inf")
+    return abs(member.delta) / half
+
+
+def rank_family(members: Sequence[Member]) -> list[Member]:
+    """Strongest first, so a member's rank is its index + 1.
+
+    Ties break by condition index, then by metric name, so the ordering is a
+    function of the record rather than of whichever order `cli` happened to
+    build the members in. `reference.md` requires that: a rank decides a
+    correction level, and a level that moved with iteration order would make
+    two identical runs disagree.
+    """
+    return sorted(
+        members,
+        key=lambda m: (-_evidence_ratio(m), m.condition_index, m.metric),
+    )
