@@ -568,6 +568,88 @@ def test_a_failing_aggregate_does_not_cost_the_run_its_record(tmp_path, monkeypa
     assert "ZeroDivisionError" in doc["stdout"]
 
 
+def test_a_colliding_derived_key_does_not_cost_the_run_its_record(tmp_path, monkeypatch, capsys):
+    """The same Critical through its second door. `summarize_step` refuses a
+    derived key that shadows a recorded column (`E-STEP-KEY-COLLISION`), and
+    that call sat outside the containment above — so a template returning
+    `pred` against a step recording `pred` exited 1 with no `run.yaml`,
+    discarding every completed execution over one badly chosen name, while
+    the sibling case (a structural return) merely warned. The refusal itself
+    stands; what it costs is the derived metric, not the run's record."""
+    import publishable.generators.experiment as experiment_gen
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    monkeypatch.setattr(GenericTemplate, "aggregate", lambda self, units, cfg: {"pred": 1.0})
+    doc = run_a_project(tmp_path, capsys=capsys)
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "completed"
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    # The recorded column's own summary survives, and is the recorded column's
+    # mean — not the derived value that tried to shadow it.
+    assert set(aggregated) == {"pred"}
+    assert aggregated["pred"]["value"] == sum(float(i) for i in range(10)) / 10
+    assert "W-STATS-AGGREGATE-FAILED" in doc["stdout"]
+    assert "E-STEP-KEY-COLLISION" in doc["stdout"]
+
+
+def test_a_shrunken_resample_is_warned_about(tmp_path, monkeypatch, capsys):
+    """An interval built from 100 of 2000 draws must not read like a clean
+    one. `resample_draws` records it; `W-STATS-RESAMPLE-THIN` says it out
+    loud, because a reader who never opens `run.yaml` has no other signal.
+    Distinct from `W-STATS-AGGREGATE-FAILED`: `aggregate` did not fail — it
+    produced numbers, on fewer draws than were asked for."""
+    import publishable.generators.experiment as experiment_gen
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    calls = {"n": 0}
+
+    def _survives_a_hundred_draws(self, units, cfg):
+        calls["n"] += 1
+        # Call 1 is the real, unresampled one whose return is the reported
+        # value; the next 100 are draws that survive, and every draw after
+        # that is degenerate.
+        if calls["n"] > 101:
+            return {"total": None}
+        return {"total": sum(units.pred)}
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    monkeypatch.setattr(GenericTemplate, "aggregate", _survives_a_hundred_draws)
+    doc = run_a_project(tmp_path, capsys=capsys)
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    metric = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["total"]
+    assert metric["resample_draws"] == 100
+    assert metric["ci95"] is not None  # 100 is above the honest floor of 80
+    assert "W-STATS-RESAMPLE-THIN" in doc["stdout"]
+    assert "100 of 2000 resample draws" in doc["stdout"]
+
+
+def test_too_few_surviving_draws_report_no_interval_at_all(tmp_path, monkeypatch, capsys):
+    """Below the floor there is no honest percentile to read: at two
+    survivors the two ranks coincide and `run.yaml` carried a zero-width 95 %
+    interval labelled `percentile_over_units`. Now the point value stands
+    alone, and the warning says why."""
+    import publishable.generators.experiment as experiment_gen
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    calls = {"n": 0}
+
+    def _survives_two_draws(self, units, cfg):
+        calls["n"] += 1
+        return {"total": sum(units.pred) if calls["n"] <= 3 else None}
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    monkeypatch.setattr(GenericTemplate, "aggregate", _survives_two_draws)
+    doc = run_a_project(tmp_path, capsys=capsys)
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    metric = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["total"]
+    assert metric["resample_draws"] == 2
+    assert metric["ci95"] is None
+    assert metric["method"] is None
+    assert "W-STATS-RESAMPLE-THIN" in doc["stdout"]
+    assert "so none is reported" in doc["stdout"]
+
+
 def test_a_raising_resample_draw_does_not_crash_the_run(tmp_path, monkeypatch):
     """The nan-versus-raise asymmetry the review named, at the integration
     level: the single unresampled call to `aggregate` must succeed (so the

@@ -11,6 +11,7 @@ from publishable.stats import (
     collapse_repeats,
     handed_to,
     mean_of,
+    min_honest_draws,
     percentile_of_derived,
     percentile_over_units,
     repeat_spread,
@@ -137,7 +138,9 @@ def _results_for_one_seed():
 
 def test_one_entry_per_level_outer_to_inner():
     levels = resolve_repeats(cfg([{"kind": "batch", "n": 2}, {"kind": "seed", "n": 2}]), "d")
-    spread = repeat_spread(_results_for_batch_seed(), "analyze", 0, levels, "score")
+    spread = repeat_spread(
+        _results_for_batch_seed(), "analyze", 0, levels, "score", keys={"u1", "u2"}
+    )
     assert [e["kind"] for e in spread] == ["batch", "seed"]
     assert [e["n"] for e in spread] == [2, 2]
     assert all(e["std"] >= 0 for e in spread)
@@ -150,7 +153,12 @@ def test_one_entry_per_level_outer_to_inner():
 def test_a_fold_level_contributes_no_entry():
     """Each unit is in exactly one fold, so there is nothing to average across."""
     levels = resolve_repeats(cfg([{"kind": "fold", "k": 2}]), "d", unit_count=4)
-    assert repeat_spread(_results_for_folds(), "analyze", 0, levels, "score") == []
+    assert (
+        repeat_spread(
+            _results_for_folds(), "analyze", 0, levels, "score", keys={"u1", "u2", "u3", "u4"}
+        )
+        == []
+    )
 
 
 def test_a_fold_nested_with_another_level_is_omitted_entirely():
@@ -167,14 +175,18 @@ def test_a_fold_nested_with_another_level_is_omitted_entirely():
         _repeat_result("analyze", "fold02_seed01", 0, {"u3": {"score": 5.0}, "u4": {"score": 6.0}}),
         _repeat_result("analyze", "fold02_seed02", 0, {"u3": {"score": 7.0}, "u4": {"score": 8.0}}),
     ]
-    assert repeat_spread(results, "analyze", 0, levels, "score") == []
+    assert (
+        repeat_spread(results, "analyze", 0, levels, "score", keys={"u1", "u2", "u3", "u4"}) == []
+    )
 
 
 def test_a_single_member_level_reports_zero_spread_not_none():
     """One repeat has no dispersion; reporting 0.0 with n: 1 says that plainly,
     where omitting the entry would read as 'this level was not run'."""
     levels = resolve_repeats(cfg([{"kind": "seed", "n": 1}]), "d")
-    spread = repeat_spread(_results_for_one_seed(), "analyze", 0, levels, "score")
+    spread = repeat_spread(
+        _results_for_one_seed(), "analyze", 0, levels, "score", keys={"u1", "u2"}
+    )
     assert spread == [{"std": 0.0, "n": 1, "kind": "seed"}]
 
 
@@ -186,7 +198,7 @@ def test_no_replication_block_means_no_repeat_spread_at_all():
     `{kind: seed, n: 1}` (the test above)."""
     levels = resolve_repeats({}, "d")
     results = [_repeat_result("analyze", "", 0, {"u1": {"score": 1.0}, "u2": {"score": 5.0}})]
-    assert repeat_spread(results, "analyze", 0, levels, "score") == []
+    assert repeat_spread(results, "analyze", 0, levels, "score", keys={"u1", "u2"}) == []
 
 
 def test_dispersion_is_computed_per_column_not_pooled():
@@ -198,8 +210,8 @@ def test_dispersion_is_computed_per_column_not_pooled():
         _repeat_result("analyze", "seed87", 0, {"u1": {"pred": 1.0, "truth": 100.0}}),
         _repeat_result("analyze", "seed93", 0, {"u1": {"pred": 3.0, "truth": 100.0}}),
     ]
-    pred_spread = repeat_spread(results, "analyze", 0, levels, "pred")
-    truth_spread = repeat_spread(results, "analyze", 0, levels, "truth")
+    pred_spread = repeat_spread(results, "analyze", 0, levels, "pred", keys={"u1"})
+    truth_spread = repeat_spread(results, "analyze", 0, levels, "truth", keys={"u1"})
     assert pred_spread[0]["std"] == pytest.approx(1.0)
     assert truth_spread[0]["std"] == pytest.approx(0.0)
 
@@ -213,8 +225,29 @@ def test_n_reflects_members_that_actually_contributed_a_mean():
         _repeat_result("analyze", "seed87", 0, {"u1": {"score": 1.0}}),
         # seed93 recorded nothing for this step at all.
     ]
-    spread = repeat_spread(results, "analyze", 0, levels, "score")
+    spread = repeat_spread(results, "analyze", 0, levels, "score", keys={"u1"})
     assert spread == [{"std": 0.0, "n": 1, "kind": "seed"}]
+
+
+def test_dispersion_reads_only_the_units_the_metric_rests_on():
+    """`value` and `ci95` rest on `collapse_repeats`'s intersection — units
+    recorded in every repeat they were handed. Reading every recorded row
+    instead would let one unit's attrition masquerade as pipeline instability:
+    here u1 is perfectly stable at 1.0 across both seeds and u2 recorded 100.0
+    in one seed only, and the whole-table figure would be `std: 24.75` for a
+    pipeline that did not move at all."""
+    levels = resolve_repeats(cfg([{"kind": "seed", "n": 2}]), "d")
+    results = [
+        _repeat_result("analyze", "seed87", 0, {"u1": {"s": 1.0}, "u2": {"s": 100.0}}),
+        _repeat_result("analyze", "seed93", 0, {"u1": {"s": 1.0}}),
+    ]
+    collapsed = collapse_repeats(results, "analyze", 0)
+    assert set(collapsed) == {"u1"}  # u2 is not in the inference base
+    spread = repeat_spread(results, "analyze", 0, levels, "s", keys=set(collapsed))
+    assert spread == [{"std": 0.0, "n": 2, "kind": "seed"}]
+    # What the unfiltered read reported, pinned so the confound cannot return.
+    unfiltered = repeat_spread(results, "analyze", 0, levels, "s", keys={"u1", "u2"})
+    assert unfiltered[0]["std"] == pytest.approx(24.75)
 
 
 def test_without_folds_a_unit_is_handed_to_every_repeat():
@@ -589,6 +622,64 @@ def test_percentile_ranks_are_symmetric_at_the_default_draw_count():
     assert _percentile_ranks(2000, 0.95) == (49, 1949)
 
 
+def test_percentile_ranks_collapse_at_tiny_draw_counts():
+    """Pinned, not fixed: at 1 and 2 draws the two ranks coincide at 0, and at
+    every count below 80 the lower rank is pinned to the sample minimum while
+    the upper keeps shrinking — low-biased and too narrow. The ranks are
+    arithmetic shared with `percentile_over_units`; the refusal to build an
+    interval from them lives in `min_honest_draws`, which is the honest place
+    for it."""
+    assert _percentile_ranks(1, 0.95) == (0, 0)
+    assert _percentile_ranks(2, 0.95) == (0, 0)
+    assert _percentile_ranks(79, 0.95) == (0, 76)  # lower rank still the minimum
+    assert _percentile_ranks(80, 0.95) == (1, 77)  # both ranks interior
+
+
+def test_the_honest_draw_floor_is_where_both_ranks_go_interior():
+    """80 at 95 %, and it tracks `confidence` rather than being a literal: the
+    smallest n with `int(tail * n) >= 2`, which is exactly where the interval
+    stops containing the sample minimum by construction."""
+    assert min_honest_draws(0.95) == 80
+    assert min_honest_draws(0.99) == 400
+    lo, hi = _percentile_ranks(min_honest_draws(0.95), 0.95)
+    assert lo > 0 and hi < min_honest_draws(0.95) - 1
+
+
+def test_no_interval_is_built_from_too_few_surviving_draws():
+    """The zero-width interval the review reproduced: two surviving draws gave
+    `lo == hi`, so `run.yaml` carried `ci95: [6.0, 6.0], method:
+    percentile_over_units` — a 95 % interval of width zero. Below the floor
+    there is no interval, and the surviving count is still reported so the
+    reader knows why."""
+    collapsed = {f"u{i}": {"pred": float(i)} for i in range(10)}
+    calls = {"n": 0}
+
+    def survives_twice(units: UnitTable) -> float | None:
+        calls["n"] += 1
+        return 6.0 if calls["n"] <= 2 else None
+
+    interval, used = percentile_of_derived(collapsed, survives_twice, seed=7, draws=100)
+    assert interval is None
+    assert used == 2
+
+
+def test_an_interval_is_built_at_the_floor():
+    """The other side of the same boundary: exactly `min_honest_draws()`
+    survivors is enough, so the floor refuses too little rather than refusing
+    everything short of `draws`."""
+    collapsed = {f"u{i}": {"pred": float(i)} for i in range(10)}
+    calls = {"n": 0}
+
+    def survives_eighty(units: UnitTable) -> float | None:
+        calls["n"] += 1
+        return float(sum(units.pred)) if calls["n"] <= min_honest_draws() else None
+
+    interval, used = percentile_of_derived(collapsed, survives_eighty, seed=7, draws=200)
+    assert used == min_honest_draws()
+    assert interval is not None
+    assert interval.low < interval.high  # never zero-width
+
+
 def test_a_resampled_draw_reports_the_real_unit_key_not_a_synthetic_index():
     """A bootstrap draw repeats units by construction — the whole point of
     resampling with replacement — so a template that legitimately reads
@@ -797,11 +888,47 @@ def test_columns_lists_the_recorded_columns():
     assert sorted(t.columns) == ["pred", "truth"]
 
 
-def test_a_ragged_column_omits_the_missing_unit():
-    """A unit with no value for a column is absent from it, not None — a mean over
-    a column must not be diluted by units that never recorded it."""
+def test_a_ragged_column_reads_none_in_row_order():
+    """A unit with no value for a column reads as `None` at its own row, not as
+    an absence that shortens the column — `reference.md` § Templates requires
+    every column to be "the same shape whichever of the two supplied them",
+    and § The per-unit tables that "a column absent from a row reads as
+    `None`"."""
     t = UnitTable({"u1": {"pred": 1.0}, "u2": {}})
-    assert list(t.pred) == [1.0]
+    assert list(t.pred) == [1.0, None]
+    assert len(t.pred) == len(t)
+
+
+def test_two_differently_ragged_columns_stay_paired():
+    """The alignment defect: dropping missing rows per column made two columns
+    ragged in *different* rows come back the same length and mispaired, so
+    `zip(units.pred, units.truth)` — or `pearsonr` over them, `reference.md`'s
+    own example — correlated u2's prediction against u3's truth and published
+    the result with an interval around it."""
+    t = UnitTable(
+        {
+            "u1": {"pred": 1.0, "truth": 1.0},
+            "u2": {"pred": 2.0},
+            "u3": {"truth": 9.0},
+            "u4": {"pred": 4.0, "truth": 4.0},
+        }
+    )
+    assert list(t.pred) == [1.0, 2.0, None, 4.0]
+    assert list(t.truth) == [1.0, None, 9.0, 4.0]
+    # Row-aligned by construction: every pair belongs to one unit.
+    for row, p, tr in zip(t, t.pred, t.truth, strict=True):
+        assert row.get("pred") == p
+        assert row.get("truth") == tr
+
+
+def test_the_unit_column_is_still_readable_by_attribute():
+    """`columns` deliberately omits `unit`, so the unknown-column refusal is
+    keyed on "this name appears in no row" instead — a template reading
+    `units.unit` (a per-unit weight lookup, say) is the case
+    `percentile_of_derived` keeps real unit keys inside every draw for."""
+    t = UnitTable({"u1": {"pred": 1.0}, "u2": {"pred": 2.0}})
+    assert list(t.unit) == ["u1", "u2"]
+    assert "unit" not in t.columns
 
 
 def test_an_unknown_column_raises():

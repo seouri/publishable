@@ -723,9 +723,11 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     # silent-no-op class as the fields above. `statistics.correction` is deliberately
     # NOT refused here: it is disclosed instead, via `W-STATS-FAMILY` plus a
     # `correction: null` recorded on every aggregated metric, so it is not a case of a
-    # declaration that changes nothing while claiming otherwise. `materialize.py`
-    # writes all five of these keys empty into every generated config, so each check
-    # below fires on a real declaration, never on the key's mere presence.
+    # declaration that changes nothing while claiming otherwise. Of these five keys
+    # `materialize.py` writes only two into a generated config — `statistics.correction`
+    # and a top-level `hypotheses: []` — so the other three are simply absent there;
+    # each check below fires on a real declaration either way, never on a key's mere
+    # presence or on the empty list `hypotheses` is generated as.
     statistics = doc.get("statistics") or {}
     for field, code, what in (
         (

@@ -10,7 +10,7 @@ See docs/reference.md § Statistical reporting.
 import hashlib
 import math
 import random
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Collection, Iterator, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -76,6 +76,26 @@ def _percentile_ranks(draws: int, confidence: float) -> tuple[int, int]:
     # the symmetric form alone gives -1 at draws=1.
     hi = max(lo, min(draws - 1, int((1.0 - tail) * draws) - 1))
     return lo, hi
+
+
+def min_honest_draws(confidence: float = 0.95) -> int:
+    """The fewest resample draws a percentile interval may be read off.
+
+    `_percentile_ranks` floors the lower rank at 0, so below this count the
+    interval's lower endpoint *is* the sample minimum while the upper endpoint
+    keeps shrinking with n: low-biased and systematically too narrow, and at
+    two surviving draws `lo == hi` and the "interval" has zero width. The
+    threshold is the smallest n at which both ranks are interior — `int(tail *
+    n) >= 2`, so `lo >= 1` and `hi <= n - 2` — which is 80 draws at 95 %
+    confidence. Below it there is no honest interval to report, and reporting
+    a point with no interval is what core does everywhere else it runs out of
+    evidence (`t_over_units`, `percentile_over_units`).
+
+    Derived from `confidence` rather than written as a literal so the two move
+    together: a caller asking for 99 % needs 400.
+    """
+    tail = (1.0 - confidence) / 2.0
+    return math.ceil(2.0 / tail)
 
 
 def percentile_over_units(
@@ -160,14 +180,16 @@ def percentile_of_derived(
     and the second return value is that surviving count — **always**, even
     when the interval is `None`. That is what lets `summarize_step` tell "the
     resample was attempted and every draw was degenerate" (a surviving count
-    of 0 or 1) apart from "resampling was never attempted at all" (no count
+    of 0) apart from "resampling was never attempted at all" (no count
     to report), which otherwise reach `run.yaml` byte-identical: both would
     write `ci95: null` and nothing else. An interval quietly built from 200 of
     2000 requested draws would read identically to a clean one for the same
-    reason, which is why the count is returned even on success. Below two
-    surviving draws there is nothing to take percentiles of — the same
-    refusal `t_over_units` and `percentile_over_units` make below two units —
-    so the interval is `None`, but the count returned alongside it is real.
+    reason, which is why the count is returned even on success. Below
+    `min_honest_draws(confidence)` survivors — 80 at 95 % — there is no
+    interval a percentile can honestly be read off (that function says why),
+    so the interval is `None` while the count returned alongside it stays
+    real. `cli.py` warns on any shortfall, a count below the floor and a count
+    merely reduced being the same event at two magnitudes.
     """
     keys = sorted(collapsed)
     if len(keys) < 2:
@@ -185,7 +207,7 @@ def percentile_of_derived(
         if value is None or (isinstance(value, float) and math.isnan(value)):
             continue
         values.append(float(value))
-    if len(values) < 2:
+    if len(values) < min_honest_draws(confidence):
         return None, len(values)
     values.sort()
     lo, hi = _percentile_ranks(len(values), confidence)
@@ -354,6 +376,7 @@ def repeat_spread(
     condition_index: int,
     levels: "list[RepeatLevel]",
     column: str,
+    keys: "Collection[str]",
 ) -> list[dict[str, Any]]:
     """How much each repeat level moved one metric's recorded values, one
     entry per level, outer to inner — `reference.md` § A `batch` says *when*,
@@ -387,7 +410,21 @@ def repeat_spread(
     each execution's composed `repeat_label`, split on `LABEL_JOIN` — the
     same idiom `realize_order` uses to find a batch's rows inside
     `batch01_seed42`.
+
+    `keys` is the unit set this figure is allowed to read: the keys of the
+    collapsed table the `value` and `ci95` beside it rest on. Required rather
+    than defaulted, so no call site can forget it. Reading *every* recorded
+    row instead would compute the dispersion over a different population than
+    the interval printed under the same metric key: a unit recorded in one
+    repeat and lost in another is excluded from `collapse_repeats` by the same
+    intersection that defines `completed`, but its lone value would still move
+    one member's mean and none of the others, so ordinary single-unit
+    attrition reads as a pipeline that is wildly unstable — or, under `batch`,
+    as apparatus drift. That is the "ragged table dressed as a rectangular
+    one" confound `collapse_repeats` refuses, and this filter is what keeps it
+    from re-entering one field over.
     """
+    admitted = set(keys)
     if len(levels) > 1 and any(lv.kind == "fold" for lv in levels):
         return []
     recording = [
@@ -408,7 +445,7 @@ def repeat_spread(
                 for r in recording
                 if member.label in (r.execution.repeat_label or "").split(LABEL_JOIN)
                 for row in r.rows
-                if column in row and _is_numeric(row[column])
+                if row["unit"] in admitted and column in row and _is_numeric(row[column])
             ]
             if values:
                 member_means.append(sum(values) / len(values))
@@ -582,16 +619,37 @@ class UnitTable:
         return list(seen)
 
     def __getattr__(self, name: str) -> list[Any]:
+        """That column, as a sequence in row order — one entry per row, `None`
+        where the unit recorded nothing.
+
+        Full length rather than "the units that recorded it", which is what
+        `reference.md` § Templates requires: `units.truth` and `units.pred`
+        "are the same shape whichever of the two supplied them", and § The
+        per-unit tables says "a column absent from a row reads as `None`".
+        Dropping missing rows *per column* — the earlier rule, right for a
+        single-column mean and wrong for every multi-column read — makes two
+        columns ragged in *different* rows come back mispaired, so
+        `pearsonr(units.pred, units.truth)` (`reference.md`'s own example)
+        would correlate one unit's prediction against another's truth and
+        publish it with a resampled interval around it. Row alignment is the
+        only property that makes the pairing correct by construction; a
+        template summing a column that holds a `None` gets a loud `TypeError`,
+        contained and disclosed as `W-STATS-AGGREGATE-FAILED`.
+
+        The refusal is keyed on "this name appears in no row", not on
+        `columns` membership: `columns` deliberately omits `unit`, which a
+        template may legitimately read (`percentile_of_derived` keeps the real
+        unit keys inside every draw precisely so it can).
+        """
         if name.startswith("_"):
             raise AttributeError(name)
-        values = [row[name] for row in self._rows if name in row]
-        if not values:
+        if not any(name in row for row in self._rows):
             raise ContractError(
                 f"{name!r} is not a column this table holds; it has "
                 f"{', '.join(self.columns) or 'no columns'}",
                 code="E-STEP-COLUMN-UNKNOWN",
             )
-        return values
+        return [row.get(name) for row in self._rows]
 
 
 def _unit_table_from_rows(rows: list[dict[str, Any]]) -> UnitTable:

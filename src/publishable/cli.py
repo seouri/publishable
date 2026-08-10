@@ -46,6 +46,7 @@ from publishable.scope import Execution, build_plan
 from publishable.stats import (
     UnitTable,
     collapse_repeats,
+    min_honest_draws,
     repeat_spread,
     resample_seed,
     summarize_step,
@@ -421,14 +422,37 @@ def command_run(config_path: Path) -> int:
                             resample_fns = {
                                 key: _make_resample_fn(key, cond_cfg, template) for key in derived
                             }
-                    step_summary = summarize_step(
-                        collapsed,
-                        counts,
-                        derived=derived,
-                        seed=resample_seed_value,
-                        resample=resample_fns,
-                        draws=derived_metric_draws,
-                    )
+                    # The second door onto the same containment. `summarize_step`
+                    # refuses a derived key that collides with a recorded column
+                    # (`E-STEP-KEY-COLLISION`) — a real fault, and not weakened
+                    # here — but the fault is in the same user-written
+                    # `aggregate` the `try` above contains, one call later.
+                    # Uncontained it exits before `run.yaml` is written,
+                    # discarding every completed execution over one badly chosen
+                    # name, while the sibling case (a structural return) merely
+                    # warns. So it is disclosed the same way and costs the same
+                    # thing: the whole `derived` mapping, exactly as a coercion
+                    # failure does, never the recorded columns' own summaries —
+                    # which is why the retry passes no `derived` rather than
+                    # dropping the one colliding key.
+                    try:
+                        step_summary = summarize_step(
+                            collapsed,
+                            counts,
+                            derived=derived,
+                            seed=resample_seed_value,
+                            resample=resample_fns,
+                            draws=derived_metric_draws,
+                        )
+                    except ContractError as exc:
+                        prefix = f"{exc.code} " if exc.code else ""
+                        aggregate_c.warn(
+                            "W-STATS-AGGREGATE-FAILED",
+                            aggregate_where,
+                            f"condition {cond.index} step {step_name!r}: "
+                            f"{prefix}{type(exc).__name__}: {exc}",
+                        )
+                        step_summary = summarize_step(collapsed, counts)
                     # `resample_draws: 0` (as opposed to `null`, meaning
                     # resampling was never attempted) is `summarize_step`'s
                     # signal that a callable was supplied and every single
@@ -445,7 +469,8 @@ def command_run(config_path: Path) -> int:
                     # template whose `aggregate` assumes distinct ones will
                     # raise on every draw rather than some.
                     for metric_key, metric in step_summary.items():
-                        if metric.get("resample_draws") == 0:
+                        used = metric.get("resample_draws")
+                        if used == 0:
                             aggregate_c.warn(
                                 "W-STATS-AGGREGATE-FAILED",
                                 aggregate_where,
@@ -453,6 +478,30 @@ def command_run(config_path: Path) -> int:
                                 f"{metric_key!r}: every resample draw failed to "
                                 "produce a value; reporting the point value with "
                                 "no interval",
+                            )
+                        # A shrunken-but-nonzero count is a different event, so
+                        # it gets a different identifier: `aggregate` did not
+                        # fail — it produced numbers, just on fewer draws than
+                        # were asked for, because some draws were degenerate.
+                        # Below `min_honest_draws` the interval is `None` and
+                        # this is the only notice of why; above it the interval
+                        # exists but rests on less than it claims. One warning
+                        # per metric, naming both counts, so a reader can weigh
+                        # it without reading `resample_draws` out of `run.yaml`.
+                        elif used is not None and used < derived_metric_draws:
+                            floor = min_honest_draws()
+                            aggregate_c.warn(
+                                "W-STATS-RESAMPLE-THIN",
+                                aggregate_where,
+                                f"condition {cond.index} step {step_name!r} metric "
+                                f"{metric_key!r}: {used} of {derived_metric_draws} "
+                                "resample draws produced a value"
+                                + (
+                                    f"; below the {floor} an interval can honestly be "
+                                    "read off, so none is reported"
+                                    if used < floor
+                                    else ""
+                                ),
                             )
                     # One dispersion figure per repeat level, outer to inner
                     # (`reference.md` § A `batch` says *when*, not *what*), computed
@@ -472,7 +521,17 @@ def command_run(config_path: Path) -> int:
                     for column in recorded_columns:
                         if column not in step_summary:
                             continue
-                        spread = repeat_spread(results, step_name, cond.index, levels, column)
+                        spread = repeat_spread(
+                            results,
+                            step_name,
+                            cond.index,
+                            levels,
+                            column,
+                            # The units the metric beside it rests on, so the
+                            # dispersion and the interval describe one
+                            # population (`repeat_spread` says why).
+                            keys=set(collapsed),
+                        )
                         if spread:
                             step_summary[column]["repeat_spread"] = (
                                 spread[0] if len(spread) == 1 else spread
