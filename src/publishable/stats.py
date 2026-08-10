@@ -268,9 +268,11 @@ def paired_percentile_of_derived(
     values: list[float] = []
     for _ in range(draws):
         drawn = [keys[rng.randrange(n)] for _ in range(n)]
+        table_a = _unit_table_from_rows([{"unit": k, **of[k]} for k in drawn])
+        table_b = _unit_table_from_rows([{"unit": k, **against[k]} for k in drawn])
         try:
-            a = compute(_unit_table_from_rows([{"unit": k, **of[k]} for k in drawn]))
-            b = compute(_unit_table_from_rows([{"unit": k, **against[k]} for k in drawn]))
+            a = compute(table_a)
+            b = compute(table_b)
         except Exception:  # a degenerate draw, not a fault; see percentile_of_derived
             continue
         if a is None or b is None:
