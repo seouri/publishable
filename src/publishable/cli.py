@@ -265,7 +265,7 @@ def _comparison_step_blocks(
                         compute_against,
                     )
                     if n_paired >= 2:
-                        interval, _ = paired_percentile_of_derived(
+                        resampled = paired_percentile_of_derived(
                             of_collapsed,
                             against_collapsed,
                             base_keys,
@@ -274,6 +274,7 @@ def _comparison_step_blocks(
                             seed,
                             draws=draws,
                         )
+                        interval = resampled.interval
                 metric_block[metric_key] = {
                     "delta": delta,
                     "basis": "units",
