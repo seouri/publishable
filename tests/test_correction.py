@@ -1,4 +1,14 @@
-from publishable.correction import ALPHA, Member, family_members, family_shape, rank_family
+import pytest
+
+from publishable.correction import (
+    ALPHA,
+    Member,
+    corrected_fields,
+    family_members,
+    family_shape,
+    rank_family,
+)
+from publishable.stats import paired_t_over_units
 
 
 def _m(where="1", step="s", metric="r", delta=0.1, ci95=(0.0, 0.2), index=1):
@@ -146,3 +156,149 @@ def test_a_zero_width_interval_ranks_first_rather_than_dividing_by_zero():
     point_mass = _m(where="a", index=0, delta=0.5, ci95=(0.5, 0.5))
     ordinary = _m(where="b", index=1, delta=0.169, ci95=(0.125, 0.213))
     assert [m.where for m in rank_family([ordinary, point_mass])] == ["a", "b"]
+
+
+def _from_diffs(where, index, mean, spread, metric="r"):
+    """A member whose `ci95` **is** the t interval over its own `diffs`.
+
+    This matters: `corrected_fields` rebuilds a column metric's corrected
+    interval by re-running `paired_t_over_units` over `diffs`, so a member whose
+    `ci95` was hand-written to some other value would make "corrected at α equals
+    raw" compare two unrelated numbers and fail against a correct
+    implementation. Deriving both from one source keeps the assertion about
+    Holm's level rather than about the fixture.
+    """
+    diffs = tuple(mean + spread * ((i % 5) - 2) for i in range(228))
+    interval = paired_t_over_units(diffs)
+    assert interval is not None
+    return Member(
+        where=where, condition_index=index, step="step03_analyze", metric=metric,
+        delta=sum(diffs) / len(diffs), ci95=(interval.low, interval.high),
+        pool=None, diffs=diffs,
+    )
+
+
+def _two_member_family():
+    """Two members, the first carrying much the stronger evidence — the worked
+    example's shape (kendall against spearman), with the same wide gap in the
+    ranking ratio and intervals that are genuinely their own construction."""
+    strong = _from_diffs("2", 2, mean=-0.169, spread=0.02)
+    weak = _from_diffs("1", 1, mean=0.026, spread=0.30)
+    return strong, weak
+
+
+def test_holm_corrects_the_weakest_member_by_nothing():
+    """`reference.md`: "the weakest comparison in a family is corrected by
+    nothing — at rank m the level is α itself", which the worked example shows:
+    spearman is rank 2 of 2, so `correction_level: 0.05` and its corrected
+    interval *is* its raw one. That is Holm working, not a correction that
+    failed, and it is the property that makes Holm more powerful than
+    Bonferroni."""
+    strong, weak_member = _two_member_family()
+    got = corrected_fields([strong, weak_member], "holm")
+    weak = got[("1", "step03_analyze", "r")]
+    assert weak["correction_level"] == pytest.approx(0.05)
+    assert weak["ci95_corrected"] == pytest.approx(list(weak_member.ci95))
+
+
+def test_holm_corrects_the_strongest_member_at_alpha_over_m():
+    """Rank 1 of 2 gets α/(m−i+1) = α/2, so its corrected interval is strictly
+    wider than its raw one on both sides. Using α for every member — the
+    mutation that keeps the weakest member's test green — is caught here."""
+    strong_member, weak_member = _two_member_family()
+    got = corrected_fields([strong_member, weak_member], "holm")
+    strong = got[("2", "step03_analyze", "r")]
+    assert strong["correction_level"] == pytest.approx(0.025)
+    low, high = strong["ci95_corrected"]
+    assert low < strong_member.ci95[0]
+    assert high > strong_member.ci95[1]
+
+
+def test_bonferroni_gives_every_member_the_same_level():
+    """α/m regardless of rank — the difference from Holm, and the reason Holm is
+    uniformly more powerful."""
+    strong, weak = _two_member_family()
+    got = corrected_fields([strong, weak], "bonferroni")
+    levels = {e["correction_level"] for e in got.values()}
+    assert levels == {0.025}
+    for member in (strong, weak):
+        entry = got[(member.where, member.step, member.metric)]
+        low, high = entry["ci95_corrected"]
+        assert low < member.ci95[0] and high > member.ci95[1]
+
+
+def test_fdr_bh_records_no_interval_and_no_level():
+    """`reference.md`: Benjamini-Hochberg "has no interval that means anything of
+    the kind — controlling a false discovery *rate* is a statement about a set,
+    not a bound on any one comparison — so core reports the adjusted p-value and
+    leaves `ci95_corrected` null". No p-value exists in this build, so there is
+    no `p_value_corrected` either."""
+    strong, weak = _two_member_family()
+    got = corrected_fields([strong, weak], "fdr_bh")
+    for entry in got.values():
+        assert entry["ci95_corrected"] is None
+        assert entry["correction_level"] is None
+        assert "p_value_corrected" not in entry
+
+
+def test_none_produces_no_corrected_fields_at_all():
+    """`reference.md`'s table: under `none`, `ci95_corrected` is *absent*. An
+    explicit null would claim a correction was attempted."""
+    strong, weak = _two_member_family()
+    assert corrected_fields([strong, weak], "none") == {}
+
+
+def test_every_member_carries_the_family_it_was_corrected_against():
+    """`family` is "reported broken out rather than as a single integer, so the
+    count is auditable instead of asserted"."""
+    strong, weak = _two_member_family()
+    got = corrected_fields([strong, weak], "holm")
+    for entry in got.values():
+        assert entry["family_size"] == 2
+        assert entry["family"] == {"comparisons": 2, "metrics": 1}
+
+
+def test_a_derived_member_is_corrected_off_its_own_pool():
+    """A derived metric has no per-unit differences, so its corrected interval is
+    a second rank pair off the stored draws. Nesting is structural: the same
+    pool, read further into both tails.
+
+    Two metrics on the same comparison so the family is size 2 and the level is
+    genuinely below α — at family size 1 the level is α itself and
+    `interval_at(pool, 0.95)` (the raw call) would be indistinguishable from the
+    correct one."""
+    pool = tuple(float(i) / 1000.0 for i in range(2000))
+    member = Member(
+        where="1", condition_index=1, step="s", metric="r", delta=1.0,
+        ci95=(0.049, 1.949), pool=pool, diffs=None,
+    )
+    other = Member(
+        where="1", condition_index=1, step="s", metric="rmse", delta=1.0,
+        ci95=(0.049, 1.949), pool=pool, diffs=None,
+    )
+    got = corrected_fields([member, other], "bonferroni")[("1", "s", "r")]
+    low, high = got["ci95_corrected"]
+    assert low < member.ci95[0] and high > member.ci95[1]
+
+
+def test_a_pool_too_small_for_the_level_reports_no_interval_and_says_so():
+    """A family of 40 implies α/40, whose honest-draw floor is 3200 against a
+    2000-draw pool. `ci95_corrected` is null while `correction_level` still
+    records what was asked for, and `thin` is what the caller turns into
+    `W-STATS-CORRECTED-THIN` — a silent null here would read as "no correction
+    applies" rather than "the evidence cannot support this level"."""
+    pool = tuple(float(i) / 1000.0 for i in range(2000))
+    members = [
+        Member(
+            where=str(c), condition_index=c, step="s", metric=k,
+            delta=1.0, ci95=(0.049, 1.949), pool=pool, diffs=None,
+        )
+        for c in range(20)
+        for k in ("r", "rmse")
+    ]
+    got = corrected_fields(members, "bonferroni")
+    entry = got[("0", "s", "r")]
+    assert entry["family_size"] == 40
+    assert entry["correction_level"] == pytest.approx(0.05 / 40)
+    assert entry["ci95_corrected"] is None
+    assert entry["thin"] is True

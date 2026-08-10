@@ -8,6 +8,9 @@ interval is an interval at a smaller α.
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Any
+
+from publishable.stats import interval_at, paired_t_over_units
 
 ALPHA = 0.05
 
@@ -96,3 +99,67 @@ def rank_family(members: Sequence[Member]) -> list[Member]:
         members,
         key=lambda m: (-_evidence_ratio(m), m.condition_index, m.metric),
     )
+
+
+def _level_for(method: str, family_size: int, rank: int) -> float | None:
+    """The α this member's corrected interval is built at.
+
+    `reference.md`'s table: `bonferroni` is α/m for every member; `holm` is
+    α/(m−i+1), which hands rank 1 the tightest level and the last rank α
+    itself; `fdr_bh` implies no per-comparison level at all, so `None`.
+    """
+    if method == "bonferroni":
+        return ALPHA / family_size
+    if method == "holm":
+        return ALPHA / (family_size - rank + 1)
+    return None
+
+
+def _corrected_bounds(member: Member, level: float) -> tuple[float, float] | None:
+    """The interval at `level`, from the same evidence as the raw one.
+
+    A recorded column re-runs `paired_t_over_units` over the stored per-unit
+    differences — exact at any α. A derived metric reads a second rank pair off
+    its stored draw pool. Neither redraws: a fresh resample at the corrected
+    level could land *inside* the raw interval, and a corrected interval
+    narrower than its raw one is precisely the number a reader cannot tell is
+    wrong.
+    """
+    if member.diffs is not None:
+        got = paired_t_over_units(member.diffs, confidence=1.0 - level)
+        return None if got is None else (got.low, got.high)
+    if member.pool is not None:
+        return interval_at(member.pool, 1.0 - level)
+    return None
+
+
+def corrected_fields(
+    members: Sequence[Member], method: str
+) -> dict[tuple[str, str, str], dict[str, Any]]:
+    """What to merge onto each record entry, keyed by `(where, step, metric)`.
+
+    Empty under `correction: none` — `reference.md`'s table makes
+    `ci95_corrected` *absent* there, not null, because an explicit null claims a
+    correction was attempted and found nothing to do.
+
+    `thin` is not a record field: the caller reads it, emits
+    `W-STATS-CORRECTED-THIN`, and drops it. It travels here because this is
+    where the level and the pool size are both known.
+    """
+    family = family_members(members)
+    if method == "none" or not family:
+        return {}
+    family_size, shape = family_shape(family)
+    out: dict[tuple[str, str, str], dict[str, Any]] = {}
+    for rank, member in enumerate(rank_family(family), start=1):
+        level = _level_for(method, family_size, rank)
+        bounds = None if level is None else _corrected_bounds(member, level)
+        out[(member.where, member.step, member.metric)] = {
+            "ci95_corrected": None if bounds is None else [bounds[0], bounds[1]],
+            "correction": method,
+            "correction_level": level,
+            "family_size": family_size,
+            "family": dict(shape),
+            "thin": level is not None and bounds is None,
+        }
+    return out
