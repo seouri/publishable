@@ -132,6 +132,19 @@ def _check_shape(doc: dict[str, Any], c: Collector) -> bool:
                 if not isinstance(level, dict):
                     _bad(f"replication.repeats[{i}]", level, "mapping")
 
+    # `statistics.contrasts` is read by two `_check_*` functions and by
+    # `contrasts.resolve_contrasts`, so it belongs here rather than being guarded
+    # three times. This block's own comment above says why: a container of the
+    # wrong shape means "the crash just moves one level down, into whichever
+    # `_check_*` reads it next", which is exactly what a scalar here did — the
+    # family count in `_check_sweep` reached it before `_check_contrasts` refused
+    # its shape, and `len()` on an int raised out of `validate`.
+    statistics = doc.get("statistics")
+    if isinstance(statistics, dict):
+        contrasts = statistics.get("contrasts")
+        if contrasts is not None and not isinstance(contrasts, list):
+            _bad("statistics.contrasts", contrasts, "list")
+
     return ok
 
 

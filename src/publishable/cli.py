@@ -822,6 +822,21 @@ def command_run(config_path: Path) -> int:
                     counts = attrition(
                         results, roster, step_name, cond.index, fold_members=fold_members
                     )
+                    max_ineligible = (doc.get("limits") or {}).get("max_ineligible_fraction")
+                    if (
+                        isinstance(max_ineligible, (int, float))
+                        and not isinstance(max_ineligible, bool)
+                        and counts["resolved"]
+                        and counts["ineligible"] / counts["resolved"] > max_ineligible
+                    ):
+                        aggregate_c.warn(
+                            "W-DATA-INELIGIBLE",
+                            "limits.max_ineligible_fraction",
+                            f"condition {cond.index}, step {step_name!r}: "
+                            f"{counts['ineligible']} of {counts['resolved']} units are "
+                            f"ineligible, above limits.max_ineligible_fraction "
+                            f"({max_ineligible})",
+                        )
                     derived = None
                     resample_fns: dict[str, Callable[[UnitTable], float | None]] | None = None
                     if template is not None:

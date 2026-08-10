@@ -174,6 +174,8 @@ def percentile_over_units(
     """
     if len(values) < 2:
         return None
+    if draws < min_honest_draws(confidence):
+        return None
     rng = random.Random(seed)
     # Sorted, not just `list(values)`: with a fixed seed, `rng.randrange(n)` draws
     # the same sequence of *indices* regardless of input order, so drawing from an

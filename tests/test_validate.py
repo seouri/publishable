@@ -6,7 +6,7 @@ import yaml
 from tests.conftest import write_experiment_module
 
 from publishable.diagnostics import Collector
-from publishable.validate import validate_config
+from publishable.validate import _check_contrasts, validate_config
 
 
 def base_config(tmp_path: Path) -> dict:
@@ -1557,6 +1557,27 @@ def test_a_null_grid_or_baseline_is_absent_not_malformed(write_config):
     assert "E-CONFIG-SHAPE" not in found
 
 
+def test_check_contrasts_still_refuses_a_non_list_when_called_directly():
+    """`_check_contrasts`'s own `isinstance(entries, list)` guard is kept even
+    though `_check_shape` now refuses that shape first in the normal pipeline
+    (`validate_config` early-returns before `_check_contrasts` ever runs for a
+    non-list block). The guard is still live for a caller that reaches
+    `_check_contrasts` directly, which is exactly why it was kept rather than
+    deleted as newly redundant."""
+    c = Collector()
+    _check_contrasts({"statistics": {"contrasts": {"id": "x"}}}, c)
+    assert "E-STATS-CONTRAST-SHAPE" in {f.code for f in c.findings}
+
+
+def test_a_scalar_contrasts_block_is_refused_once_in_the_shape_pass(write_config):
+    """`_check_shape` runs first and `validate_config` early-returns on it, so a
+    nested key refused there is refused for every later reader at once. Its own
+    comment says an unguarded container means "the crash just moves one level
+    down, into whichever `_check_*` reads it next" — which is what R11 was."""
+    found = codes(write_config({"statistics": {"contrasts": 5}}))
+    assert "E-CONFIG-SHAPE" in found
+
+
 # --- `validate` loads the experiment, so it can answer W-REPL-DETERMINISTIC -----
 
 
@@ -1668,6 +1689,10 @@ def test_a_contrast_entry_that_is_not_a_mapping_is_refused(write_config):
 
 
 def test_a_non_list_contrasts_block_is_refused(write_config):
+    """A mapping where `statistics.contrasts` wants a list: refused in `_check_shape`
+    now, upstream of `_check_contrasts`, so this is `E-CONFIG-SHAPE` rather than
+    `E-STATS-CONTRAST-SHAPE` — `validate_config` early-returns on the shape pass
+    before `_check_contrasts` ever runs."""
     found = codes(
         write_config(
             {
@@ -1676,7 +1701,7 @@ def test_a_non_list_contrasts_block_is_refused(write_config):
             }
         )
     )
-    assert "E-STATS-CONTRAST-SHAPE" in found
+    assert "E-CONFIG-SHAPE" in found
 
 
 def test_a_contrast_without_an_id_is_refused(write_config):
@@ -1744,15 +1769,16 @@ def test_declared_contrasts_are_counted_in_the_uncorrected_family(write_config):
 
 def test_a_scalar_contrasts_block_is_refused_without_raising(write_config):
     """A *scalar* where a list belongs, not a mapping: `len()` works on a mapping
-    and raises on a bool or an int, and the family count in `_check_sweep` reads
-    the block before `_check_contrasts` refuses its shape. `validate.py`
-    collects findings and never raises, so this has to come back as a
-    diagnostic — the assertion is that `validate_config` returns at all."""
+    and raises on a bool or an int, and the family count in `_check_sweep` used to
+    read the block before `_check_contrasts` refused its shape. `_check_shape` now
+    refuses any non-list `statistics.contrasts` upstream of both, so this comes
+    back as `E-CONFIG-SHAPE` — the assertion is still that `validate_config`
+    returns a diagnostic rather than raising."""
     for block in (5, True, "method=spearman"):
         found = codes(
             write_config({"sweep": _TWO_CONDITIONS, "statistics": {"contrasts": block}})
         )
-        assert "E-STATS-CONTRAST-SHAPE" in found
+        assert "E-CONFIG-SHAPE" in found
 
 
 def test_the_default_correction_does_not_warn_about_the_family(write_config):

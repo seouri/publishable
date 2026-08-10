@@ -1579,3 +1579,39 @@ def test_the_delta_interval_matches_this_fixture_s_own_arithmetic(tmp_path, caps
     assert hi - lo == pytest.approx(0.1815155, rel=1e-5)
     assert lo == pytest.approx(1.0 - 0.0907577, rel=1e-5)
     assert hi == pytest.approx(1.0 + 0.0907577, rel=1e-5)
+
+
+# --- Task 9 (carries): limits.max_ineligible_fraction ------------------------
+
+_SKIP_MOST_STEP = '''\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        # 8 of 10 units declared ineligible, which is `io.skip`'s meaning: not a
+        # failure, and deliberately not attrition. The other two record a value so
+        # the step still produces a numeric column.
+        for i, unit in enumerate(io.units):
+            if i < 8:
+                io.skip(unit.key, "outside the eligibility window")
+            else:
+                io.record(unit.key, {{"pred": float(i)}})
+        return {{"n_units": len(io.units)}}
+'''
+
+
+def test_a_condition_skipping_too_many_units_warns(tmp_path, capsys, monkeypatch):
+    """`limits.max_ineligible_fraction` was written into every generated config
+    and read by nothing — the last live silent no-op of the class S4a's refusals
+    closed. `io.skip` is what declares a unit ineligible."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _SKIP_MOST_STEP)
+    doc = run_a_project(
+        tmp_path, capsys=capsys, units=10, limits={"max_ineligible_fraction": 0.2}
+    )
+    assert "W-DATA-INELIGIBLE" in doc["stdout"]

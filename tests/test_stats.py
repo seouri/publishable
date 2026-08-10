@@ -1084,6 +1084,16 @@ def test_one_value_has_no_interval():
     assert percentile_over_units([1.0], seed=7) is None
 
 
+def test_percentile_over_units_refuses_a_pool_below_the_honest_floor():
+    """The gap `spec-defects.md` recorded: `percentile_of_derived` got a survivor
+    floor in S4a and its sibling did not, so this one returns a zero-width
+    interval at two draws. Unreachable today (`statistics.resample` is refused),
+    which is exactly why it must be closed before the slice that reaches it."""
+    values = [float(i) for i in range(60)]
+    assert percentile_over_units(values, seed=7, draws=10) is None
+    assert percentile_over_units(values, seed=7, draws=2000) is not None
+
+
 def test_resample_seed_depends_on_the_digest():
     assert resample_seed("a") != resample_seed("b")
     assert resample_seed("a") == resample_seed("a")
