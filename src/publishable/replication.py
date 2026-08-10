@@ -116,6 +116,33 @@ def _fold_k(level: dict[str, Any], unit_count: int | None) -> int:
     return k
 
 
+def _check_count_field(kind: str, level: dict[str, Any]) -> None:
+    """Each kind takes its own count field and no other's.
+
+    `reference.md` § Repeat kinds gives a `fold` its `k` and a `seed`/`batch`
+    their `n`, and says "and only these". Nothing enforced it, so
+    `{kind: fold, k: 2, n: 5}` was read as two folds by the executor and as five
+    repeats by `validate`'s budget arithmetic — a declaration that means two
+    different things to two readers, with the wrong number of the two written
+    into a recorded warning. Refused rather than resolved by precedence:
+    silently preferring one reading is what hid it.
+
+    Checked after the kind checks, so an unknown kind still gets `E-REPL-KIND`,
+    and before `_fold_k`, so `{kind: fold, n: 5}` is told its `n` was ignored
+    rather than that `k: None` is not a fold count.
+    """
+    wrong = "n" if kind == "fold" else "k"
+    right = "k" if kind == "fold" else "n"
+    if level.get(wrong) is not None:
+        raise ContractError(
+            f"`{{kind: {kind}}}` declares `{wrong}: {level[wrong]!r}`, which a "
+            f"`{kind}` level does not take — its count is `{right}`. A count the "
+            "executor ignores and the budget check believes is one declaration "
+            "meaning two different things",
+            code="E-REPL-LEVEL-FIELD",
+        )
+
+
 def resolve_repeats(
     config: dict[str, Any], digest: str, unit_count: int | None = None
 ) -> list[RepeatLevel]:
@@ -139,6 +166,7 @@ def resolve_repeats(
             )
         if kind not in SUPPORTED_KINDS:
             raise ContractError(f"`{kind}` is not a repeat kind", code="E-REPL-KIND")
+        _check_count_field(kind, level)
         if kind == "fold":
             n = _fold_k(level, unit_count)
         else:

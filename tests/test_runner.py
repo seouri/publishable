@@ -492,6 +492,36 @@ def test_the_identity_reconciles_under_a_fold():
     assert c["resolved"] == c["completed"] + c["ineligible"] + c["failed"]
 
 
+def test_two_executions_sharing_a_repeat_label_are_merged_the_way_the_collapse_merges_them():
+    """`collapse_repeats` accumulates `recorded` across executions sharing one
+    repeat label; `attrition` kept only the last (`{label: r for r in ...}`),
+    while its `labels` list still held the duplicate. The two readers of the
+    same executions then disagreed — the collapsed table carrying a row for `u1`
+    that the counts called `failed`, and `summarize_step` reporting an `n` whose
+    `resolved` no longer equals `completed + ineligible + failed`.
+
+    Built at unit level deliberately: `build_plan` emits one execution per
+    (step, condition, repeat label) and `_check_no_collisions` keeps member
+    labels unique, so a duplicate is unreachable through `cross_levels` today.
+    The point is that the two functions agree by construction rather than by the
+    caller never producing the input.
+    """
+    from publishable.stats import collapse_repeats
+
+    results = [
+        _repeat_result("analyze", "seed01", 0, {"u1": {"r": 1.0}}),
+        _repeat_result("analyze", "seed01", 0, {"u2": {"r": 3.0}}),
+    ]
+    counts = attrition(results, _roster2(), "analyze", 0, None)
+    collapsed = collapse_repeats(results, "analyze", 0, None)
+
+    assert set(collapsed) == {"u1", "u2"}  # the union, as the collapse merges it
+    assert counts == {"resolved": 2, "completed": 2, "ineligible": 0, "failed": 0}
+    # the row count and the completed count are the same fact, read two ways
+    assert counts["completed"] == len(collapsed)
+    assert counts["resolved"] == counts["completed"] + counts["ineligible"] + counts["failed"]
+
+
 def test_a_unit_skipped_in_every_repeat_of_its_own_fold_is_ineligible():
     members = {"fold01": frozenset({"u1", "u2"}), "fold02": frozenset({"u3", "u4"})}
     results = [

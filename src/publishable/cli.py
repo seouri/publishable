@@ -176,10 +176,18 @@ def command_run(config_path: Path) -> int:
     if fold_level is not None:
         # A `fold` level with no roster to partition is refused by `validate`
         # (`E-REPL-FOLD-NO-UNITS`), which already returned above — so this is
-        # unreachable with `roster is None`. Asserted rather than an `or []`
-        # fallback: if that invariant is ever wrong, this should raise loudly
-        # rather than silently run every fold against nothing.
-        assert roster is not None, "a fold level with no roster should have been refused"
+        # unreachable with `roster is None`. Raised, not asserted, and not an
+        # `or []` fallback: an `assert` disappears under `python -O`, which
+        # `reference.md` § Errors names as precisely the wrong property for the
+        # only guard on a condition nothing else detects. If the invariant is
+        # ever wrong, every fold would otherwise run against nothing.
+        if roster is None:
+            raise ContractError(
+                "a `fold` level is declared but no roster resolved; `validate` refuses "
+                "that config (`E-REPL-FOLD-NO-UNITS`), so core's resolved state "
+                "disagrees with itself about this fold",
+                code="E-RUN-FOLD-UNRESOLVED",
+            )
         partitions = partition_units(roster, fold_level.n, digest)
     fold_members = fold_members_for(levels, partitions) if partitions is not None else None
 

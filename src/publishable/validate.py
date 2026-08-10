@@ -224,7 +224,7 @@ def validate_config(
         unit_count=len(roster) if roster is not None else None,
     )
     _check_unimplemented(doc, c)
-    _check_sweep(doc, template, c)
+    _check_sweep(doc, template, c, unit_count=len(roster) if roster is not None else None)
     for message in template.validate(doc):
         c.error("E-TEMPLATE-RULE", "parameters", message)
     return doc
@@ -451,6 +451,7 @@ REPL_DECLARATION_CODES = frozenset(
         "E-REPL-FOLD-K",
         "E-REPL-FOLD-K-TOO-LARGE",
         "E-REPL-LEVEL-DUPLICATE",
+        "E-REPL-LEVEL-FIELD",
         "E-REPL-LEVEL-DEPTH",
         "E-REPL-LEVEL-BATCH-INNER",
         "E-REPL-KIND",
@@ -458,6 +459,38 @@ REPL_DECLARATION_CODES = frozenset(
         "E-REPL-SEED-COLLISION",
     }
 )
+
+
+def _declared_count(level: dict[str, Any]) -> Any:
+    """The count key this level's kind actually takes, exactly as declared.
+
+    `reference.md` § Repeat kinds gives each kind its own fields *and only these*:
+    a `fold` takes `k` (and an optional `stratify_by`), a `seed` and a `batch`
+    take `n`. Reading `n` first and falling back to `k` for every kind is what let
+    `{kind: fold, k: 2, n: 5}` report a five-execution budget for a run that
+    executes two folds — one declaration meaning two different things to two
+    readers. `resolve_repeats` refuses that cross-talk outright
+    (`E-REPL-LEVEL-FIELD`); this function is the arithmetic half of the same
+    rule, so the number every check here derives is the number the run executes.
+    """
+    return level.get("k") if level.get("kind") == "fold" else level.get("n")
+
+
+def _level_count(level: dict[str, Any], unit_count: int | None) -> int | None:
+    """This level's count as a number, or `None` when there isn't one to have.
+
+    `None` covers two cases the callers separate with `_declared_count`: nothing
+    declared at all (which contributes 1×), and a count declared but unresolvable
+    — `{kind: fold, k: all}` against a roster that did not resolve, or any other
+    string `k`, which `resolve_repeats` reports by name. A resolvable `k: all` is
+    the roster size, the same number `_fold_k` gives the run.
+    """
+    count = _declared_count(level)
+    if count == "all" and level.get("kind") == "fold":
+        return unit_count
+    if isinstance(count, bool) or not isinstance(count, int | float):
+        return None
+    return int(count)
 
 
 def _check_replication(
@@ -493,19 +526,13 @@ def _check_replication(
     any_invalid = False
     has_unresolved_fold = False
     for level in levels:
-        # `or` would read a declared 0 as "absent" and silently substitute 1,
-        # which is the difference between warning about an empty design and not.
-        count = level.get("n")
-        if count is None:
-            count = level.get("k")
-        if isinstance(count, str):
-            # `k: all` (fold's leave-one-out count) is not a fact this loop can use —
-            # turning it into a real count needs the resolved roster, which
-            # `resolve_repeats` below gets from `unit_count`. Coercing it with `int()`
-            # here would crash on the wrong exception type; any OTHER string is
-            # invalid and is reported by name as `E-REPL-FOLD-K` when `resolve_repeats`
-            # runs below. Either way, the total from here on is not a fact — don't
-            # fold a guess into it, and don't derive a floor warning from it either.
+        count = _level_count(level, unit_count)
+        if count is None and _declared_count(level) is not None:
+            # The count is declared but not resolvable to a number — `{kind: fold,
+            # k: all}` with no roster, or any other string `k`, which
+            # `resolve_repeats` reports by name as `E-REPL-FOLD-K` below. Either
+            # way the total from here on is not a fact: don't fold a guess into
+            # it, and don't derive a floor warning from it either.
             has_unresolved_fold = True
             continue
         if count is not None and int(count) < 1:
@@ -681,35 +708,41 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
             )
 
 
-def _repeat_total(doc: dict[str, Any]) -> int | None:
+def _repeat_total(doc: dict[str, Any], unit_count: int | None) -> int | None:
     """The product of every repeat level's count, permissively: an invalid level
     (`n < 1`) is already reported by `_check_replication` under its own identifier,
     so this treats it as absent rather than reporting the same defect twice under
     `W-EXEC-BUDGET`.
 
-    Returns `None` when a level's count cannot be resolved to a number — today
-    that is exactly `{kind: fold, k: all}`, whose count is the resolved roster
-    size and this build has no roster to give it (Task 8 threads `unit_count`
-    through). Silently treating that level as contributing 1× would understate
-    `W-EXEC-BUDGET` by the roster size, which is the single case the budget
-    check exists to catch — a wrong small number is worse than admitting the
-    total is unknown, so the caller must skip the check rather than trust a
-    guess.
+    `{kind: fold, k: all}` resolves against `unit_count` — the roster
+    `_check_units` already resolved — because leave-one-out is the single design
+    `W-EXEC-BUDGET` matters most for (`reference.md` § Sweeps and repeats), and
+    it was the one design that could not produce the warning while this function
+    read a string and gave up.
+
+    Returns `None` only when a declared count genuinely cannot be resolved: a
+    `k: all` whose roster did not resolve, or a string `k` that is not `all`
+    (reported by name as `E-REPL-FOLD-K`). Silently treating such a level as
+    contributing 1× would understate the total by the roster size — a wrong
+    small number is worse than admitting the total is unknown, so the caller
+    skips the check rather than trust a guess.
     """
     levels = ((doc.get("replication") or {}).get("repeats")) or []
     total = 1
     for level in levels:
-        count = level.get("n")
+        count = _level_count(level, unit_count)
         if count is None:
-            count = level.get("k")
-        if isinstance(count, str):
-            return None
-        if isinstance(count, int) and count >= 1:
+            if _declared_count(level) is not None:
+                return None
+            continue
+        if count >= 1:
             total *= count
     return total
 
 
-def _check_sweep(doc: dict[str, Any], template: Any, c: Collector) -> None:
+def _check_sweep(
+    doc: dict[str, Any], template: Any, c: Collector, *, unit_count: int | None = None
+) -> None:
     """Checks that only become reachable once a sweep actually expands: an
     unrecognised mode, an axis with nothing in it, a swept path the template
     doesn't declare, a value the spec itself rejects, a value that can't render
@@ -813,12 +846,14 @@ def _check_sweep(doc: dict[str, Any], template: Any, c: Collector) -> None:
             "`sweep` entirely",
         )
 
-    repeat_total = _repeat_total(doc)
+    repeat_total = _repeat_total(doc, unit_count)
     budget = (doc.get("limits") or {}).get("max_executions")
-    # `repeat_total` is `None` when a level's count is unresolved (`{kind: fold,
-    # k: all}` without a roster) — see `_repeat_total`. Skipping the check
-    # rather than computing against a guessed 1× is deliberate: this build has
-    # no roster to resolve it against, and Task 8 is what makes it computable.
+    # `repeat_total` is `None` only when a declared count cannot be resolved at
+    # all — a `k: all` whose roster did not resolve, or a string `k` that is not
+    # `all` — see `_repeat_total`. Skipping the check rather than computing
+    # against a guessed 1× is deliberate: an unknown total must not be reported
+    # as a small one. A `k: all` over a roster that DID resolve is a real number
+    # here, and warns like any other count.
     if repeat_total is not None and isinstance(budget, int):
         executions = len(conditions) * repeat_total
         if executions > budget:

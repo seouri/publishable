@@ -72,10 +72,18 @@ def attrition(
     under fold × seed, to every seed of that unit's own fold — so only a unit
     skipped or missing within its own group is `ineligible` or `failed`.
 
-    `resolved` counts what the execution was handed, not the cohort: without a
-    fold that is the full roster, since every execution receives it whole; with a
-    fold it is the union of what the recording executions actually received —
-    smaller than the roster, and not a shortfall against units the fold never saw.
+    `resolved` counts what was handed out across this condition, not the cohort:
+    without a fold that is the full roster, since every execution receives it
+    whole. With a fold it is the union over every *declared* fold's members
+    intersected with the roster — which the partitions cover exactly, so it is
+    the full roster again, whether or not each fold's execution ran. That is the
+    right answer at this scope: the counts a condition reports are against the
+    cohort the condition was run over, and a fold whose execution is missing
+    leaves its units genuinely unsettled, so they land in `failed` rather than
+    vanishing from the denominator. The smaller-than-roster figure — what one
+    execution was handed — is the per-execution `resolved` reported in
+    `per_repeat`, which is the level `reference.md` § What isn't a repeat states
+    that rule at.
 
     This is the per-step, per-condition breakdown `stats.summarize_step` attaches
     as a metric's `n`. It is deliberately not what guards `max_failed_fraction`:
@@ -98,8 +106,22 @@ def attrition(
     ]
     if not recording:
         return {"resolved": len(keys), "completed": 0, "ineligible": 0, "failed": len(keys)}
-    labels = [r.execution.repeat_label or "" for r in recording]
-    by_label = {r.execution.repeat_label or "": r for r in recording}
+    # Accumulated per label, exactly as `stats.collapse_repeats` accumulates its
+    # rows: two executions sharing one repeat label (a resumed leaf re-reported,
+    # say) must merge, not overwrite. A dict comprehension kept only the last
+    # while `labels` still held the duplicate, so the two readers of the same
+    # executions disagreed about a unit — the collapsed table carrying a row for
+    # a unit these counts called `failed`, which breaks the reconciliation
+    # `resolved == completed + ineligible + failed`. `labels` comes off the
+    # accumulator so it is unique and in execution order, the same list
+    # `collapse_repeats` hands `handed_to`.
+    recorded_by_label: dict[str, set[str]] = {}
+    skipped_by_label: dict[str, set[str]] = {}
+    for r in recording:
+        label = r.execution.repeat_label or ""
+        recorded_by_label.setdefault(label, set()).update(r.recorded)
+        skipped_by_label.setdefault(label, set()).update(r.skipped)
+    labels = list(recorded_by_label)
     if fold_members is None:
         handed = keys  # every unit, to every repeat — the no-fold rule
     else:
@@ -109,9 +131,9 @@ def attrition(
         mine = handed_to(key, labels, fold_members)
         if not mine:
             continue
-        if all(key in by_label[lb].recorded for lb in mine):
+        if all(key in recorded_by_label[lb] for lb in mine):
             completed.add(key)
-        elif all(key in by_label[lb].skipped for lb in mine):
+        elif all(key in skipped_by_label[lb] for lb in mine):
             ineligible.add(key)
     return {
         "resolved": len(handed),

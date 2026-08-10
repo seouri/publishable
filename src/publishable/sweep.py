@@ -2,7 +2,8 @@
 
 Pure: a config dict in, an ordered condition list out. No filesystem, no
 `Config` object, no git — expansion is a function of the declaration alone,
-so it can be tested exhaustively without a repository.
+so it can be tested exhaustively without a repository. Importing
+`publishable.errors` keeps that: it has no dependencies and no I/O of its own.
 
 A `baseline` whose values happen to coincide with a grid cell produces two
 conditions with identical `values` — `00_baseline` and the matching grid
@@ -17,6 +18,8 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
+
+from publishable.errors import ContractError
 
 if TYPE_CHECKING:
     from publishable.replication import Repeat, RepeatLevel
@@ -240,11 +243,24 @@ def sweep_document(
         doc["order_seed"] = order_seed
     if partitions is not None:
         fold = next((lv for lv in levels if lv.kind == "fold"), None)
-        assert fold is not None, "partitions given but no `fold` level was declared"
+        if fold is None:
+            # Raised rather than asserted: an `assert` disappears under
+            # `python -O`, leaving `zip(None.members, ...)` and an
+            # `AttributeError` carrying no code. Partitions with no fold level
+            # to label them is core's resolved state disagreeing with itself.
+            raise ContractError(
+                "partitions were drawn but no `fold` level is declared, so there are "
+                "no member labels to pair them with",
+                code="E-RUN-FOLD-UNRESOLVED",
+            )
         doc["partitions"] = [
             {
                 "fold": member.label,
                 "test": [u.key for u in part],
+                # `other is not part` composes `train` by object identity, which is
+                # safe rather than incidental: `partition_units` builds a fresh list
+                # per fold, so no two entries of `partitions` are the same object
+                # even when two folds hold equal units.
                 "train": [u.key for other in partitions if other is not part for u in other],
             }
             for member, part in zip(fold.members, partitions, strict=True)

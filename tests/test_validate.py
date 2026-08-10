@@ -184,15 +184,20 @@ def test_a_repeat_count_below_one_executes_nothing_and_is_an_error(write_config)
 
 def test_two_bad_repeat_levels_are_both_reported():
     """`_check_replication` collects rather than stopping, so a config with two invalid
-    levels must not report only the first."""
+    levels must not report only the first.
+
+    Both levels carry `n`, the count field their kinds actually take — a `fold`
+    with an `n` is now refused outright as a field its kind does not take
+    (`E-REPL-LEVEL-FIELD`), so it is no longer a way to write a second invalid
+    count."""
     from publishable.templates.builtin.generic import GenericTemplate
     from publishable.validate import _check_replication
 
     doc = {
         "replication": {
             "repeats": [
+                {"kind": "batch", "n": -1},
                 {"kind": "seed", "n": 0},
-                {"kind": "fold", "n": -1},
             ]
         }
     }
@@ -502,14 +507,14 @@ def test_the_budget_passes_at_exactly_the_limit_and_fails_one_over(write_config)
     assert "W-EXEC-BUDGET" in found_over
 
 
-def test_the_budget_check_does_not_crash_or_guess_under_fold_k_all(write_config):
-    """An unresolved `{kind: fold, k: all}` makes the true execution count
-    unknown in this build, not zero and not 1×. Before this fix pass,
-    `_repeat_total` silently treated the unresolved count as absent (1×),
-    which could hide a budget overrun by a factor of the roster size —
-    exactly backwards for the design this check exists to catch. Skipping
-    the warning outright is the honest behavior until Task 8 threads a real
-    `unit_count` through; what matters here is that this does not raise."""
+def test_the_budget_check_does_not_crash_or_guess_when_k_all_cannot_resolve(write_config):
+    """A `{kind: fold, k: all}` whose roster did NOT resolve makes the true
+    execution count unknown — not zero and not 1×. This config declares no
+    `data.units` at all, so there is no roster to count: the honest answer is to
+    report `E-REPL-FOLD-NO-UNITS`/`E-REPL-FOLD-K` and skip the budget check
+    rather than fold a guessed 1× into it, which would hide an overrun by a
+    factor of the roster size. Kept deliberately — the sibling test below is
+    what covers the resolvable case."""
     found = codes(
         write_config(
             {
@@ -520,6 +525,89 @@ def test_the_budget_check_does_not_crash_or_guess_under_fold_k_all(write_config)
         )
     )
     assert "W-EXEC-BUDGET" not in found
+
+
+def test_the_budget_check_fires_for_leave_one_out_against_the_real_roster(
+    write_config, tmp_path
+):
+    """Leave-one-out is the single design `W-EXEC-BUDGET` matters most for
+    (`reference.md` § Sweeps and repeats) — and it was the one design that could
+    not produce the warning, because `_repeat_total` returned `None` on any
+    string count while `_check_replication` had already been threaded a real
+    `unit_count`. A 60-unit roster under `k: all` is 60 executions against a
+    budget of 10, and it must warn exactly as `k: 60` does."""
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id\n" + "\n".join(f"p{i}" for i in range(1, 61)) + "\n"
+    )
+    overrides = {
+        "data.units": {"from": "index.csv", "key": "patient_id"},
+        "limits": {"max_executions": 10},
+    }
+    found_all = messages_by_code(
+        write_config({**overrides, "replication": {"repeats": [{"kind": "fold", "k": "all"}]}})
+    )
+    found_60 = messages_by_code(
+        write_config({**overrides, "replication": {"repeats": [{"kind": "fold", "k": 60}]}})
+    )
+    assert "W-EXEC-BUDGET" in found_all
+    assert found_all["W-EXEC-BUDGET"] == found_60["W-EXEC-BUDGET"]
+    assert "60 executions exceeds 10" in found_all["W-EXEC-BUDGET"]
+
+
+def test_the_floor_warning_also_resolves_k_all_against_the_roster():
+    """`W-REPL-FLOOR` was suppressed by the same unresolved-fold flag, so a
+    `k: all` over a small roster never warned below the convention floor. It is
+    checked here rather than through `validate_config` because `generic`'s
+    `default_repeats` is 1, which no positive count can fall below — the floor
+    only has a value to compare against under a template that sets one."""
+    from publishable.templates.builtin.generic import GenericTemplate
+    from publishable.validate import _check_replication
+
+    class ThreeRepeats(GenericTemplate):  # type: ignore[misc]
+        default_repeats = 3
+
+    doc = {"replication": {"repeats": [{"kind": "fold", "k": "all"}]}}
+    resolved = Collector()
+    _check_replication(doc, ThreeRepeats(), resolved, unit_count=2)
+    assert "W-REPL-FLOOR" in {f.code for f in resolved.findings}
+
+    # ...and still silent when the roster genuinely could not resolve.
+    unresolved = Collector()
+    _check_replication(doc, ThreeRepeats(), unresolved, unit_count=None)
+    assert "W-REPL-FLOOR" not in {f.code for f in unresolved.findings}
+
+
+def test_a_fold_declaring_n_is_refused_rather_than_read_two_ways(write_config, tmp_path):
+    """`{kind: fold, k: 2, n: 5}` validated clean, the budget reported five
+    executions, and the run executed two folds. `reference.md` § Repeat kinds
+    gives each kind its own fields and only these, so the count field the kind
+    does not take is refused rather than resolved by precedence — silently
+    preferring one reading is what hid the disagreement."""
+    (tmp_path / "input" / "index.csv").write_text("patient_id\np1\np2\np3\np4\n")
+    found = messages_by_code(
+        write_config(
+            {
+                "data.units": {"from": "index.csv", "key": "patient_id"},
+                "replication": {"repeats": [{"kind": "fold", "k": 2, "n": 5}]},
+                "limits": {"max_executions": 3},
+            }
+        )
+    )
+    assert "E-REPL-LEVEL-FIELD" in found
+    assert "`n: 5`" in found["E-REPL-LEVEL-FIELD"]
+    # and the budget arithmetic no longer believes the ignored count: two folds
+    # against a budget of three is under it, where `n: 5` would have warned.
+    assert "W-EXEC-BUDGET" not in found
+
+
+def test_a_seed_declaring_k_is_refused_the_same_way(write_config):
+    """The mirror: `k` is a fold's field, and a `seed` carrying one had it
+    silently accepted and ignored."""
+    found = messages_by_code(
+        write_config({"replication": {"repeats": [{"kind": "seed", "n": 2, "k": 9}]}})
+    )
+    assert "E-REPL-LEVEL-FIELD" in found
+    assert "`k: 9`" in found["E-REPL-LEVEL-FIELD"]
 
 
 def test_a_multi_condition_sweep_warns_about_the_uncorrected_family(write_config):
