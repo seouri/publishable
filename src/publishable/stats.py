@@ -29,6 +29,13 @@ class Interval:
     low: float
     high: float
     method: str
+    # `None` for every construction over raw values — the pool is exactly
+    # `draws` (or the input length), so the count adds nothing there. Set for
+    # `percentile_of_derived` alone: a resampled table can make `compute`
+    # degenerate on some draws (see its docstring), so the interval can rest
+    # on fewer draws than were requested, and that has to be visible next to
+    # the number rather than read off silently as a clean 2000-draw interval.
+    draws_used: int | None = None
 
 
 def mean_of(values: Sequence[float]) -> float | None:
@@ -129,21 +136,39 @@ def percentile_of_derived(
     `percentile_over_units` gets from sorting its own pool: a fixed seed draws
     a fixed sequence of *indices*, so an unsorted roster would make the
     interval depend on iteration order rather than on the multiset of units.
+    Each draw's `UnitTable` is built with the *real* unit keys a bootstrap draw
+    repeats, not a synthetic `0..n-1` re-key — `UnitTable` derives its `unit`
+    column from the mapping key it was built from, so re-keying would make
+    `units.unit` read as `n` distinct labels inside every draw even though a
+    resample duplicates units by construction; a template that legitimately
+    reads `unit` (a per-unit weight lookup keyed by it, say) would silently see
+    the wrong roster. A plain dict can't hold the resulting duplicate keys, so
+    the table is built from a row list instead, bypassing the dict-keyed
+    constructor.
 
-    A draw on which `compute` returns `None` or `nan` — a resampled table with
-    no variance for a correlation, say, which is exactly what a degenerate
-    bootstrap draw of `r` can produce — is dropped rather than counted:
-    `compute` returning `None`/`nan` is its own signal that the metric isn't
-    defined on that draw, and counting it as a value would corrupt the
-    distribution with a number that was never really computed. This can only
-    ever shrink the surviving count relative to `draws`, so the percentile
-    ranks are read off *that* count. Below two surviving draws there is
-    nothing to take percentiles of — the same refusal `t_over_units` and
-    `percentile_over_units` make below two units — so the interval is `None`
-    rather than one built from too few draws to mean anything. A `compute`
-    that raises is not caught here: that is a real fault in the metric, not a
-    degenerate draw, and swallowing it would hide a bug behind a missing
-    interval instead of surfacing it.
+    A draw on which `compute` returns `None`, returns `nan`, or *raises* is
+    dropped rather than counted. The three are the same situation from three
+    different libraries: a resampled table with no variance makes `pearsonr`
+    return `nan`, makes a hand-rolled ratio raise `ZeroDivisionError`, and a
+    template author who checks for that case explicitly return `None` — which
+    library `aggregate` happens to call is not a fact about whether the draw
+    was degenerate, so it can't be what decides whether the draw counts. The
+    one call this function does *not* make robust this way is the single
+    unresampled call to `aggregate` that produces the reported `value` — that
+    one is the metric's real definition for this table, so a failure there is
+    a fault to surface, not a degenerate draw to skip, and is contained by the
+    caller instead (`cli.py`, where the failure is disclosed rather than
+    silently producing a table this function has no way to distinguish from
+    "computed cleanly on the third try").
+
+    Counting `None`/`nan`/raise as skipped can only shrink the surviving count
+    relative to `draws`, so the percentile ranks are read off *that* count,
+    and the interval records it as `draws_used` — an interval quietly built
+    from 200 of 2000 requested draws would otherwise read identically to a
+    clean one. Below two surviving draws there is nothing to take percentiles
+    of — the same refusal `t_over_units` and `percentile_over_units` make
+    below two units — so the interval is `None` rather than one built from too
+    few draws to mean anything.
     """
     keys = sorted(collapsed)
     if len(keys) < 2:
@@ -153,8 +178,11 @@ def percentile_of_derived(
     values: list[float] = []
     for _ in range(draws):
         drawn = [keys[rng.randrange(n)] for _ in range(n)]
-        table = UnitTable({str(i): collapsed[key] for i, key in enumerate(drawn)})
-        value = compute(table)
+        table = _unit_table_from_rows([{"unit": key, **collapsed[key]} for key in drawn])
+        try:
+            value = compute(table)
+        except Exception:  # degenerate, not caught for the real call; see above
+            continue
         if value is None or (isinstance(value, float) and math.isnan(value)):
             continue
         values.append(float(value))
@@ -162,7 +190,9 @@ def percentile_of_derived(
         return None
     values.sort()
     lo, hi = _percentile_ranks(len(values), confidence)
-    return Interval(low=values[lo], high=values[hi], method="percentile_over_units")
+    return Interval(
+        low=values[lo], high=values[hi], method="percentile_over_units", draws_used=len(values)
+    )
 
 
 def _is_numeric(value: object) -> bool:
@@ -369,6 +399,7 @@ def summarize_step(
     derived: dict[str, Any] | None = None,
     seed: int | None = None,
     resample: "dict[str, Callable[[UnitTable], float | None]] | None" = None,
+    draws: int = 2000,
 ) -> dict[str, dict[str, Any]]:
     """Per-column value, basis, `n`, and interval over the collapsed unit table.
 
@@ -408,8 +439,10 @@ def summarize_step(
     key absent from `resample` (or given no `seed`) gets `ci95: null` rather
     than an invented width: reporting a point with no interval is honest.
     Every derived metric is `basis: units`, `method: percentile_over_units`
-    when it has one, and `cohens_d: null` — Cohen's *d* differences a per-unit
-    value, and a derived metric has none.
+    when it has one, `cohens_d: null` — Cohen's *d* differences a per-unit
+    value, and a derived metric has none — and `resample_draws`, the number
+    of `draws` (passed through to `percentile_of_derived`, 2000 by default)
+    that actually produced a value; below `draws` when some were degenerate.
 
     A derived key colliding with a recorded column — even one dropped above for
     being non-numeric — is refused with the same `E-STEP-KEY-COLLISION`
@@ -452,7 +485,7 @@ def summarize_step(
         for key, value in derived.items():
             compute = (resample or {}).get(key)
             interval = (
-                percentile_of_derived(collapsed, compute, seed)
+                percentile_of_derived(collapsed, compute, seed, draws=draws)
                 if compute is not None and seed is not None
                 else None
             )
@@ -464,6 +497,12 @@ def summarize_step(
                 "method": interval.method if interval else None,
                 "correction": None,
                 "cohens_d": None,
+                # Present only alongside a real interval — disclosing how many
+                # of `draws` requested actually produced a value, since a
+                # degenerate-draw-heavy interval built from 200 survivors reads
+                # identically to a clean 2000-draw one without this (see
+                # `percentile_of_derived`).
+                "resample_draws": interval.draws_used if interval else None,
             }
     return out
 
@@ -510,3 +549,20 @@ class UnitTable:
                 code="E-STEP-COLUMN-UNKNOWN",
             )
         return values
+
+
+def _unit_table_from_rows(rows: list[dict[str, Any]]) -> UnitTable:
+    """Build a `UnitTable` from rows that may repeat a unit key.
+
+    `UnitTable.__init__` takes a `dict[str, dict]`, which cannot hold two rows
+    for the same key — the right shape for the one row per unit every other
+    caller builds. A bootstrap draw repeats units by construction, so
+    `percentile_of_derived` needs this instead: each row keeps its *real*
+    `unit` value (duplicated, as the draw duplicated it), and this bypasses
+    `__init__` rather than re-keying to something synthetic and unique, which
+    is what made every draw's units look distinct to a template that reads
+    `unit` before this function existed.
+    """
+    table = UnitTable.__new__(UnitTable)
+    table._rows = rows
+    return table

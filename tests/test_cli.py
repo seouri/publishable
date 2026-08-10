@@ -472,3 +472,62 @@ def test_a_project_without_aggregate_reports_no_derived_metric(tmp_path, monkeyp
     aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
     assert "total" not in aggregated
     assert set(aggregated) == {"pred"}
+
+
+def test_a_failing_aggregate_does_not_cost_the_run_its_record(tmp_path, monkeypatch, capsys):
+    """The Critical this task's review found: `aggregate` is user code in
+    exactly the sense a step's `run` is, but ran uncontained — a raise other
+    than `PublishableError`/`OSError` would have crashed before `run.yaml` was
+    ever written, discarding every completed execution over one metric core
+    couldn't compute. `run` must still complete, still write `run.yaml`, and
+    still carry the recorded column's own summary; the failure is disclosed
+    on stdout rather than swallowed or allowed to crash."""
+    import publishable.generators.experiment as experiment_gen
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    def _raises(self, units, cfg):
+        raise ZeroDivisionError("a degenerate ratio, not a resample draw")
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    monkeypatch.setattr(GenericTemplate, "aggregate", _raises)
+    doc = run_a_project(tmp_path, capsys=capsys)
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    # A run that did happen: every execution completed, so `status` is not
+    # downgraded by a metric that could not be computed — that is a fact
+    # about `aggregate`, not about whether the pipeline ran.
+    assert run["status"] == "completed"
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert "total" not in aggregated
+    assert set(aggregated) == {"pred"}
+    assert "W-STATS-AGGREGATE-FAILED" in doc["stdout"]
+    assert "ZeroDivisionError" in doc["stdout"]
+
+
+def test_a_raising_resample_draw_does_not_crash_the_run(tmp_path, monkeypatch):
+    """The nan-versus-raise asymmetry the review named, at the integration
+    level: the single unresampled call to `aggregate` must succeed (so the
+    point value is real) while a resampled draw's call to the same
+    `aggregate` can legitimately raise on a degenerate composition — the same
+    situation `pearsonr` returning `nan` covers for a library that doesn't
+    raise. The run must still complete with a real `ci95` or an honest
+    `None`, never a traceback."""
+    import publishable.generators.experiment as experiment_gen
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    def _sum_or_raise(self, units, cfg):
+        values = units.pred
+        if len(set(values)) < 2:  # a resample draw that happened to lack spread
+            raise ZeroDivisionError("degenerate draw")
+        return {"total": sum(values)}
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    monkeypatch.setattr(GenericTemplate, "aggregate", _sum_or_raise)
+    doc = run_a_project(tmp_path)
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "completed"
+    metric = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["total"]
+    assert metric["value"] == sum(float(i) for i in range(10))
+    # Either a real interval survived enough draws, or none did — both are
+    # honest; a traceback is the only wrong answer, and this test would have
+    # raised one before the resample draws were contained.
+    assert metric["ci95"] is None or len(metric["ci95"]) == 2

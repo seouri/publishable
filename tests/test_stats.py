@@ -7,6 +7,7 @@ from publishable.replication import resolve_repeats
 from publishable.stats import (
     Interval,
     UnitTable,
+    _percentile_ranks,
     collapse_repeats,
     handed_to,
     mean_of,
@@ -521,6 +522,92 @@ def test_a_correlation_like_derived_metrics_interval_reflects_its_own_scatter():
     width_a = interval_a.high - interval_a.low
     width_b = interval_b.high - interval_b.low
     assert width_b > width_a * 3  # the leverage points make B's interval much wider
+
+
+def test_percentile_ranks_are_symmetric_at_the_default_draw_count():
+    """The defect Task 4 already had once: an off-by-one on the upper rank.
+    `_percentile_ranks` is the single copy both `percentile_over_units` and
+    `percentile_of_derived` share, so pinning it directly catches an asymmetry
+    reappearing in either without needing to drive 2000 draws through a whole
+    resample to see it."""
+    assert _percentile_ranks(2000, 0.95) == (49, 1949)
+
+
+def test_a_resampled_draw_reports_the_real_unit_key_not_a_synthetic_index():
+    """A bootstrap draw repeats units by construction — the whole point of
+    resampling with replacement — so a template that legitimately reads
+    `units.unit` (a per-unit lookup keyed by it, say) must see the real,
+    possibly-repeated keys, not `0..n-1`. Forcing every draw to contain only
+    unit `u0` twice and nothing else is what makes a synthetic re-key and a
+    real one produce different, checkable answers."""
+    collapsed = {"u0": {"x": 1.0}, "u1": {"x": 2.0}}
+    seen: list[tuple[str, ...]] = []
+
+    def compute(units: UnitTable) -> float | None:
+        seen.append(tuple(units.unit))
+        return float(sum(units.x))
+
+    percentile_of_derived(collapsed, compute, seed=7, draws=5)
+    assert seen  # `compute` ran at least once
+    for keys in seen:
+        assert set(keys) <= {"u0", "u1"}
+        assert len(keys) == 2  # one row per unit in the roster, duplicates included
+
+
+def test_draws_is_reachable_through_summarize_step():
+    """`draws` was previously computed but never threaded past the 2000
+    default — passing a small one and checking `resample_draws` never exceeds
+    it is the only way to observe it took effect without driving 2000 calls
+    through a test."""
+    collapsed = {f"u{i}": {"pred": float(i)} for i in range(10)}
+    out = summarize_step(
+        collapsed,
+        {"completed": 10},
+        derived={"total": 45.0},
+        seed=7,
+        resample={"total": lambda units: sum(units.pred)},
+        draws=10,
+    )
+    assert out["total"]["resample_draws"] is not None
+    assert out["total"]["resample_draws"] <= 10
+
+
+def test_resample_draws_discloses_a_shrunken_surviving_count():
+    """An interval built from 200 of 2000 requested draws must not read
+    identically to a clean one — `resample_draws` is what makes the
+    difference visible next to the number itself."""
+    collapsed = {f"u{i}": {"pred": float(i)} for i in range(10)}
+    calls = {"n": 0}
+
+    def flaky(units: UnitTable) -> float | None:
+        calls["n"] += 1
+        return None if calls["n"] % 2 == 0 else float(sum(units.pred))
+
+    out = summarize_step(
+        collapsed,
+        {"completed": 10},
+        derived={"total": 45.0},
+        seed=7,
+        resample={"total": flaky},
+        draws=20,
+    )
+    assert out["total"]["resample_draws"] is not None
+    assert out["total"]["resample_draws"] < 20
+
+
+def test_a_raising_compute_is_treated_as_degenerate_not_propagated():
+    """The nan-versus-raise asymmetry the review named: `pearsonr` returns
+    `nan` on a degenerate draw, a hand-rolled ratio raises `ZeroDivisionError`
+    on the same kind of draw. Both are "not defined on this draw," so a
+    `compute` that always raises must behave like one that always returns
+    `nan` — reporting no interval rather than crashing the caller."""
+    collapsed = {f"u{i}": {"pred": float(i)} for i in range(10)}
+
+    def always_raises(units: UnitTable) -> float | None:
+        raise ZeroDivisionError("degenerate draw")
+
+    interval = percentile_of_derived(collapsed, always_raises, seed=7, draws=20)
+    assert interval is None  # every draw was dropped, not propagated
 
 
 def test_a_derived_key_colliding_with_a_dropped_non_numeric_column_is_refused():

@@ -327,6 +327,17 @@ def command_run(config_path: Path) -> int:
             # one as having a recording step it never ran.
             template = get_template(doc.get("experiment_type", ""))
             resample_seed_value = resample_seed(digest)
+            aggregate_where = f"{doc.get('experiment_type', '')}.aggregate"
+            # `aggregate` is user code in exactly the sense `runner.py`'s own
+            # step execution is — "a failed execution never stops the run" —
+            # but this call sits outside that `try`, in phase 8, after every
+            # execution already completed. Uncontained, a template whose
+            # `aggregate` raises anything but `PublishableError`/`OSError`
+            # would crash before `run.yaml` is ever written, discarding every
+            # completed execution over one metric core couldn't compute.
+            # Contained here the same way: the failure is disclosed (below)
+            # and the run's other results — and `run.yaml` itself — survive.
+            aggregate_c = Collector()
             aggregated = {}
             for cond in conditions:
                 recording_steps = {
@@ -354,11 +365,27 @@ def command_run(config_path: Path) -> int:
                         # different swept value (`reference.md` § Templates). This is
                         # the single unresampled call whose return is the reported
                         # `value`; `resample_fns` below is what recomputes it per
-                        # bootstrap draw for the interval.
-                        derived = coerce_scalars(
-                            template.aggregate(UnitTable(collapsed), cond_cfg),
-                            where=f"{doc.get('experiment_type', '')}.aggregate",
-                        )
+                        # bootstrap draw for the interval. Only *this* call is
+                        # contained by a `try`: it is the metric's real definition
+                        # for this table, so a failure here is a fault to disclose,
+                        # not a degenerate draw — the per-draw calls inside
+                        # `percentile_of_derived` are a different case, handled
+                        # there (`stats.py`'s docstring says why).
+                        try:
+                            derived = coerce_scalars(
+                                template.aggregate(UnitTable(collapsed), cond_cfg),
+                                where=aggregate_where,
+                            )
+                        except Exception as exc:
+                            derived = None
+                            code = getattr(exc, "code", None)
+                            prefix = f"{code} " if code else ""
+                            aggregate_c.warn(
+                                "W-STATS-AGGREGATE-FAILED",
+                                aggregate_where,
+                                f"condition {cond.index} step {step_name!r}: "
+                                f"{prefix}{type(exc).__name__}: {exc}",
+                            )
                         if derived:
                             # A closure per key, not one shared call: `aggregate` may
                             # return several metrics, and `percentile_of_derived`
@@ -368,12 +395,19 @@ def command_run(config_path: Path) -> int:
                             # the callable `stats.py` stays pure by not importing).
                             # A nested `def`, not a lambda, so mypy has an explicit
                             # return type to check the `.get(key)` against, rather
-                            # than trying (and failing) to infer one.
+                            # than trying (and failing) to infer one. Routed through
+                            # `coerce_scalars` exactly like the call above — a bare
+                            # `float(value)` on a structural return would `TypeError`
+                            # straight into the failure this block exists to contain,
+                            # rather than the honest `ContractError` a resampled
+                            # draw can survive as "degenerate" in `stats.py`.
                             def _make_resample_fn(
                                 key: str, cfg: Config, tmpl: BaseTemplate
                             ) -> Callable[[UnitTable], float | None]:
                                 def resample_fn(units: UnitTable) -> float | None:
-                                    value = tmpl.aggregate(units, cfg).get(key)
+                                    value = coerce_scalars(
+                                        tmpl.aggregate(units, cfg), where=aggregate_where
+                                    ).get(key)
                                     return None if value is None else float(value)
 
                                 return resample_fn
@@ -401,6 +435,14 @@ def command_run(config_path: Path) -> int:
                         for metric in step_summary.values():
                             metric["repeat_spread"] = spread
                     aggregated[cond.index][step_name] = step_summary
+            if aggregate_c.findings:
+                # Disclosed, not corrective: a metric that could not be computed
+                # is not the same fact as a run that did not happen, so `status`
+                # (set above from the executions themselves, all of which already
+                # completed by the time `aggregate` runs) is deliberately left
+                # alone — printed the same way `E-INPUT-CHANGED` is, as a finding
+                # beside the run rather than a verdict on it.
+                print(aggregate_c.render())
         changed_inputs = verify_manifest(input_dir, manifest)  # phase 8: re-verify
         if changed_inputs:
             status = "failed"
