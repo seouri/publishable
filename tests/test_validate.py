@@ -924,6 +924,11 @@ def test_a_declared_contrast_is_no_longer_refused(write_config):
         )
     )
     assert "E-STATS-CONTRASTS-UNSUPPORTED" not in found
+    # The positive claim, not just the absent refusal: `of`/`against` actually
+    # resolved against real condition labels rather than merely failing to be
+    # refused by the (now-retired) blanket code.
+    assert "E-STATS-CONTRAST-UNKNOWN" not in found
+    assert "E-STATS-CONTRAST-NESTED" not in found
 
 
 def test_an_unresolvable_side_is_refused(write_config):
@@ -1020,6 +1025,7 @@ def test_a_contrast_with_a_declared_within_attribute_validates_clean(write_confi
         )
     )
     assert "E-STATS-CONTRAST-WITHIN" not in found
+    assert "E-STATS-CONTRAST-UNKNOWN" not in found
 
 
 def test_a_declared_resample_is_refused(write_config):

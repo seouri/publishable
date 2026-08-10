@@ -963,7 +963,10 @@ def _check_contrasts(doc: dict[str, Any], c: Collector) -> None:
     than the vaguer `E-STATS-CONTRAST-UNKNOWN` an unresolvable label gets — nesting
     is checked first for exactly that reason: an `id` that happens to also fail to
     resolve as a condition label must still be diagnosed as nesting, since that is
-    the more specific and more actionable fault.
+    the more specific and more actionable fault. A name that is simultaneously a
+    real condition label and another entry's `id` resolves as the label instead —
+    a legal contrast must not be refused as nesting just because some other entry
+    happens to reuse its label as an `id`.
 
     **`within` names a unit attribute**, the same one `units_matching` (Task 2)
     reads with `.get`, which returns `None` for a typo exactly as it would for a
@@ -988,7 +991,7 @@ def _check_contrasts(doc: dict[str, Any], c: Collector) -> None:
         for field in ("of", "against"):
             value = entry.get(field)
             where = f"statistics.contrasts[{i}].{field}"
-            if value in ids:
+            if value in ids and value not in labels:
                 c.error(
                     "E-STATS-CONTRAST-NESTED",
                     where,
