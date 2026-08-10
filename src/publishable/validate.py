@@ -618,8 +618,15 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     kind, and `E-REPL-LEVEL-DEPTH` past two levels, and
     `E-REPL-LEVEL-BATCH-INNER` for a `batch` that is not the outermost level.
     `batch` and `fold` themselves are no longer refused — both are supported
-    kinds. Each message says plainly that the block is honored in a later
-    slice, so a user does not read this as their config being malformed.
+    kinds. `statistics.contrasts`, `.resample`, `.null_test`, `.report_by`, and a
+    top-level `hypotheses` block are refused the same way — a declared 2000-draw
+    bootstrap or a pre-registered hypothesis that runs and reports success while
+    honoring neither is the same silent-no-op class. `statistics.correction` is the
+    deliberate exception: it is disclosed via `W-STATS-FAMILY` and a `correction: null`
+    recorded on every metric, not refused, since a warned-and-marked declaration is not
+    a declaration that changes nothing while claiming otherwise. Each message says
+    plainly that the block is honored in a later slice, so a user does not read this as
+    their config being malformed.
     """
     sweep = doc.get("sweep") or {}
     for mode, code, why in (
@@ -710,6 +717,58 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
                 "here, and a declaration that changes no behavior is the failure this "
                 "refusal exists to prevent; it will be honored in a later slice",
             )
+
+    # `statistics.contrasts`/`.resample`/`.null_test`/`.report_by` and a top-level
+    # `hypotheses` block all validate clean today and are read by nothing — the same
+    # silent-no-op class as the fields above. `statistics.correction` is deliberately
+    # NOT refused here: it is disclosed instead, via `W-STATS-FAMILY` plus a
+    # `correction: null` recorded on every aggregated metric, so it is not a case of a
+    # declaration that changes nothing while claiming otherwise. Of these five keys
+    # `materialize.py` writes only two into a generated config — `statistics.correction`
+    # and a top-level `hypotheses: []` — so the other three are simply absent there;
+    # each check below fires on a real declaration either way, never on a key's mere
+    # presence or on the empty list `hypotheses` is generated as.
+    statistics = doc.get("statistics") or {}
+    for field, code, what in (
+        (
+            "contrasts",
+            "E-STATS-CONTRASTS-UNSUPPORTED",
+            "no contrast over the paired unit intersection is computed",
+        ),
+        (
+            "resample",
+            "E-STATS-RESAMPLE-UNSUPPORTED",
+            "no resampling scheme runs",
+        ),
+        (
+            "null_test",
+            "E-STATS-NULLTEST-UNSUPPORTED",
+            "no null distribution is computed",
+        ),
+        (
+            "report_by",
+            "E-STATS-REPORTBY-UNSUPPORTED",
+            "no stratified reporting runs",
+        ),
+    ):
+        if statistics.get(field):
+            c.error(
+                code,
+                f"statistics.{field}",
+                f"is specified but not implemented in this build — {what}, and a "
+                "declaration that changes no behavior is the failure this refusal "
+                "exists to prevent; it will be honored in a later slice",
+            )
+
+    if doc.get("hypotheses"):
+        c.error(
+            "E-HYPOTHESIS-UNSUPPORTED",
+            "hypotheses",
+            "is specified but not implemented in this build — no verdict is evaluated "
+            "against a declared hypothesis, and a pre-registered hypothesis that is "
+            "never checked would report success for a claim never tested; it will be "
+            "honored in a later slice",
+        )
 
 
 def _repeat_total(doc: dict[str, Any], unit_count: int | None) -> int | None:

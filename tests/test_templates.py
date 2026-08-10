@@ -1,4 +1,5 @@
 from publishable import BaseTemplate, Param
+from publishable.stats import UnitTable
 from publishable.templates.registry import get_template
 
 
@@ -32,3 +33,19 @@ def test_validate_defaults_to_no_cross_field_rules():
         parameter_spec: dict[str, Param] = {}
 
     assert Bare().validate(None) == []
+
+
+def test_the_base_aggregate_returns_nothing():
+    """`{}` is the right answer for a table a template doesn't recognize — core
+    calls `aggregate` once per recording step, and a pipeline can have several."""
+    assert BaseTemplate().aggregate(UnitTable({"u1": {"pred": 1.0}}), None) == {}
+
+
+def test_a_subclass_can_derive_from_the_table():
+    class T(BaseTemplate):
+        def aggregate(self, units, cfg):
+            return {"total": sum(units.pred)}
+
+    assert T().aggregate(UnitTable({"u1": {"pred": 1.0}, "u2": {"pred": 2.0}}), None) == {
+        "total": 3.0
+    }

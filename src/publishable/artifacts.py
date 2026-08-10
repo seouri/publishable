@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
+from publishable.coercion import coerce_scalars
 from publishable.errors import ArtifactError, ArtifactExistsError, ContractError
 from publishable.sweep import condition_dir_name
 
@@ -259,7 +260,7 @@ class StepIO:
                 "a recorded column may not shadow it",
                 code="E-STEP-KEY-COLLISION",
             )
-        self._rows[unit_key] = {"unit": unit_key, **values}
+        self._rows[unit_key] = {"unit": unit_key, **coerce_scalars(values, "io.record")}
         self._recorded_keys.add(unit_key)
 
     def skip(self, unit_key: str, reason: str) -> None:

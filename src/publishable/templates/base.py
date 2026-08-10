@@ -1,8 +1,11 @@
 """An experiment type's parameters. See docs/reference.md § Templates."""
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from publishable.param import Param
+
+if TYPE_CHECKING:
+    from publishable.stats import UnitTable
 
 
 class BaseTemplate:
@@ -17,3 +20,19 @@ class BaseTemplate:
     def validate(self, config: Any) -> list[str]:
         """Cross-field rules. Receives the WHOLE config; [] when OK."""
         return []
+
+    def aggregate(self, units: "UnitTable", cfg: Any) -> dict[str, Any]:
+        """Derive metrics from the unit table; `{}` when there is nothing to derive.
+
+        Core calls this once per recording step, and a pipeline can have several,
+        so returning `{}` for a table this template does not recognize is the
+        right answer rather than an error. `cfg` is this condition's resolved
+        parameters — the same object a step receives — which is what lets one
+        `aggregate` compute pearson under one condition and kendall under another.
+
+        The return is what a step may return: a flat mapping of scalars under the
+        same coercion. There is no `Estimate` exception here, unlike a `summary`
+        step's return, because a derived metric is one core computes and resamples
+        itself rather than one the user asserts.
+        """
+        return {}

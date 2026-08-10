@@ -7,6 +7,7 @@ import importlib
 import importlib.metadata
 import json
 import sys
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -14,6 +15,7 @@ from typing import Any
 import yaml
 
 from publishable.base_experiment import BaseExperiment, load_experiment
+from publishable.coercion import coerce_scalars
 from publishable.config import Config
 from publishable.diagnostics import (
     EXIT_FAILED,
@@ -41,8 +43,17 @@ from publishable.run_record import assemble_run_yaml, run_status
 from publishable.runner import attrition, execute_plan, resolve_condition_cfg, resolve_wide_cfg
 from publishable.scaffold import scaffold_project
 from publishable.scope import Execution, build_plan
-from publishable.stats import collapse_repeats, summarize_step
+from publishable.stats import (
+    UnitTable,
+    collapse_repeats,
+    min_honest_draws,
+    repeat_spread,
+    resample_seed,
+    summarize_step,
+)
 from publishable.sweep import expand, sweep_document
+from publishable.templates.base import BaseTemplate
+from publishable.templates.registry import get_template
 from publishable.units import Unit, partition_units, resolve_units, units_hash
 from publishable.uv_support import uv_lock_info
 from publishable.validate import load_document, validate_config
@@ -270,7 +281,13 @@ def command_run(config_path: Path) -> int:
         (run_dir / "sweep.yaml").write_text(
             yaml.safe_dump(
                 sweep_document(
-                    conditions, levels, repeats, digest, mode, execution_order, order_seed,
+                    conditions,
+                    levels,
+                    repeats,
+                    digest,
+                    mode,
+                    execution_order,
+                    order_seed,
                     partitions=partitions,
                 ),
                 sort_keys=False,
@@ -309,6 +326,25 @@ def command_run(config_path: Path) -> int:
             # each condition and never pools across conditions — an unguarded
             # filter would let a same-named step from another condition mark this
             # one as having a recording step it never ran.
+            template = get_template(doc.get("experiment_type", ""))
+            resample_seed_value = resample_seed(digest)
+            # `statistics.resample` isn't honored yet (`E-STATS-RESAMPLE-UNSUPPORTED`
+            # refuses a declared one), so this is the one place the default
+            # `reference.md` § How a metric becomes a number documents — bootstrap
+            # at 2000 — is a real, passed value rather than `summarize_step`'s own
+            # default taking effect unseen at every call site that forgets it.
+            derived_metric_draws = 2000
+            aggregate_where = f"{doc.get('experiment_type', '')}.aggregate"
+            # `aggregate` is user code in exactly the sense `runner.py`'s own
+            # step execution is — "a failed execution never stops the run" —
+            # but this call sits outside that `try`, in phase 8, after every
+            # execution already completed. Uncontained, a template whose
+            # `aggregate` raises anything but `PublishableError`/`OSError`
+            # would crash before `run.yaml` is ever written, discarding every
+            # completed execution over one metric core couldn't compute.
+            # Contained here the same way: the failure is disclosed (below)
+            # and the run's other results — and `run.yaml` itself — survive.
+            aggregate_c = Collector()
             aggregated = {}
             for cond in conditions:
                 recording_steps = {
@@ -318,17 +354,201 @@ def command_run(config_path: Path) -> int:
                     and r.execution.condition_index == cond.index
                     and r.rows
                 }
-                aggregated[cond.index] = {
-                    step_name: summarize_step(
-                        collapse_repeats(
-                            results, step_name, cond.index, fold_members=fold_members
-                        ),
-                        attrition(
-                            results, roster, step_name, cond.index, fold_members=fold_members
-                        ),
+                aggregated[cond.index] = {}
+                for step_name in sorted(recording_steps):
+                    collapsed = collapse_repeats(
+                        results, step_name, cond.index, fold_members=fold_members
                     )
-                    for step_name in sorted(recording_steps)
-                }
+                    counts = attrition(
+                        results, roster, step_name, cond.index, fold_members=fold_members
+                    )
+                    derived = None
+                    resample_fns: dict[str, Callable[[UnitTable], float | None]] | None = None
+                    if template is not None:
+                        cond_cfg = cfgs[cond.index]
+                        # Once per recording step, on this condition's own resolved
+                        # `cfg` — the same object a step in this condition receives —
+                        # so one `aggregate` can compute a different metric under a
+                        # different swept value (`reference.md` § Templates). This is
+                        # the single unresampled call whose return is the reported
+                        # `value`; `resample_fns` below is what recomputes it per
+                        # bootstrap draw for the interval. Only *this* call is
+                        # contained by a `try`: it is the metric's real definition
+                        # for this table, so a failure here is a fault to disclose,
+                        # not a degenerate draw — the per-draw calls inside
+                        # `percentile_of_derived` are a different case, handled
+                        # there (`stats.py`'s docstring says why).
+                        try:
+                            derived = coerce_scalars(
+                                template.aggregate(UnitTable(collapsed), cond_cfg),
+                                where=aggregate_where,
+                            )
+                        except Exception as exc:
+                            derived = None
+                            code = getattr(exc, "code", None)
+                            prefix = f"{code} " if code else ""
+                            aggregate_c.warn(
+                                "W-STATS-AGGREGATE-FAILED",
+                                aggregate_where,
+                                f"condition {cond.index} step {step_name!r}: "
+                                f"{prefix}{type(exc).__name__}: {exc}",
+                            )
+                        if derived:
+                            # A closure per key, not one shared call: `aggregate` may
+                            # return several metrics, and `percentile_of_derived`
+                            # resamples one key at a time (`reference.md` § How a
+                            # metric becomes a number — resampling a derived metric
+                            # means recomputing it, and this is `cli.py` supplying
+                            # the callable `stats.py` stays pure by not importing).
+                            # A nested `def`, not a lambda, so mypy has an explicit
+                            # return type to check the `.get(key)` against, rather
+                            # than trying (and failing) to infer one. Routed through
+                            # `coerce_scalars` exactly like the call above — a bare
+                            # `float(value)` on a structural return would `TypeError`
+                            # straight into the failure this block exists to contain,
+                            # rather than the honest `ContractError` a resampled
+                            # draw can survive as "degenerate" in `stats.py`.
+                            def _make_resample_fn(
+                                key: str, cfg: Config, tmpl: BaseTemplate
+                            ) -> Callable[[UnitTable], float | None]:
+                                def resample_fn(units: UnitTable) -> float | None:
+                                    value = coerce_scalars(
+                                        tmpl.aggregate(units, cfg), where=aggregate_where
+                                    ).get(key)
+                                    return None if value is None else float(value)
+
+                                return resample_fn
+
+                            resample_fns = {
+                                key: _make_resample_fn(key, cond_cfg, template) for key in derived
+                            }
+                    # The second door onto the same containment. `summarize_step`
+                    # refuses a derived key that collides with a recorded column
+                    # (`E-STEP-KEY-COLLISION`) — a real fault, and not weakened
+                    # here — but the fault is in the same user-written
+                    # `aggregate` the `try` above contains, one call later.
+                    # Uncontained it exits before `run.yaml` is written,
+                    # discarding every completed execution over one badly chosen
+                    # name, while the sibling case (a structural return) merely
+                    # warns. So it is disclosed the same way and costs the same
+                    # thing: the whole `derived` mapping, exactly as a coercion
+                    # failure does, never the recorded columns' own summaries —
+                    # which is why the retry passes no `derived` rather than
+                    # dropping the one colliding key.
+                    try:
+                        step_summary = summarize_step(
+                            collapsed,
+                            counts,
+                            derived=derived,
+                            seed=resample_seed_value,
+                            resample=resample_fns,
+                            draws=derived_metric_draws,
+                        )
+                    except ContractError as exc:
+                        prefix = f"{exc.code} " if exc.code else ""
+                        aggregate_c.warn(
+                            "W-STATS-AGGREGATE-FAILED",
+                            aggregate_where,
+                            f"condition {cond.index} step {step_name!r}: "
+                            f"{prefix}{type(exc).__name__}: {exc}",
+                        )
+                        step_summary = summarize_step(collapsed, counts)
+                    # `resample_draws: 0` (as opposed to `null`, meaning
+                    # resampling was never attempted) is `summarize_step`'s
+                    # signal that a callable was supplied and every single
+                    # draw was degenerate — `nan`, `None`, or a raise, which
+                    # `percentile_of_derived` treats alike. That is the same
+                    # class of event `W-STATS-AGGREGATE-FAILED` already
+                    # covers above (user code could not produce a number), so
+                    # it reuses the identifier rather than minting a second
+                    # one; the two cannot both fire for one metric, because a
+                    # failure in the call above already left `derived` (and
+                    # so this key) absent from `step_summary` entirely. The
+                    # unit-identity fix makes this more likely, not less: a
+                    # bootstrap draw duplicates units by construction, and a
+                    # template whose `aggregate` assumes distinct ones will
+                    # raise on every draw rather than some.
+                    for metric_key, metric in step_summary.items():
+                        used = metric.get("resample_draws")
+                        if used == 0:
+                            aggregate_c.warn(
+                                "W-STATS-AGGREGATE-FAILED",
+                                aggregate_where,
+                                f"condition {cond.index} step {step_name!r} metric "
+                                f"{metric_key!r}: every resample draw failed to "
+                                "produce a value; reporting the point value with "
+                                "no interval",
+                            )
+                        # A shrunken-but-nonzero count is a different event, so
+                        # it gets a different identifier: `aggregate` did not
+                        # fail — it produced numbers, just on fewer draws than
+                        # were asked for, because some draws were degenerate.
+                        # Below `min_honest_draws` the interval is `None` and
+                        # this is the only notice of why; above it the interval
+                        # exists but rests on less than it claims. One warning
+                        # per metric, naming both counts, so a reader can weigh
+                        # it without reading `resample_draws` out of `run.yaml`.
+                        elif used is not None and used < derived_metric_draws:
+                            floor = min_honest_draws()
+                            aggregate_c.warn(
+                                "W-STATS-RESAMPLE-THIN",
+                                aggregate_where,
+                                f"condition {cond.index} step {step_name!r} metric "
+                                f"{metric_key!r}: {used} of {derived_metric_draws} "
+                                "resample draws produced a value"
+                                + (
+                                    f"; below the {floor} an interval can honestly be "
+                                    "read off, so none is reported"
+                                    if used < floor
+                                    else ""
+                                ),
+                            )
+                    # One dispersion figure per repeat level, outer to inner
+                    # (`reference.md` § A `batch` says *when*, not *what*), computed
+                    # per RECORDED column — pooling `pred` and `truth` into one mean
+                    # would report the blend as the dispersion of each. Only the
+                    # columns `collapse_repeats` actually collapsed (and that
+                    # survived `summarize_step`'s all-numeric check) get a figure;
+                    # a derived (`aggregate`-computed) metric has no raw per-execution
+                    # column to read a member's mean from without recomputing
+                    # `aggregate` per member — the same heavier operation
+                    # `repeat_spread` already declines for a nested `fold` — so it
+                    # gets none (`docs/superpowers/spec-defects.md`). A length-one
+                    # result is unwrapped to a bare mapping, matching
+                    # `reference.md`'s single-level examples; a nested design's list
+                    # of >1 entries is left as a list.
+                    recorded_columns = {col for cols in collapsed.values() for col in cols}
+                    for column in recorded_columns:
+                        if column not in step_summary:
+                            continue
+                        spread = repeat_spread(
+                            results,
+                            step_name,
+                            cond.index,
+                            levels,
+                            column,
+                            # The units the metric beside it rests on, so the
+                            # dispersion and the interval describe one
+                            # population (`repeat_spread` says why).
+                            keys=set(collapsed),
+                        )
+                        if spread:
+                            step_summary[column]["repeat_spread"] = (
+                                spread[0] if len(spread) == 1 else spread
+                            )
+                    aggregated[cond.index][step_name] = step_summary
+            if aggregate_c.findings:
+                # Disclosed, not corrective: a metric that could not be computed
+                # is not the same fact as a run that did not happen, so `status`
+                # (set above from the executions themselves, all of which already
+                # completed by the time `aggregate` runs) is deliberately left
+                # alone — unlike `E-INPUT-CHANGED` below, which does set
+                # `status = "failed"` for a different reason (the data a
+                # completed run rested on is no longer what it read). This is
+                # printed to stdout only: `run.yaml` has no diagnostics channel
+                # to carry a finding that isn't a metric, an interval, or a
+                # status.
+                print(aggregate_c.render())
         changed_inputs = verify_manifest(input_dir, manifest)  # phase 8: re-verify
         if changed_inputs:
             status = "failed"
@@ -433,8 +653,7 @@ def _dispatch_generate(command: str, rest: list[str]) -> int:
         missing = [f"--{o}" for o in ("template", "input-dir", "output-dir") if o not in opts]
         if not name or missing:
             print(
-                "`generate experiment` needs a name plus "
-                + ", ".join(missing or ["a name"]),
+                "`generate experiment` needs a name plus " + ", ".join(missing or ["a name"]),
                 file=sys.stderr,
             )
             return EXIT_INVOCATION

@@ -26,6 +26,7 @@ def run_a_project(
     replication: dict[str, Any] | None = None,
     capsys: pytest.CaptureFixture[str] | None = None,
     extra_steps: list[str] | None = None,
+    aggregate_returns: str | None = None,
     **overrides: Any,
 ) -> dict[str, Any]:
     """Scaffold, configure, commit, and `run` a project end to end.
@@ -55,6 +56,14 @@ def run_a_project(
     pipeline with more than one repeat-scope step — the shape that distinguishes
     step-major from pair-major execution, and which the single-step scaffold
     cannot express at all.
+
+    `aggregate_returns` names a derived metric to produce end to end: when set,
+    the scaffolded step records a `pred` column (one float per unit, `0.0`..
+    `n-1`) and the template's `aggregate` returns `{aggregate_returns: mean(pred)}`
+    over the collapsed unit table — a mean, not a sum, since it needs `len(units)`
+    rather than assuming the caller already has a denominator. Patched in via
+    `pytest.MonkeyPatch.context()`, self-contained so no caller needs its own
+    `monkeypatch` fixture, and undone before this function returns.
     """
     tmp_path.mkdir(parents=True, exist_ok=True)
     root = tmp_path / "proj"
@@ -67,30 +76,44 @@ def run_a_project(
     patients = "\n".join(f"p{i}" for i in range(1, 11))
     (data / "index.csv").write_text(f"patient_id\n{patients}\n")
     assert main(["new", str(root)]) == EXIT_OK
-    cfg = generate_experiment(
-        repo_root=root,
-        name="cohort-pilot",
-        template_name="generic",
-        input_dir=str(data),
-        output_dir=str(results_dir),
-    )
-    for step_name in extra_steps or []:
-        generate_step(repo_root=root, experiment="cohort-pilot", step_name=step_name)
-    doc = yaml.safe_load(cfg.read_text())
-    doc["metadata"]["description"] = "an end-to-end helper run"
-    doc["metadata"]["authors"] = ["Kyungjoon Lee"]
-    if replication is not None:
-        doc["replication"] = replication
-    doc.update(overrides)
-    cfg.write_text(yaml.safe_dump(doc))
-    for args in (
-        ["add", "."],
-        ["-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "helper run"],
-    ):
-        subprocess.run(["git", *args], cwd=root, check=True)
+    with pytest.MonkeyPatch.context() as mp:
+        if aggregate_returns is not None:
+            import publishable.generators.experiment as experiment_gen
+            from publishable.templates.builtin.generic import GenericTemplate
 
-    assert main(["run", str(cfg)]) == EXIT_OK
-    captured = capsys.readouterr() if capsys is not None else None
+            metric_name = aggregate_returns
+            mp.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+            mp.setattr(
+                GenericTemplate,
+                "aggregate",
+                lambda self, units, cfg, _name=metric_name: {
+                    _name: sum(units.pred) / len(units)
+                },
+            )
+        cfg = generate_experiment(
+            repo_root=root,
+            name="cohort-pilot",
+            template_name="generic",
+            input_dir=str(data),
+            output_dir=str(results_dir),
+        )
+        for step_name in extra_steps or []:
+            generate_step(repo_root=root, experiment="cohort-pilot", step_name=step_name)
+        doc = yaml.safe_load(cfg.read_text())
+        doc["metadata"]["description"] = "an end-to-end helper run"
+        doc["metadata"]["authors"] = ["Kyungjoon Lee"]
+        if replication is not None:
+            doc["replication"] = replication
+        doc.update(overrides)
+        cfg.write_text(yaml.safe_dump(doc))
+        for args in (
+            ["add", "."],
+            ["-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "helper run"],
+        ):
+            subprocess.run(["git", *args], cwd=root, check=True)
+
+        assert main(["run", str(cfg)]) == EXIT_OK
+        captured = capsys.readouterr() if capsys is not None else None
     run_dir = next(results_dir.glob("run_*"))
     lines = (run_dir / "executions.jsonl").read_text().splitlines()
     ledger = [json.loads(line) for line in lines]
@@ -383,3 +406,314 @@ def test_a_five_fold_run_end_to_end(tmp_path, capsys):
     n_units = [per_repeat[f"fold{i:02d}"]["n_units"] for i in range(1, 6)]
     assert n_units == [2, 2, 2, 2, 2]
     assert sum(n_units) == 10
+
+
+# --- Task 2 (derived-metrics): the live defect this slice closes ---------------
+
+_NUMPY_RETURN_STEP = '''\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+import numpy as np
+
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        return {{"score": np.float64(1.5)}}    # forces a NumPy scalar into run.yaml
+'''
+
+
+def test_a_numpy_scalar_return_produces_a_run_yaml_that_serializes(tmp_path, monkeypatch):
+    """The ruled-on fix: before `coerce_scalars` was wired into a step's return, a
+    `numpy.float64` reached `yaml.safe_dump` while writing `run.yaml` and raised
+    `RepresenterError` — a bare traceback, not a diagnostic. Confirmed to fail with
+    that traceback before this task's fix landed."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _NUMPY_RETURN_STEP)
+    doc = run_a_project(tmp_path)
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "completed"
+    per_repeat = run["results"]["conditions"][0]["per_repeat"]["step01_summarize_units"]
+    score = next(iter(per_repeat.values()))["score"]
+    assert type(score) is float
+
+
+# --- Task 6 (derived-metrics): a template's `aggregate` reaches the record -----
+
+_AGGREGATE_STEP = '''\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        units = list(io.units)
+        for i, unit in enumerate(units):
+            io.record(unit.key, {{"pred": float(i)}})
+        return {{"n_units": len(units)}}
+'''
+
+
+def test_a_derived_metric_reaches_run_yaml_with_a_resampled_interval(tmp_path, monkeypatch):
+    """The integration this task closes: a template's `aggregate` actually runs
+    once per recording step, over that step's collapsed unit table, and its
+    return reaches `run.yaml` as `basis: units` with a resampled `ci95` — not
+    a scalar `aggregate` computed and core silently discarded."""
+    import publishable.generators.experiment as experiment_gen
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    monkeypatch.setattr(
+        GenericTemplate, "aggregate", lambda self, units, cfg: {"total": sum(units.pred)}
+    )
+    doc = run_a_project(tmp_path)
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "completed"
+    metric = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["total"]
+    assert metric["basis"] == "units"
+    assert metric["method"] == "percentile_over_units"
+    assert metric["ci95"] is not None
+    low, high = metric["ci95"]
+    assert low < metric["value"] < high
+    assert metric["cohens_d"] is None
+
+
+def test_a_project_without_aggregate_records_only_the_recorded_column(tmp_path, monkeypatch):
+    """The regression guard: a run whose template never overrides `aggregate`
+    (the base's `{}`) must record only the recorded column, exactly as before
+    this task — no `total`, no empty placeholder, nothing new in `aggregated`."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    doc = run_a_project(tmp_path)
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert "total" not in aggregated
+    assert set(aggregated) == {"pred"}
+
+
+# --- Task 9 (derived-metrics): acceptance — a derived metric reaches `run.yaml`
+# from `main(["run", ...])`, via `run_a_project`'s new `aggregate_returns` --------
+
+
+def _first_metric(run: dict[str, Any], name: str) -> dict[str, Any] | None:
+    """The metric named `name`, wherever in `results.conditions[*].aggregated`
+    it landed — a small local helper, since every caller here already knows
+    which step it expects but the acceptance tests don't need to name it."""
+    for condition in run["results"]["conditions"]:
+        for step_aggregated in condition["aggregated"].values():
+            if name in step_aggregated:
+                metric = step_aggregated[name]
+                assert isinstance(metric, dict)
+                return metric
+    return None
+
+
+def test_a_derived_metric_end_to_end(tmp_path, capsys):
+    doc = run_a_project(tmp_path, capsys=capsys, aggregate_returns="mean_pred")
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    metric = _first_metric(run, "mean_pred")
+    assert metric["basis"] == "units"
+    assert metric["method"] == "percentile_over_units"
+    assert metric["ci95"] is not None
+    assert metric["cohens_d"] is None
+    assert metric["correction"] is None  # S4b's job; disclosed, not silently corrected
+
+
+def test_the_same_digest_reproduces_the_derived_interval(tmp_path, capsys):
+    a = run_a_project(tmp_path / "a", capsys=capsys, aggregate_returns="mean_pred")
+    b = run_a_project(tmp_path / "b", capsys=capsys, aggregate_returns="mean_pred")
+    ra = yaml.safe_load((a["run_dir"] / "run.yaml").read_text())
+    rb = yaml.safe_load((b["run_dir"] / "run.yaml").read_text())
+    assert _first_metric(ra, "mean_pred")["ci95"] == _first_metric(rb, "mean_pred")["ci95"]
+
+
+def test_a_project_without_aggregate_reports_no_derived_metric(tmp_path, capsys):
+    doc = run_a_project(tmp_path, capsys=capsys)
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert _first_metric(run, "mean_pred") is None
+
+
+def test_a_failing_aggregate_does_not_cost_the_run_its_record(tmp_path, monkeypatch, capsys):
+    """The Critical this task's review found: `aggregate` is user code in
+    exactly the sense a step's `run` is, but ran uncontained — a raise other
+    than `PublishableError`/`OSError` would have crashed before `run.yaml` was
+    ever written, discarding every completed execution over one metric core
+    couldn't compute. `run` must still complete, still write `run.yaml`, and
+    still carry the recorded column's own summary; the failure is disclosed
+    on stdout rather than swallowed or allowed to crash."""
+    import publishable.generators.experiment as experiment_gen
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    def _raises(self, units, cfg):
+        raise ZeroDivisionError("a degenerate ratio, not a resample draw")
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    monkeypatch.setattr(GenericTemplate, "aggregate", _raises)
+    doc = run_a_project(tmp_path, capsys=capsys)
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    # A run that did happen: every execution completed, so `status` is not
+    # downgraded by a metric that could not be computed — that is a fact
+    # about `aggregate`, not about whether the pipeline ran.
+    assert run["status"] == "completed"
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert "total" not in aggregated
+    assert set(aggregated) == {"pred"}
+    assert "W-STATS-AGGREGATE-FAILED" in doc["stdout"]
+    assert "ZeroDivisionError" in doc["stdout"]
+
+
+def test_a_colliding_derived_key_does_not_cost_the_run_its_record(tmp_path, monkeypatch, capsys):
+    """The same Critical through its second door. `summarize_step` refuses a
+    derived key that shadows a recorded column (`E-STEP-KEY-COLLISION`), and
+    that call sat outside the containment above — so a template returning
+    `pred` against a step recording `pred` exited 1 with no `run.yaml`,
+    discarding every completed execution over one badly chosen name, while
+    the sibling case (a structural return) merely warned. The refusal itself
+    stands; what it costs is the derived metric, not the run's record."""
+    import publishable.generators.experiment as experiment_gen
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    monkeypatch.setattr(GenericTemplate, "aggregate", lambda self, units, cfg: {"pred": 1.0})
+    doc = run_a_project(tmp_path, capsys=capsys)
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "completed"
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    # The recorded column's own summary survives, and is the recorded column's
+    # mean — not the derived value that tried to shadow it.
+    assert set(aggregated) == {"pred"}
+    assert aggregated["pred"]["value"] == sum(float(i) for i in range(10)) / 10
+    assert "W-STATS-AGGREGATE-FAILED" in doc["stdout"]
+    assert "E-STEP-KEY-COLLISION" in doc["stdout"]
+
+
+def test_a_shrunken_resample_is_warned_about(tmp_path, monkeypatch, capsys):
+    """An interval built from 100 of 2000 draws must not read like a clean
+    one. `resample_draws` records it; `W-STATS-RESAMPLE-THIN` says it out
+    loud, because a reader who never opens `run.yaml` has no other signal.
+    Distinct from `W-STATS-AGGREGATE-FAILED`: `aggregate` did not fail — it
+    produced numbers, on fewer draws than were asked for."""
+    import publishable.generators.experiment as experiment_gen
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    calls = {"n": 0}
+
+    def _survives_a_hundred_draws(self, units, cfg):
+        calls["n"] += 1
+        # Call 1 is the real, unresampled one whose return is the reported
+        # value; the next 100 are draws that survive, and every draw after
+        # that is degenerate.
+        if calls["n"] > 101:
+            return {"total": None}
+        return {"total": sum(units.pred)}
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    monkeypatch.setattr(GenericTemplate, "aggregate", _survives_a_hundred_draws)
+    doc = run_a_project(tmp_path, capsys=capsys)
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    metric = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["total"]
+    assert metric["resample_draws"] == 100
+    assert metric["ci95"] is not None  # 100 is above the honest floor of 80
+    assert "W-STATS-RESAMPLE-THIN" in doc["stdout"]
+    assert "100 of 2000 resample draws" in doc["stdout"]
+
+
+def test_too_few_surviving_draws_report_no_interval_at_all(tmp_path, monkeypatch, capsys):
+    """Below the floor there is no honest percentile to read: at two
+    survivors the two ranks coincide and `run.yaml` carried a zero-width 95 %
+    interval labelled `percentile_over_units`. Now the point value stands
+    alone, and the warning says why."""
+    import publishable.generators.experiment as experiment_gen
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    calls = {"n": 0}
+
+    def _survives_two_draws(self, units, cfg):
+        calls["n"] += 1
+        return {"total": sum(units.pred) if calls["n"] <= 3 else None}
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    monkeypatch.setattr(GenericTemplate, "aggregate", _survives_two_draws)
+    doc = run_a_project(tmp_path, capsys=capsys)
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    metric = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["total"]
+    assert metric["resample_draws"] == 2
+    assert metric["ci95"] is None
+    assert metric["method"] is None
+    assert "W-STATS-RESAMPLE-THIN" in doc["stdout"]
+    assert "so none is reported" in doc["stdout"]
+
+
+def test_a_raising_resample_draw_does_not_crash_the_run(tmp_path, monkeypatch):
+    """The nan-versus-raise asymmetry the review named, at the integration
+    level: the single unresampled call to `aggregate` must succeed (so the
+    point value is real) while a resampled draw's call to the same
+    `aggregate` can legitimately raise on a degenerate composition — the same
+    situation `pearsonr` returning `nan` covers for a library that doesn't
+    raise. The run must still complete with a real `ci95` or an honest
+    `None`, never a traceback."""
+    import publishable.generators.experiment as experiment_gen
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    def _sum_or_raise(self, units, cfg):
+        values = units.pred
+        if len(set(values)) < 2:  # a resample draw that happened to lack spread
+            raise ZeroDivisionError("degenerate draw")
+        return {"total": sum(values)}
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    monkeypatch.setattr(GenericTemplate, "aggregate", _sum_or_raise)
+    doc = run_a_project(tmp_path)
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "completed"
+    metric = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["total"]
+    assert metric["value"] == sum(float(i) for i in range(10))
+    # Either a real interval survived enough draws, or none did — both are
+    # honest; a traceback is the only wrong answer, and this test would have
+    # raised one before the resample draws were contained.
+    assert metric["ci95"] is None or len(metric["ci95"]) == 2
+
+
+def test_a_total_resample_failure_is_disclosed_not_silent(tmp_path, capsys, monkeypatch):
+    """The second review round's finding: `aggregate` that succeeds once (on
+    the real, all-distinct table) but raises on every single resampled draw
+    (because a bootstrap draw duplicates units, and this `aggregate`
+    deliberately assumes distinct ones — exactly the template the review
+    warned the unit-identity fix makes more likely) must not read identically
+    to a metric nobody tried to resample at all. `resample_draws: 0` and a
+    `W-STATS-AGGREGATE-FAILED` warning distinguish it; `status` stays
+    `completed` regardless, since every execution genuinely did complete."""
+    import publishable.generators.experiment as experiment_gen
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    def _sum_if_distinct(self, units, cfg):
+        values = units.pred
+        if len(set(values)) != len(values):  # a resampled draw always duplicates
+            raise ZeroDivisionError("this aggregate assumes distinct units")
+        return {"total": sum(values)}
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    monkeypatch.setattr(GenericTemplate, "aggregate", _sum_if_distinct)
+    doc = run_a_project(tmp_path, capsys=capsys)
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "completed"
+    metric = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["total"]
+    assert metric["value"] == sum(float(i) for i in range(10))  # the one real call succeeded
+    if metric["resample_draws"] == 0:
+        assert metric["ci95"] is None
+        assert "W-STATS-AGGREGATE-FAILED" in doc["stdout"]
+        assert "every resample draw failed" in doc["stdout"]
+    else:
+        # With 2000 draws over a 10-unit roster, an exact all-distinct
+        # permutation surviving once or twice is possible but rare; if it
+        # happened here, the disclosure path wasn't exercised and the
+        # unit-level tests (`test_a_raising_compute_is_treated_as_degenerate_
+        # not_propagated`, `test_total_resample_failure_is_distinguishable_
+        # from_no_resample_supplied`) are what pin the behaviour deterministically.
+        assert metric["resample_draws"] is not None

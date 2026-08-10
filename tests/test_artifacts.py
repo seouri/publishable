@@ -2,6 +2,7 @@
 import json
 from pathlib import Path
 
+import numpy as np
 import pytest
 
 from publishable import ArtifactError, ArtifactExistsError, ContractError
@@ -471,6 +472,20 @@ def test_a_str_and_int_column_clash_raises_rather_than_coercing():
     assert "'v'" in str(e.value)
     assert "str" in str(e.value)
     assert "int" in str(e.value)
+
+
+def test_io_record_coerces_a_numpy_value(tmp_path: Path):
+    io = make_io(tmp_path, units=UnitList([_u("u1")]))
+    io.record("u1", {"score": np.float64(1.5)})
+    row = io.rows()[0]
+    assert type(row["score"]) is float
+
+
+def test_io_record_refuses_a_structural_value(tmp_path: Path):
+    io = make_io(tmp_path, units=UnitList([_u("u1")]))
+    with pytest.raises(ContractError) as exc:
+        io.record("u1", {"score": {"nested": 1}})
+    assert exc.value.code == "E-STEP-RETURN-TYPE"
 
 
 def test_rows_returns_deep_enough_copies_that_mutating_a_row_does_not_corrupt_state(
