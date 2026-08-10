@@ -527,12 +527,16 @@ def _check_replication(
     has_unresolved_fold = False
     for level in levels:
         count = _level_count(level, unit_count)
-        if count is None and _declared_count(level) is not None:
-            # The count is declared but not resolvable to a number — `{kind: fold,
-            # k: all}` with no roster, or any other string `k`, which
-            # `resolve_repeats` reports by name as `E-REPL-FOLD-K` below. Either
-            # way the total from here on is not a fact: don't fold a guess into
-            # it, and don't derive a floor warning from it either.
+        if count is None and isinstance(_declared_count(level), str):
+            # The count is declared as a word rather than a number and could not
+            # be resolved — `{kind: fold, k: all}` with no roster, or any other
+            # string `k`, which `resolve_repeats` reports by name as
+            # `E-REPL-FOLD-K` below. The total from here on is not a fact: don't
+            # fold a guess into it, and don't derive a floor warning from it.
+            # Deliberately `str` rather than "not a number": a `n: yes` (a bool
+            # under YAML) is the one repeat `resolve_repeats` will execute, so
+            # treating it as unknown would suppress the budget check for the
+            # whole config over a typo — the silent skip this pass exists to end.
             has_unresolved_fold = True
             continue
         if count is not None and int(count) < 1:
@@ -720,9 +724,12 @@ def _repeat_total(doc: dict[str, Any], unit_count: int | None) -> int | None:
     it was the one design that could not produce the warning while this function
     read a string and gave up.
 
-    Returns `None` only when a declared count genuinely cannot be resolved: a
+    Returns `None` only when a count declared as a *word* cannot be resolved: a
     `k: all` whose roster did not resolve, or a string `k` that is not `all`
-    (reported by name as `E-REPL-FOLD-K`). Silently treating such a level as
+    (reported by name as `E-REPL-FOLD-K`). Anything else unreadable — a `n: yes`,
+    which YAML parses as a bool — executes 1× and is reported under its own
+    identifier, so it contributes 1× here rather than suppressing the check for
+    the whole config. Silently treating an unresolved level as
     contributing 1× would understate the total by the roster size — a wrong
     small number is worse than admitting the total is unknown, so the caller
     skips the check rather than trust a guess.
@@ -732,7 +739,10 @@ def _repeat_total(doc: dict[str, Any], unit_count: int | None) -> int | None:
     for level in levels:
         count = _level_count(level, unit_count)
         if count is None:
-            if _declared_count(level) is not None:
+            # A string count that did not resolve is genuinely unknown; anything
+            # else unreadable (a bool, a list) is reported under its own
+            # identifier and executes 1×, so it must not suppress this check.
+            if isinstance(_declared_count(level), str):
                 return None
             continue
         if count >= 1:

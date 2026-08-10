@@ -80,10 +80,12 @@ def attrition(
     right answer at this scope: the counts a condition reports are against the
     cohort the condition was run over, and a fold whose execution is missing
     leaves its units genuinely unsettled, so they land in `failed` rather than
-    vanishing from the denominator. The smaller-than-roster figure — what one
-    execution was handed — is the per-execution `resolved` reported in
-    `per_repeat`, which is the level `reference.md` § What isn't a repeat states
-    that rule at.
+    vanishing from the denominator. The smaller-than-roster figure is a fact
+    about one *execution* — `reference.md` § Repeat kinds states it at that
+    level, "`n: {resolved: 1, completed: 1}` per execution" under `k: all` — and
+    this function is per-condition, so it is not the number to expect here. No
+    per-execution `n` is written in this build: `run.yaml`'s `per_repeat` stays
+    verbatim what each step returned (see `run_record.assemble_run_yaml`).
 
     This is the per-step, per-condition breakdown `stats.summarize_step` attaches
     as a metric's `n`. It is deliberately not what guards `max_failed_fraction`:

@@ -507,6 +507,24 @@ def test_the_budget_passes_at_exactly_the_limit_and_fails_one_over(write_config)
     assert "W-EXEC-BUDGET" in found_over
 
 
+def test_an_unreadable_count_that_is_not_a_word_still_leaves_the_budget_computable(write_config):
+    """The skip is for a count declared as a *word* and unresolvable, not for
+    every count this module can't read as a number. `n: yes` is a bool under
+    `yaml.safe_load`; `resolve_repeats` runs it as one repeat, so treating it as
+    unknown would suppress `W-EXEC-BUDGET` for the whole config over a typo —
+    the silent-skip class this pass exists to end, reintroduced one layer up."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {"grid": {"analysis.method": ["pearson", "spearman", "kendall"]}},
+                "replication": {"repeats": [{"kind": "seed", "n": True}]},
+                "limits": {"max_executions": 2},  # 3 conditions × 1 repeat = 3 > 2
+            }
+        )
+    )
+    assert "W-EXEC-BUDGET" in found
+
+
 def test_the_budget_check_does_not_crash_or_guess_when_k_all_cannot_resolve(write_config):
     """A `{kind: fold, k: all}` whose roster did NOT resolve makes the true
     execution count unknown — not zero and not 1×. This config declares no
@@ -608,6 +626,13 @@ def test_a_seed_declaring_k_is_refused_the_same_way(write_config):
     )
     assert "E-REPL-LEVEL-FIELD" in found
     assert "`k: 9`" in found["E-REPL-LEVEL-FIELD"]
+
+    # and the `batch` half, which `reference.md` § Validation has listed as a
+    # check ("Batch takes no fields — `{kind: batch, k: 3}`") since before
+    # anything enforced it
+    assert "E-REPL-LEVEL-FIELD" in codes(
+        write_config({"replication": {"repeats": [{"kind": "batch", "k": 3}]}})
+    )
 
 
 def test_a_multi_condition_sweep_warns_about_the_uncorrected_family(write_config):

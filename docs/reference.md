@@ -220,6 +220,7 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Repeat kind coherence | `{kind: bootstrap}` is not a repeat kind — declare `statistics.resample` instead |
 | Batch has something to measure | `{kind: batch, n: 5}` is declared but no step sets `nondeterministic = True`, so five batches recompute one answer (warning) |
 | Batch takes no fields | `{kind: batch, k: 3}` — a batch varies nothing, so `n` is the only field it accepts |
+| Each kind takes its own count | `{kind: fold, k: 2, n: 5}` — `n` is a `seed`/`batch` field and a fold's count is `k`, so this executes two folds while the [execution count](#repeat-kinds) reads five. A count one reader believes and the other ignores is refused, not resolved by precedence |
 | Null test coherence | `statistics.null_test` requires `shuffle` to name a unit attribute |
 | Shuffle level is unambiguous | `null_test.shuffle: status` varies within `match_set` `M07` but is constant within `M12`, so neither a within-cluster nor a whole-cluster null applies |
 | Clusters enough to resample | `statistics.resample` with `cluster_by: animal_id` over 4 animals bootstraps 4 draws; below `limits.min_clusters` (warning) |
