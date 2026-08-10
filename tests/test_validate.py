@@ -1058,10 +1058,13 @@ def test_a_declared_null_test_is_refused(write_config):
     )
 
 
-def test_declared_report_by_is_refused(write_config):
-    assert "E-STATS-REPORTBY-UNSUPPORTED" in codes(
-        write_config({"statistics": {"report_by": ["sex"]}})
-    )
+def test_declared_report_by_is_checked_rather_than_refused(write_config):
+    """S4d retires the blanket refusal and checks the declaration for real: with
+    no `data.units.attributes` declared at all, `sex` is not among them, so this
+    is now `E-STATS-REPORTBY-UNKNOWN` rather than the retired `-UNSUPPORTED`."""
+    found = codes(write_config({"statistics": {"report_by": ["sex"]}}))
+    assert "E-STATS-REPORTBY-UNSUPPORTED" not in found
+    assert "E-STATS-REPORTBY-UNKNOWN" in found
 
 
 def test_a_declared_hypothesis_is_refused(write_config):
@@ -1899,3 +1902,57 @@ def test_an_out_of_enum_correction_string_is_refused(write_config):
         write_config({"sweep": _TWO_CONDITIONS, "statistics": {"correction": "bonferonni"}})
     )
     assert "E-STATS-CORRECTION-UNKNOWN" in found
+
+
+_UNITS_WITH_SEX = {"from": "index.csv", "key": "patient_id", "attributes": ["sex"]}
+
+
+def test_a_declared_report_by_is_no_longer_refused(write_config):
+    """S4d implements it, so the blanket refusal retires with the slice — the
+    same way `E-STATS-CONTRASTS-UNSUPPORTED` retired with S4b."""
+    found = codes(
+        write_config(
+            {"data.units": _UNITS_WITH_SEX, "statistics": {"report_by": ["sex"]}}
+        )
+    )
+    assert "E-STATS-REPORTBY-UNSUPPORTED" not in found
+    assert "E-STATS-REPORTBY-UNKNOWN" not in found
+
+
+def test_a_report_by_attribute_must_be_declared(write_config):
+    """`reference.md` § Reporting strata: "validate rejects a `report_by`
+    attribute that isn't declared in `data.units.attributes`". Left unchecked,
+    `strata.levels_for` returns `{}` for a typo, which is indistinguishable from
+    an attribute no unit happens to carry — the record would simply hold no `by`
+    block and never say why."""
+    found = codes(
+        write_config(
+            {"data.units": _UNITS_WITH_SEX, "statistics": {"report_by": ["sexx"]}}
+        )
+    )
+    assert "E-STATS-REPORTBY-UNKNOWN" in found
+
+
+def test_a_non_list_report_by_is_refused_without_raising(write_config):
+    """`validate.py` collects findings and never raises. `report_by` is a nested
+    config value that new code reads, and this slice's predecessor shipped two
+    crashes of exactly that kind — a scalar `statistics.contrasts` reaching
+    `_check_sweep`, and an unhashable contrast `id` reaching a set."""
+    for block in (5, True, "sex", {"sex": 1}):
+        found = codes(
+            write_config(
+                {"data.units": _UNITS_WITH_SEX, "statistics": {"report_by": block}}
+            )
+        )
+        assert "E-CONFIG-SHAPE" in found
+
+
+def test_a_non_string_report_by_entry_is_refused(write_config):
+    """A list is well-shaped but its *entries* may not be. An unhashable entry
+    would reach a set membership test against `data.units.attributes`."""
+    found = codes(
+        write_config(
+            {"data.units": _UNITS_WITH_SEX, "statistics": {"report_by": [["sex"]]}}
+        )
+    )
+    assert "E-STATS-REPORTBY-UNKNOWN" in found

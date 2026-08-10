@@ -148,6 +148,10 @@ def _check_shape(doc: dict[str, Any], c: Collector) -> bool:
         if contrasts is not None and not isinstance(contrasts, list):
             _bad("statistics.contrasts", contrasts, "list")
 
+        report_by = statistics.get("report_by")
+        if report_by is not None and not isinstance(report_by, list):
+            _bad("statistics.report_by", report_by, "list")
+
     return ok
 
 
@@ -243,6 +247,7 @@ def validate_config(
     _check_unimplemented(doc, c)
     _check_sweep(doc, template, c, unit_count=len(roster) if roster is not None else None)
     _check_contrasts(doc, c)
+    _check_report_by(doc, c)
     for message in template.validate(doc):
         c.error("E-TEMPLATE-RULE", "parameters", message)
     return doc
@@ -636,12 +641,14 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     kind, and `E-REPL-LEVEL-DEPTH` past two levels, and
     `E-REPL-LEVEL-BATCH-INNER` for a `batch` that is not the outermost level.
     `batch` and `fold` themselves are no longer refused — both are supported
-    kinds. `statistics.resample`, `.null_test`, `.report_by`, and a top-level
-    `hypotheses` block are refused the same way — a declared 2000-draw bootstrap or
+    kinds. `statistics.resample` and `.null_test`, and a top-level `hypotheses`
+    block, are refused the same way — a declared 2000-draw bootstrap or
     a pre-registered hypothesis that runs and reports success while honoring
     neither is the same silent-no-op class. `statistics.contrasts` is no longer in
     this family: `_check_contrasts` now resolves and checks each declared entry
-    instead of refusing the block wholesale. Neither is `statistics.correction`,
+    instead of refusing the block wholesale. Neither is `statistics.report_by`,
+    which `_check_report_by` now checks for real instead of refusing wholesale.
+    Neither is `statistics.correction`,
     which `cli.py` now applies: every comparison carries `ci95_corrected`,
     `correction_level`, `family_size`, and `family`, so what this module owes it
     is the value checks below (`E-STATS-CORRECTION-UNKNOWN`,
@@ -741,17 +748,17 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
                 "refusal exists to prevent; it will be honored in a later slice",
             )
 
-    # `statistics.resample`/`.null_test`/`.report_by` and a top-level `hypotheses`
-    # block all validate clean today and are read by nothing — the same
-    # silent-no-op class as the fields above. `statistics.contrasts` used to be in
-    # this list too; it is now checked for real by `_check_contrasts` instead of
-    # being refused wholesale. `statistics.correction` is not in it either, and no
-    # longer for a disclosure reason: `cli.py` applies it, so a declared correction
-    # changes the record — the correction checks further down this module check
-    # its *value* instead, and warn only on `none`, which corrects nothing by
-    # request. Of these four keys
-    # `materialize.py` writes only two into a generated config — `statistics.correction`
-    # and a top-level `hypotheses: []` — so the other two are simply absent there;
+    # `statistics.resample`/`.null_test` and a top-level `hypotheses` block all
+    # validate clean today and are read by nothing — the same silent-no-op class
+    # as the fields above. `statistics.contrasts` and `statistics.report_by` used
+    # to be in this list too; they are now checked for real by `_check_contrasts`
+    # and `_check_report_by` instead of being refused wholesale. `statistics.correction`
+    # is not in it either, and no longer for a disclosure reason: `cli.py` applies
+    # it, so a declared correction changes the record — the correction checks
+    # further down this module check its *value* instead, and warn only on `none`,
+    # which corrects nothing by request. `materialize.py` writes only two of these
+    # keys into a generated config — `statistics.correction` and a top-level
+    # `hypotheses: []` — so `resample` and `null_test` are simply absent there;
     # each check below fires on a real declaration either way, never on a key's mere
     # presence or on the empty list `hypotheses` is generated as.
     statistics = doc.get("statistics") or {}
@@ -765,11 +772,6 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
             "null_test",
             "E-STATS-NULLTEST-UNSUPPORTED",
             "no null distribution is computed",
-        ),
-        (
-            "report_by",
-            "E-STATS-REPORTBY-UNSUPPORTED",
-            "no stratified reporting runs",
         ),
     ):
         if statistics.get(field):
@@ -1167,3 +1169,30 @@ def _check_contrasts(doc: dict[str, Any], c: Collector) -> None:
                         f"statistics.contrasts[{i}].within",
                         f"names `{name}`, which is not in `data.units.attributes`",
                     )
+
+
+def _check_report_by(doc: dict[str, Any], c: Collector) -> None:
+    """Each `statistics.report_by` attribute, checked against the declared ones.
+
+    `reference.md` § Reporting strata: "validate rejects a `report_by` attribute
+    that isn't declared in `data.units.attributes`". The reason is the same one
+    `E-STATS-CONTRAST-WITHIN` exists for: `strata.levels_for` reads the attribute
+    with `.get`, which returns `None` for a typo exactly as it would for an
+    attribute no unit carries, so the two are indistinguishable downstream — the
+    record would hold no `by` block and never say why.
+
+    A non-string entry is refused under the same code rather than reaching the
+    set membership test below, where an unhashable one would raise out of a
+    module whose contract is that it collects.
+    """
+    entries = ((doc.get("statistics") or {}).get("report_by")) or []
+    if not isinstance(entries, list):
+        return  # `_check_shape` already refused it, and returned early
+    declared = set(((doc.get("data") or {}).get("units") or {}).get("attributes") or [])
+    for i, name in enumerate(entries):
+        if not isinstance(name, str) or name not in declared:
+            c.error(
+                "E-STATS-REPORTBY-UNKNOWN",
+                f"statistics.report_by[{i}]",
+                f"names `{name!r}`, which is not in `data.units.attributes`",
+            )
