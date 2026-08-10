@@ -2293,3 +2293,165 @@ def test_a_recorded_column_named_by_keeps_its_metric_and_warns(
     assert step_block["by"]["basis"] == "units"
     assert step_block["by"]["value"] == pytest.approx(39.0)
     assert "cohort" not in step_block["by"]
+
+
+# --- Task 6: `W-STATS-STRATUM-THIN` at run time --------------------------------
+
+_SKIP_MOST_OF_COHORT_A_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        # Cohort `a` all but disappears through `io.skip`, so its level is thin
+        # only AFTER the run — the case a roster-time count cannot predict.
+        kept = 0
+        for unit in io.units:
+            if unit.attributes["cohort"] == "a" and kept >= 3:
+                io.skip(unit.key, "outside the eligibility window")
+                continue
+            if unit.attributes["cohort"] == "a":
+                kept += 1
+            io.record(unit.key, {{"pred": float(len(unit.key))}})
+        return {{"n_units": len(io.units)}}
+"""
+
+
+def test_a_stratum_thinned_by_attrition_warns_at_run_time(tmp_path, capsys, monkeypatch):
+    """The gap validate cannot see. `W-STATS-REPORTBY-THIN` counts *resolved*
+    units from the roster; attrition happens during the run, so a level that
+    looked fine can complete on a handful. `reference.md` § What study add
+    redacts is explicit that a per-subgroup result over a handful of units is
+    exactly what no automatic rule can judge safe — so it is disclosed where it
+    is first knowable."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _SKIP_MOST_OF_COHORT_A_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
+        limits={"min_reported_n": 10},
+        statistics={"report_by": ["cohort"]},
+    )
+    assert "W-STATS-STRATUM-THIN" in doc["stdout"]
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    by = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["by"]
+    # The thin level still gets a block: that the subgroup produced almost
+    # nothing IS the finding, and dropping it would hide what the warning names.
+    assert by["cohort"]["a"]["pred"]["n"]["completed"] < 10
+
+
+def test_a_thick_stratum_does_not_warn_stratum_thin(tmp_path, capsys, monkeypatch):
+    """The negative case beside the attrition test: every level completes well
+    above the floor, so nothing should fire. This is what an "always warn"
+    mutation of the floor comparison is caught by."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
+        limits={"min_reported_n": 10},
+        statistics={"report_by": ["cohort"]},
+    )
+    assert "W-STATS-STRATUM-THIN" not in doc["stdout"]
+
+
+def test_min_reported_n_true_over_an_empty_level_does_not_warn(tmp_path, capsys, monkeypatch):
+    """Task 4's reasoning for dropping the `isinstance`/`bool` guard does not
+    transfer here. `strata.levels_for` never emits a zero-count level, so at
+    validate time a floor of `1` (`True`) is unreachable — `len(keys) < 1` never
+    holds. But a level's *completed* count genuinely can be `0` at run time
+    (every unit in the level failed or was skipped), so `min_reported_n: true`
+    giving a floor of `1` would make `0 < 1` fire without the guard. Cohort `a`
+    is skipped entirely here, so its level completes nothing — the guard must
+    keep that from warning."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _SKIP_ONE_COHORT_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
+        limits={"min_reported_n": True},
+        statistics={"report_by": ["cohort"]},
+    )
+    assert "W-STATS-STRATUM-THIN" not in doc["stdout"]
+
+
+def test_aggregate_failing_for_one_level_only_still_warns_and_reports_the_other(
+    tmp_path, capsys, monkeypatch
+):
+    """The per-level `try` around user `aggregate` code, exercised rather than
+    merely present. `aggregate` raises for exactly one level's table (keyed off
+    `len(units)`, distinguishing cohort `a`'s 3 completed units from cohort
+    `b`'s 20 and the whole table's 23): the run survives, the warning names
+    that stratum, the failing level omits the derived metric rather than
+    inheriting the parent's value, and the other level still reports its own."""
+    import publishable.generators.experiment as experiment_gen
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    def aggregate_that_fails_for_one_level(self, units, cfg):
+        if len(units) == 3:
+            raise RuntimeError("boom for the thin level only")
+        return {"r": sum(units.pred) / len(units)}
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _SKIP_MOST_OF_COHORT_A_STEP)
+    monkeypatch.setattr(GenericTemplate, "aggregate", aggregate_that_fails_for_one_level)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
+        statistics={"report_by": ["cohort"]},
+    )
+    assert "W-STATS-AGGREGATE-FAILED" in doc["stdout"]
+    assert "stratum cohort=a" in doc["stdout"]
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    by = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["by"]
+    # The failing level still has a block (its recorded column survived) but no
+    # derived metric — it does not inherit the parent's or the sibling's value.
+    assert "r" not in by["cohort"]["a"]
+    assert by["cohort"]["a"]["pred"]["n"]["completed"] == 3
+    # The sibling level's own metric survives untouched. Cohort `b` is the odd
+    # patient indices (`'ab'[i % 2]` puts `i=1` at `'b'`), all 20 recorded.
+    assert by["cohort"]["b"]["r"]["value"] == pytest.approx(
+        sum(float(len(f"p{i}")) for i in range(1, 41) if i % 2 == 1) / 20
+    )
+
+
+def test_an_empty_level_produces_no_spurious_aggregate_failed(tmp_path, capsys, monkeypatch):
+    """Empty-level gate 1 (`if not level_collapsed: continue`) is not pinned by
+    any other test: the existing empty-level test passes no `aggregate_returns`,
+    so the second gate (no metric produced) covers it just as well. With a
+    derived metric in play, gate 1 does real work — without it, `aggregate` is
+    called on an empty table, which raises for this template, and every empty
+    level would spuriously warn `W-STATS-AGGREGATE-FAILED`."""
+    import publishable.generators.experiment as experiment_gen
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _SKIP_ONE_COHORT_STEP)
+    monkeypatch.setattr(
+        GenericTemplate,
+        "aggregate",
+        lambda self, units, cfg: {"r": sum(units.pred) / len(units)},
+    )
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
+        statistics={"report_by": ["cohort"]},
+    )
+    assert "W-STATS-AGGREGATE-FAILED" not in doc["stdout"]
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    by = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["by"]
+    assert set(by["cohort"]) == {"b"}

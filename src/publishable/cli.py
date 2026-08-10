@@ -1074,16 +1074,6 @@ def command_run(config_path: Path) -> int:
                             level_collapsed = {
                                 k: v for k, v in collapsed.items() if k in keys
                             }
-                            # A level nothing completed gets no block at all —
-                            # `W-STATS-STRATUM-THIN` is what tells a reader the
-                            # level exists and is empty, and a block whose
-                            # metrics rest on no rows adds nothing to that. It
-                            # also keeps `aggregate` from being called on an
-                            # empty table, which raises for most templates and
-                            # would fill the diagnostics with one failure per
-                            # empty level.
-                            if not level_collapsed:
-                                continue
                             level_roster = UnitList([u for u in roster if u.key in keys])
                             level_counts = attrition(
                                 results,
@@ -1092,6 +1082,41 @@ def command_run(config_path: Path) -> int:
                                 cond.index,
                                 fold_members=fold_members,
                             )
+                            # Attrition happens during the run, so a level the
+                            # roster-time `W-STATS-REPORTBY-THIN` counted as
+                            # comfortable can complete on a handful — or on
+                            # nothing at all. This check sits ahead of both
+                            # gates below (the empty-level `continue` and the
+                            # no-metric-produced check) on purpose: a level
+                            # thinned to zero is the most disclosive case, and
+                            # is exactly the one that gets no block. Warning
+                            # only where a block is also emitted would mean the
+                            # worst case never warns.
+                            stratum_floor = (doc.get("limits") or {}).get("min_reported_n")
+                            completed = level_counts.get("completed", 0)
+                            if (
+                                isinstance(stratum_floor, (int, float))
+                                and not isinstance(stratum_floor, bool)
+                                and completed < stratum_floor
+                            ):
+                                aggregate_c.warn(
+                                    "W-STATS-STRATUM-THIN",
+                                    "limits.min_reported_n",
+                                    f"condition {cond.index}, step {step_name!r}: "
+                                    f"level `{level}` of `{attribute}` completed "
+                                    f"{completed} units, below limits.min_reported_n "
+                                    f"({stratum_floor})",
+                                )
+                            # A level nothing completed gets no block at all —
+                            # `W-STATS-STRATUM-THIN` above is what tells a
+                            # reader the level exists and is empty, and a block
+                            # whose metrics rest on no rows adds nothing to
+                            # that. It also keeps `aggregate` from being called
+                            # on an empty table, which raises for most
+                            # templates and would fill the diagnostics with one
+                            # failure per empty level.
+                            if not level_collapsed:
+                                continue
                             # A derived metric is NOT recomputed by
                             # `summarize_step` — it writes `value` straight
                             # through from the mapping and takes only the
