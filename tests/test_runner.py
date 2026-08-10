@@ -646,6 +646,31 @@ def test_execute_plan_without_a_fold_still_hands_the_whole_roster(tmp_path: Path
     assert results[0].returned == {"keys": "u1,u2"}
 
 
+def test_a_summary_step_under_a_fold_still_gets_the_full_roster(tmp_path: Path):
+    """By summary time every fold has already run, so there is nothing left to
+    leak — unlike `run`/`condition`, `summary` is deliberately not among the
+    scopes `reference.md` § A `fold` repeat puts the units out of reach of the
+    wider scopes names, and must keep receiving the whole roster unconditionally."""
+    roster = UnitList([Unit(key="u1"), Unit(key="u2"), Unit(key="u3"), Unit(key="u4")])
+    members = {"fold01": frozenset({"u1", "u2"}), "fold02": frozenset({"u3", "u4"})}
+
+    class TouchesUnitsAtSummary(BaseStep):
+        scope = "summary"
+
+        def run(self, cfg, io):
+            return {"keys": ",".join(sorted(u.key for u in io.units))}
+
+    _, results, _ = harness(
+        tmp_path,
+        [TouchesUnitsAtSummary],
+        units=roster,
+        repeats=[Repeat("fold", "fold01", 0), Repeat("fold", "fold02", 0)],
+        fold_members=members,
+    )
+    assert results[0].status == "completed"
+    assert results[0].returned == {"keys": "u1,u2,u3,u4"}
+
+
 def test_a_single_repeat_skip_is_still_ineligible(tmp_path: Path):
     """With one repeat, intersection over a single set is that set — unchanged behavior."""
     roster = UnitList([Unit(key="p0"), Unit(key="p1")])
