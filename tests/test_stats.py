@@ -83,6 +83,43 @@ def test_under_fold_times_seed_a_unit_is_handed_to_every_seed_of_its_fold():
     assert handed_to("u1", labels, members) == ["fold01_seed01", "fold01_seed02"]
 
 
+def test_a_fold_nested_in_a_batch_is_matched_by_token_not_by_prefix():
+    """`batch01_fold02` is the reachable two-token shape with a fold inside another
+    level — `batch` must be outermost (`_check_batch_is_outermost`) and the depth
+    cap is two, so `batch01_fold02_seed03` cannot occur. A unit of `fold02` meets
+    its own fold once per batch: batches average, folds concatenate. A refactor
+    that parsed the label by prefix rather than by token would silently return
+    nothing here and collapse to an empty table with no error."""
+    members = {"fold01": frozenset({"u1"}), "fold02": frozenset({"u2"})}
+    labels = ["batch01_fold01", "batch01_fold02", "batch02_fold01", "batch02_fold02"]
+    assert handed_to("u2", labels, members) == ["batch01_fold02", "batch02_fold02"]
+    assert handed_to("u1", labels, members) == ["batch01_fold01", "batch02_fold01"]
+
+
+def test_the_collapsed_key_order_is_sorted_not_the_order_executions_arrive_in():
+    """`summarize_step` derives column order from `collapsed.values()`, so a ragged
+    table's `run.yaml` column order follows this dict's key order. Encounter order
+    varies with `order: randomized` — the shuffle decides which execution is seen
+    first — so the keys are sorted and two supply orders must agree."""
+    rows = {
+        "u30": {"score": 1.0, "late": 1.0},  # ragged: only some units carry `late`
+        "u10": {"score": 2.0},
+        "u20": {"score": 3.0, "late": 4.0},
+        "u40": {"score": 4.0},
+        "u50": {"score": 5.0},
+    }
+    forward = [_repeat_result("analyze", f"seed{i:02d}", 0, rows) for i in range(1, 3)]
+    results = [
+        _repeat_result("analyze", "seed01", 0, {k: rows[k] for k in ["u30", "u10", "u20"]}),
+        _repeat_result("analyze", "seed01", 0, {k: rows[k] for k in ["u50", "u40"]}),
+    ]
+    assert list(collapse_repeats(forward, "analyze", 0)) == ["u10", "u20", "u30", "u40", "u50"]
+    assert list(collapse_repeats(results, "analyze", 0)) == ["u10", "u20", "u30", "u40", "u50"]
+    assert list(collapse_repeats(list(reversed(results)), "analyze", 0)) == list(
+        collapse_repeats(results, "analyze", 0)
+    )
+
+
 def test_seeds_average_and_the_table_has_one_row_per_unit():
     results = [
         _repeat_result("analyze", "seed01", 0, {"u1": {"score": 1.0}, "u2": {"score": 3.0}}),

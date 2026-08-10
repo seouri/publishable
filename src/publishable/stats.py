@@ -59,7 +59,8 @@ def handed_to(
     """The repeat labels this unit was actually given.
 
     Without a fold, every repeat — the S2 rule, and the reason `fold_members=None`
-    leaves every existing path byte-for-byte as it was. With a fold, only the
+    leaves every existing path on exactly the membership and values it had. With a
+    fold, only the
     labels whose fold component holds this unit: `reference.md` § The per-unit
     tables is explicit that intersecting over *every* repeat "would report
     `completed: 0` for any design containing a fold, because no unit is ever in
@@ -162,6 +163,11 @@ def collapse_repeats(
         candidates |= keys
 
     gathered: dict[str, dict[str, list[float]]] = {}
+    # `sorted`, and load-bearing rather than incidental: `summarize_step` derives a
+    # metric's column order from this dict's values, so a ragged table's `run.yaml`
+    # column order follows this loop. Encounter order varies with `order: randomized`
+    # — the shuffle decides which execution is seen first — so sorting is what makes
+    # that order a property of the roster instead of of the shuffle.
     for key in sorted(candidates):
         mine = handed_to(key, labels, fold_members)
         # The intersection, scoped to what this unit was handed. `not mine` drops
