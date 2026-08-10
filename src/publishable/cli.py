@@ -43,7 +43,13 @@ from publishable.run_record import assemble_run_yaml, run_status
 from publishable.runner import attrition, execute_plan, resolve_condition_cfg, resolve_wide_cfg
 from publishable.scaffold import scaffold_project
 from publishable.scope import Execution, build_plan
-from publishable.stats import UnitTable, collapse_repeats, resample_seed, summarize_step
+from publishable.stats import (
+    UnitTable,
+    collapse_repeats,
+    repeat_spread,
+    resample_seed,
+    summarize_step,
+)
 from publishable.sweep import expand, sweep_document
 from publishable.templates.base import BaseTemplate
 from publishable.templates.registry import get_template
@@ -274,7 +280,13 @@ def command_run(config_path: Path) -> int:
         (run_dir / "sweep.yaml").write_text(
             yaml.safe_dump(
                 sweep_document(
-                    conditions, levels, repeats, digest, mode, execution_order, order_seed,
+                    conditions,
+                    levels,
+                    repeats,
+                    digest,
+                    mode,
+                    execution_order,
+                    order_seed,
                     partitions=partitions,
                 ),
                 sort_keys=False,
@@ -367,16 +379,28 @@ def command_run(config_path: Path) -> int:
                                 return resample_fn
 
                             resample_fns = {
-                                key: _make_resample_fn(key, cond_cfg, template)
-                                for key in derived
+                                key: _make_resample_fn(key, cond_cfg, template) for key in derived
                             }
-                    aggregated[cond.index][step_name] = summarize_step(
+                    step_summary = summarize_step(
                         collapsed,
                         counts,
                         derived=derived,
                         seed=resample_seed_value,
                         resample=resample_fns,
                     )
+                    # One dispersion figure per repeat level, outer to inner
+                    # (`reference.md` § A `batch` says *when*, not *what*) — read
+                    # directly off the `RepeatLevel` list resolved above, once per
+                    # recording step and shared by every metric it produced, since
+                    # `repeat_spread` answers "did this pipeline give the same
+                    # answer" and takes no column of its own to differ by. A bare
+                    # `fold` level contributes nothing, so `spread` is `[]` there
+                    # and no metric gets the key at all.
+                    spread = repeat_spread(results, step_name, cond.index, levels)
+                    if spread:
+                        for metric in step_summary.values():
+                            metric["repeat_spread"] = spread
+                    aggregated[cond.index][step_name] = step_summary
         changed_inputs = verify_manifest(input_dir, manifest)  # phase 8: re-verify
         if changed_inputs:
             status = "failed"
@@ -481,8 +505,7 @@ def _dispatch_generate(command: str, rest: list[str]) -> int:
         missing = [f"--{o}" for o in ("template", "input-dir", "output-dir") if o not in opts]
         if not name or missing:
             print(
-                "`generate experiment` needs a name plus "
-                + ", ".join(missing or ["a name"]),
+                "`generate experiment` needs a name plus " + ", ".join(missing or ["a name"]),
                 file=sys.stderr,
             )
             return EXIT_INVOCATION

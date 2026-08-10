@@ -3,6 +3,7 @@ import math
 import pytest
 
 from publishable.errors import ContractError
+from publishable.replication import resolve_repeats
 from publishable.stats import (
     Interval,
     UnitTable,
@@ -11,10 +12,17 @@ from publishable.stats import (
     mean_of,
     percentile_of_derived,
     percentile_over_units,
+    repeat_spread,
     resample_seed,
     summarize_step,
     t_over_units,
 )
+
+
+def cfg(repeats):
+    """Local, rather than imported from `tests/test_replication.py` — the two
+    test modules don't share fixtures across files."""
+    return {"replication": {"repeats": repeats}}
 
 
 def _result(repeat_label, rows, *, step_name="analyze", scope="repeat"):
@@ -82,6 +90,74 @@ def _repeat_result(step, repeat_label, condition_index, rows_by_unit, skipped=fr
         skipped=frozenset(skipped),
         rows=rows,
     )
+
+
+def _results_for_batch_seed():
+    """Labels resolved from `cfg([{"kind": "batch", "n": 2}, {"kind": "seed", "n": 2}])`
+    at digest `"d"` — `batch01_seed87` and `batch01_seed93` under `batch01`,
+    `batch02_seed87` and `batch02_seed93` under `batch02`; `seed87` pairs
+    `batch01_seed87`/`batch02_seed87`, `seed93` the other pair. Values are chosen
+    so the batch grouping and the seed grouping produce different member means,
+    which a matching bug (equality instead of token membership) would collapse
+    to `n == 0` per member rather than merely to the wrong number.
+    """
+    return [
+        _repeat_result(
+            "analyze", "batch01_seed87", 0, {"u1": {"score": 1.0}, "u2": {"score": 1.0}}
+        ),
+        _repeat_result(
+            "analyze", "batch01_seed93", 0, {"u1": {"score": 3.0}, "u2": {"score": 3.0}}
+        ),
+        _repeat_result(
+            "analyze", "batch02_seed87", 0, {"u1": {"score": 5.0}, "u2": {"score": 5.0}}
+        ),
+        _repeat_result(
+            "analyze", "batch02_seed93", 0, {"u1": {"score": 7.0}, "u2": {"score": 7.0}}
+        ),
+    ]
+
+
+def _results_for_folds():
+    """Labels resolved from `cfg([{"kind": "fold", "k": 2}])` at digest `"d"`
+    with `unit_count=4`: `fold01` and `fold02`."""
+    return [
+        _repeat_result("analyze", "fold01", 0, {"u1": {"score": 1.0}, "u2": {"score": 2.0}}),
+        _repeat_result("analyze", "fold02", 0, {"u3": {"score": 3.0}, "u4": {"score": 4.0}}),
+    ]
+
+
+def _results_for_one_seed():
+    """The label resolved from `cfg([{"kind": "seed", "n": 1}])` at digest `"d"`:
+    a single member, `seed87`."""
+    return [
+        _repeat_result("analyze", "seed87", 0, {"u1": {"score": 1.0}, "u2": {"score": 5.0}}),
+    ]
+
+
+def test_one_entry_per_level_outer_to_inner():
+    levels = resolve_repeats(cfg([{"kind": "batch", "n": 2}, {"kind": "seed", "n": 2}]), "d")
+    spread = repeat_spread(_results_for_batch_seed(), "analyze", 0, levels)
+    assert [e["kind"] for e in spread] == ["batch", "seed"]
+    assert [e["n"] for e in spread] == [2, 2]
+    assert all(e["std"] >= 0 for e in spread)
+    # The batch grouping and the seed grouping cross the same four executions
+    # differently, so a correct implementation gives them different numbers —
+    # guarding against a matching bug that always groups by the leaf label.
+    assert spread[0]["std"] != spread[1]["std"]
+
+
+def test_a_fold_level_contributes_no_entry():
+    """Each unit is in exactly one fold, so there is nothing to average across."""
+    levels = resolve_repeats(cfg([{"kind": "fold", "k": 2}]), "d", unit_count=4)
+    assert repeat_spread(_results_for_folds(), "analyze", 0, levels) == []
+
+
+def test_a_single_member_level_reports_zero_spread_not_none():
+    """One repeat has no dispersion; reporting 0.0 with n: 1 says that plainly,
+    where omitting the entry would read as 'this level was not run'."""
+    levels = resolve_repeats(cfg([{"kind": "seed", "n": 1}]), "d")
+    spread = repeat_spread(_results_for_one_seed(), "analyze", 0, levels)
+    assert spread == [{"std": 0.0, "n": 1, "kind": "seed"}]
 
 
 def test_without_folds_a_unit_is_handed_to_every_repeat():
@@ -290,9 +366,15 @@ def test_collapse_never_pools_across_conditions():
             repeat_label=repeat_label,
         )
         return ExecutionResult(
-            execution=ex, status="completed", started_at="2026-08-09T00:00:00Z",
-            wall_seconds=0.0, returned={}, error=None,
-            recorded=frozenset(r["unit"] for r in rows), skipped=frozenset(), rows=tuple(rows),
+            execution=ex,
+            status="completed",
+            started_at="2026-08-09T00:00:00Z",
+            wall_seconds=0.0,
+            returned={},
+            error=None,
+            recorded=frozenset(r["unit"] for r in rows),
+            skipped=frozenset(),
+            rows=tuple(rows),
         )
 
     results = [
@@ -314,9 +396,7 @@ def test_collapse_requires_condition_index():
 
 def test_a_recorded_column_is_basis_units_and_carries_an_interval():
     collapsed = {f"p{i}": {"pred": float(i)} for i in range(10)}
-    out = summarize_step(
-        collapsed, {"resolved": 10, "completed": 10, "ineligible": 0, "failed": 0}
-    )
+    out = summarize_step(collapsed, {"resolved": 10, "completed": 10, "ineligible": 0, "failed": 0})
     assert out["pred"]["basis"] == "units"
     assert out["pred"]["n"] == {"resolved": 10, "completed": 10, "ineligible": 0, "failed": 0}
     assert out["pred"]["method"] == "t_over_units"
@@ -334,9 +414,7 @@ def test_a_ragged_columns_n_completed_counts_only_units_carrying_it():
     docstring rules out."""
     collapsed = {f"p{i}": {"pred": 1.0} for i in range(10)}
     collapsed["p0"]["rare"] = 5.0  # only one of ten units carries this column
-    out = summarize_step(
-        collapsed, {"resolved": 10, "completed": 10, "ineligible": 0, "failed": 0}
-    )
+    out = summarize_step(collapsed, {"resolved": 10, "completed": 10, "ineligible": 0, "failed": 0})
     assert out["pred"]["n"] == {"resolved": 10, "completed": 10, "ineligible": 0, "failed": 0}
     assert out["rare"]["n"] == {"resolved": 10, "completed": 1, "ineligible": 0, "failed": 0}
     assert out["rare"]["ci95"] is None, "one value has no dispersion to describe"
@@ -423,9 +501,7 @@ def test_a_correlation_like_derived_metrics_interval_reflects_its_own_scatter():
     from scipy import stats as scipy_stats
 
     n = 20
-    collapsed_a = {
-        f"u{i}": {"x": float(i), "y": float(i) + 0.5 * ((-1) ** i)} for i in range(n)
-    }
+    collapsed_a = {f"u{i}": {"x": float(i), "y": float(i) + 0.5 * ((-1) ** i)} for i in range(n)}
     collapsed_b = {f"u{i}": {"x": float(i), "y": float(i)} for i in range(n)}
     collapsed_b["u0"]["y"] += 3.0
     collapsed_b[f"u{n - 1}"]["y"] -= 3.0

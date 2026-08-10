@@ -20,6 +20,7 @@ from publishable.errors import ContractError
 from publishable.replication import LABEL_JOIN
 
 if TYPE_CHECKING:
+    from publishable.replication import RepeatLevel
     from publishable.runner import ExecutionResult
 
 
@@ -303,6 +304,63 @@ def collapse_repeats(
         key: {col: sum(vals) / len(vals) for col, vals in cols.items()}
         for key, cols in gathered.items()
     }
+
+
+def repeat_spread(
+    results: "list[ExecutionResult]",
+    step_name: str,
+    condition_index: int,
+    levels: "list[RepeatLevel]",
+) -> list[dict[str, Any]]:
+    """How much each repeat level moved the step's recorded values, one entry
+    per level, outer to inner — `reference.md` § A `batch` says *when*, not
+    *what*.
+
+    A `fold` level contributes no entry: each unit appears in exactly one
+    fold, so there is nothing to average across (the same reason S3c's
+    collapse concatenates across folds rather than averaging). Every other
+    level gets a per-member mean of its recorded numeric values, then the
+    population standard deviation (divide by `n`, not `n - 1`) of those
+    member means — population rather than sample so a single-member level
+    falls out as exactly `0.0` with no special case, which is what a lone
+    repeat's dispersion honestly is.
+
+    A member's rows are found by matching its label against the tokens of
+    each execution's composed `repeat_label`, split on `LABEL_JOIN` — the
+    same idiom `realize_order` uses to find a batch's rows inside
+    `batch01_seed42`. An anonymous level's single member has an empty label,
+    and `"".split(LABEL_JOIN)` on an empty `repeat_label` is `[""]`, so the
+    same membership test matches it without a separate branch.
+    """
+    recording = [
+        r
+        for r in results
+        if r.execution.step_name == step_name
+        and r.execution.scope == "repeat"
+        and r.execution.condition_index == condition_index
+    ]
+    entries: list[dict[str, Any]] = []
+    for level in levels:
+        if level.kind == "fold":
+            continue
+        member_means: list[float] = []
+        for member in level.members:
+            values = [
+                float(value)
+                for r in recording
+                if member.label in (r.execution.repeat_label or "").split(LABEL_JOIN)
+                for row in r.rows
+                for column, value in row.items()
+                if column != "unit" and _is_numeric(value)
+            ]
+            if values:
+                member_means.append(sum(values) / len(values))
+        if not member_means:
+            continue
+        grand_mean = sum(member_means) / len(member_means)
+        variance = sum((m - grand_mean) ** 2 for m in member_means) / len(member_means)
+        entries.append({"std": math.sqrt(variance), "n": level.n, "kind": level.kind})
+    return entries
 
 
 def summarize_step(
