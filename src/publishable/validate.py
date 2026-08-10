@@ -15,6 +15,7 @@ from publishable.materialize import TEMPLATE_VERSION
 from publishable.param import MISSING
 from publishable.provenance import find_repo_root, resolves_inside_repo
 from publishable.replication import resolve_repeats
+from publishable.strata import levels_for
 from publishable.sweep import check_swept_value, expand
 from publishable.templates.registry import get_template, template_names
 from publishable.units import UnitList, resolve_units
@@ -247,7 +248,7 @@ def validate_config(
     _check_unimplemented(doc, c)
     _check_sweep(doc, template, c, unit_count=len(roster) if roster is not None else None)
     _check_contrasts(doc, c)
-    _check_report_by(doc, c)
+    _check_report_by(doc, c, roster)
     for message in template.validate(doc):
         c.error("E-TEMPLATE-RULE", "parameters", message)
     return doc
@@ -1171,8 +1172,9 @@ def _check_contrasts(doc: dict[str, Any], c: Collector) -> None:
                     )
 
 
-def _check_report_by(doc: dict[str, Any], c: Collector) -> None:
-    """Each `statistics.report_by` attribute, checked against the declared ones.
+def _check_report_by(doc: dict[str, Any], c: Collector, roster: UnitList | None) -> None:
+    """Each `statistics.report_by` attribute, checked against the declared ones,
+    then against the roster for a level too thin to disclose.
 
     `reference.md` § Reporting strata: "validate rejects a `report_by` attribute
     that isn't declared in `data.units.attributes`". The reason is the same one
@@ -1184,6 +1186,10 @@ def _check_report_by(doc: dict[str, Any], c: Collector) -> None:
     A non-string entry is refused under the same code rather than reaching the
     set membership test below, where an unhashable one would raise out of a
     module whose contract is that it collects.
+
+    The thinness warning that follows counts over *resolved* units, which is all
+    `validate` can see; attrition between here and a run is `W-STATS-STRATUM-THIN`'s
+    job at run time.
     """
     entries = ((doc.get("statistics") or {}).get("report_by")) or []
     if not isinstance(entries, list):
@@ -1196,3 +1202,18 @@ def _check_report_by(doc: dict[str, Any], c: Collector) -> None:
                 f"statistics.report_by[{i}]",
                 f"names `{name!r}`, which is not in `data.units.attributes`",
             )
+
+    floor = (doc.get("limits") or {}).get("min_reported_n")
+    if roster is None or not isinstance(floor, (int, float)):
+        return
+    for name in entries:
+        if not isinstance(name, str) or name not in declared:
+            continue  # already refused above
+        for level, keys in sorted(levels_for(roster, name).items()):
+            if len(keys) < floor:
+                c.warn(
+                    "W-STATS-REPORTBY-THIN",
+                    f"statistics.report_by[{entries.index(name)}]",
+                    f"level `{level}` of `{name}` would hold {len(keys)} of "
+                    f"{len(roster)} units, below limits.min_reported_n ({floor})",
+                )

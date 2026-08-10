@@ -1956,3 +1956,28 @@ def test_a_non_string_report_by_entry_is_refused(write_config):
         )
     )
     assert "E-STATS-REPORTBY-UNKNOWN" in found
+
+
+def test_a_thin_report_by_level_warns_before_the_run(write_config, tmp_path):
+    """`reference.md` § Reporting strata: validate "warns when a level would hold
+    fewer units than `limits.min_reported_n` — before the run rather than at
+    disclosure." Counting is over *resolved* units, which is all validate can
+    see; the realized count after attrition is `W-STATS-STRATUM-THIN`'s job at
+    run time (Task 6)."""
+    data = tmp_path / "data"
+    data.mkdir()
+    rows = "\n".join(f"p{i},{'f' if i <= 2 else 'm'}" for i in range(1, 13))
+    (data / "index.csv").write_text(f"patient_id,sex\n{rows}\n")
+    path = write_config(
+        {
+            "data.units": _UNITS_WITH_SEX,
+            "data.input_dir": str(data),
+            "limits": {"min_reported_n": 10},
+            "statistics": {"report_by": ["sex"]},
+        }
+    )
+    found = codes(path)
+    assert "W-STATS-REPORTBY-THIN" in found
+    message = messages_by_code(path)["W-STATS-REPORTBY-THIN"]
+    assert "`f`" in message and "2 of 12" in message
+    assert "`m`" not in message  # `m` holds 10, exactly at the floor — not below it
