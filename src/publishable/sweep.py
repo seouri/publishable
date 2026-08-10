@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from publishable.replication import Repeat, RepeatLevel
+    from publishable.units import Unit
 
 
 @dataclass(frozen=True)
@@ -169,6 +170,7 @@ def sweep_document(
     order: str,
     execution_order: list[tuple[int, str]],
     order_seed: int | None = None,
+    partitions: list[list["Unit"]] | None = None,
 ) -> dict[str, Any]:
     """The `sweep.yaml` payload: the resolved plan, as plain YAML-safe data.
 
@@ -205,8 +207,13 @@ def sweep_document(
     `fold03_seed42` appears.
 
     Fold membership (`partitions`) belongs here too per § The other files a
-    run writes; folds are a later slice and the key is absent rather than
-    empty, so its absence is not read as "no folds were drawn".
+    run writes. `partitions` is `None` exactly when no `fold` level is
+    declared, and the key is omitted rather than written as an empty list —
+    an empty list would read as "no folds were drawn", a different claim from
+    "this design has no folds". Each entry pairs a fold's label with the unit
+    keys on each side: `test` is that fold's own partition, `train` every
+    other partition concatenated in fold order — the same train/test split
+    `io.units`/`io.units.train` hand a repeat-scope step for that label.
     """
     repeat_entries: list[dict[str, Any]] = []
     for lv in levels:
@@ -231,4 +238,15 @@ def sweep_document(
     }
     if order_seed is not None:
         doc["order_seed"] = order_seed
+    if partitions is not None:
+        fold = next((lv for lv in levels if lv.kind == "fold"), None)
+        assert fold is not None, "partitions given but no `fold` level was declared"
+        doc["partitions"] = [
+            {
+                "fold": member.label,
+                "test": [u.key for u in part],
+                "train": [u.key for other in partitions if other is not part for u in other],
+            }
+            for member, part in zip(fold.members, partitions, strict=True)
+        ]
     return doc

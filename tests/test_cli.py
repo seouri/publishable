@@ -61,7 +61,11 @@ def run_a_project(
     data = tmp_path / "data"
     results_dir = tmp_path / "results"
     data.mkdir()
-    (data / "index.csv").write_text("patient_id\np1\np2\n")
+    # 10 patients, not 2: a `fold` design (`{kind: fold, k: 5}`) needs `k <=
+    # unit_count`, and every other caller in this module only ever checks
+    # `results`/`sweep.yaml` shape, never the roster's exact size.
+    patients = "\n".join(f"p{i}" for i in range(1, 11))
+    (data / "index.csv").write_text(f"patient_id\n{patients}\n")
     assert main(["new", str(root)]) == EXIT_OK
     cfg = generate_experiment(
         repo_root=root,
@@ -353,3 +357,19 @@ def test_a_single_level_seed_run_has_no_composed_labels(tmp_path, capsys):
     dirs = [p.name for p in doc["run_dir"].rglob("*") if p.is_dir()]
     assert not any(f"{LABEL_JOIN}seed" in d for d in dirs)
     assert not any(d.startswith("batch") for d in dirs)
+
+
+def test_a_five_fold_run_end_to_end(tmp_path, capsys):
+    """The abort this slice fixes: before it, `_units_failed_anywhere` measured
+    against the whole roster, so under `{k: 5}` every unit outside a fold's own
+    partition counted as failed on that fold's execution and the run aborted at
+    `max_failed_fraction` reporting `failed`, well short of every fold running."""
+    doc = run_a_project(tmp_path, capsys=capsys,
+                        replication={"repeats": [{"kind": "fold", "k": 5}]})
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+    assert [p["fold"] for p in sweep["partitions"]] == [
+        "fold01", "fold02", "fold03", "fold04", "fold05"]
+    tested = [k for p in sweep["partitions"] for k in p["test"]]
+    assert len(tested) == len(set(tested))          # each unit tested exactly once
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "completed"             # the abort this slice fixes
