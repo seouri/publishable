@@ -27,6 +27,7 @@ def run_a_project(
     capsys: pytest.CaptureFixture[str] | None = None,
     extra_steps: list[str] | None = None,
     aggregate_returns: str | None = None,
+    units: int = 10,
     **overrides: Any,
 ) -> dict[str, Any]:
     """Scaffold, configure, commit, and `run` a project end to end.
@@ -70,10 +71,13 @@ def run_a_project(
     data = tmp_path / "data"
     results_dir = tmp_path / "results"
     data.mkdir()
-    # 10 patients, not 2: a `fold` design (`{kind: fold, k: 5}`) needs `k <=
-    # unit_count`, and every other caller in this module only ever checks
-    # `results`/`sweep.yaml` shape, never the roster's exact size.
-    patients = "\n".join(f"p{i}" for i in range(1, 11))
+    # 10 patients by default, not 2: a `fold` design (`{kind: fold, k: 5}`) needs
+    # `k <= unit_count`, and every other caller in this module only ever checks
+    # `results`/`sweep.yaml` shape, never the roster's exact size. `units` is a
+    # caller-set override — a thin-pairing test wants a roster small enough that
+    # `n_paired` trips `limits.min_reported_n` without inflating every other
+    # caller's fixture to match.
+    patients = "\n".join(f"p{i}" for i in range(1, units + 1))
     (data / "index.csv").write_text(f"patient_id\n{patients}\n")
     assert main(["new", str(root)]) == EXIT_OK
     with pytest.MonkeyPatch.context() as mp:
@@ -717,3 +721,135 @@ def test_a_total_resample_failure_is_disclosed_not_silent(tmp_path, capsys, monk
         # not_propagated`, `test_total_resample_failure_is_distinguishable_
         # from_no_resample_supplied`) are what pin the behaviour deterministically.
         assert metric["resample_draws"] is not None
+
+
+_METHOD_VARYING_STEP = '''\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        units = list(io.units)
+        # A per-unit value that differs both by condition (`is_spearman`,
+        # keyed off the swept `analysis.method`, so `of` and `against`
+        # genuinely diverge rather than recording the same numbers under two
+        # labels) and *per-unit differently between the two conditions* (the
+        # alternating `extra`, whose parity flips with `is_spearman`) — the
+        # per-unit differences must themselves vary, not just the two
+        # conditions' means, or the paired interval is zero-width and
+        # `cohens_dz` returns `None` regardless of which condition is which.
+        # A per-unit offset that's merely constant-but-nonzero (`+ 0.5` on
+        # every unit, in both conditions) cancels in the difference and hits
+        # the same trap: S4b task 5's plan did, and its fix is in
+        # `docs/superpowers/sdd/2026-08-10-contrasts/progress.md`, Task 5.
+        is_spearman = 1 if cfg.parameters.analysis.method == "spearman" else 0
+        for i, unit in enumerate(units):
+            extra = 0.5 if (i + is_spearman) % 2 == 1 else 0.0
+            io.record(unit.key, {{"pred": float(i) + float(is_spearman) + extra}})
+        return {{"n_units": len(units)}}
+'''
+
+
+def _first_contrast(run: dict[str, Any], label: str) -> dict[str, Any] | None:
+    """The first metric entry in the condition labeled `label`'s `vs_baseline`
+    block, wherever it landed — mirrors `_first_metric`'s shape on the
+    contrast side, since a caller here already knows which condition it
+    expects but not which step or metric name carries it."""
+    for condition in run["results"]["conditions"]:
+        if condition.get("label") != label:
+            continue
+        for step_block in condition.get("vs_baseline", {}).values():
+            for metric in step_block.values():
+                assert isinstance(metric, dict)
+                return metric
+    return None
+
+
+def test_a_baseline_sweep_reports_a_delta(tmp_path, capsys, monkeypatch):
+    """`vs_baseline` is where `resolve_contrasts`'s auto-generated,
+    condition-against-baseline comparisons land. The scaffold's own step
+    records only a bool (`{"present": True}`, filtered by `_is_numeric`), so
+    this uses `_METHOD_VARYING_STEP` — a per-unit value that genuinely
+    differs by condition and has real within-condition variance — to get a
+    real numeric column to difference, rather than `_AGGREGATE_STEP`'s
+    `float(i)` (identical under both conditions, so `delta` and `cohens_d`
+    would pass at their degenerate `0.0`/`None` values regardless of a sign
+    error or a hardcoded `None`)."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    entry = _first_contrast(run, "method=spearman")
+    assert entry is not None
+    assert entry["paired"] is True
+    assert entry["n_paired"] > 0
+    assert entry["method"] in ("paired_t_over_units", "paired_percentile_over_units")
+    assert entry["correction"] is None  # S4c's job, disclosed not applied
+    # The shift is +1.0 for spearman over pearson on every unit, so the mean
+    # per-unit difference is exactly 1.0 regardless of the alternating +0.5 —
+    # pins the sign (`of - against`, not `against - of`) and the magnitude.
+    assert entry["delta"] == pytest.approx(1.0)
+    assert entry["ci95"] is not None
+    low, high = entry["ci95"]
+    assert low < entry["delta"] < high
+    assert high - low > 0  # real variance from the alternating +0.5, not a point mass
+    # `pred` is a recorded column, so `cohens_d = cohens_dz(diffs)` — a real
+    # float, not the `None` a derived metric would carry.
+    assert isinstance(entry["cohens_d"], float)
+
+
+def test_a_run_with_no_baseline_has_no_vs_baseline_block(tmp_path, capsys):
+    """Absent, not empty. An empty block would claim a comparison was made and
+    found nothing."""
+    doc = run_a_project(tmp_path, capsys=capsys)
+    text = (doc["run_dir"] / "run.yaml").read_text()
+    assert "vs_baseline" not in text
+
+
+def test_a_baseline_sweep_with_no_metric_has_no_vs_baseline_block(tmp_path, capsys):
+    """The discriminating case `test_a_run_with_no_baseline_has_no_vs_baseline_
+    block` can't reach: a declared baseline exists (comparisons are resolved),
+    but the scaffold's default step records only a bool, so every
+    `metric_block` this task builds is empty. This is what actually exercises
+    `_compute_vs_baseline`'s `return out or None` and `run_record.py`'s
+    `if block:` guard — with no baseline at all, both are already unreachable
+    for a different reason, and either could be silently dropped without this
+    test moving."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+    )
+    text = (doc["run_dir"] / "run.yaml").read_text()
+    assert "vs_baseline" not in text
+
+
+def test_a_thin_pairing_warns(tmp_path, capsys, monkeypatch):
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=3,
+        limits={"min_reported_n": 10},
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+    )
+    assert "min_reported_n" in doc["stdout"] or "N_PAIRED" in doc["stdout"]
