@@ -249,7 +249,8 @@ def paired_percentile_of_derived(
     of: dict[str, dict[str, float]],
     against: dict[str, dict[str, float]],
     keys: list[str],
-    compute: "Callable[[UnitTable], float | None]",
+    compute_of: "Callable[[UnitTable], float | None]",
+    compute_against: "Callable[[UnitTable], float | None]",
     seed: int,
     draws: int = 2000,
     confidence: float = 0.95,
@@ -260,6 +261,23 @@ def paired_percentile_of_derived(
     destroy the pairing — the same error as differencing the two sides' own
     intervals. Both spellings produce a plausible interval; only this one is
     narrower, which is what `allocation: within` buys.
+
+    Two computes, not one — a contrast can hold its two sides' `cfg` fixed on
+    every axis except the one being compared, but `aggregate(units, cfg)` is
+    still evaluated once per side with that side's own `cfg`. A single shared
+    `compute` (as an earlier revision of this function took) is only correct
+    when the two sides evaluate the same formula; the moment a swept axis
+    changes which formula `aggregate` runs — analysis.method: pearson vs.
+    spearman, the documented worked example's own case — a shared compute
+    evaluates *one* side's formula against *both* sides' resampled draws. Where
+    the two collapsed tables hold identical per-unit data (exactly the
+    worked-example shape: `pred`/`truth` don't vary with `analysis.method`,
+    only which correlation `aggregate` computes from them does), that shared
+    evaluation cancels on every single draw — a `ci95` of zero width at zero,
+    beside a nonzero point-estimate delta, the "plausible but wrong" case with
+    nothing to raise. A caller that genuinely wants the same statistic on both
+    sides passes the same callable twice; that's a normal call, not a special
+    case this function has to detect.
     """
     if len(keys) < 2:
         return None, 0
@@ -271,8 +289,8 @@ def paired_percentile_of_derived(
         table_a = _unit_table_from_rows([{"unit": k, **of[k]} for k in drawn])
         table_b = _unit_table_from_rows([{"unit": k, **against[k]} for k in drawn])
         try:
-            a = compute(table_a)
-            b = compute(table_b)
+            a = compute_of(table_a)
+            b = compute_against(table_b)
         except Exception:  # a degenerate draw, not a fault; see percentile_of_derived
             continue
         if a is None or b is None:

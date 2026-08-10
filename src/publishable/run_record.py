@@ -59,6 +59,7 @@ def _results_block(
     aggregated: dict[int, dict[str, dict[str, Any]]] | None,
     condition_meta: dict[int, dict[str, Any]] | None = None,
     vs_baseline: dict[int, dict[str, dict[str, dict[str, Any]]]] | None = None,
+    contrasts: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     # A "run"-scoped step's return has nowhere to land here (§ The two files gives
     # `results` only `conditions` and `summary`), and the same is true of a
@@ -139,10 +140,18 @@ def _results_block(
             cond["values"] = dict(meta.get("values") or {})
         for cond in conditions.values():
             cond.setdefault("is_baseline", False)
-    return {
+    out: dict[str, Any] = {
         "conditions": [conditions[k] for k in sorted(conditions)],
         "summary": summary,
     }
+    # `contrasts` is declared `statistics.contrasts` entries — a comparison that
+    # belongs to neither of its two sides, so it sits beside `conditions` rather
+    # than inside one (`reference.md` § Contrasts: claims that aren't
+    # condition-vs-baseline). Absent, not `[]`, for the same reason every other
+    # comparison block here is: no declared contrast means nothing to report.
+    if contrasts:
+        out["contrasts"] = contrasts
+    return out
 
 
 def _layout_block(results: list[ExecutionResult], repeats: list[Repeat]) -> dict[str, bool]:
@@ -179,6 +188,7 @@ def assemble_run_yaml(
     aggregated: dict[int, dict[str, dict[str, Any]]] | None = None,
     condition_meta: dict[int, dict[str, Any]] | None = None,
     vs_baseline: dict[int, dict[str, dict[str, dict[str, Any]]]] | None = None,
+    contrasts: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     # There is no `counts` parameter here: `summarize_step` already embeds the
     # per-unit counts as `n` inside each metric under `aggregated`, and the
@@ -196,5 +206,5 @@ def assemble_run_yaml(
         "provenance": provenance,
         "layout": _layout_block(results, repeats),
         "execution": _execution_block(results),
-        "results": _results_block(results, aggregated, condition_meta, vs_baseline),
+        "results": _results_block(results, aggregated, condition_meta, vs_baseline, contrasts),
     }

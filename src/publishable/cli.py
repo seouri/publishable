@@ -57,7 +57,7 @@ from publishable.stats import (
     resample_seed,
     summarize_step,
 )
-from publishable.sweep import expand, sweep_document
+from publishable.sweep import condition_dir_name, expand, sweep_document
 from publishable.templates.base import BaseTemplate
 from publishable.templates.registry import get_template
 from publishable.units import Unit, UnitList, partition_units, resolve_units, units_hash
@@ -150,13 +150,13 @@ def _baseline_comparisons(
 
     `resolve_contrasts` also returns declared `statistics.contrasts` entries —
     an arbitrary `of`/`against` pair under a custom `id` — and those are
-    `results.contrasts`, not this run's `vs_baseline`; that block isn't built
-    yet (`docs/superpowers/spec-defects.md` is where that gap belongs, not a
-    silent misfile here). The auto-generated baseline comparisons this
+    `results.contrasts` (`_declared_comparisons`, `_compute_declared_contrasts`),
+    not this run's `vs_baseline`. The auto-generated baseline comparisons this
     function keeps are exactly the ones `resolve_contrasts` built with
     `id=<condition's own label>` and `against=<the baseline's index>` — the
-    same identity test, run again here rather than threaded through as a
-    fourth field on `Comparison`, since only this one caller needs it.
+    same identity test, run again here (and inverted in `_declared_comparisons`)
+    rather than threaded through as a fourth field on `Comparison`, since only
+    these two callers need it.
     """
     baseline = next((c for c in conditions if c.is_baseline), None)
     if baseline is None:
@@ -167,6 +167,149 @@ def _baseline_comparisons(
         for comp in resolve_contrasts(doc, conditions)
         if comp.against == baseline.index and comp.id == label_by_index.get(comp.of)
     ]
+
+
+def _declared_comparisons(doc: dict[str, Any], conditions: "list[Condition]") -> "list[Comparison]":
+    """The complement of `_baseline_comparisons`: every `resolve_contrasts` entry
+    that is *not* an auto-generated baseline comparison — i.e. a declared
+    `statistics.contrasts` entry, headed for `results.contrasts` rather than
+    `vs_baseline`. Same identity test as `_baseline_comparisons`, inverted,
+    kept as its own function so a caller never has to remember to negate the
+    other one correctly.
+    """
+    baseline = next((c for c in conditions if c.is_baseline), None)
+    label_by_index = {c.index: c.label for c in conditions}
+    all_comparisons = resolve_contrasts(doc, conditions)
+    if baseline is None:
+        return all_comparisons
+    return [
+        comp
+        for comp in all_comparisons
+        if not (comp.against == baseline.index and comp.id == label_by_index.get(comp.of))
+    ]
+
+
+def _comparison_step_blocks(
+    comp: "Comparison",
+    *,
+    roster: "UnitList",
+    aggregated: dict[int, dict[str, dict[str, Any]]],
+    collapsed_by_key: dict[tuple[int, str], dict[str, dict[str, float]]],
+    derived_by_key: dict[tuple[int, str], dict[str, Any] | None],
+    resample_fns_by_key: dict[
+        tuple[int, str], dict[str, Callable[[UnitTable], float | None]] | None
+    ],
+    seed: int,
+    draws: int,
+    min_reported_n: float | int | None,
+    findings: Collector,
+    where: str,
+) -> dict[str, dict[str, Any]]:
+    """One comparison's delta, per recording step and per metric already in
+    `aggregated` — the computation `vs_baseline` and `results.contrasts` both
+    rest on, factored out so the two record shapes don't duplicate it.
+
+    A recorded column takes `paired_t_over_units` over the per-unit
+    differences, with `cohens_d = cohens_dz(diffs)`. A derived metric — one
+    `aggregate` computed, absent any per-unit value to difference — takes
+    `paired_percentile_of_derived` instead, with its *own* resample closure on
+    each side (`compute_of`/`compute_against`): the two conditions' `cfg` can
+    differ on exactly the axis the comparison exists to measure, so evaluating
+    one side's closure against both sides' draws is wrong the moment that
+    axis changes which formula `aggregate` runs — the documented worked
+    example's `analysis.method` sweep does exactly this, and with `pred`/
+    `truth` recorded identically across conditions there, a single shared
+    closure cancels on every draw: a zero-width `ci95` at zero beside a
+    nonzero point-estimate delta. `cohens_d` is `None` for a derived metric,
+    for the reason the worked example carries `cohens_d: null` for `r`. Both
+    constructions read `n_paired` off `stats.paired_keys` — the intersection
+    of the two conditions' completed units, narrowed by `within` when the
+    comparison declares one — and record `correction: null`: the correction
+    family, `ci95_corrected`, `correction_level`, and `family_size` are S4c's.
+    """
+    allowed = units_matching(roster, comp.within)
+    of_steps = {k[1] for k in collapsed_by_key if k[0] == comp.of}
+    against_steps = {k[1] for k in collapsed_by_key if k[0] == comp.against}
+    block: dict[str, dict[str, Any]] = {}
+    for step_name in sorted(of_steps & against_steps):
+        of_collapsed = collapsed_by_key[(comp.of, step_name)]
+        against_collapsed = collapsed_by_key[(comp.against, step_name)]
+        base_keys = paired_keys(of_collapsed, against_collapsed, allowed)
+        of_summary = aggregated.get(comp.of, {}).get(step_name, {})
+        against_summary = aggregated.get(comp.against, {}).get(step_name, {})
+        of_derived = derived_by_key.get((comp.of, step_name)) or {}
+        against_derived = derived_by_key.get((comp.against, step_name)) or {}
+        metric_block: dict[str, Any] = {}
+        for metric_key in sorted(set(of_summary) & set(against_summary)):
+            is_derived = metric_key in of_derived or metric_key in against_derived
+            if is_derived:
+                compute_of = (resample_fns_by_key.get((comp.of, step_name)) or {}).get(
+                    metric_key
+                )
+                compute_against = (resample_fns_by_key.get((comp.against, step_name)) or {}).get(
+                    metric_key
+                )
+                n_paired = len(base_keys)
+                interval = None
+                if compute_of is not None and compute_against is not None and n_paired >= 2:
+                    interval, _ = paired_percentile_of_derived(
+                        of_collapsed,
+                        against_collapsed,
+                        base_keys,
+                        compute_of,
+                        compute_against,
+                        seed,
+                        draws=draws,
+                    )
+                of_value = of_summary[metric_key].get("value")
+                against_value = against_summary[metric_key].get("value")
+                delta = (
+                    float(of_value) - float(against_value)
+                    if of_value is not None and against_value is not None
+                    else None
+                )
+                metric_block[metric_key] = {
+                    "delta": delta,
+                    "basis": "units",
+                    "paired": True,
+                    "method": interval.method if interval else None,
+                    "n_paired": n_paired,
+                    "ci95": [interval.low, interval.high] if interval else None,
+                    "cohens_d": None,
+                    "correction": None,
+                }
+            else:
+                col_keys = [
+                    k
+                    for k in base_keys
+                    if metric_key in of_collapsed[k] and metric_key in against_collapsed[k]
+                ]
+                diffs = [
+                    of_collapsed[k][metric_key] - against_collapsed[k][metric_key]
+                    for k in col_keys
+                ]
+                interval = paired_t_over_units(diffs)
+                n_paired = len(col_keys)
+                metric_block[metric_key] = {
+                    "delta": mean_of(diffs),
+                    "basis": "units",
+                    "paired": True,
+                    "method": interval.method if interval else None,
+                    "n_paired": n_paired,
+                    "ci95": [interval.low, interval.high] if interval else None,
+                    "cohens_d": cohens_dz(diffs),
+                    "correction": None,
+                }
+            if min_reported_n is not None and n_paired < min_reported_n:
+                findings.warn(
+                    "W-STATS-CONTRAST-THIN",
+                    "limits.min_reported_n",
+                    f"{where}, step {step_name!r} metric {metric_key!r}: n_paired "
+                    f"{n_paired} is below limits.min_reported_n ({min_reported_n})",
+                )
+        if metric_block:
+            block[step_name] = metric_block
+    return block
 
 
 def _compute_vs_baseline(
@@ -185,19 +328,8 @@ def _compute_vs_baseline(
     findings: Collector,
 ) -> dict[int, dict[str, dict[str, dict[str, Any]]]] | None:
     """Every non-baseline condition's own delta against the baseline, per
-    recording step and per metric already in `aggregated`.
-
-    A recorded column takes `paired_t_over_units` over the per-unit
-    differences, with `cohens_d = cohens_dz(diffs)`. A derived metric — one
-    `aggregate` computed, absent any per-unit value to difference — takes
-    `paired_percentile_of_derived` instead, recomputing the metric on each
-    resampled draw via the same closure `_make_resample_fn` built for the
-    *reported* condition's own resampled `ci95`; `cohens_d` is `None` there,
-    for the reason the worked example carries `cohens_d: null` for `r`. Both
-    constructions read `n_paired` off `stats.paired_keys` — the intersection
-    of the two conditions' completed units, narrowed by `within` when the
-    comparison declares one — and record `correction: null`: the correction
-    family, `ci95_corrected`, `correction_level`, and `family_size` are S4c's.
+    recording step and per metric already in `aggregated` — see
+    `_comparison_step_blocks` for how one comparison's block is built.
 
     Returns `None`, not `{}`, when nothing survives: no baseline, no metric in
     common between a condition and the baseline, or (per
@@ -214,84 +346,85 @@ def _compute_vs_baseline(
     min_reported_n = (doc.get("limits") or {}).get("min_reported_n")
     out: dict[int, dict[str, dict[str, dict[str, Any]]]] = {}
     for comp in comparisons:
-        allowed = units_matching(roster, comp.within)
-        of_steps = {k[1] for k in collapsed_by_key if k[0] == comp.of}
-        against_steps = {k[1] for k in collapsed_by_key if k[0] == comp.against}
-        block: dict[str, dict[str, Any]] = {}
-        for step_name in sorted(of_steps & against_steps):
-            of_collapsed = collapsed_by_key[(comp.of, step_name)]
-            against_collapsed = collapsed_by_key[(comp.against, step_name)]
-            base_keys = paired_keys(of_collapsed, against_collapsed, allowed)
-            of_summary = aggregated.get(comp.of, {}).get(step_name, {})
-            against_summary = aggregated.get(comp.against, {}).get(step_name, {})
-            of_derived = derived_by_key.get((comp.of, step_name)) or {}
-            against_derived = derived_by_key.get((comp.against, step_name)) or {}
-            metric_block: dict[str, Any] = {}
-            for metric_key in sorted(set(of_summary) & set(against_summary)):
-                is_derived = metric_key in of_derived or metric_key in against_derived
-                if is_derived:
-                    compute = (resample_fns_by_key.get((comp.of, step_name)) or {}).get(
-                        metric_key
-                    ) or (resample_fns_by_key.get((comp.against, step_name)) or {}).get(
-                        metric_key
-                    )
-                    n_paired = len(base_keys)
-                    interval = None
-                    if compute is not None and n_paired >= 2:
-                        interval, _ = paired_percentile_of_derived(
-                            of_collapsed, against_collapsed, base_keys, compute, seed, draws=draws
-                        )
-                    of_value = of_summary[metric_key].get("value")
-                    against_value = against_summary[metric_key].get("value")
-                    delta = (
-                        float(of_value) - float(against_value)
-                        if of_value is not None and against_value is not None
-                        else None
-                    )
-                    metric_block[metric_key] = {
-                        "delta": delta,
-                        "basis": "units",
-                        "paired": True,
-                        "method": interval.method if interval else None,
-                        "n_paired": n_paired,
-                        "ci95": [interval.low, interval.high] if interval else None,
-                        "cohens_d": None,
-                        "correction": None,
-                    }
-                else:
-                    col_keys = [
-                        k
-                        for k in base_keys
-                        if metric_key in of_collapsed[k] and metric_key in against_collapsed[k]
-                    ]
-                    diffs = [
-                        of_collapsed[k][metric_key] - against_collapsed[k][metric_key]
-                        for k in col_keys
-                    ]
-                    interval = paired_t_over_units(diffs)
-                    n_paired = len(col_keys)
-                    metric_block[metric_key] = {
-                        "delta": mean_of(diffs),
-                        "basis": "units",
-                        "paired": True,
-                        "method": interval.method if interval else None,
-                        "n_paired": n_paired,
-                        "ci95": [interval.low, interval.high] if interval else None,
-                        "cohens_d": cohens_dz(diffs),
-                        "correction": None,
-                    }
-                if min_reported_n is not None and n_paired < min_reported_n:
-                    findings.warn(
-                        "W-STATS-CONTRAST-THIN",
-                        "limits.min_reported_n",
-                        f"condition {comp.of} ({comp.id!r}) vs baseline, step "
-                        f"{step_name!r} metric {metric_key!r}: n_paired {n_paired} is "
-                        f"below limits.min_reported_n ({min_reported_n})",
-                    )
-            if metric_block:
-                block[step_name] = metric_block
+        block = _comparison_step_blocks(
+            comp,
+            roster=roster,
+            aggregated=aggregated,
+            collapsed_by_key=collapsed_by_key,
+            derived_by_key=derived_by_key,
+            resample_fns_by_key=resample_fns_by_key,
+            seed=seed,
+            draws=draws,
+            min_reported_n=min_reported_n,
+            findings=findings,
+            where=f"condition {comp.of} ({comp.id!r}) vs baseline",
+        )
         if block:
             out[comp.of] = block
+    return out or None
+
+
+def _compute_declared_contrasts(
+    *,
+    doc: dict[str, Any],
+    conditions: "list[Condition]",
+    roster: "UnitList | None",
+    aggregated: dict[int, dict[str, dict[str, Any]]],
+    collapsed_by_key: dict[tuple[int, str], dict[str, dict[str, float]]],
+    derived_by_key: dict[tuple[int, str], dict[str, Any] | None],
+    resample_fns_by_key: dict[
+        tuple[int, str], dict[str, Callable[[UnitTable], float | None]] | None
+    ],
+    seed: int,
+    draws: int,
+    findings: Collector,
+) -> list[dict[str, Any]] | None:
+    """Every declared `statistics.contrasts` entry's delta, as `results.contrasts`
+    — `reference.md` § Contrasts: claims that aren't condition-vs-baseline: "a
+    contrast belongs to neither of its sides", so it lands beside the
+    conditions rather than inside one, as a flat list rather than keyed by
+    condition index the way `vs_baseline` is.
+
+    `of`/`against` are recorded **with their index** even though the config
+    names them by label alone — `sweep.condition_dir_name`'s `<nn>_<label>`
+    form, the same the run's own `conditions/` directories use — because the
+    record resolves what the config abbreviates.
+
+    Returns `None`, not `[]`, when nothing was declared: this is the sibling
+    no-op `docs/superpowers/spec-defects.md` used to carry (Task 6 retired
+    `E-STATS-CONTRASTS-UNSUPPORTED`, so a declared contrast validated clean
+    with nothing downstream to compute it) — closed here rather than in a
+    later slice.
+    """
+    if roster is None:
+        return None
+    comparisons = _declared_comparisons(doc, conditions)
+    if not comparisons:
+        return None
+    label_by_index = {c.index: c.label for c in conditions}
+    min_reported_n = (doc.get("limits") or {}).get("min_reported_n")
+    out: list[dict[str, Any]] = []
+    for comp in comparisons:
+        block = _comparison_step_blocks(
+            comp,
+            roster=roster,
+            aggregated=aggregated,
+            collapsed_by_key=collapsed_by_key,
+            derived_by_key=derived_by_key,
+            resample_fns_by_key=resample_fns_by_key,
+            seed=seed,
+            draws=draws,
+            min_reported_n=min_reported_n,
+            findings=findings,
+            where=f"contrast {comp.id!r}",
+        )
+        entry: dict[str, Any] = {
+            "id": comp.id,
+            "of": condition_dir_name(comp.of, label_by_index.get(comp.of) or ""),
+            "against": condition_dir_name(comp.against, label_by_index.get(comp.against) or ""),
+        }
+        entry.update(block)
+        out.append(entry)
     return out or None
 
 
@@ -479,6 +612,10 @@ def command_run(config_path: Path) -> int:
         # `_compute_vs_baseline` (below, only reached when `roster is not None`)
         # returns `None` rather than `{}` in that case.
         vs_baseline: dict[int, dict[str, dict[str, dict[str, Any]]]] | None = None
+        # Same rule, same reason, for the declared side: no `statistics.contrasts`
+        # entry means nothing to report, and `_compute_declared_contrasts` returns
+        # `None` rather than `[]`.
+        contrasts_out: list[dict[str, Any]] | None = None
         # Condition metadata `ExecutionResult` cannot carry: `Execution` holds
         # index and label but not `is_baseline` or the swept `values`, and
         # `reference.md` § The two files shows both on the condition entry.
@@ -730,6 +867,18 @@ def command_run(config_path: Path) -> int:
                 draws=derived_metric_draws,
                 findings=aggregate_c,
             )
+            contrasts_out = _compute_declared_contrasts(
+                doc=doc,
+                conditions=conditions,
+                roster=roster,
+                aggregated=aggregated,
+                collapsed_by_key=collapsed_by_key,
+                derived_by_key=derived_by_key,
+                resample_fns_by_key=resample_fns_by_key,
+                seed=resample_seed_value,
+                draws=derived_metric_draws,
+                findings=aggregate_c,
+            )
             if aggregate_c.findings:
                 # Disclosed, not corrective: a metric that could not be computed
                 # is not the same fact as a run that did not happen, so `status`
@@ -798,6 +947,7 @@ def command_run(config_path: Path) -> int:
             aggregated=aggregated,
             condition_meta=condition_meta,
             vs_baseline=vs_baseline,
+            contrasts=contrasts_out,
         )
         (run_dir / "run.yaml").write_text(yaml.safe_dump(doc_out, sort_keys=False))
         # `with` block exit releases the lock.

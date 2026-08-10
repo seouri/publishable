@@ -1137,7 +1137,7 @@ def test_the_paired_interval_is_narrower_than_two_independent_draws():
     of = {f"u{i}": {"m": float(i) + (1.0 if i % 2 == 0 else 0.0)} for i in range(60)}
     against = {f"u{i}": {"m": float(i)} for i in range(60)}
     keys = sorted(of)
-    paired, _ = paired_percentile_of_derived(of, against, keys, _mean_m, seed=7)
+    paired, _ = paired_percentile_of_derived(of, against, keys, _mean_m, _mean_m, seed=7)
     a, _ = percentile_of_derived(of, _mean_m, seed=7)
     b, _ = percentile_of_derived(against, _mean_m, seed=7)
     independent_width = (a.high - a.low) + (b.high - b.low)
@@ -1147,14 +1147,14 @@ def test_the_paired_interval_is_narrower_than_two_independent_draws():
 def test_the_interval_brackets_the_observed_difference():
     of = {f"u{i}": {"m": float(i) + (1.0 if i % 2 == 0 else 0.0)} for i in range(60)}
     against = {f"u{i}": {"m": float(i)} for i in range(60)}
-    got, _ = paired_percentile_of_derived(of, against, sorted(of), _mean_m, seed=7)
+    got, _ = paired_percentile_of_derived(of, against, sorted(of), _mean_m, _mean_m, seed=7)
     assert got.low < 0.5 < got.high
 
 
 def test_it_names_its_own_method_paired_percentile():
     of = {f"u{i}": {"m": float(i) + 1.0} for i in range(60)}
     against = {f"u{i}": {"m": float(i)} for i in range(60)}
-    got, _ = paired_percentile_of_derived(of, against, sorted(of), _mean_m, seed=7)
+    got, _ = paired_percentile_of_derived(of, against, sorted(of), _mean_m, _mean_m, seed=7)
     assert got.method == "paired_percentile_over_units"
 
 
@@ -1162,17 +1162,17 @@ def test_the_same_seed_reproduces_and_a_different_one_does_not_paired():
     of = {f"u{i}": {"m": float(i) + (1.0 if i % 2 == 0 else 0.0)} for i in range(60)}
     against = {f"u{i}": {"m": float(i)} for i in range(60)}
     k = sorted(of)
-    assert paired_percentile_of_derived(of, against, k, _mean_m, seed=7) == \
-        paired_percentile_of_derived(of, against, k, _mean_m, seed=7)
-    assert paired_percentile_of_derived(of, against, k, _mean_m, seed=7) != \
-        paired_percentile_of_derived(of, against, k, _mean_m, seed=99)
+    assert paired_percentile_of_derived(of, against, k, _mean_m, _mean_m, seed=7) == \
+        paired_percentile_of_derived(of, against, k, _mean_m, _mean_m, seed=7)
+    assert paired_percentile_of_derived(of, against, k, _mean_m, _mean_m, seed=7) != \
+        paired_percentile_of_derived(of, against, k, _mean_m, _mean_m, seed=99)
 
 
 def test_below_the_survivor_floor_there_is_no_interval_paired():
     of = {f"u{i}": {"m": float(i)} for i in range(60)}
     against = {f"u{i}": {"m": float(i)} for i in range(60)}
     got, used = paired_percentile_of_derived(
-        of, against, sorted(of), lambda t: None, seed=7, draws=200)
+        of, against, sorted(of), lambda t: None, lambda t: None, seed=7, draws=200)
     assert got is None and used == 0
 
 
@@ -1186,7 +1186,7 @@ def test_a_constant_offset_gives_a_genuinely_zero_width_interval():
     rather than a merely large one."""
     of = {f"u{i}": {"m": float(i) + 0.5} for i in range(60)}
     against = {f"u{i}": {"m": float(i)} for i in range(60)}
-    got, _ = paired_percentile_of_derived(of, against, sorted(of), _mean_m, seed=7)
+    got, _ = paired_percentile_of_derived(of, against, sorted(of), _mean_m, _mean_m, seed=7)
     assert got is not None
     assert got.high - got.low < 1e-9
 
@@ -1199,7 +1199,7 @@ def test_a_raising_compute_is_treated_as_degenerate_not_propagated_paired():
         raise ZeroDivisionError("degenerate draw")
 
     got, used = paired_percentile_of_derived(
-        of, against, sorted(of), always_raises, seed=7, draws=20)
+        of, against, sorted(of), always_raises, always_raises, seed=7, draws=20)
     assert got is None
     assert used == 0
 
@@ -1212,7 +1212,7 @@ def test_a_nan_compute_is_treated_as_degenerate_paired():
         return float("nan")
 
     got, used = paired_percentile_of_derived(
-        of, against, sorted(of), always_nan, seed=7, draws=20)
+        of, against, sorted(of), always_nan, always_nan, seed=7, draws=20)
     assert got is None
     assert used == 0
 
@@ -1238,7 +1238,7 @@ def test_a_one_sided_raise_drops_the_whole_draw_not_half():
 
     draws = 200
     got, used = paired_percentile_of_derived(
-        of, against, sorted(of), flaky_against_only, seed=7, draws=draws)
+        of, against, sorted(of), flaky_against_only, flaky_against_only, seed=7, draws=draws)
     assert used == draws // 2
     assert got is not None
 
@@ -1260,6 +1260,38 @@ def test_a_one_sided_none_drops_the_whole_draw_not_half():
 
     draws = 200
     got, used = paired_percentile_of_derived(
-        of, against, sorted(of), flaky_against_only, seed=7, draws=draws)
+        of, against, sorted(of), flaky_against_only, flaky_against_only, seed=7, draws=draws)
     assert used == draws // 2
     assert got is not None
+
+
+def test_two_different_computes_over_identical_tables_yield_a_real_interval():
+    """The regression a single shared `compute` produces, and the reason this
+    function takes two: `of` and `against` here hold *identical* per-unit
+    data — exactly the shape a swept axis that doesn't touch the recorded
+    columns produces (the documented worked example's `analysis.method`
+    sweep records the same `pred`/`truth` under every condition; only which
+    correlation `aggregate` computes from them differs). A version of this
+    function taking one `compute` shared by both sides would evaluate that
+    one formula against both sides' identical draws and report a spuriously
+    precise — often exactly zero-width — interval no matter how different
+    the two conditions' real formulas are. `compute_of` (`total`) and
+    `compute_against` (`mean`) are deliberately different formulas over the
+    same data, so a correct implementation must still produce a real,
+    non-degenerate interval that brackets the true, unresampled difference
+    between the two formulas."""
+    table = {f"u{i}": {"m": float(i)} for i in range(60)}
+
+    def total(units: UnitTable) -> float | None:
+        return float(sum(v for v in units.m if v is not None))
+
+    def mean(units: UnitTable) -> float | None:
+        vals = [v for v in units.m if v is not None]
+        return sum(vals) / len(vals) if vals else None
+
+    point_estimate = total(UnitTable(table)) - mean(UnitTable(table))
+    got, used = paired_percentile_of_derived(table, table, sorted(table), total, mean, seed=7)
+    assert got is not None
+    assert used > 0
+    assert got.high - got.low > 0  # non-degenerate: the two formulas disagree
+    assert got.low < point_estimate < got.high
