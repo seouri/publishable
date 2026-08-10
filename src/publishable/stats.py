@@ -336,32 +336,60 @@ def collapse_repeats(
     }
 
 
+def _is_anonymous_level(level: "RepeatLevel") -> bool:
+    """The single-`seed`-level `resolve_repeats` synthesizes when no
+    `replication` block is declared at all — never produced by a declared
+    level, since every declared `seed`/`batch`/`fold` member gets a real,
+    non-empty label from `_seed_members`. It's an implementation detail of
+    how core represents "no repeats declared", not a design the user
+    expressed, which is why `repeat_spread` gives it no entry while a
+    *declared* `{kind: seed, n: 1}` still reports `{std: 0.0, n: 1, ...}`.
+    """
+    return level.kind == "seed" and level.n == 1 and level.members[0].label == ""
+
+
 def repeat_spread(
     results: "list[ExecutionResult]",
     step_name: str,
     condition_index: int,
     levels: "list[RepeatLevel]",
+    column: str,
 ) -> list[dict[str, Any]]:
-    """How much each repeat level moved the step's recorded values, one entry
-    per level, outer to inner — `reference.md` § A `batch` says *when*, not
-    *what*.
+    """How much each repeat level moved one metric's recorded values, one
+    entry per level, outer to inner — `reference.md` § A `batch` says *when*,
+    not *what*. `column` is the one recorded column this figure describes:
+    pooling every numeric column of a row into one mean would average, say,
+    `pred` and `truth` together and then report that blended number as the
+    dispersion of each — dispersion is per metric, the same way the interval
+    beside it is.
 
-    A `fold` level contributes no entry: each unit appears in exactly one
-    fold, so there is nothing to average across (the same reason S3c's
-    collapse concatenates across folds rather than averaging). Every other
-    level gets a per-member mean of its recorded numeric values, then the
-    population standard deviation (divide by `n`, not `n - 1`) of those
-    member means — population rather than sample so a single-member level
-    falls out as exactly `0.0` with no special case, which is what a lone
-    repeat's dispersion honestly is.
+    A `fold` level contributes no entry on its own: each unit appears in
+    exactly one fold, so there is nothing to average across (the same reason
+    S3c's collapse concatenates across folds rather than averaging). Nested
+    with another level (`fold x seed`), the honest per-level figure would
+    need the metric recomputed over each fold's own slice — a materially
+    heavier operation this passenger does not implement — so the whole
+    result is omitted rather than reporting a differently-computed number
+    under the same key; see `docs/superpowers/spec-defects.md`. The anonymous
+    single-seed level (no `replication` block declared) is skipped the same
+    way `fold` is, via `_is_anonymous_level`.
+
+    Every other level gets a per-member mean of its recorded values for
+    `column`, then the population standard deviation (divide by `n`, not
+    `n - 1`) of those member means — population rather than sample so a
+    single-member level falls out as exactly `0.0` with no special case,
+    which is what a lone repeat's dispersion honestly is. `n` is the number
+    of members that actually contributed a mean, not the level's declared
+    count: a member with no matching rows for this column contributes
+    nothing, and `std`/`n` must describe the same set of numbers.
 
     A member's rows are found by matching its label against the tokens of
     each execution's composed `repeat_label`, split on `LABEL_JOIN` — the
     same idiom `realize_order` uses to find a batch's rows inside
-    `batch01_seed42`. An anonymous level's single member has an empty label,
-    and `"".split(LABEL_JOIN)` on an empty `repeat_label` is `[""]`, so the
-    same membership test matches it without a separate branch.
+    `batch01_seed42`.
     """
+    if len(levels) > 1 and any(lv.kind == "fold" for lv in levels):
+        return []
     recording = [
         r
         for r in results
@@ -371,17 +399,16 @@ def repeat_spread(
     ]
     entries: list[dict[str, Any]] = []
     for level in levels:
-        if level.kind == "fold":
+        if level.kind == "fold" or _is_anonymous_level(level):
             continue
         member_means: list[float] = []
         for member in level.members:
             values = [
-                float(value)
+                float(row[column])
                 for r in recording
                 if member.label in (r.execution.repeat_label or "").split(LABEL_JOIN)
                 for row in r.rows
-                for column, value in row.items()
-                if column != "unit" and _is_numeric(value)
+                if column in row and _is_numeric(row[column])
             ]
             if values:
                 member_means.append(sum(values) / len(values))
@@ -389,7 +416,7 @@ def repeat_spread(
             continue
         grand_mean = sum(member_means) / len(member_means)
         variance = sum((m - grand_mean) ** 2 for m in member_means) / len(member_means)
-        entries.append({"std": math.sqrt(variance), "n": level.n, "kind": level.kind})
+        entries.append({"std": math.sqrt(variance), "n": len(member_means), "kind": level.kind})
     return entries
 
 

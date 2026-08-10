@@ -137,7 +137,7 @@ def _results_for_one_seed():
 
 def test_one_entry_per_level_outer_to_inner():
     levels = resolve_repeats(cfg([{"kind": "batch", "n": 2}, {"kind": "seed", "n": 2}]), "d")
-    spread = repeat_spread(_results_for_batch_seed(), "analyze", 0, levels)
+    spread = repeat_spread(_results_for_batch_seed(), "analyze", 0, levels, "score")
     assert [e["kind"] for e in spread] == ["batch", "seed"]
     assert [e["n"] for e in spread] == [2, 2]
     assert all(e["std"] >= 0 for e in spread)
@@ -150,14 +150,70 @@ def test_one_entry_per_level_outer_to_inner():
 def test_a_fold_level_contributes_no_entry():
     """Each unit is in exactly one fold, so there is nothing to average across."""
     levels = resolve_repeats(cfg([{"kind": "fold", "k": 2}]), "d", unit_count=4)
-    assert repeat_spread(_results_for_folds(), "analyze", 0, levels) == []
+    assert repeat_spread(_results_for_folds(), "analyze", 0, levels, "score") == []
+
+
+def test_a_fold_nested_with_another_level_is_omitted_entirely():
+    """`fold x seed` would need the metric recomputed per fold slice to answer
+    honestly; rather than report the seed level's figure alone as if that were
+    the whole answer, the result is omitted entirely — a missing figure over a
+    differently-computed one."""
+    levels = resolve_repeats(
+        cfg([{"kind": "fold", "k": 2}, {"kind": "seed", "n": 2}]), "d", unit_count=4
+    )
+    results = [
+        _repeat_result("analyze", "fold01_seed01", 0, {"u1": {"score": 1.0}, "u2": {"score": 2.0}}),
+        _repeat_result("analyze", "fold01_seed02", 0, {"u1": {"score": 3.0}, "u2": {"score": 4.0}}),
+        _repeat_result("analyze", "fold02_seed01", 0, {"u3": {"score": 5.0}, "u4": {"score": 6.0}}),
+        _repeat_result("analyze", "fold02_seed02", 0, {"u3": {"score": 7.0}, "u4": {"score": 8.0}}),
+    ]
+    assert repeat_spread(results, "analyze", 0, levels, "score") == []
 
 
 def test_a_single_member_level_reports_zero_spread_not_none():
     """One repeat has no dispersion; reporting 0.0 with n: 1 says that plainly,
     where omitting the entry would read as 'this level was not run'."""
     levels = resolve_repeats(cfg([{"kind": "seed", "n": 1}]), "d")
-    spread = repeat_spread(_results_for_one_seed(), "analyze", 0, levels)
+    spread = repeat_spread(_results_for_one_seed(), "analyze", 0, levels, "score")
+    assert spread == [{"std": 0.0, "n": 1, "kind": "seed"}]
+
+
+def test_no_replication_block_means_no_repeat_spread_at_all():
+    """The anonymous single-seed level `resolve_repeats({}, ...)` synthesizes
+    is an implementation detail of 'no repeats declared', not a design the
+    user expressed — an ordinary run with no repeat structure must be
+    unchanged, so it gets no `repeat_spread` at all, unlike a *declared*
+    `{kind: seed, n: 1}` (the test above)."""
+    levels = resolve_repeats({}, "d")
+    results = [_repeat_result("analyze", "", 0, {"u1": {"score": 1.0}, "u2": {"score": 5.0}})]
+    assert repeat_spread(results, "analyze", 0, levels, "score") == []
+
+
+def test_dispersion_is_computed_per_column_not_pooled():
+    """A step recording two numeric columns (`pred` and `truth`) must not have
+    them averaged together into one blended figure reported as the dispersion
+    of both — `column` selects which one this call describes."""
+    levels = resolve_repeats(cfg([{"kind": "seed", "n": 2}]), "d")
+    results = [
+        _repeat_result("analyze", "seed87", 0, {"u1": {"pred": 1.0, "truth": 100.0}}),
+        _repeat_result("analyze", "seed93", 0, {"u1": {"pred": 3.0, "truth": 100.0}}),
+    ]
+    pred_spread = repeat_spread(results, "analyze", 0, levels, "pred")
+    truth_spread = repeat_spread(results, "analyze", 0, levels, "truth")
+    assert pred_spread[0]["std"] == pytest.approx(1.0)
+    assert truth_spread[0]["std"] == pytest.approx(0.0)
+
+
+def test_n_reflects_members_that_actually_contributed_a_mean():
+    """A member with no matching rows for this column contributes nothing;
+    `n` must describe the same set of numbers `std` was computed over, not the
+    level's declared count."""
+    levels = resolve_repeats(cfg([{"kind": "seed", "n": 2}]), "d")
+    results = [
+        _repeat_result("analyze", "seed87", 0, {"u1": {"score": 1.0}}),
+        # seed93 recorded nothing for this step at all.
+    ]
+    spread = repeat_spread(results, "analyze", 0, levels, "score")
     assert spread == [{"std": 0.0, "n": 1, "kind": "seed"}]
 
 

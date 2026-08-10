@@ -423,17 +423,28 @@ def command_run(config_path: Path) -> int:
                         resample=resample_fns,
                     )
                     # One dispersion figure per repeat level, outer to inner
-                    # (`reference.md` § A `batch` says *when*, not *what*) — read
-                    # directly off the `RepeatLevel` list resolved above, once per
-                    # recording step and shared by every metric it produced, since
-                    # `repeat_spread` answers "did this pipeline give the same
-                    # answer" and takes no column of its own to differ by. A bare
-                    # `fold` level contributes nothing, so `spread` is `[]` there
-                    # and no metric gets the key at all.
-                    spread = repeat_spread(results, step_name, cond.index, levels)
-                    if spread:
-                        for metric in step_summary.values():
-                            metric["repeat_spread"] = spread
+                    # (`reference.md` § A `batch` says *when*, not *what*), computed
+                    # per RECORDED column — pooling `pred` and `truth` into one mean
+                    # would report the blend as the dispersion of each. Only the
+                    # columns `collapse_repeats` actually collapsed (and that
+                    # survived `summarize_step`'s all-numeric check) get a figure;
+                    # a derived (`aggregate`-computed) metric has no raw per-execution
+                    # column to read a member's mean from without recomputing
+                    # `aggregate` per member — the same heavier operation
+                    # `repeat_spread` already declines for a nested `fold` — so it
+                    # gets none (`docs/superpowers/spec-defects.md`). A length-one
+                    # result is unwrapped to a bare mapping, matching
+                    # `reference.md`'s single-level examples; a nested design's list
+                    # of >1 entries is left as a list.
+                    recorded_columns = {col for cols in collapsed.values() for col in cols}
+                    for column in recorded_columns:
+                        if column not in step_summary:
+                            continue
+                        spread = repeat_spread(results, step_name, cond.index, levels, column)
+                        if spread:
+                            step_summary[column]["repeat_spread"] = (
+                                spread[0] if len(spread) == 1 else spread
+                            )
                     aggregated[cond.index][step_name] = step_summary
             if aggregate_c.findings:
                 # Disclosed, not corrective: a metric that could not be computed
