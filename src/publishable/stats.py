@@ -358,6 +358,26 @@ def collapse_repeats(
     }
 
 
+def paired_keys(
+    of: dict[str, dict[str, float]],
+    against: dict[str, dict[str, float]],
+    allowed: set[str] | None,
+) -> list[str]:
+    """The units both sides completed, narrowed by a `within` stratum if given.
+
+    The intersection, not the union: a unit that completed in one condition and
+    failed in the other has no difference to contribute, and counting it would
+    put a number in `n_paired` that no per-unit difference backs.
+
+    Sorted so a resample over these keys is row-order invariant, the same reason
+    `percentile_over_units` sorts its pool.
+    """
+    keys = set(of) & set(against)
+    if allowed is not None:
+        keys &= allowed
+    return sorted(keys)
+
+
 def _is_anonymous_level(level: "RepeatLevel") -> bool:
     """The single-`seed`-level `resolve_repeats` synthesizes when no
     `replication` block is declared at all — never produced by a declared

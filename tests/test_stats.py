@@ -12,6 +12,7 @@ from publishable.stats import (
     handed_to,
     mean_of,
     min_honest_draws,
+    paired_keys,
     percentile_of_derived,
     percentile_over_units,
     repeat_spread,
@@ -482,6 +483,44 @@ def test_collapse_requires_condition_index():
     `TypeError` at the call site, not a silently pooled mean."""
     with pytest.raises(TypeError):
         collapse_repeats([], "analyze")  # type: ignore[call-arg]
+
+
+def test_the_pairing_is_the_intersection():
+    of = {"u1": {"m": 1.0}, "u2": {"m": 2.0}, "u3": {"m": 3.0}}
+    against = {"u2": {"m": 1.0}, "u3": {"m": 1.0}, "u4": {"m": 1.0}}
+    assert paired_keys(of, against, None) == ["u2", "u3"]
+
+
+def test_the_union_and_either_side_alone_all_differ():
+    """Pins the intersection specifically: three wrong answers are distinguishable."""
+    of = {"u1": {"m": 1.0}, "u2": {"m": 2.0}}
+    against = {"u2": {"m": 1.0}, "u3": {"m": 1.0}}
+    keys = paired_keys(of, against, None)
+    assert keys == ["u2"]
+    assert keys != sorted(set(of) | set(against))
+    assert keys != sorted(of)
+    assert keys != sorted(against)
+
+
+def test_a_within_stratum_narrows_the_intersection():
+    of = {"u1": {"m": 1.0}, "u2": {"m": 2.0}}
+    against = {"u1": {"m": 1.0}, "u2": {"m": 1.0}}
+    assert paired_keys(of, against, {"u2"}) == ["u2"]
+
+
+def test_the_result_is_sorted():
+    of = {"u3": {"m": 1.0}, "u1": {"m": 1.0}}
+    against = {"u1": {"m": 1.0}, "u3": {"m": 1.0}}
+    assert paired_keys(of, against, None) == ["u1", "u3"]
+
+
+def test_an_empty_allowed_set_yields_no_pairing():
+    """An empty `allowed` is a real answer — nobody matched the stratum — and
+    must not be confused with `None`, which means unrestricted."""
+    of = {"u1": {"m": 1.0}}
+    against = {"u1": {"m": 1.0}}
+    assert paired_keys(of, against, set()) == []
+    assert paired_keys(of, against, None) == ["u1"]
 
 
 def test_a_recorded_column_is_basis_units_and_carries_an_interval():
