@@ -745,22 +745,34 @@ class Step(BaseStep):
 
     def run(self, cfg, io):
         units = list(io.units)
-        # A per-unit value that differs both by condition (`is_spearman`,
-        # keyed off the swept `analysis.method`, so `of` and `against`
-        # genuinely diverge rather than recording the same numbers under two
-        # labels) and *per-unit differently between the two conditions* (the
-        # alternating `extra`, whose parity flips with `is_spearman`) — the
-        # per-unit differences must themselves vary, not just the two
-        # conditions' means, or the paired interval is zero-width and
-        # `cohens_dz` returns `None` regardless of which condition is which.
-        # A per-unit offset that's merely constant-but-nonzero (`+ 0.5` on
-        # every unit, in both conditions) cancels in the difference and hits
-        # the same trap: S4b task 5's plan did, and its fix is in
+        # A per-unit value that differs both by condition (`shift`, keyed off
+        # the swept `analysis.method`, so `of` and `against` genuinely diverge
+        # rather than recording the same numbers under two labels) and
+        # *per-unit differently between the two conditions* (the alternating
+        # `extra`, whose parity flips with `shift`) — the per-unit differences
+        # must themselves vary, not just the two conditions' means, or the
+        # paired interval is zero-width and `cohens_dz` returns `None`
+        # regardless of which condition is which. A per-unit offset that's
+        # merely constant-but-nonzero (`+ 0.5` on every unit, in both
+        # conditions) cancels in the difference and hits the same trap: S4b
+        # task 5's plan did, and its fix is in
         # `docs/superpowers/sdd/2026-08-10-contrasts/progress.md`, Task 5.
-        is_spearman = 1 if cfg.parameters.analysis.method == "spearman" else 0
+        #
+        # The shift is per *method* — a `1 if spearman else 0` flag, which is
+        # what stood here, makes every arm past the first byte-identical to
+        # the baseline under a two-arm grid: all-zero per-unit differences, a
+        # zero-width interval, and infinite evidence, which ranks that arm
+        # first in the correction family and makes a corrected-interval
+        # assertion compare 0.0 against 0.0. Every non-baseline shift is odd,
+        # so the alternating `extra` flips parity against the baseline in each
+        # arm; a shift whose parity matched the baseline's would cancel the
+        # +0.5 and land back on a point mass by the other route.
+        shift = {{"pearson": 0, "spearman": 1, "kendall": 3}}.get(
+            cfg.parameters.analysis.method, 0
+        )
         for i, unit in enumerate(units):
-            extra = 0.5 if (i + is_spearman) % 2 == 1 else 0.0
-            io.record(unit.key, {{"pred": float(i) + float(is_spearman) + extra}})
+            extra = 0.5 if (i + shift) % 2 == 1 else 0.0
+            io.record(unit.key, {{"pred": float(i) + float(shift) + extra}})
         return {{"n_units": len(units)}}
 '''
 
@@ -807,7 +819,14 @@ def test_a_baseline_sweep_reports_a_delta(tmp_path, capsys, monkeypatch):
     assert entry["paired"] is True
     assert entry["n_paired"] > 0
     assert entry["method"] in ("paired_t_over_units", "paired_percentile_over_units")
-    assert entry["correction"] is None  # S4c's job, disclosed not applied
+    # A comparison is corrected against the family it belongs to, and the
+    # default method is `holm` when the config names none. One comparison over
+    # one metric is a family of one, whose only rank is corrected at α itself —
+    # so `ci95_corrected` equals `ci95` here, and the arithmetic below is
+    # unchanged by the correction pass.
+    assert entry["correction"] == "holm"
+    assert entry["family_size"] == 1
+    assert entry["ci95_corrected"] == pytest.approx(entry["ci95"])
     # The shift is +1.0 for spearman over pearson on every unit, so the mean
     # per-unit difference is exactly 1.0 regardless of the alternating +0.5 —
     # pins the sign (`of - against`, not `against - of`) and the magnitude.
@@ -819,6 +838,192 @@ def test_a_baseline_sweep_reports_a_delta(tmp_path, capsys, monkeypatch):
     # `pred` is a recorded column, so `cohens_d = cohens_dz(diffs)` — a real
     # float, not the `None` a derived metric would carry.
     assert isinstance(entry["cohens_d"], float)
+
+
+def test_a_baseline_sweep_reports_a_corrected_interval(tmp_path, capsys, monkeypatch):
+    """The whole slice, end to end: two comparisons over one metric is a family
+    of 2 under the default `holm`, the weaker member is corrected by nothing, and
+    the stronger one is corrected at α/2. `family` is broken out beside the size
+    so a reviewer can check it."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman", "kendall"]},
+        },
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    entries = [
+        metric
+        for condition in run["results"]["conditions"]
+        for step_block in condition.get("vs_baseline", {}).values()
+        for metric in step_block.values()
+    ]
+    assert len(entries) == 2
+    for entry in entries:
+        assert entry["correction"] == "holm"
+        assert entry["family_size"] == 2
+        assert entry["family"] == {"comparisons": 2, "metrics": 1}
+        assert entry["ci95_corrected"] is not None
+    levels = sorted(e["correction_level"] for e in entries)
+    assert levels == [pytest.approx(0.025), pytest.approx(0.05)]
+    weakest = next(e for e in entries if e["correction_level"] == pytest.approx(0.05))
+    assert weakest["ci95_corrected"] == pytest.approx(weakest["ci95"])
+    strongest = next(e for e in entries if e["correction_level"] == pytest.approx(0.025))
+    assert strongest["ci95_corrected"][0] < strongest["ci95"][0]
+    assert strongest["ci95_corrected"][1] > strongest["ci95"][1]
+
+
+@pytest.mark.parametrize("method", ["none", "bonferroni", "holm", "fdr_bh"])
+def test_the_configured_correction_method_decides_the_record(
+    tmp_path, capsys, monkeypatch, method
+):
+    """`statistics.correction` is read from the config, and each of its four
+    values produces the record `reference.md` § Statistical reporting's table
+    requires. Without this, hardcoding `"holm"` at the call site passes every
+    other test in this file — the config→record path for the one field that
+    decides how every interval in a run is corrected would be unpinned, and
+    the `none` row in particular backs a claim (the corrected fields are
+    *absent*, not null, since an explicit null would say a correction was
+    attempted and found nothing to do) that nothing else checks.
+
+    One family throughout: two non-baseline arms over one metric, so *m* = 2
+    and α/m = 0.025 — far enough from α = 0.05 that a method reading the wrong
+    row cannot land on the right number.
+    """
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman", "kendall"]},
+        },
+        statistics={"correction": method},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    entries = [
+        metric
+        for condition in run["results"]["conditions"]
+        for step_block in condition.get("vs_baseline", {}).values()
+        for metric in step_block.values()
+    ]
+    assert len(entries) == 2
+    if method == "none":
+        for entry in entries:
+            # `correction: null` is the metric block's own default, which is
+            # what says "uncorrected" here; the other four fields never appear.
+            assert entry["correction"] is None
+            absent = {"ci95_corrected", "correction_level", "family_size", "family"}
+            assert absent.isdisjoint(entry)
+        return
+    for entry in entries:
+        assert entry["correction"] == method
+        assert entry["family_size"] == 2
+        assert entry["family"] == {"comparisons": 2, "metrics": 1}
+    if method == "fdr_bh":
+        # Controlling a false discovery *rate* is a statement about a set, not
+        # a bound on any one comparison, so there is no level and no interval —
+        # but the family is still counted, and still says so.
+        for entry in entries:
+            assert entry["ci95_corrected"] is None
+            assert entry["correction_level"] is None
+        return
+    levels = sorted(e["correction_level"] for e in entries)
+    if method == "bonferroni":
+        # α/m for every member, rank or no rank.
+        assert levels == [pytest.approx(0.025), pytest.approx(0.025)]
+        for entry in entries:
+            assert entry["ci95_corrected"][0] < entry["ci95"][0]
+            assert entry["ci95_corrected"][1] > entry["ci95"][1]
+        return
+    # holm: α/(m−i+1), so rank 2 of 2 is corrected by nothing at all.
+    assert levels == [pytest.approx(0.025), pytest.approx(0.05)]
+    weakest = next(e for e in entries if e["correction_level"] == pytest.approx(0.05))
+    assert weakest["ci95_corrected"] == pytest.approx(weakest["ci95"])
+
+
+def test_no_draw_pool_reaches_the_record(tmp_path, capsys, monkeypatch):
+    """A corrected interval is read off 2000 stored draws. Those must travel
+    beside the record, never inside it: a run.yaml carrying a 2000-element array
+    per metric is unreadable, and `io` never promised to serialize one."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    # The `results` block, not the whole file: `run.yaml` echoes the config,
+    # whose `input_dir`/`output_dir` are under a `tmp_path` named after this
+    # very test — so a whole-file `"pool" not in text` fails on the pytest
+    # directory rather than on anything core wrote. Every field a member
+    # carries would land here, in a comparison entry, or nowhere.
+    text = yaml.safe_dump(run["results"], sort_keys=False)
+    assert "pool" not in text
+    assert "diffs" not in text
+    # `"thin:"`, not `"thin"`: the bare substring is satisfied by `within`,
+    # so a record legitimately carrying a `within` stratum would fail this for
+    # a reason that has nothing to do with a leaked field.
+    assert "thin:" not in text
+    entry = _first_contrast(run, "method=spearman")
+    assert not [k for k in entry if k.startswith("_")]
+
+
+def test_a_contrast_named_after_a_condition_index_is_its_own_comparison(
+    tmp_path, capsys, monkeypatch
+):
+    """The family is counted over distinct comparisons, so the key that
+    identifies one must not be forgeable. A declared contrast may carry any
+    `id` — `validate` refuses only an unresolvable `of`/`against` — and `id:
+    "1"` is exactly the string condition 1's own `vs_baseline` block would be
+    addressed by. Merged, they are one comparison instead of two: a family of 1
+    where there are 2, an α twice as large as it should be, and two intervals
+    narrower than the evidence supports in the direction no reader can check.
+
+    This declared contrast is the *same* comparison as the baseline block, over
+    the same 10 units, so the two raw intervals are identical and only the
+    family separates them: an implementation that merges them cannot be caught
+    by any assertion on `ci95`.
+    """
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+        statistics={
+            "contrasts": [{"id": "1", "of": "method=spearman", "against": "baseline"}]
+        },
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    from_baseline = _first_contrast(run, "method=spearman")
+    declared = run["results"]["contrasts"][0]["step01_summarize_units"]["pred"]
+    assert from_baseline is not None
+    for entry in (from_baseline, declared):
+        assert entry["family_size"] == 2
+        assert entry["family"] == {"comparisons": 2, "metrics": 1}
+        assert entry["ci95_corrected"] is not None
+    levels = sorted(e["correction_level"] for e in (from_baseline, declared))
+    assert levels == [pytest.approx(0.025), pytest.approx(0.05)]
 
 
 def _named_contrast(run: dict[str, Any], label: str, metric: str) -> dict[str, Any] | None:

@@ -625,10 +625,13 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     a pre-registered hypothesis that runs and reports success while honoring
     neither is the same silent-no-op class. `statistics.contrasts` is no longer in
     this family: `_check_contrasts` now resolves and checks each declared entry
-    instead of refusing the block wholesale. `statistics.correction` is the
-    deliberate exception: it is disclosed via `W-STATS-FAMILY` and a `correction: null`
-    recorded on every metric, not refused, since a warned-and-marked declaration is not
-    a declaration that changes nothing while claiming otherwise. Each message says
+    instead of refusing the block wholesale. Neither is `statistics.correction`,
+    which `cli.py` now applies: every comparison carries `ci95_corrected`,
+    `correction_level`, `family_size`, and `family`, so what this module owes it
+    is the value checks below (`E-STATS-CORRECTION-UNKNOWN`,
+    `W-STATS-CORRECTION-INAPPLICABLE`) plus `W-STATS-FAMILY` on the one value that
+    opts out — `none`, which corrects nothing and records `correction: null` to
+    say so. Each remaining message says
     plainly that the block is honored in a later slice, so a user does not read this as
     their config being malformed.
     """
@@ -726,10 +729,11 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     # block all validate clean today and are read by nothing — the same
     # silent-no-op class as the fields above. `statistics.contrasts` used to be in
     # this list too; it is now checked for real by `_check_contrasts` instead of
-    # being refused wholesale. `statistics.correction` is deliberately NOT refused
-    # here: it is disclosed instead, via `W-STATS-FAMILY` plus a `correction: null`
-    # recorded on every aggregated metric, so it is not a case of a declaration
-    # that changes nothing while claiming otherwise. Of these four keys
+    # being refused wholesale. `statistics.correction` is not in it either, and no
+    # longer for a disclosure reason: `cli.py` applies it, so a declared correction
+    # changes the record — the correction checks further down this module check
+    # its *value* instead, and warn only on `none`, which corrects nothing by
+    # request. Of these four keys
     # `materialize.py` writes only two into a generated config — `statistics.correction`
     # and a top-level `hypotheses: []` — so the other two are simply absent there;
     # each check below fires on a real declaration either way, never on a key's mere

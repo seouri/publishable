@@ -18,6 +18,7 @@ from publishable.base_experiment import BaseExperiment, load_experiment
 from publishable.coercion import coerce_scalars
 from publishable.config import Config
 from publishable.contrasts import resolve_contrasts, units_matching
+from publishable.correction import Member, corrected_fields
 from publishable.diagnostics import (
     EXIT_FAILED,
     EXIT_INVOCATION,
@@ -191,7 +192,8 @@ def _comparison_step_blocks(
     min_reported_n: float | int | None,
     findings: Collector,
     where: str,
-) -> dict[str, dict[str, Any]]:
+    where_id: str,
+) -> tuple[dict[str, dict[str, Any]], list[Member]]:
     """One comparison's delta, per recording step and per metric already in
     `aggregated` — the computation `vs_baseline` and `results.contrasts` both
     rest on, factored out so the two record shapes don't duplicate it.
@@ -216,8 +218,19 @@ def _comparison_step_blocks(
     for the reason the worked example carries `cohens_d: null` for `r`. Both
     constructions read `n_paired` off `stats.paired_keys` — the intersection
     of the two conditions' completed units, narrowed by `within` when the
-    comparison declares one — and record `correction: null`: the correction
-    family, `ci95_corrected`, `correction_level`, and `family_size` are S4c's.
+    comparison declares one — and record `correction: null` as their default,
+    which is what the record says under `correction: none`, since nothing is
+    merged over it then.
+
+    The second return value is the correction family's raw material: one
+    `Member` per metric entry, carrying the evidence its interval was read from
+    — the draw pool for a derived metric, the per-unit differences for a
+    recorded column. It travels beside the block rather than inside it because
+    a `run.yaml` carrying 2000 floats per metric is unreadable, and `io` never
+    promised to serialize one. `where_id` is the caller's own addressing for
+    this comparison (`cond:<index>` or `contrast:<id>`, see `_entry_for`), so
+    the correction pass can find the entry again without knowing which of the
+    two record shapes holds it.
 
     `W-STATS-CONTRAST-THIN` fires only for a comparison declaring a `within`,
     because that is the scope `reference.md` gives it three times over — §
@@ -232,6 +245,7 @@ def _comparison_step_blocks(
     of_steps = {k[1] for k in collapsed_by_key if k[0] == comp.of}
     against_steps = {k[1] for k in collapsed_by_key if k[0] == comp.against}
     block: dict[str, dict[str, Any]] = {}
+    members: list[Member] = []
     for step_name in sorted(of_steps & against_steps):
         of_collapsed = collapsed_by_key[(comp.of, step_name)]
         against_collapsed = collapsed_by_key[(comp.against, step_name)]
@@ -253,6 +267,13 @@ def _comparison_step_blocks(
                 n_paired = len(base_keys)
                 interval = None
                 delta = None
+                # Reset per metric, beside the other two: assigned only inside
+                # `n_paired >= 2` below, so a one-unit intersection would leave
+                # the name unbound where the member is built (a `NameError` on
+                # the first pass) or — worse, at function scope — hand a later
+                # metric the *previous* metric's draw pool, which nothing
+                # downstream could detect.
+                resampled = None
                 if compute_of is not None and compute_against is not None:
                     # Point estimate and interval from the same two calls over
                     # the same `base_keys`, so neither can drift onto a
@@ -307,6 +328,23 @@ def _comparison_step_blocks(
                     "cohens_d": cohens_dz(diffs),
                     "correction": None,
                 }
+            # `Member` requires exactly one of `pool`/`diffs` wherever there is
+            # an interval to correct: the draws a percentile interval was read
+            # off, or the per-unit differences a *t* interval was computed
+            # from. An entry with no `ci95` carries neither and is dropped by
+            # `family_members` before either is read.
+            members.append(
+                Member(
+                    where=where_id,
+                    condition_index=comp.of,
+                    step=step_name,
+                    metric=metric_key,
+                    delta=metric_block[metric_key]["delta"] or 0.0,
+                    ci95=(interval.low, interval.high) if interval else None,
+                    pool=tuple(resampled.pool) if is_derived and resampled else None,
+                    diffs=None if is_derived else tuple(diffs),
+                )
+            )
             if comp.within is not None and min_reported_n is not None and n_paired < min_reported_n:
                 findings.warn(
                     "W-STATS-CONTRAST-THIN",
@@ -316,7 +354,7 @@ def _comparison_step_blocks(
                 )
         if metric_block:
             block[step_name] = metric_block
-    return block
+    return block, members
 
 
 def _compute_vs_baseline(
@@ -333,7 +371,7 @@ def _compute_vs_baseline(
     seed: int,
     draws: int,
     findings: Collector,
-) -> dict[int, dict[str, dict[str, dict[str, Any]]]] | None:
+) -> tuple[dict[int, dict[str, dict[str, dict[str, Any]]]] | None, list[Member]]:
     """Every non-baseline condition's own delta against the baseline, per
     recording step and per metric already in `aggregated` — see
     `_comparison_step_blocks` for how one comparison's block is built.
@@ -344,16 +382,20 @@ def _compute_vs_baseline(
     all. `assemble_run_yaml` omits the key entirely in that case rather than
     writing an empty block that would claim a comparison was made and found
     nothing.
+
+    The members every comparison produced come back beside the block, for the
+    correction family `command_run` builds over both record shapes at once.
     """
     if roster is None:
-        return None
+        return None, []
     comparisons = _baseline_comparisons(doc, conditions)
     if not comparisons:
-        return None
+        return None, []
     min_reported_n = (doc.get("limits") or {}).get("min_reported_n")
     out: dict[int, dict[str, dict[str, dict[str, Any]]]] = {}
+    members: list[Member] = []
     for comp in comparisons:
-        block = _comparison_step_blocks(
+        block, block_members = _comparison_step_blocks(
             comp,
             roster=roster,
             aggregated=aggregated,
@@ -365,10 +407,12 @@ def _compute_vs_baseline(
             min_reported_n=min_reported_n,
             findings=findings,
             where=f"condition {comp.of} ({comp.id!r}) vs baseline",
+            where_id=f"cond:{comp.of}",
         )
         if block:
             out[comp.of] = block
-    return out or None
+            members.extend(block_members)
+    return out or None, members
 
 
 def _compute_declared_contrasts(
@@ -385,7 +429,7 @@ def _compute_declared_contrasts(
     seed: int,
     draws: int,
     findings: Collector,
-) -> list[dict[str, Any]] | None:
+) -> tuple[list[dict[str, Any]] | None, list[Member]]:
     """Every declared `statistics.contrasts` entry's delta, as `results.contrasts`
     — `reference.md` § Contrasts: claims that aren't condition-vs-baseline: "a
     contrast belongs to neither of its sides", so it lands beside the
@@ -402,17 +446,22 @@ def _compute_declared_contrasts(
     `E-STATS-CONTRASTS-UNSUPPORTED`, so a declared contrast validated clean
     with nothing downstream to compute it) — closed here rather than in a
     later slice.
+
+    The members every contrast produced come back beside the list, joining the
+    `vs_baseline` ones in one family: `reference.md` counts every interval a
+    reader is shown, and a declared contrast is one of them.
     """
     if roster is None:
-        return None
+        return None, []
     comparisons = _declared_comparisons(doc, conditions)
     if not comparisons:
-        return None
+        return None, []
     label_by_index = {c.index: c.label for c in conditions}
     min_reported_n = (doc.get("limits") or {}).get("min_reported_n")
     out: list[dict[str, Any]] = []
+    members: list[Member] = []
     for comp in comparisons:
-        block = _comparison_step_blocks(
+        block, block_members = _comparison_step_blocks(
             comp,
             roster=roster,
             aggregated=aggregated,
@@ -424,7 +473,9 @@ def _compute_declared_contrasts(
             min_reported_n=min_reported_n,
             findings=findings,
             where=f"contrast {comp.id!r}",
+            where_id=f"contrast:{comp.id}",
         )
+        members.extend(block_members)
         entry: dict[str, Any] = {
             "id": comp.id,
             "of": condition_dir_name(comp.of, label_by_index.get(comp.of) or ""),
@@ -432,7 +483,42 @@ def _compute_declared_contrasts(
         }
         entry.update(block)
         out.append(entry)
-    return out or None
+    return out or None, members
+
+
+def _entry_for(
+    vs_baseline: dict[int, dict[str, dict[str, dict[str, Any]]]] | None,
+    contrasts: list[dict[str, Any]] | None,
+    where_id: str,
+    step: str,
+    metric: str,
+) -> dict[str, Any] | None:
+    """The record entry a corrected field belongs on, in whichever shape holds it.
+
+    `where_id` is `cond:<index>` for a `vs_baseline` block and `contrast:<id>`
+    for a declared one — the same string `Member.where` carries, so the
+    correction pass never has to know which of the two record shapes it is
+    looking at.
+
+    The prefixes are what make `where` collision-proof, and that is not
+    cosmetic: `family_shape` counts comparisons as the number of distinct
+    `where` values, so a declared contrast carrying `id: "1"` — which
+    `validate` permits — would otherwise be the same comparison as condition 1.
+    A family short by one comparison is a *larger* α and an interval narrower
+    than the evidence supports, in the direction no reader can check.
+    """
+    kind, _, rest = where_id.partition(":")
+    if kind == "cond" and vs_baseline is not None:
+        block = vs_baseline.get(int(rest), {}).get(step, {})
+        return block.get(metric)
+    if kind == "contrast":
+        for entry in contrasts or []:
+            if entry.get("id") == rest:
+                step_block = entry.get(step)
+                if isinstance(step_block, dict) and metric in step_block:
+                    found = step_block[metric]
+                    return found if isinstance(found, dict) else None
+    return None
 
 
 def command_validate(config_path: Path) -> int:
@@ -862,7 +948,7 @@ def command_run(config_path: Path) -> int:
                                 spread[0] if len(spread) == 1 else spread
                             )
                     aggregated[cond.index][step_name] = step_summary
-            vs_baseline = _compute_vs_baseline(
+            vs_baseline, vs_baseline_members = _compute_vs_baseline(
                 doc=doc,
                 conditions=conditions,
                 roster=roster,
@@ -874,7 +960,7 @@ def command_run(config_path: Path) -> int:
                 draws=derived_metric_draws,
                 findings=aggregate_c,
             )
-            contrasts_out = _compute_declared_contrasts(
+            contrasts_out, contrast_members = _compute_declared_contrasts(
                 doc=doc,
                 conditions=conditions,
                 roster=roster,
@@ -886,6 +972,33 @@ def command_run(config_path: Path) -> int:
                 draws=derived_metric_draws,
                 findings=aggregate_c,
             )
+            # Every interval a reader is shown is corrected against the family
+            # it belongs to, and both record shapes are in the same family:
+            # `reference.md` counts comparisons × metrics across the run, not
+            # per block. Merged onto the entries in place, before
+            # `assemble_run_yaml` reads them — the evidence each correction was
+            # built from stays here, in the members, and never enters the
+            # record. `corrected_fields` returns `{}` under `correction: none`,
+            # which is why the field is *absent* there rather than null:
+            # an explicit null would claim a correction was attempted.
+            fields = corrected_fields(
+                vs_baseline_members + contrast_members,
+                (doc.get("statistics") or {}).get("correction") or "holm",
+            )
+            for (where_id, step_name, metric_key), values in fields.items():
+                entry = _entry_for(vs_baseline, contrasts_out, where_id, step_name, metric_key)
+                if entry is None:
+                    continue
+                if values.pop("thin"):
+                    aggregate_c.warn(
+                        "W-STATS-CORRECTED-THIN",
+                        "statistics.correction",
+                        f"{where_id}, step {step_name!r} metric {metric_key!r}: "
+                        f"{values['family_size']} comparisons imply a corrected level of "
+                        f"{values['correction_level']:.5f}, which the resample's draws cannot "
+                        "support — `ci95_corrected` is null rather than too narrow",
+                    )
+                entry.update(values)
             if aggregate_c.findings:
                 # Disclosed, not corrective: a metric that could not be computed
                 # is not the same fact as a run that did not happen, so `status`
