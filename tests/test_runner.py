@@ -10,6 +10,7 @@ from publishable.errors import ContractError
 from publishable.replication import Repeat
 from publishable.run_record import assemble_run_yaml, run_status
 from publishable.runner import (
+    _units_failed_anywhere,
     attrition,
     execute_plan,
     resolve_condition_cfg,
@@ -480,6 +481,34 @@ def test_the_identity_reconciles_under_a_fold():
     ]
     c = attrition(results, _roster4(), "analyze", 0, members)
     assert c["resolved"] == c["completed"] + c["ineligible"] + c["failed"]
+
+
+def test_a_healthy_fold_run_does_not_trip_the_failure_fraction():
+    """Before this fix, every unit outside a fold's partition counted as failed on
+    that fold's execution, so a clean 10-fold run aborted on execution one."""
+    members = {"fold01": frozenset({"u1", "u2"}), "fold02": frozenset({"u3", "u4"})}
+    results = [
+        _repeat_result("analyze", "fold01", 0, {"u1": {}, "u2": {}}),
+        _repeat_result("analyze", "fold02", 0, {"u3": {}, "u4": {}}),
+    ]
+    assert _units_failed_anywhere(results, _roster4(), members) == set()
+
+
+def test_a_genuinely_failing_fold_still_counts():
+    members = {"fold01": frozenset({"u1", "u2"}), "fold02": frozenset({"u3", "u4"})}
+    results = [
+        _repeat_result("analyze", "fold01", 0, {"u1": {}}),  # u2 never settled
+        _repeat_result("analyze", "fold02", 0, {"u3": {}, "u4": {}}),
+    ]
+    assert _units_failed_anywhere(results, _roster4(), members) == {"u2"}
+
+
+def test_without_folds_the_union_is_unchanged():
+    results = [
+        _repeat_result("analyze", "seed01", 0, {"u1": {}}),
+        _repeat_result("analyze", "seed02", 0, {"u1": {}, "u2": {}}),
+    ]
+    assert _units_failed_anywhere(results, _roster2(), None) == {"u2"}
 
 
 def test_a_single_repeat_skip_is_still_ineligible(tmp_path: Path):

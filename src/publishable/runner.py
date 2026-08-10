@@ -11,7 +11,7 @@ from typing import Any
 from publishable.artifacts import StepIO
 from publishable.config import Config, SweptAway
 from publishable.errors import ContractError
-from publishable.replication import Repeat
+from publishable.replication import LABEL_JOIN, Repeat
 from publishable.scope import Execution
 from publishable.stats import handed_to
 from publishable.sweep import condition_dir_name
@@ -121,7 +121,27 @@ def attrition(
     }
 
 
-def _units_failed_anywhere(results: list[ExecutionResult], roster: "UnitList") -> set[str]:
+def _handed_keys(
+    repeat_label: str, keys: set[str], fold_members: dict[str, frozenset[str]] | None
+) -> set[str]:
+    """The units an execution with this repeat label was actually given.
+
+    Subtracting from the whole roster instead is what made every fold run abort:
+    the k−1 partitions this execution never saw are neither recorded nor skipped,
+    and would each count as a failure.
+    """
+    if fold_members is None:
+        return keys
+    parts = set(repeat_label.split(LABEL_JOIN))
+    mine = [ks for f, ks in fold_members.items() if f in parts]
+    return (set().union(*mine) & keys) if mine else keys
+
+
+def _units_failed_anywhere(
+    results: list[ExecutionResult],
+    roster: "UnitList",
+    fold_members: dict[str, frozenset[str]] | None = None,
+) -> set[str]:
     """Units with no settled answer — neither recorded nor skipped — in at least
     one execution of a step that records units, across the whole run.
 
@@ -143,6 +163,11 @@ def _units_failed_anywhere(results: list[ExecutionResult], roster: "UnitList") -
     execution of every step, in every condition, over the whole resolved roster.
     `attrition`'s intersection is the right shape for one step's `n`; it is the
     wrong shape for this run-level union.
+
+    What changes under a fold is the membership set each execution's recorded and
+    skipped units are checked against: `_handed_keys` scopes it to the partition
+    that execution was actually given, not the entire resolved roster — the other
+    k−1 partitions were never handed to it and so cannot count as failures of it.
     """
     keys = {u.key for u in roster}
     recording_steps = {
@@ -152,7 +177,8 @@ def _units_failed_anywhere(results: list[ExecutionResult], roster: "UnitList") -
     for r in results:
         if r.execution.scope != "repeat" or r.execution.step_name not in recording_steps:
             continue
-        failed |= keys - (r.recorded | r.skipped)
+        handed = _handed_keys(r.execution.repeat_label or "", keys, fold_members)
+        failed |= handed - (r.recorded | r.skipped)
     return failed
 
 
@@ -229,6 +255,7 @@ def execute_plan(
     digest: str,
     units: UnitList | None = None,
     max_failed_fraction: float | None = None,
+    fold_members: dict[str, frozenset[str]] | None = None,
 ) -> list[ExecutionResult]:
     """Run every execution in the plan, in order, one at a time.
 
@@ -377,7 +404,7 @@ def execute_plan(
 
         if max_failed_fraction is not None and units is not None:
             resolved = len(units)
-            failed = _units_failed_anywhere(results, units)
+            failed = _units_failed_anywhere(results, units, fold_members)
             if resolved and len(failed) / resolved > max_failed_fraction:
                 break
     return results
