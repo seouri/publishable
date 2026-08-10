@@ -1632,15 +1632,32 @@ def test_a_string_ineligible_limit_does_not_raise_or_warn(tmp_path, capsys, monk
     assert "W-DATA-INELIGIBLE" not in doc["stdout"]
 
 
-def test_a_boolean_ineligible_limit_does_not_warn(tmp_path, capsys, monkeypatch):
-    """`bool` is excluded even though it is an `int` subclass: `True` compares
-    equal to `1`, and a fraction can never exceed `1`, so an un-excluded `True`
-    would silently never fire — exactly the kind of malformed-but-quiet config
-    value this guard exists to keep from masquerading as a real threshold."""
+def test_a_true_ineligible_limit_does_not_warn(tmp_path, capsys, monkeypatch):
+    """Kept as documentation, not as the guard's real test: `True` compares equal
+    to `1`, and a fraction can never exceed `1`, so this case cannot distinguish
+    the `bool` exclusion's presence from its absence — either way nothing warns.
+    `test_a_false_ineligible_limit_does_not_warn` below is the discriminating
+    case."""
     import publishable.generators.experiment as experiment_gen
 
     monkeypatch.setattr(experiment_gen, "STARTER_STEP", _SKIP_MOST_STEP)
     doc = run_a_project(
         tmp_path, capsys=capsys, units=10, limits={"max_ineligible_fraction": True}
+    )
+    assert "W-DATA-INELIGIBLE" not in doc["stdout"]
+
+
+def test_a_false_ineligible_limit_does_not_warn(tmp_path, capsys, monkeypatch):
+    """The case that actually earns the `bool` exclusion: `False == 0`, so
+    without `not isinstance(max_ineligible, bool)` the guard would read
+    `max_ineligible_fraction: false` as a `0.0` threshold and warn the moment
+    any unit is ineligible — `_SKIP_MOST_STEP` skips 8 of 10, well above zero.
+    With the exclusion, `false` is not a real fraction and the whole guard is
+    skipped, so nothing warns."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _SKIP_MOST_STEP)
+    doc = run_a_project(
+        tmp_path, capsys=capsys, units=10, limits={"max_ineligible_fraction": False}
     )
     assert "W-DATA-INELIGIBLE" not in doc["stdout"]
