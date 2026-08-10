@@ -10,7 +10,7 @@ See docs/reference.md § Statistical reporting.
 import hashlib
 import math
 import random
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -60,15 +60,33 @@ def resample_seed(digest: str) -> int:
     return int.from_bytes(hashlib.sha256(f"{digest}|resample".encode()).digest()[:4], "big")
 
 
+def _percentile_ranks(draws: int, confidence: float) -> tuple[int, int]:
+    """The symmetric pair of ranks a percentile interval reads off a sorted pool.
+
+    Factored out so every percentile construction in this module — over raw
+    values or over recomputed draws — shares one copy: an asymmetry fixed in
+    one and not the other is exactly the defect this arithmetic already had
+    once (S4a task 4's off-by-one on the upper rank).
+    """
+    tail = (1.0 - confidence) / 2.0
+    lo = max(0, int(tail * draws) - 1)
+    # Symmetric with `lo` in rank, not `int((1.0 - tail) * draws)` bare: that form
+    # overshoots the upper rank by one on every interval. Floored at `lo` because
+    # the symmetric form alone gives -1 at draws=1.
+    hi = max(lo, min(draws - 1, int((1.0 - tail) * draws) - 1))
+    return lo, hi
+
+
 def percentile_over_units(
     values: Sequence[float], seed: int, draws: int = 2000, confidence: float = 0.95
 ) -> Interval | None:
     """A percentile interval over the units, by resampling with replacement.
 
-    This is what gives a derived metric its `ci95`: a value computed from the
-    whole table has no per-unit spread to run a t-interval over, so core
-    resamples the units it was computed from (reference.md § How a metric becomes
-    a number).
+    This is what gives a *column* metric a resampled `ci95` when `resample` is
+    declared (`reference.md` § How a metric becomes a number): the mean is
+    recomputed on each bootstrap draw. A derived metric — one `aggregate`
+    computed, with no per-unit value of its own — needs `aggregate` itself
+    recomputed on each draw instead, which is what `percentile_of_derived` does.
     """
     if len(values) < 2:
         return None
@@ -80,13 +98,70 @@ def percentile_over_units(
     pool = sorted(values)
     n = len(pool)
     means = sorted(sum(pool[rng.randrange(n)] for _ in range(n)) / n for _ in range(draws))
-    tail = (1.0 - confidence) / 2.0
-    lo = max(0, int(tail * draws) - 1)
-    # Symmetric with `lo` in rank, not `int((1.0 - tail) * draws)` bare: that form
-    # overshoots the upper rank by one on every interval. Floored at `lo` because
-    # the symmetric form alone gives -1 at draws=1.
-    hi = max(lo, min(draws - 1, int((1.0 - tail) * draws) - 1))
+    lo, hi = _percentile_ranks(draws, confidence)
     return Interval(low=means[lo], high=means[hi], method="percentile_over_units")
+
+
+def percentile_of_derived(
+    collapsed: dict[str, dict[str, float]],
+    compute: "Callable[[UnitTable], float | None]",
+    seed: int,
+    draws: int = 2000,
+    confidence: float = 0.95,
+) -> Interval | None:
+    """A percentile interval for a derived metric, by recomputing it.
+
+    A derived metric has no per-unit value to resample directly — `aggregate`
+    returned one number for the whole table, not one per unit — so this is
+    the construction `reference.md` § How a metric becomes a number specifies:
+    resampling requires recomputing the metric, "which core can do only for a
+    metric it knows how to compute... a template `aggregate(units, cfg)`."
+    `stats.py` stays pure by taking `compute` as a plain callable rather than
+    importing anything: the caller (`cli.py`) closes over the template and
+    `cfg`, and this function never does.
+
+    Costs `draws` calls to `compute` — 2000 by default, matching
+    `percentile_over_units` — so a caller wrapping an expensive `aggregate`
+    should pass a smaller `draws`, and a test exercising this should too.
+
+    Units are sorted by key before drawing, for the same row-order invariance
+    `percentile_over_units` gets from sorting its own pool: a fixed seed draws
+    a fixed sequence of *indices*, so an unsorted roster would make the
+    interval depend on iteration order rather than on the multiset of units.
+
+    A draw on which `compute` returns `None` or `nan` — a resampled table with
+    no variance for a correlation, say, which is exactly what a degenerate
+    bootstrap draw of `r` can produce — is dropped rather than counted:
+    `compute` returning `None`/`nan` is its own signal that the metric isn't
+    defined on that draw, and counting it as a value would corrupt the
+    distribution with a number that was never really computed. This can only
+    ever shrink the surviving count relative to `draws`, so the percentile
+    ranks are read off *that* count. Below two surviving draws there is
+    nothing to take percentiles of — the same refusal `t_over_units` and
+    `percentile_over_units` make below two units — so the interval is `None`
+    rather than one built from too few draws to mean anything. A `compute`
+    that raises is not caught here: that is a real fault in the metric, not a
+    degenerate draw, and swallowing it would hide a bug behind a missing
+    interval instead of surfacing it.
+    """
+    keys = sorted(collapsed)
+    if len(keys) < 2:
+        return None
+    rng = random.Random(seed)
+    n = len(keys)
+    values: list[float] = []
+    for _ in range(draws):
+        drawn = [keys[rng.randrange(n)] for _ in range(n)]
+        table = UnitTable({str(i): collapsed[key] for i, key in enumerate(drawn)})
+        value = compute(table)
+        if value is None or (isinstance(value, float) and math.isnan(value)):
+            continue
+        values.append(float(value))
+    if len(values) < 2:
+        return None
+    values.sort()
+    lo, hi = _percentile_ranks(len(values), confidence)
+    return Interval(low=values[lo], high=values[hi], method="percentile_over_units")
 
 
 def _is_numeric(value: object) -> bool:
@@ -235,6 +310,7 @@ def summarize_step(
     counts: dict[str, int],
     derived: dict[str, Any] | None = None,
     seed: int | None = None,
+    resample: "dict[str, Callable[[UnitTable], float | None]] | None" = None,
 ) -> dict[str, dict[str, Any]]:
     """Per-column value, basis, `n`, and interval over the collapsed unit table.
 
@@ -260,16 +336,22 @@ def summarize_step(
     read as a proportion; this refuses that rather than doing it quietly.
 
     `derived` is what a template's `aggregate` returned for this step, name →
-    scalar, already computed once over the whole table — this function never
-    calls `aggregate` again. A derived metric has no per-unit value to run
-    `t_over_units` over (`aggregate` returned one number, not one per unit), so
-    core resamples instead: `percentile_over_units` draws bootstrap samples of
-    each unit's own row, summed across whatever that unit recorded, and the
-    resulting interval is shifted so it is centered on the value `aggregate`
-    actually returned rather than on the surrogate pool's own mean. Every
-    derived metric is `basis: units`, `method: percentile_over_units`, and
-    `cohens_d: null` — Cohen's *d* differences a per-unit value, and a derived
-    metric has none (`reference.md` § How a metric becomes a number).
+    scalar, already computed once over the whole table for the reported
+    `value`. `resample` is the matching name → callable, each one recomputing
+    that one derived key on a resampled `UnitTable` — typically
+    `lambda units: template.aggregate(units, cfg).get(key)`, closed over in
+    `cli.py` since that is where the template and `cfg` live; `stats.py` never
+    imports either. `percentile_of_derived` is what actually resamples: a
+    derived metric has no per-unit value to run `t_over_units` over
+    (`aggregate` returned one number, not one per unit), and `reference.md` §
+    How a metric becomes a number is explicit that resampling one "can do only
+    for a metric it knows how to compute... a template `aggregate(units,
+    cfg)`" — recomputing is the only construction, there is no proxy for it. A
+    key absent from `resample` (or given no `seed`) gets `ci95: null` rather
+    than an invented width: reporting a point with no interval is honest.
+    Every derived metric is `basis: units`, `method: percentile_over_units`
+    when it has one, and `cohens_d: null` — Cohen's *d* differences a per-unit
+    value, and a derived metric has none.
 
     A derived key colliding with a recorded column — even one dropped above for
     being non-numeric — is refused with the same `E-STEP-KEY-COLLISION`
@@ -309,22 +391,13 @@ def summarize_step(
                 "derived key may not shadow a recorded column",
                 code="E-STEP-KEY-COLLISION",
             )
-        pool = [sum(row.values()) for row in collapsed.values()]
         for key, value in derived.items():
-            interval = percentile_over_units(pool, seed) if seed is not None else None
-            if interval is not None:
-                # Recentered, not raw: the pool is a generic per-unit surrogate —
-                # there is no source column to resample when `aggregate` combined
-                # several columns or none — and its own mean is very unlikely to
-                # equal `value`. Shifting by the constant `value - mean(pool)`
-                # keeps the resampled *spread* (the genuine unit-level dispersion
-                # the pool carries) while centering the interval on the number
-                # actually being reported, so the interval brackets its own point
-                # estimate instead of a surrogate's.
-                shift = value - (sum(pool) / len(pool))
-                interval = Interval(
-                    low=interval.low + shift, high=interval.high + shift, method=interval.method
-                )
+            compute = (resample or {}).get(key)
+            interval = (
+                percentile_of_derived(collapsed, compute, seed)
+                if compute is not None and seed is not None
+                else None
+            )
             out[key] = {
                 "value": value,
                 "basis": "units",

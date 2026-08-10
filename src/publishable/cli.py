@@ -7,6 +7,7 @@ import importlib
 import importlib.metadata
 import json
 import sys
+from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -44,6 +45,7 @@ from publishable.scaffold import scaffold_project
 from publishable.scope import Execution, build_plan
 from publishable.stats import UnitTable, collapse_repeats, resample_seed, summarize_step
 from publishable.sweep import expand, sweep_document
+from publishable.templates.base import BaseTemplate
 from publishable.templates.registry import get_template
 from publishable.units import Unit, partition_units, resolve_units, units_hash
 from publishable.uv_support import uv_lock_info
@@ -331,17 +333,49 @@ def command_run(config_path: Path) -> int:
                         results, roster, step_name, cond.index, fold_members=fold_members
                     )
                     derived = None
+                    resample_fns: dict[str, Callable[[UnitTable], float | None]] | None = None
                     if template is not None:
+                        cond_cfg = cfgs[cond.index]
                         # Once per recording step, on this condition's own resolved
                         # `cfg` — the same object a step in this condition receives —
                         # so one `aggregate` can compute a different metric under a
-                        # different swept value (`reference.md` § Templates).
+                        # different swept value (`reference.md` § Templates). This is
+                        # the single unresampled call whose return is the reported
+                        # `value`; `resample_fns` below is what recomputes it per
+                        # bootstrap draw for the interval.
                         derived = coerce_scalars(
-                            template.aggregate(UnitTable(collapsed), cfgs[cond.index]),
+                            template.aggregate(UnitTable(collapsed), cond_cfg),
                             where=f"{doc.get('experiment_type', '')}.aggregate",
                         )
+                        if derived:
+                            # A closure per key, not one shared call: `aggregate` may
+                            # return several metrics, and `percentile_of_derived`
+                            # resamples one key at a time (`reference.md` § How a
+                            # metric becomes a number — resampling a derived metric
+                            # means recomputing it, and this is `cli.py` supplying
+                            # the callable `stats.py` stays pure by not importing).
+                            # A nested `def`, not a lambda, so mypy has an explicit
+                            # return type to check the `.get(key)` against, rather
+                            # than trying (and failing) to infer one.
+                            def _make_resample_fn(
+                                key: str, cfg: Config, tmpl: BaseTemplate
+                            ) -> Callable[[UnitTable], float | None]:
+                                def resample_fn(units: UnitTable) -> float | None:
+                                    value = tmpl.aggregate(units, cfg).get(key)
+                                    return None if value is None else float(value)
+
+                                return resample_fn
+
+                            resample_fns = {
+                                key: _make_resample_fn(key, cond_cfg, template)
+                                for key in derived
+                            }
                     aggregated[cond.index][step_name] = summarize_step(
-                        collapsed, counts, derived=derived, seed=resample_seed_value
+                        collapsed,
+                        counts,
+                        derived=derived,
+                        seed=resample_seed_value,
+                        resample=resample_fns,
                     )
         changed_inputs = verify_manifest(input_dir, manifest)  # phase 8: re-verify
         if changed_inputs:

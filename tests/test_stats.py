@@ -9,6 +9,7 @@ from publishable.stats import (
     collapse_repeats,
     handed_to,
     mean_of,
+    percentile_of_derived,
     percentile_over_units,
     resample_seed,
     summarize_step,
@@ -369,11 +370,30 @@ def test_a_bool_column_is_not_silently_averaged_to_a_proportion():
 
 def test_a_derived_metric_is_reported_over_units():
     collapsed = {f"u{i}": {"pred": float(i)} for i in range(20)}
-    out = summarize_step(collapsed, {"completed": 20}, derived={"total": 190.0}, seed=7)
+    out = summarize_step(
+        collapsed,
+        {"completed": 20},
+        derived={"total": 190.0},
+        seed=7,
+        resample={"total": lambda units: sum(units.pred)},
+    )
     assert out["total"]["basis"] == "units"
     assert out["total"]["method"] == "percentile_over_units"
     assert out["total"]["ci95"] is not None
     assert out["total"]["cohens_d"] is None
+
+
+def test_a_derived_metric_with_no_resample_callable_reports_no_interval():
+    """Reporting a point with no interval is honest; inventing one from a
+    surrogate that isn't the metric itself is not — the rule this task's own
+    escalation settled. `resample` absent (or lacking this key) means core
+    cannot recompute `aggregate`, so `ci95` stays `null` rather than a
+    fabricated width."""
+    collapsed = {f"u{i}": {"pred": float(i)} for i in range(20)}
+    out = summarize_step(collapsed, {"completed": 20}, derived={"total": 190.0}, seed=7)
+    assert out["total"]["value"] == 190.0
+    assert out["total"]["ci95"] is None
+    assert out["total"]["method"] is None
 
 
 def test_a_derived_key_colliding_with_a_recorded_column_is_refused():
@@ -390,16 +410,41 @@ def test_no_derived_metrics_leaves_the_output_unchanged():
     )
 
 
-def test_a_derived_intervals_brackets_its_own_point_estimate():
-    """The recentering this slice chose: the surrogate pool's own mean is almost
-    never the derived value, so an un-shifted percentile interval would not
-    contain the number it is printed beside. Shifting by the constant offset
-    keeps the surrogate's spread while guaranteeing the interval brackets the
-    value `aggregate` actually returned."""
-    collapsed = {f"u{i}": {"pred": float(i)} for i in range(20)}
-    out = summarize_step(collapsed, {"completed": 20}, derived={"total": 190.0}, seed=7)
-    low, high = out["total"]["ci95"]
-    assert low < 190.0 < high
+def test_a_correlation_like_derived_metrics_interval_reflects_its_own_scatter():
+    """The test the surrogate construction would fail: two fixtures with almost
+    the same Pearson `r` but very different sensitivity to which units are
+    resampled. Fixture A's noise is spread evenly across every unit, so
+    dropping or duplicating any one of them barely moves `r`. Fixture B's `y`
+    is identical except at two points, which are the only reason `r` isn't
+    ~0 — a bootstrap draw that resamples away one of them swings `r` hard.
+    Recomputing `pearsonr` on each draw is the only way to see that
+    difference; a proxy built from summed row values could not, because it
+    never looks at the correlation at all."""
+    from scipy import stats as scipy_stats
+
+    n = 20
+    collapsed_a = {
+        f"u{i}": {"x": float(i), "y": float(i) + 0.5 * ((-1) ** i)} for i in range(n)
+    }
+    collapsed_b = {f"u{i}": {"x": float(i), "y": float(i)} for i in range(n)}
+    collapsed_b["u0"]["y"] += 3.0
+    collapsed_b[f"u{n - 1}"]["y"] -= 3.0
+
+    def compute_r(units: UnitTable) -> float | None:
+        r, _ = scipy_stats.pearsonr(units.x, units.y)
+        return None if r != r else float(r)  # nan check without importing math here
+
+    ra = compute_r(UnitTable(collapsed_a))
+    rb = compute_r(UnitTable(collapsed_b))
+    assert ra is not None and rb is not None
+    assert abs(ra - rb) < 0.01  # nearly the same point estimate
+
+    interval_a = percentile_of_derived(collapsed_a, compute_r, seed=7, draws=500)
+    interval_b = percentile_of_derived(collapsed_b, compute_r, seed=7, draws=500)
+    assert interval_a is not None and interval_b is not None
+    width_a = interval_a.high - interval_a.low
+    width_b = interval_b.high - interval_b.low
+    assert width_b > width_a * 3  # the leverage points make B's interval much wider
 
 
 def test_a_derived_key_colliding_with_a_dropped_non_numeric_column_is_refused():
