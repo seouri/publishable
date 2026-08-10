@@ -80,3 +80,19 @@ def test_a_metric_absent_from_one_comparison_still_counts_as_a_metric():
     size, shape = family_shape(family_members(members))
     assert shape == {"comparisons": 2, "metrics": 2}
     assert size == 4  # not 3
+
+
+def test_the_same_metric_name_in_two_steps_counts_as_two_metrics():
+    """`metrics` keys on `(step, metric)`, not `metric` alone. A simplification
+    to `{m.metric for m in members}` would collapse `step01.r` and `step02.r`
+    into one metric, undercounting the family — and a family counted too small
+    gives an α that is too large and corrected intervals that are too narrow,
+    which is the failure `reference.md` calls out as worse than not correcting
+    at all."""
+    members = [
+        _m(where="1", index=1, step="step01", metric="r"),
+        _m(where="1", index=1, step="step02", metric="r"),
+    ]
+    size, shape = family_shape(family_members(members))
+    assert shape == {"comparisons": 1, "metrics": 2}
+    assert size == 2
