@@ -373,3 +373,13 @@ def test_a_five_fold_run_end_to_end(tmp_path, capsys):
     assert len(tested) == len(set(tested))          # each unit tested exactly once
     run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
     assert run["status"] == "completed"             # the abort this slice fixes
+
+    # The discriminating assertion: dropping `fold_members=` from `execute_plan`
+    # disables the roster-wide subtraction `_units_failed_anywhere` does AND the
+    # per-fold narrowing at the same time, so `status: completed` alone holds
+    # either way. Only the per-fold `n_units` tells the two apart — unwired, each
+    # fold's own step sees the whole 10-unit roster, not its own 2-unit partition.
+    per_repeat = run["results"]["conditions"][0]["per_repeat"]["step01_summarize_units"]
+    n_units = [per_repeat[f"fold{i:02d}"]["n_units"] for i in range(1, 6)]
+    assert n_units == [2, 2, 2, 2, 2]
+    assert sum(n_units) == 10

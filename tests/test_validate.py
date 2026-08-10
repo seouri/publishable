@@ -204,12 +204,31 @@ def test_two_bad_repeat_levels_are_both_reported():
     assert not any(f.code == "W-REPL-FLOOR" for f in c.findings)
 
 
-def test_a_fold_level_now_resolves(write_config):
+def test_a_fold_level_now_resolves(write_config, tmp_path):
     """`fold` was refused by name through S3b; S3c's replication.py resolves it, so
-    a plain `k` declares cleanly here too — with no `data.units` declared, there is
-    no roster to check `k` against, and none is invented."""
-    found = codes(write_config({"replication": {"repeats": [{"kind": "fold", "k": 5}]}}))
+    a plain `k` declares cleanly given a roster large enough to partition."""
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id\n" + "\n".join(f"p{i}" for i in range(1, 6)) + "\n"
+    )
+    found = codes(
+        write_config(
+            {
+                "data.units": {"from": "index.csv", "key": "patient_id"},
+                "replication": {"repeats": [{"kind": "fold", "k": 5}]},
+            }
+        )
+    )
     assert not [c for c in found if c.startswith("E-REPL")]
+
+
+def test_a_fold_level_with_no_units_declared_is_refused(write_config):
+    """A `fold` level partitions units; with no `data.units` there is no roster to
+    partition. Left unrefused, this validated clean and then either crashed at
+    `run` (`fold_members_for` zipping a fold's members against no partitions) or,
+    worse, ran `k` roster-less repeats to completion while `sweep.yaml`/`run.yaml`
+    described a k-fold cross-validation that never happened."""
+    found = codes(write_config({"replication": {"repeats": [{"kind": "fold", "k": 5}]}}))
+    assert "E-REPL-FOLD-NO-UNITS" in found
 
 
 def test_fold_stratify_by_is_refused_through_validate(write_config):

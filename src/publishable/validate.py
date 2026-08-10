@@ -469,6 +469,26 @@ def _check_replication(
     unit_count: int | None = None,
 ) -> None:
     levels = ((doc.get("replication") or {}).get("repeats")) or []
+    # A `fold` level partitions units into train/test splits; with no
+    # `data.units` declared there is no roster to partition at all. Left
+    # unchecked, `resolve_repeats` accepts a fixed `k` with `unit_count=None`
+    # (only `k: all` needs a count, and that already reports `E-REPL-FOLD-K`) —
+    # so a config with a fold and no units would validate clean and then, at
+    # `run`, either crash (`fold_members_for` zips a fold's members against no
+    # partitions) or, worse, complete: `k` roster-less repeats all executing
+    # against nothing while `sweep.yaml`/`run.yaml` describe a k-fold
+    # cross-validation that never happened. Caught here, at the declaration,
+    # rather than guarded at `run` — a config that validates clean must not
+    # then fail (see `docs/superpowers/spec-defects.md`).
+    if any(level.get("kind") == "fold" for level in levels) and not (
+        doc.get("data") or {}
+    ).get("units"):
+        c.error(
+            "E-REPL-FOLD-NO-UNITS",
+            "replication.repeats",
+            "a `fold` level partitions units, and `data.units` is not declared; "
+            "there is nothing to partition",
+        )
     total = 1
     any_invalid = False
     has_unresolved_fold = False

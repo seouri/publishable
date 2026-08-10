@@ -43,7 +43,7 @@ from publishable.scaffold import scaffold_project
 from publishable.scope import Execution, build_plan
 from publishable.stats import collapse_repeats, summarize_step
 from publishable.sweep import expand, sweep_document
-from publishable.units import partition_units, resolve_units, units_hash
+from publishable.units import Unit, partition_units, resolve_units, units_hash
 from publishable.uv_support import uv_lock_info
 from publishable.validate import load_document, validate_config
 
@@ -172,12 +172,16 @@ def command_run(config_path: Path) -> int:
     repeats = cross_levels(levels)
     labels = [r.label for r in repeats if r.label] or [""]
     fold_level = next((lv for lv in levels if lv.kind == "fold"), None)
-    partitions = (
-        partition_units(roster, fold_level.n, digest)
-        if fold_level is not None and roster is not None
-        else None
-    )
-    fold_members = fold_members_for(levels, partitions or [])
+    partitions: list[list[Unit]] | None = None
+    if fold_level is not None:
+        # A `fold` level with no roster to partition is refused by `validate`
+        # (`E-REPL-FOLD-NO-UNITS`), which already returned above — so this is
+        # unreachable with `roster is None`. Asserted rather than an `or []`
+        # fallback: if that invariant is ever wrong, this should raise loudly
+        # rather than silently run every fold against nothing.
+        assert roster is not None, "a fold level with no roster should have been refused"
+        partitions = partition_units(roster, fold_level.n, digest)
+    fold_members = fold_members_for(levels, partitions) if partitions is not None else None
 
     conditions = expand(doc)
     # Every path any condition fixes, not just the grid's axes. A path
