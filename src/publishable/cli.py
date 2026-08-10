@@ -177,6 +177,32 @@ def _declared_comparisons(doc: dict[str, Any], conditions: "list[Condition]") ->
     return [comp for comp in resolve_contrasts(doc, conditions) if comp.declared]
 
 
+_MISSING = object()
+
+
+def _differing_axes(of: "Condition", against: "Condition") -> list[str]:
+    """The axes two conditions disagree on, in the order the sweep declares them.
+
+    `Condition.values` is built by `sweep.expand` from `grid.items()`, so
+    iterating `of.values` first gives declaration order — which is what
+    makes `differs_on` stable across runs rather than set-ordered. But the
+    two sides' key sets are not guaranteed equal: `validate` requires every
+    swept `sweep.grid` axis to also be fixed in `sweep.baseline`, not the
+    reverse, so a baseline may fix an axis the grid never sweeps — present
+    in the baseline condition's `values` and absent from every grid
+    condition's. Iterating only `of.values` would silently skip exactly that
+    axis whenever it differs from that axis's own parameter default, so this
+    walks the union of both sides' keys instead, comparing with `.get` against
+    a sentinel (not `None`, which a real swept value could legitimately be)
+    so a key present on one side and absent on the other always counts as
+    differing rather than being skipped.
+    """
+    ordered_keys = list(of.values) + [k for k in against.values if k not in of.values]
+    return [
+        k for k in ordered_keys if of.values.get(k, _MISSING) != against.values.get(k, _MISSING)
+    ]
+
+
 def _comparison_step_blocks(
     comp: "Comparison",
     *,
@@ -193,6 +219,7 @@ def _comparison_step_blocks(
     findings: Collector,
     where: str,
     where_id: str,
+    conditions_by_index: dict[int, "Condition"],
 ) -> tuple[dict[str, dict[str, Any]], list[Member]]:
     """One comparison's delta, per recording step and per metric already in
     `aggregated` — the computation `vs_baseline` and `results.contrasts` both
@@ -240,7 +267,22 @@ def _comparison_step_blocks(
     file comment, and the § Validation row. `min_reported_n: 10` is in every
     generated config, so warning on every comparison would fire on any pilot
     under ten units for a comparison the document never scoped it to.
+
+    `confounded`/`differs_on` mark, on each metric entry, a comparison whose
+    two conditions disagree on more than one swept axis: the delta then mixes
+    two effects and no amount of correct pairing separates them — the
+    factorial main-effects problem core refuses to solve, so it is marked
+    rather than reported as if it were clean. Both keys are absent, not
+    `False`/`[]`, when only one axis differs. `paired` stays hard `True`
+    here: the crossed-*group*-axis case `reference.md` shows with
+    `paired: false` and `unpaired_*` needs a group axis or
+    `allocation: between`, both refused (`E-SWEEP-GROUPS-UNSUPPORTED`,
+    `E-DATA-ALLOCATION-UNSUPPORTED`), so it is unreachable in this build.
     """
+    differs_on = _differing_axes(
+        conditions_by_index[comp.of], conditions_by_index[comp.against]
+    )
+    confounded = len(differs_on) > 1
     allowed = units_matching(roster, comp.within)
     of_steps = {k[1] for k in collapsed_by_key if k[0] == comp.of}
     against_steps = {k[1] for k in collapsed_by_key if k[0] == comp.against}
@@ -328,6 +370,12 @@ def _comparison_step_blocks(
                     "cohens_d": cohens_dz(diffs),
                     "correction": None,
                 }
+            if confounded:
+                # Marked, not merely reported: a delta mixing two axes is the
+                # factorial main-effects problem, which core refuses to
+                # separate. `differs_on` names them so a reader knows which.
+                metric_block[metric_key]["confounded"] = True
+                metric_block[metric_key]["differs_on"] = list(differs_on)
             # `Member` requires exactly one of `pool`/`diffs` wherever there is
             # an interval to correct: the draws a percentile interval was read
             # off, or the per-unit differences a *t* interval was computed
@@ -392,6 +440,7 @@ def _compute_vs_baseline(
     if not comparisons:
         return None, []
     min_reported_n = (doc.get("limits") or {}).get("min_reported_n")
+    conditions_by_index = {c.index: c for c in conditions}
     out: dict[int, dict[str, dict[str, dict[str, Any]]]] = {}
     members: list[Member] = []
     for comp in comparisons:
@@ -408,6 +457,7 @@ def _compute_vs_baseline(
             findings=findings,
             where=f"condition {comp.of} ({comp.id!r}) vs baseline",
             where_id=f"cond:{comp.of}",
+            conditions_by_index=conditions_by_index,
         )
         if block:
             out[comp.of] = block
@@ -458,6 +508,7 @@ def _compute_declared_contrasts(
         return None, []
     label_by_index = {c.index: c.label for c in conditions}
     min_reported_n = (doc.get("limits") or {}).get("min_reported_n")
+    conditions_by_index = {c.index: c for c in conditions}
     out: list[dict[str, Any]] = []
     members: list[Member] = []
     for comp in comparisons:
@@ -474,6 +525,7 @@ def _compute_declared_contrasts(
             findings=findings,
             where=f"contrast {comp.id!r}",
             where_id=f"contrast:{comp.id}",
+            conditions_by_index=conditions_by_index,
         )
         members.extend(block_members)
         entry: dict[str, Any] = {

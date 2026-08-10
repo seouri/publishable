@@ -840,6 +840,59 @@ def test_a_baseline_sweep_reports_a_delta(tmp_path, capsys, monkeypatch):
     assert isinstance(entry["cohens_d"], float)
 
 
+def test_a_contrast_crossing_two_axes_is_marked_confounded(tmp_path, capsys, monkeypatch):
+    """`reference.md`: "A contrast crossing two axes at once ... differs in two
+    places, so its delta mixes the two effects and no amount of correct pairing
+    separates them — that's the factorial main-effects problem, and it's why
+    such a contrast is marked rather than merely reported." `differs_on` names
+    the axes, because the boolean alone says a contrast is confounded without
+    saying by what."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        sweep={
+            "baseline": {"analysis.method": "pearson", "analysis.min_samples": 10},
+            "grid": {"analysis.method": ["spearman"], "analysis.min_samples": [20]},
+        },
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    entries = [
+        metric
+        for condition in run["results"]["conditions"]
+        for step_block in condition.get("vs_baseline", {}).values()
+        for metric in step_block.values()
+    ]
+    crossed = [e for e in entries if e.get("confounded")]
+    assert crossed, "a condition differing on both axes must be marked"
+    assert crossed[0]["differs_on"] == ["analysis.method", "analysis.min_samples"]
+
+
+def test_a_one_axis_contrast_carries_neither_marker(tmp_path, capsys, monkeypatch):
+    """Absent, not `false`/`[]` — the house rule the `vs_baseline` block itself
+    follows. A `confounded: false` on every ordinary contrast is noise a reader
+    has to learn to skip."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    entry = _first_contrast(run, "method=spearman")
+    assert "confounded" not in entry
+    assert "differs_on" not in entry
+
+
 def test_a_baseline_sweep_reports_a_corrected_interval(tmp_path, capsys, monkeypatch):
     """The whole slice, end to end: two comparisons over one metric is a family
     of 2 under the default `holm`, the weaker member is corrected by nothing, and
