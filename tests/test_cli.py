@@ -893,6 +893,92 @@ def test_a_one_axis_contrast_carries_neither_marker(tmp_path, capsys, monkeypatc
     assert "differs_on" not in entry
 
 
+def test_a_baseline_only_axis_still_counts_toward_confounded(tmp_path, capsys, monkeypatch):
+    """`sweep.baseline` may fix an axis the grid never sweeps at all — `validate`
+    requires every `sweep.grid` axis to be fixed in `sweep.baseline` but never
+    the reverse (`unfixed = [p for p in grid if p not in baseline]` is the check;
+    nothing walks it the other way). When that baseline-only value diverges
+    from the axis's own parameter default, a grid condition and the baseline
+    genuinely differ on two axes — one swept (`analysis.method`), one fixed only
+    in `sweep.baseline` (`analysis.confidence`, default `0.95`, pinned here to
+    `0.99`) — even though the grid condition's own `Condition.values` never
+    mentions the second axis at all. `_differing_axes` has to walk the union of
+    both sides' keys to see it; a one-directional walk over the grid
+    condition's keys alone would silently drop it, since that axis is absent
+    from `values` on that side, not merely equal.
+    """
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        sweep={
+            "baseline": {"analysis.method": "pearson", "analysis.confidence": 0.99},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    entry = _first_contrast(run, "method=spearman")
+    assert entry is not None
+    assert entry.get("confounded") is True
+    assert entry.get("differs_on") == ["analysis.method", "analysis.confidence"]
+
+
+def test_a_declared_contrast_crossing_two_axes_is_marked_confounded(
+    tmp_path, capsys, monkeypatch
+):
+    """The same marking logic in `_comparison_step_blocks` backs
+    `_compute_declared_contrasts` too, since both call it — but every other
+    declared-contrast test in this module (`_declared_contrast_run`) uses a
+    single-axis sweep, so that path has never been exercised. A two-axis grid
+    plus a `statistics.contrasts` entry between the baseline and the one grid
+    condition that differs from it on both axes proves the sharing actually
+    holds, landing in `results.contrasts` rather than `vs_baseline`.
+    """
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        sweep={
+            "baseline": {"analysis.method": "pearson", "analysis.min_samples": 10},
+            "grid": {
+                "analysis.method": ["pearson", "spearman"],
+                "analysis.min_samples": [10, 20],
+            },
+        },
+        statistics={
+            "contrasts": [
+                {
+                    "id": "crossed",
+                    # Differs from baseline on both swept axes: method and
+                    # min_samples. `label_for` renders grid labels in
+                    # declaration order, joined by `__` (`sweep.AXIS_SEPARATOR`).
+                    "of": "method=spearman__min_samples=20",
+                    "against": "baseline",
+                }
+            ]
+        },
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    contrasts = run["results"]["contrasts"]
+    assert [c["id"] for c in contrasts] == ["crossed"]
+    metrics = [
+        metric
+        for step_block in contrasts[0].values()
+        if isinstance(step_block, dict)
+        for metric in step_block.values()
+        if isinstance(metric, dict)
+    ]
+    crossed = [m for m in metrics if m.get("confounded")]
+    assert crossed, "a declared contrast differing on both axes must be marked"
+    assert crossed[0]["differs_on"] == ["analysis.method", "analysis.min_samples"]
+
+
 def test_a_baseline_sweep_reports_a_corrected_interval(tmp_path, capsys, monkeypatch):
     """The whole slice, end to end: two comparisons over one metric is a family
     of 2 under the default `holm`, the weaker member is corrected by nothing, and
