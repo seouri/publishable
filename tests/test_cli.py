@@ -2132,3 +2132,164 @@ def test_strata_do_not_join_the_correction_family(tmp_path, capsys, monkeypatch)
         entry = _first_contrast(run, "method=spearman")
         sizes.append((entry["family_size"], entry["family"]))
     assert sizes[0] == sizes[1]
+
+
+# --- Fix round 1: the derived path, empty levels, and the reserved `by` key ---
+
+_SKIP_ONE_COHORT_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        # Every unit of cohort `a` is ineligible, so that level completes
+        # nothing at all while `b` completes normally. `io.skip` is the
+        # declaration; the unit lands in `ineligible`, not in attrition.
+        for i, unit in enumerate(io.units):
+            if unit.attributes.get("cohort") == "a":
+                io.skip(unit.key, "outside the eligibility window")
+            else:
+                io.record(unit.key, {{"pred": float(i)}})
+        return {{"n_units": len(io.units)}}
+"""
+
+
+_RECORDS_A_BY_COLUMN_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        for i, unit in enumerate(io.units):
+            io.record(unit.key, {{"pred": float(i), "by": float(i) * 2.0}})
+        return {{"n_units": len(io.units)}}
+"""
+
+
+def test_a_stratum_recomputes_a_derived_metric_over_its_own_units(
+    tmp_path, capsys, monkeypatch
+):
+    """`summarize_step` never recomputes a derived metric — it writes `value`
+    straight through from the mapping it is handed, and takes only the interval
+    and `n.completed` from the table beside it. So a stratum handed the parent's
+    `derived` would publish the whole sample's point estimate against the level's
+    own `n` and `ci95`: the S4b Critical's shape one layer in. `reference.md` §
+    Reporting strata shows three different values (0.607 / 0.591 / 0.622) for
+    exactly this reason."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        aggregate_returns="r",
+        unit_attributes=["cohort"],
+        statistics={"report_by": ["cohort"]},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    step_block = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    by = step_block["by"]["cohort"]
+    # `pred` is `float(i)` over units in roster order, and `cohort` alternates,
+    # so `a` holds the odd indices and `b` the even ones: 20, 19, and 19.5 over
+    # the whole table. Three different numbers, none of them the parent's.
+    assert step_block["r"]["value"] == pytest.approx(19.5)
+    assert by["a"]["r"]["value"] == pytest.approx(20.0)
+    assert by["b"]["r"]["value"] == pytest.approx(19.0)
+    assert by["a"]["r"]["value"] != by["b"]["r"]["value"]
+    for level in ("a", "b"):
+        entry = by[level]["r"]
+        assert entry["basis"] == "units"
+        assert entry["n"]["completed"] == 20
+        assert entry["n"]["resolved"] == 20
+        # The interval is resampled over the level's own table, through the same
+        # closure that recomputed the value.
+        assert entry["ci95"] is not None
+        assert entry["ci95"][0] <= entry["value"] <= entry["ci95"][1]
+        assert entry["resample_draws"] == 2000
+
+
+def test_a_level_that_completed_nothing_gets_no_block(tmp_path, capsys, monkeypatch):
+    """A block whose metrics rest on no rows carries nothing
+    `W-STATS-STRATUM-THIN` does not already say, so an empty level is absent
+    rather than present-and-empty — the same absent-not-empty rule the `by` block
+    itself follows. It also keeps `aggregate` from being called on an empty
+    table, which raises for most templates."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _SKIP_ONE_COHORT_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
+        statistics={"report_by": ["cohort"]},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    step_block = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert set(step_block["by"]["cohort"]) == {"b"}
+    assert step_block["by"]["cohort"]["b"]["pred"]["n"]["completed"] == 20
+
+
+def test_a_derived_metric_named_by_is_refused_not_silently_overwritten(
+    tmp_path, capsys, monkeypatch
+):
+    """`by` is reserved: it holds the reporting strata, beside the metric names
+    in the same mapping, and every consumer of a step block reads its keys as
+    metric names. A derived key of that name is `E-STEP-KEY-COLLISION`, caught by
+    the retry that already contains that fault — the run survives, the whole
+    `derived` mapping is dropped, and the strata are still reported."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        aggregate_returns="by",
+        unit_attributes=["cohort"],
+        statistics={"report_by": ["cohort"]},
+    )
+    assert "W-STATS-AGGREGATE-FAILED" in doc["stdout"]
+    assert "E-STEP-KEY-COLLISION" in doc["stdout"]
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    step_block = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    # `by` holds the strata, not a metric: the recorded column survived, the
+    # derived metric did not, and no `value` was written under the reserved key.
+    assert set(step_block["by"]) == {"cohort"}
+    assert "value" not in step_block["by"]
+    assert step_block["pred"]["n"]["completed"] == 40
+
+
+def test_a_recorded_column_named_by_keeps_its_metric_and_warns(
+    tmp_path, capsys, monkeypatch
+):
+    """The other half of the reserved key, and it cannot be refused where the
+    derived half is: the retry that contains `E-STEP-KEY-COLLISION` passes the
+    same collapsed table, so raising for a recorded column would re-raise
+    uncontained after the run has spent every execution. The column wins — it is
+    a real measurement over the units, while the strata re-present numbers
+    already in the record — and the run says so."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _RECORDS_A_BY_COLUMN_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
+        statistics={"report_by": ["cohort"]},
+    )
+    assert "W-STATS-STRATUM-SHADOWED" in doc["stdout"]
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    step_block = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    # The metric, not the strata: it carries a value and an interval of its own.
+    assert step_block["by"]["basis"] == "units"
+    assert step_block["by"]["value"] == pytest.approx(39.0)
+    assert "cohort" not in step_block["by"]
