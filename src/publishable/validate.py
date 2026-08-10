@@ -225,6 +225,7 @@ def validate_config(
     )
     _check_unimplemented(doc, c)
     _check_sweep(doc, template, c, unit_count=len(roster) if roster is not None else None)
+    _check_contrasts(doc, c)
     for message in template.validate(doc):
         c.error("E-TEMPLATE-RULE", "parameters", message)
     return doc
@@ -618,10 +619,12 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     kind, and `E-REPL-LEVEL-DEPTH` past two levels, and
     `E-REPL-LEVEL-BATCH-INNER` for a `batch` that is not the outermost level.
     `batch` and `fold` themselves are no longer refused — both are supported
-    kinds. `statistics.contrasts`, `.resample`, `.null_test`, `.report_by`, and a
-    top-level `hypotheses` block are refused the same way — a declared 2000-draw
-    bootstrap or a pre-registered hypothesis that runs and reports success while
-    honoring neither is the same silent-no-op class. `statistics.correction` is the
+    kinds. `statistics.resample`, `.null_test`, `.report_by`, and a top-level
+    `hypotheses` block are refused the same way — a declared 2000-draw bootstrap or
+    a pre-registered hypothesis that runs and reports success while honoring
+    neither is the same silent-no-op class. `statistics.contrasts` is no longer in
+    this family: `_check_contrasts` now resolves and checks each declared entry
+    instead of refusing the block wholesale. `statistics.correction` is the
     deliberate exception: it is disclosed via `W-STATS-FAMILY` and a `correction: null`
     recorded on every metric, not refused, since a warned-and-marked declaration is not
     a declaration that changes nothing while claiming otherwise. Each message says
@@ -718,23 +721,20 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
                 "refusal exists to prevent; it will be honored in a later slice",
             )
 
-    # `statistics.contrasts`/`.resample`/`.null_test`/`.report_by` and a top-level
-    # `hypotheses` block all validate clean today and are read by nothing — the same
-    # silent-no-op class as the fields above. `statistics.correction` is deliberately
-    # NOT refused here: it is disclosed instead, via `W-STATS-FAMILY` plus a
-    # `correction: null` recorded on every aggregated metric, so it is not a case of a
-    # declaration that changes nothing while claiming otherwise. Of these five keys
+    # `statistics.resample`/`.null_test`/`.report_by` and a top-level `hypotheses`
+    # block all validate clean today and are read by nothing — the same
+    # silent-no-op class as the fields above. `statistics.contrasts` used to be in
+    # this list too; it is now checked for real by `_check_contrasts` instead of
+    # being refused wholesale. `statistics.correction` is deliberately NOT refused
+    # here: it is disclosed instead, via `W-STATS-FAMILY` plus a `correction: null`
+    # recorded on every aggregated metric, so it is not a case of a declaration
+    # that changes nothing while claiming otherwise. Of these four keys
     # `materialize.py` writes only two into a generated config — `statistics.correction`
-    # and a top-level `hypotheses: []` — so the other three are simply absent there;
+    # and a top-level `hypotheses: []` — so the other two are simply absent there;
     # each check below fires on a real declaration either way, never on a key's mere
     # presence or on the empty list `hypotheses` is generated as.
     statistics = doc.get("statistics") or {}
     for field, code, what in (
-        (
-            "contrasts",
-            "E-STATS-CONTRASTS-UNSUPPORTED",
-            "no contrast over the paired unit intersection is computed",
-        ),
         (
             "resample",
             "E-STATS-RESAMPLE-UNSUPPORTED",
@@ -942,3 +942,74 @@ def _check_sweep(
             "build — every interval reported is uncorrected, and each records "
             "`correction: null` to say so",
         )
+
+
+def _check_contrasts(doc: dict[str, Any], c: Collector) -> None:
+    """Each declared `statistics.contrasts` entry, checked for real now that the
+    block is no longer refused wholesale (`_check_unimplemented` used to raise
+    `E-STATS-CONTRASTS-UNSUPPORTED` for any non-empty declaration).
+
+    `of` and `against` name conditions **by label** (`reference.md` § Contrasts),
+    the same grammar `sweep.baseline`/`sweep.grid` resolve against, so a name that
+    resolves to nothing would otherwise reach `contrasts.resolve_contrasts` and
+    raise a bare `KeyError` at run time — the same silent-failure-deferred-to-a-
+    crash class every other check in this module exists to move earlier.
+
+    **Contrasts do not nest.** `reference.md` and `design-principles.md` both say
+    a comparison between two contrasts — a dose-response ordering, a difference-
+    in-differences, a nested mean over cells — is an *interaction*, not a
+    contrast, and stays a `summary`-step `Estimate`. So a side naming another
+    entry's `id` is refused under its own code, `E-STATS-CONTRAST-NESTED`, rather
+    than the vaguer `E-STATS-CONTRAST-UNKNOWN` an unresolvable label gets — nesting
+    is checked first for exactly that reason: an `id` that happens to also fail to
+    resolve as a condition label must still be diagnosed as nesting, since that is
+    the more specific and more actionable fault.
+
+    **`within` names a unit attribute**, the same one `units_matching` (Task 2)
+    reads with `.get`, which returns `None` for a typo exactly as it would for a
+    stratum that is genuinely empty of units — the two are indistinguishable
+    downstream. So this is checked here, at validate time, against the declared
+    `data.units.attributes` list — analogous to the `report_by` unknown-attribute
+    rule (`reference.md` § Reporting strata) — rather than left to look like a
+    silently-empty stratum.
+    """
+    entries = ((doc.get("statistics") or {}).get("contrasts")) or []
+    if not entries:
+        return
+
+    ids = {entry.get("id") for entry in entries if isinstance(entry, dict) and entry.get("id")}
+    conditions = expand(doc)
+    labels = {cond.label for cond in conditions if cond.label is not None}
+    declared_attrs = set(((doc.get("data") or {}).get("units") or {}).get("attributes") or [])
+
+    for i, entry in enumerate(entries):
+        if not isinstance(entry, dict):
+            continue
+        for field in ("of", "against"):
+            value = entry.get(field)
+            where = f"statistics.contrasts[{i}].{field}"
+            if value in ids:
+                c.error(
+                    "E-STATS-CONTRAST-NESTED",
+                    where,
+                    f"names `{value}`, which is another contrast's `id` — contrasts compare "
+                    "conditions and do not nest. A comparison between two contrasts (a "
+                    "dose-response ordering, a difference-in-differences, a nested mean over "
+                    "cells) is an interaction, and stays a `summary`-step `Estimate` rather "
+                    "than a declared contrast",
+                )
+            elif value not in labels:
+                c.error(
+                    "E-STATS-CONTRAST-UNKNOWN",
+                    where,
+                    f"names `{value}`, which no condition's label matches",
+                )
+        within = entry.get("within")
+        if isinstance(within, dict):
+            for name in within:
+                if name not in declared_attrs:
+                    c.error(
+                        "E-STATS-CONTRAST-WITHIN",
+                        f"statistics.contrasts[{i}].within",
+                        f"names `{name}`, which is not in `data.units.attributes`",
+                    )

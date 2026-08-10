@@ -909,10 +909,117 @@ def test_a_null_subfield_is_not_a_declaration(write_config):
     assert not [c for c in found if c.endswith("-UNSUPPORTED")]
 
 
-def test_declared_contrasts_are_refused(write_config):
-    assert "E-STATS-CONTRASTS-UNSUPPORTED" in codes(
-        write_config({"statistics": {"contrasts": [{"id": "s", "of": "a", "against": "b"}]}})
+def test_a_declared_contrast_is_no_longer_refused(write_config):
+    found = codes(
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"analysis.method": "pearson"},
+                    "grid": {"analysis.method": ["spearman"]},
+                },
+                "statistics": {
+                    "contrasts": [{"id": "s", "of": "method=spearman", "against": "baseline"}]
+                },
+            }
+        )
     )
+    assert "E-STATS-CONTRASTS-UNSUPPORTED" not in found
+
+
+def test_an_unresolvable_side_is_refused(write_config):
+    assert "E-STATS-CONTRAST-UNKNOWN" in codes(
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"analysis.method": "pearson"},
+                    "grid": {"analysis.method": ["spearman"]},
+                },
+                "statistics": {
+                    "contrasts": [{"id": "s", "of": "method=nope", "against": "baseline"}]
+                },
+            }
+        )
+    )
+
+
+def test_a_contrast_naming_another_contrast_is_refused(write_config):
+    """Contrasts do not nest — that is an interaction, and it belongs in a
+    summary-step Estimate."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"analysis.method": "pearson"},
+                    "grid": {"analysis.method": ["spearman"]},
+                },
+                "statistics": {
+                    "contrasts": [
+                        {"id": "a", "of": "method=spearman", "against": "baseline"},
+                        {"id": "b", "of": "a", "against": "baseline"},
+                    ]
+                },
+            }
+        )
+    )
+    assert "E-STATS-CONTRAST-NESTED" in found
+
+
+def test_no_declared_contrasts_still_validates_clean(write_config):
+    found = codes(write_config({"statistics": {"contrasts": []}}))
+    assert not [c for c in found if c.startswith("E-STATS-CONTRAST")]
+
+
+def test_a_contrast_naming_an_unknown_within_attribute_is_refused(write_config):
+    """The unknown-attribute case Task 2's review flagged: `within` naming a typo'd
+    attribute would otherwise look exactly like a stratum that is genuinely empty,
+    since `units_matching` reads it with `.get` either way."""
+    found = codes(
+        write_config(
+            {
+                "data.units": {"from": "index.csv", "key": "patient_id", "attributes": ["sex"]},
+                "sweep": {
+                    "baseline": {"analysis.method": "pearson"},
+                    "grid": {"analysis.method": ["spearman"]},
+                },
+                "statistics": {
+                    "contrasts": [
+                        {
+                            "id": "s",
+                            "of": "method=spearman",
+                            "against": "baseline",
+                            "within": {"sexx": "f"},
+                        }
+                    ]
+                },
+            }
+        )
+    )
+    assert "E-STATS-CONTRAST-WITHIN" in found
+
+
+def test_a_contrast_with_a_declared_within_attribute_validates_clean(write_config):
+    found = codes(
+        write_config(
+            {
+                "data.units": {"from": "index.csv", "key": "patient_id", "attributes": ["sex"]},
+                "sweep": {
+                    "baseline": {"analysis.method": "pearson"},
+                    "grid": {"analysis.method": ["spearman"]},
+                },
+                "statistics": {
+                    "contrasts": [
+                        {
+                            "id": "s",
+                            "of": "method=spearman",
+                            "against": "baseline",
+                            "within": {"sex": "f"},
+                        }
+                    ]
+                },
+            }
+        )
+    )
+    assert "E-STATS-CONTRAST-WITHIN" not in found
 
 
 def test_a_declared_resample_is_refused(write_config):
