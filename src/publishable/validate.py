@@ -16,7 +16,7 @@ from publishable.provenance import find_repo_root, resolves_inside_repo
 from publishable.replication import resolve_repeats
 from publishable.sweep import check_swept_value, expand
 from publishable.templates.registry import get_template, template_names
-from publishable.units import resolve_units
+from publishable.units import UnitList, resolve_units
 
 REQUIRED_METADATA = ("description", "authors")
 
@@ -26,7 +26,13 @@ REQUIRED_METADATA = ("description", "authors")
 # reads them yet in this build, so the next reader inherits the guard rather than
 # the crash a hand-edited config would otherwise produce.
 _MAPPING_BLOCKS = (
-    "metadata", "data", "parameters", "sweep", "replication", "statistics", "limits",
+    "metadata",
+    "data",
+    "parameters",
+    "sweep",
+    "replication",
+    "statistics",
+    "limits",
 )
 _LIST_BLOCKS = ("hypotheses",)
 _STRING_BLOCKS = ("schema_version", "experiment_type", "template_version", "entrypoint", "plugin")
@@ -209,8 +215,14 @@ def validate_config(
     _check_parameters(doc, template, c)
     _check_versions(doc, c)
     _check_data(doc, config_path, c)
-    _check_units(doc, c)
-    _check_replication(doc, template, c, experiment=experiment)
+    roster = _check_units(doc, c)
+    _check_replication(
+        doc,
+        template,
+        c,
+        experiment=experiment,
+        unit_count=len(roster) if roster is not None else None,
+    )
     _check_unimplemented(doc, c)
     _check_sweep(doc, template, c)
     for message in template.validate(doc):
@@ -378,7 +390,7 @@ def _units_declaration(data: dict[str, Any], c: Collector) -> dict[str, Any] | N
     return units_decl
 
 
-def _check_units(doc: dict[str, Any], c: Collector) -> None:
+def _check_units(doc: dict[str, Any], c: Collector) -> UnitList | None:
     """Resolve the roster so unit checks are real rather than deferred to run time.
 
     A `ContractError` from resolution becomes a diagnostic carrying the SAME
@@ -402,24 +414,29 @@ def _check_units(doc: dict[str, Any], c: Collector) -> None:
     one of those refusals adds a genuine, independent finding — a duplicate key
     in the roster is a real defect whether or not `holdout` is also declared —
     rather than noise about the same problem twice.
+
+    Returns the resolved roster, or `None` when resolution did not happen or did
+    not succeed — `_check_replication` uses its length to check a `fold` count
+    against real units rather than resolving the roster a second time.
     """
     data = doc.get("data") or {}
     units_decl = _units_declaration(data, c)
     if units_decl is None:
-        return
+        return None
     input_dir = data.get("input_dir")
     if not input_dir:
-        return  # E-DATA-REQUIRED already reported by _check_data
+        return None  # E-DATA-REQUIRED already reported by _check_data
     path = Path(input_dir).expanduser()
     if not path.is_absolute() or not path.is_dir() or not any(path.iterdir()):
-        return  # E-DATA-NOT-ABSOLUTE / E-DATA-UNREADABLE already reported by _check_data
+        return None  # E-DATA-NOT-ABSOLUTE / E-DATA-UNREADABLE already reported by _check_data
     source = units_decl.get("from")
     if isinstance(source, dict) and "resolver" in source:
-        return  # E-DATA-RESOLVER-UNSUPPORTED already reported by _check_unimplemented
+        return None  # E-DATA-RESOLVER-UNSUPPORTED already reported by _check_unimplemented
     try:
-        resolve_units(units_decl, path)
+        return resolve_units(units_decl, path)
     except ContractError as exc:
         c.error(exc.code, "data.units", str(exc))
+        return None
 
 
 # Refusals that are properties of the DECLARATION, so `validate` reports them as
@@ -444,7 +461,12 @@ REPL_DECLARATION_CODES = frozenset(
 
 
 def _check_replication(
-    doc: dict[str, Any], template: Any, c: Collector, *, experiment: Any | None = None
+    doc: dict[str, Any],
+    template: Any,
+    c: Collector,
+    *,
+    experiment: Any | None = None,
+    unit_count: int | None = None,
 ) -> None:
     levels = ((doc.get("replication") or {}).get("repeats")) or []
     total = 1
@@ -457,14 +479,13 @@ def _check_replication(
         if count is None:
             count = level.get("k")
         if isinstance(count, str):
-            # `k: all` (fold's leave-one-out count) is genuinely unknown here —
-            # it needs the resolved roster, which `resolve_repeats` below only
-            # gets from `unit_count`, and this build never threads a real one in
-            # (Task 8's job). Coercing it with `int()` would crash on the wrong
-            # exception type; any OTHER string is invalid and is reported by
-            # name as `E-REPL-FOLD-K` when `resolve_repeats` runs below. Either
-            # way, the total from here on is not a fact — don't fold a guess
-            # into it, and don't derive a floor warning from it either.
+            # `k: all` (fold's leave-one-out count) is not a fact this loop can use —
+            # turning it into a real count needs the resolved roster, which
+            # `resolve_repeats` below gets from `unit_count`. Coercing it with `int()`
+            # here would crash on the wrong exception type; any OTHER string is
+            # invalid and is reported by name as `E-REPL-FOLD-K` when `resolve_repeats`
+            # runs below. Either way, the total from here on is not a fact — don't
+            # fold a guess into it, and don't derive a floor warning from it either.
             has_unresolved_fold = True
             continue
         if count is not None and int(count) < 1:
@@ -490,9 +511,14 @@ def _check_replication(
     # itself — fold, duplicate kinds, and depth past two levels among them. At run
     # time raising is right; here `validate` collects, so translate rather than let
     # it escape. The digest is a placeholder: seeds are irrelevant to a declaration
-    # check, only the shape of `replication.repeats` is.
+    # check, only the shape of `replication.repeats` is. `unit_count` is the roster
+    # `_check_units` already resolved, threaded through rather than resolved again —
+    # `k: all` and an oversized `k` can only be checked against a real count. When
+    # the roster failed to resolve, `unit_count` is `None` and `k: all` reports
+    # `E-REPL-FOLD-K`, which is honest: the fold count genuinely cannot be known,
+    # and the roster's own finding is already reported beside it.
     try:
-        resolve_repeats(doc, "validate")
+        resolve_repeats(doc, "validate", unit_count=unit_count)
     except ContractError as exc:
         if exc.code in REPL_DECLARATION_CODES:
             c.error(exc.code, "replication.repeats", str(exc))
@@ -550,8 +576,7 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
         (
             "ablate",
             "E-SWEEP-ABLATE-UNSUPPORTED",
-            "emits 1 + n one-change conditions and reads the baseline rather than "
-            "re-emitting it",
+            "emits 1 + n one-change conditions and reads the baseline rather than re-emitting it",
         ),
         (
             "sample",
