@@ -2484,3 +2484,127 @@ def test_an_empty_level_produces_no_spurious_aggregate_failed(tmp_path, capsys, 
     run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
     by = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["by"]
     assert set(by["cohort"]) == {"b"}
+
+
+# --- Task 7: acceptance — the three properties § Reporting strata claims -------
+
+
+def test_a_derived_metric_is_stratified_with_its_own_resample(
+    tmp_path, capsys, monkeypatch
+):
+    """A derived metric has no per-unit value, so its stratum interval is
+    `aggregate` recomputed on that level's resampled table — the same
+    construction the parent block uses, over fewer rows. A stratum reusing the
+    parent's interval, or reporting none, both look plausible in the record.
+
+    `pred` is `float(i)` in roster order and `cohort` alternates, so the three
+    means are 19.5 over the whole table, 20.0 over `a` and 19.0 over `b` — the
+    exact numbers `test_a_stratum_recomputes_a_derived_metric_over_its_own_units`
+    pins; here they are only the reason the inequalities below are meaningful.
+    """
+    import publishable.generators.experiment as experiment_gen
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    monkeypatch.setattr(
+        GenericTemplate,
+        "aggregate",
+        lambda self, units, cfg: {"score": sum(units.pred) / len(units)},
+    )
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
+        statistics={"report_by": ["cohort"]},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    step_block = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    parent = step_block["score"]
+    level = step_block["by"]["cohort"]["a"]["score"]
+    assert level["basis"] == "units"
+    assert level["ci95"] is not None
+    assert level["ci95"] != parent["ci95"]
+    assert level["value"] != parent["value"]
+
+
+def test_a_stratum_carries_no_corrected_fields(tmp_path, capsys, monkeypatch):
+    """Strata are not comparisons, so nothing in a `by` block is corrected — and
+    the four correction fields must be absent rather than null, the same
+    distinction `correction: none` observes.
+
+    Four, not five: `correction: null` is a field `summarize_step` writes on
+    *every* metric block, parent and stratum alike, and it predates the
+    correction family — it says "no multiplicity correction applies to this
+    number," which is exactly what a stratum means. The four asserted here are
+    the ones `corrected_for` attaches, and only to comparisons."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+        statistics={"report_by": ["cohort"]},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    for condition in run["results"]["conditions"]:
+        by_block = condition["aggregated"]["step01_summarize_units"]["by"]["cohort"]
+        assert by_block
+        for level in by_block.values():
+            for entry in level.values():
+                assert isinstance(entry, dict)
+                assert {
+                    "ci95_corrected",
+                    "correction_level",
+                    "family_size",
+                    "family",
+                }.isdisjoint(entry)
+
+
+def test_report_by_adds_no_executions(tmp_path, capsys, monkeypatch):
+    """`reference.md` § Reporting strata's first property: "No executions are
+    added — the run is unchanged and the split happens over a table that already
+    exists." The ledger is the ground truth for what ran.
+
+    Both sides sweep, so `results` is a 15-entry list rather than the single
+    condition a default run produces — the ledger keys on condition and repeat
+    only, so a one-condition comparison would say much less.
+
+    The two sides differ in `statistics.report_by` and nothing else. In
+    particular both declare `data.units.attributes`: that block is inside the
+    [design digest](#what-auto-derives-from) — `design_digest` covers
+    `data.units` and `sweep.groups` — so declaring an attribute on one side
+    only redraws every `auto` seed and the two ledgers would differ by their
+    repeat labels, for a reason that has nothing to do with strata."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+    sweep = {
+        "baseline": {"analysis.method": "pearson"},
+        "grid": {"analysis.method": ["spearman", "kendall"]},
+    }
+    without = run_a_project(
+        tmp_path / "a",
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
+        sweep=sweep,
+    )
+    with_strata = run_a_project(
+        tmp_path / "b",
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
+        sweep=sweep,
+        statistics={"report_by": ["cohort"]},
+    )
+    # 3 conditions × 5 seed repeats, the generated config's default replication.
+    assert len(without["results"]) == 15
+    assert len(without["results"]) == len(with_strata["results"])
+    assert without["results"] == with_strata["results"]
