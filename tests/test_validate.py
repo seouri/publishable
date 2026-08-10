@@ -1721,3 +1721,16 @@ def test_declared_contrasts_are_counted_in_the_uncorrected_family(write_config):
     )
     warning = next(f for f in c.findings if f.code == "W-STATS-FAMILY")
     assert "family of 3" in warning.message
+
+
+def test_a_scalar_contrasts_block_is_refused_without_raising(write_config):
+    """A *scalar* where a list belongs, not a mapping: `len()` works on a mapping
+    and raises on a bool or an int, and the family count in `_check_sweep` reads
+    the block before `_check_contrasts` refuses its shape. `validate.py`
+    collects findings and never raises, so this has to come back as a
+    diagnostic — the assertion is that `validate_config` returns at all."""
+    for block in (5, True, "method=spearman"):
+        found = codes(
+            write_config({"sweep": _TWO_CONDITIONS, "statistics": {"contrasts": block}})
+        )
+        assert "E-STATS-CONTRAST-SHAPE" in found

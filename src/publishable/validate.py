@@ -941,9 +941,16 @@ def _check_sweep(
     # `len(conditions) - 1` even for a sweep with no `sweep.baseline`, which
     # produces no baseline comparisons at all — a separate overcount, recorded
     # in `docs/superpowers/spec-defects.md` for the slice that implements the
-    # correction rather than fixed here, where it would silently remove a
-    # warning this build still owes the reader.
-    declared = len(((doc.get("statistics") or {}).get("contrasts")) or [])
+    # correction rather than fixed here.
+    #
+    # The `isinstance` guard is load-bearing: this runs *before*
+    # `_check_contrasts`, so a scalar `contrasts: 5` reaches it ahead of the
+    # shape refusal, and `len()` on it would raise a `TypeError` out of a
+    # module whose whole contract is that it collects findings and never
+    # raises. An unusable declaration counts as no declared contrasts here and
+    # is diagnosed as `E-STATS-CONTRAST-SHAPE` there.
+    contrasts_block = ((doc.get("statistics") or {}).get("contrasts")) or []
+    declared = len(contrasts_block) if isinstance(contrasts_block, list) else 0
     family = max(len(conditions) - 1, 0) + declared
     if family > 0:
         c.warn(
