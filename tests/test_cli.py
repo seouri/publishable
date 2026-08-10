@@ -853,3 +853,64 @@ def test_a_thin_pairing_warns(tmp_path, capsys, monkeypatch):
         },
     )
     assert "min_reported_n" in doc["stdout"] or "N_PAIRED" in doc["stdout"]
+
+
+def _first_metric_width(run: dict[str, Any], condition_index: int) -> float:
+    """The `ci95` width of the first numeric metric in one condition's
+    `aggregated` block — the per-condition counterpart to `_first_contrast`'s
+    delta, so a caller can compare the two widths directly."""
+    condition = run["results"]["conditions"][condition_index]
+    for step_block in condition["aggregated"].values():
+        for metric in step_block.values():
+            assert isinstance(metric, dict)
+            if metric.get("ci95") is not None:
+                low, high = metric["ci95"]
+                return high - low
+    raise AssertionError("no numeric metric with a ci95 found in this condition")
+
+
+def test_a_paired_delta_is_narrower_than_the_conditions_it_compares(
+    tmp_path, capsys, monkeypatch
+):
+    """The contrast that `allocation: within` buys, end to end: per-condition
+    intervals are wide and the delta's is narrow, over the same units."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=120,
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    delta = _first_contrast(run, "method=spearman")
+    assert delta is not None
+    width = delta["ci95"][1] - delta["ci95"][0]
+    per_condition = _first_metric_width(run, condition_index=1)
+    assert width < per_condition
+
+
+def test_the_delta_half_width_is_not_implausibly_narrow(tmp_path, capsys, monkeypatch):
+    """CLAUDE.md records ≈0.033 as unreachable for a linear-versus-rank contrast
+    at n≈228; a fixture producing far less has lost the resampling."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=120,
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    entry = _first_contrast(run, "method=spearman")
+    assert entry is not None
+    lo, hi = entry["ci95"]
+    assert hi > lo  # a real interval, not a point
