@@ -470,6 +470,25 @@ def test_iteration_is_repeatable():
     assert [r["unit"] for r in t] == [r["unit"] for r in t]
 
 
+def test_a_column_named_columns_cannot_shadow_the_property():
+    """`columns` is a real property, so normal attribute lookup finds it before
+    `__getattr__` ever runs — a recorded column literally named "columns" cannot
+    shadow it. The data isn't lost, only unreachable by attribute: it still shows
+    up in row iteration."""
+    t = UnitTable({"u1": {"columns": 1.0, "pred": 2.0}})
+    assert sorted(t.columns) == ["columns", "pred"]
+    assert [r["columns"] for r in t] == [1.0]
+
+
+def test_underscore_prefixed_access_raises_attribute_error_not_contract_error():
+    """Internal attribute access and pickle probes (`_anything`) must behave like
+    ordinary missing attributes, not like a step author naming a bad column."""
+    t = UnitTable({"u1": {"pred": 1.0}})
+    with pytest.raises(AttributeError) as exc:
+        _ = t._anything
+    assert not isinstance(exc.value, ContractError)
+
+
 def test_the_interval_brackets_the_point_estimate():
     values = [float(i) for i in range(50)]
     got = percentile_over_units(values, seed=7)
