@@ -8,10 +8,15 @@ from publishable.stats import (
     Interval,
     UnitTable,
     _percentile_ranks,
+    cohens_dz,
     collapse_repeats,
     handed_to,
     mean_of,
     min_honest_draws,
+    paired_delta_of_derived,
+    paired_keys,
+    paired_percentile_of_derived,
+    paired_t_over_units,
     percentile_of_derived,
     percentile_over_units,
     repeat_spread,
@@ -484,6 +489,44 @@ def test_collapse_requires_condition_index():
         collapse_repeats([], "analyze")  # type: ignore[call-arg]
 
 
+def test_the_pairing_is_the_intersection():
+    of = {"u1": {"m": 1.0}, "u2": {"m": 2.0}, "u3": {"m": 3.0}}
+    against = {"u2": {"m": 1.0}, "u3": {"m": 1.0}, "u4": {"m": 1.0}}
+    assert paired_keys(of, against, None) == ["u2", "u3"]
+
+
+def test_the_union_and_either_side_alone_all_differ():
+    """Pins the intersection specifically: three wrong answers are distinguishable."""
+    of = {"u1": {"m": 1.0}, "u2": {"m": 2.0}}
+    against = {"u2": {"m": 1.0}, "u3": {"m": 1.0}}
+    keys = paired_keys(of, against, None)
+    assert keys == ["u2"]
+    assert keys != sorted(set(of) | set(against))
+    assert keys != sorted(of)
+    assert keys != sorted(against)
+
+
+def test_a_within_stratum_narrows_the_intersection():
+    of = {"u1": {"m": 1.0}, "u2": {"m": 2.0}}
+    against = {"u1": {"m": 1.0}, "u2": {"m": 1.0}}
+    assert paired_keys(of, against, {"u2"}) == ["u2"]
+
+
+def test_the_result_is_sorted():
+    of = {"u3": {"m": 1.0}, "u1": {"m": 1.0}}
+    against = {"u1": {"m": 1.0}, "u3": {"m": 1.0}}
+    assert paired_keys(of, against, None) == ["u1", "u3"]
+
+
+def test_an_empty_allowed_set_yields_no_pairing():
+    """An empty `allowed` is a real answer — nobody matched the stratum — and
+    must not be confused with `None`, which means unrestricted."""
+    of = {"u1": {"m": 1.0}}
+    against = {"u1": {"m": 1.0}}
+    assert paired_keys(of, against, set()) == []
+    assert paired_keys(of, against, None) == ["u1"]
+
+
 def test_a_recorded_column_is_basis_units_and_carries_an_interval():
     collapsed = {f"p{i}": {"pred": float(i)} for i in range(10)}
     out = summarize_step(collapsed, {"resolved": 10, "completed": 10, "ineligible": 0, "failed": 0})
@@ -868,6 +911,37 @@ def test_confidence_widens_the_interval():
     assert (wide.high - wide.low) > (narrow.high - narrow.low)
 
 
+def test_the_interval_is_students_t_on_the_differences():
+    diffs = [1.0, 2.0, 3.0, 4.0]
+    got = paired_t_over_units(diffs)
+    plain = t_over_units(diffs)
+    assert got is not None and plain is not None
+    assert got.low == plain.low and got.high == plain.high
+
+
+def test_it_names_its_own_method():
+    iv = paired_t_over_units([1.0, 2.0, 3.0])
+    assert iv is not None and iv.method == "paired_t_over_units"
+
+
+def test_one_difference_has_no_interval():
+    assert paired_t_over_units([1.0]) is None
+
+
+def test_cohens_dz_is_the_mean_over_the_standard_deviation():
+    """Hand-computed: mean 2.5, sample sd of [1,2,3,4] is 1.2909944, so dz = 1.9365."""
+    assert cohens_dz([1.0, 2.0, 3.0, 4.0]) == pytest.approx(1.93649167, rel=1e-6)
+
+
+def test_cohens_dz_is_none_below_two_differences():
+    assert cohens_dz([1.0]) is None
+
+
+def test_cohens_dz_is_none_when_every_difference_is_identical():
+    """Zero dispersion would divide by zero; no `d` is honest, infinity is not."""
+    assert cohens_dz([2.0, 2.0, 2.0]) is None
+
+
 def test_iteration_yields_one_row_per_unit():
     t = UnitTable({"u1": {"pred": 1.0}, "u2": {"pred": 2.0}})
     assert [r["unit"] for r in t] == ["u1", "u2"]
@@ -1044,3 +1118,236 @@ def test_the_rank_indices_are_symmetric_not_off_by_one(monkeypatch):
     monkeypatch.setattr("publishable.stats.random.Random", _FakeRandom)
     result = percentile_over_units([0.0, 1.0], seed=7, draws=2000, confidence=0.95)
     assert result == Interval(low=0.0, high=0.5, method="percentile_over_units")
+
+
+def _mean_m(t):
+    vals = [v for v in t.m if v is not None]
+    return sum(vals) / len(vals) if vals else None
+
+
+def test_the_paired_interval_is_narrower_than_two_independent_draws():
+    """The property that makes pairing worth doing. Two conditions that move
+    together have a stable difference even when each side is highly variable —
+    an implementation drawing independently loses exactly that.
+
+    The per-unit difference alternates 1.0/0.0 (mean 0.5) rather than being a
+    constant 0.5 offset: a constant offset makes the paired difference exactly
+    0.5 on *every* resample regardless of which units are drawn, which would
+    demonstrate the narrowing with a degenerate zero-width interval instead of
+    a real one."""
+    of = {f"u{i}": {"m": float(i) + (1.0 if i % 2 == 0 else 0.0)} for i in range(60)}
+    against = {f"u{i}": {"m": float(i)} for i in range(60)}
+    keys = sorted(of)
+    paired, _ = paired_percentile_of_derived(of, against, keys, _mean_m, _mean_m, seed=7)
+    a, _ = percentile_of_derived(of, _mean_m, seed=7)
+    b, _ = percentile_of_derived(against, _mean_m, seed=7)
+    independent_width = (a.high - a.low) + (b.high - b.low)
+    assert (paired.high - paired.low) < independent_width / 4
+
+
+def test_the_interval_brackets_the_observed_difference():
+    of = {f"u{i}": {"m": float(i) + (1.0 if i % 2 == 0 else 0.0)} for i in range(60)}
+    against = {f"u{i}": {"m": float(i)} for i in range(60)}
+    got, _ = paired_percentile_of_derived(of, against, sorted(of), _mean_m, _mean_m, seed=7)
+    assert got.low < 0.5 < got.high
+
+
+def test_it_names_its_own_method_paired_percentile():
+    of = {f"u{i}": {"m": float(i) + 1.0} for i in range(60)}
+    against = {f"u{i}": {"m": float(i)} for i in range(60)}
+    got, _ = paired_percentile_of_derived(of, against, sorted(of), _mean_m, _mean_m, seed=7)
+    assert got.method == "paired_percentile_over_units"
+
+
+def test_the_same_seed_reproduces_and_a_different_one_does_not_paired():
+    of = {f"u{i}": {"m": float(i) + (1.0 if i % 2 == 0 else 0.0)} for i in range(60)}
+    against = {f"u{i}": {"m": float(i)} for i in range(60)}
+    k = sorted(of)
+    assert paired_percentile_of_derived(of, against, k, _mean_m, _mean_m, seed=7) == \
+        paired_percentile_of_derived(of, against, k, _mean_m, _mean_m, seed=7)
+    assert paired_percentile_of_derived(of, against, k, _mean_m, _mean_m, seed=7) != \
+        paired_percentile_of_derived(of, against, k, _mean_m, _mean_m, seed=99)
+
+
+def test_below_the_survivor_floor_there_is_no_interval_paired():
+    of = {f"u{i}": {"m": float(i)} for i in range(60)}
+    against = {f"u{i}": {"m": float(i)} for i in range(60)}
+    got, used = paired_percentile_of_derived(
+        of, against, sorted(of), lambda t: None, lambda t: None, seed=7, draws=200)
+    assert got is None and used == 0
+
+
+def test_a_constant_offset_gives_a_genuinely_zero_width_interval():
+    """A point-mass bootstrap: every unit's difference is the same constant 0.5,
+    so the resampled difference is 0.5 on *every* draw regardless of which units
+    are drawn. That is not a bug — a difference with no sampling variability
+    should report no width — and it is a sharper discriminator against an
+    independently-drawn variant than the alternating fixture above: paired width
+    is exactly 0.0 against a nonzero independent width, an unbounded ratio
+    rather than a merely large one."""
+    of = {f"u{i}": {"m": float(i) + 0.5} for i in range(60)}
+    against = {f"u{i}": {"m": float(i)} for i in range(60)}
+    got, _ = paired_percentile_of_derived(of, against, sorted(of), _mean_m, _mean_m, seed=7)
+    assert got is not None
+    assert got.high - got.low < 1e-9
+
+
+def test_a_raising_compute_is_treated_as_degenerate_not_propagated_paired():
+    of = {f"u{i}": {"m": float(i)} for i in range(60)}
+    against = {f"u{i}": {"m": float(i)} for i in range(60)}
+
+    def always_raises(units):
+        raise ZeroDivisionError("degenerate draw")
+
+    got, used = paired_percentile_of_derived(
+        of, against, sorted(of), always_raises, always_raises, seed=7, draws=20)
+    assert got is None
+    assert used == 0
+
+
+def test_a_nan_compute_is_treated_as_degenerate_paired():
+    of = {f"u{i}": {"m": float(i)} for i in range(60)}
+    against = {f"u{i}": {"m": float(i)} for i in range(60)}
+
+    def always_nan(units):
+        return float("nan")
+
+    got, used = paired_percentile_of_derived(
+        of, against, sorted(of), always_nan, always_nan, seed=7, draws=20)
+    assert got is None
+    assert used == 0
+
+
+def test_a_one_sided_raise_drops_the_whole_draw_not_half():
+    """A defect that narrows the `try` to only one side's `compute` call — the
+    exact regression Finding 1 named — would leave the other side's exception
+    unguarded, crashing the whole function rather than dropping just that
+    draw. `compute` is called twice per draw, `of` then `against` (see the
+    call order in `paired_percentile_of_derived`), so failing every fourth
+    call fails only the `against` side, on exactly every other draw, while
+    `of` always succeeds — pinning that a one-sided failure drops the whole
+    draw rather than surviving on the strength of the healthy side."""
+    of = {f"u{i}": {"m": float(i)} for i in range(60)}
+    against = {f"u{i}": {"m": float(i)} for i in range(60)}
+    calls = {"n": 0}
+
+    def flaky_against_only(units):
+        calls["n"] += 1
+        if calls["n"] % 4 == 0:
+            raise ZeroDivisionError("degenerate on this call only")
+        return float(sum(v for v in units.m if v is not None)) / len(units.m)
+
+    draws = 200
+    got, used = paired_percentile_of_derived(
+        of, against, sorted(of), flaky_against_only, flaky_against_only, seed=7, draws=draws)
+    assert used == draws // 2
+    assert got is not None
+
+
+def test_a_one_sided_none_drops_the_whole_draw_not_half():
+    """The `None`-flavoured sibling of the test above: checking only `a is
+    None` (omitting the `against`-side check) would let a `None` on `against`
+    reach `float(a) - float(b)` and crash on `TypeError` instead of being
+    dropped as a degenerate draw."""
+    of = {f"u{i}": {"m": float(i)} for i in range(60)}
+    against = {f"u{i}": {"m": float(i)} for i in range(60)}
+    calls = {"n": 0}
+
+    def flaky_against_only(units):
+        calls["n"] += 1
+        if calls["n"] % 4 == 0:
+            return None
+        return float(sum(v for v in units.m if v is not None)) / len(units.m)
+
+    draws = 200
+    got, used = paired_percentile_of_derived(
+        of, against, sorted(of), flaky_against_only, flaky_against_only, seed=7, draws=draws)
+    assert used == draws // 2
+    assert got is not None
+
+
+def test_two_different_computes_over_identical_tables_yield_a_real_interval():
+    """The regression a single shared `compute` produces, and the reason this
+    function takes two: `of` and `against` here hold *identical* per-unit
+    data — exactly the shape a swept axis that doesn't touch the recorded
+    columns produces (the documented worked example's `analysis.method`
+    sweep records the same `pred`/`truth` under every condition; only which
+    correlation `aggregate` computes from them differs). A version of this
+    function taking one `compute` shared by both sides would evaluate that
+    one formula against both sides' identical draws and report a spuriously
+    precise — often exactly zero-width — interval no matter how different
+    the two conditions' real formulas are. `compute_of` (`total`) and
+    `compute_against` (`mean`) are deliberately different formulas over the
+    same data, so a correct implementation must still produce a real,
+    non-degenerate interval that brackets the true, unresampled difference
+    between the two formulas."""
+    table = {f"u{i}": {"m": float(i)} for i in range(60)}
+
+    def total(units: UnitTable) -> float | None:
+        return float(sum(v for v in units.m if v is not None))
+
+    def mean(units: UnitTable) -> float | None:
+        vals = [v for v in units.m if v is not None]
+        return sum(vals) / len(vals) if vals else None
+
+    point_estimate = total(UnitTable(table)) - mean(UnitTable(table))
+    got, used = paired_percentile_of_derived(table, table, sorted(table), total, mean, seed=7)
+    assert got is not None
+    assert used > 0
+    assert got.high - got.low > 0  # non-degenerate: the two formulas disagree
+    assert got.low < point_estimate < got.high
+
+
+def test_the_paired_delta_is_computed_over_the_keys_it_is_given():
+    """The point estimate `paired_percentile_of_derived` builds an interval for,
+    over the same keys — so a caller cannot take one from the intersection and
+    the other from each side's whole sample, which is what put a `delta` of
+    509.5 beside a `ci95` around 10.0 in a `within` contrast."""
+    of = {f"u{i}": {"m": float(i) + 1.0} for i in range(60)}
+    against = {f"u{i}": {"m": float(i)} for i in range(60)}
+    assert paired_delta_of_derived(of, against, sorted(of), _mean_m, _mean_m) == 1.0
+    # Six keys with a mean of 2.5 on `of` against 1.5 — the same +1.0 shift, but
+    # the value of `_mean_m` itself is entirely different from the whole-sample
+    # one, so a subset genuinely reaches a different pair of aggregates.
+    subset = [f"u{i}" for i in range(4)]
+    assert paired_delta_of_derived(of, against, subset, _mean_m, _mean_m) == 1.0
+    assert _mean_m(UnitTable({k: of[k] for k in subset})) == 2.5
+
+
+def test_the_paired_delta_uses_each_side_s_own_formula():
+    """Two computes, for the reason `paired_percentile_of_derived` takes two:
+    passing `compute_of` for both sides here returns 0.0, not 59.0."""
+    table = {f"u{i}": {"m": float(i)} for i in range(60)}
+
+    def top(units: UnitTable) -> float | None:
+        return float(max(v for v in units.m if v is not None))
+
+    got = paired_delta_of_derived(table, table, sorted(table), top, _mean_m)
+    assert got == pytest.approx(59.0 - 29.5)
+
+
+def test_an_empty_intersection_has_no_delta_rather_than_a_zero_one():
+    """`reference.md` § Contrasts: "A contrast whose intersection is empty is
+    reported as such rather than as a delta of zero." `0.0` would read as two
+    conditions that agreed perfectly."""
+    of = {f"u{i}": {"m": float(i)} for i in range(10)}
+    assert paired_delta_of_derived(of, of, [], _mean_m, _mean_m) is None
+
+
+def test_a_declining_compute_yields_no_delta_on_either_side():
+    """A raising or `None`-returning `aggregate` is the degenerate treatment
+    `percentile_of_derived` gives it, not a `TypeError` from `float(None)` and
+    not a half-computed number."""
+    of = {f"u{i}": {"m": float(i)} for i in range(10)}
+
+    def gives_none(units: UnitTable) -> float | None:
+        return None
+
+    def raises(units: UnitTable) -> float | None:
+        raise ZeroDivisionError("no")
+
+    keys = sorted(of)
+    assert paired_delta_of_derived(of, of, keys, gives_none, _mean_m) is None
+    assert paired_delta_of_derived(of, of, keys, _mean_m, gives_none) is None
+    assert paired_delta_of_derived(of, of, keys, raises, _mean_m) is None
+    assert paired_delta_of_derived(of, of, keys, _mean_m, raises) is None

@@ -909,10 +909,123 @@ def test_a_null_subfield_is_not_a_declaration(write_config):
     assert not [c for c in found if c.endswith("-UNSUPPORTED")]
 
 
-def test_declared_contrasts_are_refused(write_config):
-    assert "E-STATS-CONTRASTS-UNSUPPORTED" in codes(
-        write_config({"statistics": {"contrasts": [{"id": "s", "of": "a", "against": "b"}]}})
+def test_a_declared_contrast_is_no_longer_refused(write_config):
+    found = codes(
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"analysis.method": "pearson"},
+                    "grid": {"analysis.method": ["spearman"]},
+                },
+                "statistics": {
+                    "contrasts": [{"id": "s", "of": "method=spearman", "against": "baseline"}]
+                },
+            }
+        )
     )
+    assert "E-STATS-CONTRASTS-UNSUPPORTED" not in found
+    # The positive claim, not just the absent refusal: `of`/`against` actually
+    # resolved against real condition labels rather than merely failing to be
+    # refused by the (now-retired) blanket code.
+    assert "E-STATS-CONTRAST-UNKNOWN" not in found
+    assert "E-STATS-CONTRAST-NESTED" not in found
+
+
+def test_an_unresolvable_side_is_refused(write_config):
+    assert "E-STATS-CONTRAST-UNKNOWN" in codes(
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"analysis.method": "pearson"},
+                    "grid": {"analysis.method": ["spearman"]},
+                },
+                "statistics": {
+                    "contrasts": [{"id": "s", "of": "method=nope", "against": "baseline"}]
+                },
+            }
+        )
+    )
+
+
+def test_a_contrast_naming_another_contrast_is_refused(write_config):
+    """Contrasts do not nest — that is an interaction, and it belongs in a
+    summary-step Estimate."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"analysis.method": "pearson"},
+                    "grid": {"analysis.method": ["spearman"]},
+                },
+                "statistics": {
+                    "contrasts": [
+                        {"id": "a", "of": "method=spearman", "against": "baseline"},
+                        {"id": "b", "of": "a", "against": "baseline"},
+                    ]
+                },
+            }
+        )
+    )
+    assert "E-STATS-CONTRAST-NESTED" in found
+
+
+def test_no_declared_contrasts_still_validates_clean(write_config):
+    found = codes(write_config({"statistics": {"contrasts": []}}))
+    assert not [c for c in found if c.startswith("E-STATS-CONTRAST")]
+
+
+def test_a_contrast_naming_an_unknown_within_attribute_is_refused(write_config):
+    """The unknown-attribute case Task 2's review flagged: `within` naming a typo'd
+    attribute would otherwise look exactly like a stratum that is genuinely empty,
+    since `units_matching` reads it with `.get` either way."""
+    found = codes(
+        write_config(
+            {
+                "data.units": {"from": "index.csv", "key": "patient_id", "attributes": ["sex"]},
+                "sweep": {
+                    "baseline": {"analysis.method": "pearson"},
+                    "grid": {"analysis.method": ["spearman"]},
+                },
+                "statistics": {
+                    "contrasts": [
+                        {
+                            "id": "s",
+                            "of": "method=spearman",
+                            "against": "baseline",
+                            "within": {"sexx": "f"},
+                        }
+                    ]
+                },
+            }
+        )
+    )
+    assert "E-STATS-CONTRAST-WITHIN" in found
+
+
+def test_a_contrast_with_a_declared_within_attribute_validates_clean(write_config):
+    found = codes(
+        write_config(
+            {
+                "data.units": {"from": "index.csv", "key": "patient_id", "attributes": ["sex"]},
+                "sweep": {
+                    "baseline": {"analysis.method": "pearson"},
+                    "grid": {"analysis.method": ["spearman"]},
+                },
+                "statistics": {
+                    "contrasts": [
+                        {
+                            "id": "s",
+                            "of": "method=spearman",
+                            "against": "baseline",
+                            "within": {"sex": "f"},
+                        }
+                    ]
+                },
+            }
+        )
+    )
+    assert "E-STATS-CONTRAST-WITHIN" not in found
+    assert "E-STATS-CONTRAST-UNKNOWN" not in found
 
 
 def test_a_declared_resample_is_refused(write_config):
@@ -1476,3 +1589,148 @@ def test_an_entrypoint_without_a_colon_says_so_rather_than_blaming_the_import(wr
     ]
     assert "is not `<module>:<attribute>`" in message
     assert "could not be imported" not in message
+
+
+_TWO_CONDITIONS = {
+    "baseline": {"analysis.method": "pearson"},
+    "grid": {"analysis.method": ["spearman"]},
+}
+
+
+def test_a_contrast_comparing_a_condition_with_itself_is_refused(write_config):
+    """`reference.md` § Validation, "Contrast has two distinct sides". Left
+    unchecked it publishes a perfect null with a zero-width interval over every
+    unit as a finding, and takes a slot in the correction family while doing
+    it."""
+    found = codes(
+        write_config(
+            {
+                "sweep": _TWO_CONDITIONS,
+                "statistics": {
+                    "contrasts": [{"id": "selfie", "of": "baseline", "against": "baseline"}]
+                },
+            }
+        )
+    )
+    assert "E-STATS-CONTRAST-SAME-SIDES" in found
+
+
+def test_a_contrast_with_an_unresolvable_side_is_unknown_not_same_sides(write_config):
+    """Both sides identical *and* neither resolving is a typo, not a
+    self-comparison; the more specific diagnostic has to win, or a misspelled
+    label reads as a design mistake the author didn't make."""
+    found = codes(
+        write_config(
+            {
+                "sweep": _TWO_CONDITIONS,
+                "statistics": {
+                    "contrasts": [{"id": "x", "of": "nosuch", "against": "nosuch"}]
+                },
+            }
+        )
+    )
+    assert "E-STATS-CONTRAST-UNKNOWN" in found
+    assert "E-STATS-CONTRAST-SAME-SIDES" not in found
+
+
+def test_a_contrast_entry_that_is_not_a_mapping_is_refused(write_config):
+    """A list of condition labels where a list of contrast entries belongs.
+    `resolve_contrasts` reads `entry["of"]` off whatever this holds, so before
+    this check the slip reached `run` as an `AttributeError` traceback — and
+    `contrasts.py`'s own comment leans on validate having refused it."""
+    found = codes(
+        write_config(
+            {
+                "sweep": _TWO_CONDITIONS,
+                "statistics": {"contrasts": ["method=spearman"]},
+            }
+        )
+    )
+    assert "E-STATS-CONTRAST-SHAPE" in found
+
+
+def test_a_non_list_contrasts_block_is_refused(write_config):
+    found = codes(
+        write_config(
+            {
+                "sweep": _TWO_CONDITIONS,
+                "statistics": {"contrasts": {"id": "x", "of": "baseline"}},
+            }
+        )
+    )
+    assert "E-STATS-CONTRAST-SHAPE" in found
+
+
+def test_a_contrast_without_an_id_is_refused(write_config):
+    """`id` names the entry in `results.contrasts` and in a hypothesis. Missing,
+    it reached the record as the literal string `'None'`, and two such entries
+    collided under one name."""
+    found = codes(
+        write_config(
+            {
+                "sweep": _TWO_CONDITIONS,
+                "statistics": {
+                    "contrasts": [{"of": "method=spearman", "against": "baseline"}]
+                },
+            }
+        )
+    )
+    assert "E-STATS-CONTRAST-SHAPE" in found
+
+
+def test_two_contrasts_cannot_share_one_id(write_config):
+    """`id` is how an entry is named in `results.contrasts` and in a hypothesis,
+    so two under one name are indistinguishable in both — which is what the
+    missing-`id` diagnostic already tells the author."""
+    found = codes(
+        write_config(
+            {
+                "sweep": _TWO_CONDITIONS,
+                "statistics": {
+                    "contrasts": [
+                        {"id": "same", "of": "method=spearman", "against": "baseline"},
+                        {"id": "same", "of": "baseline", "against": "method=spearman"},
+                    ]
+                },
+            }
+        )
+    )
+    assert "E-STATS-CONTRAST-SHAPE" in found
+
+
+def test_declared_contrasts_are_counted_in_the_uncorrected_family(write_config):
+    """`reference.md` § Contrasts: "Declared contrasts join the correction family
+    alongside baseline comparisons, because a reader shown both is exposed to
+    both." Counting only `len(conditions) - 1` was accurate while the block was
+    refused wholesale and is not any more — a two-condition run with two
+    declared contrasts publishes three comparisons per metric, not one."""
+    c = Collector()
+    validate_config(
+        write_config(
+            {
+                "sweep": _TWO_CONDITIONS,
+                "statistics": {
+                    "contrasts": [
+                        {"id": "a", "of": "method=spearman", "against": "baseline"},
+                        {"id": "b", "of": "baseline", "against": "method=spearman"},
+                    ]
+                },
+            }
+        ),
+        c,
+    )
+    warning = next(f for f in c.findings if f.code == "W-STATS-FAMILY")
+    assert "family of 3" in warning.message
+
+
+def test_a_scalar_contrasts_block_is_refused_without_raising(write_config):
+    """A *scalar* where a list belongs, not a mapping: `len()` works on a mapping
+    and raises on a bool or an int, and the family count in `_check_sweep` reads
+    the block before `_check_contrasts` refuses its shape. `validate.py`
+    collects findings and never raises, so this has to come back as a
+    diagnostic — the assertion is that `validate_config` returns at all."""
+    for block in (5, True, "method=spearman"):
+        found = codes(
+            write_config({"sweep": _TWO_CONDITIONS, "statistics": {"contrasts": block}})
+        )
+        assert "E-STATS-CONTRAST-SHAPE" in found

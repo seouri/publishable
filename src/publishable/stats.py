@@ -52,6 +52,34 @@ def t_over_units(values: Sequence[float], confidence: float = 0.95) -> Interval 
     return Interval(low=mean - half, high=mean + half, method="t_over_units")
 
 
+def paired_t_over_units(diffs: Sequence[float], confidence: float = 0.95) -> Interval | None:
+    """Student's t on the per-unit differences, df = n_paired − 1.
+
+    The contrast's interval is its own construction, never a difference of the
+    two sides' intervals — differencing discards the covariance that pairing
+    exists to exploit, which is why a paired interval is narrower than the two
+    conditions' own (reference.md § How a metric becomes a number).
+    """
+    plain = t_over_units(diffs, confidence)
+    if plain is None:
+        return None
+    return Interval(low=plain.low, high=plain.high, method="paired_t_over_units")
+
+
+def cohens_dz(diffs: Sequence[float]) -> float | None:
+    """The mean of the per-unit differences over their standard deviation.
+
+    Reported only for a per-unit mean: a derived metric has no per-unit value to
+    difference, which is why the worked example carries `cohens_d: null` for `r`.
+    """
+    if len(diffs) < 2:
+        return None
+    mean = sum(diffs) / len(diffs)
+    variance = sum((d - mean) ** 2 for d in diffs) / (len(diffs) - 1)
+    sd = math.sqrt(variance)
+    return mean / sd if sd > 0 else None
+
+
 def resample_seed(digest: str) -> int:
     """From the design digest, never `parameters_hash`.
 
@@ -217,6 +245,113 @@ def percentile_of_derived(
     )
 
 
+def paired_delta_of_derived(
+    of: dict[str, dict[str, float]],
+    against: dict[str, dict[str, float]],
+    keys: list[str],
+    compute_of: "Callable[[UnitTable], float | None]",
+    compute_against: "Callable[[UnitTable], float | None]",
+) -> float | None:
+    """The point estimate `paired_percentile_of_derived` builds an interval for.
+
+    A derived metric has no per-unit value to difference, so its delta has to be
+    `aggregate` evaluated on each side and subtracted — but over **the same
+    units the interval is built from**, which is the intersection of both sides'
+    completed units narrowed by the contrast's `within`, not each condition's
+    own whole-sample table. `reference.md` § Contrasts: "a paired comparison
+    exists only for units that completed in *both*. Differencing the two
+    condition means instead would not be a paired comparison at all, however
+    carefully `paired: true` was derived."
+
+    It lives here, beside the interval it belongs to, because the two were
+    computed in different modules once and drifted apart: the interval moved to
+    the intersection and the point estimate stayed whole-sample, which produced
+    a `ci95` that could not contain its own `delta`. A caller that can only get
+    both from one call cannot reintroduce that.
+
+    `None` — never a number — when there are no paired units or either side's
+    `aggregate` declines to produce a value. `reference.md`: "A contrast whose
+    intersection is empty is reported as such rather than as a delta of zero."
+    """
+    if not keys:
+        return None
+    table_of = _unit_table_from_rows([{"unit": k, **of[k]} for k in keys])
+    table_against = _unit_table_from_rows([{"unit": k, **against[k]} for k in keys])
+    try:
+        a = compute_of(table_of)
+        b = compute_against(table_against)
+    except Exception:  # the same treatment the real call gets in percentile_of_derived
+        return None
+    if a is None or b is None:
+        return None
+    delta = float(a) - float(b)
+    return None if math.isnan(delta) else delta
+
+
+def paired_percentile_of_derived(
+    of: dict[str, dict[str, float]],
+    against: dict[str, dict[str, float]],
+    keys: list[str],
+    compute_of: "Callable[[UnitTable], float | None]",
+    compute_against: "Callable[[UnitTable], float | None]",
+    seed: int,
+    draws: int = 2000,
+    confidence: float = 0.95,
+) -> tuple[Interval | None, int]:
+    """Percentiles of the resampled difference, one draw applied to both sides.
+
+    Drawing each side independently would resample the two conditions apart and
+    destroy the pairing — the same error as differencing the two sides' own
+    intervals. Both spellings produce a plausible interval; only this one is
+    narrower, which is what `allocation: within` buys.
+
+    Two computes, not one — a contrast can hold its two sides' `cfg` fixed on
+    every axis except the one being compared, but `aggregate(units, cfg)` is
+    still evaluated once per side with that side's own `cfg`. A single shared
+    `compute` (as an earlier revision of this function took) is only correct
+    when the two sides evaluate the same formula; the moment a swept axis
+    changes which formula `aggregate` runs — analysis.method: pearson vs.
+    spearman, the documented worked example's own case — a shared compute
+    evaluates *one* side's formula against *both* sides' resampled draws. Where
+    the two collapsed tables hold identical per-unit data (exactly the
+    worked-example shape: `pred`/`truth` don't vary with `analysis.method`,
+    only which correlation `aggregate` computes from them does), that shared
+    evaluation cancels on every single draw — a `ci95` of zero width at zero,
+    beside a nonzero point-estimate delta, the "plausible but wrong" case with
+    nothing to raise. A caller that genuinely wants the same statistic on both
+    sides passes the same callable twice; that's a normal call, not a special
+    case this function has to detect.
+    """
+    if len(keys) < 2:
+        return None, 0
+    rng = random.Random(seed)
+    n = len(keys)
+    values: list[float] = []
+    for _ in range(draws):
+        drawn = [keys[rng.randrange(n)] for _ in range(n)]
+        table_a = _unit_table_from_rows([{"unit": k, **of[k]} for k in drawn])
+        table_b = _unit_table_from_rows([{"unit": k, **against[k]} for k in drawn])
+        try:
+            a = compute_of(table_a)
+            b = compute_against(table_b)
+        except Exception:  # a degenerate draw, not a fault; see percentile_of_derived
+            continue
+        if a is None or b is None:
+            continue
+        diff = float(a) - float(b)
+        if math.isnan(diff):
+            continue
+        values.append(diff)
+    if len(values) < min_honest_draws(confidence):
+        return None, len(values)
+    values.sort()
+    lo, hi = _percentile_ranks(len(values), confidence)
+    return (
+        Interval(low=values[lo], high=values[hi], method="paired_percentile_over_units"),
+        len(values),
+    )
+
+
 def _is_numeric(value: object) -> bool:
     """`bool` is a `int` subclass in Python but is never a quantity to average."""
     return isinstance(value, (int, float)) and not isinstance(value, bool)
@@ -356,6 +491,26 @@ def collapse_repeats(
         key: {col: sum(vals) / len(vals) for col, vals in cols.items()}
         for key, cols in gathered.items()
     }
+
+
+def paired_keys(
+    of: dict[str, dict[str, float]],
+    against: dict[str, dict[str, float]],
+    allowed: set[str] | None,
+) -> list[str]:
+    """The units both sides completed, narrowed by a `within` stratum if given.
+
+    The intersection, not the union: a unit that completed in one condition and
+    failed in the other has no difference to contribute, and counting it would
+    put a number in `n_paired` that no per-unit difference backs.
+
+    Sorted so a resample over these keys is row-order invariant, the same reason
+    `percentile_over_units` sorts its pool.
+    """
+    keys = set(of) & set(against)
+    if allowed is not None:
+        keys &= allowed
+    return sorted(keys)
 
 
 def _is_anonymous_level(level: "RepeatLevel") -> bool:
