@@ -1,5 +1,6 @@
-from publishable.contrasts import resolve_contrasts
+from publishable.contrasts import resolve_contrasts, units_matching
 from publishable.sweep import Condition
+from publishable.units import Unit, UnitList
 
 
 def _cond(i, label, baseline=False):
@@ -59,3 +60,36 @@ def test_declared_contrasts_come_after_the_baseline_ones():
         }
     }
     assert [c.id for c in resolve_contrasts(cfg, conds)] == ["method=spearman", "extra"]
+
+
+def _roster(*specs):
+    return UnitList([Unit(key=k, paths=(), attributes=a) for k, a in specs])
+
+
+def test_no_within_means_no_restriction():
+    r = _roster(("u1", {"sex": "f"}), ("u2", {"sex": "m"}))
+    assert units_matching(r, None) is None
+
+
+def test_a_single_level_selects_matching_units():
+    r = _roster(("u1", {"sex": "f"}), ("u2", {"sex": "m"}), ("u3", {"sex": "f"}))
+    assert units_matching(r, {"sex": "f"}) == {"u1", "u3"}
+
+
+def test_multiple_levels_are_conjunctive():
+    r = _roster(("u1", {"sex": "f", "site": "a"}), ("u2", {"sex": "f", "site": "b"}))
+    assert units_matching(r, {"sex": "f", "site": "a"}) == {"u1"}
+
+
+def test_an_empty_stratum_is_an_empty_set_not_none():
+    """Empty means nobody matched; None means nobody asked. Downstream reports
+    those differently, so they must not collapse."""
+    r = _roster(("u1", {"sex": "f"}))
+    assert units_matching(r, {"sex": "m"}) == set()
+
+
+def test_values_compare_as_strings():
+    """A config's YAML gives `1` as an int while an attribute read from a CSV is
+    `"1"`; comparing them raw would silently match nothing."""
+    r = _roster(("u1", {"cohort": "1"}))
+    assert units_matching(r, {"cohort": 1}) == {"u1"}

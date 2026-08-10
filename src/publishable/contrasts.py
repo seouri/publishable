@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from publishable.sweep import Condition
+    from publishable.units import UnitList
 
 
 @dataclass(frozen=True)
@@ -50,3 +51,22 @@ def resolve_contrasts(
             )
         )
     return out
+
+
+def units_matching(roster: "UnitList", within: dict[str, str] | None) -> set[str] | None:
+    """Unit keys matching every level in `within`, or `None` when unrestricted.
+
+    `None` and `set()` are different answers: nobody asked, versus nobody
+    matched. An empty stratum is a real finding — `limits.min_reported_n` exists
+    to warn about small ones — so collapsing the two would hide it.
+
+    Values compare as strings: a config's YAML gives `1` as an int while the same
+    attribute read from a table is `"1"`, and comparing them raw matches nothing.
+    """
+    if within is None:
+        return None
+    return {
+        unit.key
+        for unit in roster
+        if all(str(unit.attributes.get(k)) == str(v) for k, v in within.items())
+    }
