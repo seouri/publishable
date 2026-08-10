@@ -59,6 +59,7 @@ from publishable.stats import (
     resample_seed,
     summarize_step,
 )
+from publishable.strata import levels_for
 from publishable.sweep import condition_dir_name, expand, sweep_document
 from publishable.templates.base import BaseTemplate
 from publishable.templates.registry import get_template
@@ -297,7 +298,12 @@ def _comparison_step_blocks(
         of_derived = derived_by_key.get((comp.of, step_name)) or {}
         against_derived = derived_by_key.get((comp.against, step_name)) or {}
         metric_block: dict[str, Any] = {}
-        for metric_key in sorted(set(of_summary) & set(against_summary)):
+        # `by` is the one key in a step block that is not a metric: it holds the
+        # reporting strata (`reference.md` § Reporting strata), a mapping of
+        # attribute to level to *another* metric block. Left in, it would be
+        # differenced as though it were a metric — and, sorting before every
+        # real name, would be the first entry of every contrast block.
+        for metric_key in sorted((set(of_summary) & set(against_summary)) - {"by"}):
             is_derived = metric_key in of_derived or metric_key in against_derived
             if is_derived:
                 compute_of = (resample_fns_by_key.get((comp.of, step_name)) or {}).get(
@@ -931,6 +937,21 @@ def command_run(config_path: Path) -> int:
                             f"{prefix}{type(exc).__name__}: {exc}",
                         )
                         step_summary = summarize_step(collapsed, counts)
+                        # What the parent block dropped, every stratum of it
+                        # drops too. A level's table carries the same columns as
+                        # the whole one, so the collision that raised above
+                        # raises identically per level — uncontained, after the
+                        # run has already spent every execution. Retrying each
+                        # level with its own `try` would be worse than either:
+                        # a level block carrying a derived metric its own parent
+                        # does not have.
+                        strata_derived: dict[str, Any] | None = None
+                        strata_resample: (
+                            dict[str, Callable[[UnitTable], float | None]] | None
+                        ) = None
+                    else:
+                        strata_derived = derived
+                        strata_resample = resample_fns
                     # `resample_draws: 0` (as opposed to `null`, meaning
                     # resampling was never attempted) is `summarize_step`'s
                     # signal that a callable was supplied and every single
@@ -1015,6 +1036,188 @@ def command_run(config_path: Path) -> int:
                                 spread[0] if len(spread) == 1 else spread
                             )
                     aggregated[cond.index][step_name] = step_summary
+                    # `reference.md` § Reporting strata: the same aggregation,
+                    # repeated over the subsets each level of each named
+                    # attribute picks out. Two attributes are two marginal
+                    # splits, not their cross — the loop is over attributes,
+                    # never nested — and no `Member` is built, because a
+                    # stratum is a description rather than a comparison a
+                    # reader acts on: joining the family would shrink α and
+                    # silently widen every real comparison in the run.
+                    # Built after the `repeat_spread` loop above deliberately,
+                    # so a level block carries none: dispersion across repeats
+                    # is the parent's figure, attached outside
+                    # `summarize_step`, and a per-level one would need the
+                    # column's per-member mean recomputed over the level's keys
+                    # for a figure nothing documents.
+                    report_by = (doc.get("statistics") or {}).get("report_by") or []
+                    by_block: dict[str, dict[str, dict[str, Any]]] = {}
+                    # `validate` refuses both a non-list `report_by` and a
+                    # non-string entry, so neither guard below is reachable from
+                    # a validated config. They stay because the cost of being
+                    # wrong is asymmetric: a malformed value arriving here
+                    # raises *after* the run has spent every one of its
+                    # executions, the most expensive place in the program to
+                    # fail.
+                    for attribute in report_by if isinstance(report_by, list) else []:
+                        if not isinstance(attribute, str):
+                            continue
+                        # Not `levels`: that name already holds this run's
+                        # repeat levels, which `repeat_spread` above reads on
+                        # every later pass of this loop.
+                        levels_block: dict[str, dict[str, Any]] = {}
+                        for level, keys in sorted(levels_for(roster, attribute).items()):
+                            # One key set decides BOTH the table and the counts.
+                            # Taking the level's rows beside the condition's `n`
+                            # is the S4b Critical's shape — a number reported
+                            # against a denominator computed over other units.
+                            level_collapsed = {
+                                k: v for k, v in collapsed.items() if k in keys
+                            }
+                            level_roster = UnitList([u for u in roster if u.key in keys])
+                            level_counts = attrition(
+                                results,
+                                level_roster,
+                                step_name,
+                                cond.index,
+                                fold_members=fold_members,
+                            )
+                            # Attrition happens during the run, so a level the
+                            # roster-time `W-STATS-REPORTBY-THIN` counted as
+                            # comfortable can complete on a handful — or on
+                            # nothing at all. This check sits ahead of both
+                            # gates below (the empty-level `continue` and the
+                            # no-metric-produced check) on purpose: a level
+                            # thinned to zero is the most disclosive case, and
+                            # is exactly the one that gets no block. Warning
+                            # only where a block is also emitted would mean the
+                            # worst case never warns.
+                            stratum_floor = (doc.get("limits") or {}).get("min_reported_n")
+                            completed = level_counts.get("completed", 0)
+                            if (
+                                isinstance(stratum_floor, (int, float))
+                                and not isinstance(stratum_floor, bool)
+                                and completed < stratum_floor
+                            ):
+                                aggregate_c.warn(
+                                    "W-STATS-STRATUM-THIN",
+                                    "limits.min_reported_n",
+                                    f"condition {cond.index}, step {step_name!r}: "
+                                    f"level `{level}` of `{attribute}` completed "
+                                    f"{completed} units, below limits.min_reported_n "
+                                    f"({stratum_floor})",
+                                )
+                            # A level nothing completed gets no block at all —
+                            # `W-STATS-STRATUM-THIN` above is what tells a
+                            # reader the level exists and is empty, and a block
+                            # whose metrics rest on no rows adds nothing to
+                            # that. It also keeps `aggregate` from being called
+                            # on an empty table, which raises for most
+                            # templates and would fill the diagnostics with one
+                            # failure per empty level.
+                            if not level_collapsed:
+                                continue
+                            # A derived metric is NOT recomputed by
+                            # `summarize_step` — it writes `value` straight
+                            # through from the mapping and takes only the
+                            # interval and `n.completed` from the table beside
+                            # it. Handing a level the parent's `derived` would
+                            # therefore publish the whole sample's point
+                            # estimate against the level's own `n` and `ci95`:
+                            # the S4b Critical's shape one layer in.
+                            # `reference.md` § Reporting strata shows three
+                            # different values (0.607 / 0.591 / 0.622) for this
+                            # reason. So each level recomputes the metric over
+                            # its own table, through the very closure the
+                            # interval already resamples with — one definition
+                            # of the metric, not two.
+                            level_derived: dict[str, Any] | None = None
+                            if strata_derived and strata_resample:
+                                level_table = UnitTable(level_collapsed)
+                                level_derived = {}
+                                for key in strata_derived:
+                                    compute = strata_resample.get(key)
+                                    if compute is None:
+                                        continue
+                                    # User code, once per level. A raise here
+                                    # costs this level's metric, never the run:
+                                    # every execution is already spent, and the
+                                    # whole-table call above is contained the
+                                    # same way for the same reason.
+                                    try:
+                                        level_value = compute(level_table)
+                                    except Exception as exc:
+                                        code = getattr(exc, "code", None)
+                                        prefix = f"{code} " if code else ""
+                                        aggregate_c.warn(
+                                            "W-STATS-AGGREGATE-FAILED",
+                                            aggregate_where,
+                                            f"condition {cond.index} step "
+                                            f"{step_name!r} metric {key!r}, "
+                                            f"stratum {attribute}={level}: "
+                                            f"{prefix}{type(exc).__name__}: {exc}",
+                                        )
+                                        continue
+                                    # Omitted rather than carried over from the
+                                    # parent: no value for this level is honest,
+                                    # the parent's value here would not be.
+                                    if level_value is not None:
+                                        level_derived[key] = level_value
+                            # The run's own resample seed, not one derived per
+                            # level: a level resamples from its own key set,
+                            # which is already what makes the draw its own.
+                            level_summary = summarize_step(
+                                level_collapsed,
+                                level_counts,
+                                derived=level_derived or None,
+                                seed=resample_seed_value,
+                                resample=strata_resample,
+                                draws=derived_metric_draws,
+                            )
+                            # At least one entry has to come from the level's own
+                            # table. A block holding nothing but derived metrics
+                            # over a table whose every column was non-numeric is
+                            # the empty case again, wearing a value.
+                            if set(level_summary) - set(level_derived or {}):
+                                levels_block[level] = level_summary
+                        if levels_block:
+                            by_block[attribute] = levels_block
+                    # `by` is reserved (`stats.RESERVED_METRIC_NAMES`). A derived
+                    # metric of that name is refused in `summarize_step`; a
+                    # RECORDED column of that name cannot be, because the retry
+                    # that contains such a refusal passes the same `collapsed`
+                    # and would re-raise uncontained, after the run has spent
+                    # every execution. So it is handled here, and the column
+                    # wins: it is a real measurement over the units, while the
+                    # strata are a re-presentation of numbers already in the
+                    # record.
+                    #
+                    # The disclosure follows the COLUMN, not the strata block:
+                    # `_comparison_step_blocks` drops `by` from every
+                    # comparison's metric set unconditionally, so a column of
+                    # that name loses its `vs_baseline` delta and its seat in
+                    # the correction family whether or not `report_by` was
+                    # declared. Gating on `by_block` would leave the case where
+                    # nothing was stratified — the case where the author has no
+                    # other hint that the name is reserved — entirely silent.
+                    # `aggregate_where`, not `statistics.report_by`: the fault
+                    # is the recorded column, and there may be no `report_by`
+                    # key in the file to point at.
+                    if "by" in step_summary:
+                        aggregate_c.warn(
+                            "W-STATS-STRATUM-SHADOWED",
+                            aggregate_where,
+                            f"condition {cond.index} step {step_name!r}: 'by' is a "
+                            "reserved metric name — it holds the key the reporting "
+                            "strata are attached under — so the recorded column of "
+                            "that name keeps its value but gets no contrast delta, "
+                            "and no strata are reported for this step",
+                        )
+                    # Absent, not empty, the rule `vs_baseline` and `contrasts`
+                    # already follow: a `by: {}` would claim a stratification
+                    # was performed and found nothing.
+                    elif by_block:
+                        aggregated[cond.index][step_name]["by"] = by_block
             vs_baseline, vs_baseline_members = _compute_vs_baseline(
                 doc=doc,
                 conditions=conditions,

@@ -2114,8 +2114,10 @@ aggregated:
     r: {value: 0.607, basis: units, n: {resolved: 240, completed: 228, failed: 12}, ci95: [...]}
     by:
       sex:
-        f: {value: 0.591, basis: units, n: {resolved: 120, completed: 114, failed: 6}, ci95: [...]}
-        m: {value: 0.622, basis: units, n: {resolved: 120, completed: 114, failed: 6}, ci95: [...]}
+        f:
+          r: {value: 0.591, basis: units, n: {resolved: 120, completed: 114, failed: 6}, ci95: [...]}
+        m:
+          r: {value: 0.622, basis: units, n: {resolved: 120, completed: 114, failed: 6}, ci95: [...]}
 ```
 
 **Two attributes are two marginal splits, not their cross.** `report_by: [sex, site]` adds a `by.sex` block and a `by.site` block, each over the whole table; it does not produce a `f × site_03` cell. A cross *is* a set of design cells, which is what a [`groups` axis](#expansion-modes) expresses when you want to execute over it and what a [`within` contrast](#contrasts-claims-that-arent-condition-vs-baseline) expresses when you want to test one — and the cells of five reporting attributes are exactly the cartesian product this section exists to avoid. Strata also repeat `aggregated` metrics only, never `vs_baseline` or a contrast's delta — a per-stratum delta would have to join the correction family, which is what a `within` contrast is for.

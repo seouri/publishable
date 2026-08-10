@@ -68,13 +68,17 @@ def run_a_project(
     `monkeypatch` fixture, and undone before this function returns.
 
     `unit_attributes` names columns to declare under `data.units.attributes`.
-    The roster file always carries a `cohort` column (alternating `a`/`b`), so
-    a caller wanting a `within` stratum passes `unit_attributes=["cohort"]` —
-    `validate` refuses a `within` naming an attribute the config never declared
-    (`E-STATS-CONTRAST-WITHIN`), and unit resolution refuses one the table
-    doesn't have (`E-UNITS-ATTR-MISSING`), so both halves have to be present.
-    The column is written unconditionally because an undeclared column is
-    simply never read.
+    The roster file always carries a `cohort` column (alternating `a`/`b`) and
+    an `arm` column (`x`/`y`, in pairs so its membership genuinely differs from
+    `cohort`'s rather than being the same split under a second name — two
+    perfectly correlated attributes would make a `report_by: [cohort, arm]`
+    test pass on byte-identical blocks), so a caller wanting a `within` stratum
+    passes `unit_attributes=["cohort"]` — `validate` refuses a `within` naming
+    an attribute the config never declared (`E-STATS-CONTRAST-WITHIN`), and
+    unit resolution refuses one the table doesn't have
+    (`E-UNITS-ATTR-MISSING`), so both halves have to be present. Both columns
+    are written unconditionally because an undeclared column is simply never
+    read.
     """
     tmp_path.mkdir(parents=True, exist_ok=True)
     root = tmp_path / "proj"
@@ -87,8 +91,10 @@ def run_a_project(
     # caller-set override — a thin-pairing test wants a roster small enough that
     # `n_paired` trips `limits.min_reported_n` without inflating every other
     # caller's fixture to match.
-    patients = "\n".join(f"p{i},{'ab'[i % 2]}" for i in range(1, units + 1))
-    (data / "index.csv").write_text(f"patient_id,cohort\n{patients}\n")
+    patients = "\n".join(
+        f"p{i},{'ab'[i % 2]},{'xy'[(i // 2) % 2]}" for i in range(1, units + 1)
+    )
+    (data / "index.csv").write_text(f"patient_id,cohort,arm\n{patients}\n")
     assert main(["new", str(root)]) == EXIT_OK
     with pytest.MonkeyPatch.context() as mp:
         if aggregate_returns is not None:
@@ -2009,3 +2015,661 @@ def test_a_derived_metric_is_corrected_off_its_own_draw_pool(tmp_path, capsys, m
         assert entry["ci95_corrected"][0] < entry["ci95"][0]
         assert entry["ci95_corrected"][1] > entry["ci95"][1]
     assert "W-STATS-CORRECTED-THIN" not in doc["stdout"]
+
+
+def test_a_reporting_stratum_repeats_the_metric_over_its_own_units(
+    tmp_path, capsys, monkeypatch
+):
+    """`reference.md` § Reporting strata: core "repeats the aggregation it already
+    performs, over the subsets of the per-unit table each level picks out". Each
+    level's `n` and `ci95` are its own — computed over that level's units, not
+    the condition's. A stratum whose numbers equal the parent's is the defect
+    this test exists to catch."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
+        statistics={"report_by": ["cohort"]},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    step_block = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    by = step_block["by"]["cohort"]
+    assert set(by) == {"a", "b"}
+    for level in ("a", "b"):
+        entry = by[level]["pred"]
+        assert entry["basis"] == "units"
+        assert entry["n"]["completed"] == 20
+        # `completed` is computed per column from the table handed to
+        # `summarize_step`, but `resolved` comes from the `counts` beside it —
+        # so this is the assertion that catches a level's rows reported against
+        # the condition's denominator, the S4b Critical's exact shape.
+        assert entry["n"]["resolved"] == 20
+        assert entry["ci95"] is not None
+        # `repeat_spread` is the parent block's, not a stratum's: the documented
+        # example carries value, basis, n and ci95 and nothing else, and `cli`
+        # attaches spread outside `summarize_step`.
+        assert "repeat_spread" not in entry
+    # The parent block is unchanged and covers every unit.
+    assert step_block["pred"]["n"]["completed"] == 40
+    # Each level's interval is its own, not a copy of the parent's.
+    assert by["a"]["pred"]["ci95"] != step_block["pred"]["ci95"]
+
+
+def test_two_attributes_are_two_marginal_splits_not_their_cross(
+    tmp_path, capsys, monkeypatch
+):
+    """`reference.md` § Reporting strata: "`report_by: [sex, site]` adds a `by.sex`
+    block and a `by.site` block, each over the whole table; it does not produce a
+    `f × site_03` cell." The cartesian product is the thing that section exists to
+    avoid — five reporting attributes would be a cell explosion of subgroups
+    nobody asked for."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort", "arm"],
+        statistics={"report_by": ["cohort", "arm"]},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    by = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["by"]
+    assert set(by) == {"cohort", "arm"}
+    assert set(by["cohort"]) == {"a", "b"}
+    # Each marginal covers the whole table, so the two levels sum to every unit.
+    assert sum(by["cohort"][lv]["pred"]["n"]["completed"] for lv in by["cohort"]) == 40
+    # No cell of the cross exists anywhere.
+    assert "a__x" not in by["cohort"]
+    assert not any(isinstance(v, dict) and "arm" in v for v in by["cohort"].values())
+
+
+def test_a_run_without_report_by_has_no_by_block(tmp_path, capsys, monkeypatch):
+    """Absent, not empty — the rule `vs_baseline` and `contrasts` already follow.
+    An empty `by: {}` would claim a stratification was performed and found
+    nothing."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+    doc = run_a_project(tmp_path, capsys=capsys, units=40)
+    text = (doc["run_dir"] / "run.yaml").read_text()
+    # A word boundary, not a bare `"by:" not in text`: the echoed config always
+    # carries `cluster_by:` and `weight_by:`, so the bare substring is present in
+    # every run.yaml ever written and would fail here for a reason that has
+    # nothing to do with strata — and, worse, could not distinguish an
+    # unconditional `by: {}` from its absence.
+    assert re.search(r"\bby:", text) is None
+
+
+def test_strata_do_not_join_the_correction_family(tmp_path, capsys, monkeypatch):
+    """`reference.md` § Reporting strata: "Strata don't join the correction
+    family, because a stratum is a description rather than a comparison a reader
+    acts on." If they did, adding `report_by` would enlarge the family, shrink α,
+    and silently tighten every real comparison in the run."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+    sweep = {
+        "baseline": {"analysis.method": "pearson"},
+        "grid": {"analysis.method": ["spearman"]},
+    }
+    without = run_a_project(tmp_path / "a", capsys=capsys, units=40, sweep=sweep)
+    with_strata = run_a_project(
+        tmp_path / "b",
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
+        sweep=sweep,
+        statistics={"report_by": ["cohort"]},
+    )
+    sizes = []
+    for doc in (without, with_strata):
+        run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+        entry = _first_contrast(run, "method=spearman")
+        sizes.append((entry["family_size"], entry["family"]))
+    assert sizes[0] == sizes[1]
+
+
+# --- Fix round 1: the derived path, empty levels, and the reserved `by` key ---
+
+_SKIP_ONE_COHORT_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        # Every unit of cohort `a` is ineligible, so that level completes
+        # nothing at all while `b` completes normally. `io.skip` is the
+        # declaration; the unit lands in `ineligible`, not in attrition.
+        for i, unit in enumerate(io.units):
+            if unit.attributes.get("cohort") == "a":
+                io.skip(unit.key, "outside the eligibility window")
+            else:
+                io.record(unit.key, {{"pred": float(i)}})
+        return {{"n_units": len(io.units)}}
+"""
+
+
+_RECORDS_A_BY_COLUMN_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        for i, unit in enumerate(io.units):
+            io.record(unit.key, {{"pred": float(i), "by": float(i) * 2.0}})
+        return {{"n_units": len(io.units)}}
+"""
+
+
+def test_a_stratum_recomputes_a_derived_metric_over_its_own_units(
+    tmp_path, capsys, monkeypatch
+):
+    """`summarize_step` never recomputes a derived metric — it writes `value`
+    straight through from the mapping it is handed, and takes only the interval
+    and `n.completed` from the table beside it. So a stratum handed the parent's
+    `derived` would publish the whole sample's point estimate against the level's
+    own `n` and `ci95`: the S4b Critical's shape one layer in. `reference.md` §
+    Reporting strata shows three different values (0.607 / 0.591 / 0.622) for
+    exactly this reason."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        aggregate_returns="r",
+        unit_attributes=["cohort"],
+        statistics={"report_by": ["cohort"]},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    step_block = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    by = step_block["by"]["cohort"]
+    # `pred` is `float(i)` over units in roster order, and `cohort` alternates,
+    # so `a` holds the odd indices and `b` the even ones: 20, 19, and 19.5 over
+    # the whole table. Three different numbers, none of them the parent's.
+    assert step_block["r"]["value"] == pytest.approx(19.5)
+    assert by["a"]["r"]["value"] == pytest.approx(20.0)
+    assert by["b"]["r"]["value"] == pytest.approx(19.0)
+    assert by["a"]["r"]["value"] != by["b"]["r"]["value"]
+    for level in ("a", "b"):
+        entry = by[level]["r"]
+        assert entry["basis"] == "units"
+        assert entry["n"]["completed"] == 20
+        assert entry["n"]["resolved"] == 20
+        # The interval is resampled over the level's own table, through the same
+        # closure that recomputed the value.
+        assert entry["ci95"] is not None
+        assert entry["ci95"][0] <= entry["value"] <= entry["ci95"][1]
+        assert entry["resample_draws"] == 2000
+
+
+def test_a_level_that_completed_nothing_gets_no_block(tmp_path, capsys, monkeypatch):
+    """A block whose metrics rest on no rows carries nothing
+    `W-STATS-STRATUM-THIN` does not already say, so an empty level is absent
+    rather than present-and-empty — the same absent-not-empty rule the `by` block
+    itself follows. It also keeps `aggregate` from being called on an empty
+    table, which raises for most templates."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _SKIP_ONE_COHORT_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
+        statistics={"report_by": ["cohort"]},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    step_block = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert set(step_block["by"]["cohort"]) == {"b"}
+    assert step_block["by"]["cohort"]["b"]["pred"]["n"]["completed"] == 20
+
+
+def test_levels_are_reported_in_sorted_order(tmp_path, capsys, monkeypatch):
+    """`levels_for` returns a plain dict in roster first-seen order, and
+    `run.yaml` is dumped with `sort_keys=False` — so level order in the
+    published record is whatever the level loop iterates. Sorting it is what
+    makes two runs over the same roster produce byte-comparable records.
+
+    The fixture discriminates because `run_a_project` writes `'ab'[i % 2]` with
+    `i` starting at 1: `p1` is cohort `b`, so first-seen order is `b, a` — the
+    reverse of alphabetical. A roster whose first unit were cohort `a` would
+    pass this test with the sort removed."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
+        statistics={"report_by": ["cohort"]},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    step_block = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert list(step_block["by"]["cohort"]) == ["a", "b"]
+
+
+def test_a_derived_metric_named_by_is_refused_not_silently_overwritten(
+    tmp_path, capsys, monkeypatch
+):
+    """`by` is reserved: it holds the reporting strata, beside the metric names
+    in the same mapping, and every consumer of a step block reads its keys as
+    metric names. A derived key of that name is `E-STEP-KEY-COLLISION`, caught by
+    the retry that already contains that fault — the run survives, the whole
+    `derived` mapping is dropped, and the strata are still reported."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        aggregate_returns="by",
+        unit_attributes=["cohort"],
+        statistics={"report_by": ["cohort"]},
+    )
+    assert "W-STATS-AGGREGATE-FAILED" in doc["stdout"]
+    assert "E-STEP-KEY-COLLISION" in doc["stdout"]
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    step_block = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    # `by` holds the strata, not a metric: the recorded column survived, the
+    # derived metric did not, and no `value` was written under the reserved key.
+    assert set(step_block["by"]) == {"cohort"}
+    assert "value" not in step_block["by"]
+    assert step_block["pred"]["n"]["completed"] == 40
+
+
+def test_a_recorded_column_named_by_keeps_its_metric_and_warns(
+    tmp_path, capsys, monkeypatch
+):
+    """The other half of the reserved key, and it cannot be refused where the
+    derived half is: the retry that contains `E-STEP-KEY-COLLISION` passes the
+    same collapsed table, so raising for a recorded column would re-raise
+    uncontained after the run has spent every execution. The column wins — it is
+    a real measurement over the units, while the strata re-present numbers
+    already in the record — and the run says so."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _RECORDS_A_BY_COLUMN_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
+        statistics={"report_by": ["cohort"]},
+    )
+    assert "W-STATS-STRATUM-SHADOWED" in doc["stdout"]
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    step_block = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    # The metric, not the strata: it carries a value and an interval of its own.
+    assert step_block["by"]["basis"] == "units"
+    assert step_block["by"]["value"] == pytest.approx(39.0)
+    assert "cohort" not in step_block["by"]
+
+
+def test_a_recorded_by_column_warns_even_with_no_report_by_declared(
+    tmp_path, capsys, monkeypatch
+):
+    """The disclosure follows the column, not the strata block. `by` is dropped
+    from every comparison's metric set unconditionally
+    (`_comparison_step_blocks`), so a recorded column of that name loses its
+    `vs_baseline` delta whether or not `report_by` was declared — and the
+    undeclared case is the one where the author has no other hint that the name
+    is reserved. Gating the warning on a non-empty `by` block left it silent
+    exactly there."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _RECORDS_A_BY_COLUMN_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+    )
+    assert "W-STATS-STRATUM-SHADOWED" in doc["stdout"]
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    step_block = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    # The column is a real measurement and keeps its own number, warning or not.
+    assert step_block["by"]["value"] == pytest.approx(39.0)
+    # And the consequence the warning now names: no delta, no seat in the family.
+    compared = next(
+        c for c in run["results"]["conditions"] if c.get("label") == "method=spearman"
+    )
+    metrics = sorted(
+        name
+        for step_block in compared["vs_baseline"].values()
+        for name in step_block
+    )
+    assert metrics == ["pred"]
+    assert _first_contrast(run, "method=spearman")["family_size"] == 1
+
+
+# --- Task 6: `W-STATS-STRATUM-THIN` at run time --------------------------------
+
+_SKIP_MOST_OF_COHORT_A_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        # Cohort `a` all but disappears through `io.skip`, so its level is thin
+        # only AFTER the run — the case a roster-time count cannot predict.
+        kept = 0
+        for unit in io.units:
+            if unit.attributes["cohort"] == "a" and kept >= 3:
+                io.skip(unit.key, "outside the eligibility window")
+                continue
+            if unit.attributes["cohort"] == "a":
+                kept += 1
+            io.record(unit.key, {{"pred": float(len(unit.key))}})
+        return {{"n_units": len(io.units)}}
+"""
+
+
+def test_a_stratum_thinned_by_attrition_warns_at_run_time(tmp_path, capsys, monkeypatch):
+    """The gap validate cannot see. `W-STATS-REPORTBY-THIN` counts *resolved*
+    units from the roster; attrition happens during the run, so a level that
+    looked fine can complete on a handful. `reference.md` § What study add
+    redacts is explicit that a per-subgroup result over a handful of units is
+    exactly what no automatic rule can judge safe — so it is disclosed where it
+    is first knowable."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _SKIP_MOST_OF_COHORT_A_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
+        limits={"min_reported_n": 10},
+        statistics={"report_by": ["cohort"]},
+    )
+    assert "W-STATS-STRATUM-THIN" in doc["stdout"]
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    by = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["by"]
+    # The thin level still gets a block: that the subgroup produced almost
+    # nothing IS the finding, and dropping it would hide what the warning names.
+    assert by["cohort"]["a"]["pred"]["n"]["completed"] < 10
+
+
+def test_a_stratum_thinned_to_zero_warns_and_gets_no_block(tmp_path, capsys, monkeypatch):
+    """Pins the placement itself, not just the identifier. The warning sits
+    ahead of both skip-gates precisely so the most disclosive case — a level
+    that completed nothing — still warns even though it earns no block (the
+    fix-round-1 amendment above this section). Moving the check to after gate 1
+    leaves every other test in the suite green, because none of them asserts
+    both halves together: the warning firing over a numeric `min_reported_n`
+    (not the bool-guard case, which is pinned separately), and the level's
+    block being genuinely absent from `run.yaml`, at once."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _SKIP_ONE_COHORT_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
+        limits={"min_reported_n": 10},
+        statistics={"report_by": ["cohort"]},
+    )
+    assert "W-STATS-STRATUM-THIN" in doc["stdout"]
+    assert "level `a` of `cohort`" in doc["stdout"]
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    by = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["by"]
+    # No block for the vanished level: a block with no rows says nothing the
+    # warning does not, and the amendment above already rules that out.
+    assert set(by["cohort"]) == {"b"}
+
+
+def test_a_thick_stratum_does_not_warn_stratum_thin(tmp_path, capsys, monkeypatch):
+    """The negative case beside the attrition test: every level completes well
+    above the floor, so nothing should fire. This is what an "always warn"
+    mutation of the floor comparison is caught by."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
+        limits={"min_reported_n": 10},
+        statistics={"report_by": ["cohort"]},
+    )
+    assert "W-STATS-STRATUM-THIN" not in doc["stdout"]
+
+
+def test_min_reported_n_true_over_an_empty_level_does_not_warn(tmp_path, capsys, monkeypatch):
+    """Task 4's reasoning for dropping the `isinstance`/`bool` guard does not
+    transfer here. `strata.levels_for` never emits a zero-count level, so at
+    validate time a floor of `1` (`True`) is unreachable — `len(keys) < 1` never
+    holds. But a level's *completed* count genuinely can be `0` at run time
+    (every unit in the level failed or was skipped), so `min_reported_n: true`
+    giving a floor of `1` would make `0 < 1` fire without the guard. Cohort `a`
+    is skipped entirely here, so its level completes nothing — the guard must
+    keep that from warning."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _SKIP_ONE_COHORT_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
+        limits={"min_reported_n": True},
+        statistics={"report_by": ["cohort"]},
+    )
+    assert "W-STATS-STRATUM-THIN" not in doc["stdout"]
+
+
+def test_aggregate_failing_for_one_level_only_still_warns_and_reports_the_other(
+    tmp_path, capsys, monkeypatch
+):
+    """The per-level `try` around user `aggregate` code, exercised rather than
+    merely present. `aggregate` raises for exactly one level's table (keyed off
+    `len(units)`, distinguishing cohort `a`'s 3 completed units from cohort
+    `b`'s 20 and the whole table's 23): the run survives, the warning names
+    that stratum, the failing level omits the derived metric rather than
+    inheriting the parent's value, and the other level still reports its own."""
+    import publishable.generators.experiment as experiment_gen
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    def aggregate_that_fails_for_one_level(self, units, cfg):
+        if len(units) == 3:
+            raise RuntimeError("boom for the thin level only")
+        return {"r": sum(units.pred) / len(units)}
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _SKIP_MOST_OF_COHORT_A_STEP)
+    monkeypatch.setattr(GenericTemplate, "aggregate", aggregate_that_fails_for_one_level)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
+        statistics={"report_by": ["cohort"]},
+    )
+    assert "W-STATS-AGGREGATE-FAILED" in doc["stdout"]
+    assert "stratum cohort=a" in doc["stdout"]
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    by = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["by"]
+    # The failing level still has a block (its recorded column survived) but no
+    # derived metric — it does not inherit the parent's or the sibling's value.
+    assert "r" not in by["cohort"]["a"]
+    assert by["cohort"]["a"]["pred"]["n"]["completed"] == 3
+    # The sibling level's own metric survives untouched. Cohort `b` is the odd
+    # patient indices (`'ab'[i % 2]` puts `i=1` at `'b'`), all 20 recorded.
+    assert by["cohort"]["b"]["r"]["value"] == pytest.approx(
+        sum(float(len(f"p{i}")) for i in range(1, 41) if i % 2 == 1) / 20
+    )
+
+
+def test_an_empty_level_produces_no_spurious_aggregate_failed(tmp_path, capsys, monkeypatch):
+    """Empty-level gate 1 (`if not level_collapsed: continue`) is not pinned by
+    any other test: the existing empty-level test passes no `aggregate_returns`,
+    so the second gate (no metric produced) covers it just as well. With a
+    derived metric in play, gate 1 does real work — without it, `aggregate` is
+    called on an empty table, which raises for this template, and every empty
+    level would spuriously warn `W-STATS-AGGREGATE-FAILED`."""
+    import publishable.generators.experiment as experiment_gen
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _SKIP_ONE_COHORT_STEP)
+    monkeypatch.setattr(
+        GenericTemplate,
+        "aggregate",
+        lambda self, units, cfg: {"r": sum(units.pred) / len(units)},
+    )
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
+        statistics={"report_by": ["cohort"]},
+    )
+    assert "W-STATS-AGGREGATE-FAILED" not in doc["stdout"]
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    by = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["by"]
+    assert set(by["cohort"]) == {"b"}
+
+
+# --- Task 7: acceptance — the three properties § Reporting strata claims -------
+
+
+def test_a_derived_metric_is_stratified_with_its_own_resample(
+    tmp_path, capsys, monkeypatch
+):
+    """A derived metric has no per-unit value, so its stratum interval is
+    `aggregate` recomputed on that level's resampled table — the same
+    construction the parent block uses, over fewer rows. A stratum reusing the
+    parent's interval, or reporting none, both look plausible in the record.
+
+    `pred` is `float(i)` in roster order and `cohort` alternates, so the three
+    means are 19.5 over the whole table, 20.0 over `a` and 19.0 over `b` — the
+    exact numbers `test_a_stratum_recomputes_a_derived_metric_over_its_own_units`
+    pins; here they are only the reason the inequalities below are meaningful.
+    """
+    import publishable.generators.experiment as experiment_gen
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    monkeypatch.setattr(
+        GenericTemplate,
+        "aggregate",
+        lambda self, units, cfg: {"score": sum(units.pred) / len(units)},
+    )
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
+        statistics={"report_by": ["cohort"]},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    step_block = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    parent = step_block["score"]
+    level = step_block["by"]["cohort"]["a"]["score"]
+    assert level["basis"] == "units"
+    assert level["ci95"] is not None
+    assert level["ci95"] != parent["ci95"]
+    assert level["value"] != parent["value"]
+
+
+def test_a_stratum_carries_no_corrected_fields(tmp_path, capsys, monkeypatch):
+    """Strata are not comparisons, so nothing in a `by` block is corrected — and
+    the four correction fields must be absent rather than null, the same
+    distinction `correction: none` observes.
+
+    Four, not five: `correction: null` is a field `summarize_step` writes on
+    *every* metric block, parent and stratum alike, and it predates the
+    correction family — it says "no multiplicity correction applies to this
+    number," which is exactly what a stratum means. The four asserted here are
+    the ones `corrected_for` attaches, and only to comparisons."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+        statistics={"report_by": ["cohort"]},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    for condition in run["results"]["conditions"]:
+        by_block = condition["aggregated"]["step01_summarize_units"]["by"]["cohort"]
+        assert by_block
+        for level in by_block.values():
+            for entry in level.values():
+                assert isinstance(entry, dict)
+                assert {
+                    "ci95_corrected",
+                    "correction_level",
+                    "family_size",
+                    "family",
+                }.isdisjoint(entry)
+
+
+def test_report_by_adds_no_executions(tmp_path, capsys, monkeypatch):
+    """`reference.md` § Reporting strata's first property: "No executions are
+    added — the run is unchanged and the split happens over a table that already
+    exists." The ledger is the ground truth for what ran.
+
+    Both sides sweep, so `results` is a 15-entry list rather than the single
+    condition a default run produces — the ledger keys on condition and repeat
+    only, so a one-condition comparison would say much less.
+
+    The two sides differ in `statistics.report_by` and nothing else. In
+    particular both declare `data.units.attributes`: that block is inside the
+    [design digest](#what-auto-derives-from) — `design_digest` covers
+    `data.units` and `sweep.groups` — so declaring an attribute on one side
+    only redraws every `auto` seed and the two ledgers would differ by their
+    repeat labels, for a reason that has nothing to do with strata."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+    sweep = {
+        "baseline": {"analysis.method": "pearson"},
+        "grid": {"analysis.method": ["spearman", "kendall"]},
+    }
+    without = run_a_project(
+        tmp_path / "a",
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
+        sweep=sweep,
+    )
+    with_strata = run_a_project(
+        tmp_path / "b",
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
+        sweep=sweep,
+        statistics={"report_by": ["cohort"]},
+    )
+    # 3 conditions × 5 seed repeats, the generated config's default replication.
+    assert len(without["results"]) == 15
+    assert len(without["results"]) == len(with_strata["results"])
+    assert without["results"] == with_strata["results"]

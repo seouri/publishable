@@ -23,6 +23,14 @@ if TYPE_CHECKING:
     from publishable.replication import RepeatLevel
     from publishable.runner import ExecutionResult
 
+#: Keys a step block holds that are not metrics, and so may not be metric names.
+#: `by` carries the reporting strata (`reference.md` § Reporting strata): a
+#: mapping of attribute to level to another metric block, sitting beside the
+#: metric names in the same mapping. A derived metric of that name would be
+#: overwritten by the strata — or, worse, would be differenced as a contrast
+#: metric, since every consumer of a step block reads its keys as metric names.
+RESERVED_METRIC_NAMES = frozenset({"by"})
+
 
 @dataclass(frozen=True)
 class Interval:
@@ -736,6 +744,21 @@ def summarize_step(
             "correction": None,
         }
     if derived:
+        # A derived key may not take a name the step block already spends on
+        # something that is not a metric. Refused here, beside the recorded-column
+        # collision and with the same identifier, because it is the same fault:
+        # one name cannot hold both a metric and the block's strata. The recorded
+        # -column half of this cannot be refused here — the caller's retry passes
+        # the same `collapsed` and would re-raise uncontained — so `cli.py` warns
+        # for that one instead.
+        reserved = set(derived) & RESERVED_METRIC_NAMES
+        if reserved:
+            name = sorted(reserved)[0]
+            raise ContractError(
+                f"{name!r} is reserved for a step block's reporting strata and may "
+                "not be a derived metric name",
+                code="E-STEP-KEY-COLLISION",
+            )
         collision = set(derived) & set(columns)
         if collision:
             name = sorted(collision)[0]

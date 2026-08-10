@@ -1058,10 +1058,13 @@ def test_a_declared_null_test_is_refused(write_config):
     )
 
 
-def test_declared_report_by_is_refused(write_config):
-    assert "E-STATS-REPORTBY-UNSUPPORTED" in codes(
-        write_config({"statistics": {"report_by": ["sex"]}})
-    )
+def test_declared_report_by_is_checked_rather_than_refused(write_config):
+    """S4d retires the blanket refusal and checks the declaration for real: with
+    no `data.units.attributes` declared at all, `sex` is not among them, so this
+    is now `E-STATS-REPORTBY-UNKNOWN` rather than the retired `-UNSUPPORTED`."""
+    found = codes(write_config({"statistics": {"report_by": ["sex"]}}))
+    assert "E-STATS-REPORTBY-UNSUPPORTED" not in found
+    assert "E-STATS-REPORTBY-UNKNOWN" in found
 
 
 def test_a_declared_hypothesis_is_refused(write_config):
@@ -1899,3 +1902,110 @@ def test_an_out_of_enum_correction_string_is_refused(write_config):
         write_config({"sweep": _TWO_CONDITIONS, "statistics": {"correction": "bonferonni"}})
     )
     assert "E-STATS-CORRECTION-UNKNOWN" in found
+
+
+_UNITS_WITH_SEX = {"from": "index.csv", "key": "patient_id", "attributes": ["sex"]}
+
+
+def test_a_declared_report_by_is_no_longer_refused(write_config):
+    """S4d implements it, so the blanket refusal retires with the slice — the
+    same way `E-STATS-CONTRASTS-UNSUPPORTED` retired with S4b."""
+    found = codes(
+        write_config(
+            {"data.units": _UNITS_WITH_SEX, "statistics": {"report_by": ["sex"]}}
+        )
+    )
+    assert "E-STATS-REPORTBY-UNSUPPORTED" not in found
+    assert "E-STATS-REPORTBY-UNKNOWN" not in found
+
+
+def test_a_report_by_attribute_must_be_declared(write_config):
+    """`reference.md` § Reporting strata: "validate rejects a `report_by`
+    attribute that isn't declared in `data.units.attributes`". Left unchecked,
+    `strata.levels_for` returns `{}` for a typo, which is indistinguishable from
+    an attribute no unit happens to carry — the record would simply hold no `by`
+    block and never say why."""
+    found = codes(
+        write_config(
+            {"data.units": _UNITS_WITH_SEX, "statistics": {"report_by": ["sexx"]}}
+        )
+    )
+    assert "E-STATS-REPORTBY-UNKNOWN" in found
+
+
+def test_a_non_list_report_by_is_refused_without_raising(write_config):
+    """`validate.py` collects findings and never raises. `report_by` is a nested
+    config value that new code reads, and this slice's predecessor shipped two
+    crashes of exactly that kind — a scalar `statistics.contrasts` reaching
+    `_check_sweep`, and an unhashable contrast `id` reaching a set."""
+    for block in (5, True, "sex", {"sex": 1}):
+        found = codes(
+            write_config(
+                {"data.units": _UNITS_WITH_SEX, "statistics": {"report_by": block}}
+            )
+        )
+        assert "E-CONFIG-SHAPE" in found
+
+
+def test_a_non_string_report_by_entry_is_refused(write_config):
+    """A list is well-shaped but its *entries* may not be. An unhashable entry
+    would reach a set membership test against `data.units.attributes`."""
+    found = codes(
+        write_config(
+            {"data.units": _UNITS_WITH_SEX, "statistics": {"report_by": [["sex"]]}}
+        )
+    )
+    assert "E-STATS-REPORTBY-UNKNOWN" in found
+
+
+def test_a_thin_report_by_level_warns_before_the_run(write_config, tmp_path):
+    """`reference.md` § Reporting strata: validate "warns when a level would hold
+    fewer units than `limits.min_reported_n` — before the run rather than at
+    disclosure." Counting is over *resolved* units, which is all validate can
+    see; the realized count after attrition is `W-STATS-STRATUM-THIN`'s job at
+    run time (Task 6)."""
+    data = tmp_path / "data"
+    data.mkdir()
+    rows = "\n".join(f"p{i},{'f' if i <= 2 else 'm'}" for i in range(1, 13))
+    (data / "index.csv").write_text(f"patient_id,sex\n{rows}\n")
+    path = write_config(
+        {
+            "data.units": _UNITS_WITH_SEX,
+            "data.input_dir": str(data),
+            "limits": {"min_reported_n": 10},
+            "statistics": {"report_by": ["sex"]},
+        }
+    )
+    found = codes(path)
+    assert "W-STATS-REPORTBY-THIN" in found
+    message = messages_by_code(path)["W-STATS-REPORTBY-THIN"]
+    assert "`f`" in message and "2 of 12" in message
+    assert "`m`" not in message  # `m` holds 10, exactly at the floor — not below it
+
+
+def test_two_thin_report_by_levels_are_diagnosed_in_a_stable_order(write_config, tmp_path):
+    """Two levels below the floor must diagnose in level-sorted order, not roster
+    order or set/dict iteration order. The roster here meets `m` before `f` —
+    `m` is every one of the first three rows, `f` only the next two — so removing
+    the `sorted(...)` in `_check_report_by` would surface `m` first: a mismatch
+    this test catches deterministically, independent of `PYTHONHASHSEED`."""
+    data = tmp_path / "data"
+    data.mkdir()
+    levels = ["m"] * 3 + ["f"] * 2 + ["x"] * 7
+    rows = "\n".join(f"p{i},{levels[i - 1]}" for i in range(1, 13))
+    (data / "index.csv").write_text(f"patient_id,sex\n{rows}\n")
+    path = write_config(
+        {
+            "data.units": _UNITS_WITH_SEX,
+            "data.input_dir": str(data),
+            "limits": {"min_reported_n": 5},
+            "statistics": {"report_by": ["sex"]},
+        }
+    )
+    c = Collector()
+    validate_config(path, c)
+    thin = [f.message for f in c.findings if f.code == "W-STATS-REPORTBY-THIN"]
+    assert thin == [
+        "level `f` of `sex` would hold 2 of 12 units, below limits.min_reported_n (5)",
+        "level `m` of `sex` would hold 3 of 12 units, below limits.min_reported_n (5)",
+    ]
