@@ -23,7 +23,8 @@ class Member:
     evidence as the raw one — the stored draws for a derived metric, the stored
     per-unit differences for a recorded column. Exactly one of them is set.
     Neither may reach `run.yaml`: they are tuples so a member cannot be mutated
-    into the record by accident.
+    into the record by accident. `pool` must already be sorted ascending —
+    `interval_at` reads fixed ranks off it and does not sort.
     """
 
     where: str
@@ -34,6 +35,34 @@ class Member:
     ci95: tuple[float, float] | None
     pool: tuple[float, ...] | None
     diffs: tuple[float, ...] | None
+
+    def __post_init__(self) -> None:
+        """Exactly one of `pool`/`diffs` is set whenever there is a `ci95` to
+        correct — never both, never neither. A member with no interval at all
+        (`ci95=None`, excluded by `family_members` before either field is ever
+        read) is exempt: it carries neither.
+
+        This is `cli.py`'s bookkeeping error to make, not a plugin author's
+        declaration to violate, so it raises plain `ValueError` rather than
+        `ContractError`: the latter is reserved for something a user's code
+        asked for or handed back that its own declarations don't allow, and
+        nothing here comes from outside core.
+
+        Both set would let `_corrected_bounds` silently take the `diffs`
+        branch and build a *t* interval as the corrected counterpart of a
+        *percentile* raw one — narrower or wider than the truth by construction,
+        not by evidence, which is the exact failure this slice exists to
+        prevent. Neither set would make `_corrected_bounds` return `None` for
+        a reason that has nothing to do with the pool being too small, so
+        `thin: True` would fire over a member that was never thin.
+        """
+        if self.ci95 is None:
+            return
+        if (self.pool is None) == (self.diffs is None):
+            raise ValueError(
+                "Member requires exactly one of pool/diffs, not "
+                f"{'both' if self.pool is not None else 'neither'}"
+            )
 
 
 def family_members(entries: Sequence[Member]) -> list[Member]:
@@ -146,7 +175,7 @@ def corrected_fields(
     `W-STATS-CORRECTED-THIN`, and drops it. It travels here because this is
     where the level and the pool size are both known.
     """
-    family = family_members(members)
+    family = list({(m.where, m.step, m.metric): m for m in family_members(members)}.values())
     if method == "none" or not family:
         return {}
     family_size, shape = family_shape(family)

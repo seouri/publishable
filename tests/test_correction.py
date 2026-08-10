@@ -31,6 +31,28 @@ def test_alpha_is_five_percent_and_not_configurable():
     assert ALPHA == 0.05
 
 
+def test_a_member_with_an_interval_rejects_both_pool_and_diffs():
+    """Both set would let `_corrected_bounds` silently take the `diffs`
+    branch and build a *t* interval as the corrected counterpart of a
+    *percentile* raw one — wrong by construction, not by evidence."""
+    with pytest.raises(ValueError, match="both"):
+        Member(
+            where="1", condition_index=1, step="s", metric="r", delta=0.1,
+            ci95=(0.0, 0.2), pool=(0.1, 0.2, 0.3), diffs=(0.1, 0.2, 0.3),
+        )
+
+
+def test_a_member_with_an_interval_rejects_neither_pool_nor_diffs():
+    """Neither set would make `_corrected_bounds` return `None` for a reason
+    that has nothing to do with the pool being too small, so `thin: True`
+    would fire over a member that was never thin."""
+    with pytest.raises(ValueError, match="neither"):
+        Member(
+            where="1", condition_index=1, step="s", metric="r", delta=0.1,
+            ci95=(0.0, 0.2), pool=None, diffs=None,
+        )
+
+
 def test_a_member_with_no_interval_is_not_in_the_family():
     """Counted-iff-corrected: a metric reported without an interval is not a
     comparison a reader can read as significant, so it neither takes a slot nor
@@ -193,9 +215,13 @@ def test_holm_corrects_the_weakest_member_by_nothing():
     spearman is rank 2 of 2, so `correction_level: 0.05` and its corrected
     interval *is* its raw one. That is Holm working, not a correction that
     failed, and it is the property that makes Holm more powerful than
-    Bonferroni."""
+    Bonferroni.
+
+    Passed in as `[weak, strong]` — reversed from ranked order — so a
+    `rank_family` call replaced by `enumerate` over the input as given cannot
+    pass by accident; the correct implementation must actually re-rank."""
     strong, weak_member = _two_member_family()
-    got = corrected_fields([strong, weak_member], "holm")
+    got = corrected_fields([weak_member, strong], "holm")
     weak = got[("1", "step03_analyze", "r")]
     assert weak["correction_level"] == pytest.approx(0.05)
     assert weak["ci95_corrected"] == pytest.approx(list(weak_member.ci95))
@@ -225,6 +251,7 @@ def test_bonferroni_gives_every_member_the_same_level():
         entry = got[(member.where, member.step, member.metric)]
         low, high = entry["ci95_corrected"]
         assert low < member.ci95[0] and high > member.ci95[1]
+        assert entry["correction"] == "bonferroni"
 
 
 def test_fdr_bh_records_no_interval_and_no_level():
@@ -232,12 +259,18 @@ def test_fdr_bh_records_no_interval_and_no_level():
     the kind — controlling a false discovery *rate* is a statement about a set,
     not a bound on any one comparison — so core reports the adjusted p-value and
     leaves `ci95_corrected` null". No p-value exists in this build, so there is
-    no `p_value_corrected` either."""
+    no `p_value_corrected` either.
+
+    `thin` must be `False` here even though `bounds` is always `None` under
+    `fdr_bh` — there is no `level` to have been too tight for the pool, so
+    reporting thin would blame the evidence for a method that never asked for
+    an interval in the first place."""
     strong, weak = _two_member_family()
     got = corrected_fields([strong, weak], "fdr_bh")
     for entry in got.values():
         assert entry["ci95_corrected"] is None
         assert entry["correction_level"] is None
+        assert entry["thin"] is False
         assert "p_value_corrected" not in entry
 
 
