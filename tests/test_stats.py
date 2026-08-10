@@ -8,11 +8,13 @@ from publishable.stats import (
     Interval,
     UnitTable,
     _percentile_ranks,
+    cohens_dz,
     collapse_repeats,
     handed_to,
     mean_of,
     min_honest_draws,
     paired_keys,
+    paired_t_over_units,
     percentile_of_derived,
     percentile_over_units,
     repeat_spread,
@@ -905,6 +907,37 @@ def test_confidence_widens_the_interval():
     wide = t_over_units([1.0, 2.0, 3.0, 4.0], confidence=0.99)
     assert narrow is not None and wide is not None
     assert (wide.high - wide.low) > (narrow.high - narrow.low)
+
+
+def test_the_interval_is_students_t_on_the_differences():
+    diffs = [1.0, 2.0, 3.0, 4.0]
+    got = paired_t_over_units(diffs)
+    plain = t_over_units(diffs)
+    assert got is not None and plain is not None
+    assert got.low == plain.low and got.high == plain.high
+
+
+def test_it_names_its_own_method():
+    iv = paired_t_over_units([1.0, 2.0, 3.0])
+    assert iv is not None and iv.method == "paired_t_over_units"
+
+
+def test_one_difference_has_no_interval():
+    assert paired_t_over_units([1.0]) is None
+
+
+def test_cohens_dz_is_the_mean_over_the_standard_deviation():
+    """Hand-computed: mean 2.5, sample sd of [1,2,3,4] is 1.2909944, so dz = 1.9365."""
+    assert cohens_dz([1.0, 2.0, 3.0, 4.0]) == pytest.approx(1.93649167, rel=1e-6)
+
+
+def test_cohens_dz_is_none_below_two_differences():
+    assert cohens_dz([1.0]) is None
+
+
+def test_cohens_dz_is_none_when_every_difference_is_identical():
+    """Zero dispersion would divide by zero; no `d` is honest, infinity is not."""
+    assert cohens_dz([2.0, 2.0, 2.0]) is None
 
 
 def test_iteration_yields_one_row_per_unit():

@@ -52,6 +52,34 @@ def t_over_units(values: Sequence[float], confidence: float = 0.95) -> Interval 
     return Interval(low=mean - half, high=mean + half, method="t_over_units")
 
 
+def paired_t_over_units(diffs: Sequence[float], confidence: float = 0.95) -> Interval | None:
+    """Student's t on the per-unit differences, df = n_paired − 1.
+
+    The contrast's interval is its own construction, never a difference of the
+    two sides' intervals — differencing discards the covariance that pairing
+    exists to exploit, which is why a paired interval is narrower than the two
+    conditions' own (reference.md § How a metric becomes a number).
+    """
+    plain = t_over_units(diffs, confidence)
+    if plain is None:
+        return None
+    return Interval(low=plain.low, high=plain.high, method="paired_t_over_units")
+
+
+def cohens_dz(diffs: Sequence[float]) -> float | None:
+    """The mean of the per-unit differences over their standard deviation.
+
+    Reported only for a per-unit mean: a derived metric has no per-unit value to
+    difference, which is why the worked example carries `cohens_d: null` for `r`.
+    """
+    if len(diffs) < 2:
+        return None
+    mean = sum(diffs) / len(diffs)
+    variance = sum((d - mean) ** 2 for d in diffs) / (len(diffs) - 1)
+    sd = math.sqrt(variance)
+    return mean / sd if sd > 0 else None
+
+
 def resample_seed(digest: str) -> int:
     """From the design digest, never `parameters_hash`.
 
