@@ -327,6 +327,12 @@ def command_run(config_path: Path) -> int:
             # one as having a recording step it never ran.
             template = get_template(doc.get("experiment_type", ""))
             resample_seed_value = resample_seed(digest)
+            # `statistics.resample` isn't honored yet (`E-STATS-RESAMPLE-UNSUPPORTED`
+            # refuses a declared one), so this is the one place the default
+            # `reference.md` § How a metric becomes a number documents — bootstrap
+            # at 2000 — is a real, passed value rather than `summarize_step`'s own
+            # default taking effect unseen at every call site that forgets it.
+            derived_metric_draws = 2000
             aggregate_where = f"{doc.get('experiment_type', '')}.aggregate"
             # `aggregate` is user code in exactly the sense `runner.py`'s own
             # step execution is — "a failed execution never stops the run" —
@@ -421,7 +427,33 @@ def command_run(config_path: Path) -> int:
                         derived=derived,
                         seed=resample_seed_value,
                         resample=resample_fns,
+                        draws=derived_metric_draws,
                     )
+                    # `resample_draws: 0` (as opposed to `null`, meaning
+                    # resampling was never attempted) is `summarize_step`'s
+                    # signal that a callable was supplied and every single
+                    # draw was degenerate — `nan`, `None`, or a raise, which
+                    # `percentile_of_derived` treats alike. That is the same
+                    # class of event `W-STATS-AGGREGATE-FAILED` already
+                    # covers above (user code could not produce a number), so
+                    # it reuses the identifier rather than minting a second
+                    # one; the two cannot both fire for one metric, because a
+                    # failure in the call above already left `derived` (and
+                    # so this key) absent from `step_summary` entirely. The
+                    # unit-identity fix makes this more likely, not less: a
+                    # bootstrap draw duplicates units by construction, and a
+                    # template whose `aggregate` assumes distinct ones will
+                    # raise on every draw rather than some.
+                    for metric_key, metric in step_summary.items():
+                        if metric.get("resample_draws") == 0:
+                            aggregate_c.warn(
+                                "W-STATS-AGGREGATE-FAILED",
+                                aggregate_where,
+                                f"condition {cond.index} step {step_name!r} metric "
+                                f"{metric_key!r}: every resample draw failed to "
+                                "produce a value; reporting the point value with "
+                                "no interval",
+                            )
                     # One dispersion figure per repeat level, outer to inner
                     # (`reference.md` § A `batch` says *when*, not *what*), computed
                     # per RECORDED column — pooling `pred` and `truth` into one mean
@@ -451,8 +483,12 @@ def command_run(config_path: Path) -> int:
                 # is not the same fact as a run that did not happen, so `status`
                 # (set above from the executions themselves, all of which already
                 # completed by the time `aggregate` runs) is deliberately left
-                # alone — printed the same way `E-INPUT-CHANGED` is, as a finding
-                # beside the run rather than a verdict on it.
+                # alone — unlike `E-INPUT-CHANGED` below, which does set
+                # `status = "failed"` for a different reason (the data a
+                # completed run rested on is no longer what it read). This is
+                # printed to stdout only: `run.yaml` has no diagnostics channel
+                # to carry a finding that isn't a metric, an interval, or a
+                # status.
                 print(aggregate_c.render())
         changed_inputs = verify_manifest(input_dir, manifest)  # phase 8: re-verify
         if changed_inputs:

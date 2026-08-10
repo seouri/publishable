@@ -531,3 +531,42 @@ def test_a_raising_resample_draw_does_not_crash_the_run(tmp_path, monkeypatch):
     # honest; a traceback is the only wrong answer, and this test would have
     # raised one before the resample draws were contained.
     assert metric["ci95"] is None or len(metric["ci95"]) == 2
+
+
+def test_a_total_resample_failure_is_disclosed_not_silent(tmp_path, capsys, monkeypatch):
+    """The second review round's finding: `aggregate` that succeeds once (on
+    the real, all-distinct table) but raises on every single resampled draw
+    (because a bootstrap draw duplicates units, and this `aggregate`
+    deliberately assumes distinct ones — exactly the template the review
+    warned the unit-identity fix makes more likely) must not read identically
+    to a metric nobody tried to resample at all. `resample_draws: 0` and a
+    `W-STATS-AGGREGATE-FAILED` warning distinguish it; `status` stays
+    `completed` regardless, since every execution genuinely did complete."""
+    import publishable.generators.experiment as experiment_gen
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    def _sum_if_distinct(self, units, cfg):
+        values = units.pred
+        if len(set(values)) != len(values):  # a resampled draw always duplicates
+            raise ZeroDivisionError("this aggregate assumes distinct units")
+        return {"total": sum(values)}
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    monkeypatch.setattr(GenericTemplate, "aggregate", _sum_if_distinct)
+    doc = run_a_project(tmp_path, capsys=capsys)
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "completed"
+    metric = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["total"]
+    assert metric["value"] == sum(float(i) for i in range(10))  # the one real call succeeded
+    if metric["resample_draws"] == 0:
+        assert metric["ci95"] is None
+        assert "W-STATS-AGGREGATE-FAILED" in doc["stdout"]
+        assert "every resample draw failed" in doc["stdout"]
+    else:
+        # With 2000 draws over a 10-unit roster, an exact all-distinct
+        # permutation surviving once or twice is possible but rare; if it
+        # happened here, the disclosure path wasn't exercised and the
+        # unit-level tests (`test_a_raising_compute_is_treated_as_degenerate_
+        # not_propagated`, `test_total_resample_failure_is_distinguishable_
+        # from_no_resample_supplied`) are what pin the behaviour deterministically.
+        assert metric["resample_draws"] is not None

@@ -572,8 +572,8 @@ def test_a_correlation_like_derived_metrics_interval_reflects_its_own_scatter():
     assert ra is not None and rb is not None
     assert abs(ra - rb) < 0.01  # nearly the same point estimate
 
-    interval_a = percentile_of_derived(collapsed_a, compute_r, seed=7, draws=500)
-    interval_b = percentile_of_derived(collapsed_b, compute_r, seed=7, draws=500)
+    interval_a, _ = percentile_of_derived(collapsed_a, compute_r, seed=7, draws=500)
+    interval_b, _ = percentile_of_derived(collapsed_b, compute_r, seed=7, draws=500)
     assert interval_a is not None and interval_b is not None
     width_a = interval_a.high - interval_a.low
     width_b = interval_b.high - interval_b.low
@@ -593,9 +593,12 @@ def test_a_resampled_draw_reports_the_real_unit_key_not_a_synthetic_index():
     """A bootstrap draw repeats units by construction — the whole point of
     resampling with replacement — so a template that legitimately reads
     `units.unit` (a per-unit lookup keyed by it, say) must see the real,
-    possibly-repeated keys, not `0..n-1`. Forcing every draw to contain only
-    unit `u0` twice and nothing else is what makes a synthetic re-key and a
-    real one produce different, checkable answers."""
+    possibly-repeated keys, not `0..n-1`. A synthetic `0..n-1` re-key would
+    make every draw's keys distinct by construction, so at least one draw
+    (out of five, with two real units to draw from) showing the *same* key
+    twice is what a real re-key produces and a synthetic one never could —
+    which is what this pins, rather than only checking the keys are drawn
+    from the real roster."""
     collapsed = {"u0": {"x": 1.0}, "u1": {"x": 2.0}}
     seen: list[tuple[str, ...]] = []
 
@@ -607,7 +610,38 @@ def test_a_resampled_draw_reports_the_real_unit_key_not_a_synthetic_index():
     assert seen  # `compute` ran at least once
     for keys in seen:
         assert set(keys) <= {"u0", "u1"}
-        assert len(keys) == 2  # one row per unit in the roster, duplicates included
+        assert len(keys) == 2  # one row per unit in the roster, per draw
+    # The repetition the fix exists to produce, pinned directly: with seed 7
+    # at least one of the five draws repeats a key rather than drawing both
+    # distinct units.
+    assert any(len(set(keys)) < len(keys) for keys in seen)
+
+
+def test_total_resample_failure_is_distinguishable_from_no_resample_supplied():
+    """Task 6's second review round's finding: `ci95: null` alone cannot tell
+    "nobody supplied a `resample` callable" apart from "one was supplied and
+    every draw raised or returned `nan`" — both produced a `run.yaml` with no
+    interval and no draw count. `resample_draws` closes that: `null` for the
+    first, `0` for the second, never the same value for both."""
+    collapsed = {f"u{i}": {"pred": float(i)} for i in range(10)}
+
+    def always_fails(units: UnitTable) -> float | None:
+        raise ZeroDivisionError("every draw is degenerate")
+
+    not_attempted = summarize_step(collapsed, {"completed": 10}, derived={"total": 45.0}, seed=7)
+    attempted_and_failed = summarize_step(
+        collapsed,
+        {"completed": 10},
+        derived={"total": 45.0},
+        seed=7,
+        resample={"total": always_fails},
+    )
+    assert not_attempted["total"]["resample_draws"] is None
+    assert attempted_and_failed["total"]["resample_draws"] == 0
+    # Both are honest about carrying no interval — the distinction is in the
+    # draw count, not in `ci95` alone.
+    assert not_attempted["total"]["ci95"] is None
+    assert attempted_and_failed["total"]["ci95"] is None
 
 
 def test_draws_is_reachable_through_summarize_step():
@@ -662,8 +696,9 @@ def test_a_raising_compute_is_treated_as_degenerate_not_propagated():
     def always_raises(units: UnitTable) -> float | None:
         raise ZeroDivisionError("degenerate draw")
 
-    interval = percentile_of_derived(collapsed, always_raises, seed=7, draws=20)
+    interval, draws_used = percentile_of_derived(collapsed, always_raises, seed=7, draws=20)
     assert interval is None  # every draw was dropped, not propagated
+    assert draws_used == 0  # attempted and failed, not "never attempted" — see below
 
 
 def test_a_derived_key_colliding_with_a_dropped_non_numeric_column_is_refused():

@@ -29,13 +29,6 @@ class Interval:
     low: float
     high: float
     method: str
-    # `None` for every construction over raw values — the pool is exactly
-    # `draws` (or the input length), so the count adds nothing there. Set for
-    # `percentile_of_derived` alone: a resampled table can make `compute`
-    # degenerate on some draws (see its docstring), so the interval can rest
-    # on fewer draws than were requested, and that has to be visible next to
-    # the number rather than read off silently as a clean 2000-draw interval.
-    draws_used: int | None = None
 
 
 def mean_of(values: Sequence[float]) -> float | None:
@@ -116,8 +109,9 @@ def percentile_of_derived(
     seed: int,
     draws: int = 2000,
     confidence: float = 0.95,
-) -> Interval | None:
-    """A percentile interval for a derived metric, by recomputing it.
+) -> tuple[Interval | None, int]:
+    """A percentile interval for a derived metric, by recomputing it, and the
+    number of draws it actually rests on.
 
     A derived metric has no per-unit value to resample directly — `aggregate`
     returned one number for the whole table, not one per unit — so this is
@@ -163,16 +157,21 @@ def percentile_of_derived(
 
     Counting `None`/`nan`/raise as skipped can only shrink the surviving count
     relative to `draws`, so the percentile ranks are read off *that* count,
-    and the interval records it as `draws_used` — an interval quietly built
-    from 200 of 2000 requested draws would otherwise read identically to a
-    clean one. Below two surviving draws there is nothing to take percentiles
-    of — the same refusal `t_over_units` and `percentile_over_units` make
-    below two units — so the interval is `None` rather than one built from too
-    few draws to mean anything.
+    and the second return value is that surviving count — **always**, even
+    when the interval is `None`. That is what lets `summarize_step` tell "the
+    resample was attempted and every draw was degenerate" (a surviving count
+    of 0 or 1) apart from "resampling was never attempted at all" (no count
+    to report), which otherwise reach `run.yaml` byte-identical: both would
+    write `ci95: null` and nothing else. An interval quietly built from 200 of
+    2000 requested draws would read identically to a clean one for the same
+    reason, which is why the count is returned even on success. Below two
+    surviving draws there is nothing to take percentiles of — the same
+    refusal `t_over_units` and `percentile_over_units` make below two units —
+    so the interval is `None`, but the count returned alongside it is real.
     """
     keys = sorted(collapsed)
     if len(keys) < 2:
-        return None
+        return None, 0
     rng = random.Random(seed)
     n = len(keys)
     values: list[float] = []
@@ -187,11 +186,12 @@ def percentile_of_derived(
             continue
         values.append(float(value))
     if len(values) < 2:
-        return None
+        return None, len(values)
     values.sort()
     lo, hi = _percentile_ranks(len(values), confidence)
-    return Interval(
-        low=values[lo], high=values[hi], method="percentile_over_units", draws_used=len(values)
+    return (
+        Interval(low=values[lo], high=values[hi], method="percentile_over_units"),
+        len(values),
     )
 
 
@@ -467,9 +467,14 @@ def summarize_step(
     than an invented width: reporting a point with no interval is honest.
     Every derived metric is `basis: units`, `method: percentile_over_units`
     when it has one, `cohens_d: null` — Cohen's *d* differences a per-unit
-    value, and a derived metric has none — and `resample_draws`, the number
-    of `draws` (passed through to `percentile_of_derived`, 2000 by default)
-    that actually produced a value; below `draws` when some were degenerate.
+    value, and a derived metric has none — and `resample_draws`: `null` when
+    resampling was never attempted (no callable, or no `seed`), and otherwise
+    the number of `draws` (passed through to `percentile_of_derived`, 2000 by
+    default) that actually produced a value — `0` when every one was
+    degenerate, matching `ci95: null` there too. `null` and `0` are different
+    facts: one says nobody tried to resample this metric, the other says
+    resampling was attempted and failed, and a caller (`cli.py`) that only
+    checked `ci95: null` could not otherwise tell which happened.
 
     A derived key colliding with a recorded column — even one dropped above for
     being non-numeric — is refused with the same `E-STEP-KEY-COLLISION`
@@ -511,25 +516,36 @@ def summarize_step(
             )
         for key, value in derived.items():
             compute = (resample or {}).get(key)
-            interval = (
-                percentile_of_derived(collapsed, compute, seed, draws=draws)
-                if compute is not None and seed is not None
-                else None
-            )
+            # `draws_used` is `None` only when resampling was never attempted
+            # at all (no callable, or no `seed`) — attempted-and-failed
+            # reports `0`, not `None`, which is the distinction Task 6's
+            # review named: without it, "every draw raised" and "nobody
+            # supplied a `resample` callable" write the same `run.yaml`.
+            derived_interval: Interval | None
+            draws_used: int | None
+            if compute is not None and seed is not None:
+                derived_interval, draws_used = percentile_of_derived(
+                    collapsed, compute, seed, draws=draws
+                )
+            else:
+                derived_interval, draws_used = None, None
             out[key] = {
                 "value": value,
                 "basis": "units",
                 "n": {**counts, "completed": len(collapsed)},
-                "ci95": [interval.low, interval.high] if interval else None,
-                "method": interval.method if interval else None,
+                "ci95": (
+                    [derived_interval.low, derived_interval.high] if derived_interval else None
+                ),
+                "method": derived_interval.method if derived_interval else None,
                 "correction": None,
                 "cohens_d": None,
-                # Present only alongside a real interval — disclosing how many
-                # of `draws` requested actually produced a value, since a
-                # degenerate-draw-heavy interval built from 200 survivors reads
-                # identically to a clean 2000-draw one without this (see
-                # `percentile_of_derived`).
-                "resample_draws": interval.draws_used if interval else None,
+                # How many of `draws` requested actually produced a value —
+                # `None` when resampling wasn't attempted, `0` (or `1`) when
+                # it was attempted and every draw was degenerate, and the real
+                # survivor count on success. A degenerate-draw-heavy interval
+                # built from 200 survivors would otherwise read identically to
+                # a clean 2000-draw one (see `percentile_of_derived`).
+                "resample_draws": draws_used,
             }
     return out
 
