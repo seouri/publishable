@@ -1073,7 +1073,18 @@ def _check_contrasts(doc: dict[str, Any], c: Collector) -> None:
         )
         return
 
-    ids = {entry.get("id") for entry in entries if isinstance(entry, dict) and entry.get("id")}
+    # `isinstance(..., str)` before the value enters a `set`, for the reason the
+    # `of`/`against` loop below states: building a `set` hashes every element, so
+    # an `id` holding a mapping or a list (one bad indent under `id:`) raised
+    # `TypeError` out of `validate_config` here, before a single finding was
+    # collected. A non-string `id` is not a name a contrast can be published
+    # under, so dropping it from `ids` routes it to the missing-or-not-a-string
+    # branch below rather than minting an identifier.
+    ids = {
+        entry["id"]
+        for entry in entries
+        if isinstance(entry, dict) and isinstance(entry.get("id"), str) and entry["id"]
+    }
     conditions = expand(doc)
     labels = {cond.label for cond in conditions if cond.label is not None}
     declared_attrs = set(((doc.get("data") or {}).get("units") or {}).get("attributes") or [])
@@ -1088,17 +1099,23 @@ def _check_contrasts(doc: dict[str, Any], c: Collector) -> None:
                 "list of condition labels is not a list of contrasts",
             )
             continue
-        if entry.get("id") in seen_ids:
+        # The second site that hashes `id`: `in seen_ids` raises for an
+        # unhashable value exactly as the `ids` construction above did, so the
+        # `isinstance` guard has to come first here too. A non-string `id` is
+        # never a repeat of anything — it gets the shape error below instead.
+        raw_id = entry.get("id")
+        is_named = isinstance(raw_id, str) and raw_id
+        if is_named and raw_id in seen_ids:
             c.error(
                 "E-STATS-CONTRAST-SHAPE",
                 f"statistics.contrasts[{i}].id",
-                f"repeats `{entry.get('id')}`, which an earlier entry already uses; two "
+                f"repeats `{raw_id}`, which an earlier entry already uses; two "
                 "contrasts under one name are indistinguishable in `results.contrasts` and "
                 "in a hypothesis naming it",
             )
-        elif isinstance(entry.get("id"), str) and entry.get("id"):
+        elif is_named:
             seen_ids.add(entry["id"])
-        if not isinstance(entry.get("id"), str) or not entry.get("id"):
+        if not is_named:
             c.error(
                 "E-STATS-CONTRAST-SHAPE",
                 f"statistics.contrasts[{i}].id",

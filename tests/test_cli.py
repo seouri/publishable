@@ -997,13 +997,23 @@ def test_a_baseline_sweep_reports_a_corrected_interval(tmp_path, capsys, monkeyp
         },
     )
     run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
-    entries = [
-        metric
+    # Keyed by the condition's own label, not collected label-blind: the
+    # *multiset* of levels survives every member ranking wrongly — with every
+    # `Member.delta` zero, say, all members tie and Holm hands α/2 to whichever
+    # comparison has the lower condition index, so the strongest claim in the
+    # run can receive the weakest correction with the multiset unchanged. Which
+    # arm gets which level is the only thing that pins the `cli` → `Member` →
+    # rank path, and the expectation is computed from the record rather than
+    # written down: the evidence ratio is |delta| over half the raw `ci95`
+    # width, and the larger one must carry the tighter level.
+    by_label = {
+        condition["label"]: metric
         for condition in run["results"]["conditions"]
         for step_block in condition.get("vs_baseline", {}).values()
         for metric in step_block.values()
-    ]
-    assert len(entries) == 2
+    }
+    assert set(by_label) == {"method=spearman", "method=kendall"}
+    entries = list(by_label.values())
     for entry in entries:
         assert entry["correction"] == "holm"
         assert entry["family_size"] == 2
@@ -1011,11 +1021,66 @@ def test_a_baseline_sweep_reports_a_corrected_interval(tmp_path, capsys, monkeyp
         assert entry["ci95_corrected"] is not None
     levels = sorted(e["correction_level"] for e in entries)
     assert levels == [pytest.approx(0.025), pytest.approx(0.05)]
-    weakest = next(e for e in entries if e["correction_level"] == pytest.approx(0.05))
+
+    ratios = {
+        label: abs(e["delta"]) / ((e["ci95"][1] - e["ci95"][0]) / 2.0)
+        for label, e in by_label.items()
+    }
+    strong_label, weak_label = sorted(ratios, key=lambda label: -ratios[label])
+    # Not a tie: on a tie the assertions below would pass under any ranking,
+    # which is exactly the vacuity this test exists to close.
+    assert ratios[strong_label] > ratios[weak_label]
+    strongest = by_label[strong_label]
+    weakest = by_label[weak_label]
+    assert strongest["correction_level"] == pytest.approx(0.025)
+    assert weakest["correction_level"] == pytest.approx(0.05)
     assert weakest["ci95_corrected"] == pytest.approx(weakest["ci95"])
-    strongest = next(e for e in entries if e["correction_level"] == pytest.approx(0.025))
     assert strongest["ci95_corrected"][0] < strongest["ci95"][0]
     assert strongest["ci95_corrected"][1] > strongest["ci95"][1]
+
+
+def test_each_member_carries_the_condition_index_of_its_own_comparison():
+    """`Member.condition_index` is read in exactly one place — `rank_family`'s
+    tie-break — so hardcoding it to `0` in `cli` changes nothing until two
+    members tie, and then it silently reorders them and hands out the wrong
+    levels. No end-to-end record carries the index, so the assignment is pinned
+    where it is made: `_comparison_step_blocks` called directly with a
+    comparison whose `of` is deliberately not `0`, the same
+    called-directly treatment `_check_contrasts`'s kept guard gets in
+    `tests/test_validate.py`."""
+    from publishable.cli import _comparison_step_blocks
+    from publishable.contrasts import Comparison
+    from publishable.diagnostics import Collector
+    from publishable.sweep import Condition
+    from publishable.units import Unit, UnitList
+
+    roster = UnitList([Unit(key=f"u{i}") for i in range(12)])
+    of_collapsed = {f"u{i}": {"r": 1.0 + 0.1 * (i % 3)} for i in range(12)}
+    against_collapsed = {f"u{i}": {"r": 0.5} for i in range(12)}
+    block, members = _comparison_step_blocks(
+        Comparison(id="c", of=2, against=0),
+        roster=roster,
+        aggregated={2: {"s": {"r": 1.1}}, 0: {"s": {"r": 0.5}}},
+        collapsed_by_key={(2, "s"): of_collapsed, (0, "s"): against_collapsed},
+        derived_by_key={},
+        resample_fns_by_key={},
+        seed=7,
+        draws=200,
+        min_reported_n=None,
+        findings=Collector(),
+        where="condition 2",
+        where_id="cond:2",
+        conditions_by_index={
+            0: Condition(index=0, label="baseline", is_baseline=True),
+            2: Condition(index=2, label="method=kendall", values={"analysis.method": "kendall"}),
+        },
+    )
+    assert block["s"]["r"]["ci95"] is not None
+    assert [(m.where, m.condition_index, m.step, m.metric) for m in members] == [
+        ("cond:2", 2, "s", "r")
+    ]
+    assert members[0].delta == pytest.approx(block["s"]["r"]["delta"])
+    assert members[0].delta != 0.0
 
 
 @pytest.mark.parametrize("method", ["none", "bonferroni", "holm", "fdr_bh"])

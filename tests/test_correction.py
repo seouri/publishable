@@ -254,6 +254,30 @@ def test_bonferroni_gives_every_member_the_same_level():
         assert entry["correction"] == "bonferroni"
 
 
+def test_the_level_divides_by_the_family_product_not_the_member_count():
+    """`family_size` is `comparisons × metrics`, and it is the *m* both Holm and
+    Bonferroni divide α by — not `len(family)`, which on a non-square family is
+    smaller. `rmse` is recorded in comparison "1" and absent from comparison
+    "2", so 3 members span a family of 2 × 2 = 4: the level is 0.05/4, and
+    correcting at 0.05/3 instead would publish every interval in the run
+    narrower than the evidence supports, beside a `family_size: 4` saying the
+    opposite. The design spec records the same warning in prose ("Recorded here
+    so a future reader does not 'fix' it into the member count"); this is what
+    stops them."""
+    members = [
+        _from_diffs("1", 1, mean=-0.169, spread=0.02, metric="r"),
+        _from_diffs("1", 1, mean=-0.150, spread=0.02, metric="rmse"),
+        _from_diffs("2", 2, mean=0.026, spread=0.30, metric="r"),
+    ]
+    got = corrected_fields(members, "bonferroni")
+    assert len(got) == 3
+    for entry in got.values():
+        assert entry["family_size"] == 4  # not 3
+        assert entry["family"] == {"comparisons": 2, "metrics": 2}
+        assert entry["correction_level"] == pytest.approx(0.05 / 4)  # not 0.05 / 3
+        assert entry["correction_level"] != pytest.approx(0.05 / 3)
+
+
 def test_fdr_bh_records_no_interval_and_no_level():
     """`reference.md`: Benjamini-Hochberg "has no interval that means anything of
     the kind — controlling a false discovery *rate* is a statement about a set,
@@ -315,7 +339,7 @@ def test_a_derived_member_is_corrected_off_its_own_pool():
 
 
 def test_a_pool_too_small_for_the_level_reports_no_interval_and_says_so():
-    """A family of 40 implies α/40, whose honest-draw floor is 3200 against a
+    """A family of 40 implies α/40, whose honest-draw floor is 3201 against a
     2000-draw pool. `ci95_corrected` is null while `correction_level` still
     records what was asked for, and `thin` is what the caller turns into
     `W-STATS-CORRECTED-THIN` — a silent null here would read as "no correction

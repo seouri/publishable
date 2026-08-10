@@ -1153,7 +1153,7 @@ def test_interval_at_reads_a_wider_pair_of_ranks_at_a_smaller_alpha():
 def test_interval_at_refuses_a_pool_too_small_for_the_level():
     """`min_honest_draws` is the floor below which both percentile ranks are not
     interior and the interval is systematically too narrow. At α/40 the floor is
-    3200 draws, so a 2000-draw pool has no honest interval at that level — and a
+    3201 draws, so a 2000-draw pool has no honest interval at that level — and a
     number would be worse than a null."""
     pool = [float(i) for i in range(2000)]
     assert min_honest_draws(1.0 - 0.00125) > 2000

@@ -1694,6 +1694,32 @@ def test_an_unhashable_side_inside_a_well_shaped_contrast_is_refused_not_a_crash
     assert "E-STATS-CONTRAST-UNKNOWN" in found
 
 
+@pytest.mark.parametrize("bad_id", [{"name": "sensitivity"}, ["sensitivity"]])
+def test_an_unhashable_contrast_id_is_refused_not_a_crash(write_config, bad_id):
+    """The sibling of the `of`/`against` fix above, at the two sites that read
+    `id`: the `ids` **set construction** that collects every entry's `id` before
+    the loop, and the `in seen_ids` repeat check inside it. Both hash whatever
+    `id` holds, so a mapping (one bad indent under `id:`) or a list raised
+    `TypeError: unhashable type` out of `validate_config` before any finding was
+    collected — and because `run` validates first, `run` got the traceback too.
+    `validate.py` collects findings and never raises, so a non-string `id` has
+    to come back as the diagnostic the missing/non-string branch already gives
+    it, through `validate_config` end to end."""
+    found = codes(
+        write_config(
+            {
+                "sweep": _TWO_CONDITIONS,
+                "statistics": {
+                    "contrasts": [
+                        {"id": bad_id, "of": "method=spearman", "against": "baseline"}
+                    ]
+                },
+            }
+        )
+    )
+    assert "E-STATS-CONTRAST-SHAPE" in found
+
+
 def test_a_contrast_entry_that_is_not_a_mapping_is_refused(write_config):
     """A list of condition labels where a list of contrast entries belongs.
     `resolve_contrasts` reads `entry["of"]` off whatever this holds, so before
