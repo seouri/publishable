@@ -636,25 +636,32 @@ def test_a_seed_declaring_k_is_refused_the_same_way(write_config):
 
 
 def test_a_multi_condition_sweep_warns_about_the_uncorrected_family(write_config):
-    """A grid-only sweep declares no baseline and publishes no comparison, so this
-    needs a `baseline` for `resolve_contrasts` to build a real family from, and
-    `correction: none` for `W-STATS-FAMILY` to fire under its new condition."""
+    """A grid-only sweep with no `sweep.baseline` publishes no baseline
+    comparison, so the retired formula `max(len(conditions) - 1, 0) + declared`
+    and the current `len(resolve_contrasts(doc, conditions))` disagree here: two
+    grid conditions and one declared contrast between them give the old formula
+    `(2 - 1) + 1 = 2` and the new one exactly `1` (the declared contrast alone —
+    there is no baseline to compare against). A fixture where both formulas
+    agree — such as one with a real `sweep.baseline` — would pass even if the
+    recount reverted to the retired formula, which is what made the previous
+    version of this test lose its discriminating power."""
     c = Collector()
     validate_config(
         write_config(
             {
-                "sweep": {
-                    "baseline": {"analysis.method": "pearson"},
-                    "grid": {"analysis.method": ["spearman", "kendall"]},
+                "sweep": {"grid": {"analysis.method": ["spearman", "kendall"]}},
+                "statistics": {
+                    "correction": "none",
+                    "contrasts": [
+                        {"id": "x", "of": "method=spearman", "against": "method=kendall"}
+                    ],
                 },
-                "statistics": {"correction": "none"},
             }
         ),
         c,
     )
     warning = next(f for f in c.findings if f.code == "W-STATS-FAMILY")
-    assert "2" in warning.message
-    assert "correction" in warning.message.lower()
+    assert "1 comparisons per metric form a family" in warning.message
 
 
 def test_a_single_condition_run_has_no_family(write_config):
@@ -1804,3 +1811,17 @@ def test_a_non_string_correction_is_refused_without_raising(write_config):
     for value in (5, True, ["holm"], {"method": "holm"}):
         found = codes(write_config({"sweep": _TWO_CONDITIONS, "statistics": {"correction": value}}))
         assert "E-STATS-CORRECTION-UNKNOWN" in found
+
+
+def test_an_out_of_enum_correction_string_is_refused(write_config):
+    """`bonferonni` is a plausible typo of `bonferroni`. Left unchecked it
+    collects zero findings, and `corrected_for` downstream returns
+    `ci95_corrected: null`, `correction: "bonferonni"`, `correction_level: null`,
+    `thin: false` — a correction recorded as applied while none was, and `thin:
+    false` suppresses the one signal that would otherwise flag it. `reference.md`
+    § The one config file enumerates `none | bonferroni | holm | fdr_bh` and
+    nothing else is a legal value."""
+    found = codes(
+        write_config({"sweep": _TWO_CONDITIONS, "statistics": {"correction": "bonferonni"}})
+    )
+    assert "E-STATS-CORRECTION-UNKNOWN" in found

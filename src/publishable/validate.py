@@ -940,12 +940,25 @@ def _check_sweep(
     # all, and telling its author they have a family of two was a false
     # positive rather than a backstop (`spec-defects.md`).
     correction = (doc.get("statistics") or {}).get("correction")
-    if correction is not None and not isinstance(correction, str):
+    known_corrections = {"none", "bonferroni", "holm", "fdr_bh"}
+    # An out-of-enum *string* is the more likely mistake in practice — a typo
+    # like `bonferonni` — and left unchecked it collects zero findings while
+    # `corrected_for` downstream returns `ci95_corrected: null` with `thin:
+    # false` and `correction: "bonferonni"` recorded on every member: a
+    # correction named as applied while none was, and `thin: false`
+    # suppresses the one signal that would otherwise flag it (`reference.md` §
+    # Statistical reporting). Checking `isinstance` before the set membership
+    # test is deliberate, not stylistic — `in` on a `set` raises `TypeError`
+    # for an unhashable value (a `list` or `dict`), and `and` short-circuits
+    # before that ever runs.
+    if correction is not None and not (
+        isinstance(correction, str) and correction in known_corrections
+    ):
+        shown = f"`{correction}`" if isinstance(correction, str) else type(correction).__name__
         c.error(
             "E-STATS-CORRECTION-UNKNOWN",
             "statistics.correction",
-            f"is {type(correction).__name__}, not one of `none`, `bonferroni`, `holm` or "
-            "`fdr_bh`",
+            f"is {shown}, not one of `none`, `bonferroni`, `holm` or `fdr_bh`",
         )
         correction = None
     # `resolve_contrasts` trusts its caller to have refused an unusable
