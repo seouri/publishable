@@ -34,11 +34,15 @@ def _result(repeat_label, rows, *, step_name="analyze", scope="repeat"):
     )
 
 
-def _repeat_result(step, repeat_label, condition_index, rows_by_unit):
+def _repeat_result(step, repeat_label, condition_index, rows_by_unit, skipped=frozenset()):
     """A repeat-scoped `ExecutionResult` from `{unit_key: {column: value}}`.
 
     The keyed form the fold tests read best in; `_result` above is the positional
     row-list form the earlier tests use. Both build the same object.
+
+    `skipped` is additive and defaulted to `frozenset()` so every existing caller
+    is unaffected: it declares which unit keys `io.skip` marked this execution,
+    independent of `rows_by_unit` (a skipped unit has no row).
     """
     from publishable.runner import ExecutionResult
     from publishable.scope import Execution
@@ -63,7 +67,7 @@ def _repeat_result(step, repeat_label, condition_index, rows_by_unit):
         returned={},
         error=None,
         recorded=frozenset(r["unit"] for r in rows),
-        skipped=frozenset(),
+        skipped=frozenset(skipped),
         rows=rows,
     )
 

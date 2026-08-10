@@ -483,6 +483,34 @@ def test_the_identity_reconciles_under_a_fold():
     assert c["resolved"] == c["completed"] + c["ineligible"] + c["failed"]
 
 
+def test_a_unit_skipped_in_every_repeat_of_its_own_fold_is_ineligible():
+    members = {"fold01": frozenset({"u1", "u2"}), "fold02": frozenset({"u3", "u4"})}
+    results = [
+        _repeat_result("analyze", "fold01", 0, {"u2": {}}, skipped=frozenset({"u1"})),
+        _repeat_result("analyze", "fold02", 0, {"u3": {}, "u4": {}}),
+    ]
+    counts = attrition(results, _roster4(), "analyze", 0, members)
+    assert counts == {"resolved": 4, "completed": 3, "ineligible": 1, "failed": 0}
+    assert counts["resolved"] == counts["completed"] + counts["ineligible"] + counts["failed"]
+
+
+def test_under_fold_times_seed_skipped_in_one_seed_and_recorded_in_the_other_is_failed():
+    """The sharp edge: eligibility must be a consistent answer across every seed of
+    a unit's own fold. Skipped in one seed and recorded in the other is neither a
+    consistent skip (so not `ineligible`) nor a consistent completion (so not
+    `completed`) — it falls through to `failed`, not `ineligible`."""
+    members = {"fold01": frozenset({"u1", "u2"})}
+    results = [
+        _repeat_result("analyze", "fold01_seed01", 0, {"u2": {}}, skipped=frozenset({"u1"})),
+        _repeat_result("analyze", "fold01_seed02", 0, {"u1": {}, "u2": {}}),
+    ]
+    counts = attrition(results, _roster2(), "analyze", 0, members)
+    assert counts["completed"] == 1  # u2, consistently recorded in both of its seeds
+    assert counts["ineligible"] == 0
+    assert counts["failed"] == 1  # u1: skipped in one seed, recorded in the other
+    assert counts["resolved"] == counts["completed"] + counts["ineligible"] + counts["failed"]
+
+
 def test_a_healthy_fold_run_does_not_trip_the_failure_fraction():
     """Before this fix, every unit outside a fold's partition counted as failed on
     that fold's execution, so a clean 10-fold run aborted on execution one."""
