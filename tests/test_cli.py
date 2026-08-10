@@ -383,3 +383,36 @@ def test_a_five_fold_run_end_to_end(tmp_path, capsys):
     n_units = [per_repeat[f"fold{i:02d}"]["n_units"] for i in range(1, 6)]
     assert n_units == [2, 2, 2, 2, 2]
     assert sum(n_units) == 10
+
+
+# --- Task 2 (derived-metrics): the live defect this slice closes ---------------
+
+_NUMPY_RETURN_STEP = '''\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+import numpy as np
+
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        return {{"score": np.float64(1.5)}}    # forces a NumPy scalar into run.yaml
+'''
+
+
+def test_a_numpy_scalar_return_produces_a_run_yaml_that_serializes(tmp_path, monkeypatch):
+    """The ruled-on fix: before `coerce_scalars` was wired into a step's return, a
+    `numpy.float64` reached `yaml.safe_dump` while writing `run.yaml` and raised
+    `RepresenterError` — a bare traceback, not a diagnostic. Confirmed to fail with
+    that traceback before this task's fix landed."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _NUMPY_RETURN_STEP)
+    doc = run_a_project(tmp_path)
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "completed"
+    per_repeat = run["results"]["conditions"][0]["per_repeat"]["step01_summarize_units"]
+    score = next(iter(per_repeat.values()))["score"]
+    assert type(score) is float

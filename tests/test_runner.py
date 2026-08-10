@@ -1,6 +1,7 @@
 import copy
 from pathlib import Path
 
+import numpy as np
 import pytest
 from tests.test_stats import _repeat_result
 
@@ -63,6 +64,13 @@ class ReturnsNone(BaseStep):
 
     def run(self, cfg, io):
         return None
+
+
+class ReturnsNumpyScalar(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        return {"r": np.float64(0.5)}
 
 
 def test_a_composed_repeat_label_is_one_directory_segment(tmp_path):
@@ -258,6 +266,15 @@ def test_a_none_return_still_completes_with_an_empty_mapping_recorded(tmp_path: 
     for result in none_results:
         assert result.status == "completed"
         assert result.returned == {}
+
+
+def test_a_numpy_scalar_return_reaches_the_result_as_a_plain_float(tmp_path: Path):
+    _, results, _ = harness(tmp_path, [ReturnsNumpyScalar])
+    numpy_results = [r for r in results if r.execution.step_name == "returns_numpy_scalar"]
+    assert numpy_results
+    for result in numpy_results:
+        assert result.status == "completed"
+        assert type(result.returned["r"]) is float
 
 
 def test_attrition_reconciles_exactly(tmp_path: Path):

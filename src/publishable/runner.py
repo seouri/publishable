@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import Any
 
 from publishable.artifacts import StepIO
+from publishable.coercion import coerce_scalars
 from publishable.config import Config, SweptAway
 from publishable.errors import ContractError
 from publishable.replication import LABEL_JOIN, Repeat
@@ -426,6 +427,7 @@ def execute_plan(
                     "a step's `run` must return a mapping or None",
                     code="E-STEP-RETURN-TYPE",
                 )
+            returned = coerce_scalars(returned, execution.step_name)
             io.finalize()
             recorded = frozenset(io.recorded_keys)
             skipped = frozenset(io.skipped)
