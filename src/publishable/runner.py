@@ -338,11 +338,29 @@ def execute_plan(
             digest=digest,
             seed=seed,
         )
+        # A fold repeat puts the units out of reach of the wider scopes: there is
+        # no fold at "run" or "condition" scope, since folds are repeats and
+        # repeats haven't happened yet, so a step fitting there would fit on units
+        # later folds test on. `units` (the full roster, from the outer scope)
+        # stays untouched for `attrition`/`_units_failed_anywhere` below — only
+        # this execution's own `step_units` narrows.
+        if fold_members is None or units is None:
+            step_units = units
+        elif execution.scope != "repeat":
+            step_units = None  # no fold exists yet at these scopes
+        else:
+            handed = _handed_keys(
+                execution.repeat_label or "", {u.key for u in units}, fold_members
+            )
+            step_units = UnitList(
+                [u for u in units if u.key in handed],
+                train=UnitList([u for u in units if u.key not in handed]),
+            )
         io = StepIO(
             step_dir=step_dir_for(run_dir, execution, collapse),
             input_dir=input_dir,
             run_dir=run_dir,
-            units=units,
+            units=step_units,
             scope=execution.scope,
             conditions=conditions_list,
             repeats=repeats_list,

@@ -88,7 +88,14 @@ def test_a_collapsed_repeat_still_collapses_with_a_composed_label(tmp_path):
 
 
 def harness(
-    tmp_path: Path, steps, *, units=None, repeats=None, max_failed_fraction=None, conditions=None
+    tmp_path: Path,
+    steps,
+    *,
+    units=None,
+    repeats=None,
+    max_failed_fraction=None,
+    conditions=None,
+    fold_members=None,
 ):
     class P(BaseExperiment):
         pass
@@ -111,6 +118,7 @@ def harness(
         digest="sha256:abc",
         units=units,
         max_failed_fraction=max_failed_fraction,
+        fold_members=fold_members,
     )
     return run_dir, results, repeats
 
@@ -549,6 +557,93 @@ def test_a_label_with_no_fold_component_raises_rather_than_falling_back():
     with pytest.raises(ContractError) as excinfo:
         _handed_keys("seed01", {"u1", "u2", "u3", "u4"}, members)
     assert excinfo.value.code == "E-RUN-FOLD-UNRESOLVED"
+
+
+def test_execute_plan_hands_each_fold_execution_its_own_partition(tmp_path: Path):
+    """A `repeat`-scoped step under a fold sees only its fold as `io.units`, with
+    the complement as `io.units.train` — this is the wiring `_handed_keys` exists
+    for, exercised through `execute_plan` rather than called directly."""
+    roster = UnitList([Unit(key="u1"), Unit(key="u2"), Unit(key="u3"), Unit(key="u4")])
+    members = {"fold01": frozenset({"u1", "u2"}), "fold02": frozenset({"u3", "u4"})}
+
+    class SeeYourFold(BaseStep):
+        scope = "repeat"
+
+        def run(self, cfg, io):
+            return {
+                "test_keys": ",".join(sorted(u.key for u in io.units)),
+                "train_keys": ",".join(sorted(u.key for u in io.units.train)),
+            }
+
+    _, results, _ = harness(
+        tmp_path,
+        [SeeYourFold],
+        units=roster,
+        repeats=[Repeat("fold", "fold01", 0), Repeat("fold", "fold02", 0)],
+        fold_members=members,
+    )
+    by_label = {r.execution.repeat_label: r for r in results}
+    assert by_label["fold01"].returned == {"test_keys": "u1,u2", "train_keys": "u3,u4"}
+    assert by_label["fold02"].returned == {"test_keys": "u3,u4", "train_keys": "u1,u2"}
+
+
+def test_execute_plan_withholds_units_at_condition_and_run_scope_under_a_fold(
+    tmp_path: Path,
+):
+    """There is no fold at `run` or `condition` scope — folds are repeats, and
+    repeats haven't happened yet — so both scopes get `io.units == None`'s raise
+    rather than the whole roster a condition-scoped fit could leak into."""
+    roster = UnitList([Unit(key="u1"), Unit(key="u2"), Unit(key="u3"), Unit(key="u4")])
+    members = {"fold01": frozenset({"u1", "u2"}), "fold02": frozenset({"u3", "u4"})}
+
+    class TouchesUnitsAtRun(BaseStep):
+        scope = "run"
+
+        def run(self, cfg, io):
+            _ = io.units
+            return {}
+
+    class TouchesUnitsAtCondition(BaseStep):
+        scope = "condition"
+
+        def run(self, cfg, io):
+            _ = io.units
+            return {}
+
+    _, results, _ = harness(
+        tmp_path,
+        [TouchesUnitsAtRun, TouchesUnitsAtCondition],
+        units=roster,
+        repeats=[Repeat("fold", "fold01", 0), Repeat("fold", "fold02", 0)],
+        fold_members=members,
+    )
+    statuses = {r.execution.step_name: r.status for r in results}
+    errors = {r.execution.step_name: r.error or "" for r in results}
+    assert statuses["touches_units_at_run"] == "failed"
+    assert statuses["touches_units_at_condition"] == "failed"
+    assert "E-STEP-UNITS-UNAVAILABLE" in errors["touches_units_at_run"]
+    assert "E-STEP-UNITS-UNAVAILABLE" in errors["touches_units_at_condition"]
+
+
+def test_execute_plan_without_a_fold_still_hands_the_whole_roster(tmp_path: Path):
+    """`fold_members=None` must leave the no-fold path byte-for-byte identical:
+    every execution still gets the whole roster, regardless of scope."""
+    roster = UnitList([Unit(key="u1"), Unit(key="u2")])
+
+    class TouchesUnitsAtCondition(BaseStep):
+        scope = "condition"
+
+        def run(self, cfg, io):
+            return {"keys": ",".join(sorted(u.key for u in io.units))}
+
+    _, results, _ = harness(
+        tmp_path,
+        [TouchesUnitsAtCondition],
+        units=roster,
+        repeats=[Repeat("seed", "seed17", 17)],
+    )
+    assert results[0].status == "completed"
+    assert results[0].returned == {"keys": "u1,u2"}
 
 
 def test_a_single_repeat_skip_is_still_ineligible(tmp_path: Path):

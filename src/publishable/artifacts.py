@@ -206,8 +206,11 @@ class StepIO:
     def units(self) -> "UnitList":
         if self._units is None:
             raise ContractError(
-                "`io.units` needs a `data.units` declaration; none is present, and an "
-                "empty list would let a step report results about nothing",
+                "`io.units` has no roster here: either no `data.units` is declared, "
+                "or a `fold` repeat is declared and this execution's scope (`run` or "
+                "`condition`) is wider than where the fold exists — there is no fold "
+                "yet at these scopes, only at `repeat`, which is where a step reading "
+                "`io.units` belongs",
                 code="E-STEP-UNITS-UNAVAILABLE",
             )
         return self._units
