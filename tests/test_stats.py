@@ -2,7 +2,15 @@ import math
 
 import pytest
 
-from publishable.stats import collapse_repeats, handed_to, mean_of, summarize_step, t_over_units
+from publishable.errors import ContractError
+from publishable.stats import (
+    UnitTable,
+    collapse_repeats,
+    handed_to,
+    mean_of,
+    summarize_step,
+    t_over_units,
+)
 
 
 def _result(repeat_label, rows, *, step_name="analyze", scope="repeat"):
@@ -419,3 +427,42 @@ def test_confidence_widens_the_interval():
     wide = t_over_units([1.0, 2.0, 3.0, 4.0], confidence=0.99)
     assert narrow is not None and wide is not None
     assert (wide.high - wide.low) > (narrow.high - narrow.low)
+
+
+def test_iteration_yields_one_row_per_unit():
+    t = UnitTable({"u1": {"pred": 1.0}, "u2": {"pred": 2.0}})
+    assert [r["unit"] for r in t] == ["u1", "u2"]
+    assert [r["pred"] for r in t] == [1.0, 2.0]
+
+
+def test_column_access_returns_values_in_iteration_order():
+    t = UnitTable({"u1": {"pred": 1.0}, "u2": {"pred": 2.0}})
+    assert list(t.pred) == [1.0, 2.0]
+
+
+def test_len_counts_units():
+    assert len(UnitTable({"u1": {"pred": 1.0}, "u2": {"pred": 2.0}})) == 2
+
+
+def test_columns_lists_the_recorded_columns():
+    t = UnitTable({"u1": {"pred": 1.0, "truth": 0.0}})
+    assert sorted(t.columns) == ["pred", "truth"]
+
+
+def test_a_ragged_column_omits_the_missing_unit():
+    """A unit with no value for a column is absent from it, not None — a mean over
+    a column must not be diluted by units that never recorded it."""
+    t = UnitTable({"u1": {"pred": 1.0}, "u2": {}})
+    assert list(t.pred) == [1.0]
+
+
+def test_an_unknown_column_raises():
+    t = UnitTable({"u1": {"pred": 1.0}})
+    with pytest.raises(ContractError) as exc:
+        _ = t.nope
+    assert exc.value.code == "E-STEP-COLUMN-UNKNOWN"
+
+
+def test_iteration_is_repeatable():
+    t = UnitTable({"u1": {"pred": 1.0}})
+    assert [r["unit"] for r in t] == [r["unit"] for r in t]

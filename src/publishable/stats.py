@@ -8,12 +8,13 @@ See docs/reference.md § Statistical reporting.
 """
 
 import math
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from scipy import stats as _scipy_stats
 
+from publishable.errors import ContractError
 from publishable.replication import LABEL_JOIN
 
 if TYPE_CHECKING:
@@ -240,3 +241,47 @@ def summarize_step(
             "correction": None,
         }
     return out
+
+
+class UnitTable:
+    """Row iteration, column access, `len`, `columns` — and nothing else.
+
+    Deliberately not a `DataFrame`: one that also promised indexing, filtering
+    and `.loc` would be one, and core could never change what backs it — a lazily
+    materialized table, a view over a partition — without breaking every plugin.
+    The same reasoning that keeps `io.units` to three operations.
+    """
+
+    def __init__(self, collapsed: dict[str, dict[str, float]]) -> None:
+        self._rows = [{"unit": key, **values} for key, values in collapsed.items()]
+
+    def __iter__(self) -> Iterator[dict[str, Any]]:
+        return iter(self._rows)
+
+    def __len__(self) -> int:
+        return len(self._rows)
+
+    @property
+    def columns(self) -> list[str]:
+        # A property, not something `__getattr__` serves: `__getattr__` runs only
+        # when normal attribute lookup fails, so a real property is the only way
+        # a recorded column literally named `columns` can't shadow it — the same
+        # shadowing question `cfg`'s no-methods rule answers.
+        seen: dict[str, None] = {}
+        for row in self._rows:
+            for key in row:
+                if key != "unit":
+                    seen[key] = None
+        return list(seen)
+
+    def __getattr__(self, name: str) -> list[Any]:
+        if name.startswith("_"):
+            raise AttributeError(name)
+        values = [row[name] for row in self._rows if name in row]
+        if not values:
+            raise ContractError(
+                f"{name!r} is not a column this table holds; it has "
+                f"{', '.join(self.columns) or 'no columns'}",
+                code="E-STEP-COLUMN-UNKNOWN",
+            )
+        return values
