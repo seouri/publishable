@@ -2346,6 +2346,35 @@ def test_a_stratum_thinned_by_attrition_warns_at_run_time(tmp_path, capsys, monk
     assert by["cohort"]["a"]["pred"]["n"]["completed"] < 10
 
 
+def test_a_stratum_thinned_to_zero_warns_and_gets_no_block(tmp_path, capsys, monkeypatch):
+    """Pins the placement itself, not just the identifier. The warning sits
+    ahead of both skip-gates precisely so the most disclosive case — a level
+    that completed nothing — still warns even though it earns no block (the
+    fix-round-1 amendment above this section). Moving the check to after gate 1
+    leaves every other test in the suite green, because none of them asserts
+    both halves together: the warning firing over a numeric `min_reported_n`
+    (not the bool-guard case, which is pinned separately), and the level's
+    block being genuinely absent from `run.yaml`, at once."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _SKIP_ONE_COHORT_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
+        limits={"min_reported_n": 10},
+        statistics={"report_by": ["cohort"]},
+    )
+    assert "W-STATS-STRATUM-THIN" in doc["stdout"]
+    assert "level `a` of `cohort`" in doc["stdout"]
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    by = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["by"]
+    # No block for the vanished level: a block with no rows says nothing the
+    # warning does not, and the amendment above already rules that out.
+    assert set(by["cohort"]) == {"b"}
+
+
 def test_a_thick_stratum_does_not_warn_stratum_thin(tmp_path, capsys, monkeypatch):
     """The negative case beside the attrition test: every level completes well
     above the floor, so nothing should fire. This is what an "always warn"
