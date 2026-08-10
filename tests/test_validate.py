@@ -1981,3 +1981,31 @@ def test_a_thin_report_by_level_warns_before_the_run(write_config, tmp_path):
     message = messages_by_code(path)["W-STATS-REPORTBY-THIN"]
     assert "`f`" in message and "2 of 12" in message
     assert "`m`" not in message  # `m` holds 10, exactly at the floor — not below it
+
+
+def test_two_thin_report_by_levels_are_diagnosed_in_a_stable_order(write_config, tmp_path):
+    """Two levels below the floor must diagnose in level-sorted order, not roster
+    order or set/dict iteration order. The roster here meets `m` before `f` —
+    `m` is every one of the first three rows, `f` only the next two — so removing
+    the `sorted(...)` in `_check_report_by` would surface `m` first: a mismatch
+    this test catches deterministically, independent of `PYTHONHASHSEED`."""
+    data = tmp_path / "data"
+    data.mkdir()
+    levels = ["m"] * 3 + ["f"] * 2 + ["x"] * 7
+    rows = "\n".join(f"p{i},{levels[i - 1]}" for i in range(1, 13))
+    (data / "index.csv").write_text(f"patient_id,sex\n{rows}\n")
+    path = write_config(
+        {
+            "data.units": _UNITS_WITH_SEX,
+            "data.input_dir": str(data),
+            "limits": {"min_reported_n": 5},
+            "statistics": {"report_by": ["sex"]},
+        }
+    )
+    c = Collector()
+    validate_config(path, c)
+    thin = [f.message for f in c.findings if f.code == "W-STATS-REPORTBY-THIN"]
+    assert thin == [
+        "level `f` of `sex` would hold 2 of 12 units, below limits.min_reported_n (5)",
+        "level `m` of `sex` would hold 3 of 12 units, below limits.min_reported_n (5)",
+    ]

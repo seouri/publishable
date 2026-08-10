@@ -1206,14 +1206,14 @@ def _check_report_by(doc: dict[str, Any], c: Collector, roster: UnitList | None)
     floor = (doc.get("limits") or {}).get("min_reported_n")
     if roster is None or not isinstance(floor, (int, float)):
         return
-    for name in entries:
+    for i, name in enumerate(entries):
         if not isinstance(name, str) or name not in declared:
             continue  # already refused above
         for level, keys in sorted(levels_for(roster, name).items()):
             if len(keys) < floor:
                 c.warn(
                     "W-STATS-REPORTBY-THIN",
-                    f"statistics.report_by[{entries.index(name)}]",
+                    f"statistics.report_by[{i}]",
                     f"level `{level}` of `{name}` would hold {len(keys)} of "
                     f"{len(roster)} units, below limits.min_reported_n ({floor})",
                 )
