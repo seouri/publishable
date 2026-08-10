@@ -13,6 +13,7 @@ from publishable.stats import (
     handed_to,
     mean_of,
     min_honest_draws,
+    paired_delta_of_derived,
     paired_keys,
     paired_percentile_of_derived,
     paired_t_over_units,
@@ -1295,3 +1296,58 @@ def test_two_different_computes_over_identical_tables_yield_a_real_interval():
     assert used > 0
     assert got.high - got.low > 0  # non-degenerate: the two formulas disagree
     assert got.low < point_estimate < got.high
+
+
+def test_the_paired_delta_is_computed_over_the_keys_it_is_given():
+    """The point estimate `paired_percentile_of_derived` builds an interval for,
+    over the same keys — so a caller cannot take one from the intersection and
+    the other from each side's whole sample, which is what put a `delta` of
+    509.5 beside a `ci95` around 10.0 in a `within` contrast."""
+    of = {f"u{i}": {"m": float(i) + 1.0} for i in range(60)}
+    against = {f"u{i}": {"m": float(i)} for i in range(60)}
+    assert paired_delta_of_derived(of, against, sorted(of), _mean_m, _mean_m) == 1.0
+    # Six keys with a mean of 2.5 on `of` against 1.5 — the same +1.0 shift, but
+    # the value of `_mean_m` itself is entirely different from the whole-sample
+    # one, so a subset genuinely reaches a different pair of aggregates.
+    subset = [f"u{i}" for i in range(4)]
+    assert paired_delta_of_derived(of, against, subset, _mean_m, _mean_m) == 1.0
+    assert _mean_m(UnitTable({k: of[k] for k in subset})) == 2.5
+
+
+def test_the_paired_delta_uses_each_side_s_own_formula():
+    """Two computes, for the reason `paired_percentile_of_derived` takes two:
+    passing `compute_of` for both sides here returns 0.0, not 59.0."""
+    table = {f"u{i}": {"m": float(i)} for i in range(60)}
+
+    def top(units: UnitTable) -> float | None:
+        return float(max(v for v in units.m if v is not None))
+
+    got = paired_delta_of_derived(table, table, sorted(table), top, _mean_m)
+    assert got == pytest.approx(59.0 - 29.5)
+
+
+def test_an_empty_intersection_has_no_delta_rather_than_a_zero_one():
+    """`reference.md` § Contrasts: "A contrast whose intersection is empty is
+    reported as such rather than as a delta of zero." `0.0` would read as two
+    conditions that agreed perfectly."""
+    of = {f"u{i}": {"m": float(i)} for i in range(10)}
+    assert paired_delta_of_derived(of, of, [], _mean_m, _mean_m) is None
+
+
+def test_a_declining_compute_yields_no_delta_on_either_side():
+    """A raising or `None`-returning `aggregate` is the degenerate treatment
+    `percentile_of_derived` gives it, not a `TypeError` from `float(None)` and
+    not a half-computed number."""
+    of = {f"u{i}": {"m": float(i)} for i in range(10)}
+
+    def gives_none(units: UnitTable) -> float | None:
+        return None
+
+    def raises(units: UnitTable) -> float | None:
+        raise ZeroDivisionError("no")
+
+    keys = sorted(of)
+    assert paired_delta_of_derived(of, of, keys, gives_none, _mean_m) is None
+    assert paired_delta_of_derived(of, of, keys, _mean_m, gives_none) is None
+    assert paired_delta_of_derived(of, of, keys, raises, _mean_m) is None
+    assert paired_delta_of_derived(of, of, keys, _mean_m, raises) is None

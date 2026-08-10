@@ -245,6 +245,49 @@ def percentile_of_derived(
     )
 
 
+def paired_delta_of_derived(
+    of: dict[str, dict[str, float]],
+    against: dict[str, dict[str, float]],
+    keys: list[str],
+    compute_of: "Callable[[UnitTable], float | None]",
+    compute_against: "Callable[[UnitTable], float | None]",
+) -> float | None:
+    """The point estimate `paired_percentile_of_derived` builds an interval for.
+
+    A derived metric has no per-unit value to difference, so its delta has to be
+    `aggregate` evaluated on each side and subtracted — but over **the same
+    units the interval is built from**, which is the intersection of both sides'
+    completed units narrowed by the contrast's `within`, not each condition's
+    own whole-sample table. `reference.md` § Contrasts: "a paired comparison
+    exists only for units that completed in *both*. Differencing the two
+    condition means instead would not be a paired comparison at all, however
+    carefully `paired: true` was derived."
+
+    It lives here, beside the interval it belongs to, because the two were
+    computed in different modules once and drifted apart: the interval moved to
+    the intersection and the point estimate stayed whole-sample, which produced
+    a `ci95` that could not contain its own `delta`. A caller that can only get
+    both from one call cannot reintroduce that.
+
+    `None` — never a number — when there are no paired units or either side's
+    `aggregate` declines to produce a value. `reference.md`: "A contrast whose
+    intersection is empty is reported as such rather than as a delta of zero."
+    """
+    if not keys:
+        return None
+    table_of = _unit_table_from_rows([{"unit": k, **of[k]} for k in keys])
+    table_against = _unit_table_from_rows([{"unit": k, **against[k]} for k in keys])
+    try:
+        a = compute_of(table_of)
+        b = compute_against(table_against)
+    except Exception:  # the same treatment the real call gets in percentile_of_derived
+        return None
+    if a is None or b is None:
+        return None
+    delta = float(a) - float(b)
+    return None if math.isnan(delta) else delta
+
+
 def paired_percentile_of_derived(
     of: dict[str, dict[str, float]],
     against: dict[str, dict[str, float]],

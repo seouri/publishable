@@ -1589,3 +1589,90 @@ def test_an_entrypoint_without_a_colon_says_so_rather_than_blaming_the_import(wr
     ]
     assert "is not `<module>:<attribute>`" in message
     assert "could not be imported" not in message
+
+
+_TWO_CONDITIONS = {
+    "baseline": {"analysis.method": "pearson"},
+    "grid": {"analysis.method": ["spearman"]},
+}
+
+
+def test_a_contrast_comparing_a_condition_with_itself_is_refused(write_config):
+    """`reference.md` § Validation, "Contrast has two distinct sides". Left
+    unchecked it publishes a perfect null with a zero-width interval over every
+    unit as a finding, and takes a slot in the correction family while doing
+    it."""
+    found = codes(
+        write_config(
+            {
+                "sweep": _TWO_CONDITIONS,
+                "statistics": {
+                    "contrasts": [{"id": "selfie", "of": "baseline", "against": "baseline"}]
+                },
+            }
+        )
+    )
+    assert "E-STATS-CONTRAST-SAME-SIDES" in found
+
+
+def test_a_contrast_with_an_unresolvable_side_is_unknown_not_same_sides(write_config):
+    """Both sides identical *and* neither resolving is a typo, not a
+    self-comparison; the more specific diagnostic has to win, or a misspelled
+    label reads as a design mistake the author didn't make."""
+    found = codes(
+        write_config(
+            {
+                "sweep": _TWO_CONDITIONS,
+                "statistics": {
+                    "contrasts": [{"id": "x", "of": "nosuch", "against": "nosuch"}]
+                },
+            }
+        )
+    )
+    assert "E-STATS-CONTRAST-UNKNOWN" in found
+    assert "E-STATS-CONTRAST-SAME-SIDES" not in found
+
+
+def test_a_contrast_entry_that_is_not_a_mapping_is_refused(write_config):
+    """A list of condition labels where a list of contrast entries belongs.
+    `resolve_contrasts` reads `entry["of"]` off whatever this holds, so before
+    this check the slip reached `run` as an `AttributeError` traceback — and
+    `contrasts.py`'s own comment leans on validate having refused it."""
+    found = codes(
+        write_config(
+            {
+                "sweep": _TWO_CONDITIONS,
+                "statistics": {"contrasts": ["method=spearman"]},
+            }
+        )
+    )
+    assert "E-STATS-CONTRAST-SHAPE" in found
+
+
+def test_a_non_list_contrasts_block_is_refused(write_config):
+    found = codes(
+        write_config(
+            {
+                "sweep": _TWO_CONDITIONS,
+                "statistics": {"contrasts": {"id": "x", "of": "baseline"}},
+            }
+        )
+    )
+    assert "E-STATS-CONTRAST-SHAPE" in found
+
+
+def test_a_contrast_without_an_id_is_refused(write_config):
+    """`id` names the entry in `results.contrasts` and in a hypothesis. Missing,
+    it reached the record as the literal string `'None'`, and two such entries
+    collided under one name."""
+    found = codes(
+        write_config(
+            {
+                "sweep": _TWO_CONDITIONS,
+                "statistics": {
+                    "contrasts": [{"of": "method=spearman", "against": "baseline"}]
+                },
+            }
+        )
+    )
+    assert "E-STATS-CONTRAST-SHAPE" in found

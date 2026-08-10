@@ -50,6 +50,7 @@ from publishable.stats import (
     collapse_repeats,
     mean_of,
     min_honest_draws,
+    paired_delta_of_derived,
     paired_keys,
     paired_percentile_of_derived,
     paired_t_over_units,
@@ -198,8 +199,13 @@ def _comparison_step_blocks(
     A recorded column takes `paired_t_over_units` over the per-unit
     differences, with `cohens_d = cohens_dz(diffs)`. A derived metric — one
     `aggregate` computed, absent any per-unit value to difference — takes
-    `paired_percentile_of_derived` instead, with its *own* resample closure on
-    each side (`compute_of`/`compute_against`): the two conditions' `cfg` can
+    `paired_delta_of_derived` and `paired_percentile_of_derived` instead, both
+    over `base_keys`: the point estimate is `aggregate` evaluated on each side
+    over the *intersection*, never the difference of the two conditions' own
+    whole-sample `aggregated` values, which under a `within` stratum or unequal
+    completion is a number computed over units the interval beside it never
+    saw. Each side gets its *own* resample closure
+    (`compute_of`/`compute_against`): the two conditions' `cfg` can
     differ on exactly the axis the comparison exists to measure, so evaluating
     one side's closure against both sides' draws is wrong the moment that
     axis changes which formula `aggregate` runs — the documented worked
@@ -212,6 +218,15 @@ def _comparison_step_blocks(
     of the two conditions' completed units, narrowed by `within` when the
     comparison declares one — and record `correction: null`: the correction
     family, `ci95_corrected`, `correction_level`, and `family_size` are S4c's.
+
+    `W-STATS-CONTRAST-THIN` fires only for a comparison declaring a `within`,
+    because that is the scope `reference.md` gives it three times over — §
+    Contrasts ("`limits.min_reported_n` applies to a `within` contrast's
+    `n_paired`, since a stratified paired comparison is where a small
+    denominator is easiest to miss and most disclosive"), the § The one config
+    file comment, and the § Validation row. `min_reported_n: 10` is in every
+    generated config, so warning on every comparison would fire on any pilot
+    under ten units for a comparison the document never scoped it to.
     """
     allowed = units_matching(roster, comp.within)
     of_steps = {k[1] for k in collapsed_by_key if k[0] == comp.of}
@@ -237,23 +252,28 @@ def _comparison_step_blocks(
                 )
                 n_paired = len(base_keys)
                 interval = None
-                if compute_of is not None and compute_against is not None and n_paired >= 2:
-                    interval, _ = paired_percentile_of_derived(
+                delta = None
+                if compute_of is not None and compute_against is not None:
+                    # Point estimate and interval from the same two calls over
+                    # the same `base_keys`, so neither can drift onto a
+                    # different unit set from the other.
+                    delta = paired_delta_of_derived(
                         of_collapsed,
                         against_collapsed,
                         base_keys,
                         compute_of,
                         compute_against,
-                        seed,
-                        draws=draws,
                     )
-                of_value = of_summary[metric_key].get("value")
-                against_value = against_summary[metric_key].get("value")
-                delta = (
-                    float(of_value) - float(against_value)
-                    if of_value is not None and against_value is not None
-                    else None
-                )
+                    if n_paired >= 2:
+                        interval, _ = paired_percentile_of_derived(
+                            of_collapsed,
+                            against_collapsed,
+                            base_keys,
+                            compute_of,
+                            compute_against,
+                            seed,
+                            draws=draws,
+                        )
                 metric_block[metric_key] = {
                     "delta": delta,
                     "basis": "units",
@@ -286,7 +306,7 @@ def _comparison_step_blocks(
                     "cohens_d": cohens_dz(diffs),
                     "correction": None,
                 }
-            if min_reported_n is not None and n_paired < min_reported_n:
+            if comp.within is not None and min_reported_n is not None and n_paired < min_reported_n:
                 findings.warn(
                     "W-STATS-CONTRAST-THIN",
                     "limits.min_reported_n",

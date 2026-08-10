@@ -975,9 +975,34 @@ def _check_contrasts(doc: dict[str, Any], c: Collector) -> None:
     `data.units.attributes` list — analogous to the `report_by` unknown-attribute
     rule (`reference.md` § Reporting strata) — rather than left to look like a
     silently-empty stratum.
+
+    **The shape is checked here too, and it has to be.** `resolve_contrasts`
+    reads `entry["of"]` and `entry.get("id")` off whatever the list holds, and
+    its comment leans on this function having refused anything that would make
+    those raise; before this block was un-refused, nothing could reach it at
+    all. So a non-list `contrasts`, an entry that is not a mapping (a bare list
+    of condition labels is the plausible slip), and a missing or non-string
+    `id` are all `E-STATS-CONTRAST-SHAPE` rather than an `AttributeError` out
+    of `run` or the literal string `'None'` published as a contrast's name,
+    where two such entries would collide.
+
+    **The two sides must be distinct** (`reference.md` § Validation, "Contrast
+    has two distinct sides"), checked only once both resolve so the diagnostic
+    for a typo stays the more specific `E-STATS-CONTRAST-UNKNOWN`. A condition
+    compared with itself is a perfect null with a zero-width interval over
+    every unit, published as a finding and occupying a slot in the correction
+    family.
     """
     entries = ((doc.get("statistics") or {}).get("contrasts")) or []
     if not entries:
+        return
+    if not isinstance(entries, list):
+        c.error(
+            "E-STATS-CONTRAST-SHAPE",
+            "statistics.contrasts",
+            "is not a list of contrast entries; each entry is a mapping with `id`, `of` and "
+            "`against`",
+        )
         return
 
     ids = {entry.get("id") for entry in entries if isinstance(entry, dict) and entry.get("id")}
@@ -987,7 +1012,20 @@ def _check_contrasts(doc: dict[str, Any], c: Collector) -> None:
 
     for i, entry in enumerate(entries):
         if not isinstance(entry, dict):
+            c.error(
+                "E-STATS-CONTRAST-SHAPE",
+                f"statistics.contrasts[{i}]",
+                f"is {type(entry).__name__}, not a mapping with `id`, `of` and `against` — a "
+                "list of condition labels is not a list of contrasts",
+            )
             continue
+        if not isinstance(entry.get("id"), str) or not entry.get("id"):
+            c.error(
+                "E-STATS-CONTRAST-SHAPE",
+                f"statistics.contrasts[{i}].id",
+                "is missing or not a string; `id` is how the contrast is named in "
+                "`results.contrasts` and in a hypothesis, so two entries cannot share one",
+            )
         for field in ("of", "against"):
             value = entry.get(field)
             where = f"statistics.contrasts[{i}].{field}"
@@ -1007,6 +1045,15 @@ def _check_contrasts(doc: dict[str, Any], c: Collector) -> None:
                     where,
                     f"names `{value}`, which no condition's label matches",
                 )
+        if entry.get("of") in labels and entry.get("of") == entry.get("against"):
+            c.error(
+                "E-STATS-CONTRAST-SAME-SIDES",
+                f"statistics.contrasts[{i}]",
+                f"sets `of` and `against` to the same condition (`{entry.get('of')}`); a "
+                "contrast has two distinct sides. Comparing a condition with itself publishes "
+                "a perfect null over every unit as a finding, and it joins the correction "
+                "family, tightening every other interval in the run",
+            )
         within = entry.get("within")
         if isinstance(within, dict):
             for name in within:
