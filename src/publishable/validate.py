@@ -18,6 +18,7 @@ from publishable.replication import resolve_repeats
 from publishable.scope import step_name as _step_name
 from publishable.strata import levels_for
 from publishable.sweep import check_swept_value, expand
+from publishable.templates.base import BaseTemplate
 from publishable.templates.registry import get_template, template_names
 from publishable.units import UnitList, resolve_units
 
@@ -249,7 +250,7 @@ def validate_config(
     _check_unimplemented(doc, c)
     _check_sweep(doc, template, c, unit_count=len(roster) if roster is not None else None)
     _check_contrasts(doc, c)
-    _check_hypotheses(doc, c, experiment)
+    _check_hypotheses(doc, c, experiment, template)
     _check_report_by(doc, c, roster)
     for message in template.validate(doc):
         c.error("E-TEMPLATE-RULE", "parameters", message)
@@ -1178,7 +1179,9 @@ _DIRECTIONS = ("greater", "less")
 _EVALUATE_ONS = ("observed", "ci95_lower", "ci95_upper")
 
 
-def _check_hypotheses(doc: dict[str, Any], c: Collector, experiment: Any | None) -> None:
+def _check_hypotheses(
+    doc: dict[str, Any], c: Collector, experiment: Any | None, template: Any
+) -> None:
     """Each declared `hypotheses` entry, checked for real now that the block is
     non-empty and list-shaped (`_check_shape` already refused anything else).
 
@@ -1194,6 +1197,57 @@ def _check_hypotheses(doc: dict[str, Any], c: Collector, experiment: Any | None)
     one — there being no experiment to check against (its import already failed,
     reported elsewhere as `E-ENTRYPOINT-IMPORT`) is not a hypothesis fault, so
     that case is silently skipped rather than double-reported.
+
+    **`compare.to: baseline` needs a declared baseline.** `reference.md` §
+    Validation, "Hypothesis needs baseline": `hypotheses[0].compare.to:
+    baseline` but `sweep.baseline` is not declared. Nothing downstream guards
+    this — `hypotheses.resolve` reads `vs_baseline`, which `cli` never
+    populates without a declared baseline, so the hypothesis would silently
+    resolve to no observation rather than being refused before a run starts.
+    `E-HYPOTHESIS-BASELINE`.
+
+    **`compare.contrast` needs a real contrast.** `reference.md` § Validation,
+    "Hypothesis names a real contrast": `hypotheses[1].compare.contrast` is
+    `invariance`, which `statistics.contrasts` does not declare. The same
+    unresolvable-label class `_check_contrasts` already refuses for `of` and
+    `against` — a typo here would resolve to nothing in `hypotheses.resolve`
+    and read back `block=None`, reported but never diagnosed as a typo.
+    `E-HYPOTHESIS-CONTRAST`.
+
+    **`evaluate_on` needs a bound that can exist.** `reference.md` §
+    Validation, "Hypothesis bound exists": `evaluate_on` names a bound
+    (`ci95_lower`/`ci95_upper`), but no metric this run computes could ever
+    carry an interval — `data.units` undeclared *and* the template defines no
+    `aggregate`, which together are the only way a `basis: units` metric with
+    a `ci95` gets produced at all. `generic`, the only template this build
+    registers, does not override `BaseTemplate.aggregate` — it inherits the
+    `{}`-returning default — so the `aggregate`-half of this condition holds
+    for every config naming it; `data.units` presence is what discriminates.
+
+    **That two-condition test is `reference.md`'s own — "the config-level
+    form" — and this check adds one more gate on top of it, not a divergence
+    from it.** § What a hypothesis is tested against draws the line itself:
+    "`validate` catches the config-level form of that, where nothing in the
+    run could carry an interval; the per-metric form is settled when the step
+    returns." A `scope: "summary"` metric can be a `reported: true` `Estimate`
+    a step supplies directly ("A hypothesis may name a summary metric"), with
+    its own real `ci95` and no unit table involved at all — core never
+    inspects a step's body to know whether *this* summary step actually does
+    that, and `command_run` treats an `E-HYPOTHESIS-BOUND` finding as a hard
+    stop (`c.has_errors`), so refusing here on the two-condition test alone
+    would permanently block a design the spec explicitly permits, not merely
+    defer it to run time. So the check below only fires when the metric's
+    scope is affirmatively known and is not `"summary"` — unknown (no
+    experiment, or a `metric` that doesn't parse) is treated the same as
+    `"summary"`, conservatively. `E-HYPOTHESIS-BOUND`.
+
+    **The same impossible-interval condition, without a bound requested, is a
+    warning rather than a refusal.** `reference.md` § Validation, "Hypothesis
+    has an inference base": every metric will be `basis: repeats` — reportable
+    (`evaluate_on: observed` still reads a value) but not testable against an
+    interval. `W-HYPOTHESIS-INFERENCE-BASE` fires exactly where
+    `E-HYPOTHESIS-BOUND` does not: same condition, `evaluate_on` absent or
+    `observed` instead of a bound.
 
     **A hypothesis's form must match its metric's scope.** `reference.md` § What
     a hypothesis is tested against: a `scope: "summary"` metric "is one value
@@ -1227,6 +1281,26 @@ def _check_hypotheses(doc: dict[str, Any], c: Collector, experiment: Any | None)
     if experiment is not None:
         scopes_by_step = {_step_name(cls): cls.scope for cls in experiment.steps}
 
+    has_baseline = bool((doc.get("sweep") or {}).get("baseline"))
+    contrast_entries = ((doc.get("statistics") or {}).get("contrasts")) or []
+    contrast_ids = {
+        entry["id"]
+        for entry in contrast_entries
+        if isinstance(entry, dict) and isinstance(entry.get("id"), str) and entry["id"]
+    } if isinstance(contrast_entries, list) else set()
+    # The bound-exists error and the inference-base warning share one condition:
+    # no metric this run computes could ever carry an interval, because that
+    # needs a `basis: units` metric and the only source of one is a resolved
+    # unit table run through a template's `aggregate`. `generic` — the only
+    # template this build registers — inherits `BaseTemplate.aggregate`'s
+    # `{}`-returning default rather than overriding it, so `data.units` is what
+    # discriminates in practice; the `type(...) is not BaseTemplate.aggregate`
+    # check is what would let a future template with a real `aggregate` clear
+    # this condition without either check changing.
+    no_interval_possible = not bool(
+        (doc.get("data") or {}).get("units")
+    ) and type(template).aggregate is BaseTemplate.aggregate
+
     for i, hyp in enumerate(entries):
         if not isinstance(hyp, dict):
             c.error(
@@ -1259,8 +1333,60 @@ def _check_hypotheses(doc: dict[str, Any], c: Collector, experiment: Any | None)
                 "bound the verdict is about rather than being caught anywhere",
             )
 
+        compare = hyp.get("compare")
+        if isinstance(compare, dict):
+            if compare.get("to") == "baseline" and not has_baseline:
+                c.error(
+                    "E-HYPOTHESIS-BASELINE",
+                    f"hypotheses[{i}].compare",
+                    "sets `to: baseline`, but `sweep.baseline` is not declared — nothing "
+                    "populates a baseline comparison without one, so this hypothesis would "
+                    "silently resolve to no observation rather than the comparison it names",
+                )
+            if "contrast" in compare:
+                contrast_id = compare.get("contrast")
+                if not isinstance(contrast_id, str) or contrast_id not in contrast_ids:
+                    c.error(
+                        "E-HYPOTHESIS-CONTRAST",
+                        f"hypotheses[{i}].compare.contrast",
+                        f"names `{contrast_id!r}`, which `statistics.contrasts` does not "
+                        "declare",
+                    )
+
         metric = hyp.get("metric")
         step, _, name = metric.partition(".") if isinstance(metric, str) else ("", "", "")
+        # A `scope: "summary"` metric can be a `reported: true` `Estimate` a step
+        # supplies directly (`reference.md` § What a hypothesis is tested
+        # against, "A hypothesis may name a summary metric") — its own real
+        # `ci95`, with no unit table involved. Core never inspects a step's body
+        # to know whether *this* summary step actually does that, so the
+        # bound-exists check below only fires when the metric's scope is
+        # affirmatively known and is *not* `"summary"` — unknown (no experiment,
+        # or a `metric` that doesn't parse) is treated the same as `"summary"`,
+        # conservatively, rather than refusing a design this check cannot rule
+        # out. A `condition`- or `repeat`-scoped metric has no such exception:
+        # its only possible interval is `basis: units`, derived from `data.units`
+        # through a template's `aggregate`, which `no_interval_possible` already
+        # covers in full.
+        scope = scopes_by_step.get(step) if step else None
+        if no_interval_possible and scope not in (None, "summary"):
+            if evaluate_on in ("ci95_lower", "ci95_upper"):
+                c.error(
+                    "E-HYPOTHESIS-BOUND",
+                    f"hypotheses[{i}].evaluate_on",
+                    f"names `{evaluate_on}`, but no metric this run computes could carry "
+                    "an interval — `data.units` is undeclared and the template defines no "
+                    "`aggregate`, so nothing produces a `ci95` to evaluate a bound against",
+                )
+            else:
+                c.warn(
+                    "W-HYPOTHESIS-INFERENCE-BASE",
+                    f"hypotheses[{i}]",
+                    "names a metric under a run where `data.units` is undeclared and the "
+                    "template defines no `aggregate` — every metric will be `basis: "
+                    "repeats`, reportable but not testable against an interval",
+                )
+
         if not isinstance(metric, str) or not metric or not name:
             c.error(
                 "E-HYPOTHESIS-METRIC",
