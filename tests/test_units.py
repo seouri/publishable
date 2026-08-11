@@ -127,8 +127,9 @@ def test_a_unit_is_frozen_and_hashable_by_key():
 
 def test_attributes_cannot_be_mutated_in_place():
     u = Unit(key="p1", paths=(), attributes={"label": "1"})
-    with pytest.raises(TypeError):
+    with pytest.raises(ContractError) as exc:
         u.attributes["x"] = 1  # type: ignore[index]
+    assert exc.value.code == "E-UNIT-IMMUTABLE"
     assert u.attributes["label"] == "1"
     assert u.label == "1"
 
@@ -233,3 +234,58 @@ def test_a_different_digest_gives_a_different_split():
     a = partition_units(_roster(50), 5, "d")
     b = partition_units(_roster(50), 5, "other")
     assert [[u.key for u in p] for p in a] != [[u.key for u in p] for p in b]
+
+
+def test_writing_a_unit_field_raises_the_documented_code() -> None:
+    unit = Unit(key="u1")
+
+    with pytest.raises(ContractError) as exc:
+        unit.key = "u2"  # type: ignore[misc]
+
+    assert exc.value.code == "E-UNIT-IMMUTABLE"
+
+
+def test_writing_through_a_units_attributes_raises_the_documented_code() -> None:
+    """`reference.md` names this exact expression: a roster is shared across
+    conditions, so this write would change what the next condition measures."""
+    unit = Unit(key="u1", attributes={"site": "A"})
+
+    with pytest.raises(ContractError) as exc:
+        unit.attributes["scored"] = True  # type: ignore[index]
+
+    assert exc.value.code == "E-UNIT-IMMUTABLE"
+
+
+def test_deleting_a_units_attribute_raises_the_documented_code() -> None:
+    unit = Unit(key="u1", attributes={"site": "A"})
+
+    with pytest.raises(ContractError) as exc:
+        del unit.attributes["site"]  # type: ignore[misc]
+
+    assert exc.value.code == "E-UNIT-IMMUTABLE"
+
+
+def test_a_unit_still_reads_normally() -> None:
+    unit = Unit(key="u1", paths=("a.csv",), attributes={"site": "A"})
+
+    assert unit.key == "u1"
+    assert unit.paths == ("a.csv",)
+    assert unit.attributes["site"] == "A"
+    assert unit.site == "A"
+    assert len(unit.attributes) == 1
+    assert dict(unit.attributes) == {"site": "A"}
+    assert {unit} == {Unit(key="u1")}          # hashable by key
+
+
+def test_a_units_attributes_copy_the_input_mapping() -> None:
+    """`_FrozenAttributes.__init__` must copy rather than alias its argument: if it
+    stored the caller's dict directly, mutating that dict after construction would
+    silently change what the unit reports, defeating the immutability this task adds."""
+    source = {"site": "A"}
+    unit = Unit(key="u1", attributes=source)
+
+    source["site"] = "B"
+    source["extra"] = "new"
+
+    assert unit.attributes["site"] == "A"
+    assert "extra" not in unit.attributes

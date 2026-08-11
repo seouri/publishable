@@ -272,10 +272,18 @@ def percentile_of_derived(
     values: list[float] = []
     for _ in range(draws):
         drawn = [keys[rng.randrange(n)] for _ in range(n)]
-        table = _unit_table_from_rows([{"unit": key, **collapsed[key]} for key in drawn])
+        table = unit_table_from_rows([{"unit": key, **collapsed[key]} for key in drawn])
         try:
             value = compute(table)
-        except Exception:  # degenerate, not caught for the real call; see above
+        # Degenerate, not caught for the real call; see above. Also the
+        # containment for a template returning a non-numeric metric:
+        # `coerce_scalars` accepts a `str`, so a `{"m": "high"}` return
+        # reaches `cli.py`'s resample closure, which floats whatever
+        # `aggregate` returned — and `float("high")` raises `ValueError` on
+        # every draw, caught here beside a degenerate `ZeroDivisionError`.
+        # Narrowing this to a closed set that drops `ValueError` reopens that
+        # path; see the pin in tests/test_stats.py.
+        except Exception:
             continue
         if value is None or (isinstance(value, float) and math.isnan(value)):
             continue
@@ -320,12 +328,19 @@ def paired_delta_of_derived(
     """
     if not keys:
         return None
-    table_of = _unit_table_from_rows([{"unit": k, **of[k]} for k in keys])
-    table_against = _unit_table_from_rows([{"unit": k, **against[k]} for k in keys])
+    table_of = unit_table_from_rows([{"unit": k, **of[k]} for k in keys])
+    table_against = unit_table_from_rows([{"unit": k, **against[k]} for k in keys])
     try:
         a = compute_of(table_of)
         b = compute_against(table_against)
-    except Exception:  # the same treatment the real call gets in percentile_of_derived
+    # The same treatment the real call gets in `percentile_of_derived`. Also
+    # the same containment for a template returning a non-numeric metric:
+    # `coerce_scalars` accepts a `str`, so a `{"m": "high"}` return reaches
+    # `cli.py`'s resample closure, which floats whatever `aggregate`
+    # returned — and `float("high")` raises `ValueError`, caught here.
+    # Narrowing this to a closed set that drops `ValueError` reopens that
+    # path; see the pin in tests/test_stats.py.
+    except Exception:
         return None
     if a is None or b is None:
         return None
@@ -374,12 +389,19 @@ def paired_percentile_of_derived(
     values: list[float] = []
     for _ in range(draws):
         drawn = [keys[rng.randrange(n)] for _ in range(n)]
-        table_a = _unit_table_from_rows([{"unit": k, **of[k]} for k in drawn])
-        table_b = _unit_table_from_rows([{"unit": k, **against[k]} for k in drawn])
+        table_a = unit_table_from_rows([{"unit": k, **of[k]} for k in drawn])
+        table_b = unit_table_from_rows([{"unit": k, **against[k]} for k in drawn])
         try:
             a = compute_of(table_a)
             b = compute_against(table_b)
-        except Exception:  # a degenerate draw, not a fault; see percentile_of_derived
+        # A degenerate draw, not a fault; see `percentile_of_derived`. Also the
+        # same containment for a template returning a non-numeric metric:
+        # `coerce_scalars` accepts a `str`, so a `{"m": "high"}` return reaches
+        # `cli.py`'s resample closure, which floats whatever `aggregate`
+        # returned — and `float("high")` raises `ValueError`, caught here.
+        # Narrowing this to a closed set that drops `ValueError` reopens that
+        # path; see the pin in tests/test_stats.py.
+        except Exception:
             continue
         if a is None or b is None:
             continue
@@ -868,7 +890,7 @@ class UnitTable:
         return [row.get(name) for row in self._rows]
 
 
-def _unit_table_from_rows(rows: list[dict[str, Any]]) -> UnitTable:
+def unit_table_from_rows(rows: list[dict[str, Any]]) -> UnitTable:
     """Build a `UnitTable` from rows that may repeat a unit key.
 
     `UnitTable.__init__` takes a `dict[str, dict]`, which cannot hold two rows
@@ -879,6 +901,11 @@ def _unit_table_from_rows(rows: list[dict[str, Any]]) -> UnitTable:
     `__init__` rather than re-keying to something synthetic and unique, which
     is what made every draw's units look distinct to a template that reads
     `unit` before this function existed.
+
+    Public rather than private because `cli.py` needs it for the same reason:
+    merging a unit's declared attributes into the table a template's `aggregate`
+    reads is a row-level operation (`columns` then names them for free), and the
+    table it has to merge into is sometimes one of these draws.
     """
     table = UnitTable.__new__(UnitTable)
     table._rows = rows

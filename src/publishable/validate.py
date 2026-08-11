@@ -216,6 +216,17 @@ def validate_config(
         try:
             if repo_root is not None:
                 experiment = load_experiment(repo_root, entrypoint)
+        except SystemExit as exc:
+            # `SystemExit` is a `BaseException`, so the broad `except Exception` below
+            # does not see it. A user package calling `sys.exit()` at module scope —
+            # or building an `argparse` parser at import — would otherwise end the
+            # process with the user's own exit code and no diagnostic at all, which
+            # is the one outcome `validate` is contracted never to produce.
+            c.error(
+                "E-ENTRYPOINT-IMPORT",
+                "entrypoint",
+                f"could not be imported: SystemExit: {exc.code}",
+            )
         except Exception as exc:
             # Deliberately broad. Importing user code can fail every way user code
             # can fail — a syntax error, a missing dependency, a module-scope raise —
@@ -925,15 +936,34 @@ def _check_sweep(
         if _path_resolves(path, f"sweep.baseline.{path}"):
             _value_checks(path, value, f"sweep.baseline.{path}", nameable=False)
 
-    conditions = expand(doc)
-    if sweep and not conditions:
-        c.error(
-            "E-SWEEP-EXPANDS-EMPTY",
-            "sweep",
-            "expands to zero conditions, so the run would execute nothing while "
-            "reporting success — declare `baseline`, a non-empty `grid`, or remove "
-            "`sweep` entirely",
-        )
+    # Guarded the same way `_condition_labels` guards its own `expand(doc)`:
+    # `validate` collects findings and never raises. A `sweep.grid` axis value
+    # of `null` reaches here — past the per-axis `E-SWEEP-AXIS-EMPTY` check
+    # above, which fires only on a value that is *present and falsy* and then
+    # `continue`s past the rest of the per-axis body, and past `_check_shape`'s
+    # per-axis `list` guard, which refuses only a *present, non-list* value —
+    # and makes `itertools.product` raise `TypeError` inside `expand`.
+    # `E-SWEEP-EXPANDS-EMPTY` below is deliberately skipped rather than fired
+    # on the caught exception: that check means "this sweep is shaped well
+    # enough to expand, and expanding it yields nothing," a different and more
+    # specific claim than "this sweep could not be expanded at all," and
+    # firing it here would misreport a crash as an empty grid.
+    # `conditions = []` regardless, so every later use in this function (the
+    # execution-budget arithmetic below) sees zero rather than reading a name
+    # that was never assigned.
+    try:
+        conditions = expand(doc)
+    except Exception:
+        conditions = []
+    else:
+        if sweep and not conditions:
+            c.error(
+                "E-SWEEP-EXPANDS-EMPTY",
+                "sweep",
+                "expands to zero conditions, so the run would execute nothing while "
+                "reporting success — declare `baseline`, a non-empty `grid`, or remove "
+                "`sweep` entirely",
+            )
 
     repeat_total = _repeat_total(doc, unit_count)
     budget = (doc.get("limits") or {}).get("max_executions")
@@ -1084,7 +1114,29 @@ def _check_contrasts(doc: dict[str, Any], c: Collector) -> None:
         for entry in entries
         if isinstance(entry, dict) and isinstance(entry.get("id"), str) and entry["id"]
     }
-    conditions = expand(doc)
+    # Guarded the same way `_condition_labels` guards its own `expand(doc)`:
+    # `validate` collects findings and never raises. `_check_sweep` calls this
+    # same pure function on this same doc one statement earlier and is *also*
+    # guarded now, so a sweep malformed enough to make `expand` raise (a
+    # `null` grid axis value, past `_check_shape`'s per-axis `list` guard) no
+    # longer crashes there first — meaning this guard is genuinely reachable
+    # through `validate_config` too, not only from a caller that reaches
+    # `_check_contrasts` directly. Kept regardless of that overlap, on the
+    # same reasoning the `isinstance(entries, list)` guard just above was kept
+    # once `_check_shape` started covering its shape first: two guards on the
+    # same pure call is deliberate belt-and-braces, not redundancy to delete —
+    # a caller that reaches `_check_contrasts` directly, skipping
+    # `_check_sweep` entirely (`test_check_contrasts_guards_expand_when_called_directly`
+    # does exactly this), still needs its own guard, and a future change that
+    # reopens `_check_sweep`'s crash must not silently reopen this one too.
+    # `conditions = []` rather than returning:
+    # the shape and `id`-collision checks below don't need a resolved sweep at
+    # all, and every `of`/`against` correctly reports `E-STATS-CONTRAST-UNKNOWN`
+    # against an empty `labels` rather than the block going silently unchecked.
+    try:
+        conditions = expand(doc)
+    except Exception:
+        conditions = []
     labels = {cond.label for cond in conditions if cond.label is not None}
     declared_attrs = set(((doc.get("data") or {}).get("units") or {}).get("attributes") or [])
     seen_ids: set[str] = set()

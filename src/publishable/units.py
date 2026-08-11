@@ -13,12 +13,56 @@ import random
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from types import MappingProxyType
 from typing import Any
 
 from publishable.errors import ContractError
 
 RESERVED_FIELDS = ("key", "paths", "attributes")
+
+
+class _FrozenAttributes(Mapping[str, Any]):
+    """A read-only mapping that refuses a write with the documented code.
+
+    `MappingProxyType` refuses too, but with a bare `TypeError` that carries no
+    `.code` and is not a `PublishableError` — so `main` does not catch it and the
+    user gets a traceback where every other refusal is a diagnostic. The document
+    names `unit.attributes["scored"] = True` as the example, so this is the
+    expression that has to produce `E-UNIT-IMMUTABLE`.
+    """
+
+    __slots__ = ("_data",)
+    _data: dict[str, Any]
+
+    def __init__(self, data: Mapping[str, Any]) -> None:
+        object.__setattr__(self, "_data", dict(data))
+
+    def __getitem__(self, key: str) -> Any:
+        return self._data[key]
+
+    def __iter__(self) -> Iterator[str]:
+        return iter(self._data)
+
+    def __len__(self) -> int:
+        return len(self._data)
+
+    def __repr__(self) -> str:
+        return repr(self._data)
+
+    def _refuse(self, *_args: Any, **_kwargs: Any) -> Any:
+        raise ContractError(
+            "a unit's attributes are read-only: the roster is resolved once per run "
+            "and shared across every condition, so writing here would change what "
+            "the next condition measures",
+            code="E-UNIT-IMMUTABLE",
+        )
+
+    __setitem__ = _refuse
+    __delitem__ = _refuse
+    pop = _refuse
+    popitem = _refuse
+    clear = _refuse
+    update = _refuse
+    setdefault = _refuse
 
 
 @dataclass(frozen=True, eq=False)
@@ -30,11 +74,9 @@ class Unit:
     attributes: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        # A dict copy first, so a caller holding the original mapping cannot mutate
-        # this unit's attributes through it after construction. The proxy over that
-        # copy is what makes `attributes["x"] = ...` raise rather than silently
-        # changing what a later condition measures.
-        object.__setattr__(self, "attributes", MappingProxyType(dict(self.attributes)))
+        # `object.__setattr__` rather than `self.attributes = …`, because the
+        # refusal below is already in place by the time this runs.
+        object.__setattr__(self, "attributes", _FrozenAttributes(self.attributes))
 
     def __getattr__(self, name: str) -> Any:
         # Only reached when normal lookup fails, so it never shadows the three fields.
@@ -52,6 +94,31 @@ class Unit:
 
     def __eq__(self, other: object) -> bool:
         return isinstance(other, Unit) and other.key == self.key
+
+
+# Bound after the class rather than defined in its body: `@dataclass(frozen=True)`
+# generates its own `__setattr__`/`__delattr__` and raises `TypeError: Cannot
+# overwrite attribute ... in class Unit` if the name is already in `Unit.__dict__`
+# at decoration time. Binding here, after the decorator has run, replaces the
+# dataclass-generated version with the refusing one instead of colliding with it.
+def _unit_setattr(self: Unit, name: str, value: Any) -> None:
+    raise ContractError(
+        f"a unit is immutable: cannot set {name!r}. The roster is resolved once "
+        "per run and shared across every condition",
+        code="E-UNIT-IMMUTABLE",
+    )
+
+
+def _unit_delattr(self: Unit, name: str) -> None:
+    raise ContractError(
+        f"a unit is immutable: cannot delete {name!r}. The roster is resolved "
+        "once per run and shared across every condition",
+        code="E-UNIT-IMMUTABLE",
+    )
+
+
+Unit.__setattr__ = _unit_setattr  # type: ignore[assignment]
+Unit.__delattr__ = _unit_delattr  # type: ignore[assignment]
 
 
 class UnitList:

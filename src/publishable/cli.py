@@ -3,6 +3,7 @@
 See docs/reference.md § Exit codes and diagnostics, § Generators, § Scaffolding.
 """
 
+import dataclasses
 import importlib
 import importlib.metadata
 import json
@@ -60,6 +61,7 @@ from publishable.stats import (
     repeat_spread,
     resample_seed,
     summarize_step,
+    unit_table_from_rows,
 )
 from publishable.strata import levels_for
 from publishable.sweep import condition_dir_name, expand, sweep_document
@@ -204,6 +206,64 @@ def _differing_axes(of: "Condition", against: "Condition") -> list[str]:
     return [
         k for k in ordered_keys if of.values.get(k, _MISSING) != against.values.get(k, _MISSING)
     ]
+
+
+def _attributed(table: UnitTable, attributes: dict[str, dict[str, Any]]) -> UnitTable:
+    """The same table, with each unit's declared attributes merged into its row.
+
+    `data.units.attributes` declares what the roster carries; `reference.md` §
+    Templates has `aggregate` reading the unit table, and a template that wants
+    to stratify on a declared attribute has nowhere else to read it from — the
+    collapsed table holds only *recorded* columns, because that is all a step's
+    `io.record` puts there. So the roster is merged in here, at the one boundary
+    where `aggregate` is called.
+
+    Merged into the rows rather than into `collapsed` itself, and that is the
+    load-bearing choice: `collapsed` is also what `summarize_step` summarizes
+    column by column, what `repeat_spread` reads, and what a contrast
+    differences. Two consequences, the first of them observable today and
+    pinned by `test_a_declared_attribute_is_not_in_the_recorded_column_
+    namespace`: an attribute in `collapsed` joins the **recorded-column
+    namespace**, so a template returning a metric that merely shares an
+    attribute's name collides with something no step ever recorded, and the
+    containment around `summarize_step` costs it every metric it computed. And
+    a *numeric* attribute (an age, a dose) would be published as a metric with
+    its own `ci95` and its own seat in the correction family, and handed a
+    repeat-dispersion figure for a value that cannot vary across repeats — not
+    reachable while every roster attribute arrives from `csv.DictReader` as a
+    string, and the reason not to depend on that staying true. Here an
+    attribute reaches `aggregate` and nothing else.
+
+    An attribute is carried through **unchanged**: it comes from the roster
+    rather than from an execution, so unlike a recorded numeric column it has
+    no repeats to average over. A recorded column of the same name is already
+    refused upstream — `io.record` raises `ContractError` ·
+    `E-STEP-KEY-COLLISION` — so this merge arbitrates no precedence; it merely
+    must not be the thing that papers over that collision, which is why the
+    attributes are applied last rather than first.
+
+    `unit` is restored after the merge because nothing refuses an attribute
+    *named* `unit` (`units.py` reserves `key`, `paths` and `attributes`, the
+    fields of `Unit` itself), and the unit key column must survive: a bootstrap
+    draw duplicates units on purpose, and `percentile_of_derived` keeps the real
+    keys inside every draw precisely so a template reading `unit` sees the
+    roster it was drawn from.
+
+    Row-level, so the four operations the table promises are untouched and
+    `columns` — derived from the rows — names the attributes for free.
+    """
+    # Empty exactly when the config declared no attributes (the caller builds
+    # the mapping from the units that have any), so a project that declares
+    # none pays nothing: no row list rebuilt on the unresampled call, and none
+    # on any of the 2000 draws behind every derived metric's interval.
+    if not attributes:
+        return table
+    rows = []
+    for row in table:
+        merged = {**row, **attributes.get(row["unit"], {})}
+        merged["unit"] = row["unit"]
+        rows.append(merged)
+    return unit_table_from_rows(rows)
 
 
 def _comparison_step_blocks(
@@ -392,13 +452,18 @@ def _comparison_step_blocks(
             members.append(
                 Member(
                     where=where_id,
-                    condition_index=comp.of,
                     step=step_name,
                     metric=metric_key,
                     delta=metric_block[metric_key]["delta"] or 0.0,
                     ci95=(interval.low, interval.high) if interval else None,
                     pool=tuple(resampled.pool) if is_derived and resampled else None,
                     diffs=None if is_derived else tuple(diffs),
+                    # Placeholder: this function only sees one comparison, not
+                    # the whole family. The caller that concatenates
+                    # `vs_baseline_members` and `contrast_members` reassigns
+                    # this to the position in that combined, ordered list —
+                    # the only point where the full declaration order exists.
+                    declaration_index=0,
                 )
             )
             if comp.within is not None and min_reported_n is not None and n_paired < min_reported_n:
@@ -822,6 +887,15 @@ def command_run(config_path: Path) -> int:
             # one as having a recording step it never ran.
             template = get_template(doc.get("experiment_type", ""))
             resample_seed_value = resample_seed(digest)
+            # The roster is resolved once per run and shared across every
+            # condition, so this mapping is built once too — it is the same
+            # attributes for every condition, every step and every draw
+            # (`_attributed` says what it is for). The `if u.attributes` filter
+            # is what makes it *empty* — rather than a unit-keyed mapping of
+            # empty dicts, which is truthy — when the config declares no
+            # `data.units.attributes`, so `_attributed`'s early return actually
+            # fires and such a project never rebuilds a row list at all.
+            unit_attributes = {u.key: dict(u.attributes) for u in roster if u.attributes}
             # `statistics.resample` isn't honored yet (`E-STATS-RESAMPLE-UNSUPPORTED`
             # refuses a declared one), so this is the one place the default
             # `reference.md` § How a metric becomes a number documents — bootstrap
@@ -899,7 +973,10 @@ def command_run(config_path: Path) -> int:
                         # there (`stats.py`'s docstring says why).
                         try:
                             derived = coerce_scalars(
-                                template.aggregate(UnitTable(collapsed), cond_cfg),
+                                template.aggregate(
+                                    _attributed(UnitTable(collapsed), unit_attributes),
+                                    cond_cfg,
+                                ),
                                 where=aggregate_where,
                             )
                         except Exception as exc:
@@ -927,19 +1004,37 @@ def command_run(config_path: Path) -> int:
                             # straight into the failure this block exists to contain,
                             # rather than the honest `ContractError` a resampled
                             # draw can survive as "degenerate" in `stats.py`.
+                            # `attrs` is passed in rather than closed over for the
+                            # same reason `key`, `cfg` and `tmpl` are, and the
+                            # closure re-attributes whatever table it is handed:
+                            # `stats.py` rebuilds a table per bootstrap draw (and
+                            # per side of a derived contrast) from rows it takes
+                            # from `collapsed`, and it never sees the roster. So
+                            # this is the one place that can put the attributes
+                            # back — without it an attribute-reading `aggregate`
+                            # computes its point estimate cleanly and then fails
+                            # every single draw, reaching `run.yaml` with
+                            # `resample_draws: 0` and no interval, and takes a
+                            # derived contrast's *point estimate*
+                            # (`paired_delta_of_derived`) down with it.
                             def _make_resample_fn(
-                                key: str, cfg: Config, tmpl: BaseTemplate
+                                key: str,
+                                cfg: Config,
+                                tmpl: BaseTemplate,
+                                attrs: dict[str, dict[str, Any]],
                             ) -> Callable[[UnitTable], float | None]:
                                 def resample_fn(units: UnitTable) -> float | None:
                                     value = coerce_scalars(
-                                        tmpl.aggregate(units, cfg), where=aggregate_where
+                                        tmpl.aggregate(_attributed(units, attrs), cfg),
+                                        where=aggregate_where,
                                     ).get(key)
                                     return None if value is None else float(value)
 
                                 return resample_fn
 
                             resample_fns = {
-                                key: _make_resample_fn(key, cond_cfg, template) for key in derived
+                                key: _make_resample_fn(key, cond_cfg, template, unit_attributes)
+                                for key in derived
                             }
                     collapsed_by_key[(cond.index, step_name)] = collapsed
                     derived_by_key[(cond.index, step_name)] = derived
@@ -1181,7 +1276,17 @@ def command_run(config_path: Path) -> int:
                                     # costs this level's metric, never the run:
                                     # every execution is already spent, and the
                                     # whole-table call above is contained the
-                                    # same way for the same reason.
+                                    # same way for the same reason. Also the
+                                    # containment for a template returning a
+                                    # non-numeric metric: `coerce_scalars`
+                                    # accepts a `str`, so a `{"m": "high"}`
+                                    # return reaches `compute` here — the same
+                                    # resample closure — which floats
+                                    # whatever `aggregate` returned, and
+                                    # `float("high")` raises `ValueError`,
+                                    # caught below. Narrowing this to a closed
+                                    # set that drops `ValueError` reopens that
+                                    # path; see the pin in tests/test_stats.py.
                                     try:
                                         level_value = compute(level_table)
                                     except Exception as exc:
@@ -1289,7 +1394,15 @@ def command_run(config_path: Path) -> int:
             # record. `corrected_fields` returns `{}` under `correction: none`,
             # which is why the field is *absent* there rather than null:
             # an explicit null would claim a correction was attempted.
-            comparison_members = vs_baseline_members + contrast_members
+            # Reassigned here, not where each `Member` is constructed: this is
+            # the one point where the whole family — `vs_baseline` comparisons
+            # then declared contrasts, each in config order — exists as a
+            # single list, so it is the only place an index can be unique and
+            # monotonic across all of it rather than restarted per comparison.
+            comparison_members = [
+                dataclasses.replace(m, declaration_index=i)
+                for i, m in enumerate(vs_baseline_members + contrast_members)
+            ]
             fields = corrected_fields(comparison_members, correction_method)
             for (where_id, step_name, metric_key), values in fields.items():
                 entry = _entry_for(vs_baseline, contrasts_out, where_id, step_name, metric_key)

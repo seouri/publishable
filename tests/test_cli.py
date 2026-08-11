@@ -528,6 +528,28 @@ def test_a_derived_metric_reaches_run_yaml_with_a_resampled_interval(tmp_path, m
     assert metric["cohens_d"] is None
 
 
+def test_a_non_numeric_derived_metric_is_disclosed_not_a_traceback(tmp_path, monkeypatch, capsys):
+    """A template returning `{"total": "high"}` is a scalar `coerce_scalars`
+    accepts, so it reaches `run.yaml` as the reported `value` — but the
+    resample closure floats that same return on every draw, and
+    `float("high")` fails on every one of them. The run must still complete,
+    with a null interval and a warning naming the failure, not a traceback."""
+    import publishable.generators.experiment as experiment_gen
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    monkeypatch.setattr(GenericTemplate, "aggregate", lambda self, units, cfg: {"total": "high"})
+    doc = run_a_project(tmp_path, capsys=capsys)
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "completed"
+    metric = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["total"]
+    assert metric["value"] == "high"
+    assert metric["ci95"] is None
+    assert metric["resample_draws"] == 0
+    assert "W-STATS-AGGREGATE-FAILED" in doc["stdout"]
+    assert "every resample draw failed" in doc["stdout"]
+
+
 def test_a_project_without_aggregate_records_only_the_recorded_column(tmp_path, monkeypatch):
     """The regression guard: a run whose template never overrides `aggregate`
     (the base's `{}`) must record only the recorded column, exactly as before
@@ -762,6 +784,118 @@ def test_a_total_resample_failure_is_disclosed_not_silent(tmp_path, capsys, monk
         # not_propagated`, `test_total_resample_failure_is_distinguishable_
         # from_no_resample_supplied`) are what pin the behaviour deterministically.
         assert metric["resample_draws"] is not None
+
+
+def test_a_templates_aggregate_sees_declared_unit_attributes(tmp_path, monkeypatch, capsys):
+    """`data.units` declares `cohort`; a template reading `row["cohort"]` must find it.
+
+    The roster carries it, no step records it, and before this it never reached
+    the table — so a template that stratifies on a declared attribute could not,
+    even though `report_by` splits on the very same attribute one layer out.
+
+    `run_a_project`'s roster writes `cohort` as `'ab'[i % 2]` over `i` in
+    `1..units`, so the default 10 units are `b,a,b,a,…` — five of them `a`.
+    Declared through `unit_attributes=["cohort"]`, since unit resolution reads
+    only what the config names (`E-UNITS-ATTR-MISSING` for one the table lacks).
+    """
+    import publishable.generators.experiment as experiment_gen
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    def _count_cohort_a(self, units, cfg):
+        return {"n_cohort_a": float(sum(1 for row in units if row["cohort"] == "a"))}
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    monkeypatch.setattr(GenericTemplate, "aggregate", _count_cohort_a)
+    doc = run_a_project(tmp_path, capsys=capsys, unit_attributes=["cohort"])
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "completed"
+    metric = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"][
+        "n_cohort_a"
+    ]
+    assert metric["value"] == 5
+    # An attribute-reading `aggregate` must survive the resampled draws too, or
+    # the metric would reach `run.yaml` with no interval at all: a draw's table
+    # is rebuilt from rows inside `stats.py`, which never sees the roster.
+    assert metric["ci95"] is not None
+    assert metric["resample_draws"] == 2000
+    assert "W-STATS-AGGREGATE-FAILED" not in doc["stdout"]
+
+
+def test_a_declared_unit_attribute_is_one_of_the_tables_columns(tmp_path, monkeypatch, capsys):
+    """`columns` must name the attribute, not merely carry it in every row.
+
+    The four operations are the whole contract (`reference.md` § Templates), so
+    a template discovering what it may read asks `units.columns` — an attribute
+    present by `row["cohort"]` but absent from `columns` would read as a column
+    the table does not hold. This is the assertion the value test above passes
+    without.
+    """
+    import publishable.generators.experiment as experiment_gen
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    def _report_columns(self, units, cfg):
+        return {
+            "cohort_is_a_column": float("cohort" in units.columns),
+            "arm_is_a_column": float("arm" in units.columns),
+            # The third of the four operations: column access. `__getattr__`
+            # keys on "this name appears in some row", so a merged attribute
+            # must come back full length, one entry per row, like any column.
+            "cohort_reads_full_length": float(len(units.cohort) == len(units)),
+        }
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    monkeypatch.setattr(GenericTemplate, "aggregate", _report_columns)
+    doc = run_a_project(tmp_path, capsys=capsys, unit_attributes=["cohort"])
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert aggregated["cohort_is_a_column"]["value"] == 1.0
+    assert aggregated["cohort_reads_full_length"]["value"] == 1.0
+    # `arm` is in the roster file and *not* declared, so it is not a unit
+    # attribute at all: the table carries what the config declared, not every
+    # column the roster source happened to have.
+    assert aggregated["arm_is_a_column"]["value"] == 0.0
+    # And the attribute reaches `aggregate` and nothing else: it is not a
+    # measurement, so it gets no summary of its own, no `ci95`, and no seat in
+    # the correction family — which is why the merge is into the rows of the
+    # table `aggregate` reads rather than into the collapsed table
+    # `summarize_step`, `repeat_spread` and every contrast also read.
+    assert "cohort" not in aggregated
+
+
+def test_a_declared_attribute_is_not_in_the_recorded_column_namespace(
+    tmp_path, monkeypatch, capsys
+):
+    """A declared attribute must not make its own name unusable as a metric.
+
+    This is what pins *where* the merge happens. `summarize_step` refuses a
+    derived key that shadows a **recorded column** (`E-STEP-KEY-COLLISION`), and
+    the containment around it costs the whole `derived` mapping — so merging the
+    attributes into the collapsed table instead of into the rows of the table
+    `aggregate` reads would put `cohort` into the recorded-column namespace and
+    make a template returning a metric *named* `cohort` lose every metric it
+    computed, to a collision with something no step ever recorded. An attribute
+    and a metric are different kinds of thing; only the recorded columns and the
+    derived keys share a namespace.
+
+    So: `cohort` is declared, `aggregate` returns a metric called `cohort`, and
+    both must survive — the metric reaches the step block, and nothing warns.
+    """
+    import publishable.generators.experiment as experiment_gen
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    def _metric_named_like_the_attribute(self, units, cfg):
+        return {"cohort": float(sum(1 for row in units if row["cohort"] == "a"))}
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    monkeypatch.setattr(GenericTemplate, "aggregate", _metric_named_like_the_attribute)
+    doc = run_a_project(tmp_path, capsys=capsys, unit_attributes=["cohort"])
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "completed"
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert set(aggregated) == {"pred", "cohort"}
+    assert aggregated["cohort"]["value"] == 5
+    assert "W-STATS-AGGREGATE-FAILED" not in doc["stdout"]
+    assert "E-STEP-KEY-COLLISION" not in doc["stdout"]
 
 
 _METHOD_VARYING_STEP = '''\
@@ -1068,15 +1202,22 @@ def test_a_baseline_sweep_reports_a_corrected_interval(tmp_path, capsys, monkeyp
     assert strongest["ci95_corrected"][1] > strongest["ci95"][1]
 
 
-def test_each_member_carries_the_condition_index_of_its_own_comparison():
-    """`Member.condition_index` is read in exactly one place — `rank_family`'s
-    tie-break — so hardcoding it to `0` in `cli` changes nothing until two
-    members tie, and then it silently reorders them and hands out the wrong
-    levels. No end-to-end record carries the index, so the assignment is pinned
-    where it is made: `_comparison_step_blocks` called directly with a
-    comparison whose `of` is deliberately not `0`, the same
+def test_a_comparison_reads_its_own_condition_not_condition_zero():
+    """A comparison whose `of` is deliberately not `0` — the same
     called-directly treatment `_check_contrasts`'s kept guard gets in
-    `tests/test_validate.py`."""
+    `tests/test_validate.py` — pins that `_comparison_step_blocks` reads
+    `aggregated`/`collapsed_by_key` at *its own* `comp.of`/`comp.against`
+    rather than at a hardcoded `0`, which a copy-paste of the baseline path
+    would get right by accident whenever `of == 0` and wrong everywhere else.
+
+    This test used to also pin `Member.condition_index`, which `cli` set from
+    `comp.of` here. That field was removed: once `rank_family`'s tie-break
+    moved to `declaration_index` (assigned once, over the whole family, where
+    `cli` concatenates `vs_baseline` and declared-contrast members), nothing
+    read `condition_index` anywhere — not `rank_family`, not any other
+    function in `correction.py`, `hypotheses.py`, or `cli.py` — so it was
+    write-only data on a frozen dataclass. `where` (`"cond:2"` here) already
+    carries the addressing a reader needs."""
     from publishable.cli import _comparison_step_blocks
     from publishable.contrasts import Comparison
     from publishable.diagnostics import Collector
@@ -1105,9 +1246,7 @@ def test_each_member_carries_the_condition_index_of_its_own_comparison():
         },
     )
     assert block["s"]["r"]["ci95"] is not None
-    assert [(m.where, m.condition_index, m.step, m.metric) for m in members] == [
-        ("cond:2", 2, "s", "r")
-    ]
+    assert [(m.where, m.step, m.metric) for m in members] == [("cond:2", "s", "r")]
     assert members[0].delta == pytest.approx(block["s"]["r"]["delta"])
     assert members[0].delta != 0.0
 

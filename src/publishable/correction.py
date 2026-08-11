@@ -28,13 +28,13 @@ class Member:
     """
 
     where: str
-    condition_index: int
     step: str
     metric: str
     delta: float
     ci95: tuple[float, float] | None
     pool: tuple[float, ...] | None
     diffs: tuple[float, ...] | None
+    declaration_index: int
 
     def __post_init__(self) -> None:
         """Exactly one of `pool`/`diffs` is set whenever there is a `ci95` to
@@ -118,15 +118,16 @@ def _evidence_ratio(member: Member) -> float:
 def rank_family(members: Sequence[Member]) -> list[Member]:
     """Strongest first, so a member's rank is its index + 1.
 
-    Ties break by condition index, then by metric name, so the ordering is a
-    function of the record rather than of whichever order `cli` happened to
-    build the members in. `reference.md` requires that: a rank decides a
-    correction level, and a level that moved with iteration order would make
-    two identical runs disagree.
+    Ties break by declaration order — the index `cli` assigned when it built the
+    family, which follows the config's own ordering of comparisons and metrics.
+    `reference.md` requires that: a rank decides a correction level, and a level
+    that moved with iteration order would make two identical runs disagree. The
+    earlier key broke ties by metric *name*, which is a different ordering that
+    happened to be stable, and which reorders a family when a metric is renamed.
     """
     return sorted(
         members,
-        key=lambda m: (-_evidence_ratio(m), m.condition_index, m.metric),
+        key=lambda m: (-_evidence_ratio(m), m.declaration_index),
     )
 
 
