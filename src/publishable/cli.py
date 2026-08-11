@@ -3,6 +3,7 @@
 See docs/reference.md § Exit codes and diagnostics, § Generators, § Scaffolding.
 """
 
+import dataclasses
 import importlib
 import importlib.metadata
 import json
@@ -399,6 +400,12 @@ def _comparison_step_blocks(
                     ci95=(interval.low, interval.high) if interval else None,
                     pool=tuple(resampled.pool) if is_derived and resampled else None,
                     diffs=None if is_derived else tuple(diffs),
+                    # Placeholder: this function only sees one comparison, not
+                    # the whole family. The caller that concatenates
+                    # `vs_baseline_members` and `contrast_members` reassigns
+                    # this to the position in that combined, ordered list —
+                    # the only point where the full declaration order exists.
+                    declaration_index=0,
                 )
             )
             if comp.within is not None and min_reported_n is not None and n_paired < min_reported_n:
@@ -1289,7 +1296,15 @@ def command_run(config_path: Path) -> int:
             # record. `corrected_fields` returns `{}` under `correction: none`,
             # which is why the field is *absent* there rather than null:
             # an explicit null would claim a correction was attempted.
-            comparison_members = vs_baseline_members + contrast_members
+            # Reassigned here, not where each `Member` is constructed: this is
+            # the one point where the whole family — `vs_baseline` comparisons
+            # then declared contrasts, each in config order — exists as a
+            # single list, so it is the only place an index can be unique and
+            # monotonic across all of it rather than restarted per comparison.
+            comparison_members = [
+                dataclasses.replace(m, declaration_index=i)
+                for i, m in enumerate(vs_baseline_members + contrast_members)
+            ]
             fields = corrected_fields(comparison_members, correction_method)
             for (where_id, step_name, metric_key), values in fields.items():
                 entry = _entry_for(vs_baseline, contrasts_out, where_id, step_name, metric_key)

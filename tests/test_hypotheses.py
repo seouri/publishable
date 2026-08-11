@@ -280,10 +280,11 @@ def test_omitting_evaluate_on_defaults_to_observed():
     assert got["supported"] is True
 
 
-def _member(where, step, metric, delta, ci95):
+def _member(where, step, metric, delta, ci95, decl=0):
     return Member(where=where, condition_index=1, step=step, metric=metric,
                   delta=delta, ci95=ci95, pool=None,
-                  diffs=tuple(delta + 0.01 * ((i % 5) - 2) for i in range(60)))
+                  diffs=tuple(delta + 0.01 * ((i % 5) - 2) for i in range(60)),
+                  declaration_index=decl)
 
 
 def test_only_confirmatory_computed_hypotheses_are_counted():
@@ -363,9 +364,9 @@ def test_the_hypothesis_family_is_its_own_size_not_the_sweeps():
         contrasts=[{"id": "x", "s": {"m1": {"delta": 0.10, "ci95": [0.01, 0.19]},
                                      "m2": {"delta": 0.20, "ci95": [0.11, 0.29]}}}],
         summary={},
-        members=[_member("contrast:x", "s", "m1", 0.10, (0.01, 0.19)),
-                 _member("contrast:x", "s", "m2", 0.20, (0.11, 0.29)),
-                 _member("contrast:x", "s", "m3", 0.30, (0.21, 0.39))],
+        members=[_member("contrast:x", "s", "m1", 0.10, (0.01, 0.19), decl=0),
+                 _member("contrast:x", "s", "m2", 0.20, (0.11, 0.29), decl=1),
+                 _member("contrast:x", "s", "m3", 0.30, (0.21, 0.39), decl=2)],
         method="bonferroni", parameters_hash="sha256:1a2b",
     )
     assert {e["family_size"] for e in got} == {2}
@@ -425,7 +426,8 @@ def _thin_member(where, step, metric, delta, ci95):
     covered end to end in `test_cli.py`."""
     return Member(where=where, condition_index=1, step=step, metric=metric,
                   delta=delta, ci95=ci95,
-                  pool=tuple(sorted(delta + 0.001 * i for i in range(60))), diffs=None)
+                  pool=tuple(sorted(delta + 0.001 * i for i in range(60))), diffs=None,
+                  declaration_index=0)
 
 
 _THIN_CONTRASTS = [{"id": "x", "s": {"m": {"delta": 0.10, "ci95": [0.01, 0.19]}}}]
