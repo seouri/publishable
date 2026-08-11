@@ -66,6 +66,27 @@ def test_a_contrast_hypothesis_reads_the_entry_it_names_not_the_first():
     assert got.block == {"delta": -0.11, "ci95": [-0.19, -0.03]}
 
 
+def test_a_plain_scalar_summary_return_is_no_block_rather_than_a_crash():
+    """The Critical's second door, checked rather than assumed. A `summary` step
+    returning a bare `{"adjusted": "high"}` — no `Estimate` — never reaches
+    `_coerce_estimate`, and `_coerce_one` accepts a `str` scalar happily. It is
+    `resolve`'s `isinstance(block, dict)` guard that closes it: `summary_values`
+    leaves a non-`Estimate` return exactly as it came back, so the metric is a
+    string where a block belongs, `block` is `None`, and the verdict is an
+    honest `supported: null` rather than a `ValueError` in phase 8."""
+    got = resolve(
+        {"id": "h", "metric": "step04_agreement.bare"},
+        label_to_index={},
+        vs_baseline=None,
+        contrasts=None,
+        summary={"step04_agreement": {"bare": "high"}},
+    )
+    assert got.block is None
+    assert verdict_for(
+        {"id": "h", "direction": "greater", "threshold": 0.02}, got, None
+    )["supported"] is None
+
+
 def test_a_summary_hypothesis_takes_no_compare_and_rests_on_reported():
     """`reference.md`: a summary metric "is one value per run rather than a
     contrast between conditions", so it takes no `compare` — and core did not

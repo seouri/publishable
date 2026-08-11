@@ -78,9 +78,17 @@ def _coerce_estimate(key: str, value: Estimate, where: str, scope: str | None) -
     hypothesis names, in phase 8 — after every execution is spent and before
     `run.yaml` is written, so an unguarded `ValueError` there costs the whole
     record. Refusing at the return keeps the cost at the one step that made the
-    mistake and names it with an identifier. `n` is deliberately not held to
-    this: nothing evaluates a verdict against it, and a step that reports its
-    own `n` as a label ("612 pairs") is describing, not asserting.
+    mistake and names it with an identifier.
+
+    Not every refused shape crashed, and the two reasons are worth keeping
+    apart. A `str` `value`, and a `str` or `None` `ci95` bound, are the ones
+    that did. A `None` `value` never reached `float()` — `_tested_number` skips
+    a point estimate that is `None` — and is refused on the narrower ground
+    that `Estimate.value` is declared a number and a hypothesis naming one
+    would get a verdict of `null` from a field the type says cannot be empty.
+    `n` is not held to this rule at all: nothing evaluates a verdict against
+    it, and a step that reports its own `n` as a label ("612 pairs") is
+    describing, not asserting.
 
     The fields are coerced, not merely passed through. A mixed model hands back
     `numpy.float64` at least as often as a derived metric does, and an uncoerced
