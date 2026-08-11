@@ -76,9 +76,10 @@ def check_swept_value(value: Any) -> str | None:
     resolves the conflict by refusing the value rather than the character —
     `_` alone stays legal.
 
-    Task 4's `validate` is where this predicate is meant to be called from,
-    once `_check_sweep` exists: this is the shape of the check it should run
-    per swept value, on top of (not instead of) the existing pattern check.
+    `validate._check_sweep` calls this per swept `grid` value and reports
+    `E-SWEEP-VALUE-UNNAMEABLE`; a `baseline` entry is exempt, because
+    `label_for` renders a baseline condition as the literal `baseline` and
+    never joins its fixed values into a label.
     """
     rendered = render_value(value)
     if not re.match(SWEPT_VALUE_PATTERN, rendered):
