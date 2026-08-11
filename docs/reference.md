@@ -392,7 +392,7 @@ returns immediately after, and, likewise apart from those exceptions, none of th
 | `data.input_dir` is not a directory, or is a directory with nothing in it | `E-DATA-UNREADABLE` |
 | Once no experiment was preloaded, `entrypoint` is a non-empty string, and a repository root was found for it, importing it raises anything — a `SystemExit` at module scope, `entrypoint` not shaped `<module>:<attribute>`, or any other exception; skipped without a report when no repository root exists at all, since there is then no `src/` to import from | `E-ENTRYPOINT-IMPORT` |
 | `entrypoint` is empty, or is not a string | `E-ENTRYPOINT-REQUIRED` |
-| A hypothesis's `compare.to` is `baseline` and `sweep.baseline` is not declared | `E-HYPOTHESIS-BASELINE` |
+| A hypothesis's `compare.to` is `baseline` — explicit, or implicit when `compare.condition` is set and neither `to` nor `compare.contrast` is — and `sweep.baseline` is not declared | `E-HYPOTHESIS-BASELINE` |
 | Once the entrypoint has imported and the metric's step is one it declares, a hypothesis names a metric whose scope is not `summary`, sets `evaluate_on` to `ci95_lower` or `ci95_upper`, and no metric this run computes could ever carry an interval — `data.units` is undeclared and the template defines no `aggregate` | `E-HYPOTHESIS-BOUND` |
 | A hypothesis's `compare` declares `to`, and its value is not `baseline` | `E-HYPOTHESIS-COMPARE-TO` |
 | A hypothesis's `compare.condition` names a label the run's `sweep` does not declare, or names the baseline's own label — checked only once a baseline is declared, since `E-HYPOTHESIS-BASELINE` already covers the case where none is, and only once `sweep` expands cleanly enough to resolve condition labels at all | `E-HYPOTHESIS-CONDITION` |
@@ -2607,6 +2607,8 @@ Not every key above is required, and `validate` enforces the set below rather th
 | `threshold` | required | a number with no default — the same absent-rather-than-guessed rule as `direction` (`E-HYPOTHESIS-THRESHOLD`) |
 | `evaluate_on` | optional | `observed` when absent; `ci95_lower` or `ci95_upper` otherwise (`E-HYPOTHESIS-EVALUATE-ON` when present and none of the three) |
 | `compare` | conditional | absent exactly when `metric` names a `scope: "summary"` step — a summary metric is one value per run, not a contrast between conditions — and required for every other scope; both directions are `E-HYPOTHESIS-FORM` |
+
+**`compare` names both sides of the comparison, not one.** A condition alone says *what's being measured*; a comparison also needs *what it's measured against*. `to: baseline` is the ordinary spelling of the second side — the named condition against the declared baseline — and a declared contrast, named through `compare.contrast`, is the other. `compare: {condition: X}` with neither `to: baseline` nor a declared `sweep.baseline` names a condition and nothing to compare it against, and `validate` refuses it (`E-HYPOTHESIS-BASELINE`) rather than defaulting the missing side to baseline: a hypothesis whose comparison cannot be resolved has no quantity under test, the same reason `metric` is required, and a silent default would decide what a pre-registered hypothesis tested rather than what the config declared.
 
 Core evaluates each hypothesis against the results and writes the verdict into `run.yaml`:
 

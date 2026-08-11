@@ -1355,12 +1355,27 @@ def _check_hypotheses(
     reported elsewhere as `E-ENTRYPOINT-IMPORT`) is not a hypothesis fault, so
     that case is silently skipped rather than double-reported.
 
-    **`compare.to: baseline` needs a declared baseline.** `reference.md` §
-    Validation, "Hypothesis needs baseline": `hypotheses[0].compare.to:
-    baseline` but `sweep.baseline` is not declared. Nothing downstream guards
-    this — `hypotheses.resolve` reads `vs_baseline`, which `cli` never
-    populates without a declared baseline, so the hypothesis would silently
-    resolve to no observation rather than being refused before a run starts.
+    **`compare.to: baseline` needs a declared baseline — and so does a bare
+    `compare.condition` with no `to` at all, because `hypotheses.resolve` reads
+    `compare.condition` as a baseline comparison whether or not `to` spells it
+    out.** `reference.md` § Validation, "Hypothesis needs baseline":
+    `hypotheses[0].compare.to: baseline` but `sweep.baseline` is not declared.
+    Nothing downstream guards this — `hypotheses.resolve` reads `vs_baseline`,
+    which `cli` never populates without a declared baseline, so the hypothesis
+    would silently resolve to no observation rather than being refused before a
+    run starts. The same gap exists one form earlier: `compare: {condition: X}`
+    with neither `to: baseline` nor a declared `sweep.baseline` used to fire
+    neither this check (no `to` to read) nor `E-HYPOTHESIS-CONDITION` (the label
+    can resolve just fine), so it validated clean while naming a condition and
+    nothing to compare it against — `reference.md` § Pre-registration's ruling
+    is to refuse that form rather than default the missing side to baseline, so
+    `E-HYPOTHESIS-BASELINE`'s condition is widened to `to == "baseline"` *or*
+    (`condition` present, `to` absent, and `contrast` absent too) — the last
+    exclusion because `hypotheses.resolve` checks `"contrast" in compare` first
+    and returns from that branch without ever reading `condition`, so a
+    `{contrast: x, condition: y}` hypothesis resolves through the contrast and
+    needs no baseline at all — rather than minting a second code for one fault
+    that is the same fault under a different spelling.
     `E-HYPOTHESIS-BASELINE`.
 
     **`compare.to` has exactly one value, and it is `baseline`.**
@@ -1574,14 +1589,40 @@ def _check_hypotheses(
                     "comparison that will never be made and is silently evaluated against "
                     "the baseline instead",
                 )
-            missing_baseline = compare.get("to") == "baseline" and not has_baseline
+            # `to: baseline` is the ordinary spelling, but `hypotheses.resolve`
+            # reads `compare.condition` as a baseline comparison whether or not
+            # `to` says so — so a bare `{condition: X}` implies the same
+            # comparison `to: baseline` spells out, and needs the same declared
+            # baseline. Without this second branch, that bare form fired neither
+            # this check (no `to` to read) nor `E-HYPOTHESIS-CONDITION` (the
+            # label can resolve just fine), and validated clean while naming a
+            # condition and nothing to compare it against.
+            #
+            # Excludes `contrast in compare`: `resolve` checks `"contrast" in
+            # compare` first and returns from that branch without ever reading
+            # `condition` — so `{contrast: x, condition: y}` resolves through the
+            # contrast, not the baseline, and needs no baseline at all. Without
+            # this exclusion, a hypothesis that names both would be refused for a
+            # comparison it was never going to make.
+            implies_baseline = compare.get("to") == "baseline" or (
+                "condition" in compare and "to" not in compare and "contrast" not in compare
+            )
+            missing_baseline = implies_baseline and not has_baseline
             if missing_baseline:
+                if "to" in compare:
+                    detail = "sets `to: baseline`, but `sweep.baseline` is not declared"
+                else:
+                    detail = (
+                        "names `condition` with no `to` and no declared `sweep.baseline` — "
+                        "a `compare` names both sides of the comparison, and `to: baseline` "
+                        "is the ordinary spelling of the side this is missing"
+                    )
                 c.error(
                     "E-HYPOTHESIS-BASELINE",
                     f"hypotheses[{i}].compare",
-                    "sets `to: baseline`, but `sweep.baseline` is not declared — nothing "
-                    "populates a baseline comparison without one, so this hypothesis would "
-                    "silently resolve to no observation rather than the comparison it names",
+                    f"{detail} — nothing populates a baseline comparison without one, so this "
+                    "hypothesis would silently resolve to no observation rather than the "
+                    "comparison it names",
                 )
             # Gated on `missing_baseline` so one fault gets one code: with no
             # declared baseline there is no comparison for *any* label to name,

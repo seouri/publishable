@@ -2708,6 +2708,38 @@ def test_a_hypothesis_compared_to_something_other_than_the_baseline_is_refused(
     assert "E-HYPOTHESIS-COMPARE-TO" in found
 
 
+def test_a_compare_to_naming_another_condition_gets_one_code_not_two(
+    write_config_two_scopes,
+):
+    """`compare.to: method=kendall` with no `sweep.baseline` declared is a
+    tempting way to have the widened `E-HYPOTHESIS-BASELINE` branch over-fire:
+    naming *any* other condition through `condition` with no baseline declared
+    looks like the bare-condition form this task refuses. It isn't — `to` here
+    explicitly names a value other than `baseline`, which `E-HYPOTHESIS-COMPARE-TO`
+    already refuses on its own, and firing `E-HYPOTHESIS-BASELINE` too would be
+    the double-report one fault getting two codes exists to avoid, exactly as the
+    baseline-itself case already guards against it for `E-HYPOTHESIS-CONDITION`."""
+    found = codes(
+        write_config_two_scopes(
+            {
+                "sweep": {"grid": {"analysis.method": ["spearman", "kendall"]}},
+                "hypotheses": [
+                    {
+                        "id": "h",
+                        "kind": "confirmatory",
+                        "metric": "step01_measure.r",
+                        "compare": {"condition": "method=spearman", "to": "method=kendall"},
+                        "direction": "greater",
+                        "threshold": 0.5,
+                    }
+                ],
+            }
+        )
+    )
+    assert "E-HYPOTHESIS-COMPARE-TO" in found
+    assert "E-HYPOTHESIS-BASELINE" not in found
+
+
 def test_a_sweep_without_a_baseline_still_needs_one_for_a_baseline_comparison(
     write_config_two_scopes,
 ):
@@ -2737,6 +2769,64 @@ def test_a_sweep_without_a_baseline_still_needs_one_for_a_baseline_comparison(
         )
     )
     assert "E-HYPOTHESIS-BASELINE" not in with_baseline
+
+
+def test_a_compare_naming_a_condition_with_no_baseline_is_refused(write_config_two_scopes):
+    """`compare: {condition: X}` with no `to` and no `sweep.baseline` used to fire
+    neither check: `E-HYPOTHESIS-BASELINE` read `compare.get("to") == "baseline"`,
+    which is `False` with no `to` key at all, and `E-HYPOTHESIS-CONDITION` never
+    fires because `method=spearman` is a label the grid-only sweep below genuinely
+    declares — it resolves cleanly, it just resolves to nothing to compare
+    against. `reference.md` § Pre-registration's ruling is to refuse this rather
+    than default the missing side to `baseline`."""
+    grid_only = {"grid": {"analysis.method": ["spearman"]}}
+    found = codes(
+        write_config_two_scopes(
+            {
+                "sweep": grid_only,
+                "hypotheses": [
+                    {
+                        "id": "h",
+                        "kind": "confirmatory",
+                        "metric": "step01_measure.r",
+                        "compare": {"condition": "method=spearman"},
+                        "direction": "greater",
+                        "threshold": 0.5,
+                    }
+                ],
+            }
+        )
+    )
+    assert "E-HYPOTHESIS-BASELINE" in found
+
+
+def test_a_bare_compare_condition_with_a_declared_baseline_is_not_flagged(
+    write_config_two_scopes,
+):
+    """The ruling refuses the form with *no* baseline anywhere to name — not the
+    bare `{condition: X}` spelling itself. Once `sweep.baseline` is declared,
+    `hypotheses.resolve` has a `vs_baseline` block to read whether or not `to`
+    spells out that it's the baseline being compared against, so this must stay
+    clean; an over-broad check that refused every bare `condition` regardless of
+    a declared baseline would wrongly flag it."""
+    found = codes(
+        write_config_two_scopes(
+            {
+                "sweep": _TWO_CONDITIONS,
+                "hypotheses": [
+                    {
+                        "id": "h",
+                        "kind": "confirmatory",
+                        "metric": "step01_measure.r",
+                        "compare": {"condition": "method=spearman"},
+                        "direction": "greater",
+                        "threshold": 0.5,
+                    }
+                ],
+            }
+        )
+    )
+    assert "E-HYPOTHESIS-BASELINE" not in found
 
 
 def test_a_hypothesis_naming_an_undeclared_condition_is_refused(write_config_two_scopes):
@@ -3011,6 +3101,73 @@ def test_a_hypothesis_naming_a_declared_contrast_is_not_flagged(write_config_two
         )
     )
     assert "E-HYPOTHESIS-CONTRAST" not in found
+
+
+def test_a_declared_contrast_needs_no_baseline_even_under_a_grid_only_sweep(
+    write_config_two_scopes,
+):
+    """A pure `compare: {contrast: x}` hypothesis resolves entirely through
+    `statistics.contrasts` — `hypotheses.resolve` never reaches `vs_baseline` for
+    it — so it must stay clean even when `sweep.baseline` is undeclared. The other
+    contrast test declares a baseline via `_TWO_CONDITIONS`, which leaves the
+    widened `E-HYPOTHESIS-BASELINE` branch (added for the bare-`condition` form)
+    untested against the pure-contrast form under exactly the sweep shape that
+    would trip it if the branch ever grew to include `contrast`."""
+    found = codes(
+        write_config_two_scopes(
+            {
+                "sweep": {"grid": {"analysis.method": ["spearman", "kendall"]}},
+                "statistics": {
+                    "contrasts": [
+                        {"id": "x", "of": "method=spearman", "against": "method=kendall"}
+                    ]
+                },
+                "hypotheses": [
+                    {
+                        "id": "h",
+                        "kind": "confirmatory",
+                        "metric": "step01_measure.r",
+                        "compare": {"contrast": "x"},
+                        "direction": "greater",
+                        "threshold": 0.5,
+                    }
+                ],
+            }
+        )
+    )
+    assert "E-HYPOTHESIS-BASELINE" not in found
+
+
+def test_a_contrast_alongside_condition_needs_no_baseline_either(write_config_two_scopes):
+    """`hypotheses.resolve` checks `"contrast" in compare` first and returns from
+    that branch without ever reading `condition` — so a hypothesis naming both
+    resolves through the contrast, never through `vs_baseline`, and needs no
+    declared baseline regardless of what `condition` says. Without the `contrast
+    not in compare` exclusion on the widened branch, this config would be refused
+    for a baseline comparison it was never going to make."""
+    found = codes(
+        write_config_two_scopes(
+            {
+                "sweep": {"grid": {"analysis.method": ["spearman", "kendall"]}},
+                "statistics": {
+                    "contrasts": [
+                        {"id": "x", "of": "method=spearman", "against": "method=kendall"}
+                    ]
+                },
+                "hypotheses": [
+                    {
+                        "id": "h",
+                        "kind": "confirmatory",
+                        "metric": "step01_measure.r",
+                        "compare": {"contrast": "x", "condition": "method=spearman"},
+                        "direction": "greater",
+                        "threshold": 0.5,
+                    }
+                ],
+            }
+        )
+    )
+    assert "E-HYPOTHESIS-BASELINE" not in found
 
 
 def test_a_bound_hypothesis_is_refused_when_no_metric_could_carry_an_interval(
