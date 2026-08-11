@@ -1202,16 +1202,22 @@ def _check_hypotheses(doc: dict[str, Any], c: Collector, experiment: Any | None)
     same mistake inverted" without one. Both directions are `E-HYPOTHESIS-FORM`.
 
     **`direction` and `evaluate_on` are closed vocabularies, refused here rather
-    than misread.** Neither is echoed into the record (`verdict_evaluated_on` is
-    spelled out from `evaluate_on`, but nothing renders `direction` at all), so a
-    typo in either is otherwise invisible: `hypotheses.py` treats any `direction`
-    that isn't `"greater"` as `"less"` before this task, and reads any
-    `evaluate_on` that isn't `"observed"` or `"ci95_lower"` as `"ci95_upper"` —
-    both silently invert or redirect a verdict rather than raising. `direction`
-    has no named enum anywhere in the four documents; `evaluate_on` does
-    (`observed | ci95_lower | ci95_upper`), but the same reasoning applies to
-    both, so both are checked here under their own identifiers,
-    `E-HYPOTHESIS-DIRECTION` and `E-HYPOTHESIS-EVALUATE-ON`.
+    than reaching the evaluator at all.** The two fields are not symmetric in
+    what happens if this check didn't exist. `hypotheses.py::verdict_for` already
+    guards `direction`: `supported` is set only when `direction in ("greater",
+    "less")`, so an out-of-vocabulary value (Task 4's review found `greatr`) gets
+    `supported: None` rather than a wrong verdict — the refusal here is a second,
+    earlier line of defence, so a mistyped `direction` never even reaches a real
+    run, rather than being caught only after one. `evaluate_on` has no such
+    guard: `_tested_number` reads `evaluate_on == "observed"` and, failing that,
+    `evaluate_on == "ci95_lower"` — anything else, including a typo of either
+    string, silently falls through to `ci95_upper` and both fields go on to
+    build a genuinely different verdict, with nothing in the record to reveal
+    that the value was never recognized. So `E-HYPOTHESIS-EVALUATE-ON` is closing
+    a live, currently-unguarded misread; `E-HYPOTHESIS-DIRECTION` is moving an
+    already-guarded one earlier. `direction` has no named enum anywhere in the
+    four documents; `evaluate_on`'s is documented
+    (`observed | ci95_lower | ci95_upper`) but no identifier existed for either.
     """
     entries = doc.get("hypotheses")
     if not isinstance(entries, list) or not entries:
@@ -1236,9 +1242,10 @@ def _check_hypotheses(doc: dict[str, Any], c: Collector, experiment: Any | None)
             c.error(
                 "E-HYPOTHESIS-DIRECTION",
                 f"hypotheses[{i}].direction",
-                f"is `{direction}`; the only directions are `greater` and `less` — anything "
-                "else is read as `less` rather than raising, and `direction` is never echoed "
-                "into the record for a reader to catch the mistake by eye",
+                f"is `{direction}`; the only directions are `greater` and `less` — the "
+                "evaluator already refuses to guess by returning `supported: None` for "
+                "anything else, but that means a mistyped direction still reaches a full "
+                "run and comes back untested rather than being refused before one starts",
             )
 
         evaluate_on = hyp.get("evaluate_on")
@@ -1247,7 +1254,9 @@ def _check_hypotheses(doc: dict[str, Any], c: Collector, experiment: Any | None)
                 "E-HYPOTHESIS-EVALUATE-ON",
                 f"hypotheses[{i}].evaluate_on",
                 f"is `{evaluate_on}`; the only values are `observed`, `ci95_lower` and "
-                "`ci95_upper` — anything else is read as `ci95_upper` rather than raising",
+                "`ci95_upper` — unlike `direction`, the evaluator has no guard for this one "
+                "and silently reads anything else as `ci95_upper`, so a typo changes which "
+                "bound the verdict is about rather than being caught anywhere",
             )
 
         metric = hyp.get("metric")

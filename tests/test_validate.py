@@ -2166,3 +2166,15 @@ def test_a_valid_evaluate_on_is_not_flagged(write_config_two_scopes):
                         "evaluate_on": "ci95_lower"}],
     }))
     assert "E-HYPOTHESIS-EVALUATE-ON" not in found
+
+
+def test_a_hypothesis_entry_that_is_not_a_mapping_is_refused_as_a_metric_fault(write_config):
+    """`hypotheses: [not-a-mapping]` is still a list — `_check_shape` has nothing to
+    say about it — so `_check_hypotheses` must refuse a non-mapping entry itself
+    rather than call `.get` on it, the same class of crash `_check_contrasts`
+    guards against for `statistics.contrasts`."""
+    found = codes(write_config({
+        "sweep": _TWO_CONDITIONS,
+        "hypotheses": ["not-a-mapping"],
+    }))
+    assert "E-HYPOTHESIS-METRIC" in found
