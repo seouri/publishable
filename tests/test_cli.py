@@ -764,6 +764,82 @@ def test_a_total_resample_failure_is_disclosed_not_silent(tmp_path, capsys, monk
         assert metric["resample_draws"] is not None
 
 
+def test_a_templates_aggregate_sees_declared_unit_attributes(tmp_path, monkeypatch, capsys):
+    """`data.units` declares `cohort`; a template reading `row["cohort"]` must find it.
+
+    The roster carries it, no step records it, and before this it never reached
+    the table — so a template that stratifies on a declared attribute could not,
+    even though `report_by` splits on the very same attribute one layer out.
+
+    `run_a_project`'s roster writes `cohort` as `'ab'[i % 2]` over `i` in
+    `1..units`, so the default 10 units are `b,a,b,a,…` — five of them `a`.
+    Declared through `unit_attributes=["cohort"]`, since unit resolution reads
+    only what the config names (`E-UNITS-ATTR-MISSING` for one the table lacks).
+    """
+    import publishable.generators.experiment as experiment_gen
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    def _count_cohort_a(self, units, cfg):
+        return {"n_cohort_a": float(sum(1 for row in units if row["cohort"] == "a"))}
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    monkeypatch.setattr(GenericTemplate, "aggregate", _count_cohort_a)
+    doc = run_a_project(tmp_path, capsys=capsys, unit_attributes=["cohort"])
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "completed"
+    metric = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"][
+        "n_cohort_a"
+    ]
+    assert metric["value"] == 5
+    # An attribute-reading `aggregate` must survive the resampled draws too, or
+    # the metric would reach `run.yaml` with no interval at all: a draw's table
+    # is rebuilt from rows inside `stats.py`, which never sees the roster.
+    assert metric["ci95"] is not None
+    assert metric["resample_draws"] == 2000
+    assert "W-STATS-AGGREGATE-FAILED" not in doc["stdout"]
+
+
+def test_a_declared_unit_attribute_is_one_of_the_tables_columns(tmp_path, monkeypatch, capsys):
+    """`columns` must name the attribute, not merely carry it in every row.
+
+    The four operations are the whole contract (`reference.md` § Templates), so
+    a template discovering what it may read asks `units.columns` — an attribute
+    present by `row["cohort"]` but absent from `columns` would read as a column
+    the table does not hold. This is the assertion the value test above passes
+    without.
+    """
+    import publishable.generators.experiment as experiment_gen
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    def _report_columns(self, units, cfg):
+        return {
+            "cohort_is_a_column": float("cohort" in units.columns),
+            "arm_is_a_column": float("arm" in units.columns),
+            # The third of the four operations: column access. `__getattr__`
+            # keys on "this name appears in some row", so a merged attribute
+            # must come back full length, one entry per row, like any column.
+            "cohort_reads_full_length": float(len(units.cohort) == len(units)),
+        }
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    monkeypatch.setattr(GenericTemplate, "aggregate", _report_columns)
+    doc = run_a_project(tmp_path, capsys=capsys, unit_attributes=["cohort"])
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert aggregated["cohort_is_a_column"]["value"] == 1.0
+    assert aggregated["cohort_reads_full_length"]["value"] == 1.0
+    # `arm` is in the roster file and *not* declared, so it is not a unit
+    # attribute at all: the table carries what the config declared, not every
+    # column the roster source happened to have.
+    assert aggregated["arm_is_a_column"]["value"] == 0.0
+    # And the attribute reaches `aggregate` and nothing else: it is not a
+    # measurement, so it gets no summary of its own, no `ci95`, and no seat in
+    # the correction family — which is why the merge is into the rows of the
+    # table `aggregate` reads rather than into the collapsed table
+    # `summarize_step`, `repeat_spread` and every contrast also read.
+    assert "cohort" not in aggregated
+
+
 _METHOD_VARYING_STEP = '''\
 # src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
 from publishable import BaseStep

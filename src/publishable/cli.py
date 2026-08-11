@@ -61,6 +61,7 @@ from publishable.stats import (
     repeat_spread,
     resample_seed,
     summarize_step,
+    unit_table_from_rows,
 )
 from publishable.strata import levels_for
 from publishable.sweep import condition_dir_name, expand, sweep_document
@@ -205,6 +206,53 @@ def _differing_axes(of: "Condition", against: "Condition") -> list[str]:
     return [
         k for k in ordered_keys if of.values.get(k, _MISSING) != against.values.get(k, _MISSING)
     ]
+
+
+def _attributed(table: UnitTable, attributes: dict[str, dict[str, Any]]) -> UnitTable:
+    """The same table, with each unit's declared attributes merged into its row.
+
+    `data.units.attributes` declares what the roster carries; `reference.md` §
+    Templates has `aggregate` reading the unit table, and a template that wants
+    to stratify on a declared attribute has nowhere else to read it from — the
+    collapsed table holds only *recorded* columns, because that is all a step's
+    `io.record` puts there. So the roster is merged in here, at the one boundary
+    where `aggregate` is called.
+
+    Merged into the rows rather than into `collapsed` itself, and that is the
+    load-bearing choice: `collapsed` is also what `summarize_step` summarizes
+    column by column, what `repeat_spread` reads, and what a contrast
+    differences. A numeric attribute (an age, a dose) landing there would be
+    published as a metric with its own `ci95` and its own seat in the
+    correction family, and would be handed a repeat-dispersion figure for a
+    value that cannot vary across repeats. Here it reaches `aggregate` and
+    nothing else.
+
+    An attribute is carried through **unchanged**: it comes from the roster
+    rather than from an execution, so unlike a recorded numeric column it has
+    no repeats to average over. A recorded column of the same name is already
+    refused upstream — `io.record` raises `ContractError` ·
+    `E-STEP-KEY-COLLISION` — so this merge arbitrates no precedence; it merely
+    must not be the thing that papers over that collision, which is why the
+    attributes are applied last rather than first.
+
+    `unit` is restored after the merge because nothing refuses an attribute
+    *named* `unit` (`units.py` reserves `key`, `paths` and `attributes`, the
+    fields of `Unit` itself), and the unit key column must survive: a bootstrap
+    draw duplicates units on purpose, and `percentile_of_derived` keeps the real
+    keys inside every draw precisely so a template reading `unit` sees the
+    roster it was drawn from.
+
+    Row-level, so the four operations the table promises are untouched and
+    `columns` — derived from the rows — names the attributes for free.
+    """
+    if not attributes:
+        return table
+    rows = []
+    for row in table:
+        merged = {**row, **attributes.get(row["unit"], {})}
+        merged["unit"] = row["unit"]
+        rows.append(merged)
+    return unit_table_from_rows(rows)
 
 
 def _comparison_step_blocks(
@@ -828,6 +876,13 @@ def command_run(config_path: Path) -> int:
             # one as having a recording step it never ran.
             template = get_template(doc.get("experiment_type", ""))
             resample_seed_value = resample_seed(digest)
+            # The roster is resolved once per run and shared across every
+            # condition, so this mapping is built once too — it is the same
+            # attributes for every condition, every step and every draw
+            # (`_attributed` says what it is for). Empty when the config
+            # declares no `data.units.attributes`, which makes the merge a
+            # no-op for every project that declares none.
+            unit_attributes = {u.key: dict(u.attributes) for u in roster}
             # `statistics.resample` isn't honored yet (`E-STATS-RESAMPLE-UNSUPPORTED`
             # refuses a declared one), so this is the one place the default
             # `reference.md` § How a metric becomes a number documents — bootstrap
@@ -905,7 +960,10 @@ def command_run(config_path: Path) -> int:
                         # there (`stats.py`'s docstring says why).
                         try:
                             derived = coerce_scalars(
-                                template.aggregate(UnitTable(collapsed), cond_cfg),
+                                template.aggregate(
+                                    _attributed(UnitTable(collapsed), unit_attributes),
+                                    cond_cfg,
+                                ),
                                 where=aggregate_where,
                             )
                         except Exception as exc:
@@ -933,19 +991,37 @@ def command_run(config_path: Path) -> int:
                             # straight into the failure this block exists to contain,
                             # rather than the honest `ContractError` a resampled
                             # draw can survive as "degenerate" in `stats.py`.
+                            # `attrs` is passed in rather than closed over for the
+                            # same reason `key`, `cfg` and `tmpl` are, and the
+                            # closure re-attributes whatever table it is handed:
+                            # `stats.py` rebuilds a table per bootstrap draw (and
+                            # per side of a derived contrast) from rows it takes
+                            # from `collapsed`, and it never sees the roster. So
+                            # this is the one place that can put the attributes
+                            # back — without it an attribute-reading `aggregate`
+                            # computes its point estimate cleanly and then fails
+                            # every single draw, reaching `run.yaml` with
+                            # `resample_draws: 0` and no interval, and takes a
+                            # derived contrast's *point estimate*
+                            # (`paired_delta_of_derived`) down with it.
                             def _make_resample_fn(
-                                key: str, cfg: Config, tmpl: BaseTemplate
+                                key: str,
+                                cfg: Config,
+                                tmpl: BaseTemplate,
+                                attrs: dict[str, dict[str, Any]],
                             ) -> Callable[[UnitTable], float | None]:
                                 def resample_fn(units: UnitTable) -> float | None:
                                     value = coerce_scalars(
-                                        tmpl.aggregate(units, cfg), where=aggregate_where
+                                        tmpl.aggregate(_attributed(units, attrs), cfg),
+                                        where=aggregate_where,
                                     ).get(key)
                                     return None if value is None else float(value)
 
                                 return resample_fn
 
                             resample_fns = {
-                                key: _make_resample_fn(key, cond_cfg, template) for key in derived
+                                key: _make_resample_fn(key, cond_cfg, template, unit_attributes)
+                                for key in derived
                             }
                     collapsed_by_key[(cond.index, step_name)] = collapsed
                     derived_by_key[(cond.index, step_name)] = derived
