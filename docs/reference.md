@@ -370,11 +370,14 @@ already commits to deleting on a schedule neither this table nor its author cont
 Each row states the condition, not the wording.
 
 Two faults return `validate_config` before any row below runs: a container-shaped
-`E-CONFIG-SHAPE` fault, and `E-TEMPLATE-UNKNOWN`. Every row in this table fires only once
+`E-CONFIG-SHAPE` fault, and `E-TEMPLATE-UNKNOWN`. Every row in this table fires only after
 both have already passed, except the four `E-CONFIG-*` rows, which are found before that
 return is possible, and `E-TEMPLATE-UNKNOWN` itself, which is what triggers it rather than
-sitting behind it. A config with a container-shape fault or an unresolvable `experiment_type`
-reports exactly that one finding, and none of this table's others, for the whole file.
+sitting behind it. A container-shape fault reports every `E-CONFIG-SHAPE` finding
+`_check_shape` turns up — it loops over every block rather than stopping at the first — and,
+apart from the `E-CONFIG-*` exceptions above, none of this table's other rows; an
+unresolvable `experiment_type` reports `E-TEMPLATE-UNKNOWN` exactly once, since that check
+returns immediately after, and, likewise apart from those exceptions, none of the others.
 
 | Reported when | Code |
 |---|---|
