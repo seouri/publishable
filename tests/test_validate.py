@@ -76,6 +76,8 @@ class CohortPilotExperiment(BaseExperiment):
 
 _BROKEN_EXPERIMENT = "raise RuntimeError('module scope blew up')\n"
 
+_EXITING_EXPERIMENT = "import sys\nsys.exit(3)\n"
+
 
 @pytest.fixture
 def write_config_nondet(git_repo: Path, write_config):
@@ -96,6 +98,19 @@ def write_config_broken(git_repo: Path, write_config):
     def _write(overrides: dict | None = None) -> Path:
         path = write_config(overrides)
         write_experiment_module(git_repo, _BROKEN_EXPERIMENT)
+        return path
+
+    return _write
+
+
+@pytest.fixture
+def write_config_exits(git_repo: Path, write_config):
+    """`write_config`, but the entrypoint's module calls `sys.exit()` at import —
+    a `SystemExit`, which does not inherit from `Exception`."""
+
+    def _write(overrides: dict | None = None) -> Path:
+        path = write_config(overrides)
+        write_experiment_module(git_repo, _EXITING_EXPERIMENT)
         return path
 
     return _write
@@ -1625,6 +1640,18 @@ def test_a_broken_entrypoint_does_not_also_warn_about_determinism(write_config_b
 def test_the_import_failure_message_names_the_exception(write_config_broken):
     message = messages_by_code(write_config_broken({}))["E-ENTRYPOINT-IMPORT"]
     assert "RuntimeError" in message and "module scope blew up" in message
+
+
+def test_an_entrypoint_that_exits_at_module_scope_is_reported_not_propagated(
+    write_config_exits,
+):
+    """`sys.exit()` at import is a SystemExit, which is not an Exception.
+
+    Without an explicit arm it escapes `validate`'s catch and takes the process
+    with it — the user's exit code, and no diagnostic naming the entrypoint.
+    """
+    message = messages_by_code(write_config_exits({}))["E-ENTRYPOINT-IMPORT"]
+    assert "SystemExit" in message
 
 
 def test_an_entrypoint_without_a_colon_says_so_rather_than_blaming_the_import(write_config):

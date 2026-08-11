@@ -216,6 +216,17 @@ def validate_config(
         try:
             if repo_root is not None:
                 experiment = load_experiment(repo_root, entrypoint)
+        except SystemExit as exc:
+            # `SystemExit` is a `BaseException`, so the broad `except Exception` below
+            # does not see it. A user package calling `sys.exit()` at module scope —
+            # or building an `argparse` parser at import — would otherwise end the
+            # process with the user's own exit code and no diagnostic at all, which
+            # is the one outcome `validate` is contracted never to produce.
+            c.error(
+                "E-ENTRYPOINT-IMPORT",
+                "entrypoint",
+                f"could not be imported: SystemExit: {exc.code}",
+            )
         except Exception as exc:
             # Deliberately broad. Importing user code can fail every way user code
             # can fail — a syntax error, a missing dependency, a module-scope raise —
