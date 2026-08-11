@@ -193,6 +193,39 @@ def test_a_wrong_typed_container_is_still_fatal(tmp_path: Path) -> None:
     assert "E-CONFIG-SHAPE" in [f.code for f in findings]
 
 
+def test_a_wrong_typed_input_dir_does_not_crash_unit_resolution(tmp_path: Path) -> None:
+    """`_check_data` guards its own `Path(input_dir)` call, but `_check_units` makes
+    a SECOND, independent `Path(input_dir)` call — reached only once `data.units` is
+    declared, which is exactly the shape the original three-guard survey never
+    exercised (see the task report). Before `_check_units` had its own guard, this
+    config crashed `validate_config` with a bare `TypeError` from `Path()`, discarding
+    every finding the pass had collected up to that point — worse than no envelope at
+    all, since `check_envelope` had already recorded `E-CONFIG-TYPE` for this exact
+    leaf and the crash threw it away."""
+    findings = _validate_with(
+        tmp_path,
+        {"data": {"input_dir": ["a", "list"], "units": {"from": "index.csv", "key": "p1"}}},
+    )
+
+    assert "E-CONFIG-TYPE" in [f.code for f in findings]
+
+
+def test_a_wrong_typed_units_key_does_not_crash_table_resolution(tmp_path: Path) -> None:
+    """`_from_table` (`units.py`) hashes `data.units.key` against a `set` of column
+    names (`key_col not in columns`), which raises `TypeError: unhashable type` for a
+    list or dict — not the `ContractError` `_check_units`'s `except` is built to
+    catch. Before `_check_units` guarded this leaf's type before calling
+    `resolve_units`, this config crashed `validate_config` the same way the input_dir
+    case above did, for the same reason: a leaf fault is deliberately non-fatal, so
+    `_check_units` reaches `resolve_units` on a still-malformed `doc`."""
+    findings = _validate_with(
+        tmp_path,
+        {"data": {"units": {"from": "index.csv", "key": ["a", "list"]}}},
+    )
+
+    assert "E-CONFIG-TYPE" in [f.code for f in findings]
+
+
 def test_a_valid_config_reports_nothing(write_config):
     assert codes(write_config()) == set()
 

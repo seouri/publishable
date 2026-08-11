@@ -490,12 +490,35 @@ def _check_units(doc: dict[str, Any], c: Collector) -> UnitList | None:
     input_dir = data.get("input_dir")
     if not input_dir:
         return None  # E-DATA-REQUIRED already reported by _check_data
+    if not isinstance(input_dir, str):
+        # `check_envelope` is what REPORTS this (E-CONFIG-TYPE) — this guard
+        # exists because this function may be reached without it having run: a
+        # leaf fault is deliberately non-fatal, so `_check_units` still runs on
+        # a still-malformed `doc`, and `Path()` requires a str/PathLike. This is
+        # a second, independent `Path(input_dir)` call from the one `_check_data`
+        # already guards — the two read the same leaf for two different purposes
+        # (whether the directory is usable at all vs. whether a roster resolves
+        # against it), so each needs its own guard.
+        return None
     path = Path(input_dir).expanduser()
     if not path.is_absolute() or not path.is_dir() or not any(path.iterdir()):
         return None  # E-DATA-NOT-ABSOLUTE / E-DATA-UNREADABLE already reported by _check_data
     source = units_decl.get("from")
     if isinstance(source, dict) and "resolver" in source:
         return None  # E-DATA-RESOLVER-UNSUPPORTED already reported by _check_unimplemented
+    key = units_decl.get("key")
+    if key is not None and not isinstance(key, str):
+        # `check_envelope` is what REPORTS this (E-CONFIG-TYPE) — this guard
+        # exists because this function may be reached without it having run.
+        # `_from_table` hashes `key` against a `set` of column names
+        # (`key_col not in columns`), which raises `TypeError: unhashable type`
+        # for a list or dict rather than the `ContractError` the `except` below
+        # is built to catch — a plain wrong-but-hashable type (an int, a bool)
+        # does not crash there, but skipping uniformly on any wrong type keeps
+        # this guard matching what `check_envelope` already typed the leaf as,
+        # rather than only covering the unhashable subset that happens to crash
+        # today.
+        return None
     try:
         return resolve_units(units_decl, path)
     except ContractError as exc:
