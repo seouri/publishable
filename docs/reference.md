@@ -385,6 +385,10 @@ provenance:
                                                # can only observe"
   input_manifest: "manifest/input.json"
   input_manifest_hash: sha256:3d8a...
+  input_manifest_changed: []                   # paths that drifted between the manifest's build and
+                                               #   its re-verification at run end; empty means none did.
+                                               #   Non-empty fails the run — see "What status means and
+                                               #   when a run keeps going"
   units: {n: 240, key: patient_id}
   units_hash: sha256:c40e...                   # of the resolved unit list
   allocation: null                             # "allocation.json" and its hash, when an arm
@@ -396,6 +400,14 @@ provenance:
       used: ["step01_load_cohort/cohort.parquet"]
   publishable_version: "0.1.0"
   plugin_versions: {}
+
+layout:                                        # which artifact-tree levels this run's directories
+                                               #   actually have — degenerate levels collapse, so a
+                                               #   missing `conditions/` could otherwise mean either
+                                               #   an unswept run or a failure; see "How artifacts
+                                               #   are organized"
+  conditions: true                             # more than the one unlabeled condition `run` builds
+  repeats: true                                # more than one repeat was resolved
 
 execution:                                     # mechanical; nested by the scope of each step
   shared:
@@ -448,6 +460,22 @@ results:                                       # scientific; see "Statistical re
   hypotheses:                                  # see "Pre-registration"
     - {id: h1, kind: confirmatory, supported: true}
 ```
+
+A run with no repeat level still writes `per_repeat`, keyed by the empty string — the one repeat
+has no label because there is no repeat axis to render one from — as soon as some repeat-scoped step
+recorded a return; the key is `''` there rather than absent. The block is present rather than omitted
+so that a reader parsing `per_repeat` does not need two code paths, and the empty key is what says
+"this run had one execution per condition" rather than "this run recorded nothing".
+
+`repeat_spread` beside a metric is omitted, not zeroed, when the run declared no repeat axis at all —
+the single unlabeled repeat core resolves when no `replication` block is declared carries no dispersion
+figure, because a standard deviation over an execution that was never repeated would read as agreement
+between repeats that don't exist, the same mistake a zero-width `ci95` over one unit would make. A
+*declared* repeat that happens to resolve one contributing member is a different fact and is written
+as `{std: 0.0, n: 1, kind: <the level's kind>}` — a declared `{kind: seed, n: 1}` writes
+`{std: 0.0, n: 1, kind: seed}`: `n` is what tells the two apart, since it counts members that
+actually contributed a mean rather than the level's declared count, and a `std` of `0.0` is what a
+single real repeat's dispersion honestly is.
 
 ### What `status` means, and when a run keeps going
 
