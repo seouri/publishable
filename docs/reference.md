@@ -1867,6 +1867,10 @@ class CompareMethods(BaseStep):
         return {"best_method": "spearman"}
 ```
 
+`io.conditions` yields `(index, label)` pairs, not bare labels — `read_condition` addresses a
+condition by its index, and the label is what you put in a figure. An unswept run yields one pair
+whose label is `None`, because there is no `key=value` body to render.
+
 `cfg.parameters` in a summary step holds the *base* values, and reading a path the sweep varies [raises](#step-scope) rather than returning one — there's no condition whose value it would be, so there's no misleading pretense that one applies.
 
 **What a summary step returns is recorded, not interpreted.** It lands in `results.summary`, with no `basis`, no place in the [correction family](#sweeps-and-repeats), and no recomputation on a resampled table — core didn't compute it and can't, which is the same reason a step-returned scalar is [`basis: repeats`](#the-unit-table-is-the-inference-base). Since factorial main effects, curve fits, conditional estimators, and mixed models are all routed here, that's worth being plain about: this scope is where core stops doing statistics and starts storing yours.
@@ -1960,6 +1964,11 @@ Five properties of this layout:
   | Value | Rendered as written in the config — `true`/`false` for booleans, shortest round-trip form for floats. `validate` rejects a swept value whose rendering isn't `[A-Za-z0-9._+-]+`, since a label that needs escaping isn't a name anyone can type |
   | Index | Assigned over the expansion in order, each cell's baseline first *within its cell*. The **last** declared axis varies fastest, so the numbering reads like nested loops written in declaration order. With one baseline it is condition `00`; with [one per cell](#expansion-modes) they land at the head of each cell, which is why `ablate × groups` numbers `00_cohort=derivation__baseline` and `03_cohort=validation__baseline` rather than putting both baselines first |
 
+  A swept value renders as `[A-Za-z0-9._+-]+` and additionally may not contain `__`, which is the
+  separator between one `key=value` component and the next. A value carrying it would produce a
+  directory name that parses back into a different set of components than the one it was built from,
+  and a label that cannot be read back is not a label.
+
   The index is the part to be careful with, because it's the part that moves: adding a level to any axis renumbers everything after it. That is why [`reuse_from`](#reuse_from-addresses-an-artifact-not-the-design-that-produced-it) addresses artifacts by name rather than by condition, and why a selector names the label's body rather than its prefix.
 
   `sample` conditions are the exception, and deliberately: a sobol draw of `dose_mg` has no short exact spelling, and rounding one into a directory name makes two distinct conditions collide at some precision. Sampled conditions are labelled `01_sample`, `02_sample`, with the drawn values in `sweep.yaml` and in `results.conditions[i].values`. Anything that selects a condition by name — a [hypothesis](#pre-registration) `compare.condition`, a `report` filter — is therefore selecting a discrete label, never a float you have to spell identically twice.
@@ -1983,6 +1992,14 @@ The `n` in a confidence interval is a count of the things the claim generalizes 
 | Derived from the table by the template's [`aggregate(units, cfg)`](#templates-where-parameters-are-defined) | `units` | The derived value, with a percentile `ci95` from resampling units — or clusters, when [`cluster_by`](#clustered-units) is declared |
 | A unit table exists, but the metric isn't derivable from it | `repeats` | Point estimate and across-repeat spread — **no `ci95`** |
 | No `data.units` at all | `repeats` | Mean, std, sem and a t-based `ci95` over repeats, labelled as such |
+
+**An interval needs two units, and enough draws to place its bounds.** A metric whose completed
+units number fewer than two reports `ci95: null` — there is no dispersion to estimate from one
+observation, and a zero-width interval around it would read as certainty. A percentile construction
+additionally reports `ci95: null` when `statistics.resample_draws` is below the floor its
+confidence level needs, because a bound read off too few draws is a bound placed by the draw count
+rather than by the data. `n` still reports the units, and `value` still reports the point estimate:
+what is missing is the interval, not the metric.
 
 Those last two rows differ, and `data.units` is the whole discriminator. With no unit table, the executions *are* the observations — a simulation's ten seeds are ten draws from the thing being studied — so an interval over repeats is the honest one, and core computes it. With a unit table present, an interval over repeats would be a claim about seeds standing in for a claim about units, so core refuses it rather than substituting the wrong denominator.
 
@@ -3000,13 +3017,18 @@ Templates encode what a field's reviewers expect. Core enforces whatever the tem
 
 `default_repeats` is a plain integer in every class, because core [does not compute power](experimental-designs.md#what-core-will-not-do-for-you) and a default it cannot derive would be a number pretending to be a calculation. Where a field expects an a-priori sample size, the template asks for it as a parameter — declared by you, recorded in the config, and checkable against the units actually resolved.
 
-| Convention class | Naming | Default repeats |
+| Convention class | Naming | Repeat floor |
 |---|---|---|
 | `clinical` | `kebab-case`, includes cohort or method identifier | 3 |
 | `ml_benchmark` | `snake_case`, includes dataset + method tag | 5 |
 | `behavioral` | `snake_case`, includes study phase (`pilot`/`main`/`replication`) | 1; the template instead requires a target-N parameter and warns when resolved units fall below it |
 | `simulation` | `dot.case`, includes the swept axis | 10 per condition |
 | `generic` | `kebab-case` | 1 |
+
+This is a floor, not a value `init` writes. A template declaring a repeat floor above what a
+config asks for makes `validate` warn ([`W-REPL-FLOOR`](#warnings-core-reports)); it never edits
+the config. What executes is what the config says, and what the floor buys is that a design running
+below it says so in its record.
 
 ---
 
