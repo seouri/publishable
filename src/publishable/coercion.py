@@ -71,7 +71,21 @@ def _coerce_estimate(key: str, value: Estimate, where: str, scope: str | None) -
     one reaches `yaml.safe_dump` and raises `RepresenterError` while writing
     `run.yaml` — the traceback-instead-of-diagnostic this module exists to
     prevent, one level of nesting down.
+
+    `scope is None` is not "some other scope" — it means the call site does not
+    take a scope at all. `io.record` and a template's `aggregate` never pass
+    one, and neither accepts an `Estimate` under any name for it: `io.record`'s
+    `values`, and `aggregate`'s return, are the flat mapping of scalars this
+    module exists to enforce, full stop. Telling that author "an Estimate is
+    accepted at scope `summary` only" would name a door that, for `aggregate`,
+    does not exist, and for `io.record` — reachable from a `summary` step,
+    which is handed the full roster — describes the scope the caller is
+    already at. So `scope is None` falls straight through to the same
+    `E-STEP-RETURN-TYPE` refusal any other structural value gets; only a real,
+    non-`summary` step scope gets the `E-STEP-ESTIMATE-SCOPE` message below.
     """
+    if scope is None:
+        raise _refuse(key, value, where)
     if scope != "summary":
         raise ContractError(
             f"{where} gave {key!r} an Estimate at scope {scope!r}; an Estimate is accepted "

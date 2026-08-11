@@ -110,10 +110,35 @@ def test_an_estimate_is_refused_at_every_other_scope():
     the step returned*" — an interval per repeat is either a claim about one
     execution or an accident."""
     est = Estimate(value=0.031)
-    for scope in ("repeat", "condition", "run", None):
+    for scope in ("repeat", "condition", "run"):
         with pytest.raises(ContractError) as excinfo:
             coerce_scalars({"delta": est}, "step03_analyze", scope=scope)
         assert excinfo.value.code == "E-STEP-ESTIMATE-SCOPE"
+
+
+def test_io_record_refuses_an_estimate_without_claiming_summary_scope_helps():
+    """`io.record` never passes a `scope` — it is reachable from a `summary`
+    step, which is handed the full roster, so an author already at summary
+    scope must not be told an Estimate is accepted at scope `summary` only.
+    This call site never accepts an Estimate at all; the refusal is the same
+    `E-STEP-RETURN-TYPE` any other structural value gets."""
+    est = Estimate(value=0.031)
+    with pytest.raises(ContractError) as excinfo:
+        coerce_scalars({"d": est}, "io.record")
+    assert excinfo.value.code == "E-STEP-RETURN-TYPE"
+    assert "summary" not in str(excinfo.value)
+
+
+def test_template_aggregate_refuses_an_estimate_without_claiming_summary_scope_helps():
+    """`reference.md` § "There is no `Estimate` exception here" for a
+    template's `aggregate` — the call site never passes `scope`, and telling
+    its author "accepted at scope `summary` only" would point at a door that
+    does not exist for this surface."""
+    est = Estimate(value=0.031)
+    with pytest.raises(ContractError) as excinfo:
+        coerce_scalars({"r": est}, "template aggregate")
+    assert excinfo.value.code == "E-STEP-RETURN-TYPE"
+    assert "summary" not in str(excinfo.value)
 
 
 def test_ci95_without_method_is_refused():
@@ -152,10 +177,13 @@ def test_an_estimates_own_fields_are_coerced():
 
 
 def test_something_structural_inside_an_estimate_is_still_refused():
-    """The exemption admits an `Estimate`, not everything inside one."""
+    """The exemption admits an `Estimate`, not everything inside one — this is
+    the same field-coercion refusal any other structural value gets, not an
+    interval-labelling refusal, so the code must be `E-STEP-RETURN-TYPE`."""
     est = Estimate(value=[0.031], method="m")  # type: ignore[arg-type]
-    with pytest.raises(ContractError):
+    with pytest.raises(ContractError) as excinfo:
         coerce_scalars({"delta": est}, "step03_site_model", scope="summary")
+    assert excinfo.value.code == "E-STEP-RETURN-TYPE"
 
 
 def test_a_bare_value_beside_an_estimate_is_untouched():
