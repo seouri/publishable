@@ -175,3 +175,64 @@ def test_a_bound_test_on_a_metric_with_no_interval_is_supported_null():
                        "direction": "greater", "threshold": 0.0,
                        "evaluate_on": "ci95_lower"}, obs, None)
     assert got["supported"] is None
+
+
+def test_a_misspelled_direction_is_supported_null_not_a_wrong_verdict():
+    """A `direction` outside `{greater, less}` — a typo such as `greatr` — must
+    not silently invert the verdict. `direction` is never echoed into the
+    record, so a wrong `supported` here would read as clean. `reference.md`
+    documents no third value, so this is the same "no answer" as an
+    unresolvable observation."""
+    got = verdict_for({**_H1, "direction": "greatr", "evaluate_on": "observed"}, _obs_h1(), None)
+    assert got["supported"] is None
+
+
+def test_a_value_exactly_at_the_threshold_is_not_supported():
+    """`reference.md` describes a supported hypothesis as one that "exceeds" or
+    "clears" the threshold — a strict inequality. A value equal to the
+    threshold has done neither, so `>`/`<` and not `>=`/`<=` is the reading
+    pinned here."""
+    obs = Observation(where="cond:1", step="s", metric="m",
+                      block={"delta": 0.02, "ci95": [0.01, 0.03]}, rests_on="computed")
+    hyp = {"id": "i", "metric": "s.m", "compare": {"contrast": "x"},
+           "direction": "greater", "threshold": 0.02, "evaluate_on": "observed"}
+    assert verdict_for(hyp, obs, None)["supported"] is False
+
+
+def test_a_sweep_ci95_corrected_is_not_relabelled_as_the_hypothesis_familys():
+    """A `vs_baseline` entry already carries the sweep family's own
+    `ci95_corrected`. Without a `bounds` from Task 5, `observed` must not show
+    it — that would misattribute a different family's corrected interval to
+    this hypothesis."""
+    obs = Observation(where="cond:1", step="s", metric="m",
+                      block={"delta": 0.5, "ci95": [0.1, 0.9], "ci95_corrected": [0.05, 0.95]},
+                      rests_on="computed")
+    hyp = {"id": "i", "metric": "s.m", "compare": {"contrast": "x"},
+           "direction": "greater", "threshold": 0.0, "evaluate_on": "observed"}
+    got = verdict_for(hyp, obs, None)
+    assert "ci95_corrected" not in got["observed"]
+
+
+def test_observed_carries_exactly_the_named_block_keys():
+    """`_observed_block` enumerates `delta`/`value`/`ci95`/`method` rather than
+    copying the block, so a field the record entry carries for its own
+    purposes — `n`, an unrelated note — does not leak into `observed`."""
+    obs = Observation(where="cond:1", step="s", metric="m",
+                      block={"delta": 0.5, "ci95": [0.1, 0.9], "n": 10, "note": "x"},
+                      rests_on="computed")
+    hyp = {"id": "i", "metric": "s.m", "compare": {"contrast": "x"},
+           "direction": "greater", "threshold": 0.0}
+    got = verdict_for(hyp, obs, None)
+    assert set(got["observed"]) == {"delta", "ci95"}
+
+
+def test_omitting_evaluate_on_defaults_to_observed():
+    """`reference.md`: "`direction` and `threshold` are compared to the observed
+    value by default." Nothing must fail if that default silently changes."""
+    obs = Observation(where="cond:1", step="s", metric="m",
+                      block={"delta": 0.5, "ci95": [0.1, 0.9]}, rests_on="computed")
+    hyp = {"id": "i", "metric": "s.m", "compare": {"contrast": "x"},
+           "direction": "greater", "threshold": 0.0}
+    got = verdict_for(hyp, obs, None)
+    assert got["verdict_evaluated_on"] == "observed"
+    assert got["supported"] is True

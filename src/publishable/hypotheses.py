@@ -153,17 +153,27 @@ def verdict_for(
 
     `supported` is `None`, never `False`, when there is no number to compare: a
     `False` would be indistinguishable from a claim that was tested and failed.
+    The same holds for `direction`: a value outside `{greater, less}` — most
+    likely a typo — gets no verdict rather than one silently read against the
+    wrong side, since a wrong `supported` is worse than an absent one and
+    `direction` is never echoed into the record for a reader to catch it by eye.
+
+    The comparison is strict (`>`, not `>=`): `reference.md` describes a
+    supported hypothesis as one whose value "exceeds" or "clears" the
+    threshold, and a value exactly at the threshold has done neither.
     """
     evaluate_on = str(hyp.get("evaluate_on") or "observed")
     number = _tested_number(obs, evaluate_on, bounds)
     threshold = hyp.get("threshold")
+    direction = hyp.get("direction")
     supported: bool | None = None
     if (
         number is not None
         and isinstance(threshold, (int, float))
         and not isinstance(threshold, bool)
+        and direction in ("greater", "less")
     ):
-        supported = number > threshold if hyp.get("direction") == "greater" else number < threshold
+        supported = number > threshold if direction == "greater" else number < threshold
     return {
         "observed": _observed_block(obs, bounds),
         "verdict_evaluated_on": evaluate_on,
