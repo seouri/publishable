@@ -15,6 +15,7 @@ from publishable.materialize import TEMPLATE_VERSION
 from publishable.param import MISSING
 from publishable.provenance import find_repo_root, resolves_inside_repo
 from publishable.replication import resolve_repeats
+from publishable.scope import step_name as _step_name
 from publishable.strata import levels_for
 from publishable.sweep import check_swept_value, expand
 from publishable.templates.registry import get_template, template_names
@@ -248,6 +249,7 @@ def validate_config(
     _check_unimplemented(doc, c)
     _check_sweep(doc, template, c, unit_count=len(roster) if roster is not None else None)
     _check_contrasts(doc, c)
+    _check_hypotheses(doc, c, experiment)
     _check_report_by(doc, c, roster)
     for message in template.validate(doc):
         c.error("E-TEMPLATE-RULE", "parameters", message)
@@ -1170,6 +1172,124 @@ def _check_contrasts(doc: dict[str, Any], c: Collector) -> None:
                         f"statistics.contrasts[{i}].within",
                         f"names `{name}`, which is not in `data.units.attributes`",
                     )
+
+
+_DIRECTIONS = ("greater", "less")
+_EVALUATE_ONS = ("observed", "ci95_lower", "ci95_upper")
+
+
+def _check_hypotheses(doc: dict[str, Any], c: Collector, experiment: Any | None) -> None:
+    """Each declared `hypotheses` entry, checked for real now that the block is
+    non-empty and list-shaped (`_check_shape` already refused anything else).
+
+    **`metric` names the quantity under test, and `compare` only ever says
+    *where*.** `reference.md` § Pre-registration: "`metric` is required in every
+    form, because `compare` says *where* and never *what*." A contrast or a
+    condition comparison reports one value per step metric exactly as a summary
+    step does, so a hypothesis that names only `compare` leaves the quantity
+    unstated — `E-HYPOTHESIS-METRIC`. A `metric` naming a step this experiment's
+    `steps` list does not declare is the same failure by a different route: the
+    string looks like it names something, but nothing in the run will ever
+    produce it, so it is refused under the same identifier rather than a third
+    one — there being no experiment to check against (its import already failed,
+    reported elsewhere as `E-ENTRYPOINT-IMPORT`) is not a hypothesis fault, so
+    that case is silently skipped rather than double-reported.
+
+    **A hypothesis's form must match its metric's scope.** `reference.md` § What
+    a hypothesis is tested against: a `scope: "summary"` metric "is one value
+    per run, not a contrast between conditions" and takes no `compare`, while a
+    `condition`- or `repeat`-scoped metric only exists per condition and "is the
+    same mistake inverted" without one. Both directions are `E-HYPOTHESIS-FORM`.
+
+    **`direction` and `evaluate_on` are closed vocabularies, refused here rather
+    than misread.** Neither is echoed into the record (`verdict_evaluated_on` is
+    spelled out from `evaluate_on`, but nothing renders `direction` at all), so a
+    typo in either is otherwise invisible: `hypotheses.py` treats any `direction`
+    that isn't `"greater"` as `"less"` before this task, and reads any
+    `evaluate_on` that isn't `"observed"` or `"ci95_lower"` as `"ci95_upper"` —
+    both silently invert or redirect a verdict rather than raising. `direction`
+    has no named enum anywhere in the four documents; `evaluate_on` does
+    (`observed | ci95_lower | ci95_upper`), but the same reasoning applies to
+    both, so both are checked here under their own identifiers,
+    `E-HYPOTHESIS-DIRECTION` and `E-HYPOTHESIS-EVALUATE-ON`.
+    """
+    entries = doc.get("hypotheses")
+    if not isinstance(entries, list) or not entries:
+        return  # `_check_shape` already refused a bad shape; `[]` is not a declaration
+
+    scopes_by_step: dict[str, str] = {}
+    if experiment is not None:
+        scopes_by_step = {_step_name(cls): cls.scope for cls in experiment.steps}
+
+    for i, hyp in enumerate(entries):
+        if not isinstance(hyp, dict):
+            c.error(
+                "E-HYPOTHESIS-METRIC",
+                f"hypotheses[{i}]",
+                f"is a {type(hyp).__name__}, not a mapping with `metric`, `direction` and "
+                "`threshold`",
+            )
+            continue
+
+        direction = hyp.get("direction")
+        if direction is not None and direction not in _DIRECTIONS:
+            c.error(
+                "E-HYPOTHESIS-DIRECTION",
+                f"hypotheses[{i}].direction",
+                f"is `{direction}`; the only directions are `greater` and `less` — anything "
+                "else is read as `less` rather than raising, and `direction` is never echoed "
+                "into the record for a reader to catch the mistake by eye",
+            )
+
+        evaluate_on = hyp.get("evaluate_on")
+        if evaluate_on is not None and evaluate_on not in _EVALUATE_ONS:
+            c.error(
+                "E-HYPOTHESIS-EVALUATE-ON",
+                f"hypotheses[{i}].evaluate_on",
+                f"is `{evaluate_on}`; the only values are `observed`, `ci95_lower` and "
+                "`ci95_upper` — anything else is read as `ci95_upper` rather than raising",
+            )
+
+        metric = hyp.get("metric")
+        step, _, name = metric.partition(".") if isinstance(metric, str) else ("", "", "")
+        if not isinstance(metric, str) or not metric or not name:
+            c.error(
+                "E-HYPOTHESIS-METRIC",
+                f"hypotheses[{i}].metric",
+                "is missing or not a `step.metric` string; `compare` says where a "
+                "hypothesis is tested and never what, so a contrast or condition "
+                "comparison alone leaves the quantity under test unnamed",
+            )
+            continue
+
+        if experiment is None:
+            continue  # the entrypoint didn't import; no step list to check the form against
+
+        scope = scopes_by_step.get(step)
+        if scope is None:
+            c.error(
+                "E-HYPOTHESIS-METRIC",
+                f"hypotheses[{i}].metric",
+                f"names step `{step}`, which the entrypoint's `steps` list does not declare",
+            )
+            continue
+
+        has_compare = isinstance(hyp.get("compare"), dict)
+        if scope == "summary" and has_compare:
+            c.error(
+                "E-HYPOTHESIS-FORM",
+                f"hypotheses[{i}]",
+                f"names `{metric}`, a `scope: \"summary\"` metric, and declares `compare` — "
+                "a summary metric is one value per run, not a contrast between conditions",
+            )
+        elif scope != "summary" and not has_compare:
+            c.error(
+                "E-HYPOTHESIS-FORM",
+                f"hypotheses[{i}]",
+                f"names `{metric}`, a `scope: \"{scope}\"` metric, without declaring `compare` "
+                "— that quantity only exists per condition, so the hypothesis must say which "
+                "conditions it compares",
+            )
 
 
 def _check_report_by(doc: dict[str, Any], c: Collector, roster: UnitList | None) -> None:

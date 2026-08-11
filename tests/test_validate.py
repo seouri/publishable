@@ -2009,3 +2009,160 @@ def test_two_thin_report_by_levels_are_diagnosed_in_a_stable_order(write_config,
         "level `f` of `sex` would hold 2 of 12 units, below limits.min_reported_n (5)",
         "level `m` of `sex` would hold 3 of 12 units, below limits.min_reported_n (5)",
     ]
+
+
+def test_a_non_list_hypotheses_block_is_refused_without_raising(write_config):
+    """`validate.py` collects and never raises. S4c shipped two crashes from a
+    nested config value reaching a reader, and `hypotheses` is a new one."""
+    for block in (5, True, "h1", {"id": "h1"}):
+        assert "E-CONFIG-SHAPE" in codes(write_config({"hypotheses": block}))
+
+
+def test_a_hypothesis_with_compare_and_no_metric_is_refused(write_config):
+    """`reference.md`: "a contrast reports a value per step metric, so the
+    quantity under test is unnamed"."""
+    found = codes(write_config({
+        "sweep": _TWO_CONDITIONS,
+        "statistics": {"contrasts": [{"id": "x", "of": "method=spearman",
+                                      "against": "baseline"}]},
+        "hypotheses": [{"id": "h", "kind": "confirmatory", "compare": {"contrast": "x"},
+                        "direction": "greater", "threshold": 0.0}],
+    }))
+    assert "E-HYPOTHESIS-METRIC" in found
+
+
+_TWO_SCOPE_EXPERIMENT = """\
+from publishable import BaseExperiment, BaseStep
+
+
+class Step01Measure(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        return {}
+
+
+class Step02Combine(BaseStep):
+    scope = "summary"
+
+    def run(self, cfg, io):
+        return {}
+
+
+class CohortPilotExperiment(BaseExperiment):
+    steps = [Step01Measure, Step02Combine]
+"""
+
+
+@pytest.fixture
+def write_config_two_scopes(git_repo: Path, write_config):
+    """`write_config`, but the entrypoint declares a repeat step and a summary
+    step — so `validate` can tell which scope a hypothesis's metric belongs to.
+    Modelled on `write_config_nondet`, which is the same pattern for a different
+    step property."""
+
+    def _write(overrides: dict | None = None) -> Path:
+        path = write_config(overrides)
+        write_experiment_module(git_repo, _TWO_SCOPE_EXPERIMENT)
+        return path
+
+    return _write
+
+
+def test_a_summary_metric_hypothesis_may_not_declare_compare(write_config_two_scopes):
+    """`reference.md`: "a summary metric is one value per run, not a contrast
+    between conditions — and a condition-step metric without `compare` is the
+    same mistake inverted"."""
+    found = codes(write_config_two_scopes({
+        "sweep": _TWO_CONDITIONS,
+        "hypotheses": [{"id": "h", "kind": "confirmatory",
+                        "metric": "step02_combine.agreement",
+                        "compare": {"condition": "method=spearman", "to": "baseline"},
+                        "direction": "greater", "threshold": 0.9}],
+    }))
+    assert "E-HYPOTHESIS-FORM" in found
+
+
+def test_a_condition_metric_hypothesis_must_declare_compare(write_config_two_scopes):
+    """The same mistake inverted: a metric of a repeat-scoped step names a
+    quantity that only exists per condition, so a hypothesis about it has to say
+    which conditions it compares."""
+    found = codes(write_config_two_scopes({
+        "sweep": _TWO_CONDITIONS,
+        "hypotheses": [{"id": "h", "kind": "confirmatory",
+                        "metric": "step01_measure.r",
+                        "direction": "greater", "threshold": 0.5}],
+    }))
+    assert "E-HYPOTHESIS-FORM" in found
+
+
+def test_a_hypothesis_naming_an_undeclared_step_is_refused_as_a_metric_fault(
+    write_config_two_scopes,
+):
+    """A `metric` naming a step outside the entrypoint's `steps` list is folded
+    into `E-HYPOTHESIS-METRIC`, the same code a missing metric gets, rather than
+    a third identifier: in both cases the quantity under test does not exist."""
+    found = codes(write_config_two_scopes({
+        "sweep": _TWO_CONDITIONS,
+        "hypotheses": [{"id": "h", "kind": "confirmatory",
+                        "metric": "step99_nonexistent.r",
+                        "compare": {"condition": "method=spearman", "to": "baseline"},
+                        "direction": "greater", "threshold": 0.5}],
+    }))
+    assert "E-HYPOTHESIS-METRIC" in found
+    assert "E-HYPOTHESIS-FORM" not in found
+
+
+def test_a_mistyped_direction_is_refused_rather_than_silently_inverted(write_config_two_scopes):
+    """Task 4 review: a `direction` outside `{greater, less}` was read as `less`
+    and never echoed into the record, so a typo silently inverted the verdict.
+    The refusal belongs at `validate` time, closing that gap for good."""
+    found = codes(write_config_two_scopes({
+        "sweep": _TWO_CONDITIONS,
+        "hypotheses": [{"id": "h", "kind": "confirmatory",
+                        "metric": "step01_measure.r",
+                        "compare": {"condition": "method=spearman", "to": "baseline"},
+                        "direction": "greatr", "threshold": 0.5}],
+    }))
+    assert "E-HYPOTHESIS-DIRECTION" in found
+
+
+def test_a_valid_direction_is_not_flagged(write_config_two_scopes):
+    found = codes(write_config_two_scopes({
+        "sweep": _TWO_CONDITIONS,
+        "hypotheses": [{"id": "h", "kind": "confirmatory",
+                        "metric": "step01_measure.r",
+                        "compare": {"condition": "method=spearman", "to": "baseline"},
+                        "direction": "less", "threshold": 0.5}],
+    }))
+    assert "E-HYPOTHESIS-DIRECTION" not in found
+
+
+def test_a_mistyped_evaluate_on_is_refused_rather_than_silently_read_as_an_upper_bound(
+    write_config_two_scopes,
+):
+    """`evaluate_on` is a documented enum (`observed | ci95_lower | ci95_upper`),
+    but the evaluator reads anything other than `observed`/`ci95_lower` as
+    `ci95_upper` — the same silent-misread shape as `direction`, so it gets the
+    same refusal."""
+    found = codes(write_config_two_scopes({
+        "sweep": _TWO_CONDITIONS,
+        "hypotheses": [{"id": "h", "kind": "confirmatory",
+                        "metric": "step01_measure.r",
+                        "compare": {"condition": "method=spearman", "to": "baseline"},
+                        "direction": "greater", "threshold": 0.5,
+                        "evaluate_on": "ci95_lowerr"}],
+    }))
+    assert "E-HYPOTHESIS-EVALUATE-ON" in found
+
+
+def test_a_valid_evaluate_on_is_not_flagged(write_config_two_scopes):
+    found = codes(write_config_two_scopes({
+        "sweep": _TWO_CONDITIONS,
+        "hypotheses": [{"id": "h", "kind": "confirmatory",
+                        "metric": "step01_measure.r",
+                        "compare": {"condition": "method=spearman", "to": "baseline"},
+                        "direction": "greater", "threshold": 0.5,
+                        "evaluate_on": "ci95_lower"}],
+    }))
+    assert "E-HYPOTHESIS-EVALUATE-ON" not in found
