@@ -221,11 +221,18 @@ def _attributed(table: UnitTable, attributes: dict[str, dict[str, Any]]) -> Unit
     Merged into the rows rather than into `collapsed` itself, and that is the
     load-bearing choice: `collapsed` is also what `summarize_step` summarizes
     column by column, what `repeat_spread` reads, and what a contrast
-    differences. A numeric attribute (an age, a dose) landing there would be
-    published as a metric with its own `ci95` and its own seat in the
-    correction family, and would be handed a repeat-dispersion figure for a
-    value that cannot vary across repeats. Here it reaches `aggregate` and
-    nothing else.
+    differences. Two consequences, the first of them observable today and
+    pinned by `test_a_declared_attribute_is_not_in_the_recorded_column_
+    namespace`: an attribute in `collapsed` joins the **recorded-column
+    namespace**, so a template returning a metric that merely shares an
+    attribute's name collides with something no step ever recorded, and the
+    containment around `summarize_step` costs it every metric it computed. And
+    a *numeric* attribute (an age, a dose) would be published as a metric with
+    its own `ci95` and its own seat in the correction family, and handed a
+    repeat-dispersion figure for a value that cannot vary across repeats — not
+    reachable while every roster attribute arrives from `csv.DictReader` as a
+    string, and the reason not to depend on that staying true. Here an
+    attribute reaches `aggregate` and nothing else.
 
     An attribute is carried through **unchanged**: it comes from the roster
     rather than from an execution, so unlike a recorded numeric column it has
@@ -245,6 +252,10 @@ def _attributed(table: UnitTable, attributes: dict[str, dict[str, Any]]) -> Unit
     Row-level, so the four operations the table promises are untouched and
     `columns` — derived from the rows — names the attributes for free.
     """
+    # Empty exactly when the config declared no attributes (the caller builds
+    # the mapping from the units that have any), so a project that declares
+    # none pays nothing: no row list rebuilt on the unresampled call, and none
+    # on any of the 2000 draws behind every derived metric's interval.
     if not attributes:
         return table
     rows = []
@@ -879,10 +890,12 @@ def command_run(config_path: Path) -> int:
             # The roster is resolved once per run and shared across every
             # condition, so this mapping is built once too — it is the same
             # attributes for every condition, every step and every draw
-            # (`_attributed` says what it is for). Empty when the config
-            # declares no `data.units.attributes`, which makes the merge a
-            # no-op for every project that declares none.
-            unit_attributes = {u.key: dict(u.attributes) for u in roster}
+            # (`_attributed` says what it is for). The `if u.attributes` filter
+            # is what makes it *empty* — rather than a unit-keyed mapping of
+            # empty dicts, which is truthy — when the config declares no
+            # `data.units.attributes`, so `_attributed`'s early return actually
+            # fires and such a project never rebuilds a row list at all.
+            unit_attributes = {u.key: dict(u.attributes) for u in roster if u.attributes}
             # `statistics.resample` isn't honored yet (`E-STATS-RESAMPLE-UNSUPPORTED`
             # refuses a declared one), so this is the one place the default
             # `reference.md` § How a metric becomes a number documents — bootstrap

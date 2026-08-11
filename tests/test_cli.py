@@ -840,6 +840,42 @@ def test_a_declared_unit_attribute_is_one_of_the_tables_columns(tmp_path, monkey
     assert "cohort" not in aggregated
 
 
+def test_a_declared_attribute_is_not_in_the_recorded_column_namespace(
+    tmp_path, monkeypatch, capsys
+):
+    """A declared attribute must not make its own name unusable as a metric.
+
+    This is what pins *where* the merge happens. `summarize_step` refuses a
+    derived key that shadows a **recorded column** (`E-STEP-KEY-COLLISION`), and
+    the containment around it costs the whole `derived` mapping — so merging the
+    attributes into the collapsed table instead of into the rows of the table
+    `aggregate` reads would put `cohort` into the recorded-column namespace and
+    make a template returning a metric *named* `cohort` lose every metric it
+    computed, to a collision with something no step ever recorded. An attribute
+    and a metric are different kinds of thing; only the recorded columns and the
+    derived keys share a namespace.
+
+    So: `cohort` is declared, `aggregate` returns a metric called `cohort`, and
+    both must survive — the metric reaches the step block, and nothing warns.
+    """
+    import publishable.generators.experiment as experiment_gen
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    def _metric_named_like_the_attribute(self, units, cfg):
+        return {"cohort": float(sum(1 for row in units if row["cohort"] == "a"))}
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    monkeypatch.setattr(GenericTemplate, "aggregate", _metric_named_like_the_attribute)
+    doc = run_a_project(tmp_path, capsys=capsys, unit_attributes=["cohort"])
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "completed"
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert set(aggregated) == {"pred", "cohort"}
+    assert aggregated["cohort"]["value"] == 5
+    assert "W-STATS-AGGREGATE-FAILED" not in doc["stdout"]
+    assert "E-STEP-KEY-COLLISION" not in doc["stdout"]
+
+
 _METHOD_VARYING_STEP = '''\
 # src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
 from publishable import BaseStep
