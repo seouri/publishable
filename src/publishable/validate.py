@@ -1052,7 +1052,12 @@ def _check_sweep(
     # this guard exists because this function may be reached without it having
     # run: a leaf fault is deliberately non-fatal, so `_check_sweep` still runs
     # on a still-malformed `doc`, and `executions > budget` below would raise
-    # `TypeError` comparing an `int` to a `str`.
+    # `TypeError` comparing an `int` to a `str`. `isinstance(budget, int)` is
+    # deliberately plain, not `envelope._is_type`'s bool-excluding variant: a
+    # `max_executions: true` is `check_envelope`'s fault to name (`E-CONFIG-TYPE`,
+    # since `LEAF_TYPES` excludes `bool`), and this guard's only job is to keep
+    # the comparison below from raising, which a `bool` — an `int` subtype —
+    # never does.
     if repeat_total is not None and isinstance(budget, int):
         executions = len(conditions) * repeat_total
         if executions > budget:

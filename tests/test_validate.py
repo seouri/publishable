@@ -193,9 +193,12 @@ def test_a_wrong_typed_container_is_still_fatal(tmp_path: Path) -> None:
     assert "E-CONFIG-SHAPE" in [f.code for f in findings]
 
 
-def test_a_string_budget_is_reported_and_the_budget_check_still_runs(tmp_path: Path) -> None:
-    """Two findings, not one. Before the envelope this reported neither: the
-    isinstance guard skipped the budget check and nothing typed the leaf."""
+def test_a_string_budget_is_reported(tmp_path: Path) -> None:
+    """Before the envelope this reported nothing: `isinstance(budget, int)`
+    skipped the budget check on a string, and nothing typed the leaf either.
+    A string budget can't be compared against an execution count, so this
+    test pins only the type fault — the paired test below pins that the
+    budget check itself still runs once the value is well-typed."""
     findings = _validate_with(tmp_path, {"limits": {"max_executions": "5"}})
 
     codes = [f.code for f in findings]
@@ -207,7 +210,9 @@ def test_a_well_typed_budget_below_the_design_still_warns(tmp_path: Path) -> Non
     test that fails if a fix reports the type fault and drops the warning."""
     findings = _validate_with(tmp_path, {"limits": {"max_executions": 1}})
 
-    assert "W-EXEC-BUDGET" in [f.code for f in findings]
+    messages = {f.code: f.message for f in findings}
+    assert "W-EXEC-BUDGET" in messages
+    assert "1 conditions × 5 repeats = 5 executions exceeds 1" in messages["W-EXEC-BUDGET"]
 
 
 def test_a_wrong_typed_input_dir_does_not_crash_unit_resolution(tmp_path: Path) -> None:
