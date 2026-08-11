@@ -2508,9 +2508,12 @@ appears by exactly two routes: the observation does not resolve — the step tha
 the metric failed, or every unit on one side of a comparison was ineligible — or the verdict asks
 for a bound (`evaluate_on: ci95_lower` or `ci95_upper`) against a bound that isn't there: the raw
 `ci95`, or — for a hypothesis whose family is corrected — the corrected bound at the level this
-family implies, which a family too thin for the resample to support leaves `null` beside a raw
-interval that is perfectly fine (see [`W-STATS-CORRECTED-THIN`](#warnings-core-reports)). The shape
-of `observed` is how a reader tells the two routes apart: the first writes `observed: null` — there
+family implies, which can be `null` for two unrelated reasons: a family too large for the resample's
+draws to support ([`W-STATS-CORRECTED-THIN`](#warnings-core-reports)) leaves it unmet beside a raw
+interval that is perfectly fine, and `correction: fdr_bh` leaves it unmet by construction — Benjamini-
+Hochberg implies no per-comparison level at all, so there is no bound to build regardless of sample
+size. The shape of `observed` is how a reader tells the two routes apart: the first writes `observed:
+null` — there
 is no block, because nothing was found to report — and the second writes a real `observed` block
 whose `ci95` (or `ci95_corrected`) is the `null` field.
 
