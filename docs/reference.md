@@ -369,12 +369,19 @@ already commits to deleting on a schedule neither this table nor its author cont
 
 Each row states the condition, not the wording.
 
+Two faults return `validate_config` before any row below runs: a container-shaped
+`E-CONFIG-SHAPE` fault, and `E-TEMPLATE-UNKNOWN`. Every row in this table fires only once
+both have already passed, except the four `E-CONFIG-*` rows — `check_envelope` runs inside
+`_check_shape` itself, before that function can return early. A config with a container-shape
+fault or an unresolvable `experiment_type` reports exactly that one finding, and none of this
+table's others, for the whole file.
+
 | Reported when | Code |
 |---|---|
 | A key under a container `check_envelope`'s `LEAF_TYPES` table declares, or a top-level key, that the table does not name — checked with a `difflib` hint, skipping the `parameters` and `sweep` subtrees entirely since each has its own closure (`E-PARAM-UNKNOWN`, `E-SWEEP-KEY-UNKNOWN`), and never descending into a known leaf's own value (a typo inside `data.units.holdout` or a `from` mapping is `_check_shape`'s job, not this one's); a non-string YAML mapping key is coerced with `str()` first so it is still reported | `E-CONFIG-KEY-UNKNOWN` |
 | The config file does not parse as YAML, or parses to something other than a mapping | `E-CONFIG-PARSE` |
-| A top-level block, or a nested container `_check_shape` walks before its items — `data.units` and its `attributes`, `sweep.baseline`, `sweep.grid` and each axis's values, `replication.repeats` and each level, `statistics.contrasts`, `statistics.report_by` — is present and not the mapping, list, or string its position requires | `E-CONFIG-SHAPE` |
-| A leaf `check_envelope`'s `LEAF_TYPES` table declares is present and not its declared type — a `bool` never satisfies a numeric declaration, and an `int` satisfies a `float` one; unset (`null`) is treated as absent | `E-CONFIG-TYPE` |
+| A top-level block, or a nested container `_check_shape` walks before its items — `data.units` and its `attributes`, `sweep.baseline`, `sweep.grid` and each axis's values, `replication.repeats` and each level, `statistics.contrasts`, `statistics.report_by` — is present and not the mapping, list, or string its position requires; unset (`null`) is treated as absent, matching `E-CONFIG-TYPE` | `E-CONFIG-SHAPE` |
+| A leaf `check_envelope`'s `LEAF_TYPES` table declares is present and not its declared type — a `bool` never satisfies any leaf's type, since the table declares none as `bool`, and an `int` satisfies a `float` one; unset (`null`) is treated as absent | `E-CONFIG-TYPE` |
 | `data.input_dir` or `data.output_dir` resolves inside the git repository, checked once a repo root is found | `E-DATA-IN-REPO` |
 | `data.input_dir` or `data.output_dir`, after `expanduser()`, is not an absolute path | `E-DATA-NOT-ABSOLUTE` |
 | `data.input_manifest_policy` is empty, or is a value outside the declared policies | `E-DATA-POLICY` |
@@ -394,7 +401,7 @@ Each row states the condition, not the wording.
 | A hypothesis entry is not a mapping, or its `metric` is missing or not a `step.metric` string, or — once the entrypoint has imported — names a step the entrypoint's `steps` list does not declare | `E-HYPOTHESIS-METRIC` |
 | A hypothesis's `threshold` is missing or is not a number — a `bool` does not count as one | `E-HYPOTHESIS-THRESHOLD` |
 | `metadata.description` or `metadata.authors` — the two fields this check covers — is empty; one finding per field, and `metadata.name` is not among them | `E-META-REQUIRED` |
-| `metadata.name` is truthy and differs from the name of the directory its config file sits in — checked regardless of `name`'s type, so a wrongly-typed truthy `name` reports this alongside `E-CONFIG-TYPE` rather than being skipped, unlike `E-NAME-PATTERN` | `E-NAME-DIR` |
+| `metadata.name` is truthy and differs from the name of the directory its config file sits in — checked regardless of `name`'s type, so a wrongly-typed truthy `name` reports this alongside `E-CONFIG-TYPE` rather than being skipped, unlike `E-NAME-PATTERN`; and checked only once the config path names a directory at all — a bare filename with no parent segment (`validate config.yaml`, run from inside that config's own directory) resolves to an empty directory name and skips the check | `E-NAME-DIR` |
 | `metadata.name` is a non-empty string that does not match the template's `naming_pattern` | `E-NAME-PATTERN` |
 | A `parameter_spec` parameter with no `default` is not declared under `parameters` | `E-PARAM-MISSING` |
 | A key under `parameters`, flattened to its dotted path, is not one `parameter_spec` declares — checked with a `difflib` hint | `E-PARAM-UNKNOWN` |
@@ -423,7 +430,7 @@ Each row states the condition, not the wording.
 | `sweep` declares a key that is not one of the six recognized sweep modes (`baseline`, `grid`, `paired`, `ablate`, `sample`, `groups`) | `E-SWEEP-KEY-UNKNOWN` |
 | `sweep.grid` or `sweep.baseline` names a dotted path the template's `parameter_spec` does not declare | `E-SWEEP-PATH-UNKNOWN` |
 | A `sweep.grid` value cannot be rendered into a condition label — a `sweep.baseline` value is exempt, since it is never rendered into one | `E-SWEEP-VALUE-UNNAMEABLE` |
-| Once `experiment_type` resolves to an installed template and the shape pass found no container fault, `template.validate(doc)` yields a message — run last and ungated by earlier findings, so a cross-block rule can report on `parameters` another row already refused | `E-TEMPLATE-RULE` |
+| `template.validate(doc)` yields a message — run last, after every other check in this table, and ungated by their findings, so a cross-block rule can report on `parameters` another row already refused | `E-TEMPLATE-RULE` |
 | `experiment_type` names a template no installed package registers | `E-TEMPLATE-UNKNOWN` |
 | `data.units.attributes` names a value the source table has no column for, or — for a table source only — names a non-string item | `E-UNITS-ATTR-MISSING` |
 | `data.units.attributes` names a field of `Unit` itself (`key`, `paths`, or `attributes`), which cannot also be a declared attribute | `E-UNITS-ATTR-RESERVED` |
