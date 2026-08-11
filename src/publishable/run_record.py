@@ -5,6 +5,7 @@ See docs/reference.md § The two files.
 
 from typing import Any
 
+from publishable.estimate import Estimate
 from publishable.replication import Repeat
 from publishable.runner import ExecutionResult
 
@@ -54,6 +55,29 @@ def _execution_block(results: list[ExecutionResult]) -> dict[str, Any]:
     }
 
 
+def _summary_values(returned: dict[str, Any]) -> dict[str, Any]:
+    """A summary step's return, with each `Estimate` expanded and every other
+    value left exactly as it came back.
+
+    `reference.md` § `Estimate` shows both in one block: the expanded
+    `site_adjusted_delta` beside a bare `converged: true`. Only a value carrying
+    an interval makes an attribution claim, so only that one gets `reported`.
+    """
+    out: dict[str, Any] = {}
+    for key, value in returned.items():
+        if isinstance(value, Estimate):
+            out[key] = {
+                "value": value.value,
+                "reported": True,
+                "ci95": value.ci95,
+                "n": value.n,
+                "method": value.method,
+            }
+        else:
+            out[key] = value
+    return out
+
+
 def _results_block(
     results: list[ExecutionResult],
     aggregated: dict[int, dict[str, dict[str, Any]]] | None,
@@ -70,7 +94,7 @@ def _results_block(
     for r in results:
         e = r.execution
         if e.scope == "summary":
-            summary[e.step_name] = r.returned
+            summary[e.step_name] = _summary_values(r.returned)
             continue
         if e.scope == "run":
             continue
