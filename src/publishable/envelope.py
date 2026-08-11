@@ -10,6 +10,7 @@ Pure: this module returns findings and never raises, and imports nothing from
 `config`, `artifacts`, `runner`, `cli` or `validate`.
 """
 
+import difflib
 from typing import Any
 
 # `bool` is deliberately absent from every numeric entry: it is a subclass of
@@ -71,6 +72,73 @@ LEAF_TYPES: dict[str, type | tuple[type, ...]] = {
     "hypotheses": list,
 }
 
+# Skipped by the closure below entirely — each has its own authority, and a
+# second one reporting the same namespace is the defaults-file problem one
+# level up. `parameters` is `parameter_spec`'s (`E-PARAM-UNKNOWN`, with its own
+# difflib hint); `sweep`'s top-level modes are `_check_sweep`'s (`E-SWEEP-KEY-UNKNOWN`).
+EXEMPT_SUBTREES = frozenset({"parameters", "sweep"})
+
+
+def _known_containers() -> frozenset[str]:
+    """Every dotted prefix a `LEAF_TYPES` path implies, e.g. `data.units.from`
+    implies `data` and `data.units`. Derived rather than hand-listed, so it
+    cannot drift from the one table that already has to stay accurate for the
+    type check."""
+    containers: set[str] = set()
+    for path in LEAF_TYPES:
+        parts = path.split(".")
+        for i in range(1, len(parts)):
+            containers.add(".".join(parts[:i]))
+    return frozenset(containers)
+
+
+_KNOWN_LEAVES = frozenset(LEAF_TYPES)
+_KNOWN_CONTAINERS = _known_containers()
+_KNOWN_OR_EXEMPT = _KNOWN_LEAVES | _KNOWN_CONTAINERS | EXEMPT_SUBTREES
+
+
+def _immediate_children(prefix: str) -> list[str]:
+    """The unqualified names one level under `prefix` that the closure
+    recognizes — leaves, containers, and the two exempt subtrees — for the
+    `difflib` hint. Top-level names use `prefix == ""`."""
+    children: set[str] = set()
+    for path in _KNOWN_OR_EXEMPT:
+        if prefix:
+            if path.startswith(prefix + "."):
+                children.add(path[len(prefix) + 1 :].split(".", 1)[0])
+        else:
+            children.add(path.split(".", 1)[0])
+    return sorted(children)
+
+
+def _check_unknown_keys(
+    node: Any, findings: list[tuple[str, str, str]], prefix: str = ""
+) -> None:
+    """Walk `node` reporting any key not implied by `LEAF_TYPES`, skipping the
+    two exempt subtrees entirely and never descending into a known LEAF's
+    value — a leaf's own children (`data.units.holdout`'s `method`, a `from`
+    dict's `resolver`) have no fixed dotted path a table entry could name, so
+    they are `_check_shape`'s job, exactly as the module docstring already
+    says for `sweep.grid`'s axis values.
+    """
+    if not isinstance(node, dict):
+        return
+    for key, value in node.items():
+        path = f"{prefix}.{key}" if prefix else key
+        if path in EXEMPT_SUBTREES:
+            continue
+        if path in _KNOWN_LEAVES:
+            continue
+        if path in _KNOWN_CONTAINERS:
+            _check_unknown_keys(value, findings, path)
+            continue
+        near = difflib.get_close_matches(key, _immediate_children(prefix), n=1)
+        hint = f" — did you mean `{near[0]}`?" if near else ""
+        findings.append(
+            ("E-CONFIG-KEY-UNKNOWN", path, f"is not a key this schema declares{hint}")
+        )
+
+
 _LABEL = {str: "a string", int: "an integer", float: "a number", list: "a list", dict: "a mapping"}
 
 
@@ -94,7 +162,10 @@ def _is_type(value: Any, expected: type | tuple[type, ...]) -> bool:
 
 
 def check_envelope(doc: dict[str, Any]) -> list[tuple[str, str, str]]:
-    """`(code, field, message)` per wrong-typed leaf, in table order.
+    """`(code, field, message)` per wrong-typed leaf, in table order, followed by
+    `(code, field, message)` per unknown key, depth-first — closing the schema
+    that § Validation claims is closed. `parameters` and `sweep` are excluded
+    from the unknown-key closure; see `EXEMPT_SUBTREES`.
 
     An absent leaf is not a finding — a required key absent is its own check's
     report — and a `null` is treated as absent, matching `doc.get("x") or {}`
@@ -118,4 +189,5 @@ def check_envelope(doc: dict[str, Any]) -> list[tuple[str, str, str]]:
                     f"is a {type(node).__name__} (`{node!r}`); expected {_label(expected)}",
                 )
             )
+    _check_unknown_keys(doc, findings)
     return findings

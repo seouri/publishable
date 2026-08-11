@@ -166,6 +166,14 @@ def _validate_with(tmp_path: Path, overrides: dict) -> list:
     return c.findings
 
 
+def test_a_misspelled_key_anywhere_is_reported(tmp_path: Path) -> None:
+    findings = _validate_with(tmp_path, {"sweeep": {"grid": {}}, "metadata": {"athors": ["x"]}})
+
+    fields = [f.path for f in findings if f.code == "E-CONFIG-KEY-UNKNOWN"]
+    assert "sweeep" in fields
+    assert "metadata.athors" in fields
+
+
 def test_a_wrong_typed_leaf_is_a_diagnostic_not_a_traceback(tmp_path: Path) -> None:
     """`validate` collects findings and never raises. Before the envelope this
     ended the process in `re.match`'s TypeError with no diagnostic at all."""

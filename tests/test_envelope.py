@@ -52,3 +52,26 @@ def test_a_bool_is_not_accepted_where_an_int_is_declared() -> None:
     findings = check_envelope({"limits": {"max_executions": True}})
 
     assert [f[1] for f in findings] == ["limits.max_executions"]
+
+
+def test_an_unknown_top_level_key_is_reported() -> None:
+    findings = check_envelope({"sweeep": {"grid": {}}})
+
+    assert [(f[0], f[1]) for f in findings] == [("E-CONFIG-KEY-UNKNOWN", "sweeep")]
+
+
+def test_an_unknown_nested_key_is_reported() -> None:
+    findings = check_envelope({"metadata": {"athors": ["x"]}})
+
+    assert [f[1] for f in findings] == ["metadata.athors"]
+
+
+def test_parameters_is_exempt_from_the_closure() -> None:
+    """`parameter_spec` owns that namespace and reports E-PARAM-UNKNOWN with a
+    difflib hint. A second authority would double-report and could disagree."""
+    assert check_envelope({"parameters": {"anything": {"at": "all"}}}) == []
+
+
+def test_sweeps_modes_are_exempt_from_the_closure() -> None:
+    """`_check_sweep` owns the mode list and reports E-SWEEP-KEY-UNKNOWN."""
+    assert check_envelope({"sweep": {"whatever": {}}}) == []
