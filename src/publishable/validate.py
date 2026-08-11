@@ -9,6 +9,7 @@ import yaml
 from publishable.base_experiment import load_experiment
 from publishable.contrasts import resolve_contrasts
 from publishable.diagnostics import Collector
+from publishable.envelope import check_envelope
 from publishable.errors import ContractError
 from publishable.manifest import POLICIES
 from publishable.materialize import TEMPLATE_VERSION
@@ -155,6 +156,15 @@ def _check_shape(doc: dict[str, Any], c: Collector) -> bool:
         if report_by is not None and not isinstance(report_by, list):
             _bad("statistics.report_by", report_by, "list")
 
+    # The leaf layer, in the same walk as the container layer above: shape and
+    # type are one question asked at two depths, and two walks over one document
+    # is how the two rules drift apart. Leaf faults are deliberately NOT fatal —
+    # `ok` is untouched here. A wrong-typed `metadata.name` must not suppress a
+    # `data.input_dir` finding, while a wrong-typed *container* must, because
+    # every later check indexes into it.
+    for code, field, message in check_envelope(doc):
+        c.error(code, field, message)
+
     return ok
 
 
@@ -274,7 +284,14 @@ def _check_metadata(doc: dict[str, Any], config_path: Path, template: Any, c: Co
         if not metadata.get(field):
             c.error("E-META-REQUIRED", f"metadata.{field}", "is empty, and is required")
     name = metadata.get("name", "")
-    if name and not re.match(template.naming_pattern, name):
+    # `check_envelope` is what REPORTS a wrong-typed `name` (E-CONFIG-TYPE) — this
+    # guard exists because this function may be reached without it having run: a
+    # leaf fault is deliberately non-fatal to the pass, so `_check_metadata` still
+    # executes on the still-malformed `doc`, and `re.match` requires a str/bytes-
+    # like second argument. Without this, a list or int name raised `TypeError`
+    # out of `validate` for the exact leaf fault this pass exists to turn into a
+    # diagnostic instead.
+    if name and isinstance(name, str) and not re.match(template.naming_pattern, name):
         c.error(
             "E-NAME-PATTERN",
             "metadata.name",
@@ -364,6 +381,12 @@ def _check_data(doc: dict[str, Any], config_path: Path, c: Collector) -> None:
         if not raw:
             c.error("E-DATA-REQUIRED", f"data.{field}", "is empty, and is required")
             continue
+        if not isinstance(raw, str):
+            # `check_envelope` is what REPORTS this (E-CONFIG-TYPE) — this guard
+            # exists because this function may be reached without it having run:
+            # a leaf fault is deliberately non-fatal, so `_check_data` still runs
+            # on a still-malformed `doc`, and `Path()` requires a str/PathLike.
+            continue
         path = Path(raw).expanduser()
         if not path.is_absolute():
             c.error(
@@ -377,7 +400,10 @@ def _check_data(doc: dict[str, Any], config_path: Path, c: Collector) -> None:
         resolvable[field] = path.resolve()
 
     input_dir = data.get("input_dir")
-    if input_dir:
+    # Same reasoning as the `isinstance` guard above: `check_envelope` reports a
+    # wrong-typed `input_dir`, but this function may be reached without it having
+    # run, and `Path()` requires a str/PathLike.
+    if input_dir and isinstance(input_dir, str):
         path = Path(input_dir).expanduser()
         if not path.is_dir() or not any(path.iterdir()):
             c.error("E-DATA-UNREADABLE", "data.input_dir", f"{path} is unreadable or empty")

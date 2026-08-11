@@ -131,6 +131,68 @@ def messages_by_code(path: Path) -> dict[str, str]:
     return {f.code: f.message for f in c.findings}
 
 
+def _validate_with(tmp_path: Path, overrides: dict) -> list:
+    """Write a scaffolded config with `overrides` deep-merged over `base_config`,
+    then return `validate_config`'s findings.
+
+    `test_validate.py` has no existing helper of this exact shape: every other
+    test in this file goes through the `write_config` fixture, which requires
+    `git_repo` (a real git repo, so `data.output_dir` can be checked against it)
+    and only accepts *dotted-leaf* overrides whose parent already exists in
+    `base_config`. The two tests this helper serves need to replace a whole
+    block (`metadata`, `data`) with a wrong-typed value, and don't need a repo —
+    `_check_data`'s repo-root lookup already tolerates "no repo at all" by
+    returning quietly (`E-GIT-NO-REPO`), and neither test is about that check.
+    So this writes straight under `tmp_path`, with no `git_repo`, and merges
+    `overrides` recursively rather than requiring dotted keys, matching the
+    brief's `{"metadata": {"name": [...]}}` call shape.
+    """
+
+    def _merge(dst: dict, src: dict) -> None:
+        for key, value in src.items():
+            if isinstance(value, dict) and isinstance(dst.get(key), dict):
+                _merge(dst[key], value)
+            else:
+                dst[key] = value
+
+    doc = base_config(tmp_path)
+    _merge(doc, overrides)
+    (tmp_path / "input").mkdir(exist_ok=True)
+    (tmp_path / "input" / "index.csv").write_text("patient_id\np1\n")
+    path = tmp_path / "config.yaml"
+    path.write_text(yaml.safe_dump(doc))
+    c = Collector()
+    validate_config(path, c)
+    return c.findings
+
+
+def test_a_wrong_typed_leaf_is_a_diagnostic_not_a_traceback(tmp_path: Path) -> None:
+    """`validate` collects findings and never raises. Before the envelope this
+    ended the process in `re.match`'s TypeError with no diagnostic at all."""
+    findings = _validate_with(tmp_path, {"metadata": {"name": ["a", "b"]}})
+
+    assert "E-CONFIG-TYPE" in [f.code for f in findings]
+
+
+def test_a_wrong_typed_leaf_does_not_suppress_later_findings(tmp_path: Path) -> None:
+    """A leaf fault is fatal to its field, not to the pass. A container fault
+    is fatal to the pass, and that difference is the point."""
+    findings = _validate_with(
+        tmp_path, {"metadata": {"name": ["a", "b"]}, "data": {"input_dir": "/nonexistent"}}
+    )
+
+    codes_found = [f.code for f in findings]
+    assert "E-CONFIG-TYPE" in codes_found
+    assert len([c for c in codes_found if c != "E-CONFIG-TYPE"]) > 0
+
+
+def test_a_wrong_typed_container_is_still_fatal(tmp_path: Path) -> None:
+    """The existing early return, unchanged: later checks index into the block."""
+    findings = _validate_with(tmp_path, {"metadata": ["not", "a", "mapping"]})
+
+    assert "E-CONFIG-SHAPE" in [f.code for f in findings]
+
+
 def test_a_valid_config_reports_nothing(write_config):
     assert codes(write_config()) == set()
 
