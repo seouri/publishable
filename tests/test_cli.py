@@ -3443,3 +3443,175 @@ def test_sweep_family_unmoved_by_declaring_hypotheses(tmp_path, capsys, monkeypa
     # all: the second run's own hypothesis verdict is present and evaluated.
     assert run_with["results"]["hypotheses"][0]["id"] == "h1"
     assert "hypotheses" not in run_without["results"]
+
+
+# --- Task 10: the acceptance test ---------------------------------------------
+
+# The threshold the two acceptance tests below share, and the reason it sits
+# where it does. `_METHOD_VARYING_STEP` over 120 units gives 120 per-unit
+# differences — 60 at 1.5 and 60 at 0.5 — so the delta is exactly 1.0 and the
+# paired *t* interval is [0.909242, 1.090758]: half-width 0.0907577, already
+# pinned independently by
+# `test_the_delta_interval_matches_this_fixture_s_own_arithmetic` above, so this
+# threshold's provenance is checkable rather than hand-derived. 0.95 sits
+# strictly between that lower bound and the point estimate, which is the whole
+# construction: the observed delta clears it, the interval's lower bound does
+# not. That mirrors `reference.md` § Pre-registration exactly, where the worked
+# example's 0.02 sits between the delta 0.026 and the interval's −0.007. Both
+# tests assert the ordering rather than trusting it, so a later fixture change
+# that moved the interval would fail loudly instead of quietly ceasing to
+# discriminate.
+_ACCEPTANCE_THRESHOLD = 0.95
+
+
+def _acceptance_hypotheses() -> list[dict[str, Any]]:
+    """The pair `reference.md` § Pre-registration states both verdicts for:
+    identical in every field but `evaluate_on`.
+
+    `evaluate_on` is written out on *both*, never omitted on the `observed` one
+    — `verdict_for` defaults an absent field to `"observed"`, so leaving it off
+    would make the pair differ in a field's presence rather than in its value,
+    and the point of the pair is that one value flips the verdict.
+    """
+    common: dict[str, Any] = {
+        "kind": "confirmatory",
+        "statement": "spearman exceeds pearson by more than 0.95",
+        "metric": "step01_summarize_units.pred",
+        "compare": {"condition": "method=spearman", "to": "baseline"},
+        "direction": "greater",
+        "threshold": _ACCEPTANCE_THRESHOLD,
+    }
+    return [
+        {"id": "h1", **common, "evaluate_on": "observed"},
+        {"id": "h1_bound", **common, "evaluate_on": "ci95_lower"},
+    ]
+
+
+def test_acceptance_one_delta_two_questions_two_verdicts(tmp_path, capsys, monkeypatch):
+    """The slice's exit criterion, and the spine's: the worked example's `h1`
+    renders its verdict, both ways, from one number.
+
+    `reference.md` § Pre-registration: the observed delta clears the declared
+    threshold, so the hypothesis is `supported: true` on `observed`; the same
+    delta's interval does not exclude the threshold, so the same hypothesis
+    written `evaluate_on: ci95_lower` comes back `supported: false`. "Neither
+    verdict is wrong; they answer different questions, and a reader who can see
+    which one was asked can decide what the run showed."
+
+    One run, one metric, two hypotheses differing only in `evaluate_on` — so an
+    implementation that read the field and one that ignored it are
+    distinguishable by this test alone, which is what makes it the sharp one.
+
+    What it deliberately does *not* discriminate: both the corrected and the raw
+    lower bound sit below the threshold here, so `h1_bound` would still read
+    `supported: false` if `_tested_number` silently fell back to the raw
+    interval. That read is pinned by
+    `test_a_bound_verdict_reads_the_hypothesis_family_correction` above, whose
+    threshold is bracketed strictly between the two bounds for exactly that
+    purpose; a pair differing *only* in `evaluate_on` cannot also carry that
+    bracket, since it has one threshold to spend.
+    """
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=120,
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+        hypotheses=_acceptance_hypotheses(),
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    verdicts = {v["id"]: v for v in run["results"]["hypotheses"]}
+    point, bound = verdicts["h1"], verdicts["h1_bound"]
+
+    # The precondition, enforced rather than assumed. The bound hypothesis reads
+    # `ci95_corrected` when its family is corrected (`_tested_number` prefers the
+    # corrected bounds), so the whole chain is asserted: the threshold must sit
+    # above *both* lower bounds and below the point estimate, or the pair stops
+    # discriminating and these verdicts stop meaning what they say.
+    observed = bound["observed"]
+    corrected_low, _ = observed["ci95_corrected"]
+    raw_low, raw_high = observed["ci95"]
+    assert observed["delta"] == pytest.approx(1.0)
+    assert raw_low == pytest.approx(1.0 - 0.0907577, rel=1e-5)
+    assert raw_high == pytest.approx(1.0 + 0.0907577, rel=1e-5)
+    assert corrected_low < raw_low < _ACCEPTANCE_THRESHOLD < observed["delta"]
+
+    # The pair. Same delta, same interval, opposite verdicts.
+    assert point["supported"] is True
+    assert bound["supported"] is False
+    assert point["verdict_evaluated_on"] == "observed"
+    assert bound["verdict_evaluated_on"] == "ci95_lower"
+    # Both rest on a number core computed, not one a step reported — the field
+    # that would say `reported` if the observation had come from an `Estimate`.
+    assert point["verdict_rests_on"] == "computed"
+    assert bound["verdict_rests_on"] == "computed"
+    # The pre-registration claim is checkable because the verdict names the hash
+    # of the config that declared it, exactly, not by prefix.
+    declared_in = f"parameters_hash {run['parameters_hash']}"
+    assert point["declared_in"] == declared_in
+    assert bound["declared_in"] == declared_in
+    # Both `observed` blocks show the comparison's own fields — the same keys, so
+    # the two verdicts are visibly two readings of one block, not two numbers.
+    # `method` among them: the interval's construction travels with the bound a
+    # verdict may rest on, so a reader can see it was `paired_t_over_units` and
+    # not a difference of two conditions' intervals.
+    assert set(point["observed"]) == {"delta", "ci95", "method", "ci95_corrected"}
+    assert point["observed"]["method"] == "paired_t_over_units"
+    assert point["observed"] == bound["observed"]
+
+
+def test_acceptance_the_verdict_record_carries_every_field(tmp_path, capsys, monkeypatch):
+    """`reference.md`: "A record that reported only `supported: true` would be
+    the version worth distrusting." One assertion over the whole entry, against a
+    literal — so a field quietly disappearing from the verdict fails here even
+    though every value-level assertion above would still pass.
+
+    Only the list leaves are rounded, and the key set is carried through
+    untouched: an added field fails this as loudly as a removed one, while a
+    last-digit difference in a scipy-derived bound does not. `delta` is exact
+    (every recorded value is a multiple of 0.5), and `declared_in` is
+    interpolated because the hash is per-run.
+    """
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=120,
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+        hypotheses=_acceptance_hypotheses(),
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    verdict = next(v for v in run["results"]["hypotheses"] if v["id"] == "h1")
+    rounded = {
+        key: ([round(x, 6) for x in value] if isinstance(value, list) else value)
+        for key, value in verdict["observed"].items()
+    }
+    # `family_size` is 2, not 1: both hypotheses are confirmatory and both rest
+    # on a computed observation, so both are counted — the pair being one
+    # question asked twice does not make it one member.
+    assert {**verdict, "observed": rounded} == {
+        "id": "h1",
+        "kind": "confirmatory",
+        "declared_in": f"parameters_hash {run['parameters_hash']}",
+        "observed": {
+            "delta": 1.0,
+            "ci95": [0.909242, 1.090758],
+            "method": "paired_t_over_units",
+            "ci95_corrected": [0.895949, 1.104051],
+        },
+        "verdict_evaluated_on": "observed",
+        "supported": True,
+        "verdict_rests_on": "computed",
+        "family_size": 2,
+        "family": {"hypotheses": 2},
+    }
