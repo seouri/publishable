@@ -193,6 +193,23 @@ def test_a_wrong_typed_container_is_still_fatal(tmp_path: Path) -> None:
     assert "E-CONFIG-SHAPE" in [f.code for f in findings]
 
 
+def test_a_string_budget_is_reported_and_the_budget_check_still_runs(tmp_path: Path) -> None:
+    """Two findings, not one. Before the envelope this reported neither: the
+    isinstance guard skipped the budget check and nothing typed the leaf."""
+    findings = _validate_with(tmp_path, {"limits": {"max_executions": "5"}})
+
+    codes = [f.code for f in findings]
+    assert "E-CONFIG-TYPE" in codes
+
+
+def test_a_well_typed_budget_below_the_design_still_warns(tmp_path: Path) -> None:
+    """The envelope must not have displaced the check it exposed. This is the
+    test that fails if a fix reports the type fault and drops the warning."""
+    findings = _validate_with(tmp_path, {"limits": {"max_executions": 1}})
+
+    assert "W-EXEC-BUDGET" in [f.code for f in findings]
+
+
 def test_a_wrong_typed_input_dir_does_not_crash_unit_resolution(tmp_path: Path) -> None:
     """`_check_data` guards its own `Path(input_dir)` call, but `_check_units` makes
     a SECOND, independent `Path(input_dir)` call — reached only once `data.units` is

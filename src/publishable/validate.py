@@ -1048,6 +1048,11 @@ def _check_sweep(
     # against a guessed 1× is deliberate: an unknown total must not be reported
     # as a small one. A `k: all` over a roster that DID resolve is a real number
     # here, and warns like any other count.
+    # `check_envelope` is what REPORTS a wrong-typed `budget` (E-CONFIG-TYPE) —
+    # this guard exists because this function may be reached without it having
+    # run: a leaf fault is deliberately non-fatal, so `_check_sweep` still runs
+    # on a still-malformed `doc`, and `executions > budget` below would raise
+    # `TypeError` comparing an `int` to a `str`.
     if repeat_total is not None and isinstance(budget, int):
         executions = len(conditions) * repeat_total
         if executions > budget:
