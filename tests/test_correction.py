@@ -224,14 +224,28 @@ def test_corrected_for_takes_the_family_size_it_is_given():
 
 
 def test_corrected_fields_still_computes_the_sweep_shape():
-    """The existing caller keeps its behaviour: it passes the product, and its
-    breakout still names comparisons and metrics."""
-    strong, weak = _two_member_family()
-    got = corrected_fields([strong, weak], "bonferroni")
+    """The existing caller keeps its behaviour: it passes the product, not the
+    member count, and its breakout still names comparisons and metrics.
+
+    Non-square on purpose, following
+    `test_the_level_divides_by_the_family_product_not_the_member_count`'s
+    fixture shape: `rmse` is recorded in comparison "1" and absent from
+    comparison "2", so 3 members span a family of 2 comparisons × 2 metrics =
+    4. A caller that substituted `len(family)` (3) for the product would
+    compute `family_size: 3` here and this test would catch it — a square
+    fixture (comparisons == metrics == members) cannot, since the product and
+    the member count coincide by construction."""
+    members = [
+        _from_diffs("1", 1, mean=-0.169, spread=0.02, metric="r"),
+        _from_diffs("1", 1, mean=-0.150, spread=0.02, metric="rmse"),
+        _from_diffs("2", 2, mean=0.026, spread=0.30, metric="r"),
+    ]
+    got = corrected_fields(members, "bonferroni")
+    assert len(got) == 3
     for entry in got.values():
-        assert entry["family_size"] == 2
-        assert entry["family"] == {"comparisons": 2, "metrics": 1}
-        assert entry["correction_level"] == pytest.approx(0.05 / 2)
+        assert entry["family_size"] == 4
+        assert entry["family"] == {"comparisons": 2, "metrics": 2}
+        assert entry["correction_level"] == pytest.approx(0.05 / 4)
 
 
 def test_holm_ranks_within_whatever_family_size_it_is_handed():
