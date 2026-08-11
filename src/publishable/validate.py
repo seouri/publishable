@@ -1052,13 +1052,14 @@ def _check_sweep(
     # this guard exists because this function may be reached without it having
     # run: a leaf fault is deliberately non-fatal, so `_check_sweep` still runs
     # on a still-malformed `doc`, and `executions > budget` below would raise
-    # `TypeError` comparing an `int` to a `str`. `isinstance(budget, int)` is
-    # deliberately plain, not `envelope._is_type`'s bool-excluding variant: a
-    # `max_executions: true` is `check_envelope`'s fault to name (`E-CONFIG-TYPE`,
-    # since `LEAF_TYPES` excludes `bool`), and this guard's only job is to keep
-    # the comparison below from raising, which a `bool` — an `int` subtype —
-    # never does.
-    if repeat_total is not None and isinstance(budget, int):
+    # `TypeError` comparing an `int` to a `str`. `bool` is excluded explicitly,
+    # matching `envelope._is_type`'s own bool-excluding rule for the same leaf
+    # (`LEAF_TYPES` types `max_executions` as `int`, not `int | bool`): without
+    # the exclusion, `isinstance(True, int)` is `True`, so a `max_executions:
+    # true` would both get `E-CONFIG-TYPE` from the envelope AND run this check
+    # against a `bool` budget, warning "exceeds True" — a message a wrong-typed
+    # value should never be able to produce.
+    if repeat_total is not None and isinstance(budget, int) and not isinstance(budget, bool):
         executions = len(conditions) * repeat_total
         if executions > budget:
             c.warn(
@@ -1747,6 +1748,11 @@ def _check_report_by(doc: dict[str, Any], c: Collector, roster: UnitList | None)
             )
 
     floor = (doc.get("limits") or {}).get("min_reported_n")
+    # `check_envelope` is what REPORTS a wrong-typed `floor` (E-CONFIG-TYPE) —
+    # this guard exists because this function may be reached without it having
+    # run: a leaf fault is deliberately non-fatal, so `_check_report_by` still
+    # runs on a still-malformed `doc`, and `len(keys) < floor` below would raise
+    # `TypeError` comparing an `int` to a `str`.
     if roster is None or not isinstance(floor, (int, float)):
         return
     for i, name in enumerate(entries):

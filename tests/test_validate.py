@@ -215,6 +215,34 @@ def test_a_well_typed_budget_below_the_design_still_warns(tmp_path: Path) -> Non
     assert "1 conditions × 5 repeats = 5 executions exceeds 1" in messages["W-EXEC-BUDGET"]
 
 
+def test_a_bool_budget_is_reported_once_and_the_check_is_skipped(tmp_path: Path) -> None:
+    """`isinstance(True, int)` is `True` in Python, so a plain `isinstance(budget,
+    int)` guard let a `bool` budget through into the comparison, producing a
+    warning no one could act on (`"... exceeds True"`) alongside the envelope's
+    own `E-CONFIG-TYPE` — reporting the same fault twice, once sensibly and once
+    as nonsense. `max_executions: true` must be reported by the envelope and by
+    nothing else."""
+    findings = _validate_with(tmp_path, {"limits": {"max_executions": True}})
+
+    codes = [f.code for f in findings]
+    assert "E-CONFIG-TYPE" in codes
+    assert "W-EXEC-BUDGET" not in codes
+
+
+def test_a_string_min_reported_n_is_reported(tmp_path: Path) -> None:
+    """The same silent-skip class as the budget check, one guard over in
+    `_check_report_by`: `isinstance(floor, (int, float))` used to skip
+    `W-STATS-REPORTBY-THIN` on a wrong-typed `min_reported_n` with nothing
+    typing the leaf either. `test_a_thin_report_by_level_warns_before_the_run`
+    and `test_two_thin_report_by_levels_are_diagnosed_in_a_stable_order`
+    already pin that the check still runs on a well-typed floor, so this test
+    covers only the type fault half of the pair."""
+    findings = _validate_with(tmp_path, {"limits": {"min_reported_n": "10"}})
+
+    codes = [f.code for f in findings]
+    assert "E-CONFIG-TYPE" in codes
+
+
 def test_a_wrong_typed_input_dir_does_not_crash_unit_resolution(tmp_path: Path) -> None:
     """`_check_data` guards its own `Path(input_dir)` call, but `_check_units` makes
     a SECOND, independent `Path(input_dir)` call — reached only once `data.units` is
