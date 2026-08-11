@@ -186,6 +186,34 @@ def test_something_structural_inside_an_estimate_is_still_refused():
     assert excinfo.value.code == "E-STEP-RETURN-TYPE"
 
 
+def test_a_ci95_that_is_not_two_elements_is_refused():
+    """S5b indexes this list to read a bound. A one-element interval would raise
+    an IndexError mid-run, after every execution has been spent."""
+    for bad in ([0.4], [0.1, 0.2, 0.3], []):
+        est = Estimate(value=0.5, ci95=bad, method="one-sided BCa")
+        with pytest.raises(ContractError) as excinfo:
+            coerce_scalars({"d": est}, "step04_agreement", scope="summary")
+        assert excinfo.value.code == "E-STEP-ESTIMATE-CI95"
+
+
+def test_a_reversed_ci95_is_refused():
+    """`evaluate_on: ci95_lower` reads element 0. Reversed, it reads the upper
+    bound and returns a verdict that looks authoritative and tested the wrong
+    number — mechanically detectable, and not a judgement about the statistics."""
+    est = Estimate(value=0.5, ci95=[0.6, 0.4], method="one-sided BCa")
+    with pytest.raises(ContractError) as excinfo:
+        coerce_scalars({"d": est}, "step04_agreement", scope="summary")
+    assert excinfo.value.code == "E-STEP-ESTIMATE-CI95"
+
+
+def test_an_equal_pair_is_allowed():
+    """A zero-width interval is legitimate — S4b established it for a point-mass
+    bootstrap — so the check is `>`, not `>=`."""
+    est = Estimate(value=0.5, ci95=[0.5, 0.5], method="point mass")
+    got = coerce_scalars({"d": est}, "step04_agreement", scope="summary")["d"]
+    assert got.ci95 == [0.5, 0.5]
+
+
 def test_a_bare_value_beside_an_estimate_is_untouched():
     """The documented example returns `converged: True` alongside. A bare value
     stays bare — it is not wrapped into the Estimate shape."""

@@ -101,13 +101,27 @@ def _coerce_estimate(key: str, value: Estimate, where: str, scope: str | None) -
             "on whether it is the right method",
             code="E-STEP-ESTIMATE-METHOD",
         )
+    coerced_ci95 = (
+        None if value.ci95 is None else [_coerce_one(f"{key}.ci95", v, where) for v in value.ci95]
+    )
+    if coerced_ci95 is not None:
+        if len(coerced_ci95) != 2:
+            raise ContractError(
+                f"{where} gave {key!r} a ci95 of {len(coerced_ci95)} elements; an interval is "
+                "exactly two, lower then upper, because a hypothesis evaluating on "
+                "`ci95_lower` or `ci95_upper` reads one of them by position",
+                code="E-STEP-ESTIMATE-CI95",
+            )
+        if coerced_ci95[0] > coerced_ci95[1]:
+            raise ContractError(
+                f"{where} gave {key!r} a ci95 whose lower bound {coerced_ci95[0]} exceeds its "
+                f"upper bound {coerced_ci95[1]}; reversed, `evaluate_on: ci95_lower` would read "
+                "the upper bound and report a verdict against the wrong number",
+                code="E-STEP-ESTIMATE-CI95",
+            )
     return Estimate(
         value=_coerce_one(f"{key}.value", value.value, where),
-        ci95=(
-            None
-            if value.ci95 is None
-            else [_coerce_one(f"{key}.ci95", v, where) for v in value.ci95]
-        ),
+        ci95=coerced_ci95,
         n=None if value.n is None else _coerce_one(f"{key}.n", value.n, where),
         method=value.method,
     )
