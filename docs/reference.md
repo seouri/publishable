@@ -371,10 +371,10 @@ Each row states the condition, not the wording.
 
 Two faults return `validate_config` before any row below runs: a container-shaped
 `E-CONFIG-SHAPE` fault, and `E-TEMPLATE-UNKNOWN`. Every row in this table fires only once
-both have already passed, except the four `E-CONFIG-*` rows — `check_envelope` runs inside
-`_check_shape` itself, before that function can return early. A config with a container-shape
-fault or an unresolvable `experiment_type` reports exactly that one finding, and none of this
-table's others, for the whole file.
+both have already passed, except the four `E-CONFIG-*` rows, which are found before that
+return is possible, and `E-TEMPLATE-UNKNOWN` itself, which is what triggers it rather than
+sitting behind it. A config with a container-shape fault or an unresolvable `experiment_type`
+reports exactly that one finding, and none of this table's others, for the whole file.
 
 | Reported when | Code |
 |---|---|
