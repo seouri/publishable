@@ -3246,3 +3246,200 @@ def test_a_hypothesis_family_too_large_for_its_draws_gets_no_bound_verdict(
     assert first["observed"]["ci95_corrected"] is None
     assert first["supported"] is None
     assert all(v["supported"] is None for v in verdicts)
+
+
+# --- Task 9: what the correction family deliberately does not count -----------
+
+
+def test_an_exploratory_hypothesis_is_evaluated_and_uncounted(tmp_path, capsys, monkeypatch):
+    """`reference.md`: the family "counts the confirmatory hypotheses whose
+    observations core computed" — an exploratory one is evaluated the same way
+    a confirmatory one is (both get a real `supported` and
+    `verdict_evaluated_on`) but is not a member of the family it would
+    otherwise join, because `kind` is one of the two exclusions
+    `hypotheses._is_counted` checks. Both name the same metric and the same
+    comparison, so the only axis under test is `kind`."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+        hypotheses=[
+            {
+                "id": "h1",
+                "kind": "confirmatory",
+                "statement": "spearman exceeds pearson",
+                "metric": "step01_summarize_units.pred",
+                "compare": {"condition": "method=spearman", "to": "baseline"},
+                "direction": "greater",
+                "threshold": 0.5,
+                "evaluate_on": "observed",
+            },
+            {
+                "id": "h2",
+                "kind": "exploratory",
+                "statement": "spearman exceeds pearson (unregistered)",
+                "metric": "step01_summarize_units.pred",
+                "compare": {"condition": "method=spearman", "to": "baseline"},
+                "direction": "greater",
+                "threshold": 0.5,
+                "evaluate_on": "observed",
+            },
+        ],
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    verdicts = {v["id"]: v for v in run["results"]["hypotheses"]}
+    h1, h2 = verdicts["h1"], verdicts["h2"]
+    # Both are evaluated: same comparison, same threshold, same direction, so
+    # both carry a real verdict rather than one being silently skipped.
+    assert h1["supported"] is True
+    assert h2["supported"] is True
+    assert h1["verdict_evaluated_on"] == "observed"
+    assert h2["verdict_evaluated_on"] == "observed"
+    # Only the confirmatory one joins the family — a family of one, not two,
+    # because the exploratory entry never counts toward its own size either.
+    assert h1["family_size"] == 1
+    assert "family_size" not in h2
+    assert "family" not in h2
+
+
+_ESTIMATE_FOR_HYPOTHESIS_STEP = '''\
+# generated, and runnable as-is
+from publishable import BaseStep, Estimate
+
+
+class Step(BaseStep):
+    scope = "summary"
+
+    def run(self, cfg, io):
+        return {{"adjusted": Estimate(value=0.031, ci95=[0.008, 0.055], n=612,
+                                      method="mixed model, REML")}}
+'''
+
+
+def test_a_reported_hypothesis_is_evaluated_and_uncounted(tmp_path, capsys, monkeypatch):
+    """`reference.md` § What a hypothesis is tested against: "A hypothesis may
+    name a summary metric" — a `reported: true` `Estimate` a step computed
+    itself, with no `data.units` or comparison involved at all. Its verdict
+    rests on `reported`, not `computed`, and `hypotheses._is_counted` excludes
+    it from the family for that reason — the same rule the exploratory case
+    above hits from the other side.
+
+    This run declares no `data.units` at all — the `_NO_UNITS_STARTER_STEP`
+    fixture and the `data` override both exist for exactly this
+    (`test_an_estimate_with_no_roster_still_warns`), reused here rather than
+    invented fresh. That is deliberate: `cli`'s `hypotheses.evaluate` call sits
+    outside `if roster is not None:`, and a fixture that still declares
+    `data.units` would never exercise that placement — a hypothesis resting on
+    a reported `Estimate` is the one case that needs no roster to be reachable
+    at all. Gating the call inside that branch (checked by hand, not asserted
+    here since it would mean editing `src/`) makes this test fail with a
+    `KeyError` reading `run["results"]["hypotheses"]`, which does not exist
+    when the whole aggregate-phase block is skipped for lack of a roster — so
+    this fixture does pin the placement.
+    """
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _NO_UNITS_STARTER_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        extra_steps=["summarize"],
+        extra_step_source=_ESTIMATE_FOR_HYPOTHESIS_STEP,
+        data={
+            "input_dir": str(tmp_path / "data"),
+            "output_dir": str(tmp_path / "results"),
+            "input_manifest_policy": "hash_all",
+        },
+        hypotheses=[
+            {
+                "id": "h1",
+                "kind": "confirmatory",
+                "statement": "the adjusted estimate exceeds 0.02",
+                "metric": "step02_summarize.adjusted",
+                "direction": "greater",
+                "threshold": 0.02,
+            }
+        ],
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "completed"
+    verdict = run["results"]["hypotheses"][0]
+    assert verdict["id"] == "h1"
+    assert verdict["verdict_rests_on"] == "reported"
+    assert verdict["supported"] is True
+    assert "family_size" not in verdict
+    assert "family" not in verdict
+
+
+def test_sweep_family_unmoved_by_declaring_hypotheses(tmp_path, capsys, monkeypatch):
+    """`reference.md`: the sweep's own correction family and the hypothesis
+    family "are corrected separately" — declaring a hypothesis must not change
+    the `family_size`/`family` a sweep contrast already carries.
+
+    The two runs differ *only* in the `hypotheses` block. `design_digest`
+    covers `data.units` and `sweep.groups` only (`hashes.py`) — `hypotheses`
+    is neither — so unlike a one-sided `data.units.attributes` declaration
+    (`test_report_by_adds_no_executions`), adding a `hypotheses` block does not
+    redraw a single seed; asserted below from the two `sweep.yaml` files
+    rather than argued from the source, since a moved digest would mean this
+    comparison was measuring drawn-again numbers rather than the same ones
+    corrected under two different declared-hypothesis states.
+    """
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+    sweep = {
+        "baseline": {"analysis.method": "pearson"},
+        "grid": {"analysis.method": ["spearman", "kendall"]},
+    }
+    hypotheses = [
+        {
+            "id": "h1",
+            "kind": "confirmatory",
+            "statement": "spearman exceeds pearson",
+            "metric": "step01_summarize_units.pred",
+            "compare": {"condition": "method=spearman", "to": "baseline"},
+            "direction": "greater",
+            "threshold": 0.5,
+            "evaluate_on": "observed",
+        }
+    ]
+    without = run_a_project(
+        tmp_path / "without",
+        capsys=capsys,
+        units=40,
+        sweep=sweep,
+    )
+    with_hyp = run_a_project(
+        tmp_path / "with",
+        capsys=capsys,
+        units=40,
+        sweep=sweep,
+        hypotheses=hypotheses,
+    )
+    digest_without = yaml.safe_load(
+        (without["run_dir"] / "sweep.yaml").read_text()
+    )["design_digest"]
+    digest_with = yaml.safe_load((with_hyp["run_dir"] / "sweep.yaml").read_text())[
+        "design_digest"
+    ]
+    assert digest_without == digest_with
+    run_without = yaml.safe_load((without["run_dir"] / "run.yaml").read_text())
+    run_with = yaml.safe_load((with_hyp["run_dir"] / "run.yaml").read_text())
+    entry_without = _first_contrast(run_without, "method=spearman")
+    entry_with = _first_contrast(run_with, "method=spearman")
+    assert entry_without is not None
+    assert entry_with is not None
+    assert entry_without["family_size"] == entry_with["family_size"]
+    assert entry_without["family"] == entry_with["family"]
+    # Not a vacuous comparison of two configs that never touched hypotheses at
+    # all: the second run's own hypothesis verdict is present and evaluated.
+    assert run_with["results"]["hypotheses"][0]["id"] == "h1"
+    assert "hypotheses" not in run_without["results"]
