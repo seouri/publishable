@@ -1914,11 +1914,16 @@ results:
 
 **`reported: true` is the whole mechanism, and it is an attribution rather than an endorsement.** Core stores the fields, `report` renders them as an interval, and [`study add`](#what-study-add-redacts) can check `n` against `limits.min_reported_n` — but core never recomputes the value, never resamples it, never corrects it, and never counts it in the family. Nothing about the refusal above changes; what changes is that a reader of `run.yaml` can now tell which intervals core derived from the per-unit table and which an author's own model asserted. Before this, both looked identical to every tool and to every reader, which was the worse of the two situations: the interval was already returnable, just unmarked.
 
-Three rules, each a declaration check rather than a judgement about your statistics:
+Five rules, each a declaration check rather than a judgement about your statistics:
 
 - **`method` is required whenever `ci95` is present.** An interval nobody labelled is unreadable, and core can enforce that a label exists without having any opinion on whether it's the right method. This is the same standard the [correction family](#sweeps-and-repeats) is held to — a number that looks handled and isn't is worse than an honest one.
 - **`n` is optional but its absence is surfaced**, because an interval with no stated denominator is exactly the disclosure risk `min_reported_n` exists to catch.
 - **`Estimate` is accepted at `scope: "summary"` only.** Elsewhere it would be a way to attach an interval to a per-execution return value, and `per_repeat` is *"exactly what the step returned"* — an interval per repeat is either a claim about that one execution or an accident, and neither belongs on the record. Intervals at every other scope come from the [unit table](#the-unit-table-is-the-inference-base), which is the refusal that makes the rest of this section work.
+- `ci95` is exactly two numbers, in ascending order — refused as
+  [`E-STEP-ESTIMATE-CI95`](#errors-core-raises). A bound read off a one-element or reversed pair
+  would be the wrong bound, silently, and `evaluate_on: ci95_lower` indexes it.
+- `value` is a number — refused as [`E-STEP-ESTIMATE-VALUE`](#errors-core-raises). An `Estimate` is
+  the one interval core stores without computing, so the only thing it can check is the shape.
 
 ### How artifacts are organized
 
@@ -2453,6 +2458,20 @@ hypotheses:
     evaluate_on: observed
 ```
 
+Not every key above is required, and `validate` enforces the set below rather than leaving it to prose:
+
+| Field | Required | Because |
+|---|---|---|
+| `id` | optional | `validate` never checks it; it exists to label an entry in `results.hypotheses`, not to resolve one |
+| `kind` | required | `confirmatory` or `exploratory` with no default — an omission would silently drop a pre-registered claim out of its correction family (`E-HYPOTHESIS-KIND`) |
+| `statement` | optional | `validate` never checks it; it is the claim in prose, for a reader, and plays no part in resolving or evaluating the hypothesis |
+| `metric` | required | `compare` says *where*, never *what*, in every form — `metric` is the one field naming the quantity under test (`E-HYPOTHESIS-METRIC`) |
+| `step` | not a key | there is no separate `step` field; it is the part of `metric` before the dot in `step.metric` |
+| `direction` | required | `greater` or `less` with no default — a missing or mistyped value gets no default guess, only `supported: null` (`E-HYPOTHESIS-DIRECTION`) |
+| `threshold` | required | a number with no default — the same absent-rather-than-guessed rule as `direction` (`E-HYPOTHESIS-THRESHOLD`) |
+| `evaluate_on` | optional | `observed` when absent; `ci95_lower` or `ci95_upper` otherwise (`E-HYPOTHESIS-EVALUATE-ON` when present and none of the three) |
+| `compare` | conditional | absent exactly when `metric` names a `scope: "summary"` step — a summary metric is one value per run, not a contrast between conditions — and required for every other scope; both directions are `E-HYPOTHESIS-FORM` |
+
 Core evaluates each hypothesis against the results and writes the verdict into `run.yaml`:
 
 ```yaml
@@ -2462,17 +2481,46 @@ results:
       kind: confirmatory
       declared_in: parameters_hash sha256:1a2b...      # the config that predicted it
       observed: {delta: 0.026, ci95: [-0.007, 0.059],
-                 ci95_corrected: [-0.007, 0.059]}      # corrected in the hypothesis family
+                 method: paired_percentile_over_units,
+                 ci95_corrected: [-0.007, 0.059]}       # corrected in the hypothesis family
       verdict_evaluated_on: observed                   # 0.026 against threshold 0.02
       family_size: 1                                   # this family, not the sweep's 2
       family: {hypotheses: 1}                          # confirmatory and core-computed
       supported: true
       verdict_rests_on: computed                       # core derived the number it compared
+
+    - id: h3
+      kind: exploratory
+      declared_in: parameters_hash sha256:1a2b...
+      observed: {delta: 0.041, ci95: null, method: null}  # one paired unit: a delta,
+      supported: null                                     #   but too few draws for a ci95
+      verdict_evaluated_on: ci95_lower
+      verdict_rests_on: computed
 ```
 
 **The verdict records which number it compared, because the [hypothesis family](#sweeps-and-repeats) is corrected separately from the sweep's.** `family_size` and `family` carry it in the same idiom every other family uses, with a single breakout key because a hypothesis family multiplies nothing: it counts the confirmatory hypotheses whose observations core computed, where a sweep's family counts comparisons × metrics. A reader can check the level without re-deriving it, exactly as `family` beside a `vs_baseline` delta is auditable rather than asserted. Correction reaches a verdict only through a bound: a hypothesis evaluating on `observed` compares a point estimate, which has no α to adjust, while one evaluating on `ci95_lower` or `ci95_upper` reads the corrected bound at the level *this* family implies. `verdict_evaluated_on` names which of the three the comparison actually used — spelled out rather than echoing the config's `evaluate_on`, since a record field one letter from a config field is a typo waiting to be read as agreement. So a verdict is never a number a reader has to reconstruct from `evaluate_on` plus a correction rule.
 
 **In the worked example the two available answers differ, and the field is what makes that legible.** The observed delta of 0.026 clears the declared threshold of 0.02, so `h1` is supported on `observed` — while the same delta's interval over 228 units, [−0.007, 0.059], does not exclude zero, so the same hypothesis written `evaluate_on: ci95_lower` would come back `supported: false`. Neither verdict is wrong; they answer different questions, and a reader who can see which one was asked can decide what the run showed. A record that reported only `supported: true` would be the version worth distrusting. See [What a hypothesis is tested against](#what-a-hypothesis-is-tested-against) for when to declare which.
+
+**`supported` has three states, and the third is not a failure.** `true` and `false` mean the
+comparison was made and came out one way or the other. `null` means core could not make it, and it
+appears by exactly two routes: the observation does not resolve — the step that would have produced
+the metric failed, or every unit on one side of a comparison was ineligible — or the verdict asks
+for a bound (`evaluate_on: ci95_lower` or `ci95_upper`) against a bound that isn't there: the raw
+`ci95`, or — for a hypothesis whose family is corrected — the corrected bound at the level this
+family implies, which a family too thin for the resample to support leaves `null` beside a raw
+interval that is perfectly fine (see [`W-STATS-CORRECTED-THIN`](#warnings-core-reports)). The shape
+of `observed` is how a reader tells the two routes apart: the first writes `observed: null` — there
+is no block, because nothing was found to report — and the second writes a real `observed` block
+whose `ci95` (or `ci95_corrected`) is the `null` field.
+
+A `false` in either of those places would be indistinguishable from a claim that was tested and did
+not hold, which is the confusion [`verdict_evaluated_on`](#what-a-hypothesis-is-tested-against)
+exists to prevent one level up. A hypothesis core could not evaluate is not a hypothesis core
+refuted. The `run.yaml` above shows the second route beside `h1`: `h3`'s one paired unit gives it a
+`delta` but too few draws for a `ci95`, and its bound test asks for `ci95_lower` against an interval
+that isn't there, so `supported` comes back `null` rather than a guess at which side of zero was
+meant.
 
 ### What a hypothesis is tested against
 
