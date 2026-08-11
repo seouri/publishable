@@ -344,6 +344,55 @@ Each row states the condition, not the wording.
 
 `W-ENV-UNLOCKED` is the one row above that names a gap in this project rather than in yours: it fires on every scaffolded run right now, because `publishable` cannot yet be resolved from an index a lockfile pins against. That is bootstrapping, not a defect — a reader hitting it on their first run is seeing an accurate, expected state, not a misconfigured one.
 
+### Errors `validate` reports
+
+A validate-time error is a [diagnostic](#exit-codes-and-diagnostics), not an exception —
+`validate` collects every fault it can find in one pass, and modelling each as a raise would
+force it to stop at the first. [§ Errors core raises](#errors-core-raises) covers the run-time
+surface, where there is a step to raise into; these are the codes a *command* reports. Each
+carries a stable `E-` identifier for the same reason a raise-time code does: a message gets
+clearer over time, and something pinned to the wording breaks when it does.
+
+Some of these are raised where the roster and the repeat levels are resolved, rather than in
+`validate` itself — `validate` resolves both while checking a declaration and reports whatever
+it catches under the same code, so a user sees one identifier for one problem whether it
+surfaced at `validate` or at `run`.
+
+Each row states the condition, not the wording.
+
+| Reported when | Code |
+|---|---|
+| `data.units.allocation` is declared as something other than `within`, the only value this build implements | `E-DATA-ALLOCATION-UNSUPPORTED` |
+| `data.units.assign` is declared — read by nothing in this build | `E-DATA-ASSIGN-UNSUPPORTED` |
+| `data.units.cluster_by` is declared — read by nothing in this build | `E-DATA-CLUSTER-UNSUPPORTED` |
+| `data.units.holdout` is declared — read by nothing in this build | `E-DATA-HOLDOUT-UNSUPPORTED` |
+| `data.input_dir` or `data.output_dir` resolves inside the git repository, checked once a repo root is found | `E-DATA-IN-REPO` |
+| `data.units.measurements` is declared — read by nothing in this build | `E-DATA-MEASUREMENTS-UNSUPPORTED` |
+| `data.input_dir` or `data.output_dir` is not an absolute path | `E-DATA-NOT-ABSOLUTE` |
+| `data.input_manifest_policy` is empty, or is a value outside the declared policies | `E-DATA-POLICY` |
+| `data.input_dir` or `data.output_dir` is empty | `E-DATA-REQUIRED` |
+| `data.units.from` names a `resolver` — resolvers are plugin artifacts and the plugin registry is not implemented in this build | `E-DATA-RESOLVER-UNSUPPORTED` |
+| `data.input_dir` is not a directory, or is a directory with nothing in it | `E-DATA-UNREADABLE` |
+| `data.units.weight_by` is declared — read by nothing in this build | `E-DATA-WEIGHT-UNSUPPORTED` |
+| A `fold` level's `k` is `all` with no resolved roster to size it against, or is not a whole number ≥ 2 — including exactly 1, which `E-REPL-N`'s floor of 1 does not catch | `E-REPL-FOLD-K` |
+| A `fold` level's `k` exceeds the resolved unit count, which would leave a fold with nothing to test | `E-REPL-FOLD-K-TOO-LARGE` |
+| `replication.repeats` declares a `fold` level and `data.units` is not declared, so there is no roster to partition | `E-REPL-FOLD-NO-UNITS` |
+| A `fold` level declares `stratify_by` — stratified partitioning is not implemented in this build | `E-REPL-FOLD-STRATIFY-UNSUPPORTED` |
+| A repeat level's `kind` is one of the rejected legacy names (`bootstrap`, `permutation`, `technical`, `biological`, `holdout`), or is not one of the supported kinds (`seed`, `batch`, `fold`) | `E-REPL-KIND` |
+| A `batch` level is declared anywhere but the outermost position in `replication.repeats` | `E-REPL-LEVEL-BATCH-INNER` |
+| `replication.repeats` declares more than two levels | `E-REPL-LEVEL-DEPTH` |
+| Two levels of `replication.repeats` declare the same `kind` | `E-REPL-LEVEL-DUPLICATE` |
+| A level declares the count field belonging to the other kind — `n` on a `fold` level, or `k` on a `seed`/`batch` level | `E-REPL-LEVEL-FIELD` |
+| A `seed` or `batch` level's `n`, or a `fold` level's `k`, resolves to an integer less than 1 | `E-REPL-N` |
+| `replication.order` is a value other than `as_declared` or `randomized` | `E-REPL-ORDER` |
+| Two members of one repeat level derive the same seed, or resolve to the same label, from the digest the check ran against | `E-REPL-SEED-COLLISION` |
+| `data.units.attributes` names a value the source table has no column for, or names a non-string item | `E-UNITS-ATTR-MISSING` |
+| `data.units.attributes` names a field of `Unit` itself (`key`, `paths`, or `attributes`), which cannot also be a declared attribute | `E-UNITS-ATTR-RESERVED` |
+| The table `data.units.from` names has no data rows, or the `glob` it names matches no files under `input_dir` | `E-UNITS-EMPTY` |
+| Two resolved units share the same `data.units.key` value | `E-UNITS-KEY-DUPLICATE` |
+| `data.units.key` names a column the source table does not have | `E-UNITS-KEY-MISSING` |
+| `data.units.from` names a table that is not a file under `input_dir`, or is neither a table name nor a `{glob: ...}` mapping | `E-UNITS-SOURCE-MISSING` |
+
 ---
 
 ## The two files
