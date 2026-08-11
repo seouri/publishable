@@ -7,8 +7,14 @@ for, so core lets you use it: declare what you *expect*, not only what you'll
 compute."
 """
 
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+from publishable.correction import corrected_for
+
+if TYPE_CHECKING:
+    from publishable.correction import Member
 
 
 @dataclass(frozen=True)
@@ -180,3 +186,67 @@ def verdict_for(
         "supported": supported,
         "verdict_rests_on": obs.rests_on,
     }
+
+
+def _is_counted(hyp: dict[str, Any], obs: Observation) -> bool:
+    """`reference.md`: the family "counts the confirmatory hypotheses whose
+    observations core computed".
+
+    Two exclusions, and neither is a special case: an exploratory hypothesis is
+    not a confirmatory one, and a reported `Estimate` is not core's number to
+    correct. Counted-iff-corrected is the same rule the sweep family follows.
+    """
+    return (
+        hyp.get("kind") == "confirmatory"
+        and obs.rests_on == "computed"
+        and obs.block is not None
+    )
+
+
+def evaluate(
+    hyps: Sequence[dict[str, Any]],
+    *,
+    label_to_index: dict[str, int],
+    vs_baseline: dict[int, dict[str, dict[str, Any]]] | None,
+    contrasts: list[dict[str, Any]] | None,
+    summary: dict[str, dict[str, Any]] | None,
+    members: Sequence["Member"],
+    method: str,
+    parameters_hash: str,
+) -> list[dict[str, Any]]:
+    """Every declared hypothesis, resolved, corrected where it counts, judged.
+
+    The corrected bound is rebuilt from the same evidence as the raw one, at this
+    family's level — which is why `members` is a parameter: the record carries no
+    draws, so a bound cannot be re-derived from it.
+    """
+    resolved = [
+        (hyp, resolve(hyp, label_to_index=label_to_index, vs_baseline=vs_baseline,
+                      contrasts=contrasts, summary=summary))
+        for hyp in hyps
+    ]
+    counted = [(h, o) for h, o in resolved if _is_counted(h, o)]
+    by_key = {(m.where, m.step, m.metric): m for m in members}
+    counted_keys = [(o.where, o.step, o.metric) for _, o in counted if o.where is not None]
+    family_members_ = [by_key[key] for key in counted_keys if key in by_key]
+    size = len(counted)
+    fields = corrected_for(family_members_, method, size, {"hypotheses": size}) if size else {}
+    out: list[dict[str, Any]] = []
+    for hyp, obs in resolved:
+        entry: dict[str, Any] = {
+            "id": hyp.get("id"),
+            "kind": hyp.get("kind"),
+            "declared_in": f"parameters_hash {parameters_hash}",
+        }
+        key = (obs.where, obs.step, obs.metric) if obs.where is not None else None
+        corrected = fields.get(key) if key is not None and _is_counted(hyp, obs) else None
+        bounds = None
+        if corrected and corrected.get("ci95_corrected"):
+            low, high = corrected["ci95_corrected"]
+            bounds = (low, high)
+        entry.update(verdict_for(hyp, obs, bounds))
+        if _is_counted(hyp, obs):
+            entry["family_size"] = size
+            entry["family"] = {"hypotheses": size}
+        out.append(entry)
+    return out
