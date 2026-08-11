@@ -1752,8 +1752,16 @@ def _check_report_by(doc: dict[str, Any], c: Collector, roster: UnitList | None)
     # this guard exists because this function may be reached without it having
     # run: a leaf fault is deliberately non-fatal, so `_check_report_by` still
     # runs on a still-malformed `doc`, and `len(keys) < floor` below would raise
-    # `TypeError` comparing an `int` to a `str`.
-    if roster is None or not isinstance(floor, (int, float)):
+    # `TypeError` comparing an `int` to a `str`. `bool` is excluded explicitly,
+    # the same rule as the budget guard above: `isinstance(True, (int, float))`
+    # is `True` in Python, and a value already flagged wrong-typed by the
+    # envelope must not also drive this check — whether or not the result
+    # would be visibly wrong. (Here it happens not to be: every level in
+    # `levels_for` holds at least one unit, so `len(keys) < floor` can never
+    # hold for `floor` coerced to `0` or `1` either. The exclusion still
+    # belongs here, on the same principle as the budget guard, rather than
+    # relying on that being true forever.)
+    if roster is None or isinstance(floor, bool) or not isinstance(floor, (int, float)):
         return
     for i, name in enumerate(entries):
         if not isinstance(name, str) or name not in declared:
