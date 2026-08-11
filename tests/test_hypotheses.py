@@ -305,7 +305,12 @@ def test_the_hypothesis_family_is_its_own_size_not_the_sweeps():
     """Two confirmatory computed hypotheses over a sweep whose own family is
     larger. The level must come from 2, not from the sweep's count — the two
     families are corrected separately, which is the whole reason `family_size`
-    is on the verdict at all."""
+    is on the verdict at all.
+
+    `members` carries a *third* member, `m3`, that no hypothesis names — the
+    shape `cli` actually hands `evaluate` in Task 8, where the sweep's full
+    `Member` list is passed through unfiltered. `family_size` must come from
+    the two counted hypotheses, not from `len(members) == 3`."""
     hyps = [
         {"id": f"h{i}", "kind": "confirmatory", "metric": f"s.m{i}",
          "compare": {"contrast": "x"}, "direction": "greater", "threshold": 0.0,
@@ -318,7 +323,53 @@ def test_the_hypothesis_family_is_its_own_size_not_the_sweeps():
                                      "m2": {"delta": 0.20, "ci95": [0.11, 0.29]}}}],
         summary={},
         members=[_member("contrast:x", "s", "m1", 0.10, (0.01, 0.19)),
-                 _member("contrast:x", "s", "m2", 0.20, (0.11, 0.29))],
+                 _member("contrast:x", "s", "m2", 0.20, (0.11, 0.29)),
+                 _member("contrast:x", "s", "m3", 0.30, (0.21, 0.39))],
         method="bonferroni", parameters_hash="sha256:1a2b",
     )
     assert {e["family_size"] for e in got} == {2}
+
+
+def test_an_unresolvable_confirmatory_hypothesis_is_not_counted():
+    """A confirmatory hypothesis naming a metric no run produced (`m1` is
+    correct; `nosuch` matches no member) rests on `computed` — its `compare`
+    names a contrast — but has no `block`, so it must not inflate the family
+    or tighten the resolvable hypothesis's corrected bound. It is still
+    evaluated: `supported` reads `None` rather than being counted."""
+    hyps = [
+        {"id": "resolves", "kind": "confirmatory", "metric": "s.m1",
+         "compare": {"contrast": "x"}, "direction": "greater", "threshold": 0.0,
+         "evaluate_on": "ci95_lower"},
+        {"id": "missing", "kind": "confirmatory", "metric": "s.nosuch",
+         "compare": {"contrast": "x"}, "direction": "greater", "threshold": 0.0,
+         "evaluate_on": "ci95_lower"},
+    ]
+    got = evaluate(
+        hyps, label_to_index={}, vs_baseline=None,
+        contrasts=[{"id": "x", "s": {"m1": {"delta": 0.10, "ci95": [0.01, 0.19]}}}],
+        summary={}, members=[_member("contrast:x", "s", "m1", 0.10, (0.01, 0.19))],
+        method="bonferroni", parameters_hash="sha256:1a2b",
+    )
+    by_id = {e["id"]: e for e in got}
+    assert by_id["resolves"]["family_size"] == 1
+    assert "family_size" not in by_id["missing"]
+    assert by_id["missing"]["supported"] is None
+
+
+def test_a_counted_hypothesis_with_no_matching_member_still_gets_a_verdict():
+    """`members` is the caller's own bookkeeping and may not carry an entry for
+    every counted, computed hypothesis (a bookkeeping mismatch between how
+    `cli` built `members` and what a hypothesis names). The hypothesis is still
+    judged, on its raw bound rather than a corrected one it has no evidence to
+    rebuild."""
+    hyp = {"id": "orphan", "kind": "confirmatory", "metric": "s.m",
+           "compare": {"contrast": "x"}, "direction": "greater", "threshold": 0.0,
+           "evaluate_on": "ci95_lower"}
+    got = evaluate(
+        [hyp], label_to_index={}, vs_baseline=None,
+        contrasts=[{"id": "x", "s": {"m": {"delta": 0.10, "ci95": [0.01, 0.19]}}}],
+        summary={}, members=[], method="bonferroni", parameters_hash="sha256:1a2b",
+    )
+    assert got[0]["family_size"] == 1
+    assert got[0]["supported"] is True
+    assert "ci95_corrected" not in (got[0]["observed"] or {})
