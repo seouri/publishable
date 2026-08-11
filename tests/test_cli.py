@@ -3378,6 +3378,71 @@ def test_a_reported_hypothesis_is_evaluated_and_uncounted(tmp_path, capsys, monk
     assert "family" not in verdict
 
 
+_NON_NUMERIC_ESTIMATE_STEP = '''\
+# generated, and runnable as-is
+from publishable import BaseStep, Estimate
+
+
+class Step(BaseStep):
+    scope = "summary"
+
+    def run(self, cfg, io):
+        return {{"adjusted": Estimate(value="high", ci95=None, n=None, method=None)}}
+'''
+
+
+def test_a_non_numeric_reported_estimate_does_not_cost_the_run_its_record(
+    tmp_path, capsys, monkeypatch
+):
+    """The whole-branch Critical, end to end. `_tested_number` calls `float()` on
+    a reported `Estimate`'s `value`, and `coercion` accepted a `str` there — so
+    this exact config raised `ValueError` in phase 8, before `run.yaml` was
+    written, and `main` catches only `PublishableError`/`OSError`. Every
+    completed execution's record was lost to a traceback.
+
+    Refusing it in `_coerce_estimate` moves the fault inside `runner`'s
+    per-execution containment: the summary execution fails with
+    `E-STEP-ESTIMATE-VALUE`, `run.yaml` is still written, and the hypothesis
+    that named the metric gets an honest `supported: null` — the same shape
+    `test_a_failing_aggregate_does_not_cost_the_run_its_record` established.
+    """
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _NO_UNITS_STARTER_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        extra_steps=["summarize"],
+        extra_step_source=_NON_NUMERIC_ESTIMATE_STEP,
+        data={
+            "input_dir": str(tmp_path / "data"),
+            "output_dir": str(tmp_path / "results"),
+            "input_manifest_policy": "hash_all",
+        },
+        hypotheses=[
+            {
+                "id": "h1",
+                "kind": "confirmatory",
+                "statement": "the adjusted estimate exceeds 0.02",
+                "metric": "step02_summarize.adjusted",
+                "direction": "greater",
+                "threshold": 0.02,
+            }
+        ],
+        expect_exit=EXIT_PARTIAL,
+    )
+    text = (doc["run_dir"] / "run.yaml").read_text()
+    run = yaml.safe_load(text)
+    assert run["status"] == "partial"
+    entry = run["execution"]["summary"]["step02_summarize"]
+    assert entry["status"] == "failed"
+    assert "E-STEP-ESTIMATE-VALUE" in entry["error"]
+    verdict = run["results"]["hypotheses"][0]
+    assert verdict["id"] == "h1"
+    assert verdict["observed"] is None
+    assert verdict["supported"] is None
+
+
 def test_sweep_family_unmoved_by_declaring_hypotheses(tmp_path, capsys, monkeypatch):
     """`reference.md`: the sweep's own correction family and the hypothesis
     family "are corrected separately" — declaring a hypothesis must not change
@@ -3473,17 +3538,27 @@ def _acceptance_hypotheses() -> list[dict[str, Any]]:
     would make the pair differ in a field's presence rather than in its value,
     and the point of the pair is that one value flips the verdict.
     """
-    common: dict[str, Any] = {
-        "kind": "confirmatory",
-        "statement": "spearman exceeds pearson by more than 0.95",
-        "metric": "step01_summarize_units.pred",
-        "compare": {"condition": "method=spearman", "to": "baseline"},
-        "direction": "greater",
-        "threshold": _ACCEPTANCE_THRESHOLD,
-    }
+    def common() -> dict[str, Any]:
+        # Rebuilt per entry rather than shared, so the two entries hold no object
+        # in common: one shared `compare` dict made `yaml.safe_dump` anchor the
+        # echoed config (`compare: &id001`) and alias it on the second
+        # hypothesis, which the raw-text assertion in
+        # `test_acceptance_the_verdict_record_carries_every_field` catches. That
+        # assertion is about `run.yaml` reading as written, and a fixture-
+        # authored alias in the echoed config is the same unreadability from
+        # another direction.
+        return {
+            "kind": "confirmatory",
+            "statement": "spearman exceeds pearson by more than 0.95",
+            "metric": "step01_summarize_units.pred",
+            "compare": {"condition": "method=spearman", "to": "baseline"},
+            "direction": "greater",
+            "threshold": _ACCEPTANCE_THRESHOLD,
+        }
+
     return [
-        {"id": "h1", **common, "evaluate_on": "observed"},
-        {"id": "h1_bound", **common, "evaluate_on": "ci95_lower"},
+        {"id": "h1", **common(), "evaluate_on": "observed"},
+        {"id": "h1_bound", **common(), "evaluate_on": "ci95_lower"},
     ]
 
 
@@ -3576,6 +3651,15 @@ def test_acceptance_the_verdict_record_carries_every_field(tmp_path, capsys, mon
     last-digit difference in a scipy-derived bound does not. `delta` is exact
     (every recorded value is a multiple of 0.5), and `declared_in` is
     interpolated because the hash is per-run.
+
+    The raw-text assertion is separate from all of that and cannot be folded into
+    it: `_observed_block` shared the `vs_baseline` entry's own `ci95` list, so
+    `yaml.safe_dump` anchored it (`ci95: &id002`) and wrote the verdict's copy as
+    an alias (`ci95: *id002`). Every test here `safe_load`s the file, which
+    resolves aliases, so nothing saw it — while a reader opening `run.yaml` finds
+    the number the verdict rests on replaced by a pointer. A hypothesis-free run
+    emits no anchors at all, so zero is the right expectation rather than a
+    count.
     """
     import publishable.generators.experiment as experiment_gen
 
@@ -3590,7 +3674,10 @@ def test_acceptance_the_verdict_record_carries_every_field(tmp_path, capsys, mon
         },
         hypotheses=_acceptance_hypotheses(),
     )
-    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    text = (doc["run_dir"] / "run.yaml").read_text()
+    assert "&id" not in text
+    assert "*id" not in text
+    run = yaml.safe_load(text)
     verdict = next(v for v in run["results"]["hypotheses"] if v["id"] == "h1")
     rounded = {
         key: ([round(x, 6) for x in value] if isinstance(value, list) else value)

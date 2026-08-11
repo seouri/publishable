@@ -1170,6 +1170,27 @@ def _check_contrasts(doc: dict[str, Any], c: Collector) -> None:
 
 _DIRECTIONS = ("greater", "less")
 _EVALUATE_ONS = ("observed", "ci95_lower", "ci95_upper")
+_KINDS = ("confirmatory", "exploratory")
+
+
+def _condition_labels(doc: dict[str, Any]) -> tuple[set[str], set[str]] | None:
+    """Every declared condition label, and the baseline's own, or `None`.
+
+    `None` means the sweep block is malformed badly enough that `expand` cannot
+    read it — a scalar where an axis's value list belongs, a non-mapping
+    `baseline`. `_check_sweep` is the check that reports those, and this module
+    collects rather than raises, so an unexpandable sweep silently skips the
+    label test instead of turning one bad indent into a traceback.
+    """
+    try:
+        conditions = expand(doc)
+    except Exception:
+        return None
+    labels = {cond.label for cond in conditions if cond.label is not None}
+    baselines = {
+        cond.label for cond in conditions if cond.label is not None and cond.is_baseline
+    }
+    return labels, baselines
 
 
 def _check_hypotheses(
@@ -1285,6 +1306,28 @@ def _check_hypotheses(
     already-guarded one earlier. `direction` has no named enum anywhere in the
     four documents; `evaluate_on`'s is documented
     (`observed | ci95_lower | ci95_upper`) but no identifier existed for either.
+
+    **`kind`, `direction` and `threshold` are required, not merely constrained.**
+    `reference.md` § The one config file writes all three in every hypothesis and
+    gives a default for none of them, and each has a different silent
+    consequence when absent. `kind` is the worst: `hypotheses._is_counted` tests
+    `== "confirmatory"`, so an omitted or mistyped `kind` leaves the correction
+    family and the verdict is decided on the *raw* — tighter — bound, over-
+    supporting a claim that the corrected level would have refused, with the
+    record echoing the typo but no diagnostic anywhere. `direction` and
+    `threshold` fail the other way, honestly but expensively: `verdict_for`
+    returns `supported: None` and the run comes back with no verdict after the
+    compute is spent. So `direction`'s check drops its `is not None` guard and
+    `E-HYPOTHESIS-KIND` and `E-HYPOTHESIS-THRESHOLD` join it. `evaluate_on`
+    stays optional, because `observed` is a documented default rather than an
+    omission.
+
+    **`compare.condition` is resolved against the declared labels**, the job
+    `_check_contrasts` already does for `of`/`against` with the same `expand(doc)`
+    machinery. A typo'd label validated clean and came back `observed: null,
+    supported: null`; so did naming the baseline's own label, which
+    `vs_baseline` has no entry for by construction. Both are
+    `E-HYPOTHESIS-CONDITION`.
     """
     entries = doc.get("hypotheses")
     if not isinstance(entries, list) or not entries:
@@ -1295,6 +1338,7 @@ def _check_hypotheses(
         scopes_by_step = {_step_name(cls): cls.scope for cls in experiment.steps}
 
     has_baseline = bool((doc.get("sweep") or {}).get("baseline"))
+    labels = _condition_labels(doc)
     contrast_entries = ((doc.get("statistics") or {}).get("contrasts")) or []
     contrast_ids = {
         entry["id"]
@@ -1324,15 +1368,39 @@ def _check_hypotheses(
             )
             continue
 
+        kind = hyp.get("kind")
+        if kind not in _KINDS:
+            c.error(
+                "E-HYPOTHESIS-KIND",
+                f"hypotheses[{i}].kind",
+                f"is `{kind}`; the only kinds are `confirmatory` and `exploratory`, and "
+                "there is no default — `hypotheses.evaluate` counts a hypothesis into the "
+                "correction family only when `kind` is exactly `confirmatory`, so a typo or "
+                "an omission drops a pre-registered claim out of its family and decides it "
+                "on the raw, tighter bound instead of the corrected one",
+            )
+
         direction = hyp.get("direction")
-        if direction is not None and direction not in _DIRECTIONS:
+        if direction not in _DIRECTIONS:
             c.error(
                 "E-HYPOTHESIS-DIRECTION",
                 f"hypotheses[{i}].direction",
-                f"is `{direction}`; the only directions are `greater` and `less` — the "
-                "evaluator already refuses to guess by returning `supported: None` for "
-                "anything else, but that means a mistyped direction still reaches a full "
-                "run and comes back untested rather than being refused before one starts",
+                f"is `{direction}`; the only directions are `greater` and `less`, and it is "
+                "required — the evaluator refuses to guess by returning `supported: None` "
+                "for anything else, so a mistyped or missing direction otherwise reaches a "
+                "full run and comes back with no verdict rather than being refused before "
+                "one starts",
+            )
+
+        threshold = hyp.get("threshold")
+        if not isinstance(threshold, (int, float)) or isinstance(threshold, bool):
+            c.error(
+                "E-HYPOTHESIS-THRESHOLD",
+                f"hypotheses[{i}].threshold",
+                f"is `{threshold}`; a hypothesis is one quantity against one numeric "
+                "threshold, and `verdict_for` compares against nothing else — a missing or "
+                "non-numeric threshold yields `supported: null` after the whole run is "
+                "spent, with nothing in the record saying why",
             )
 
         evaluate_on = hyp.get("evaluate_on")
@@ -1358,7 +1426,8 @@ def _check_hypotheses(
                     "comparison that will never be made and is silently evaluated against "
                     "the baseline instead",
                 )
-            if compare.get("to") == "baseline" and not has_baseline:
+            missing_baseline = compare.get("to") == "baseline" and not has_baseline
+            if missing_baseline:
                 c.error(
                     "E-HYPOTHESIS-BASELINE",
                     f"hypotheses[{i}].compare",
@@ -1366,6 +1435,32 @@ def _check_hypotheses(
                     "populates a baseline comparison without one, so this hypothesis would "
                     "silently resolve to no observation rather than the comparison it names",
                 )
+            # Gated on `missing_baseline` so one fault gets one code: with no
+            # declared baseline there is no comparison for *any* label to name,
+            # and `E-HYPOTHESIS-BASELINE` above already says so — reporting the
+            # label as unknown too would be the double-report the dotless-metric
+            # ordering fix exists to avoid.
+            if "condition" in compare and not missing_baseline and labels is not None:
+                declared_labels, baseline_labels = labels
+                named = compare.get("condition")
+                if not isinstance(named, str) or named not in declared_labels:
+                    c.error(
+                        "E-HYPOTHESIS-CONDITION",
+                        f"hypotheses[{i}].compare.condition",
+                        f"names `{named!r}`, which is not a condition this run's `sweep` "
+                        "declares — `hypotheses.resolve` looks the label up and finds "
+                        "nothing, so the verdict comes back `observed: null, supported: "
+                        "null` after the whole run is spent, exactly the unresolvable-label "
+                        "class `E-STATS-CONTRAST-UNKNOWN` refuses for a contrast's sides",
+                    )
+                elif named in baseline_labels:
+                    c.error(
+                        "E-HYPOTHESIS-CONDITION",
+                        f"hypotheses[{i}].compare.condition",
+                        f"names `{named}`, which is the baseline itself — `vs_baseline` holds "
+                        "one entry per *other* condition, because a baseline has no "
+                        "comparison against itself, so this resolves to no observation",
+                    )
             if "contrast" in compare:
                 contrast_id = compare.get("contrast")
                 if not isinstance(contrast_id, str) or contrast_id not in contrast_ids:

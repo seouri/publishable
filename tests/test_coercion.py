@@ -206,6 +206,43 @@ def test_a_reversed_ci95_is_refused():
     assert excinfo.value.code == "E-STEP-ESTIMATE-CI95"
 
 
+def test_a_non_numeric_ci95_bound_is_refused():
+    """`[0.1, None]` is the reachable slip — a one-sided interval writing only the
+    bound it has — and before this guard it reached `coerced_ci95[0] >
+    coerced_ci95[1]` and raised a raw `TypeError` in place of a diagnostic, which
+    is the whole reason this module exists. A string bound got further still: it
+    passed coercion and `hypotheses._tested_number` called `float()` on it in
+    phase 8, after every execution was spent."""
+    for bad in ([0.1, None], [None, None], [0.1, "x"], ["a", "b"], [True, 0.9]):
+        est = Estimate(value=0.5, ci95=bad, method="one-sided BCa")
+        with pytest.raises(ContractError) as excinfo:
+            coerce_scalars({"d": est}, "step04_agreement", scope="summary")
+        assert excinfo.value.code == "E-STEP-ESTIMATE-CI95"
+
+
+def test_a_non_numeric_estimate_value_is_refused():
+    """The Critical this closes: a `summary` step returning `Estimate(value="high")`
+    plus a hypothesis naming it raised `ValueError: could not convert string to
+    float` in phase 8 — before `run.yaml` was written, and `main` catches only
+    `PublishableError`/`OSError`, so a real run lost every completed execution's
+    record to a traceback. `str` is a scalar `_coerce_one` accepts everywhere
+    else, so the narrower rule is stated here, at the point of the mistake."""
+    for bad in ("high", None, True):
+        est = Estimate(value=bad, method="m")  # type: ignore[arg-type]
+        with pytest.raises(ContractError) as excinfo:
+            coerce_scalars({"adjusted": est}, "step04_agreement", scope="summary")
+        assert excinfo.value.code == "E-STEP-ESTIMATE-VALUE"
+
+
+def test_an_estimates_own_n_may_still_be_a_label():
+    """`n` is deliberately outside the numeric rule: no verdict is read against
+    it, and a step describing its own base ("612 pairs") is describing, not
+    asserting. Pins the boundary so the omission reads as a decision."""
+    est = Estimate(value=0.5, n="612 pairs", method="m")  # type: ignore[arg-type]
+    got = coerce_scalars({"d": est}, "step04_agreement", scope="summary")["d"]
+    assert got.n == "612 pairs"
+
+
 def test_an_equal_pair_is_allowed():
     """A zero-width interval is legitimate — S4b established it for a point-mass
     bootstrap — so the check is `>`, not `>=`."""

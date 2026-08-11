@@ -124,9 +124,18 @@ def _observed_block(
     """
     if obs.block is None:
         return None
-    out: dict[str, Any] = {
-        k: obs.block[k] for k in ("delta", "value", "ci95", "method") if k in obs.block
-    }
+    # `list(...)`, not the entry's own list object. Sharing it makes
+    # `yaml.safe_dump` anchor the interval where the comparison writes it
+    # (`&id002`) and emit an alias (`*id002`) in the verdict, so the number a
+    # hypothesis was decided on is no longer readable where it is written — in
+    # the file this project describes as what a reviewer opens in ten years.
+    # Copying also keeps a later in-place edit of either copy from silently
+    # changing both.
+    out: dict[str, Any] = {}
+    for k in ("delta", "value", "ci95", "method"):
+        if k in obs.block:
+            held = obs.block[k]
+            out[k] = list(held) if isinstance(held, list) else held
     if bounds is not None:
         out["ci95_corrected"] = [bounds[0], bounds[1]]
     elif corrected_unavailable:

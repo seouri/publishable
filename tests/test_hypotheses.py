@@ -2,9 +2,17 @@ from publishable.correction import Member
 from publishable.hypotheses import Observation, evaluate, resolve, verdict_for
 
 _VS_BASELINE = {1: {"step03_analyze": {"r": {"delta": 0.026, "ci95": [-0.007, 0.059]}}}}
+# Two entries, not one, and both carrying the same step metric with different
+# numbers: with a single entry, ignoring `compare.contrast` entirely (`if True`
+# in place of the id test) passed the whole suite, and the consequence would be
+# invisible in `run.yaml` — an `observed` block carries no identifier for which
+# contrast it came from, so a verdict about `invariance` reported against
+# `sensitivity`'s numbers reads as a real answer.
 _CONTRASTS = [
     {"id": "sensitivity", "of": "01_a", "against": "00_b",
-     "step03_screen": {"auroc": {"delta": 0.04, "ci95": [0.01, 0.07]}}}
+     "step03_screen": {"auroc": {"delta": 0.04, "ci95": [0.01, 0.07]}}},
+    {"id": "invariance", "of": "02_c", "against": "00_b",
+     "step03_screen": {"auroc": {"delta": -0.11, "ci95": [-0.19, -0.03]}}},
 ]
 _SUMMARY = {
     "step04_agreement": {
@@ -44,6 +52,18 @@ def test_a_contrast_hypothesis_reads_that_contrast_entry():
     assert got.where == "contrast:sensitivity"
     assert got.block == {"delta": 0.04, "ci95": [0.01, 0.07]}
     assert got.rests_on == "computed"
+
+
+def test_a_contrast_hypothesis_reads_the_entry_it_names_not_the_first():
+    """The id is resolved, not assumed. Both declared contrasts report the same
+    step metric, so a resolver returning `contrasts[0]` regardless answers a
+    hypothesis about `invariance` with `sensitivity`'s delta — and the record
+    would not say so, because `observed` carries no contrast identifier."""
+    got = _resolve({
+        "id": "inv", "metric": "step03_screen.auroc", "compare": {"contrast": "invariance"},
+    })
+    assert got.where == "contrast:invariance"
+    assert got.block == {"delta": -0.11, "ci95": [-0.19, -0.03]}
 
 
 def test_a_summary_hypothesis_takes_no_compare_and_rests_on_reported():
