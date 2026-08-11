@@ -95,3 +95,78 @@ def resolve(
         block=found if isinstance(found, dict) else None,
         rests_on="computed",
     )
+
+
+_POINT_KEYS = ("delta", "value")
+
+
+def _observed_block(obs: Observation, bounds: tuple[float, float] | None) -> dict[str, Any] | None:
+    """What the record shows as `observed`, in the shape its source implies.
+
+    `reference.md` shows two: `{delta, ci95, ci95_corrected}` for a comparison and
+    `{value, ci95, method}` for a summary metric. Both are the entry's own fields,
+    not a reshaping of them, so a reader can find the same numbers in the block
+    the hypothesis names.
+    """
+    if obs.block is None:
+        return None
+    out: dict[str, Any] = {
+        k: obs.block[k] for k in ("delta", "value", "ci95", "method") if k in obs.block
+    }
+    if bounds is not None:
+        out["ci95_corrected"] = [bounds[0], bounds[1]]
+    return out
+
+
+def _tested_number(
+    obs: Observation, evaluate_on: str, bounds: tuple[float, float] | None
+) -> float | None:
+    """The one number the verdict compares, or `None` when there isn't one.
+
+    A bound test reads the corrected interval when this hypothesis is in a
+    corrected family, and the raw one otherwise — `reference.md`: "Correction
+    reaches a verdict only through a bound", and counted-iff-corrected decides
+    whether there is a corrected bound at all.
+    """
+    if obs.block is None:
+        return None
+    if evaluate_on == "observed":
+        for key in _POINT_KEYS:
+            if key in obs.block and obs.block[key] is not None:
+                return float(obs.block[key])
+        return None
+    interval = bounds if bounds is not None else obs.block.get("ci95")
+    if not interval:
+        return None
+    return float(interval[0] if evaluate_on == "ci95_lower" else interval[1])
+
+
+def verdict_for(
+    hyp: dict[str, Any], obs: Observation, bounds: tuple[float, float] | None
+) -> dict[str, Any]:
+    """The verdict fields for one hypothesis.
+
+    `verdict_evaluated_on` is spelled out rather than echoing the config's
+    `evaluate_on` because `reference.md` says "a record field one letter from a
+    config field is a typo waiting to be read as agreement" — a reader must see
+    which question was asked without reconstructing it.
+
+    `supported` is `None`, never `False`, when there is no number to compare: a
+    `False` would be indistinguishable from a claim that was tested and failed.
+    """
+    evaluate_on = str(hyp.get("evaluate_on") or "observed")
+    number = _tested_number(obs, evaluate_on, bounds)
+    threshold = hyp.get("threshold")
+    supported: bool | None = None
+    if (
+        number is not None
+        and isinstance(threshold, (int, float))
+        and not isinstance(threshold, bool)
+    ):
+        supported = number > threshold if hyp.get("direction") == "greater" else number < threshold
+    return {
+        "observed": _observed_block(obs, bounds),
+        "verdict_evaluated_on": evaluate_on,
+        "supported": supported,
+        "verdict_rests_on": obs.rests_on,
+    }
