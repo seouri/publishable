@@ -3019,7 +3019,11 @@ def test_an_estimate_outside_summary_scope_fails_that_execution(tmp_path, capsys
     entry = next(iter(steps.values()))
     assert entry["status"] == "failed"
     assert "E-STEP-ESTIMATE-SCOPE" in entry["error"]
+    # Both channels: `test_an_unwritable_output_dir_is_a_diagnostic_not_a_
+    # traceback` reads stderr for `E-IO-FAILED`, so stderr is a real diagnostics
+    # channel here and "not printed" has to cover it.
     assert "E-STEP-ESTIMATE-SCOPE" not in doc["stdout"]
+    assert "E-STEP-ESTIMATE-SCOPE" not in doc["stderr"]
 
 
 _ESTIMATE_WITHOUT_METHOD_SUMMARY_STEP = '''\
@@ -3053,6 +3057,8 @@ def test_an_interval_with_no_method_fails_that_execution(tmp_path, capsys):
     entry = run["execution"]["summary"]["step02_summarize"]
     assert entry["status"] == "failed"
     assert "E-STEP-ESTIMATE-METHOD" in entry["error"]
+    assert "E-STEP-ESTIMATE-METHOD" not in doc["stdout"]
+    assert "E-STEP-ESTIMATE-METHOD" not in doc["stderr"]
     # A failed summary execution returns nothing, so no `reported` entry is
     # written from a step whose contract was refused.
     assert run["results"]["summary"]["step02_summarize"] == {}
