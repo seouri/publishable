@@ -519,6 +519,32 @@ def _check_units(doc: dict[str, Any], c: Collector) -> UnitList | None:
         # rather than only covering the unhashable subset that happens to crash
         # today.
         return None
+    # `LEAF_TYPES` types `data.units.attributes` itself a `list` — and it is one
+    # here, so `check_envelope` reports nothing — but names no dotted path for a
+    # list ELEMENT (the same reason `sweep.grid`'s axis values aren't in the
+    # table either). So a non-string item is this function's own finding to
+    # make, not a fault `check_envelope` already caught: unlike the `input_dir`
+    # and `key` guards above, skipping here silently would be a real gap, not a
+    # duplicate. `_from_table` (`units.py`) checks each name against
+    # `RESERVED_FIELDS` (a tuple — tolerates an unhashable name) and then against
+    # `columns` (a `set` — raises `TypeError: unhashable type` for a list or
+    # dict). Reported under `E-UNITS-ATTR-MISSING`, the identifier `_from_table`
+    # itself already raises for a *string* name the table doesn't have — a
+    # non-string name can never equal a CSV column name either, so "the table
+    # does not have it" is exactly as true, and this is one identifier for one
+    # user-facing question ("is this a real column?") rather than a second code
+    # for the type-shaped version of the same fault.
+    attrs = units_decl.get("attributes")
+    if isinstance(source, str) and isinstance(attrs, list):
+        bad_attrs = [a for a in attrs if not isinstance(a, str)]
+        if bad_attrs:
+            for bad in bad_attrs:
+                c.error(
+                    "E-UNITS-ATTR-MISSING",
+                    "data.units.attributes",
+                    f"names {bad!r}, which {source} does not have",
+                )
+            return None
     try:
         return resolve_units(units_decl, path)
     except ContractError as exc:
@@ -600,9 +626,9 @@ def _check_replication(
     # cross-validation that never happened. Caught here, at the declaration,
     # rather than guarded at `run` — a config that validates clean must not
     # then fail (see `docs/superpowers/spec-defects.md`).
-    if any(level.get("kind") == "fold" for level in levels) and not (
-        doc.get("data") or {}
-    ).get("units"):
+    if any(level.get("kind") == "fold" for level in levels) and not (doc.get("data") or {}).get(
+        "units"
+    ):
         c.error(
             "E-REPL-FOLD-NO-UNITS",
             "replication.repeats",
@@ -1187,7 +1213,14 @@ def _check_contrasts(doc: dict[str, Any], c: Collector) -> None:
     except Exception:
         conditions = []
     labels = {cond.label for cond in conditions if cond.label is not None}
-    declared_attrs = set(((doc.get("data") or {}).get("units") or {}).get("attributes") or [])
+    # Same reasoning as `_check_report_by`'s `declared` set: a non-string item in
+    # `data.units.attributes` is `_check_units`'s finding to make, not this
+    # function's, but `set(...)` over the raw list would crash on it first.
+    declared_attrs = {
+        a
+        for a in (((doc.get("data") or {}).get("units") or {}).get("attributes") or [])
+        if isinstance(a, str)
+    }
     seen_ids: set[str] = set()
 
     for i, entry in enumerate(entries):
@@ -1288,9 +1321,7 @@ def _condition_labels(doc: dict[str, Any]) -> tuple[set[str], set[str]] | None:
     except Exception:
         return None
     labels = {cond.label for cond in conditions if cond.label is not None}
-    baselines = {
-        cond.label for cond in conditions if cond.label is not None and cond.is_baseline
-    }
+    baselines = {cond.label for cond in conditions if cond.label is not None and cond.is_baseline}
     return labels, baselines
 
 
@@ -1441,11 +1472,15 @@ def _check_hypotheses(
     has_baseline = bool((doc.get("sweep") or {}).get("baseline"))
     labels = _condition_labels(doc)
     contrast_entries = ((doc.get("statistics") or {}).get("contrasts")) or []
-    contrast_ids = {
-        entry["id"]
-        for entry in contrast_entries
-        if isinstance(entry, dict) and isinstance(entry.get("id"), str) and entry["id"]
-    } if isinstance(contrast_entries, list) else set()
+    contrast_ids = (
+        {
+            entry["id"]
+            for entry in contrast_entries
+            if isinstance(entry, dict) and isinstance(entry.get("id"), str) and entry["id"]
+        }
+        if isinstance(contrast_entries, list)
+        else set()
+    )
     # The bound-exists error and the inference-base warning share one condition:
     # no metric this run computes could ever carry an interval, because that
     # needs a `basis: units` metric and the only source of one is a resolved
@@ -1455,9 +1490,10 @@ def _check_hypotheses(
     # discriminates in practice; the `type(...) is not BaseTemplate.aggregate`
     # check is what would let a future template with a real `aggregate` clear
     # this condition without either check changing.
-    no_interval_possible = not bool(
-        (doc.get("data") or {}).get("units")
-    ) and type(template).aggregate is BaseTemplate.aggregate
+    no_interval_possible = (
+        not bool((doc.get("data") or {}).get("units"))
+        and type(template).aggregate is BaseTemplate.aggregate
+    )
 
     for i, hyp in enumerate(entries):
         if not isinstance(hyp, dict):
@@ -1568,8 +1604,7 @@ def _check_hypotheses(
                     c.error(
                         "E-HYPOTHESIS-CONTRAST",
                         f"hypotheses[{i}].compare.contrast",
-                        f"names `{contrast_id!r}`, which `statistics.contrasts` does not "
-                        "declare",
+                        f"names `{contrast_id!r}`, which `statistics.contrasts` does not declare",
                     )
 
         metric = hyp.get("metric")
@@ -1647,14 +1682,14 @@ def _check_hypotheses(
             c.error(
                 "E-HYPOTHESIS-FORM",
                 f"hypotheses[{i}]",
-                f"names `{metric}`, a `scope: \"summary\"` metric, and declares `compare` — "
+                f'names `{metric}`, a `scope: "summary"` metric, and declares `compare` — '
                 "a summary metric is one value per run, not a contrast between conditions",
             )
         elif scope != "summary" and not has_compare:
             c.error(
                 "E-HYPOTHESIS-FORM",
                 f"hypotheses[{i}]",
-                f"names `{metric}`, a `scope: \"{scope}\"` metric, without declaring `compare` "
+                f'names `{metric}`, a `scope: "{scope}"` metric, without declaring `compare` '
                 "— that quantity only exists per condition, so the hypothesis must say which "
                 "conditions it compares",
             )
@@ -1682,7 +1717,17 @@ def _check_report_by(doc: dict[str, Any], c: Collector, roster: UnitList | None)
     entries = ((doc.get("statistics") or {}).get("report_by")) or []
     if not isinstance(entries, list):
         return  # `_check_shape` already refused it, and returned early
-    declared = set(((doc.get("data") or {}).get("units") or {}).get("attributes") or [])
+    # A non-string item in `data.units.attributes` is `_check_units`'s own
+    # finding to make (`E-UNITS-ATTR-MISSING`), not this function's — but
+    # `set(...)` over the raw list would still crash on it before that finding
+    # is ever reached (`TypeError: unhashable type` for a list or dict item).
+    # Filtering to strings here just means a non-string item is treated as "not
+    # declared", which is already true of it regardless.
+    declared = {
+        a
+        for a in (((doc.get("data") or {}).get("units") or {}).get("attributes") or [])
+        if isinstance(a, str)
+    }
     for i, name in enumerate(entries):
         if not isinstance(name, str) or name not in declared:
             c.error(
