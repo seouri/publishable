@@ -162,10 +162,30 @@ def _corrected_bounds(member: Member, level: float) -> tuple[float, float] | Non
     return None
 
 
-def corrected_fields(
-    members: Sequence[Member], method: str
+def _family(members: Sequence[Member]) -> list[Member]:
+    """The correctable members, one per `(where, step, metric)`.
+
+    Deduplicated because a key reaching this twice would take two ranks and
+    inflate the family it is being corrected against.
+    """
+    return list({(m.where, m.step, m.metric): m for m in family_members(members)}.values())
+
+
+def corrected_for(
+    members: Sequence[Member],
+    method: str,
+    family_size: int,
+    shape: dict[str, int],
 ) -> dict[tuple[str, str, str], dict[str, Any]]:
-    """What to merge onto each record entry, keyed by `(where, step, metric)`.
+    """The corrected fields for one family, at a size the caller decides.
+
+    Two families use this, and `reference.md` says they differ in exactly one
+    respect: a sweep's family "counts comparisons × metrics", while a hypothesis
+    family "multiplies nothing: it counts the confirmatory hypotheses whose
+    observations core computed". Everything else — the ranking statistic, Holm's
+    α/(m−i+1), Bonferroni's α/m, the interval rebuilt at a smaller α — is the
+    same arithmetic, so it lives here once. Two spellings of one construction
+    drifting apart is a defect this codebase has already shipped.
 
     Empty under `correction: none` — `reference.md`'s table makes
     `ci95_corrected` *absent* there, not null, because an explicit null claims a
@@ -175,10 +195,9 @@ def corrected_fields(
     `W-STATS-CORRECTED-THIN`, and drops it. It travels here because this is
     where the level and the pool size are both known.
     """
-    family = list({(m.where, m.step, m.metric): m for m in family_members(members)}.values())
+    family = _family(members)
     if method == "none" or not family:
         return {}
-    family_size, shape = family_shape(family)
     out: dict[tuple[str, str, str], dict[str, Any]] = {}
     for rank, member in enumerate(rank_family(family), start=1):
         level = _level_for(method, family_size, rank)
@@ -192,3 +211,19 @@ def corrected_fields(
             "thin": level is not None and bounds is None,
         }
     return out
+
+
+def corrected_fields(
+    members: Sequence[Member], method: str
+) -> dict[tuple[str, str, str], dict[str, Any]]:
+    """The sweep family: `corrected_for` at `family_shape`'s product.
+
+    Kept as its own entry point rather than folded into the caller, because the
+    product *is* this family's definition and `cli` should not have to restate
+    it at the call site.
+    """
+    family = _family(members)
+    if not family:
+        return {}
+    family_size, shape = family_shape(family)
+    return corrected_for(members, method, family_size, shape)

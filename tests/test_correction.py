@@ -4,6 +4,7 @@ from publishable.correction import (
     ALPHA,
     Member,
     corrected_fields,
+    corrected_for,
     family_members,
     family_shape,
     rank_family,
@@ -207,6 +208,39 @@ def _two_member_family():
     strong = _from_diffs("2", 2, mean=-0.169, spread=0.02)
     weak = _from_diffs("1", 1, mean=0.026, spread=0.30)
     return strong, weak
+
+
+def test_corrected_for_takes_the_family_size_it_is_given():
+    """The hypothesis family "counts the confirmatory hypotheses whose
+    observations core computed, where a sweep's family counts comparisons ×
+    metrics" — it "multiplies nothing". Only the size differs, so only the size
+    is a parameter."""
+    strong, weak = _two_member_family()
+    got = corrected_for([strong, weak], "bonferroni", 7, {"hypotheses": 7})
+    for entry in got.values():
+        assert entry["correction_level"] == pytest.approx(0.05 / 7)
+        assert entry["family_size"] == 7
+        assert entry["family"] == {"hypotheses": 7}
+
+
+def test_corrected_fields_still_computes_the_sweep_shape():
+    """The existing caller keeps its behaviour: it passes the product, and its
+    breakout still names comparisons and metrics."""
+    strong, weak = _two_member_family()
+    got = corrected_fields([strong, weak], "bonferroni")
+    for entry in got.values():
+        assert entry["family_size"] == 2
+        assert entry["family"] == {"comparisons": 2, "metrics": 1}
+        assert entry["correction_level"] == pytest.approx(0.05 / 2)
+
+
+def test_holm_ranks_within_whatever_family_size_it_is_handed():
+    """Holm's level is α/(m−i+1), so a larger m makes rank 1 tighter. Passing a
+    size the members did not imply is exactly what the hypothesis family does."""
+    strong, weak = _two_member_family()
+    got = corrected_for([strong, weak], "holm", 5, {"hypotheses": 5})
+    levels = sorted(e["correction_level"] for e in got.values())
+    assert levels == [pytest.approx(0.05 / 5), pytest.approx(0.05 / 4)]
 
 
 def test_holm_corrects_the_weakest_member_by_nothing():
