@@ -1229,25 +1229,35 @@ def _check_hypotheses(
     from it.** § What a hypothesis is tested against draws the line itself:
     "`validate` catches the config-level form of that, where nothing in the
     run could carry an interval; the per-metric form is settled when the step
-    returns." A `scope: "summary"` metric can be a `reported: true` `Estimate`
-    a step supplies directly ("A hypothesis may name a summary metric"), with
-    its own real `ci95` and no unit table involved at all — core never
-    inspects a step's body to know whether *this* summary step actually does
-    that, and `command_run` treats an `E-HYPOTHESIS-BOUND` finding as a hard
-    stop (`c.has_errors`), so refusing here on the two-condition test alone
-    would permanently block a design the spec explicitly permits, not merely
-    defer it to run time. So the check below only fires when the metric's
-    scope is affirmatively known and is not `"summary"` — unknown (no
-    experiment, or a `metric` that doesn't parse) is treated the same as
-    `"summary"`, conservatively. `E-HYPOTHESIS-BOUND`.
+    returns." The Validation row's own wording is "no metric this run
+    *computes*" — and CLAUDE.md's own invariant is explicit that "the one
+    interval core stores *without computing* is an `Estimate` returned by a
+    `summary` step"; a `reported: true` `Estimate` a step supplies directly
+    ("A hypothesis may name a summary metric") is therefore outside what that
+    row is even about, not an exception carved into it. Core never inspects a
+    step's body to know whether *this* summary step actually returns one, so
+    the check below only fires when the metric's scope is affirmatively known
+    and is not `"summary"` — unknown (no experiment, or a `metric` that
+    doesn't parse) is treated the same as `"summary"`, conservatively, since
+    the check can rule out neither. `E-HYPOTHESIS-BOUND`.
 
     **The same impossible-interval condition, without a bound requested, is a
-    warning rather than a refusal.** `reference.md` § Validation, "Hypothesis
-    has an inference base": every metric will be `basis: repeats` — reportable
-    (`evaluate_on: observed` still reads a value) but not testable against an
-    interval. `W-HYPOTHESIS-INFERENCE-BASE` fires exactly where
-    `E-HYPOTHESIS-BOUND` does not: same condition, `evaluate_on` absent or
-    `observed` instead of a bound.
+    warning rather than a refusal — and shares the same scope gate, for the
+    warning's own reason rather than the error's.** `reference.md` §
+    Validation, "Hypothesis has an inference base": every metric will be
+    `basis: repeats` — reportable (`evaluate_on: observed` still reads a
+    value) but not testable against an interval. That premise is false for a
+    `scope: "summary"` metric that turns out to be a reported `Estimate`: it
+    is neither `basis: repeats` nor untestable — it is `reported`, carries its
+    own interval, and is exactly what `evaluate_on: ci95_lower`/`ci95_upper`
+    can test. (The error's hard-stop argument — `command_run` treats
+    `E-HYPOTHESIS-BOUND` as `c.has_errors` and a warning never stops a run —
+    does not transfer to the warning and is not why this one is gated; a
+    warning it wrongly issued would cost nothing but a false alarm, so the
+    gate here is justified only by the premise being false, the same way it
+    is for the error.) `W-HYPOTHESIS-INFERENCE-BASE` fires exactly where
+    `E-HYPOTHESIS-BOUND` does not, under that shared gate: same condition,
+    `evaluate_on` absent or `observed` instead of a bound.
 
     **A hypothesis's form must match its metric's scope.** `reference.md` § What
     a hypothesis is tested against: a `scope: "summary"` metric "is one value
@@ -1355,39 +1365,53 @@ def _check_hypotheses(
 
         metric = hyp.get("metric")
         step, _, name = metric.partition(".") if isinstance(metric, str) else ("", "", "")
+        metric_is_well_formed = isinstance(metric, str) and bool(metric) and bool(name)
+
         # A `scope: "summary"` metric can be a `reported: true` `Estimate` a step
         # supplies directly (`reference.md` § What a hypothesis is tested
         # against, "A hypothesis may name a summary metric") — its own real
-        # `ci95`, with no unit table involved. Core never inspects a step's body
-        # to know whether *this* summary step actually does that, so the
-        # bound-exists check below only fires when the metric's scope is
-        # affirmatively known and is *not* `"summary"` — unknown (no experiment,
-        # or a `metric` that doesn't parse) is treated the same as `"summary"`,
-        # conservatively, rather than refusing a design this check cannot rule
-        # out. A `condition`- or `repeat`-scoped metric has no such exception:
-        # its only possible interval is `basis: units`, derived from `data.units`
-        # through a template's `aggregate`, which `no_interval_possible` already
-        # covers in full.
-        scope = scopes_by_step.get(step) if step else None
-        if no_interval_possible and scope not in (None, "summary"):
-            if evaluate_on in ("ci95_lower", "ci95_upper"):
-                c.error(
-                    "E-HYPOTHESIS-BOUND",
-                    f"hypotheses[{i}].evaluate_on",
-                    f"names `{evaluate_on}`, but no metric this run computes could carry "
-                    "an interval — `data.units` is undeclared and the template defines no "
-                    "`aggregate`, so nothing produces a `ci95` to evaluate a bound against",
-                )
-            else:
-                c.warn(
-                    "W-HYPOTHESIS-INFERENCE-BASE",
-                    f"hypotheses[{i}]",
-                    "names a metric under a run where `data.units` is undeclared and the "
-                    "template defines no `aggregate` — every metric will be `basis: "
-                    "repeats`, reportable but not testable against an interval",
-                )
+        # `ci95`, with no unit table involved, and it is itself the answer to
+        # `basis: repeats`'s "reportable but not testable": a reported `Estimate`
+        # is neither `basis: repeats` nor untestable, so the warning's own
+        # premise is false for one, and the error's "no metric ... could carry
+        # an interval" is false for one too. Core never inspects a step's body
+        # to know whether *this* summary step actually returns one, so both
+        # checks below fire only when the metric's scope is affirmatively known
+        # and is *not* `"summary"` — unknown (no experiment) is treated the same
+        # as `"summary"`, conservatively. A `condition`- or `repeat`-scoped
+        # metric has no such exception: its only possible interval is `basis:
+        # units`, derived from `data.units` through a template's `aggregate`,
+        # which `no_interval_possible` already covers in full.
+        #
+        # Gated on `metric_is_well_formed` too, and deliberately checked before
+        # the malformed-metric refusal just below: a `metric` that doesn't parse
+        # to `step.metric` names no scope to look up, and `step` alone (a
+        # dotless value) can still collide with a real step name, which would
+        # otherwise let this block read a real `scope` for a metric that is
+        # about to be refused anyway — reporting the same entry under two
+        # unrelated codes rather than the one `E-HYPOTHESIS-METRIC` fault it
+        # actually has.
+        if metric_is_well_formed:
+            scope = scopes_by_step.get(step) if step else None
+            if no_interval_possible and scope not in (None, "summary"):
+                if evaluate_on in ("ci95_lower", "ci95_upper"):
+                    c.error(
+                        "E-HYPOTHESIS-BOUND",
+                        f"hypotheses[{i}].evaluate_on",
+                        f"names `{evaluate_on}`, but no metric this run computes could carry "
+                        "an interval — `data.units` is undeclared and the template defines no "
+                        "`aggregate`, so nothing produces a `ci95` to evaluate a bound against",
+                    )
+                else:
+                    c.warn(
+                        "W-HYPOTHESIS-INFERENCE-BASE",
+                        f"hypotheses[{i}]",
+                        "names a metric under a run where `data.units` is undeclared and the "
+                        "template defines no `aggregate` — every metric will be `basis: "
+                        "repeats`, reportable but not testable against an interval",
+                    )
 
-        if not isinstance(metric, str) or not metric or not name:
+        if not metric_is_well_formed:
             c.error(
                 "E-HYPOTHESIS-METRIC",
                 f"hypotheses[{i}].metric",

@@ -2069,6 +2069,52 @@ def write_config_two_scopes(git_repo: Path, write_config):
     return _write
 
 
+_THREE_SCOPE_EXPERIMENT = """\
+from publishable import BaseExperiment, BaseStep
+
+
+class Step01Measure(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        return {}
+
+
+class Step02Fit(BaseStep):
+    scope = "condition"
+
+    def run(self, cfg, io):
+        return {}
+
+
+class Step03Combine(BaseStep):
+    scope = "summary"
+
+    def run(self, cfg, io):
+        return {}
+
+
+class CohortPilotExperiment(BaseExperiment):
+    steps = [Step01Measure, Step02Fit, Step03Combine]
+"""
+
+
+@pytest.fixture
+def write_config_three_scopes(git_repo: Path, write_config):
+    """`write_config_two_scopes`, plus a `condition`-scoped step — needed to pin
+    the bound-exists/inference-base scope gate's exact membership: `{"summary"}`
+    is exempt, but `"condition"` is not, and no fixture declared a
+    `condition`-scoped step until now, so a mutation widening the gate to also
+    exempt `condition` scope had nothing in the suite to fail against it."""
+
+    def _write(overrides: dict | None = None) -> Path:
+        path = write_config(overrides)
+        write_experiment_module(git_repo, _THREE_SCOPE_EXPERIMENT)
+        return path
+
+    return _write
+
+
 def test_a_summary_metric_hypothesis_may_not_declare_compare(write_config_two_scopes):
     """`reference.md`: "a summary metric is one value per run, not a contrast
     between conditions — and a condition-step metric without `compare` is the
@@ -2332,3 +2378,64 @@ def test_a_summary_metric_bound_is_not_refused_even_with_no_units(write_config_t
     }))
     assert "E-HYPOTHESIS-BOUND" not in found
     assert "W-HYPOTHESIS-INFERENCE-BASE" not in found
+
+
+def test_a_summary_metric_hypothesis_gets_no_inference_base_warning(write_config_two_scopes):
+    """The scope gate on `W-HYPOTHESIS-INFERENCE-BASE` is justified by the
+    warning's own premise, not the error's hard-stop argument (a warning never
+    stops a run) — "every metric will be `basis: repeats`" is false for a
+    `scope: "summary"` metric that turns out to be a `reported: true`
+    `Estimate`: it is `reported`, carries its own interval, and is exactly what
+    `evaluate_on` can test. No `evaluate_on` here (unlike the bound-exists
+    fixture above), so this exercises the warning branch specifically rather
+    than the error branch."""
+    found = codes(write_config_two_scopes({
+        "hypotheses": [{"id": "h", "kind": "confirmatory",
+                        "metric": "step02_combine.agreement",
+                        "direction": "greater", "threshold": 0.9}],
+    }))
+    assert "W-HYPOTHESIS-INFERENCE-BASE" not in found
+    assert "E-HYPOTHESIS-BOUND" not in found
+
+
+def test_a_dotless_metric_is_refused_once_even_when_it_names_a_real_step(
+    write_config_two_scopes,
+):
+    """`metric.partition(".")` on a dotless value like `step01_measure` returns
+    `("step01_measure", "", "")` — `step` still resolves to the real, declared
+    `repeat`-scoped step, even though `name` is empty and the metric is
+    definitely malformed (no `.metric` half to name a quantity with). Before
+    the bound/warning block was moved behind the `metric_is_well_formed` guard,
+    this let it read that real `scope` and fire `E-HYPOTHESIS-BOUND` (or the
+    warning) *alongside* `E-HYPOTHESIS-METRIC`, reporting one fault under two
+    codes — the double-report `_check_hypotheses`'s own docstring says a
+    hypothesis with two *distinct* faults should report, but a single
+    malformed `metric` is one fault, not two."""
+    found = codes(write_config_two_scopes({
+        "hypotheses": [{"id": "h", "kind": "confirmatory",
+                        "metric": "step01_measure",
+                        "direction": "greater", "threshold": 0.5,
+                        "evaluate_on": "ci95_lower"}],
+    }))
+    assert "E-HYPOTHESIS-METRIC" in found
+    assert "E-HYPOTHESIS-BOUND" not in found
+    assert "W-HYPOTHESIS-INFERENCE-BASE" not in found
+
+
+def test_a_condition_scoped_bound_is_still_refused(write_config_three_scopes):
+    """The scope gate exempts exactly `{None, "summary"}`, not "anything but
+    `repeat`" — a `scope: "condition"` metric has no reported-`Estimate`
+    exception either (that mechanism is `summary`-only), so the bound-exists
+    check must still fire for one. Needs `write_config_three_scopes`: no
+    existing fixture declared a `condition`-scoped step, so a mutation that
+    widened the gate to also exempt `condition` scope had nothing in the suite
+    to catch it."""
+    found = codes(write_config_three_scopes({
+        "sweep": _TWO_CONDITIONS,
+        "hypotheses": [{"id": "h", "kind": "confirmatory",
+                        "metric": "step02_fit.score",
+                        "compare": {"condition": "method=spearman", "to": "baseline"},
+                        "direction": "greater", "threshold": 0.5,
+                        "evaluate_on": "ci95_lower"}],
+    }))
+    assert "E-HYPOTHESIS-BOUND" in found
