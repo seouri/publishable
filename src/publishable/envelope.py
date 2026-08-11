@@ -124,7 +124,21 @@ def _check_unknown_keys(
     if not isinstance(node, dict):
         return
     for key, value in node.items():
-        path = f"{prefix}.{key}" if prefix else key
+        # A YAML mapping key need not be a string — `1: oops` and `true: oops`
+        # parse to an `int`/`bool` key, and `load_document` only rejects an
+        # *unhashable* key (a list or mapping key, `yaml.ConstructorError`,
+        # a `YAMLError` subclass) before this ever runs; a hashable non-string
+        # key reaches here untouched. Coerced once, up front, so every use
+        # below — building `path`, the `difflib` call, which requires a
+        # string and is where this crashed before this comment was added —
+        # sees a string. No `LEAF_TYPES` path, container, or exempt name is
+        # ever anything but a string, so a coerced non-string key can never
+        # accidentally match one; it always falls through to the report
+        # below, which is the right outcome: `1: oops` is certainly not a key
+        # this schema declares, and reporting nothing for it would be exactly
+        # the silent-typo gap this task exists to close.
+        key_name = key if isinstance(key, str) else str(key)
+        path = f"{prefix}.{key_name}" if prefix else key_name
         if path in EXEMPT_SUBTREES:
             continue
         if path in _KNOWN_LEAVES:
@@ -132,7 +146,7 @@ def _check_unknown_keys(
         if path in _KNOWN_CONTAINERS:
             _check_unknown_keys(value, findings, path)
             continue
-        near = difflib.get_close_matches(key, _immediate_children(prefix), n=1)
+        near = difflib.get_close_matches(key_name, _immediate_children(prefix), n=1)
         hint = f" — did you mean `{near[0]}`?" if near else ""
         findings.append(
             ("E-CONFIG-KEY-UNKNOWN", path, f"is not a key this schema declares{hint}")

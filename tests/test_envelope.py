@@ -75,3 +75,20 @@ def test_parameters_is_exempt_from_the_closure() -> None:
 def test_sweeps_modes_are_exempt_from_the_closure() -> None:
     """`_check_sweep` owns the mode list and reports E-SWEEP-KEY-UNKNOWN."""
     assert check_envelope({"sweep": {"whatever": {}}}) == []
+
+
+def test_a_non_string_top_level_key_is_reported_not_raised() -> None:
+    """A YAML mapping key need not be a string — `1: oops` parses to an `int`
+    key. `load_document` only rejects an unhashable key before this runs, so a
+    hashable non-string key reaches `check_envelope` directly. It can never
+    equal a `LEAF_TYPES` path (all strings), so it is certainly not a key this
+    schema declares — reported, not silently skipped."""
+    findings = check_envelope({1: "oops"})
+
+    assert [(f[0], f[1]) for f in findings] == [("E-CONFIG-KEY-UNKNOWN", "1")]
+
+
+def test_a_non_string_nested_key_is_reported_not_raised() -> None:
+    findings = check_envelope({"metadata": {1: "oops"}})
+
+    assert [(f[0], f[1]) for f in findings] == [("E-CONFIG-KEY-UNKNOWN", "metadata.1")]

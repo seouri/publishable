@@ -174,6 +174,23 @@ def test_a_misspelled_key_anywhere_is_reported(tmp_path: Path) -> None:
     assert "metadata.athors" in fields
 
 
+def test_a_non_string_top_level_key_is_a_diagnostic_not_a_traceback(tmp_path: Path) -> None:
+    """A YAML mapping key need not be a string (`1: oops` parses to an `int`
+    key), and `check_envelope`'s `difflib` call used to require one — a
+    regression this task's own closure introduced and this test pins shut."""
+    findings = _validate_with(tmp_path, {1: "oops"})
+
+    fields = [f.path for f in findings if f.code == "E-CONFIG-KEY-UNKNOWN"]
+    assert "1" in fields
+
+
+def test_a_non_string_nested_key_is_a_diagnostic_not_a_traceback(tmp_path: Path) -> None:
+    findings = _validate_with(tmp_path, {"metadata": {1: "oops"}})
+
+    fields = [f.path for f in findings if f.code == "E-CONFIG-KEY-UNKNOWN"]
+    assert "metadata.1" in fields
+
+
 def test_a_wrong_typed_leaf_is_a_diagnostic_not_a_traceback(tmp_path: Path) -> None:
     """`validate` collects findings and never raises. Before the envelope this
     ended the process in `re.match`'s TypeError with no diagnostic at all."""
