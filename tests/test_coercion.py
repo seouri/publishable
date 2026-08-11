@@ -5,6 +5,7 @@ from fractions import Fraction
 import numpy as np
 import pytest
 
+from publishable import Estimate
 from publishable.coercion import coerce_scalars
 from publishable.errors import ContractError
 
@@ -95,3 +96,72 @@ def test_a_sized_object_is_refused_even_if_it_implements_float():
     with pytest.raises(ContractError) as exc:
         coerce_scalars({"r": _FloatyButSized()}, "io.record")
     assert exc.value.code == "E-STEP-RETURN-TYPE"
+
+
+def test_an_estimate_passes_through_at_summary_scope():
+    est = Estimate(value=0.031, ci95=[0.008, 0.055], n=612, method="mixed model, REML")
+    got = coerce_scalars({"delta": est}, "step03_site_model", scope="summary")
+    assert got["delta"] == est
+
+
+def test_an_estimate_is_refused_at_every_other_scope():
+    """`reference.md` § `Estimate`: elsewhere it "would be a way to attach an
+    interval to a per-execution return value, and `per_repeat` is *exactly what
+    the step returned*" — an interval per repeat is either a claim about one
+    execution or an accident."""
+    est = Estimate(value=0.031)
+    for scope in ("repeat", "condition", "run", None):
+        with pytest.raises(ContractError) as excinfo:
+            coerce_scalars({"delta": est}, "step03_analyze", scope=scope)
+        assert excinfo.value.code == "E-STEP-ESTIMATE-SCOPE"
+
+
+def test_ci95_without_method_is_refused():
+    """`reference.md`: "`method` is required whenever `ci95` is present. An
+    interval nobody labelled is unreadable." The check is a declaration check,
+    not a judgement about the statistics."""
+    est = Estimate(value=0.031, ci95=[0.008, 0.055])
+    with pytest.raises(ContractError) as excinfo:
+        coerce_scalars({"delta": est}, "step03_site_model", scope="summary")
+    assert excinfo.value.code == "E-STEP-ESTIMATE-METHOD"
+
+
+def test_a_bare_estimate_without_ci95_needs_no_method():
+    got = coerce_scalars({"delta": Estimate(value=0.031)}, "s", scope="summary")
+    assert got["delta"].method is None
+
+
+def test_an_estimates_own_fields_are_coerced():
+    """The half a narrower exemption would miss. `coerce_scalars` exists because
+    an uncoerced NumPy scalar "reaches `yaml.safe_dump` and raises
+    `RepresenterError` while writing `run.yaml` — a traceback rather than a
+    diagnostic", and a mixed model hands back NumPy scalars more often than a
+    derived metric does, not less. Passing the Estimate through untouched would
+    reintroduce that defect one level of nesting down."""
+    est = Estimate(
+        value=np.float64(0.031),
+        ci95=[np.float64(0.008), np.float64(0.055)],
+        n=np.int64(612),
+        method="mixed model, REML",
+    )
+    got = coerce_scalars({"delta": est}, "step03_site_model", scope="summary")["delta"]
+    assert type(got.value) is float
+    assert [type(v) for v in got.ci95] == [float, float]
+    assert type(got.n) is int
+    assert got.value == 0.031
+
+
+def test_something_structural_inside_an_estimate_is_still_refused():
+    """The exemption admits an `Estimate`, not everything inside one."""
+    est = Estimate(value=[0.031], method="m")  # type: ignore[arg-type]
+    with pytest.raises(ContractError):
+        coerce_scalars({"delta": est}, "step03_site_model", scope="summary")
+
+
+def test_a_bare_value_beside_an_estimate_is_untouched():
+    """The documented example returns `converged: True` alongside. A bare value
+    stays bare — it is not wrapped into the Estimate shape."""
+    got = coerce_scalars(
+        {"delta": Estimate(value=0.031), "converged": True}, "s", scope="summary"
+    )
+    assert got["converged"] is True

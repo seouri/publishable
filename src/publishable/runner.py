@@ -427,7 +427,7 @@ def execute_plan(
                     "a step's `run` must return a mapping or None",
                     code="E-STEP-RETURN-TYPE",
                 )
-            returned = coerce_scalars(returned, execution.step_name)
+            returned = coerce_scalars(returned, execution.step_name, scope=execution.scope)
             io.finalize()
             recorded = frozenset(io.recorded_keys)
             skipped = frozenset(io.skipped)
