@@ -1996,7 +1996,7 @@ The `n` in a confidence interval is a count of the things the claim generalizes 
 **An interval needs two units, and enough draws to place its bounds.** A metric whose completed
 units number fewer than two reports `ci95: null` — there is no dispersion to estimate from one
 observation, and a zero-width interval around it would read as certainty. A percentile construction
-additionally reports `ci95: null` when `statistics.resample_draws` is below the floor its
+additionally reports `ci95: null` when the recorded `resample_draws` is below the floor its
 confidence level needs, because a bound read off too few draws is a bound placed by the draw count
 rather than by the data. `n` still reports the units, and `value` still reports the point estimate:
 what is missing is the interval, not the metric.
