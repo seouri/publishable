@@ -1,4 +1,5 @@
-from publishable.hypotheses import Observation, resolve, verdict_for
+from publishable.correction import Member
+from publishable.hypotheses import Observation, evaluate, resolve, verdict_for
 
 _VS_BASELINE = {1: {"step03_analyze": {"r": {"delta": 0.026, "ci95": [-0.007, 0.059]}}}}
 _CONTRASTS = [
@@ -236,3 +237,88 @@ def test_omitting_evaluate_on_defaults_to_observed():
     got = verdict_for(hyp, obs, None)
     assert got["verdict_evaluated_on"] == "observed"
     assert got["supported"] is True
+
+
+def _member(where, step, metric, delta, ci95):
+    return Member(where=where, condition_index=1, step=step, metric=metric,
+                  delta=delta, ci95=ci95, pool=None,
+                  diffs=tuple(delta + 0.01 * ((i % 5) - 2) for i in range(60)))
+
+
+def test_only_confirmatory_computed_hypotheses_are_counted():
+    """`reference.md`: "Core's hypothesis family is the confirmatory hypotheses
+    whose observations it computed, which keeps `family_size` predictable from
+    the config." An exploratory one is evaluated and recorded, and counted by
+    nothing."""
+    hyps = [
+        {"id": "a", "kind": "confirmatory", "metric": "s.m",
+         "compare": {"contrast": "x"}, "direction": "greater", "threshold": 0.0,
+         "evaluate_on": "ci95_lower"},
+        {"id": "b", "kind": "exploratory", "metric": "s.m",
+         "compare": {"contrast": "x"}, "direction": "greater", "threshold": 0.0,
+         "evaluate_on": "ci95_lower"},
+    ]
+    got = evaluate(
+        hyps, label_to_index={}, vs_baseline=None,
+        contrasts=[{"id": "x", "s": {"m": {"delta": 0.1, "ci95": [0.01, 0.19]}}}],
+        summary={}, members=[_member("contrast:x", "s", "m", 0.1, (0.01, 0.19))],
+        method="holm", parameters_hash="sha256:1a2b",
+    )
+    by_id = {e["id"]: e for e in got}
+    assert by_id["a"]["family_size"] == 1
+    assert by_id["a"]["family"] == {"hypotheses": 1}
+    assert "family_size" not in by_id["b"]
+    assert by_id["b"]["supported"] is not None   # still evaluated, just uncounted
+
+
+def test_a_reported_estimate_hypothesis_is_evaluated_but_never_counted():
+    """`reference.md`: its observation "is a reported `Estimate`, so core has
+    nothing to correct — and therefore does not count it"."""
+    got = evaluate(
+        [{"id": "h2", "kind": "confirmatory", "metric": "step04.s",
+          "direction": "greater", "threshold": 0.99, "evaluate_on": "observed"}],
+        label_to_index={}, vs_baseline=None, contrasts=None,
+        summary={"step04": {"s": {"value": 0.9931, "reported": True,
+                                  "ci95": [0.9931, 1.0], "n": None, "method": "BCa"}}},
+        members=[], method="holm", parameters_hash="sha256:1a2b",
+    )
+    assert got[0]["verdict_rests_on"] == "reported"
+    assert got[0]["supported"] is True
+    assert "family_size" not in got[0]
+
+
+def test_every_verdict_carries_the_hash_that_declared_it():
+    """`reference.md`: a hypothesis "carries the `parameters_hash` of the config
+    that declared it. Add a hypothesis after seeing results and rerun, and the
+    hash won't match the earlier run"."""
+    got = evaluate(
+        [{"id": "a", "kind": "confirmatory", "metric": "s.m", "compare": {"contrast": "x"},
+          "direction": "greater", "threshold": 0.0, "evaluate_on": "observed"}],
+        label_to_index={}, vs_baseline=None,
+        contrasts=[{"id": "x", "s": {"m": {"delta": 0.1, "ci95": [0.01, 0.19]}}}],
+        summary={}, members=[], method="none", parameters_hash="sha256:1a2b",
+    )
+    assert got[0]["declared_in"] == "parameters_hash sha256:1a2b"
+
+
+def test_the_hypothesis_family_is_its_own_size_not_the_sweeps():
+    """Two confirmatory computed hypotheses over a sweep whose own family is
+    larger. The level must come from 2, not from the sweep's count — the two
+    families are corrected separately, which is the whole reason `family_size`
+    is on the verdict at all."""
+    hyps = [
+        {"id": f"h{i}", "kind": "confirmatory", "metric": f"s.m{i}",
+         "compare": {"contrast": "x"}, "direction": "greater", "threshold": 0.0,
+         "evaluate_on": "ci95_lower"}
+        for i in (1, 2)
+    ]
+    got = evaluate(
+        hyps, label_to_index={}, vs_baseline=None,
+        contrasts=[{"id": "x", "s": {"m1": {"delta": 0.10, "ci95": [0.01, 0.19]},
+                                     "m2": {"delta": 0.20, "ci95": [0.11, 0.29]}}}],
+        summary={},
+        members=[_member("contrast:x", "s", "m1", 0.10, (0.01, 0.19)),
+                 _member("contrast:x", "s", "m2", 0.20, (0.11, 0.29))],
+        method="bonferroni", parameters_hash="sha256:1a2b",
+    )
+    assert {e["family_size"] for e in got} == {2}
