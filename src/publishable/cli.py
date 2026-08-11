@@ -775,6 +775,10 @@ def command_run(config_path: Path) -> int:
         # not there is a roster — a `reported` hypothesis names a `summary`
         # step's `Estimate`, which is reachable with no `data.units` at all.
         comparison_members: list[Member] = []
+        # Bound once and read twice — the sweep family below and the hypothesis
+        # family after it are corrected by the *same* declared method, and two
+        # spellings of one default is how they would come to disagree.
+        correction_method = (doc.get("statistics") or {}).get("correction") or "holm"
         # Condition metadata `ExecutionResult` cannot carry: `Execution` holds
         # index and label but not `is_baseline` or the swept `values`, and
         # `reference.md` § The two files shows both on the condition entry.
@@ -1286,10 +1290,7 @@ def command_run(config_path: Path) -> int:
             # which is why the field is *absent* there rather than null:
             # an explicit null would claim a correction was attempted.
             comparison_members = vs_baseline_members + contrast_members
-            fields = corrected_fields(
-                comparison_members,
-                (doc.get("statistics") or {}).get("correction") or "holm",
-            )
+            fields = corrected_fields(comparison_members, correction_method)
             for (where_id, step_name, metric_key), values in fields.items():
                 entry = _entry_for(vs_baseline, contrasts_out, where_id, step_name, metric_key)
                 if entry is None:
@@ -1332,7 +1333,7 @@ def command_run(config_path: Path) -> int:
                 if r.execution.scope == "summary"
             },
             members=comparison_members,
-            method=(doc.get("statistics") or {}).get("correction") or "holm",
+            method=correction_method,
             parameters_hash=ph,
         )
         # Outside `if roster is not None:` on purpose: `aggregate_c` is created

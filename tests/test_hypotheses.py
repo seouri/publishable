@@ -373,3 +373,81 @@ def test_a_counted_hypothesis_with_no_matching_member_still_gets_a_verdict():
     assert got[0]["family_size"] == 1
     assert got[0]["supported"] is True
     assert "ci95_corrected" not in (got[0]["observed"] or {})
+
+
+def _thin_member(where, step, metric, delta, ci95):
+    """A member whose corrected bound cannot be built: a 60-draw pool, where
+    `stats.min_honest_draws(0.95)` is 80. Every level a correction asks for is
+    at or below α, so `interval_at` returns `None` and `corrected_for` marks it
+    `thin` — the real path is a family large enough that α/m outruns the 2000
+    draws `cli` resamples with, which needs 26 hypotheses to reach and is
+    covered end to end in `test_cli.py`."""
+    return Member(where=where, condition_index=1, step=step, metric=metric,
+                  delta=delta, ci95=ci95,
+                  pool=tuple(sorted(delta + 0.001 * i for i in range(60))), diffs=None)
+
+
+_THIN_CONTRASTS = [{"id": "x", "s": {"m": {"delta": 0.10, "ci95": [0.01, 0.19]}}}]
+
+
+def _thin_verdict(evaluate_on, method="holm", threshold=0.0):
+    hyp = {"id": "h", "kind": "confirmatory", "metric": "s.m",
+           "compare": {"contrast": "x"}, "direction": "greater",
+           "threshold": threshold, "evaluate_on": evaluate_on}
+    return evaluate(
+        [hyp], label_to_index={}, vs_baseline=None, contrasts=_THIN_CONTRASTS,
+        summary={}, members=[_thin_member("contrast:x", "s", "m", 0.10, (0.01, 0.19))],
+        method=method, parameters_hash="sha256:1a2b",
+    )[0]
+
+
+def test_a_bound_the_correction_could_not_build_is_supported_null():
+    """The error direction is what makes this a refusal rather than a fallback:
+    the raw bound is the *tighter* of the two, so testing it answers a question
+    nobody asked and answers it favourably. `reference.md` — "Correction reaches
+    a verdict only through a bound" — makes the corrected bound the subject of
+    the claim, so when it cannot be built there is no verdict, not a substitute
+    one."""
+    got = _thin_verdict("ci95_lower")
+    assert got["family_size"] == 1
+    assert got["verdict_evaluated_on"] == "ci95_lower"
+    assert got["supported"] is None
+    # Null, not absent: absent means no correction was attempted at all, which
+    # is a different fact and the one `correction: none` records.
+    assert "ci95_corrected" in got["observed"]
+    assert got["observed"]["ci95_corrected"] is None
+    # The raw interval stays on the record — the number exists, it is the
+    # verdict at this level that does not.
+    assert got["observed"]["ci95"] == [0.01, 0.19]
+
+
+def test_an_unbuildable_bound_does_not_disturb_an_observed_verdict():
+    """A point estimate has no α to adjust, so a thin family changes nothing
+    about what `evaluate_on: observed` compares. `ci95_corrected: null` is still
+    disclosed beside it, because the family was still corrected and still could
+    not produce the interval."""
+    got = _thin_verdict("observed")
+    assert got["supported"] is True  # delta 0.10 > 0.0
+    assert got["observed"]["ci95_corrected"] is None
+
+
+def test_an_fdr_bh_family_gives_a_bound_hypothesis_no_verdict():
+    """`fdr_bh` implies no per-comparison level at all (`correction._level_for`
+    returns `None`), so there is no corrected bound to test — the same absence
+    as a thin family, reached by a different route, and the same refusal to
+    fall back to the raw bound. `reference.md` already warns that `fdr_bh` over
+    a family carrying no p-value is the wrong tool; silently answering on the
+    uncorrected bound would hide that rather than surface it."""
+    got = _thin_verdict("ci95_upper", method="fdr_bh")
+    assert got["supported"] is None
+    assert got["observed"]["ci95_corrected"] is None
+
+
+def test_no_correction_at_all_still_tests_the_raw_bound():
+    """The third state, and the one that must not be swept up by the fix above:
+    `correction: none` produces no family entry at all, which is a *request*
+    that the raw bound be the one tested. `reference.md` makes `ci95_corrected`
+    absent there rather than null, and the verdict is a real one."""
+    got = _thin_verdict("ci95_lower", method="none")
+    assert got["supported"] is True  # raw lower bound 0.01 > 0.0
+    assert "ci95_corrected" not in got["observed"]

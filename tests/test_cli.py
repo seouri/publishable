@@ -3100,7 +3100,12 @@ def test_a_declared_hypothesis_gets_a_verdict(tmp_path, capsys, monkeypatch):
     assert verdict["supported"] is True  # the delta is exactly 1.0
     assert verdict["verdict_evaluated_on"] == "observed"
     assert verdict["verdict_rests_on"] == "computed"
-    assert verdict["declared_in"].startswith("parameters_hash ")
+    # The exact hash, not the prefix: `declared_in` is what makes the
+    # pre-registration claim checkable, and swapping `parameters_hash` for
+    # `code_hash` at the call site keeps the prefix intact while pointing the
+    # reader at a tree instead of at the config that predicted the result.
+    assert verdict["declared_in"] == f"parameters_hash {run['parameters_hash']}"
+    assert run["code_hash"] not in verdict["declared_in"]
     assert verdict["family_size"] == 1
 
 
@@ -3182,3 +3187,62 @@ def test_a_bound_verdict_reads_the_hypothesis_family_correction(tmp_path, capsys
     assert corrected_low < threshold < raw_low
     assert h2["supported"] is False
     assert h2["verdict_rests_on"] == "computed"
+
+
+def test_a_hypothesis_family_too_large_for_its_draws_gets_no_bound_verdict(
+    tmp_path, capsys, monkeypatch
+):
+    """A corrected bound that cannot be built must not fall back to the raw one.
+
+    The arithmetic that makes this reachable at all: a derived metric's
+    corrected interval is a second rank pair off its stored 2000-draw pool, and
+    `stats.min_honest_draws(1 - α')` is `ceil(4/α')`, so a level below 0.002 has
+    no honest interval in 2000 draws. Holm hands rank 1 α/(m − i + 1) = 0.05/26
+    = 0.00192 at twenty-six counted hypotheses — the smallest family that
+    outruns the pool. Every one of them names the same derived metric, which is
+    exactly what `family_size` counts: the confirmatory hypotheses core
+    computed, not the members behind them.
+
+    The raw lower bound would clear the threshold below, so a fallback reads
+    `supported: true` — a verdict at α for a claim asked at α/26, and favourable
+    in the direction that matters. `supported: null` beside `ci95_corrected:
+    null` is the honest answer.
+    """
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        aggregate_returns="r",
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+        hypotheses=[
+            {
+                "id": f"h{i}",
+                "kind": "confirmatory",
+                "statement": "the derived mean exceeds -1",
+                "metric": "step01_summarize_units.r",
+                "compare": {"condition": "method=spearman", "to": "baseline"},
+                "direction": "greater",
+                "threshold": -1.0,
+                "evaluate_on": "ci95_lower",
+            }
+            for i in range(26)
+        ],
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    verdicts = run["results"]["hypotheses"]
+    assert len(verdicts) == 26
+    first = verdicts[0]
+    assert first["family_size"] == 26
+    assert first["verdict_evaluated_on"] == "ci95_lower"
+    # The number exists and the record still shows it; what does not exist is a
+    # bound at the level this family implies.
+    assert first["observed"]["ci95"] is not None
+    assert first["observed"]["ci95_corrected"] is None
+    assert first["supported"] is None
+    assert all(v["supported"] is None for v in verdicts)

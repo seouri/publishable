@@ -106,13 +106,21 @@ def resolve(
 _POINT_KEYS = ("delta", "value")
 
 
-def _observed_block(obs: Observation, bounds: tuple[float, float] | None) -> dict[str, Any] | None:
+def _observed_block(
+    obs: Observation, bounds: tuple[float, float] | None, corrected_unavailable: bool = False
+) -> dict[str, Any] | None:
     """What the record shows as `observed`, in the shape its source implies.
 
     `reference.md` shows two: `{delta, ci95, ci95_corrected}` for a comparison and
     `{value, ci95, method}` for a summary metric. Both are the entry's own fields,
     not a reshaping of them, so a reader can find the same numbers in the block
     the hypothesis names.
+
+    `ci95_corrected: null` when this hypothesis is in a corrected family whose
+    bound could not be built — the same disclosure `W-STATS-CORRECTED-THIN`
+    makes on the sweep side ("`ci95_corrected` is null rather than too narrow").
+    Absent still means what it means everywhere else in this record: no
+    correction was attempted at all.
     """
     if obs.block is None:
         return None
@@ -121,11 +129,16 @@ def _observed_block(obs: Observation, bounds: tuple[float, float] | None) -> dic
     }
     if bounds is not None:
         out["ci95_corrected"] = [bounds[0], bounds[1]]
+    elif corrected_unavailable:
+        out["ci95_corrected"] = None
     return out
 
 
 def _tested_number(
-    obs: Observation, evaluate_on: str, bounds: tuple[float, float] | None
+    obs: Observation,
+    evaluate_on: str,
+    bounds: tuple[float, float] | None,
+    corrected_unavailable: bool = False,
 ) -> float | None:
     """The one number the verdict compares, or `None` when there isn't one.
 
@@ -133,8 +146,19 @@ def _tested_number(
     corrected family, and the raw one otherwise — `reference.md`: "Correction
     reaches a verdict only through a bound", and counted-iff-corrected decides
     whether there is a corrected bound at all.
+
+    `corrected_unavailable` is the third case, and it is not the second: this
+    hypothesis *is* in a corrected family, the level was demanded, and the bound
+    at that level could not be built — a family too large for the resample's
+    draws to support (`thin`), or an `fdr_bh` family, which implies no
+    per-comparison level at all. Falling back to the raw interval there would
+    answer a question nobody asked, on the *tighter* of the two bounds, so the
+    error direction is over-support: a `supported: true` decided at α when the
+    verdict was asked for at α/m. There is no number, so there is no verdict.
     """
     if obs.block is None:
+        return None
+    if corrected_unavailable and evaluate_on != "observed":
         return None
     if evaluate_on == "observed":
         for key in _POINT_KEYS:
@@ -148,7 +172,10 @@ def _tested_number(
 
 
 def verdict_for(
-    hyp: dict[str, Any], obs: Observation, bounds: tuple[float, float] | None
+    hyp: dict[str, Any],
+    obs: Observation,
+    bounds: tuple[float, float] | None,
+    corrected_unavailable: bool = False,
 ) -> dict[str, Any]:
     """The verdict fields for one hypothesis.
 
@@ -167,9 +194,20 @@ def verdict_for(
     The comparison is strict (`>`, not `>=`): `reference.md` describes a
     supported hypothesis as one whose value "exceeds" or "clears" the
     threshold, and a value exactly at the threshold has done neither.
+
+    A bound the correction could not build is the same honest absence, for the
+    reason `_tested_number` gives: `supported: null` beside a
+    `ci95_corrected: null` says the question was asked and could not be
+    answered at the level asked for, where a raw-bound verdict would look
+    answered and be over-supported. That choice over a warning is the project's
+    own standard — a number that looks handled and is not is worse than an
+    honest absence — and it is also the only one available to a pure function
+    with no diagnostics channel: `run.yaml` has nowhere to carry a finding, so
+    a warning printed to stdout would leave the record itself still claiming a
+    verdict it cannot support.
     """
     evaluate_on = str(hyp.get("evaluate_on") or "observed")
-    number = _tested_number(obs, evaluate_on, bounds)
+    number = _tested_number(obs, evaluate_on, bounds, corrected_unavailable)
     threshold = hyp.get("threshold")
     direction = hyp.get("direction")
     supported: bool | None = None
@@ -181,7 +219,7 @@ def verdict_for(
     ):
         supported = number > threshold if direction == "greater" else number < threshold
     return {
-        "observed": _observed_block(obs, bounds),
+        "observed": _observed_block(obs, bounds, corrected_unavailable),
         "verdict_evaluated_on": evaluate_on,
         "supported": supported,
         "verdict_rests_on": obs.rests_on,
@@ -241,10 +279,20 @@ def evaluate(
         key = (obs.where, obs.step, obs.metric) if obs.where is not None else None
         corrected = fields.get(key) if key is not None and _is_counted(hyp, obs) else None
         bounds = None
-        if corrected and corrected.get("ci95_corrected"):
-            low, high = corrected["ci95_corrected"]
-            bounds = (low, high)
-        entry.update(verdict_for(hyp, obs, bounds))
+        # Three states, not two. No entry at all means no correction was
+        # attempted — `correction: none`, or a hypothesis outside the family —
+        # and the raw interval is then the right one to test. An entry whose
+        # `ci95_corrected` is `None` means the opposite: a level *was* demanded
+        # and the interval at it could not be built, which `_tested_number`
+        # refuses to paper over with the raw bound.
+        corrected_unavailable = False
+        if corrected is not None:
+            interval = corrected.get("ci95_corrected")
+            if interval:
+                bounds = (interval[0], interval[1])
+            else:
+                corrected_unavailable = True
+        entry.update(verdict_for(hyp, obs, bounds, corrected_unavailable))
         if _is_counted(hyp, obs):
             entry["family_size"] = size
             entry["family"] = {"hypotheses": size}

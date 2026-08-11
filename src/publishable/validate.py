@@ -1199,6 +1199,16 @@ def _check_hypotheses(
     resolve to no observation rather than being refused before a run starts.
     `E-HYPOTHESIS-BASELINE`.
 
+    **`compare.to` has exactly one value, and it is `baseline`.**
+    `reference.md` § Pre-registration writes `to: baseline` and core computes
+    no other per-condition comparison — a claim against some *other* condition
+    is a `statistics.contrasts` entry, named through `compare.contrast`. Left
+    unchecked, `to: some_other_label` validates clean and
+    `hypotheses.resolve` — which never reads the field — evaluates it against
+    the baseline anyway, so the verdict answers a question the config did not
+    ask and nothing in the record reveals the substitution.
+    `E-HYPOTHESIS-COMPARE-TO`.
+
     **`compare.contrast` needs a real contrast.** `reference.md` § Validation,
     "Hypothesis names a real contrast": `hypotheses[1].compare.contrast` is
     `invariance`, which `statistics.contrasts` does not declare. The same
@@ -1338,6 +1348,16 @@ def _check_hypotheses(
 
         compare = hyp.get("compare")
         if isinstance(compare, dict):
+            if "to" in compare and compare.get("to") != "baseline":
+                c.error(
+                    "E-HYPOTHESIS-COMPARE-TO",
+                    f"hypotheses[{i}].compare.to",
+                    f"is `{compare.get('to')}`; the only value is `baseline` — core computes "
+                    "no other per-condition comparison, and `hypotheses.resolve` reads the "
+                    "baseline block whatever this says, so any other value names a "
+                    "comparison that will never be made and is silently evaluated against "
+                    "the baseline instead",
+                )
             if compare.get("to") == "baseline" and not has_baseline:
                 c.error(
                     "E-HYPOTHESIS-BASELINE",

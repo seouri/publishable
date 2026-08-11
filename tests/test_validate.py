@@ -2255,6 +2255,26 @@ def test_a_hypothesis_compared_to_a_declared_baseline_is_not_flagged(write_confi
                         "direction": "greater", "threshold": 0.5}],
     }))
     assert "E-HYPOTHESIS-BASELINE" not in found
+    assert "E-HYPOTHESIS-COMPARE-TO" not in found
+
+
+def test_a_hypothesis_compared_to_something_other_than_the_baseline_is_refused(
+    write_config_two_scopes,
+):
+    """`compare.to` has one value. `hypotheses.resolve` never reads the field —
+    it reads the `vs_baseline` block for the named condition whatever `to` says
+    — so an unrefused `to: method=kendall` is evaluated against the baseline and
+    the record shows a verdict for a comparison the config did not ask for. A
+    claim against another *condition* is a `statistics.contrasts` entry, named
+    through `compare.contrast`."""
+    found = codes(write_config_two_scopes({
+        "sweep": _TWO_CONDITIONS,
+        "hypotheses": [{"id": "h", "kind": "confirmatory",
+                        "metric": "step01_measure.r",
+                        "compare": {"condition": "method=spearman", "to": "method=kendall"},
+                        "direction": "greater", "threshold": 0.5}],
+    }))
+    assert "E-HYPOTHESIS-COMPARE-TO" in found
 
 
 def test_a_hypothesis_naming_an_undeclared_contrast_is_refused(write_config_two_scopes):
