@@ -376,6 +376,17 @@ Each row states the condition, not the wording.
 | `data.input_manifest_policy` is empty, or is a value outside the declared policies | `E-DATA-POLICY` |
 | `data.input_dir` or `data.output_dir` is empty | `E-DATA-REQUIRED` |
 | `data.input_dir` is not a directory, or is a directory with nothing in it | `E-DATA-UNREADABLE` |
+| A hypothesis's `compare.to` is `baseline` and `sweep.baseline` is not declared | `E-HYPOTHESIS-BASELINE` |
+| A hypothesis names a metric whose scope is not `summary`, sets `evaluate_on` to `ci95_lower` or `ci95_upper`, and no metric this run computes could ever carry an interval — `data.units` is undeclared and the template defines no `aggregate` | `E-HYPOTHESIS-BOUND` |
+| A hypothesis's `compare` declares `to`, and its value is not `baseline` | `E-HYPOTHESIS-COMPARE-TO` |
+| A hypothesis's `compare.condition` names a label the run's `sweep` does not declare, or names the baseline's own label — checked only once a baseline is declared, since `E-HYPOTHESIS-BASELINE` already covers the case where none is | `E-HYPOTHESIS-CONDITION` |
+| A hypothesis's `compare.contrast` names an `id` `statistics.contrasts` does not declare | `E-HYPOTHESIS-CONTRAST` |
+| A hypothesis's `direction` is missing or is a value other than `greater` or `less` | `E-HYPOTHESIS-DIRECTION` |
+| A hypothesis's `evaluate_on` is set and is a value other than `observed`, `ci95_lower`, or `ci95_upper` — unset (`null`) is accepted, since `observed` is the documented default | `E-HYPOTHESIS-EVALUATE-ON` |
+| Once the entrypoint has imported, a hypothesis names a `scope: summary` metric and declares `compare`, or names a `condition`- or `repeat`-scoped metric without declaring `compare` | `E-HYPOTHESIS-FORM` |
+| A hypothesis's `kind` is missing or is a value other than `confirmatory` or `exploratory` | `E-HYPOTHESIS-KIND` |
+| A hypothesis entry is not a mapping, or its `metric` is missing or not a `step.metric` string, or — once the entrypoint has imported — names a step the entrypoint's `steps` list does not declare | `E-HYPOTHESIS-METRIC` |
+| A hypothesis's `threshold` is missing or is not a number — a `bool` does not count as one | `E-HYPOTHESIS-THRESHOLD` |
 | A `fold` level's `k` is `all` with no resolved roster to size it against, or is not a whole number ≥ 2 — including exactly 1, which `E-REPL-N`'s floor of 1 does not catch | `E-REPL-FOLD-K` |
 | A `fold` level's `k` exceeds the resolved unit count, which would leave a fold with nothing to test | `E-REPL-FOLD-K-TOO-LARGE` |
 | `replication.repeats` declares a `fold` level and `data.units` is not declared, so there is no roster to partition | `E-REPL-FOLD-NO-UNITS` |
@@ -387,6 +398,19 @@ Each row states the condition, not the wording.
 | A `seed` or `batch` level's `n`, or a `fold` level's `k`, resolves to an integer less than 1 | `E-REPL-N` |
 | `replication.order` is set and is a value other than `as_declared` or `randomized` — unset (`null`) is accepted | `E-REPL-ORDER` |
 | Two members of one repeat level derive the same seed, or resolve to the same label, from the digest the check ran against | `E-REPL-SEED-COLLISION` |
+| A `statistics.contrasts` entry's `of` or `against` names another entry's `id` rather than a condition's label — contrasts compare conditions and do not nest | `E-STATS-CONTRAST-NESTED` |
+| A `statistics.contrasts` entry sets `of` and `against` to the same condition | `E-STATS-CONTRAST-SAME-SIDES` |
+| `statistics.contrasts` is not a list, an entry in it is not a mapping, or an entry's `id` is missing, is not a string, or repeats an earlier entry's | `E-STATS-CONTRAST-SHAPE` |
+| A `statistics.contrasts` entry's `of` or `against` names a value that matches no declared condition's label and no other entry's `id` | `E-STATS-CONTRAST-UNKNOWN` |
+| A `statistics.contrasts` entry's `within` names an attribute `data.units.attributes` does not declare | `E-STATS-CONTRAST-WITHIN` |
+| `statistics.correction` is set and is a value other than `none`, `bonferroni`, `holm`, or `fdr_bh` — unset (`null`) is accepted | `E-STATS-CORRECTION-UNKNOWN` |
+| A `statistics.report_by` entry is not a string, or names an attribute `data.units.attributes` does not declare | `E-STATS-REPORTBY-UNKNOWN` |
+| A `sweep.grid` axis declares an empty (falsy) list of values, so the sweep would expand to zero conditions | `E-SWEEP-AXIS-EMPTY` |
+| `sweep.baseline` is declared and leaves at least one of `sweep.grid`'s axes unfixed — per-cell baseline expansion is specified but not implemented in this build | `E-SWEEP-BASELINE-PARTIAL` |
+| `sweep` is declared and resolves to zero conditions, whatever shape produced that — a backstop beneath the per-axis checks above | `E-SWEEP-EXPANDS-EMPTY` |
+| `sweep` declares a key that is not one of the six recognized sweep modes (`baseline`, `grid`, `paired`, `ablate`, `sample`, `groups`) | `E-SWEEP-KEY-UNKNOWN` |
+| `sweep.grid` or `sweep.baseline` names a dotted path the template's `parameter_spec` does not declare | `E-SWEEP-PATH-UNKNOWN` |
+| A `sweep.grid` value cannot be rendered into a condition label — a `sweep.baseline` value is exempt, since it is never rendered into one | `E-SWEEP-VALUE-UNNAMEABLE` |
 | `data.units.attributes` names a value the source table has no column for, or — for a table source only — names a non-string item | `E-UNITS-ATTR-MISSING` |
 | `data.units.attributes` names a field of `Unit` itself (`key`, `paths`, or `attributes`), which cannot also be a declared attribute | `E-UNITS-ATTR-RESERVED` |
 | The table `data.units.from` names has no data rows, or the `glob` it names matches no files under `input_dir` | `E-UNITS-EMPTY` |
