@@ -1115,14 +1115,21 @@ def _check_contrasts(doc: dict[str, Any], c: Collector) -> None:
         if isinstance(entry, dict) and isinstance(entry.get("id"), str) and entry["id"]
     }
     # Guarded the same way `_condition_labels` guards its own `expand(doc)`:
-    # `validate` collects findings and never raises. Unreachable through
-    # `validate_config` itself — `_check_sweep` calls this same pure function
-    # on this same doc one statement earlier, so any sweep malformed enough to
-    # make `expand` raise (a `null` grid axis value, past `_check_shape`'s
-    # per-axis `list` guard) already crashes there first. This guard is for a
-    # caller that reaches `_check_contrasts` directly, the same reason the
-    # `isinstance(entries, list)` guard just above was kept rather than
-    # deleted as newly redundant. `conditions = []` rather than returning:
+    # `validate` collects findings and never raises. `_check_sweep` calls this
+    # same pure function on this same doc one statement earlier and is *also*
+    # guarded now, so a sweep malformed enough to make `expand` raise (a
+    # `null` grid axis value, past `_check_shape`'s per-axis `list` guard) no
+    # longer crashes there first — meaning this guard is genuinely reachable
+    # through `validate_config` too, not only from a caller that reaches
+    # `_check_contrasts` directly. Kept regardless of that overlap, on the
+    # same reasoning the `isinstance(entries, list)` guard just above was kept
+    # once `_check_shape` started covering its shape first: two guards on the
+    # same pure call is deliberate belt-and-braces, not redundancy to delete —
+    # a caller that reaches `_check_contrasts` directly, skipping
+    # `_check_sweep` entirely (`test_check_contrasts_guards_expand_when_called_directly`
+    # does exactly this), still needs its own guard, and a future change that
+    # reopens `_check_sweep`'s crash must not silently reopen this one too.
+    # `conditions = []` rather than returning:
     # the shape and `id`-collision checks below don't need a resolved sweep at
     # all, and every `of`/`against` correctly reports `E-STATS-CONTRAST-UNKNOWN`
     # against an empty `labels` rather than the block going silently unchecked.
