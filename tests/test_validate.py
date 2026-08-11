@@ -1067,10 +1067,16 @@ def test_declared_report_by_is_checked_rather_than_refused(write_config):
     assert "E-STATS-REPORTBY-UNKNOWN" in found
 
 
-def test_a_declared_hypothesis_is_refused(write_config):
-    assert "E-HYPOTHESIS-UNSUPPORTED" in codes(
+def test_a_declared_hypothesis_is_checked_rather_than_refused(write_config):
+    """S5b retires the blanket refusal and checks the declaration for real: `cli`
+    now evaluates every declared hypothesis and writes its verdict, so a bare
+    `metric: r` is `E-HYPOTHESIS-METRIC` — it names no step — rather than the
+    retired `-UNSUPPORTED`."""
+    found = codes(
         write_config({"hypotheses": [{"id": "h1", "metric": "r", "direction": "greater"}]})
     )
+    assert "E-HYPOTHESIS-UNSUPPORTED" not in found
+    assert "E-HYPOTHESIS-METRIC" in found
 
 
 def test_empty_declarations_are_not_refused(write_config):

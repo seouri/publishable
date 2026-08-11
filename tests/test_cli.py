@@ -3065,3 +3065,120 @@ def test_an_interval_with_no_method_fails_that_execution(tmp_path, capsys):
     # And the missing-`n` warning does not fire on an `Estimate` that never
     # made it past coercion.
     assert "W-STEP-ESTIMATE-N" not in doc["stdout"]
+
+
+def test_a_declared_hypothesis_gets_a_verdict(tmp_path, capsys, monkeypatch):
+    """The slice end to end. A run with no `hypotheses` is unchanged; one with a
+    hypothesis carries a verdict naming what it compared and who computed it."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+        hypotheses=[
+            {
+                "id": "h1",
+                "kind": "confirmatory",
+                "statement": "spearman exceeds pearson",
+                "metric": "step01_summarize_units.pred",
+                "compare": {"condition": "method=spearman", "to": "baseline"},
+                "direction": "greater",
+                "threshold": 0.5,
+                "evaluate_on": "observed",
+            }
+        ],
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    verdict = run["results"]["hypotheses"][0]
+    assert verdict["id"] == "h1"
+    assert verdict["supported"] is True  # the delta is exactly 1.0
+    assert verdict["verdict_evaluated_on"] == "observed"
+    assert verdict["verdict_rests_on"] == "computed"
+    assert verdict["declared_in"].startswith("parameters_hash ")
+    assert verdict["family_size"] == 1
+
+
+def test_a_run_with_no_hypotheses_has_no_hypotheses_block(tmp_path, capsys, monkeypatch):
+    """Absent, not empty — the rule `vs_baseline` and `contrasts` already follow."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+    doc = run_a_project(tmp_path, capsys=capsys, units=40)
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    # Structural, not textual. A generated config ships `hypotheses: []`
+    # (`materialize.py`), and `run.yaml` echoes the config verbatim — so the
+    # string `hypotheses:` is in the file whatever `results` does, and a
+    # whole-file text assertion would fail against a correct implementation.
+    # The rule is about the results block, so that is what is asserted.
+    assert "hypotheses" not in run["results"]
+    assert run["config"]["hypotheses"] == []
+
+
+def test_a_bound_verdict_reads_the_hypothesis_family_correction(tmp_path, capsys, monkeypatch):
+    """`reference.md`: "Correction reaches a verdict only through a bound." A
+    hypothesis evaluating on `ci95_lower` compares the bound corrected at *this*
+    family's level, not the raw one — so the threshold below sits strictly
+    between the two, and only the corrected bound gives the right verdict.
+
+    Two confirmatory hypotheses, because a family of one corrects its only rank
+    at α itself: `ci95_corrected` would equal `ci95` and no threshold could tell
+    the two apart. The corrected bound is rebuilt from the `correction.Member`s
+    `cli` built for the sweep, which the record does not carry — passing none
+    silently falls back to the raw interval, and that is what this test exists
+    to catch.
+    """
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+    threshold = 2.82
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman", "kendall"]},
+        },
+        hypotheses=[
+            {
+                "id": "h1",
+                "kind": "confirmatory",
+                "statement": "spearman exceeds pearson",
+                "metric": "step01_summarize_units.pred",
+                "compare": {"condition": "method=spearman", "to": "baseline"},
+                "direction": "greater",
+                "threshold": 0.5,
+                "evaluate_on": "ci95_lower",
+            },
+            {
+                "id": "h2",
+                "kind": "confirmatory",
+                "statement": "kendall exceeds pearson by more than 2.82",
+                "metric": "step01_summarize_units.pred",
+                "compare": {"condition": "method=kendall", "to": "baseline"},
+                "direction": "greater",
+                "threshold": threshold,
+                "evaluate_on": "ci95_lower",
+            },
+        ],
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    verdicts = {v["id"]: v for v in run["results"]["hypotheses"]}
+    assert verdicts["h1"]["supported"] is True
+    h2 = verdicts["h2"]
+    assert h2["family_size"] == 2
+    assert h2["verdict_evaluated_on"] == "ci95_lower"
+    # The kendall shift is +3.0 on every unit, so the raw lower bound clears
+    # 2.82 and the corrected one does not. Widening is the whole effect of the
+    # correction, so it is asserted rather than left implied.
+    raw_low, _ = h2["observed"]["ci95"]
+    corrected_low, _ = h2["observed"]["ci95_corrected"]
+    assert corrected_low < threshold < raw_low
+    assert h2["supported"] is False
+    assert h2["verdict_rests_on"] == "computed"

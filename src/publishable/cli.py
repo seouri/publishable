@@ -32,6 +32,7 @@ from publishable.estimate import Estimate
 from publishable.generators.experiment import generate_experiment
 from publishable.generators.step import generate_step
 from publishable.hashes import code_hash, design_digest, parameters_hash
+from publishable.hypotheses import evaluate as evaluate_hypotheses
 from publishable.manifest import build_manifest, manifest_hash, verify_manifest
 from publishable.provenance import find_repo_root, git_provenance
 from publishable.replication import (
@@ -42,7 +43,7 @@ from publishable.replication import (
     resolve_repeats,
 )
 from publishable.run_identity import RunLock, allocate_run_dir, point_latest
-from publishable.run_record import assemble_run_yaml, run_status
+from publishable.run_record import assemble_run_yaml, run_status, summary_values
 from publishable.runner import attrition, execute_plan, resolve_condition_cfg, resolve_wide_cfg
 from publishable.scaffold import scaffold_project
 from publishable.scope import Execution, build_plan
@@ -768,6 +769,12 @@ def command_run(config_path: Path) -> int:
         # entry means nothing to report, and `_compute_declared_contrasts` returns
         # `None` rather than `[]`.
         contrasts_out: list[dict[str, Any]] | None = None
+        # The sweep family's raw material, declared out here for the same reason
+        # `vs_baseline` and `contrasts_out` are: the hypothesis family is
+        # rebuilt from these members, and `hypotheses.evaluate` runs whether or
+        # not there is a roster — a `reported` hypothesis names a `summary`
+        # step's `Estimate`, which is reachable with no `data.units` at all.
+        comparison_members: list[Member] = []
         # Condition metadata `ExecutionResult` cannot carry: `Execution` holds
         # index and label but not `is_baseline` or the swept `values`, and
         # `reference.md` § The two files shows both on the condition entry.
@@ -1278,8 +1285,9 @@ def command_run(config_path: Path) -> int:
             # record. `corrected_fields` returns `{}` under `correction: none`,
             # which is why the field is *absent* there rather than null:
             # an explicit null would claim a correction was attempted.
+            comparison_members = vs_baseline_members + contrast_members
             fields = corrected_fields(
-                vs_baseline_members + contrast_members,
+                comparison_members,
                 (doc.get("statistics") or {}).get("correction") or "holm",
             )
             for (where_id, step_name, metric_key), values in fields.items():
@@ -1296,6 +1304,37 @@ def command_run(config_path: Path) -> int:
                         "support — `ci95_corrected` is null rather than too narrow",
                     )
                 entry.update(values)
+        # Outside `if roster is not None:` on purpose, and for the same reason
+        # `aggregate_c` is: a hypothesis naming a `summary` step's `Estimate`
+        # is evaluable in a run with no `data.units` at all, where none of the
+        # aggregate-phase code above runs. `vs_baseline`, `contrasts_out` and
+        # `comparison_members` all carry their no-roster values there.
+        #
+        # The members, not the record, are what a corrected bound is rebuilt
+        # from: `run.yaml` carries no draws, so an interval at *this* family's
+        # level cannot be re-derived from what was already written. The
+        # hypothesis family is corrected separately from the sweep's
+        # (`reference.md` § Sweeps and repeats), which is why `evaluate` gets
+        # the same members a second time rather than reading `ci95_corrected`
+        # off the entries the pass above just merged into.
+        #
+        # `label_to_index` skips the unlabeled condition a sweepless plan
+        # builds: a hypothesis names a condition by label, and `None` is not
+        # one a config can write.
+        hypothesis_verdicts = evaluate_hypotheses(
+            doc.get("hypotheses") or [],
+            label_to_index={c.label: c.index for c in conditions if c.label is not None},
+            vs_baseline=vs_baseline,
+            contrasts=contrasts_out,
+            summary={
+                r.execution.step_name: summary_values(r.returned)
+                for r in results
+                if r.execution.scope == "summary"
+            },
+            members=comparison_members,
+            method=(doc.get("statistics") or {}).get("correction") or "holm",
+            parameters_hash=ph,
+        )
         # Outside `if roster is not None:` on purpose: `aggregate_c` is created
         # above that block precisely so a `summary` step's `W-STEP-ESTIMATE-N`
         # still prints in a run with no roster at all, where none of the
@@ -1369,6 +1408,7 @@ def command_run(config_path: Path) -> int:
             condition_meta=condition_meta,
             vs_baseline=vs_baseline,
             contrasts=contrasts_out,
+            hypotheses=hypothesis_verdicts,
         )
         (run_dir / "run.yaml").write_text(yaml.safe_dump(doc_out, sort_keys=False))
         # `with` block exit releases the lock.

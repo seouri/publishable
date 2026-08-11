@@ -752,19 +752,22 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
                 "refusal exists to prevent; it will be honored in a later slice",
             )
 
-    # `statistics.resample`/`.null_test` and a top-level `hypotheses` block all
-    # validate clean today and are read by nothing — the same silent-no-op class
-    # as the fields above. `statistics.contrasts` and `statistics.report_by` used
-    # to be in this list too; they are now checked for real by `_check_contrasts`
-    # and `_check_report_by` instead of being refused wholesale. `statistics.correction`
-    # is not in it either, and no longer for a disclosure reason: `cli.py` applies
-    # it, so a declared correction changes the record — the correction checks
-    # further down this module check its *value* instead, and warn only on `none`,
-    # which corrects nothing by request. `materialize.py` writes only two of these
-    # keys into a generated config — `statistics.correction` and a top-level
-    # `hypotheses: []` — so `resample` and `null_test` are simply absent there;
-    # each check below fires on a real declaration either way, never on a key's mere
-    # presence or on the empty list `hypotheses` is generated as.
+    # `statistics.resample`/`.null_test` validate clean today and are read by
+    # nothing — the same silent-no-op class as the fields above.
+    # `statistics.contrasts`, `statistics.report_by` and the top-level
+    # `hypotheses` block used to be in this list too; they are now checked for
+    # real by `_check_contrasts`, `_check_report_by` and `_check_hypotheses`
+    # instead of being refused wholesale — `cli.py` evaluates every declared
+    # hypothesis and writes its verdict, so the declaration changes the record.
+    # `statistics.correction` is not in it either, and no longer for a disclosure
+    # reason: `cli.py` applies it, so a declared correction changes the record —
+    # the correction checks further down this module check its *value* instead,
+    # and warn only on `none`, which corrects nothing by request.
+    # `materialize.py` writes only two of these keys into a generated config —
+    # `statistics.correction` and a top-level `hypotheses: []` — so `resample`
+    # and `null_test` are simply absent there; each check below fires on a real
+    # declaration either way, never on a key's mere presence or on the empty
+    # list `hypotheses` is generated as.
     statistics = doc.get("statistics") or {}
     for field, code, what in (
         (
@@ -786,16 +789,6 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
                 "declaration that changes no behavior is the failure this refusal "
                 "exists to prevent; it will be honored in a later slice",
             )
-
-    if doc.get("hypotheses"):
-        c.error(
-            "E-HYPOTHESIS-UNSUPPORTED",
-            "hypotheses",
-            "is specified but not implemented in this build — no verdict is evaluated "
-            "against a declared hypothesis, and a pre-registered hypothesis that is "
-            "never checked would report success for a claim never tested; it will be "
-            "honored in a later slice",
-        )
 
 
 def _repeat_total(doc: dict[str, Any], unit_count: int | None) -> int | None:
