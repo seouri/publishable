@@ -393,7 +393,6 @@ def _comparison_step_blocks(
             members.append(
                 Member(
                     where=where_id,
-                    condition_index=comp.of,
                     step=step_name,
                     metric=metric_key,
                     delta=metric_block[metric_key]["delta"] or 0.0,

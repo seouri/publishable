@@ -281,7 +281,7 @@ def test_omitting_evaluate_on_defaults_to_observed():
 
 
 def _member(where, step, metric, delta, ci95, decl=0):
-    return Member(where=where, condition_index=1, step=step, metric=metric,
+    return Member(where=where, step=step, metric=metric,
                   delta=delta, ci95=ci95, pool=None,
                   diffs=tuple(delta + 0.01 * ((i % 5) - 2) for i in range(60)),
                   declaration_index=decl)
@@ -424,7 +424,7 @@ def _thin_member(where, step, metric, delta, ci95):
     `thin` — the real path is a family large enough that α/m outruns the 2000
     draws `cli` resamples with, which needs 26 hypotheses to reach and is
     covered end to end in `test_cli.py`."""
-    return Member(where=where, condition_index=1, step=step, metric=metric,
+    return Member(where=where, step=step, metric=metric,
                   delta=delta, ci95=ci95,
                   pool=tuple(sorted(delta + 0.001 * i for i in range(60))), diffs=None,
                   declaration_index=0)

@@ -1068,15 +1068,22 @@ def test_a_baseline_sweep_reports_a_corrected_interval(tmp_path, capsys, monkeyp
     assert strongest["ci95_corrected"][1] > strongest["ci95"][1]
 
 
-def test_each_member_carries_the_condition_index_of_its_own_comparison():
-    """`Member.condition_index` is read in exactly one place — `rank_family`'s
-    tie-break — so hardcoding it to `0` in `cli` changes nothing until two
-    members tie, and then it silently reorders them and hands out the wrong
-    levels. No end-to-end record carries the index, so the assignment is pinned
-    where it is made: `_comparison_step_blocks` called directly with a
-    comparison whose `of` is deliberately not `0`, the same
+def test_a_comparison_reads_its_own_condition_not_condition_zero():
+    """A comparison whose `of` is deliberately not `0` — the same
     called-directly treatment `_check_contrasts`'s kept guard gets in
-    `tests/test_validate.py`."""
+    `tests/test_validate.py` — pins that `_comparison_step_blocks` reads
+    `aggregated`/`collapsed_by_key` at *its own* `comp.of`/`comp.against`
+    rather than at a hardcoded `0`, which a copy-paste of the baseline path
+    would get right by accident whenever `of == 0` and wrong everywhere else.
+
+    This test used to also pin `Member.condition_index`, which `cli` set from
+    `comp.of` here. That field was removed: once `rank_family`'s tie-break
+    moved to `declaration_index` (assigned once, over the whole family, where
+    `cli` concatenates `vs_baseline` and declared-contrast members), nothing
+    read `condition_index` anywhere — not `rank_family`, not any other
+    function in `correction.py`, `hypotheses.py`, or `cli.py` — so it was
+    write-only data on a frozen dataclass. `where` (`"cond:2"` here) already
+    carries the addressing a reader needs."""
     from publishable.cli import _comparison_step_blocks
     from publishable.contrasts import Comparison
     from publishable.diagnostics import Collector
@@ -1105,9 +1112,7 @@ def test_each_member_carries_the_condition_index_of_its_own_comparison():
         },
     )
     assert block["s"]["r"]["ci95"] is not None
-    assert [(m.where, m.condition_index, m.step, m.metric) for m in members] == [
-        ("cond:2", 2, "s", "r")
-    ]
+    assert [(m.where, m.step, m.metric) for m in members] == [("cond:2", "s", "r")]
     assert members[0].delta == pytest.approx(block["s"]["r"]["delta"])
     assert members[0].delta != 0.0
 

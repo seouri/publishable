@@ -28,7 +28,6 @@ class Member:
     """
 
     where: str
-    condition_index: int
     step: str
     metric: str
     delta: float
