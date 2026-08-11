@@ -1595,16 +1595,17 @@ def test_check_contrasts_still_refuses_a_non_list_when_called_directly():
 
 def test_check_contrasts_guards_expand_when_called_directly():
     """`_check_contrasts` calls `expand(doc)` unguarded to resolve condition
-    labels for `of`/`against`. Through `validate_config` this is unreachable:
-    `_check_sweep` calls the same pure `expand(doc)` on the same doc one line
-    earlier (`validate_config` runs it first), so any sweep malformed enough
-    to make `expand` raise already crashes there first — `_check_shape`'s
-    per-axis `list` guard does not cover a `null` axis value (`not None` is
-    how this module always treats an absent key), and `itertools.product`
-    raises `TypeError` on a `None` iterable. The guard here is for a caller
-    that reaches `_check_contrasts` directly, the same reason
-    `test_check_contrasts_still_refuses_a_non_list_when_called_directly`'s
-    own shape guard was kept rather than deleted as redundant."""
+    labels for `of`/`against` — a `null` `sweep.grid` axis value reaches it
+    (`_check_shape`'s per-axis `list` guard refuses only a *present, non-list*
+    value, not `null`) and `itertools.product` raises `TypeError` on a `None`
+    iterable. `_check_sweep` calls the same pure `expand(doc)` on the same doc
+    one line earlier in the normal `validate_config` pipeline and is now
+    guarded too (`test_a_malformed_sweep_with_contrasts_is_a_diagnostic_not_a_crash`
+    exercises that end to end), so this direct call is what proves the guard
+    inside `_check_contrasts` is live in its own right — the same reason
+    `test_check_contrasts_still_refuses_a_non_list_when_called_directly`'s own
+    shape guard was kept rather than deleted as redundant once `_check_shape`
+    also covers it."""
     c = Collector()
     _check_contrasts(
         {
@@ -1618,6 +1619,37 @@ def test_check_contrasts_guards_expand_when_called_directly():
     # so each is reported unknown rather than the whole block going unchecked.
     codes_found = [f.code for f in c.findings]
     assert codes_found.count("E-STATS-CONTRAST-UNKNOWN") == 2
+
+
+def test_a_malformed_sweep_with_contrasts_is_a_diagnostic_not_a_crash(write_config):
+    """The acceptance test Debt B's brief actually specified: a config whose
+    `sweep` cannot expand *and* whose `statistics.contrasts` is declared,
+    through `validate_config` end to end. Before the fix this raised
+    `TypeError: 'NoneType' object is not iterable` out of `_check_sweep`'s own
+    unguarded `expand(doc)` call — one statement before `_check_contrasts`
+    ever runs — so guarding `_check_contrasts` alone did not make this
+    pass."""
+    path = write_config(
+        {
+            "sweep": {"grid": {"analysis.method": None}},
+            "statistics": {"contrasts": [{"id": "x", "of": "a", "against": "b"}]},
+        }
+    )
+    c = Collector()
+    validate_config(path, c)  # must not raise
+    assert c.findings  # a diagnostic, not silence
+
+
+def test_a_malformed_sweep_alone_with_no_contrasts_is_also_a_diagnostic(write_config):
+    """The crash this task found does not need `statistics.contrasts` at all
+    — `_check_sweep`'s own `expand(doc)` call is what raises, and it runs
+    whether or not any contrast is declared. Kept as a separate case from the
+    one above so a future fix scoped only to `_check_contrasts` (which would
+    leave this one failing) is caught."""
+    path = write_config({"sweep": {"grid": {"analysis.method": None}}})
+    c = Collector()
+    validate_config(path, c)  # must not raise
+    assert c.findings
 
 
 def test_a_scalar_contrasts_block_is_refused_once_in_the_shape_pass(write_config):

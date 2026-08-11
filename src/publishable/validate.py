@@ -936,15 +936,34 @@ def _check_sweep(
         if _path_resolves(path, f"sweep.baseline.{path}"):
             _value_checks(path, value, f"sweep.baseline.{path}", nameable=False)
 
-    conditions = expand(doc)
-    if sweep and not conditions:
-        c.error(
-            "E-SWEEP-EXPANDS-EMPTY",
-            "sweep",
-            "expands to zero conditions, so the run would execute nothing while "
-            "reporting success — declare `baseline`, a non-empty `grid`, or remove "
-            "`sweep` entirely",
-        )
+    # Guarded the same way `_condition_labels` guards its own `expand(doc)`:
+    # `validate` collects findings and never raises. A `sweep.grid` axis value
+    # of `null` reaches here — past the per-axis `E-SWEEP-AXIS-EMPTY` check
+    # above, which fires only on a value that is *present and falsy* and then
+    # `continue`s past the rest of the per-axis body, and past `_check_shape`'s
+    # per-axis `list` guard, which refuses only a *present, non-list* value —
+    # and makes `itertools.product` raise `TypeError` inside `expand`.
+    # `E-SWEEP-EXPANDS-EMPTY` below is deliberately skipped rather than fired
+    # on the caught exception: that check means "this sweep is shaped well
+    # enough to expand, and expanding it yields nothing," a different and more
+    # specific claim than "this sweep could not be expanded at all," and
+    # firing it here would misreport a crash as an empty grid.
+    # `conditions = []` regardless, so every later use in this function (the
+    # execution-budget arithmetic below) sees zero rather than reading a name
+    # that was never assigned.
+    try:
+        conditions = expand(doc)
+    except Exception:
+        conditions = []
+    else:
+        if sweep and not conditions:
+            c.error(
+                "E-SWEEP-EXPANDS-EMPTY",
+                "sweep",
+                "expands to zero conditions, so the run would execute nothing while "
+                "reporting success — declare `baseline`, a non-empty `grid`, or remove "
+                "`sweep` entirely",
+            )
 
     repeat_total = _repeat_total(doc, unit_count)
     budget = (doc.get("limits") or {}).get("max_executions")

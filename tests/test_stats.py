@@ -837,14 +837,22 @@ def test_a_raising_compute_is_treated_as_degenerate_not_propagated():
     assert draws_used == 0  # attempted and failed, not "never attempted" — see below
 
 
-def test_a_derived_metric_returning_a_string_is_contained_not_raised() -> None:
-    """A template returning a non-numeric metric yields a null interval, not
-    a crash. `coerce_scalars` accepts a `str`, so `{"m": "high"}` reaches
-    `cli.py`'s resample closure, which floats whatever `aggregate` returned
-    (`return None if value is None else float(value)`) — and `float("high")`
-    raises `ValueError` on every single draw. `compute` here stands in for
-    that closure rather than for `aggregate` itself, because the failure is in
-    the cast the closure performs on `aggregate`'s return, not inside
+def test_a_compute_that_raises_valueerror_is_contained_the_same_as_zerodivisionerror() -> None:
+    """`percentile_of_derived` contains a `ValueError`-raising `compute` the
+    same way `test_a_raising_compute_is_treated_as_degenerate_not_propagated`
+    already pins for `ZeroDivisionError` — near-isomorphic to that test with
+    the exception swapped, and named for exactly that rather than for the
+    broader claim "a non-numeric `aggregate` return is contained," which is
+    pinned end to end in `tests/test_cli.py`'s
+    `test_a_non_numeric_derived_metric_is_disclosed_not_a_traceback` instead.
+
+    `ValueError` is the real, concrete exception that mechanism produces: a
+    template returning `{"m": "high"}` is a `str` `coerce_scalars` accepts,
+    so it reaches `cli.py`'s resample closure, which floats whatever
+    `aggregate` returned (`return None if value is None else float(value)`)
+    — and `float("high")` raises `ValueError`. `compute` here stands in for
+    that closure rather than for `aggregate` itself, because the failure is
+    in the cast the closure performs on `aggregate`'s return, not inside
     `aggregate`.
 
     The containment is real but incidental: it comes from the same
