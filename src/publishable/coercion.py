@@ -21,7 +21,11 @@ There is exactly one documented exception: an `Estimate` returned at
 NumPy scalar coerced, anything structural a `ContractError`, and an
 `Estimate` at `summary` scope the one exception." The exception admits the
 type, not what it holds: its own fields go through the same coercion as
-everything else.
+everything else — and two of them are then held to a *narrower* rule than a
+scalar anywhere else here. `value` and each `ci95` bound must be a number,
+because a hypothesis naming a reported `Estimate` compares exactly those to a
+`threshold`; the `str` this module accepts happily in a recorded column is,
+there, a verdict nobody can read.
 """
 
 from typing import Any
@@ -66,6 +70,26 @@ def _coerce_estimate(key: str, value: Estimate, where: str, scope: str | None) -
     exception lives here rather than being special-cased in `runner.py`: one
     place decides what a step's return may contain.
 
+    `value` and each `ci95` bound must be a number once coerced, which is
+    stricter than `_coerce_one` alone: `str` is a scalar this module accepts
+    everywhere else, and `None` is what a one-sided interval writes for the
+    bound it does not have. Both are refused here rather than at the read site,
+    because `hypotheses._tested_number` calls `float()` on whichever of them a
+    hypothesis names, in phase 8 — after every execution is spent and before
+    `run.yaml` is written, so an unguarded `ValueError` there costs the whole
+    record. Refusing at the return keeps the cost at the one step that made the
+    mistake and names it with an identifier.
+
+    Not every refused shape crashed, and the two reasons are worth keeping
+    apart. A `str` `value`, and a `str` or `None` `ci95` bound, are the ones
+    that did. A `None` `value` never reached `float()` — `_tested_number` skips
+    a point estimate that is `None` — and is refused on the narrower ground
+    that `Estimate.value` is declared a number and a hypothesis naming one
+    would get a verdict of `null` from a field the type says cannot be empty.
+    `n` is not held to this rule at all: nothing evaluates a verdict against
+    it, and a step that reports its own `n` as a label ("612 pairs") is
+    describing, not asserting.
+
     The fields are coerced, not merely passed through. A mixed model hands back
     `numpy.float64` at least as often as a derived metric does, and an uncoerced
     one reaches `yaml.safe_dump` and raises `RepresenterError` while writing
@@ -101,16 +125,61 @@ def _coerce_estimate(key: str, value: Estimate, where: str, scope: str | None) -
             "on whether it is the right method",
             code="E-STEP-ESTIMATE-METHOD",
         )
+    coerced_ci95 = (
+        None if value.ci95 is None else [_coerce_one(f"{key}.ci95", v, where) for v in value.ci95]
+    )
+    if coerced_ci95 is not None:
+        if len(coerced_ci95) != 2:
+            raise ContractError(
+                f"{where} gave {key!r} a ci95 of {len(coerced_ci95)} elements; an interval is "
+                "exactly two, lower then upper, because a hypothesis evaluating on "
+                "`ci95_lower` or `ci95_upper` reads one of them by position",
+                code="E-STEP-ESTIMATE-CI95",
+            )
+        for position, bound in zip(("lower", "upper"), coerced_ci95, strict=True):
+            if not _is_number(bound):
+                raise ContractError(
+                    f"{where} gave {key!r} a ci95 whose {position} bound is "
+                    f"{bound!r} ({type(bound).__name__}); an interval bound must be a number, "
+                    "because `evaluate_on: ci95_lower`/`ci95_upper` compares it to a "
+                    "`threshold` — a `None` from a one-sided interval, or a string, is a "
+                    "bound no verdict can be read against",
+                    code="E-STEP-ESTIMATE-CI95",
+                )
+        if coerced_ci95[0] > coerced_ci95[1]:
+            raise ContractError(
+                f"{where} gave {key!r} a ci95 whose lower bound {coerced_ci95[0]} exceeds its "
+                f"upper bound {coerced_ci95[1]}; reversed, `evaluate_on: ci95_lower` would read "
+                "the upper bound and report a verdict against the wrong number",
+                code="E-STEP-ESTIMATE-CI95",
+            )
+    coerced_value = _coerce_one(f"{key}.value", value.value, where)
+    if not _is_number(coerced_value):
+        raise ContractError(
+            f"{where} gave {key!r} a value of {coerced_value!r} "
+            f"({type(coerced_value).__name__}); an Estimate's `value` must be a number, "
+            "because a hypothesis naming a reported Estimate compares it to a `threshold` — "
+            "a string or a `None` there is a point estimate no verdict can be read against",
+            code="E-STEP-ESTIMATE-VALUE",
+        )
     return Estimate(
-        value=_coerce_one(f"{key}.value", value.value, where),
-        ci95=(
-            None
-            if value.ci95 is None
-            else [_coerce_one(f"{key}.ci95", v, where) for v in value.ci95]
-        ),
+        value=coerced_value,
+        ci95=coerced_ci95,
         n=None if value.n is None else _coerce_one(f"{key}.n", value.n, where),
         method=value.method,
     )
+
+
+def _is_number(value: Any) -> bool:
+    """The same predicate `hypotheses.verdict_for` applies to a `threshold`.
+
+    A `bool` is an `int` in Python and is excluded on purpose: `True` as a point
+    estimate or an interval bound is a mistake that would otherwise compare
+    against a threshold as `1` and produce a real-looking verdict. Written once
+    here so the value core will judge and the value core accepts cannot drift
+    apart.
+    """
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
 
 
 def _coerce_one(key: str, value: Any, where: str) -> Any:

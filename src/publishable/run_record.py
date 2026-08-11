@@ -55,13 +55,19 @@ def _execution_block(results: list[ExecutionResult]) -> dict[str, Any]:
     }
 
 
-def _summary_values(returned: dict[str, Any]) -> dict[str, Any]:
+def summary_values(returned: dict[str, Any]) -> dict[str, Any]:
     """A summary step's return, with each `Estimate` expanded and every other
     value left exactly as it came back.
 
     `reference.md` § `Estimate` shows both in one block: the expanded
     `site_adjusted_delta` beside a bare `converged: true`. Only a value carrying
     an interval makes an attribution claim, so only that one gets `reported`.
+
+    Public rather than private because `cli` needs the same mapping before this
+    module builds it: a hypothesis naming a summary metric resolves against the
+    *expanded* block (a bare `Estimate` object is not one), and two spellings of
+    that expansion would be two shapes a verdict could disagree with the record
+    over.
     """
     out: dict[str, Any] = {}
     for key, value in returned.items():
@@ -84,6 +90,7 @@ def _results_block(
     condition_meta: dict[int, dict[str, Any]] | None = None,
     vs_baseline: dict[int, dict[str, dict[str, dict[str, Any]]]] | None = None,
     contrasts: list[dict[str, Any]] | None = None,
+    hypotheses: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     # A "run"-scoped step's return has nowhere to land here (§ The two files gives
     # `results` only `conditions` and `summary`), and the same is true of a
@@ -94,7 +101,7 @@ def _results_block(
     for r in results:
         e = r.execution
         if e.scope == "summary":
-            summary[e.step_name] = _summary_values(r.returned)
+            summary[e.step_name] = summary_values(r.returned)
             continue
         if e.scope == "run":
             continue
@@ -175,6 +182,14 @@ def _results_block(
     # comparison block here is: no declared contrast means nothing to report.
     if contrasts:
         out["contrasts"] = contrasts
+    # `hypotheses` are verdicts on declarations the config carried before the
+    # run, so they sit beside `conditions` and `contrasts` rather than inside
+    # either — `reference.md` § Pre-registration shows them at exactly this
+    # level. Absent, not `[]`, the same rule every block above follows: no
+    # declared hypothesis means nothing was pre-registered, which an empty list
+    # would render as a pre-registration that found nothing.
+    if hypotheses:
+        out["hypotheses"] = hypotheses
     return out
 
 
@@ -213,6 +228,7 @@ def assemble_run_yaml(
     condition_meta: dict[int, dict[str, Any]] | None = None,
     vs_baseline: dict[int, dict[str, dict[str, dict[str, Any]]]] | None = None,
     contrasts: list[dict[str, Any]] | None = None,
+    hypotheses: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     # There is no `counts` parameter here: `summarize_step` already embeds the
     # per-unit counts as `n` inside each metric under `aggregated`, and the
@@ -230,5 +246,7 @@ def assemble_run_yaml(
         "provenance": provenance,
         "layout": _layout_block(results, repeats),
         "execution": _execution_block(results),
-        "results": _results_block(results, aggregated, condition_meta, vs_baseline, contrasts),
+        "results": _results_block(
+            results, aggregated, condition_meta, vs_baseline, contrasts, hypotheses
+        ),
     }

@@ -15,8 +15,10 @@ from publishable.materialize import TEMPLATE_VERSION
 from publishable.param import MISSING
 from publishable.provenance import find_repo_root, resolves_inside_repo
 from publishable.replication import resolve_repeats
+from publishable.scope import step_name as _step_name
 from publishable.strata import levels_for
 from publishable.sweep import check_swept_value, expand
+from publishable.templates.base import BaseTemplate
 from publishable.templates.registry import get_template, template_names
 from publishable.units import UnitList, resolve_units
 
@@ -248,6 +250,7 @@ def validate_config(
     _check_unimplemented(doc, c)
     _check_sweep(doc, template, c, unit_count=len(roster) if roster is not None else None)
     _check_contrasts(doc, c)
+    _check_hypotheses(doc, c, experiment, template)
     _check_report_by(doc, c, roster)
     for message in template.validate(doc):
         c.error("E-TEMPLATE-RULE", "parameters", message)
@@ -749,19 +752,22 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
                 "refusal exists to prevent; it will be honored in a later slice",
             )
 
-    # `statistics.resample`/`.null_test` and a top-level `hypotheses` block all
-    # validate clean today and are read by nothing — the same silent-no-op class
-    # as the fields above. `statistics.contrasts` and `statistics.report_by` used
-    # to be in this list too; they are now checked for real by `_check_contrasts`
-    # and `_check_report_by` instead of being refused wholesale. `statistics.correction`
-    # is not in it either, and no longer for a disclosure reason: `cli.py` applies
-    # it, so a declared correction changes the record — the correction checks
-    # further down this module check its *value* instead, and warn only on `none`,
-    # which corrects nothing by request. `materialize.py` writes only two of these
-    # keys into a generated config — `statistics.correction` and a top-level
-    # `hypotheses: []` — so `resample` and `null_test` are simply absent there;
-    # each check below fires on a real declaration either way, never on a key's mere
-    # presence or on the empty list `hypotheses` is generated as.
+    # `statistics.resample`/`.null_test` validate clean today and are read by
+    # nothing — the same silent-no-op class as the fields above.
+    # `statistics.contrasts`, `statistics.report_by` and the top-level
+    # `hypotheses` block used to be in this list too; they are now checked for
+    # real by `_check_contrasts`, `_check_report_by` and `_check_hypotheses`
+    # instead of being refused wholesale — `cli.py` evaluates every declared
+    # hypothesis and writes its verdict, so the declaration changes the record.
+    # `statistics.correction` is not in it either, and no longer for a disclosure
+    # reason: `cli.py` applies it, so a declared correction changes the record —
+    # the correction checks further down this module check its *value* instead,
+    # and warn only on `none`, which corrects nothing by request.
+    # `materialize.py` writes only two of these keys into a generated config —
+    # `statistics.correction` and a top-level `hypotheses: []` — so `resample`
+    # and `null_test` are simply absent there; each check below fires on a real
+    # declaration either way, never on a key's mere presence or on the empty
+    # list `hypotheses` is generated as.
     statistics = doc.get("statistics") or {}
     for field, code, what in (
         (
@@ -783,16 +789,6 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
                 "declaration that changes no behavior is the failure this refusal "
                 "exists to prevent; it will be honored in a later slice",
             )
-
-    if doc.get("hypotheses"):
-        c.error(
-            "E-HYPOTHESIS-UNSUPPORTED",
-            "hypotheses",
-            "is specified but not implemented in this build — no verdict is evaluated "
-            "against a declared hypothesis, and a pre-registered hypothesis that is "
-            "never checked would report success for a claim never tested; it will be "
-            "honored in a later slice",
-        )
 
 
 def _repeat_total(doc: dict[str, Any], unit_count: int | None) -> int | None:
@@ -1170,6 +1166,397 @@ def _check_contrasts(doc: dict[str, Any], c: Collector) -> None:
                         f"statistics.contrasts[{i}].within",
                         f"names `{name}`, which is not in `data.units.attributes`",
                     )
+
+
+_DIRECTIONS = ("greater", "less")
+_EVALUATE_ONS = ("observed", "ci95_lower", "ci95_upper")
+_KINDS = ("confirmatory", "exploratory")
+
+
+def _condition_labels(doc: dict[str, Any]) -> tuple[set[str], set[str]] | None:
+    """Every declared condition label, and the baseline's own, or `None`.
+
+    `None` means the sweep block is malformed badly enough that `expand` cannot
+    read it — a scalar where an axis's value list belongs, a non-mapping
+    `baseline`. `_check_sweep` is the check that reports those, and this module
+    collects rather than raises, so an unexpandable sweep silently skips the
+    label test instead of turning one bad indent into a traceback.
+    """
+    try:
+        conditions = expand(doc)
+    except Exception:
+        return None
+    labels = {cond.label for cond in conditions if cond.label is not None}
+    baselines = {
+        cond.label for cond in conditions if cond.label is not None and cond.is_baseline
+    }
+    return labels, baselines
+
+
+def _check_hypotheses(
+    doc: dict[str, Any], c: Collector, experiment: Any | None, template: Any
+) -> None:
+    """Each declared `hypotheses` entry, checked for real now that the block is
+    non-empty and list-shaped (`_check_shape` already refused anything else).
+
+    **`metric` names the quantity under test, and `compare` only ever says
+    *where*.** `reference.md` § Pre-registration: "`metric` is required in every
+    form, because `compare` says *where* and never *what*." A contrast or a
+    condition comparison reports one value per step metric exactly as a summary
+    step does, so a hypothesis that names only `compare` leaves the quantity
+    unstated — `E-HYPOTHESIS-METRIC`. A `metric` naming a step this experiment's
+    `steps` list does not declare is the same failure by a different route: the
+    string looks like it names something, but nothing in the run will ever
+    produce it, so it is refused under the same identifier rather than a third
+    one — there being no experiment to check against (its import already failed,
+    reported elsewhere as `E-ENTRYPOINT-IMPORT`) is not a hypothesis fault, so
+    that case is silently skipped rather than double-reported.
+
+    **`compare.to: baseline` needs a declared baseline.** `reference.md` §
+    Validation, "Hypothesis needs baseline": `hypotheses[0].compare.to:
+    baseline` but `sweep.baseline` is not declared. Nothing downstream guards
+    this — `hypotheses.resolve` reads `vs_baseline`, which `cli` never
+    populates without a declared baseline, so the hypothesis would silently
+    resolve to no observation rather than being refused before a run starts.
+    `E-HYPOTHESIS-BASELINE`.
+
+    **`compare.to` has exactly one value, and it is `baseline`.**
+    `reference.md` § Pre-registration writes `to: baseline` and core computes
+    no other per-condition comparison — a claim against some *other* condition
+    is a `statistics.contrasts` entry, named through `compare.contrast`. Left
+    unchecked, `to: some_other_label` validates clean and
+    `hypotheses.resolve` — which never reads the field — evaluates it against
+    the baseline anyway, so the verdict answers a question the config did not
+    ask and nothing in the record reveals the substitution.
+    `E-HYPOTHESIS-COMPARE-TO`.
+
+    **`compare.contrast` needs a real contrast.** `reference.md` § Validation,
+    "Hypothesis names a real contrast": `hypotheses[1].compare.contrast` is
+    `invariance`, which `statistics.contrasts` does not declare. The same
+    unresolvable-label class `_check_contrasts` already refuses for `of` and
+    `against` — a typo here would resolve to nothing in `hypotheses.resolve`
+    and read back `block=None`, reported but never diagnosed as a typo.
+    `E-HYPOTHESIS-CONTRAST`.
+
+    **`evaluate_on` needs a bound that can exist.** `reference.md` §
+    Validation, "Hypothesis bound exists": `evaluate_on` names a bound
+    (`ci95_lower`/`ci95_upper`), but no metric this run computes could ever
+    carry an interval — `data.units` undeclared *and* the template defines no
+    `aggregate`, which together are the only way a `basis: units` metric with
+    a `ci95` gets produced at all. `generic`, the only template this build
+    registers, does not override `BaseTemplate.aggregate` — it inherits the
+    `{}`-returning default — so the `aggregate`-half of this condition holds
+    for every config naming it; `data.units` presence is what discriminates.
+
+    **That two-condition test is `reference.md`'s own — "the config-level
+    form" — and this check adds one more gate on top of it, not a divergence
+    from it.** § What a hypothesis is tested against draws the line itself:
+    "`validate` catches the config-level form of that, where nothing in the
+    run could carry an interval; the per-metric form is settled when the step
+    returns." The Validation row's own wording is "no metric this run
+    *computes*" — and CLAUDE.md's own invariant is explicit that "the one
+    interval core stores *without computing* is an `Estimate` returned by a
+    `summary` step"; a `reported: true` `Estimate` a step supplies directly
+    ("A hypothesis may name a summary metric") is therefore outside what that
+    row is even about, not an exception carved into it. Core never inspects a
+    step's body to know whether *this* summary step actually returns one, so
+    the check below only fires when the metric's scope is affirmatively known
+    and is not `"summary"` — unknown (no experiment, or a `metric` that
+    doesn't parse) is treated the same as `"summary"`, conservatively, since
+    the check can rule out neither. `E-HYPOTHESIS-BOUND`.
+
+    **The same impossible-interval condition, without a bound requested, is a
+    warning rather than a refusal — and shares the same scope gate, for the
+    warning's own reason rather than the error's.** `reference.md` §
+    Validation, "Hypothesis has an inference base": every metric will be
+    `basis: repeats` — reportable (`evaluate_on: observed` still reads a
+    value) but not testable against an interval. That premise is false for a
+    `scope: "summary"` metric that turns out to be a reported `Estimate`: it
+    is neither `basis: repeats` nor untestable — it is `reported`, carries its
+    own interval, and is exactly what `evaluate_on: ci95_lower`/`ci95_upper`
+    can test. (The error's hard-stop argument — `command_run` treats
+    `E-HYPOTHESIS-BOUND` as `c.has_errors` and a warning never stops a run —
+    does not transfer to the warning and is not why this one is gated; a
+    warning it wrongly issued would cost nothing but a false alarm, so the
+    gate here is justified only by the premise being false, the same way it
+    is for the error.) `W-HYPOTHESIS-INFERENCE-BASE` fires exactly where
+    `E-HYPOTHESIS-BOUND` does not, under that shared gate: same condition,
+    `evaluate_on` absent or `observed` instead of a bound.
+
+    **A hypothesis's form must match its metric's scope.** `reference.md` § What
+    a hypothesis is tested against: a `scope: "summary"` metric "is one value
+    per run, not a contrast between conditions" and takes no `compare`, while a
+    `condition`- or `repeat`-scoped metric only exists per condition and "is the
+    same mistake inverted" without one. Both directions are `E-HYPOTHESIS-FORM`.
+
+    **`direction` and `evaluate_on` are closed vocabularies, refused here rather
+    than reaching the evaluator at all.** The two fields are not symmetric in
+    what happens if this check didn't exist. `hypotheses.py::verdict_for` already
+    guards `direction`: `supported` is set only when `direction in ("greater",
+    "less")`, so an out-of-vocabulary value (Task 4's review found `greatr`) gets
+    `supported: None` rather than a wrong verdict — the refusal here is a second,
+    earlier line of defence, so a mistyped `direction` never even reaches a real
+    run, rather than being caught only after one. `evaluate_on` has no such
+    guard: `_tested_number` reads `evaluate_on == "observed"` and, failing that,
+    `evaluate_on == "ci95_lower"` — anything else, including a typo of either
+    string, silently falls through to `ci95_upper` and both fields go on to
+    build a genuinely different verdict, with nothing in the record to reveal
+    that the value was never recognized. So `E-HYPOTHESIS-EVALUATE-ON` is closing
+    a live, currently-unguarded misread; `E-HYPOTHESIS-DIRECTION` is moving an
+    already-guarded one earlier. `direction` has no named enum anywhere in the
+    four documents; `evaluate_on`'s is documented
+    (`observed | ci95_lower | ci95_upper`) but no identifier existed for either.
+
+    **`kind`, `direction` and `threshold` are required, not merely constrained.**
+    `reference.md` § The one config file writes all three in every hypothesis and
+    gives a default for none of them, and each has a different silent
+    consequence when absent. `kind` is the worst: `hypotheses._is_counted` tests
+    `== "confirmatory"`, so an omitted or mistyped `kind` leaves the correction
+    family and the verdict is decided on the *raw* — tighter — bound, over-
+    supporting a claim that the corrected level would have refused, with the
+    record echoing the typo but no diagnostic anywhere. `direction` and
+    `threshold` fail the other way, honestly but expensively: `verdict_for`
+    returns `supported: None` and the run comes back with no verdict after the
+    compute is spent. So `direction`'s check drops its `is not None` guard and
+    `E-HYPOTHESIS-KIND` and `E-HYPOTHESIS-THRESHOLD` join it. `evaluate_on`
+    stays optional, because `observed` is a documented default rather than an
+    omission.
+
+    **`compare.condition` is resolved against the declared labels**, the job
+    `_check_contrasts` already does for `of`/`against` with the same `expand(doc)`
+    machinery. A typo'd label validated clean and came back `observed: null,
+    supported: null`; so did naming the baseline's own label, which
+    `vs_baseline` has no entry for by construction. Both are
+    `E-HYPOTHESIS-CONDITION`.
+    """
+    entries = doc.get("hypotheses")
+    if not isinstance(entries, list) or not entries:
+        return  # `_check_shape` already refused a bad shape; `[]` is not a declaration
+
+    scopes_by_step: dict[str, str] = {}
+    if experiment is not None:
+        scopes_by_step = {_step_name(cls): cls.scope for cls in experiment.steps}
+
+    has_baseline = bool((doc.get("sweep") or {}).get("baseline"))
+    labels = _condition_labels(doc)
+    contrast_entries = ((doc.get("statistics") or {}).get("contrasts")) or []
+    contrast_ids = {
+        entry["id"]
+        for entry in contrast_entries
+        if isinstance(entry, dict) and isinstance(entry.get("id"), str) and entry["id"]
+    } if isinstance(contrast_entries, list) else set()
+    # The bound-exists error and the inference-base warning share one condition:
+    # no metric this run computes could ever carry an interval, because that
+    # needs a `basis: units` metric and the only source of one is a resolved
+    # unit table run through a template's `aggregate`. `generic` — the only
+    # template this build registers — inherits `BaseTemplate.aggregate`'s
+    # `{}`-returning default rather than overriding it, so `data.units` is what
+    # discriminates in practice; the `type(...) is not BaseTemplate.aggregate`
+    # check is what would let a future template with a real `aggregate` clear
+    # this condition without either check changing.
+    no_interval_possible = not bool(
+        (doc.get("data") or {}).get("units")
+    ) and type(template).aggregate is BaseTemplate.aggregate
+
+    for i, hyp in enumerate(entries):
+        if not isinstance(hyp, dict):
+            c.error(
+                "E-HYPOTHESIS-METRIC",
+                f"hypotheses[{i}]",
+                f"is a {type(hyp).__name__}, not a mapping with `metric`, `direction` and "
+                "`threshold`",
+            )
+            continue
+
+        kind = hyp.get("kind")
+        if kind not in _KINDS:
+            c.error(
+                "E-HYPOTHESIS-KIND",
+                f"hypotheses[{i}].kind",
+                f"is `{kind}`; the only kinds are `confirmatory` and `exploratory`, and "
+                "there is no default — `hypotheses.evaluate` counts a hypothesis into the "
+                "correction family only when `kind` is exactly `confirmatory`, so a typo or "
+                "an omission drops a pre-registered claim out of its family and decides it "
+                "on the raw, tighter bound instead of the corrected one",
+            )
+
+        direction = hyp.get("direction")
+        if direction not in _DIRECTIONS:
+            c.error(
+                "E-HYPOTHESIS-DIRECTION",
+                f"hypotheses[{i}].direction",
+                f"is `{direction}`; the only directions are `greater` and `less`, and it is "
+                "required — the evaluator refuses to guess by returning `supported: None` "
+                "for anything else, so a mistyped or missing direction otherwise reaches a "
+                "full run and comes back with no verdict rather than being refused before "
+                "one starts",
+            )
+
+        threshold = hyp.get("threshold")
+        if not isinstance(threshold, (int, float)) or isinstance(threshold, bool):
+            c.error(
+                "E-HYPOTHESIS-THRESHOLD",
+                f"hypotheses[{i}].threshold",
+                f"is `{threshold}`; a hypothesis is one quantity against one numeric "
+                "threshold, and `verdict_for` compares against nothing else — a missing or "
+                "non-numeric threshold yields `supported: null` after the whole run is "
+                "spent, with nothing in the record saying why",
+            )
+
+        evaluate_on = hyp.get("evaluate_on")
+        if evaluate_on is not None and evaluate_on not in _EVALUATE_ONS:
+            c.error(
+                "E-HYPOTHESIS-EVALUATE-ON",
+                f"hypotheses[{i}].evaluate_on",
+                f"is `{evaluate_on}`; the only values are `observed`, `ci95_lower` and "
+                "`ci95_upper` — unlike `direction`, the evaluator has no guard for this one "
+                "and silently reads anything else as `ci95_upper`, so a typo changes which "
+                "bound the verdict is about rather than being caught anywhere",
+            )
+
+        compare = hyp.get("compare")
+        if isinstance(compare, dict):
+            if "to" in compare and compare.get("to") != "baseline":
+                c.error(
+                    "E-HYPOTHESIS-COMPARE-TO",
+                    f"hypotheses[{i}].compare.to",
+                    f"is `{compare.get('to')}`; the only value is `baseline` — core computes "
+                    "no other per-condition comparison, and `hypotheses.resolve` reads the "
+                    "baseline block whatever this says, so any other value names a "
+                    "comparison that will never be made and is silently evaluated against "
+                    "the baseline instead",
+                )
+            missing_baseline = compare.get("to") == "baseline" and not has_baseline
+            if missing_baseline:
+                c.error(
+                    "E-HYPOTHESIS-BASELINE",
+                    f"hypotheses[{i}].compare",
+                    "sets `to: baseline`, but `sweep.baseline` is not declared — nothing "
+                    "populates a baseline comparison without one, so this hypothesis would "
+                    "silently resolve to no observation rather than the comparison it names",
+                )
+            # Gated on `missing_baseline` so one fault gets one code: with no
+            # declared baseline there is no comparison for *any* label to name,
+            # and `E-HYPOTHESIS-BASELINE` above already says so — reporting the
+            # label as unknown too would be the double-report the dotless-metric
+            # ordering fix exists to avoid.
+            if "condition" in compare and not missing_baseline and labels is not None:
+                declared_labels, baseline_labels = labels
+                named = compare.get("condition")
+                if not isinstance(named, str) or named not in declared_labels:
+                    c.error(
+                        "E-HYPOTHESIS-CONDITION",
+                        f"hypotheses[{i}].compare.condition",
+                        f"names `{named!r}`, which is not a condition this run's `sweep` "
+                        "declares — `hypotheses.resolve` looks the label up and finds "
+                        "nothing, so the verdict comes back `observed: null, supported: "
+                        "null` after the whole run is spent, exactly the unresolvable-label "
+                        "class `E-STATS-CONTRAST-UNKNOWN` refuses for a contrast's sides",
+                    )
+                elif named in baseline_labels:
+                    c.error(
+                        "E-HYPOTHESIS-CONDITION",
+                        f"hypotheses[{i}].compare.condition",
+                        f"names `{named}`, which is the baseline itself — `vs_baseline` holds "
+                        "one entry per *other* condition, because a baseline has no "
+                        "comparison against itself, so this resolves to no observation",
+                    )
+            if "contrast" in compare:
+                contrast_id = compare.get("contrast")
+                if not isinstance(contrast_id, str) or contrast_id not in contrast_ids:
+                    c.error(
+                        "E-HYPOTHESIS-CONTRAST",
+                        f"hypotheses[{i}].compare.contrast",
+                        f"names `{contrast_id!r}`, which `statistics.contrasts` does not "
+                        "declare",
+                    )
+
+        metric = hyp.get("metric")
+        step, _, name = metric.partition(".") if isinstance(metric, str) else ("", "", "")
+        metric_is_well_formed = isinstance(metric, str) and bool(metric) and bool(name)
+
+        # A `scope: "summary"` metric can be a `reported: true` `Estimate` a step
+        # supplies directly (`reference.md` § What a hypothesis is tested
+        # against, "A hypothesis may name a summary metric") — its own real
+        # `ci95`, with no unit table involved, and it is itself the answer to
+        # `basis: repeats`'s "reportable but not testable": a reported `Estimate`
+        # is neither `basis: repeats` nor untestable, so the warning's own
+        # premise is false for one, and the error's "no metric ... could carry
+        # an interval" is false for one too. Core never inspects a step's body
+        # to know whether *this* summary step actually returns one, so both
+        # checks below fire only when the metric's scope is affirmatively known
+        # and is *not* `"summary"` — unknown (no experiment) is treated the same
+        # as `"summary"`, conservatively. A `condition`- or `repeat`-scoped
+        # metric has no such exception: its only possible interval is `basis:
+        # units`, derived from `data.units` through a template's `aggregate`,
+        # which `no_interval_possible` already covers in full.
+        #
+        # Gated on `metric_is_well_formed` too, and deliberately checked before
+        # the malformed-metric refusal just below: a `metric` that doesn't parse
+        # to `step.metric` names no scope to look up, and `step` alone (a
+        # dotless value) can still collide with a real step name, which would
+        # otherwise let this block read a real `scope` for a metric that is
+        # about to be refused anyway — reporting the same entry under two
+        # unrelated codes rather than the one `E-HYPOTHESIS-METRIC` fault it
+        # actually has.
+        if metric_is_well_formed:
+            scope = scopes_by_step.get(step) if step else None
+            if no_interval_possible and scope not in (None, "summary"):
+                if evaluate_on in ("ci95_lower", "ci95_upper"):
+                    c.error(
+                        "E-HYPOTHESIS-BOUND",
+                        f"hypotheses[{i}].evaluate_on",
+                        f"names `{evaluate_on}`, but no metric this run computes could carry "
+                        "an interval — `data.units` is undeclared and the template defines no "
+                        "`aggregate`, so nothing produces a `ci95` to evaluate a bound against",
+                    )
+                else:
+                    c.warn(
+                        "W-HYPOTHESIS-INFERENCE-BASE",
+                        f"hypotheses[{i}]",
+                        "names a metric under a run where `data.units` is undeclared and the "
+                        "template defines no `aggregate` — every metric will be `basis: "
+                        "repeats`, reportable but not testable against an interval",
+                    )
+
+        if not metric_is_well_formed:
+            c.error(
+                "E-HYPOTHESIS-METRIC",
+                f"hypotheses[{i}].metric",
+                "is missing or not a `step.metric` string; `compare` says where a "
+                "hypothesis is tested and never what, so a contrast or condition "
+                "comparison alone leaves the quantity under test unnamed",
+            )
+            continue
+
+        if experiment is None:
+            continue  # the entrypoint didn't import; no step list to check the form against
+
+        scope = scopes_by_step.get(step)
+        if scope is None:
+            c.error(
+                "E-HYPOTHESIS-METRIC",
+                f"hypotheses[{i}].metric",
+                f"names step `{step}`, which the entrypoint's `steps` list does not declare",
+            )
+            continue
+
+        has_compare = isinstance(hyp.get("compare"), dict)
+        if scope == "summary" and has_compare:
+            c.error(
+                "E-HYPOTHESIS-FORM",
+                f"hypotheses[{i}]",
+                f"names `{metric}`, a `scope: \"summary\"` metric, and declares `compare` — "
+                "a summary metric is one value per run, not a contrast between conditions",
+            )
+        elif scope != "summary" and not has_compare:
+            c.error(
+                "E-HYPOTHESIS-FORM",
+                f"hypotheses[{i}]",
+                f"names `{metric}`, a `scope: \"{scope}\"` metric, without declaring `compare` "
+                "— that quantity only exists per condition, so the hypothesis must say which "
+                "conditions it compares",
+            )
 
 
 def _check_report_by(doc: dict[str, Any], c: Collector, roster: UnitList | None) -> None:

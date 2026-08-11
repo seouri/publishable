@@ -4,6 +4,7 @@ from publishable.correction import (
     ALPHA,
     Member,
     corrected_fields,
+    corrected_for,
     family_members,
     family_shape,
     rank_family,
@@ -207,6 +208,53 @@ def _two_member_family():
     strong = _from_diffs("2", 2, mean=-0.169, spread=0.02)
     weak = _from_diffs("1", 1, mean=0.026, spread=0.30)
     return strong, weak
+
+
+def test_corrected_for_takes_the_family_size_it_is_given():
+    """The hypothesis family "counts the confirmatory hypotheses whose
+    observations core computed, where a sweep's family counts comparisons ×
+    metrics" — it "multiplies nothing". Only the size differs, so only the size
+    is a parameter."""
+    strong, weak = _two_member_family()
+    got = corrected_for([strong, weak], "bonferroni", 7, {"hypotheses": 7})
+    for entry in got.values():
+        assert entry["correction_level"] == pytest.approx(0.05 / 7)
+        assert entry["family_size"] == 7
+        assert entry["family"] == {"hypotheses": 7}
+
+
+def test_corrected_fields_still_computes_the_sweep_shape():
+    """The existing caller keeps its behaviour: it passes the product, not the
+    member count, and its breakout still names comparisons and metrics.
+
+    Non-square on purpose, following
+    `test_the_level_divides_by_the_family_product_not_the_member_count`'s
+    fixture shape: `rmse` is recorded in comparison "1" and absent from
+    comparison "2", so 3 members span a family of 2 comparisons × 2 metrics =
+    4. A caller that substituted `len(family)` (3) for the product would
+    compute `family_size: 3` here and this test would catch it — a square
+    fixture (comparisons == metrics == members) cannot, since the product and
+    the member count coincide by construction."""
+    members = [
+        _from_diffs("1", 1, mean=-0.169, spread=0.02, metric="r"),
+        _from_diffs("1", 1, mean=-0.150, spread=0.02, metric="rmse"),
+        _from_diffs("2", 2, mean=0.026, spread=0.30, metric="r"),
+    ]
+    got = corrected_fields(members, "bonferroni")
+    assert len(got) == 3
+    for entry in got.values():
+        assert entry["family_size"] == 4
+        assert entry["family"] == {"comparisons": 2, "metrics": 2}
+        assert entry["correction_level"] == pytest.approx(0.05 / 4)
+
+
+def test_holm_ranks_within_whatever_family_size_it_is_handed():
+    """Holm's level is α/(m−i+1), so a larger m makes rank 1 tighter. Passing a
+    size the members did not imply is exactly what the hypothesis family does."""
+    strong, weak = _two_member_family()
+    got = corrected_for([strong, weak], "holm", 5, {"hypotheses": 5})
+    levels = sorted(e["correction_level"] for e in got.values())
+    assert levels == [pytest.approx(0.05 / 5), pytest.approx(0.05 / 4)]
 
 
 def test_holm_corrects_the_weakest_member_by_nothing():

@@ -1067,10 +1067,16 @@ def test_declared_report_by_is_checked_rather_than_refused(write_config):
     assert "E-STATS-REPORTBY-UNKNOWN" in found
 
 
-def test_a_declared_hypothesis_is_refused(write_config):
-    assert "E-HYPOTHESIS-UNSUPPORTED" in codes(
+def test_a_declared_hypothesis_is_checked_rather_than_refused(write_config):
+    """S5b retires the blanket refusal and checks the declaration for real: `cli`
+    now evaluates every declared hypothesis and writes its verdict, so a bare
+    `metric: r` is `E-HYPOTHESIS-METRIC` — it names no step — rather than the
+    retired `-UNSUPPORTED`."""
+    found = codes(
         write_config({"hypotheses": [{"id": "h1", "metric": "r", "direction": "greater"}]})
     )
+    assert "E-HYPOTHESIS-UNSUPPORTED" not in found
+    assert "E-HYPOTHESIS-METRIC" in found
 
 
 def test_empty_declarations_are_not_refused(write_config):
@@ -2009,3 +2015,612 @@ def test_two_thin_report_by_levels_are_diagnosed_in_a_stable_order(write_config,
         "level `f` of `sex` would hold 2 of 12 units, below limits.min_reported_n (5)",
         "level `m` of `sex` would hold 3 of 12 units, below limits.min_reported_n (5)",
     ]
+
+
+def test_a_non_list_hypotheses_block_is_refused_without_raising(write_config):
+    """`validate.py` collects and never raises. S4c shipped two crashes from a
+    nested config value reaching a reader, and `hypotheses` is a new one."""
+    for block in (5, True, "h1", {"id": "h1"}):
+        assert "E-CONFIG-SHAPE" in codes(write_config({"hypotheses": block}))
+
+
+def test_a_hypothesis_with_compare_and_no_metric_is_refused(write_config):
+    """`reference.md`: "a contrast reports a value per step metric, so the
+    quantity under test is unnamed"."""
+    found = codes(write_config({
+        "sweep": _TWO_CONDITIONS,
+        "statistics": {"contrasts": [{"id": "x", "of": "method=spearman",
+                                      "against": "baseline"}]},
+        "hypotheses": [{"id": "h", "kind": "confirmatory", "compare": {"contrast": "x"},
+                        "direction": "greater", "threshold": 0.0}],
+    }))
+    assert "E-HYPOTHESIS-METRIC" in found
+
+
+_TWO_SCOPE_EXPERIMENT = """\
+from publishable import BaseExperiment, BaseStep
+
+
+class Step01Measure(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        return {}
+
+
+class Step02Combine(BaseStep):
+    scope = "summary"
+
+    def run(self, cfg, io):
+        return {}
+
+
+class CohortPilotExperiment(BaseExperiment):
+    steps = [Step01Measure, Step02Combine]
+"""
+
+
+@pytest.fixture
+def write_config_two_scopes(git_repo: Path, write_config):
+    """`write_config`, but the entrypoint declares a repeat step and a summary
+    step — so `validate` can tell which scope a hypothesis's metric belongs to.
+    Modelled on `write_config_nondet`, which is the same pattern for a different
+    step property."""
+
+    def _write(overrides: dict | None = None) -> Path:
+        path = write_config(overrides)
+        write_experiment_module(git_repo, _TWO_SCOPE_EXPERIMENT)
+        return path
+
+    return _write
+
+
+_THREE_SCOPE_EXPERIMENT = """\
+from publishable import BaseExperiment, BaseStep
+
+
+class Step01Measure(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        return {}
+
+
+class Step02Fit(BaseStep):
+    scope = "condition"
+
+    def run(self, cfg, io):
+        return {}
+
+
+class Step03Combine(BaseStep):
+    scope = "summary"
+
+    def run(self, cfg, io):
+        return {}
+
+
+class CohortPilotExperiment(BaseExperiment):
+    steps = [Step01Measure, Step02Fit, Step03Combine]
+"""
+
+
+@pytest.fixture
+def write_config_three_scopes(git_repo: Path, write_config):
+    """`write_config_two_scopes`, plus a `condition`-scoped step — needed to pin
+    the bound-exists/inference-base scope gate's exact membership: `{"summary"}`
+    is exempt, but `"condition"` is not, and no fixture declared a
+    `condition`-scoped step until now, so a mutation widening the gate to also
+    exempt `condition` scope had nothing in the suite to fail against it."""
+
+    def _write(overrides: dict | None = None) -> Path:
+        path = write_config(overrides)
+        write_experiment_module(git_repo, _THREE_SCOPE_EXPERIMENT)
+        return path
+
+    return _write
+
+
+def test_a_summary_metric_hypothesis_may_not_declare_compare(write_config_two_scopes):
+    """`reference.md`: "a summary metric is one value per run, not a contrast
+    between conditions — and a condition-step metric without `compare` is the
+    same mistake inverted"."""
+    found = codes(write_config_two_scopes({
+        "sweep": _TWO_CONDITIONS,
+        "hypotheses": [{"id": "h", "kind": "confirmatory",
+                        "metric": "step02_combine.agreement",
+                        "compare": {"condition": "method=spearman", "to": "baseline"},
+                        "direction": "greater", "threshold": 0.9}],
+    }))
+    assert "E-HYPOTHESIS-FORM" in found
+
+
+def test_a_condition_metric_hypothesis_must_declare_compare(write_config_two_scopes):
+    """The same mistake inverted: a metric of a repeat-scoped step names a
+    quantity that only exists per condition, so a hypothesis about it has to say
+    which conditions it compares."""
+    found = codes(write_config_two_scopes({
+        "sweep": _TWO_CONDITIONS,
+        "hypotheses": [{"id": "h", "kind": "confirmatory",
+                        "metric": "step01_measure.r",
+                        "direction": "greater", "threshold": 0.5}],
+    }))
+    assert "E-HYPOTHESIS-FORM" in found
+
+
+def test_a_hypothesis_naming_an_undeclared_step_is_refused_as_a_metric_fault(
+    write_config_two_scopes,
+):
+    """A `metric` naming a step outside the entrypoint's `steps` list is folded
+    into `E-HYPOTHESIS-METRIC`, the same code a missing metric gets, rather than
+    a third identifier: in both cases the quantity under test does not exist."""
+    found = codes(write_config_two_scopes({
+        "sweep": _TWO_CONDITIONS,
+        "hypotheses": [{"id": "h", "kind": "confirmatory",
+                        "metric": "step99_nonexistent.r",
+                        "compare": {"condition": "method=spearman", "to": "baseline"},
+                        "direction": "greater", "threshold": 0.5}],
+    }))
+    assert "E-HYPOTHESIS-METRIC" in found
+    assert "E-HYPOTHESIS-FORM" not in found
+
+
+def test_a_mistyped_direction_is_refused_rather_than_silently_inverted(write_config_two_scopes):
+    """Task 4 review: a `direction` outside `{greater, less}` was read as `less`
+    and never echoed into the record, so a typo silently inverted the verdict.
+    The refusal belongs at `validate` time, closing that gap for good."""
+    found = codes(write_config_two_scopes({
+        "sweep": _TWO_CONDITIONS,
+        "hypotheses": [{"id": "h", "kind": "confirmatory",
+                        "metric": "step01_measure.r",
+                        "compare": {"condition": "method=spearman", "to": "baseline"},
+                        "direction": "greatr", "threshold": 0.5}],
+    }))
+    assert "E-HYPOTHESIS-DIRECTION" in found
+
+
+def test_a_valid_direction_is_not_flagged(write_config_two_scopes):
+    found = codes(write_config_two_scopes({
+        "sweep": _TWO_CONDITIONS,
+        "hypotheses": [{"id": "h", "kind": "confirmatory",
+                        "metric": "step01_measure.r",
+                        "compare": {"condition": "method=spearman", "to": "baseline"},
+                        "direction": "less", "threshold": 0.5}],
+    }))
+    assert "E-HYPOTHESIS-DIRECTION" not in found
+
+
+def test_a_mistyped_evaluate_on_is_refused_rather_than_silently_read_as_an_upper_bound(
+    write_config_two_scopes,
+):
+    """`evaluate_on` is a documented enum (`observed | ci95_lower | ci95_upper`),
+    but the evaluator reads anything other than `observed`/`ci95_lower` as
+    `ci95_upper` — the same silent-misread shape as `direction`, so it gets the
+    same refusal."""
+    found = codes(write_config_two_scopes({
+        "sweep": _TWO_CONDITIONS,
+        "hypotheses": [{"id": "h", "kind": "confirmatory",
+                        "metric": "step01_measure.r",
+                        "compare": {"condition": "method=spearman", "to": "baseline"},
+                        "direction": "greater", "threshold": 0.5,
+                        "evaluate_on": "ci95_lowerr"}],
+    }))
+    assert "E-HYPOTHESIS-EVALUATE-ON" in found
+
+
+def test_a_valid_evaluate_on_is_not_flagged(write_config_two_scopes):
+    found = codes(write_config_two_scopes({
+        "sweep": _TWO_CONDITIONS,
+        "hypotheses": [{"id": "h", "kind": "confirmatory",
+                        "metric": "step01_measure.r",
+                        "compare": {"condition": "method=spearman", "to": "baseline"},
+                        "direction": "greater", "threshold": 0.5,
+                        "evaluate_on": "ci95_lower"}],
+    }))
+    assert "E-HYPOTHESIS-EVALUATE-ON" not in found
+
+
+def test_a_hypothesis_entry_that_is_not_a_mapping_is_refused_as_a_metric_fault(write_config):
+    """`hypotheses: [not-a-mapping]` is still a list — `_check_shape` has nothing to
+    say about it — so `_check_hypotheses` must refuse a non-mapping entry itself
+    rather than call `.get` on it, the same class of crash `_check_contrasts`
+    guards against for `statistics.contrasts`."""
+    found = codes(write_config({
+        "sweep": _TWO_CONDITIONS,
+        "hypotheses": ["not-a-mapping"],
+    }))
+    assert "E-HYPOTHESIS-METRIC" in found
+
+
+def test_a_hypothesis_compared_to_baseline_needs_a_declared_baseline(write_config_two_scopes):
+    """`reference.md` § Validation, "Hypothesis needs baseline":
+    `hypotheses[0].compare.to: baseline` but `sweep.baseline` is not declared.
+    Nothing populates a `vs_baseline` comparison without one, so the hypothesis
+    would silently resolve to no observation rather than being refused up front."""
+    found = codes(write_config_two_scopes({
+        "hypotheses": [{"id": "h", "kind": "confirmatory",
+                        "metric": "step01_measure.r",
+                        "compare": {"condition": "method=spearman", "to": "baseline"},
+                        "direction": "greater", "threshold": 0.5}],
+    }))
+    assert "E-HYPOTHESIS-BASELINE" in found
+
+
+def test_a_hypothesis_compared_to_a_declared_baseline_is_not_flagged(write_config_two_scopes):
+    found = codes(write_config_two_scopes({
+        "sweep": _TWO_CONDITIONS,
+        "hypotheses": [{"id": "h", "kind": "confirmatory",
+                        "metric": "step01_measure.r",
+                        "compare": {"condition": "method=spearman", "to": "baseline"},
+                        "direction": "greater", "threshold": 0.5}],
+    }))
+    assert "E-HYPOTHESIS-BASELINE" not in found
+    assert "E-HYPOTHESIS-COMPARE-TO" not in found
+
+
+def test_a_hypothesis_compared_to_something_other_than_the_baseline_is_refused(
+    write_config_two_scopes,
+):
+    """`compare.to` has one value. `hypotheses.resolve` never reads the field —
+    it reads the `vs_baseline` block for the named condition whatever `to` says
+    — so an unrefused `to: method=kendall` is evaluated against the baseline and
+    the record shows a verdict for a comparison the config did not ask for. A
+    claim against another *condition* is a `statistics.contrasts` entry, named
+    through `compare.contrast`."""
+    found = codes(write_config_two_scopes({
+        "sweep": _TWO_CONDITIONS,
+        "hypotheses": [{"id": "h", "kind": "confirmatory",
+                        "metric": "step01_measure.r",
+                        "compare": {"condition": "method=spearman", "to": "method=kendall"},
+                        "direction": "greater", "threshold": 0.5}],
+    }))
+    assert "E-HYPOTHESIS-COMPARE-TO" in found
+
+
+def test_a_sweep_without_a_baseline_still_needs_one_for_a_baseline_comparison(
+    write_config_two_scopes,
+):
+    """The pair above varies two things at once — the whole `sweep` block *and*
+    its `baseline` — so `has_baseline = bool(doc.get("sweep"))` passed the entire
+    suite. This one holds `sweep` present, with a grid, and varies only
+    `baseline`: under that mutant a config declaring a grid and no baseline
+    validates clean and comes back `supported: null` after the full run, which is
+    exactly the case `E-HYPOTHESIS-BASELINE` exists to refuse."""
+    grid_only = {"grid": {"analysis.method": ["spearman"]}}
+    hypothesis = {"id": "h", "kind": "confirmatory",
+                  "metric": "step01_measure.r",
+                  "compare": {"condition": "method=spearman", "to": "baseline"},
+                  "direction": "greater", "threshold": 0.5}
+    found = codes(write_config_two_scopes({"sweep": grid_only, "hypotheses": [hypothesis]}))
+    assert "E-HYPOTHESIS-BASELINE" in found
+    with_baseline = codes(write_config_two_scopes({
+        "sweep": {**grid_only, "baseline": {"analysis.method": "pearson"}},
+        "hypotheses": [hypothesis],
+    }))
+    assert "E-HYPOTHESIS-BASELINE" not in with_baseline
+
+
+def test_a_hypothesis_naming_an_undeclared_condition_is_refused(write_config_two_scopes):
+    """`_check_contrasts` resolves `of`/`against` against `expand(doc)`'s labels;
+    nothing did the same for `compare.condition`. A typo'd label validated clean,
+    `hypotheses.resolve` looked it up and found nothing, and the verdict read
+    `observed: null, supported: null` with nothing saying why."""
+    found = codes(write_config_two_scopes({
+        "sweep": _TWO_CONDITIONS,
+        "hypotheses": [{"id": "h", "kind": "confirmatory",
+                        "metric": "step01_measure.r",
+                        "compare": {"condition": "method=spearmen", "to": "baseline"},
+                        "direction": "greater", "threshold": 0.5}],
+    }))
+    assert "E-HYPOTHESIS-CONDITION" in found
+
+
+def test_a_hypothesis_naming_the_baseline_itself_is_refused(write_config_two_scopes):
+    """`vs_baseline` holds one entry per *other* condition — a baseline has no
+    comparison against itself — so naming it resolves to no observation exactly
+    as a typo does, and gets the same code."""
+    found = codes(write_config_two_scopes({
+        "sweep": _TWO_CONDITIONS,
+        "hypotheses": [{"id": "h", "kind": "confirmatory",
+                        "metric": "step01_measure.r",
+                        "compare": {"condition": "baseline", "to": "baseline"},
+                        "direction": "greater", "threshold": 0.5}],
+    }))
+    assert "E-HYPOTHESIS-CONDITION" in found
+
+
+def test_a_hypothesis_naming_a_declared_condition_is_not_flagged(write_config_two_scopes):
+    found = codes(write_config_two_scopes({
+        "sweep": _TWO_CONDITIONS,
+        "hypotheses": [{"id": "h", "kind": "confirmatory",
+                        "metric": "step01_measure.r",
+                        "compare": {"condition": "method=spearman", "to": "baseline"},
+                        "direction": "greater", "threshold": 0.5}],
+    }))
+    assert "E-HYPOTHESIS-CONDITION" not in found
+
+
+def test_a_sweep_expand_cannot_read_leaves_the_condition_unchecked_rather_than_raising(
+    write_config_two_scopes,
+):
+    """`validate` collects and never raises. `expand` raises `TypeError` on an
+    axis whose values are a scalar rather than a list — `_check_sweep`'s finding
+    to make — so the label test skips instead of turning one bad indent into a
+    traceback out of `validate_config`."""
+    found = codes(write_config_two_scopes({
+        "sweep": {"baseline": {"analysis.method": "pearson"},
+                  "grid": {"analysis.method": "spearman"}},
+        "hypotheses": [{"id": "h", "kind": "confirmatory",
+                        "metric": "step01_measure.r",
+                        "compare": {"condition": "method=spearman", "to": "baseline"},
+                        "direction": "greater", "threshold": 0.5}],
+    }))
+    assert "E-HYPOTHESIS-CONDITION" not in found
+    assert found  # the sweep's own shape finding, not silence
+
+
+def test_a_hypothesis_kind_outside_the_two_is_refused(write_config_two_scopes):
+    """The third member of the `direction`/`evaluate_on` triple, and the one with
+    no runtime guard at all: `_is_counted` tests `== "confirmatory"`, so
+    `confirmatry` — or an omitted `kind` — drops a pre-registered claim out of its
+    correction family and decides it on the raw, *tighter* bound. The error
+    direction is over-support, so an absent `kind` is refused rather than
+    defaulted."""
+    for kind in ("confirmatry", None):
+        hypothesis = {"id": "h", "metric": "step01_measure.r",
+                      "compare": {"condition": "method=spearman", "to": "baseline"},
+                      "direction": "greater", "threshold": 0.5}
+        if kind is not None:
+            hypothesis["kind"] = kind
+        found = codes(write_config_two_scopes({
+            "sweep": _TWO_CONDITIONS, "hypotheses": [hypothesis],
+        }))
+        assert "E-HYPOTHESIS-KIND" in found
+
+
+def test_both_declared_kinds_are_accepted(write_config_two_scopes):
+    for kind in ("confirmatory", "exploratory"):
+        found = codes(write_config_two_scopes({
+            "sweep": _TWO_CONDITIONS,
+            "hypotheses": [{"id": "h", "kind": kind,
+                            "metric": "step01_measure.r",
+                            "compare": {"condition": "method=spearman", "to": "baseline"},
+                            "direction": "greater", "threshold": 0.5}],
+        }))
+        assert "E-HYPOTHESIS-KIND" not in found
+
+
+def test_a_hypothesis_with_no_direction_is_refused(write_config_two_scopes):
+    """`verdict_for` sets `supported` only for `greater`/`less`, so an omitted
+    `direction` behaves exactly as a typo'd one — `supported: null` after the
+    whole run, with nothing in the record saying why. Same field, same code."""
+    found = codes(write_config_two_scopes({
+        "sweep": _TWO_CONDITIONS,
+        "hypotheses": [{"id": "h", "kind": "confirmatory",
+                        "metric": "step01_measure.r",
+                        "compare": {"condition": "method=spearman", "to": "baseline"},
+                        "threshold": 0.5}],
+    }))
+    assert "E-HYPOTHESIS-DIRECTION" in found
+
+
+def test_a_missing_or_non_numeric_threshold_is_refused(write_config_two_scopes):
+    """`verdict_for` compares against an `int`/`float` that is not a `bool` and
+    nothing else, so a missing threshold — or `true`, or a string — is a
+    pre-registered claim that comes back unevaluated. `E-HYPOTHESIS-THRESHOLD`
+    mirrors that predicate exactly, so validate refuses what the evaluator
+    declines to judge."""
+    for threshold in (None, True, "0.5"):
+        hypothesis = {"id": "h", "kind": "confirmatory",
+                      "metric": "step01_measure.r",
+                      "compare": {"condition": "method=spearman", "to": "baseline"},
+                      "direction": "greater"}
+        if threshold is not None:
+            hypothesis["threshold"] = threshold
+        found = codes(write_config_two_scopes({
+            "sweep": _TWO_CONDITIONS, "hypotheses": [hypothesis],
+        }))
+        assert "E-HYPOTHESIS-THRESHOLD" in found
+
+
+def test_a_zero_threshold_is_accepted(write_config_two_scopes):
+    """`reference.md`'s own superiority form is `threshold: 0.0` — the check is a
+    type test, not a truthiness test."""
+    found = codes(write_config_two_scopes({
+        "sweep": _TWO_CONDITIONS,
+        "hypotheses": [{"id": "h", "kind": "confirmatory",
+                        "metric": "step01_measure.r",
+                        "compare": {"condition": "method=spearman", "to": "baseline"},
+                        "direction": "greater", "threshold": 0.0}],
+    }))
+    assert "E-HYPOTHESIS-THRESHOLD" not in found
+
+
+def test_a_hypothesis_naming_an_undeclared_contrast_is_refused(write_config_two_scopes):
+    """`reference.md` § Validation, "Hypothesis names a real contrast":
+    `hypotheses[1].compare.contrast` is `invariance`, which `statistics.contrasts`
+    does not declare."""
+    found = codes(write_config_two_scopes({
+        "statistics": {"contrasts": [{"id": "x", "of": "method=spearman",
+                                      "against": "baseline"}]},
+        "hypotheses": [{"id": "h", "kind": "confirmatory",
+                        "metric": "step01_measure.r",
+                        "compare": {"contrast": "invariance"},
+                        "direction": "greater", "threshold": 0.5}],
+    }))
+    assert "E-HYPOTHESIS-CONTRAST" in found
+
+
+def test_a_hypothesis_naming_a_declared_contrast_is_not_flagged(write_config_two_scopes):
+    found = codes(write_config_two_scopes({
+        "sweep": _TWO_CONDITIONS,
+        "statistics": {"contrasts": [{"id": "x", "of": "method=spearman",
+                                      "against": "baseline"}]},
+        "hypotheses": [{"id": "h", "kind": "confirmatory",
+                        "metric": "step01_measure.r",
+                        "compare": {"contrast": "x"},
+                        "direction": "greater", "threshold": 0.5}],
+    }))
+    assert "E-HYPOTHESIS-CONTRAST" not in found
+
+
+def test_a_bound_hypothesis_is_refused_when_no_metric_could_carry_an_interval(
+    write_config_two_scopes,
+):
+    """`reference.md` § Validation, "Hypothesis bound exists": `evaluate_on` names
+    a bound, but `data.units` is undeclared and template `generic` defines no
+    `aggregate` (checked directly: `GenericTemplate` does not override
+    `BaseTemplate.aggregate`), so no metric this run computes can carry an
+    interval — `write_config`'s base document never declares `data.units`.
+    `sweep: _TWO_CONDITIONS` declares a baseline so this fixture doesn't also
+    trip `E-HYPOTHESIS-BASELINE`, keeping the assertion isolated to one rule.
+    The metric is `step01_measure.r`, a `repeat`-scoped step, deliberately not
+    the `summary`-scoped `step02_combine.agreement`: a summary metric could be
+    a `reported: true` `Estimate` core never inspects the step body to rule
+    out, and `reference.md` (§ What a hypothesis is tested against) says that
+    per-metric exception is "settled when the step returns", not here — a
+    `repeat`-scoped metric has no such exception, so this fixture can't be read
+    as accidentally exercising it."""
+    found = codes(write_config_two_scopes({
+        "sweep": _TWO_CONDITIONS,
+        "hypotheses": [{"id": "h", "kind": "confirmatory",
+                        "metric": "step01_measure.r",
+                        "compare": {"condition": "method=spearman", "to": "baseline"},
+                        "direction": "greater", "threshold": 0.5,
+                        "evaluate_on": "ci95_lower"}],
+    }))
+    assert "E-HYPOTHESIS-BOUND" in found
+
+
+def test_a_bound_hypothesis_is_not_flagged_once_units_are_declared(write_config_two_scopes):
+    """The discriminating half of the bound-exists rule: once `data.units` is
+    declared, a metric derived over the unit table can carry an interval, so the
+    same `evaluate_on: ci95_lower` no longer names an impossible bound."""
+    found = codes(write_config_two_scopes({
+        "sweep": _TWO_CONDITIONS,
+        "data.units": {"from": "index.csv", "key": "patient_id"},
+        "hypotheses": [{"id": "h", "kind": "confirmatory",
+                        "metric": "step01_measure.r",
+                        "compare": {"condition": "method=spearman", "to": "baseline"},
+                        "direction": "greater", "threshold": 0.5,
+                        "evaluate_on": "ci95_lower"}],
+    }))
+    assert "E-HYPOTHESIS-BOUND" not in found
+
+
+def test_a_hypothesis_with_no_inference_base_warns_rather_than_refuses(
+    write_config_two_scopes,
+):
+    """`reference.md` § Validation, "Hypothesis has an inference base": the same
+    impossible-interval condition as the bound-exists rule, but with no bound
+    requested — a config that would otherwise be fine, since `evaluate_on` is
+    absent. Every metric will be `basis: repeats`: reportable, but not testable
+    against an interval. `step01_measure.r`, not `step02_combine.agreement`, for
+    the same reason the bound-exists fixture above avoids the summary step: a
+    `repeat`-scoped metric can never be a `reported: true` `Estimate`, so
+    "every metric will be `basis: repeats`" is unambiguously true of it."""
+    found = codes(write_config_two_scopes({
+        "sweep": _TWO_CONDITIONS,
+        "hypotheses": [{"id": "h", "kind": "confirmatory",
+                        "metric": "step01_measure.r",
+                        "compare": {"condition": "method=spearman", "to": "baseline"},
+                        "direction": "greater", "threshold": 0.5}],
+    }))
+    assert "W-HYPOTHESIS-INFERENCE-BASE" in found
+    assert "E-HYPOTHESIS-BOUND" not in found
+
+
+def test_a_hypothesis_with_an_inference_base_is_not_warned(write_config_two_scopes):
+    """Once `data.units` is declared, the same hypothesis has a real inference
+    base — the warning is specific to the case where none exists."""
+    found = codes(write_config_two_scopes({
+        "sweep": _TWO_CONDITIONS,
+        "data.units": {"from": "index.csv", "key": "patient_id"},
+        "hypotheses": [{"id": "h", "kind": "confirmatory",
+                        "metric": "step01_measure.r",
+                        "compare": {"condition": "method=spearman", "to": "baseline"},
+                        "direction": "greater", "threshold": 0.5}],
+    }))
+    assert "W-HYPOTHESIS-INFERENCE-BASE" not in found
+
+
+def test_a_summary_metric_bound_is_not_refused_even_with_no_units(write_config_two_scopes):
+    """`reference.md` § What a hypothesis is tested against: a `scope: "summary"`
+    metric can be a `reported: true` `Estimate` a step supplies directly, with
+    its own real `ci95` and no unit table involved — core never inspects the
+    step body to know whether *this* one does. `command_run` treats
+    `E-HYPOTHESIS-BOUND` as a hard stop, so applying the two-condition
+    (`data.units` undeclared, template has no `aggregate`) test to a
+    `scope: "summary"` metric would permanently refuse a design the spec
+    explicitly permits (`A hypothesis may name a summary metric`), not merely
+    defer it — so the bound-exists check does not fire for one, and neither
+    does the inference-base warning."""
+    found = codes(write_config_two_scopes({
+        "hypotheses": [{"id": "h", "kind": "confirmatory",
+                        "metric": "step02_combine.agreement",
+                        "direction": "greater", "threshold": 0.99,
+                        "evaluate_on": "ci95_lower"}],
+    }))
+    assert "E-HYPOTHESIS-BOUND" not in found
+    assert "W-HYPOTHESIS-INFERENCE-BASE" not in found
+
+
+def test_a_summary_metric_hypothesis_gets_no_inference_base_warning(write_config_two_scopes):
+    """The scope gate on `W-HYPOTHESIS-INFERENCE-BASE` is justified by the
+    warning's own premise, not the error's hard-stop argument (a warning never
+    stops a run) — "every metric will be `basis: repeats`" is false for a
+    `scope: "summary"` metric that turns out to be a `reported: true`
+    `Estimate`: it is `reported`, carries its own interval, and is exactly what
+    `evaluate_on` can test. No `evaluate_on` here (unlike the bound-exists
+    fixture above), so this exercises the warning branch specifically rather
+    than the error branch."""
+    found = codes(write_config_two_scopes({
+        "hypotheses": [{"id": "h", "kind": "confirmatory",
+                        "metric": "step02_combine.agreement",
+                        "direction": "greater", "threshold": 0.9}],
+    }))
+    assert "W-HYPOTHESIS-INFERENCE-BASE" not in found
+    assert "E-HYPOTHESIS-BOUND" not in found
+
+
+def test_a_dotless_metric_is_refused_once_even_when_it_names_a_real_step(
+    write_config_two_scopes,
+):
+    """`metric.partition(".")` on a dotless value like `step01_measure` returns
+    `("step01_measure", "", "")` — `step` still resolves to the real, declared
+    `repeat`-scoped step, even though `name` is empty and the metric is
+    definitely malformed (no `.metric` half to name a quantity with). Before
+    the bound/warning block was moved behind the `metric_is_well_formed` guard,
+    this let it read that real `scope` and fire `E-HYPOTHESIS-BOUND` (or the
+    warning) *alongside* `E-HYPOTHESIS-METRIC`, reporting one fault under two
+    codes — the double-report `_check_hypotheses`'s own docstring says a
+    hypothesis with two *distinct* faults should report, but a single
+    malformed `metric` is one fault, not two."""
+    found = codes(write_config_two_scopes({
+        "hypotheses": [{"id": "h", "kind": "confirmatory",
+                        "metric": "step01_measure",
+                        "direction": "greater", "threshold": 0.5,
+                        "evaluate_on": "ci95_lower"}],
+    }))
+    assert "E-HYPOTHESIS-METRIC" in found
+    assert "E-HYPOTHESIS-BOUND" not in found
+    assert "W-HYPOTHESIS-INFERENCE-BASE" not in found
+
+
+def test_a_condition_scoped_bound_is_still_refused(write_config_three_scopes):
+    """The scope gate exempts exactly `{None, "summary"}`, not "anything but
+    `repeat`" — a `scope: "condition"` metric has no reported-`Estimate`
+    exception either (that mechanism is `summary`-only), so the bound-exists
+    check must still fire for one. Needs `write_config_three_scopes`: no
+    existing fixture declared a `condition`-scoped step, so a mutation that
+    widened the gate to also exempt `condition` scope had nothing in the suite
+    to catch it."""
+    found = codes(write_config_three_scopes({
+        "sweep": _TWO_CONDITIONS,
+        "hypotheses": [{"id": "h", "kind": "confirmatory",
+                        "metric": "step02_fit.score",
+                        "compare": {"condition": "method=spearman", "to": "baseline"},
+                        "direction": "greater", "threshold": 0.5,
+                        "evaluate_on": "ci95_lower"}],
+    }))
+    assert "E-HYPOTHESIS-BOUND" in found
