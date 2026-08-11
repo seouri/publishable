@@ -377,9 +377,9 @@ Each row states the condition, not the wording.
 | `data.input_dir` or `data.output_dir` is empty | `E-DATA-REQUIRED` |
 | `data.input_dir` is not a directory, or is a directory with nothing in it | `E-DATA-UNREADABLE` |
 | A hypothesis's `compare.to` is `baseline` and `sweep.baseline` is not declared | `E-HYPOTHESIS-BASELINE` |
-| A hypothesis names a metric whose scope is not `summary`, sets `evaluate_on` to `ci95_lower` or `ci95_upper`, and no metric this run computes could ever carry an interval — `data.units` is undeclared and the template defines no `aggregate` | `E-HYPOTHESIS-BOUND` |
+| Once the entrypoint has imported and the metric's step is one it declares, a hypothesis names a metric whose scope is not `summary`, sets `evaluate_on` to `ci95_lower` or `ci95_upper`, and no metric this run computes could ever carry an interval — `data.units` is undeclared and the template defines no `aggregate` | `E-HYPOTHESIS-BOUND` |
 | A hypothesis's `compare` declares `to`, and its value is not `baseline` | `E-HYPOTHESIS-COMPARE-TO` |
-| A hypothesis's `compare.condition` names a label the run's `sweep` does not declare, or names the baseline's own label — checked only once a baseline is declared, since `E-HYPOTHESIS-BASELINE` already covers the case where none is | `E-HYPOTHESIS-CONDITION` |
+| A hypothesis's `compare.condition` names a label the run's `sweep` does not declare, or names the baseline's own label — checked only once a baseline is declared, since `E-HYPOTHESIS-BASELINE` already covers the case where none is, and only once `sweep` expands cleanly enough to resolve condition labels at all | `E-HYPOTHESIS-CONDITION` |
 | A hypothesis's `compare.contrast` names an `id` `statistics.contrasts` does not declare | `E-HYPOTHESIS-CONTRAST` |
 | A hypothesis's `direction` is missing or is a value other than `greater` or `less` | `E-HYPOTHESIS-DIRECTION` |
 | A hypothesis's `evaluate_on` is set and is a value other than `observed`, `ci95_lower`, or `ci95_upper` — unset (`null`) is accepted, since `observed` is the documented default | `E-HYPOTHESIS-EVALUATE-ON` |
