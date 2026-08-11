@@ -2553,7 +2553,7 @@ exists to prevent one level up. A hypothesis core could not evaluate is not a hy
 refuted.
 
 The second route needs a comparison too thin to carry an interval, which this document's worked
-pipeline — 228 units completing on both sides of its one comparison — never produces, so it is shown
+pipeline — 228 units completing on both sides of each of its two comparisons — never produces, so it is shown
 against a config of its own. A subgroup claim is the ordinary way to get there: a
 [`within` contrast](#contrasts-claims-that-arent-condition-vs-baseline) narrows the paired
 intersection to the units matching *every* level it names, and two levels together can leave one.
