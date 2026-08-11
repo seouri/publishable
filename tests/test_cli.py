@@ -10,7 +10,7 @@ import yaml
 
 from publishable import BaseStep
 from publishable.cli import _apply_execution_order, main
-from publishable.diagnostics import EXIT_INVOCATION, EXIT_OK, EXIT_WRONG
+from publishable.diagnostics import EXIT_INVOCATION, EXIT_OK, EXIT_PARTIAL, EXIT_WRONG
 from publishable.errors import ContractError
 from publishable.generators.experiment import generate_experiment
 from publishable.generators.step import generate_step
@@ -26,9 +26,11 @@ def run_a_project(
     replication: dict[str, Any] | None = None,
     capsys: pytest.CaptureFixture[str] | None = None,
     extra_steps: list[str] | None = None,
+    extra_step_source: str | None = None,
     aggregate_returns: str | None = None,
     units: int = 10,
     unit_attributes: list[str] | None = None,
+    expect_exit: int = EXIT_OK,
     **overrides: Any,
 ) -> dict[str, Any]:
     """Scaffold, configure, commit, and `run` a project end to end.
@@ -59,6 +61,15 @@ def run_a_project(
     step-major from pair-major execution, and which the single-step scaffold
     cannot express at all.
 
+    `extra_step_source` overrides the source every `extra_steps` entry is
+    generated from — `generate_step` always writes `generators.step.STEP_PY`,
+    a `repeat`-scoped stub, so this is how a caller gets a non-`repeat` scope
+    (a `summary` step, say) into a generated project at all. Monkeypatched
+    the same way `aggregate_returns` patches `experiment_gen.STARTER_STEP`
+    above, self-contained and undone before this function returns. The
+    source still goes through `STEP_PY.format(step_name=step_name)`, so a
+    literal `{` in it must be doubled unless it names `step_name` itself.
+
     `aggregate_returns` names a derived metric to produce end to end: when set,
     the scaffolded step records a `pred` column (one float per unit, `0.0`..
     `n-1`) and the template's `aggregate` returns `{aggregate_returns: mean(pred)}`
@@ -79,6 +90,14 @@ def run_a_project(
     (`E-UNITS-ATTR-MISSING`), so both halves have to be present. Both columns
     are written unconditionally because an undeclared column is simply never
     read.
+
+    `expect_exit` is the exit code `main(["run", ...])` must return, `EXIT_OK`
+    by default. A step whose `run` raises is *contained* — that execution lands
+    `status: "failed"`, the rest of the plan still runs, and `run_status` turns
+    that into `partial` and so `EXIT_PARTIAL` — so a caller provoking a step
+    contract error on purpose still gets a whole run directory to assert on,
+    and states the expected code here rather than losing the run to an
+    `EXIT_OK` assertion.
     """
     tmp_path.mkdir(parents=True, exist_ok=True)
     root = tmp_path / "proj"
@@ -117,6 +136,10 @@ def run_a_project(
             input_dir=str(data),
             output_dir=str(results_dir),
         )
+        if extra_step_source is not None:
+            import publishable.generators.step as step_gen
+
+            mp.setattr(step_gen, "STEP_PY", extra_step_source)
         for step_name in extra_steps or []:
             generate_step(repo_root=root, experiment="cohort-pilot", step_name=step_name)
         doc = yaml.safe_load(cfg.read_text())
@@ -134,7 +157,7 @@ def run_a_project(
         ):
             subprocess.run(["git", *args], cwd=root, check=True)
 
-        assert main(["run", str(cfg)]) == EXIT_OK
+        assert main(["run", str(cfg)]) == expect_exit
         captured = capsys.readouterr() if capsys is not None else None
     run_dir = next(results_dir.glob("run_*"))
     lines = (run_dir / "executions.jsonl").read_text().splitlines()
@@ -2673,3 +2696,372 @@ def test_report_by_adds_no_executions(tmp_path, capsys, monkeypatch):
     assert len(without["results"]) == 15
     assert len(without["results"]) == len(with_strata["results"])
     assert without["results"] == with_strata["results"]
+
+
+# --- W-STEP-ESTIMATE-N: an interval with no stated denominator ----------------
+#
+# `generate_step` always writes a `repeat`-scoped stub (`generators.step.STEP_PY`),
+# so a `summary`-scoped step needs `run_a_project`'s `extra_step_source` to
+# monkeypatch that module global the same way `aggregate_returns` patches
+# `experiment_gen.STARTER_STEP` — no existing test in this repo puts a
+# `summary`-scoped step through `extra_steps`, so this is that route, established
+# here rather than assumed.
+
+_ESTIMATE_SUMMARY_STEP = '''\
+# generated, and runnable as-is
+from publishable import BaseStep, Estimate
+
+
+class Step(BaseStep):
+    scope = "summary"
+
+    def run(self, cfg, io):
+        # An interval with no stated denominator, which is exactly the
+        # disclosure risk `min_reported_n` exists to catch.
+        return {{"adjusted": Estimate(value=0.031, ci95=[0.008, 0.055],
+                                      method="mixed model, REML")}}
+'''
+
+
+def test_an_estimate_with_an_interval_and_no_n_warns(tmp_path, capsys):
+    """`reference.md` § `Estimate`: "`n` is optional but its absence is
+    surfaced, because an interval with no stated denominator is exactly the
+    disclosure risk `min_reported_n` exists to catch." Optional means the run
+    completes; surfaced means it does not pass in silence."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=10,
+        extra_steps=["summarize"],
+        extra_step_source=_ESTIMATE_SUMMARY_STEP,
+    )
+    assert "W-STEP-ESTIMATE-N" in doc["stdout"]
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    entry = run["results"]["summary"]["step02_summarize"]["adjusted"]
+    assert entry["reported"] is True
+    assert entry["n"] is None
+
+
+_ESTIMATE_WITH_N_SUMMARY_STEP = '''\
+# generated, and runnable as-is
+from publishable import BaseStep, Estimate
+
+
+class Step(BaseStep):
+    scope = "summary"
+
+    def run(self, cfg, io):
+        return {{"adjusted": Estimate(value=0.031, ci95=[0.008, 0.055], n=612,
+                                      method="mixed model, REML")}}
+'''
+
+
+def test_an_estimate_with_an_n_does_not_warn(tmp_path, capsys):
+    """The other half: a stated denominator is the whole point, so supplying one
+    must be silent. A warning that fires either way teaches a reader to ignore
+    it."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=10,
+        extra_steps=["summarize"],
+        extra_step_source=_ESTIMATE_WITH_N_SUMMARY_STEP,
+    )
+    assert "W-STEP-ESTIMATE-N" not in doc["stdout"]
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["results"]["summary"]["step02_summarize"]["adjusted"]["n"] == 612
+
+
+_BARE_ESTIMATE_SUMMARY_STEP = '''\
+# generated, and runnable as-is
+from publishable import BaseStep, Estimate
+
+
+class Step(BaseStep):
+    scope = "summary"
+
+    def run(self, cfg, io):
+        return {{"adjusted": Estimate(value=0.031)}}
+'''
+
+
+def test_an_estimate_with_no_interval_does_not_warn(tmp_path, capsys):
+    """`n` is surfaced because an *interval* needs a denominator. A value with no
+    interval makes no such claim, so warning about its missing `n` would fire on
+    a shape that is entirely correct."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=10,
+        extra_steps=["summarize"],
+        extra_step_source=_BARE_ESTIMATE_SUMMARY_STEP,
+    )
+    assert "W-STEP-ESTIMATE-N" not in doc["stdout"]
+
+
+_NO_UNITS_STARTER_STEP = '''\
+# generated, and runnable as-is — deliberately never touches `io.units`
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        return {{"present": True}}
+'''
+
+
+def test_an_estimate_with_no_roster_still_warns(tmp_path, capsys, monkeypatch):
+    """`reference.md` § Units: a `summary` step still runs when `data.units` is
+    undeclared — only `io.units`/`io.units.train` become unreachable there — so
+    `W-STEP-ESTIMATE-N` must not be coupled to a roster existing. The collector it
+    warns into is created ahead of `if roster is not None:` for exactly this case.
+    """
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _NO_UNITS_STARTER_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        extra_steps=["summarize"],
+        extra_step_source=_ESTIMATE_SUMMARY_STEP,
+        data={
+            "input_dir": str(tmp_path / "data"),
+            "output_dir": str(tmp_path / "results"),
+            "input_manifest_policy": "hash_all",
+        },
+    )
+    assert "W-STEP-ESTIMATE-N" in doc["stdout"]
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "completed"
+
+
+# --- Acceptance: an author's own interval, end to end -------------------------
+#
+# The fixture header is the sibling fixtures' `# generated, and runnable as-is`
+# rather than a `# src/{pkg}/...` line: `extra_step_source` goes through
+# `STEP_PY.format(step_name=step_name)`, which knows `step_name` and nothing
+# else, so a `{pkg}` placeholder here is a `KeyError` before the run starts.
+
+_NUMPY_ESTIMATE_SUMMARY_STEP = '''\
+# generated, and runnable as-is
+import numpy as np
+
+from publishable import BaseStep, Estimate
+
+
+class Step(BaseStep):
+    scope = "summary"
+
+    def run(self, cfg, io):
+        # What a real model hands back. Uncoerced, every one of these reaches
+        # `yaml.safe_dump` and raises `RepresenterError` while writing run.yaml.
+        return {{"adjusted": Estimate(value=np.float64(0.031),
+                                      ci95=[np.float64(0.008), np.float64(0.055)],
+                                      n=np.int64(612),
+                                      method="mixed model, REML"),
+                 "converged": True}}
+'''
+
+
+def test_a_summary_estimate_reaches_run_yaml_marked_as_reported(tmp_path, capsys):
+    """The slice end to end: a summary step returns an interval it computed, and
+    the record says so. Every field survives the round trip through coercion and
+    the record assembly, and the bare value beside it stays bare."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=10,
+        extra_steps=["summarize"],
+        extra_step_source=_NUMPY_ESTIMATE_SUMMARY_STEP,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    summary = run["results"]["summary"]["step02_summarize"]
+    assert summary["adjusted"] == {
+        "value": 0.031,
+        "reported": True,
+        "ci95": [0.008, 0.055],
+        "n": 612,
+        "method": "mixed model, REML",
+    }
+    assert summary["converged"] is True
+
+
+def test_a_numpy_estimate_reaches_the_record_without_a_traceback(tmp_path, capsys):
+    """The failure mode `coerce_scalars` exists for, one level of nesting down.
+    The run completing at all is half the assertion; the types are the other
+    half, since `yaml.safe_dump` would have raised on a `numpy.float64`."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=10,
+        extra_steps=["summarize"],
+        extra_step_source=_NUMPY_ESTIMATE_SUMMARY_STEP,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "completed"
+    entry = run["results"]["summary"]["step02_summarize"]["adjusted"]
+    assert type(entry["value"]) is float
+    assert [type(v) for v in entry["ci95"]] == [float, float]
+    assert type(entry["n"]) is int
+    assert entry["value"] == 0.031
+
+
+def test_a_summary_estimate_does_not_join_the_correction_family(tmp_path, capsys, monkeypatch):
+    """`reference.md` § `Estimate`: core "never recomputes the value, never
+    resamples it, never corrects it, and never counts it in the family."
+
+    This holds structurally today — `correction.Member`s are built only from
+    comparisons, and a summary step produces none — so the test pins a property
+    that currently holds by accident. S5b's `verdict_rests_on: reported` will
+    depend on it, and a property that holds by accident and one that holds by
+    test are the same until someone edits.
+
+    The two runs must differ *only* in the summary step. `design_digest` covers
+    `data.units` and `sweep.groups` only (`hashes.py`), and `generate_step`
+    writes under `src/` and never touches `config.yaml`, so adding a step moves
+    `code_hash` and nothing the seeds are drawn from — asserted below from the
+    two `sweep.yaml` files rather than argued from the source. `_METHOD_VARYING_
+    STEP` is what gives the sweep a real numeric column to contrast; the
+    scaffold's own step records a bool, which `_is_numeric` filters out, leaving
+    no family to compare at all.
+    """
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+    sweep = {
+        "baseline": {"analysis.method": "pearson"},
+        "grid": {"analysis.method": ["spearman"]},
+    }
+    sizes = []
+    digests = []
+    code_hashes = []
+    for extra in ([], ["summarize"]):
+        doc = run_a_project(
+            tmp_path / f"run{len(extra)}",
+            capsys=capsys,
+            units=40,
+            sweep=sweep,
+            extra_steps=extra,
+            extra_step_source=_NUMPY_ESTIMATE_SUMMARY_STEP,
+        )
+        run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+        entry = _first_contrast(run, "method=spearman")
+        assert entry is not None
+        sizes.append((entry["family_size"], entry["family"]))
+        digests.append(
+            yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())["design_digest"]
+        )
+        code_hashes.append(run["code_hash"])
+        if extra:
+            # Positive assertion, without which this test passes vacuously: a
+            # misnamed fixture or a mis-set scope would leave the summary
+            # execution `failed`, its return dropped, and the family trivially
+            # equal because no `Estimate` ever entered the record.
+            reported = run["results"]["summary"]["step02_summarize"]["adjusted"]
+            assert reported["reported"] is True
+    # The whole difference between the two runs lands in `code_hash` (a file
+    # appeared under `src/`) and none of it in `design_digest`, which is what
+    # the seeds are drawn from — S4d's equivalent test had to work around the
+    # opposite, a one-sided `data.units` declaration redrawing every seed.
+    assert code_hashes[0] != code_hashes[1]
+    assert digests[0] == digests[1]
+    assert sizes[0][0] == 1
+    assert sizes[0] == sizes[1]
+
+
+# --- The two coercion refusals, produced through `main(["run", ...])` ----------
+#
+# Both identifiers were reachable only from `tests/test_coercion.py` before
+# this, and an identifier no real run produces is one refactor away from being
+# unreachable. `_coerce_estimate` checks scope before method, so the two
+# fixtures differ only on the axis under test: the scope fixture carries a
+# valid `method`, the method fixture is genuinely `summary`-scoped.
+
+_ESTIMATE_AT_REPEAT_SCOPE_STEP = '''\
+# generated, and runnable as-is
+from publishable import BaseStep, Estimate
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        return {{"adjusted": Estimate(value=0.031, ci95=[0.008, 0.055],
+                                      method="mixed model, REML")}}
+'''
+
+
+def test_an_estimate_outside_summary_scope_fails_that_execution(tmp_path, capsys):
+    """`E-STEP-ESTIMATE-SCOPE` through a real run, not just `coerce_scalars`.
+
+    What a run does with it: nothing special. A step contract error is
+    contained like any other step failure — the execution is marked `failed`
+    with the identifier in its recorded `error`, the rest of the plan runs, and
+    the run ends `partial` at `EXIT_PARTIAL`. It is *not* printed on the
+    diagnostics channel: `run.yaml`'s `execution` block is the only place it
+    surfaces.
+    """
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=10,
+        extra_steps=["summarize"],
+        extra_step_source=_ESTIMATE_AT_REPEAT_SCOPE_STEP,
+        expect_exit=EXIT_PARTIAL,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    # Every repeat execution of step02 fails, yet step01's completions keep the
+    # run off `failed` — the containment is the point.
+    assert run["status"] == "partial"
+    steps = run["execution"]["conditions"][0]["steps"]["step02_summarize"]
+    entry = next(iter(steps.values()))
+    assert entry["status"] == "failed"
+    assert "E-STEP-ESTIMATE-SCOPE" in entry["error"]
+    # Both channels: `test_an_unwritable_output_dir_is_a_diagnostic_not_a_
+    # traceback` reads stderr for `E-IO-FAILED`, so stderr is a real diagnostics
+    # channel here and "not printed" has to cover it.
+    assert "E-STEP-ESTIMATE-SCOPE" not in doc["stdout"]
+    assert "E-STEP-ESTIMATE-SCOPE" not in doc["stderr"]
+
+
+_ESTIMATE_WITHOUT_METHOD_SUMMARY_STEP = '''\
+# generated, and runnable as-is
+from publishable import BaseStep, Estimate
+
+
+class Step(BaseStep):
+    scope = "summary"
+
+    def run(self, cfg, io):
+        return {{"adjusted": Estimate(value=0.031, ci95=[0.008, 0.055])}}
+'''
+
+
+def test_an_interval_with_no_method_fails_that_execution(tmp_path, capsys):
+    """`E-STEP-ESTIMATE-METHOD` through a real run. `Estimate` itself validates
+    nothing, so the refusal has to come from coercion at the step boundary, and
+    it lands the same way the scope refusal does: one failed execution, the
+    identifier in its recorded `error`, the run `partial`."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=10,
+        extra_steps=["summarize"],
+        extra_step_source=_ESTIMATE_WITHOUT_METHOD_SUMMARY_STEP,
+        expect_exit=EXIT_PARTIAL,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "partial"
+    entry = run["execution"]["summary"]["step02_summarize"]
+    assert entry["status"] == "failed"
+    assert "E-STEP-ESTIMATE-METHOD" in entry["error"]
+    assert "E-STEP-ESTIMATE-METHOD" not in doc["stdout"]
+    assert "E-STEP-ESTIMATE-METHOD" not in doc["stderr"]
+    # A failed summary execution returns nothing, so no `reported` entry is
+    # written from a step whose contract was refused.
+    assert run["results"]["summary"]["step02_summarize"] == {}
+    # And the missing-`n` warning does not fire on an `Estimate` that never
+    # made it past coercion.
+    assert "W-STEP-ESTIMATE-N" not in doc["stdout"]

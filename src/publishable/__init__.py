@@ -8,6 +8,7 @@ from publishable.errors import (
     ContractError,
     PublishableError,
 )
+from publishable.estimate import Estimate
 from publishable.param import Param
 from publishable.templates.base import BaseTemplate
 
@@ -18,6 +19,7 @@ __all__ = [
     "BaseStep",
     "BaseTemplate",
     "ContractError",
+    "Estimate",
     "Param",
     "PublishableError",
 ]
