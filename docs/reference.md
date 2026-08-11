@@ -371,11 +371,17 @@ Each row states the condition, not the wording.
 
 | Reported when | Code |
 |---|---|
+| A key under a container `check_envelope`'s `LEAF_TYPES` table declares, or a top-level key, that the table does not name — checked with a `difflib` hint, skipping the `parameters` and `sweep` subtrees entirely since each has its own closure (`E-PARAM-UNKNOWN`, `E-SWEEP-KEY-UNKNOWN`), and never descending into a known leaf's own value (a typo inside `data.units.holdout` or a `from` mapping is `_check_shape`'s job, not this one's); a non-string YAML mapping key is coerced with `str()` first so it is still reported | `E-CONFIG-KEY-UNKNOWN` |
+| The config file does not parse as YAML, or parses to something other than a mapping | `E-CONFIG-PARSE` |
+| A top-level block, or a nested container `_check_shape` walks before its items — `data.units` and its `attributes`, `sweep.baseline`, `sweep.grid` and each axis's values, `replication.repeats` and each level, `statistics.contrasts`, `statistics.report_by` — is present and not the mapping, list, or string its position requires | `E-CONFIG-SHAPE` |
+| A leaf `check_envelope`'s `LEAF_TYPES` table declares is present and not its declared type — a `bool` never satisfies a numeric declaration, and an `int` satisfies a `float` one; unset (`null`) is treated as absent | `E-CONFIG-TYPE` |
 | `data.input_dir` or `data.output_dir` resolves inside the git repository, checked once a repo root is found | `E-DATA-IN-REPO` |
 | `data.input_dir` or `data.output_dir`, after `expanduser()`, is not an absolute path | `E-DATA-NOT-ABSOLUTE` |
 | `data.input_manifest_policy` is empty, or is a value outside the declared policies | `E-DATA-POLICY` |
 | `data.input_dir` or `data.output_dir` is empty | `E-DATA-REQUIRED` |
 | `data.input_dir` is not a directory, or is a directory with nothing in it | `E-DATA-UNREADABLE` |
+| Once no experiment was preloaded, `entrypoint` is a non-empty string, and a repository root was found for it, importing it raises anything — a `SystemExit` at module scope, `entrypoint` not shaped `<module>:<attribute>`, or any other exception; skipped without a report when no repository root exists at all, since there is then no `src/` to import from | `E-ENTRYPOINT-IMPORT` |
+| `entrypoint` is empty, or is not a string | `E-ENTRYPOINT-REQUIRED` |
 | A hypothesis's `compare.to` is `baseline` and `sweep.baseline` is not declared | `E-HYPOTHESIS-BASELINE` |
 | Once the entrypoint has imported and the metric's step is one it declares, a hypothesis names a metric whose scope is not `summary`, sets `evaluate_on` to `ci95_lower` or `ci95_upper`, and no metric this run computes could ever carry an interval — `data.units` is undeclared and the template defines no `aggregate` | `E-HYPOTHESIS-BOUND` |
 | A hypothesis's `compare` declares `to`, and its value is not `baseline` | `E-HYPOTHESIS-COMPARE-TO` |
@@ -387,6 +393,12 @@ Each row states the condition, not the wording.
 | A hypothesis's `kind` is missing or is a value other than `confirmatory` or `exploratory` | `E-HYPOTHESIS-KIND` |
 | A hypothesis entry is not a mapping, or its `metric` is missing or not a `step.metric` string, or — once the entrypoint has imported — names a step the entrypoint's `steps` list does not declare | `E-HYPOTHESIS-METRIC` |
 | A hypothesis's `threshold` is missing or is not a number — a `bool` does not count as one | `E-HYPOTHESIS-THRESHOLD` |
+| `metadata.description` or `metadata.authors` — the two fields this check covers — is empty; one finding per field, and `metadata.name` is not among them | `E-META-REQUIRED` |
+| `metadata.name` is truthy and differs from the name of the directory its config file sits in — checked regardless of `name`'s type, so a wrongly-typed truthy `name` reports this alongside `E-CONFIG-TYPE` rather than being skipped, unlike `E-NAME-PATTERN` | `E-NAME-DIR` |
+| `metadata.name` is a non-empty string that does not match the template's `naming_pattern` | `E-NAME-PATTERN` |
+| A `parameter_spec` parameter with no `default` is not declared under `parameters` | `E-PARAM-MISSING` |
+| A key under `parameters`, flattened to its dotted path, is not one `parameter_spec` declares — checked with a `difflib` hint | `E-PARAM-UNKNOWN` |
+| A value declared under `parameters`, or a value fixed by `sweep.grid`/`sweep.baseline`, fails its `Param`'s own check | `E-PARAM-VALUE` |
 | A `fold` level's `k` is `all` with no resolved roster to size it against, or is not a whole number ≥ 2 — including exactly 1, which `E-REPL-N`'s floor of 1 does not catch | `E-REPL-FOLD-K` |
 | A `fold` level's `k` exceeds the resolved unit count, which would leave a fold with nothing to test | `E-REPL-FOLD-K-TOO-LARGE` |
 | `replication.repeats` declares a `fold` level and `data.units` is not declared, so there is no roster to partition | `E-REPL-FOLD-NO-UNITS` |
@@ -411,6 +423,8 @@ Each row states the condition, not the wording.
 | `sweep` declares a key that is not one of the six recognized sweep modes (`baseline`, `grid`, `paired`, `ablate`, `sample`, `groups`) | `E-SWEEP-KEY-UNKNOWN` |
 | `sweep.grid` or `sweep.baseline` names a dotted path the template's `parameter_spec` does not declare | `E-SWEEP-PATH-UNKNOWN` |
 | A `sweep.grid` value cannot be rendered into a condition label — a `sweep.baseline` value is exempt, since it is never rendered into one | `E-SWEEP-VALUE-UNNAMEABLE` |
+| Once `experiment_type` resolves to an installed template and the shape pass found no container fault, `template.validate(doc)` yields a message — run last and ungated by earlier findings, so a cross-block rule can report on `parameters` another row already refused | `E-TEMPLATE-RULE` |
+| `experiment_type` names a template no installed package registers | `E-TEMPLATE-UNKNOWN` |
 | `data.units.attributes` names a value the source table has no column for, or — for a table source only — names a non-string item | `E-UNITS-ATTR-MISSING` |
 | `data.units.attributes` names a field of `Unit` itself (`key`, `paths`, or `attributes`), which cannot also be a declared attribute | `E-UNITS-ATTR-RESERVED` |
 | The table `data.units.from` names has no data rows, or the `glob` it names matches no files under `input_dir` | `E-UNITS-EMPTY` |
