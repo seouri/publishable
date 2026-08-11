@@ -26,6 +26,7 @@ def run_a_project(
     replication: dict[str, Any] | None = None,
     capsys: pytest.CaptureFixture[str] | None = None,
     extra_steps: list[str] | None = None,
+    extra_step_source: str | None = None,
     aggregate_returns: str | None = None,
     units: int = 10,
     unit_attributes: list[str] | None = None,
@@ -58,6 +59,15 @@ def run_a_project(
     pipeline with more than one repeat-scope step — the shape that distinguishes
     step-major from pair-major execution, and which the single-step scaffold
     cannot express at all.
+
+    `extra_step_source` overrides the source every `extra_steps` entry is
+    generated from — `generate_step` always writes `generators.step.STEP_PY`,
+    a `repeat`-scoped stub, so this is how a caller gets a non-`repeat` scope
+    (a `summary` step, say) into a generated project at all. Monkeypatched
+    the same way `aggregate_returns` patches `experiment_gen.STARTER_STEP`
+    above, self-contained and undone before this function returns. The
+    source still goes through `STEP_PY.format(step_name=step_name)`, so a
+    literal `{` in it must be doubled unless it names `step_name` itself.
 
     `aggregate_returns` names a derived metric to produce end to end: when set,
     the scaffolded step records a `pred` column (one float per unit, `0.0`..
@@ -117,6 +127,10 @@ def run_a_project(
             input_dir=str(data),
             output_dir=str(results_dir),
         )
+        if extra_step_source is not None:
+            import publishable.generators.step as step_gen
+
+            mp.setattr(step_gen, "STEP_PY", extra_step_source)
         for step_name in extra_steps or []:
             generate_step(repo_root=root, experiment="cohort-pilot", step_name=step_name)
         doc = yaml.safe_load(cfg.read_text())
@@ -2673,3 +2687,142 @@ def test_report_by_adds_no_executions(tmp_path, capsys, monkeypatch):
     assert len(without["results"]) == 15
     assert len(without["results"]) == len(with_strata["results"])
     assert without["results"] == with_strata["results"]
+
+
+# --- W-STEP-ESTIMATE-N: an interval with no stated denominator ----------------
+#
+# `generate_step` always writes a `repeat`-scoped stub (`generators.step.STEP_PY`),
+# so a `summary`-scoped step needs `run_a_project`'s `extra_step_source` to
+# monkeypatch that module global the same way `aggregate_returns` patches
+# `experiment_gen.STARTER_STEP` — no existing test in this repo puts a
+# `summary`-scoped step through `extra_steps`, so this is that route, established
+# here rather than assumed.
+
+_ESTIMATE_SUMMARY_STEP = '''\
+# generated, and runnable as-is
+from publishable import BaseStep, Estimate
+
+
+class Step(BaseStep):
+    scope = "summary"
+
+    def run(self, cfg, io):
+        # An interval with no stated denominator, which is exactly the
+        # disclosure risk `min_reported_n` exists to catch.
+        return {{"adjusted": Estimate(value=0.031, ci95=[0.008, 0.055],
+                                      method="mixed model, REML")}}
+'''
+
+
+def test_an_estimate_with_an_interval_and_no_n_warns(tmp_path, capsys):
+    """`reference.md` § `Estimate`: "`n` is optional but its absence is
+    surfaced, because an interval with no stated denominator is exactly the
+    disclosure risk `min_reported_n` exists to catch." Optional means the run
+    completes; surfaced means it does not pass in silence."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=10,
+        extra_steps=["summarize"],
+        extra_step_source=_ESTIMATE_SUMMARY_STEP,
+    )
+    assert "W-STEP-ESTIMATE-N" in doc["stdout"]
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    entry = run["results"]["summary"]["step02_summarize"]["adjusted"]
+    assert entry["reported"] is True
+    assert entry["n"] is None
+
+
+_ESTIMATE_WITH_N_SUMMARY_STEP = '''\
+# generated, and runnable as-is
+from publishable import BaseStep, Estimate
+
+
+class Step(BaseStep):
+    scope = "summary"
+
+    def run(self, cfg, io):
+        return {{"adjusted": Estimate(value=0.031, ci95=[0.008, 0.055], n=612,
+                                      method="mixed model, REML")}}
+'''
+
+
+def test_an_estimate_with_an_n_does_not_warn(tmp_path, capsys):
+    """The other half: a stated denominator is the whole point, so supplying one
+    must be silent. A warning that fires either way teaches a reader to ignore
+    it."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=10,
+        extra_steps=["summarize"],
+        extra_step_source=_ESTIMATE_WITH_N_SUMMARY_STEP,
+    )
+    assert "W-STEP-ESTIMATE-N" not in doc["stdout"]
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["results"]["summary"]["step02_summarize"]["adjusted"]["n"] == 612
+
+
+_BARE_ESTIMATE_SUMMARY_STEP = '''\
+# generated, and runnable as-is
+from publishable import BaseStep, Estimate
+
+
+class Step(BaseStep):
+    scope = "summary"
+
+    def run(self, cfg, io):
+        return {{"adjusted": Estimate(value=0.031)}}
+'''
+
+
+def test_an_estimate_with_no_interval_does_not_warn(tmp_path, capsys):
+    """`n` is surfaced because an *interval* needs a denominator. A value with no
+    interval makes no such claim, so warning about its missing `n` would fire on
+    a shape that is entirely correct."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=10,
+        extra_steps=["summarize"],
+        extra_step_source=_BARE_ESTIMATE_SUMMARY_STEP,
+    )
+    assert "W-STEP-ESTIMATE-N" not in doc["stdout"]
+
+
+_NO_UNITS_STARTER_STEP = '''\
+# generated, and runnable as-is — deliberately never touches `io.units`
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        return {{"present": True}}
+'''
+
+
+def test_an_estimate_with_no_roster_still_warns(tmp_path, capsys, monkeypatch):
+    """`reference.md` § Units: a `summary` step still runs when `data.units` is
+    undeclared — only `io.units`/`io.units.train` become unreachable there — so
+    `W-STEP-ESTIMATE-N` must not be coupled to a roster existing. The collector it
+    warns into is created ahead of `if roster is not None:` for exactly this case.
+    """
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _NO_UNITS_STARTER_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        extra_steps=["summarize"],
+        extra_step_source=_ESTIMATE_SUMMARY_STEP,
+        data={
+            "input_dir": str(tmp_path / "data"),
+            "output_dir": str(tmp_path / "results"),
+            "input_manifest_policy": "hash_all",
+        },
+    )
+    assert "W-STEP-ESTIMATE-N" in doc["stdout"]
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "completed"

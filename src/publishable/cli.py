@@ -28,6 +28,7 @@ from publishable.diagnostics import (
     Collector,
 )
 from publishable.errors import ContractError, PublishableError
+from publishable.estimate import Estimate
 from publishable.generators.experiment import generate_experiment
 from publishable.generators.step import generate_step
 from publishable.hashes import code_hash, design_digest, parameters_hash
@@ -776,6 +777,33 @@ def command_run(config_path: Path) -> int:
             c.index: {"label": c.label, "is_baseline": c.is_baseline, "values": dict(c.values)}
             for c in conditions
         }
+        # Declared here rather than only under `if roster is not None:` below: a
+        # `summary` step's `Estimate` is reachable whether or not `data.units` is
+        # declared at all (`reference.md` § Units: undeclared `data.units` still
+        # runs, it just leaves `io.units`/`io.units.train` unreachable), so the
+        # warning this collector carries must not be coupled to a roster existing.
+        aggregate_c = Collector()
+        # An `Estimate` reaches here already valid (`coerce_scalars` refused a
+        # `ci95` with no `method`, E-STEP-ESTIMATE-METHOD, and any non-`summary`
+        # scope, E-STEP-ESTIMATE-SCOPE) — the one thing left unchecked is `n`.
+        # `n` is optional (the run completes either way) but its absence beside
+        # a real `ci95` is surfaced rather than passed in silence: an interval
+        # with no stated denominator is exactly the disclosure risk
+        # `limits.min_reported_n` exists to catch, and `study add` cannot check
+        # what it cannot see. A bare `Estimate` with no `ci95` makes no interval
+        # claim at all, so it is not warned about here.
+        for r in results:
+            if r.execution.scope != "summary":
+                continue
+            for key, value in (r.returned or {}).items():
+                if isinstance(value, Estimate) and value.ci95 is not None and value.n is None:
+                    aggregate_c.warn(
+                        "W-STEP-ESTIMATE-N",
+                        f"{r.execution.step_name}.{key}",
+                        "reports a ci95 with no `n`; an interval with no stated "
+                        "denominator is the disclosure risk `limits.min_reported_n` "
+                        "exists to catch, and `study add` cannot check what it cannot see",
+                    )
         if roster is not None:
             # `condition_index` is guarded per condition: core aggregates within
             # each condition and never pools across conditions — an unguarded
@@ -799,7 +827,6 @@ def command_run(config_path: Path) -> int:
             # completed execution over one metric core couldn't compute.
             # Contained here the same way: the failure is disclosed (below)
             # and the run's other results — and `run.yaml` itself — survive.
-            aggregate_c = Collector()
             aggregated = {}
             # Kept beside `aggregated` so `vs_baseline` (below, once every
             # condition's own metrics are in) can recompute a paired interval
@@ -1269,18 +1296,22 @@ def command_run(config_path: Path) -> int:
                         "support — `ci95_corrected` is null rather than too narrow",
                     )
                 entry.update(values)
-            if aggregate_c.findings:
-                # Disclosed, not corrective: a metric that could not be computed
-                # is not the same fact as a run that did not happen, so `status`
-                # (set above from the executions themselves, all of which already
-                # completed by the time `aggregate` runs) is deliberately left
-                # alone — unlike `E-INPUT-CHANGED` below, which does set
-                # `status = "failed"` for a different reason (the data a
-                # completed run rested on is no longer what it read). This is
-                # printed to stdout only: `run.yaml` has no diagnostics channel
-                # to carry a finding that isn't a metric, an interval, or a
-                # status.
-                print(aggregate_c.render())
+        # Outside `if roster is not None:` on purpose: `aggregate_c` is created
+        # above that block precisely so a `summary` step's `W-STEP-ESTIMATE-N`
+        # still prints in a run with no roster at all, where none of the
+        # aggregate-phase code above runs and adds nothing to it.
+        if aggregate_c.findings:
+            # Disclosed, not corrective: a metric that could not be computed
+            # is not the same fact as a run that did not happen, so `status`
+            # (set above from the executions themselves, all of which already
+            # completed by the time `aggregate` runs) is deliberately left
+            # alone — unlike `E-INPUT-CHANGED` below, which does set
+            # `status = "failed"` for a different reason (the data a
+            # completed run rested on is no longer what it read). This is
+            # printed to stdout only: `run.yaml` has no diagnostics channel
+            # to carry a finding that isn't a metric, an interval, or a
+            # status.
+            print(aggregate_c.render())
         changed_inputs = verify_manifest(input_dir, manifest)  # phase 8: re-verify
         if changed_inputs:
             status = "failed"
