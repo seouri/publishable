@@ -639,22 +639,34 @@ Everything you write against — a step, a template, a resolver, a probe, a repo
 from publishable import BaseStep, Estimate, Unit, register_resolver
 ```
 
-| Name | Kind | Is |
-|---|---|---|
-| `BaseExperiment` | subclass | The ordered `steps` list, and nothing else — see [Generators](#generators) |
-| `BaseStep` | subclass | One stage: `scope`, `run(cfg, io)`, `nondeterministic`, `derive_seed` — see [Steps and artifacts](#steps-and-artifacts) |
-| `BaseTemplate` | subclass | An experiment type's `parameter_spec`, `validate`, `aggregate` — see [Templates](#templates-where-parameters-are-defined) |
-| `BaseReport` | subclass | A renderer override for one experiment — see [A report override](#a-report-override-renders-one-experiments-own-figures) |
-| `Param` | construct | One parameter's type, default, constraints, and help text — see [Templates](#templates-where-parameters-are-defined) |
-| `Unit` | construct | What a resolver yields: `key`, `paths`, `attributes` — see [Where units come from](#where-units-come-from) |
-| `Apparatus` | construct | What a probe returns: `facts` — see [The apparatus core can only observe](#the-apparatus-core-can-only-observe) |
-| `Estimate` | construct | An interval a `summary` step computed itself — see [`Estimate`](#estimate-carries-your-interval-without-core-claiming-it) |
-| `register_template` · `register_resolver` · `register_probe` · `register_writer` | decorator | The four plugin registries — see [Creating a plugin](#creating-a-plugin-publishable-plugin-new) |
-| `PublishableError` · `ContractError` · `ArtifactError` · `ArtifactExistsError` | exception | Everything core raises — see below |
+| Name | Kind | Status | Is |
+|---|---|---|---|
+| `BaseExperiment` | subclass | built | The ordered `steps` list, and nothing else — see [Generators](#generators) |
+| `BaseStep` | subclass | built | One stage: `scope`, `run(cfg, io)`, `nondeterministic`, `derive_seed` — see [Steps and artifacts](#steps-and-artifacts) |
+| `BaseTemplate` | subclass | built | An experiment type's `parameter_spec`, `validate`, `aggregate` — see [Templates](#templates-where-parameters-are-defined) |
+| `BaseReport` | subclass | not yet built | A renderer override for one experiment — see [A report override](#a-report-override-renders-one-experiments-own-figures) |
+| `Param` | construct | built | One parameter's type, default, constraints, and help text — see [Templates](#templates-where-parameters-are-defined) |
+| `Unit` | construct | built | What a resolver yields: `key`, `paths`, `attributes` — see [Where units come from](#where-units-come-from) |
+| `Apparatus` | construct | not yet built | What a probe returns: `facts` — see [The apparatus core can only observe](#the-apparatus-core-can-only-observe) |
+| `Estimate` | construct | built | An interval a `summary` step computed itself — see [`Estimate`](#estimate-carries-your-interval-without-core-claiming-it) |
+| `register_template` · `register_resolver` · `register_probe` · `register_writer` | decorator | not yet built | The four plugin registries — see [Creating a plugin](#creating-a-plugin-publishable-plugin-new) |
+| `PublishableError` · `ContractError` · `ArtifactError` · `ArtifactExistsError` | exception | built | Everything core raises — see below |
 
 **One root, and no second path to any name.** `from publishable.templates import BaseTemplate` is not a supported spelling even where it happens to work, because two import paths for one class is the [defaults-file problem](#there-is-no-separate-defaults-file) in Python: a plugin written against the deeper one breaks when core reorganizes a module it never promised to hold still. `publishable/__init__.py` is the promise; everything under it is an implementation detail, and [§ Package layout](#package-layout) is a map of core's own source rather than a second index of this table.
 
+**A row marked `not yet built` is a promise, not an export.** Importing one raises `ImportError`
+today. The rows stay because this table is the enumerated surface every plugin is written against,
+and a contract that appears only once its implementation lands is a contract nobody could have
+designed to.
+
 **`cfg` and `io` are not on it, and that's the shape of the API rather than an omission.** Both are constructed by core and handed to your `run`, already scoped — there is nothing to import and nothing to construct, which is what lets core decide what backs them. Every other name above is one you subclass, instantiate, decorate with, or catch.
+
+**The root config node carries exactly one accessor, `raw`; every nested node carries none.** That
+is a real exception to "no methods at all" and it costs one name: a top-level key named `raw` is
+unreachable through dot-access. It is at the root only, because the root is the one node core hands
+to something other than a step — `validate` and a template's `validate(config)` both need the
+underlying mapping — and a nested node has no such caller. A parameter named `raw` inside a block
+is reachable exactly as any other is.
 
 ### What you define, and what is core's
 
@@ -3054,44 +3066,54 @@ publishable/
 │   ├── errors.py              # PublishableError and the three below it, each carrying its code
 │   ├── cli.py                 # dispatch
 │   ├── scaffold.py            # `new`
-│   ├── plugin_scaffold.py     # `plugin new`
+│   ├── plugin_scaffold.py     # `plugin new` — not yet built
 │   ├── generators/            # experiment | step | template | report, incl. --plugin
 │   ├── materialize.py         # renders a fully-populated, commented config from parameter_spec
-│   ├── docs.py                # `docs`: regenerates managed README regions from live specs
+│   ├── docs.py                # `docs`: regenerates managed README regions from live specs — not yet built
 │   ├── readme_templates/      # the shipped README/CITATION.cff/LICENSE scaffolds
 │   ├── param.py               # Param: type, default, constraints, help
 │   ├── validate.py            # the value-level validation engine
 │   ├── base_experiment.py     # BaseExperiment: one ordered steps list, scopes resolved from it
 │   ├── base_step.py           # BaseStep: scope, run(cfg, io), self.condition/self.repeat,
 │   │                          #     derive_seed, nondeterministic
+│   ├── runner.py              # one execution: constructs the step, runs it, records what came back
+│   ├── coercion.py            # a step's return to a flat mapping of scalars; the Estimate exemption
 │   ├── artifacts.py           # io: scope-aware paths, atomic writes, append, record,
 │   │                          #     read_condition, exists/resumed/recorded_keys
 │   ├── sweep.py               # grid/paired/ablate/sample/groups/baseline expansion, labels, sweep.yaml
 │   ├── units.py               # unit resolution (table/glob/resolver registry), keys, attributes, partitioning
 │   ├── scope.py               # step scope resolution, execution plan, read-direction checks
-│   ├── lineage.py             # upstream run recording and chain verification
+│   ├── lineage.py             # upstream run recording and chain verification — not yet built
 │   ├── hypotheses.py          # pre-registered hypothesis evaluation, confirmatory/exploratory,
 │   │                          #     computed vs. reported verdict provenance
-│   ├── study.py               # study new/add: bundle assembly, redaction, cross-run report
+│   ├── study.py               # study new/add: bundle assembly, redaction, cross-run report — not yet built
 │   ├── replication.py         # repeat kinds (seed/batch/fold), nesting, seed derivation
-│   ├── stats.py               # unit-table inference, resample/null_test, deltas, effect sizes,
-│   │                          #     declared contrasts, reporting strata, sample weights
+│   ├── stats.py               # unit-table inference, resample/null_test, deltas, effect sizes —
+│   │                          #     the computation contrasts.py and strata.py resolve names into
+│   ├── contrasts.py           # vs_baseline and declared statistics.contrasts, resolved to comparisons
+│   ├── correction.py          # correction families: ranking, holm/bonferroni levels, corrected bounds
+│   ├── estimate.py            # Estimate: an interval a summary step computed itself
+│   ├── strata.py              # statistics.report_by: stratum levels off the roster
 │   ├── run_identity.py        # run_<id> allocation, latest symlink, resume resolution
 │   ├── hashes.py              # code_hash (src/** + templates/**), parameters_hash, digest
 │   ├── config.py              # load + dot-access Config
 │   ├── run_record.py          # run.yaml assembly; Estimate storage and attribution
 │   ├── provenance.py          # git discovery (user repo), uv env capture
 │   ├── manifest.py            # input_dir manifest build/verify, policies
-│   ├── apparatus.py           # probe registry, per-condition facts, change gate
+│   ├── apparatus.py           # probe registry, per-condition facts, change gate — not yet built
 │   ├── uv_support.py          # uv.lock copy/hash, --locked drift checks
-│   ├── secrets.py             # dotenv loading, required_env checks — never touches provenance
-│   ├── reproduce.py           # clone/checkout/sync, then report what's left to supply
-│   ├── report.py              # BaseReport: standard sections, html/markdown, override discovery
+│   ├── secrets.py             # dotenv loading, required_env checks (never touches provenance) — not yet built
+│   ├── reproduce.py           # clone/checkout/sync, then report what's left to supply — not yet built
+│   ├── report.py              # BaseReport: standard sections, html/markdown, override discovery — not yet built
 │   ├── diagnostics.py         # stable E-/W- identifiers, collected reporting, exit codes
-│   └── templates/{base.py,builtin/generic.py}
+│   └── templates/{base.py,registry.py,builtin/generic.py}
 ├── tests/
 ├── examples/generic/
 └── pyproject.toml
 ```
+
+**Modules marked `— not yet built` are specified and unbuilt.** The tree is a map of what core's
+source will hold, and a module removed from it because today's `src/` lacks it would have to be
+re-argued when its slice lands. What is built is what `src/publishable/` contains.
 
 ---

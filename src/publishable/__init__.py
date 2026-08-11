@@ -11,6 +11,7 @@ from publishable.errors import (
 from publishable.estimate import Estimate
 from publishable.param import Param
 from publishable.templates.base import BaseTemplate
+from publishable.units import Unit
 
 __all__ = [
     "ArtifactError",
@@ -22,5 +23,6 @@ __all__ = [
     "Estimate",
     "Param",
     "PublishableError",
+    "Unit",
 ]
 __version__ = "0.1.0"
