@@ -1276,7 +1276,17 @@ def command_run(config_path: Path) -> int:
                                     # costs this level's metric, never the run:
                                     # every execution is already spent, and the
                                     # whole-table call above is contained the
-                                    # same way for the same reason.
+                                    # same way for the same reason. Also the
+                                    # containment for a template returning a
+                                    # non-numeric metric: `coerce_scalars`
+                                    # accepts a `str`, so a `{"m": "high"}`
+                                    # return reaches `compute` here — the same
+                                    # resample closure — which floats
+                                    # whatever `aggregate` returned, and
+                                    # `float("high")` raises `ValueError`,
+                                    # caught below. Narrowing this to a closed
+                                    # set that drops `ValueError` reopens that
+                                    # path; see the pin in tests/test_stats.py.
                                     try:
                                         level_value = compute(level_table)
                                     except Exception as exc:

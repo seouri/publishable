@@ -275,7 +275,15 @@ def percentile_of_derived(
         table = unit_table_from_rows([{"unit": key, **collapsed[key]} for key in drawn])
         try:
             value = compute(table)
-        except Exception:  # degenerate, not caught for the real call; see above
+        # Degenerate, not caught for the real call; see above. Also the
+        # containment for a template returning a non-numeric metric:
+        # `coerce_scalars` accepts a `str`, so a `{"m": "high"}` return
+        # reaches `cli.py`'s resample closure, which floats whatever
+        # `aggregate` returned — and `float("high")` raises `ValueError` on
+        # every draw, caught here beside a degenerate `ZeroDivisionError`.
+        # Narrowing this to a closed set that drops `ValueError` reopens that
+        # path; see the pin in tests/test_stats.py.
+        except Exception:
             continue
         if value is None or (isinstance(value, float) and math.isnan(value)):
             continue
@@ -325,7 +333,14 @@ def paired_delta_of_derived(
     try:
         a = compute_of(table_of)
         b = compute_against(table_against)
-    except Exception:  # the same treatment the real call gets in percentile_of_derived
+    # The same treatment the real call gets in `percentile_of_derived`. Also
+    # the same containment for a template returning a non-numeric metric:
+    # `coerce_scalars` accepts a `str`, so a `{"m": "high"}` return reaches
+    # `cli.py`'s resample closure, which floats whatever `aggregate`
+    # returned — and `float("high")` raises `ValueError`, caught here.
+    # Narrowing this to a closed set that drops `ValueError` reopens that
+    # path; see the pin in tests/test_stats.py.
+    except Exception:
         return None
     if a is None or b is None:
         return None
@@ -379,7 +394,14 @@ def paired_percentile_of_derived(
         try:
             a = compute_of(table_a)
             b = compute_against(table_b)
-        except Exception:  # a degenerate draw, not a fault; see percentile_of_derived
+        # A degenerate draw, not a fault; see `percentile_of_derived`. Also the
+        # same containment for a template returning a non-numeric metric:
+        # `coerce_scalars` accepts a `str`, so a `{"m": "high"}` return reaches
+        # `cli.py`'s resample closure, which floats whatever `aggregate`
+        # returned — and `float("high")` raises `ValueError`, caught here.
+        # Narrowing this to a closed set that drops `ValueError` reopens that
+        # path; see the pin in tests/test_stats.py.
+        except Exception:
             continue
         if a is None or b is None:
             continue

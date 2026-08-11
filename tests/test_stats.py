@@ -837,6 +837,47 @@ def test_a_raising_compute_is_treated_as_degenerate_not_propagated():
     assert draws_used == 0  # attempted and failed, not "never attempted" — see below
 
 
+def test_a_derived_metric_returning_a_string_is_contained_not_raised() -> None:
+    """A template returning a non-numeric metric yields a null interval, not
+    a crash. `coerce_scalars` accepts a `str`, so `{"m": "high"}` reaches
+    `cli.py`'s resample closure, which floats whatever `aggregate` returned
+    (`return None if value is None else float(value)`) — and `float("high")`
+    raises `ValueError` on every single draw. `compute` here stands in for
+    that closure rather than for `aggregate` itself, because the failure is in
+    the cast the closure performs on `aggregate`'s return, not inside
+    `aggregate`.
+
+    The containment is real but incidental: it comes from the same
+    `except Exception` that exists for a degenerate arithmetic failure like
+    `ZeroDivisionError`, not for a badly-typed metric — the module docstring
+    says only "raises" without saying which exceptions. This test is what
+    makes narrowing that handler to a closed set that drops `ValueError` fail
+    loudly instead of silently reopening this path.
+
+    Narrowing specifically to `except (ValueError, ZeroDivisionError)` does
+    **not** trip this test — it still passes, because `float()` on a
+    non-numeric `str` raises `ValueError` and nothing else can reach that
+    cast: `coerce_scalars` constrains whatever `aggregate` returned to
+    `bool`/`int`/`float`/`str`/`None` before it ever reaches here, `bool`/
+    `int`/`float` convert cleanly, and `None` short-circuits before `float()`
+    is called at all. Only a narrowing that excludes `ValueError` itself
+    (`except ZeroDivisionError` alone, say — the set the *other* existing
+    pin, `test_a_raising_compute_is_treated_as_degenerate_not_propagated`,
+    alone would license) actually reopens this path.
+    """
+    collapsed = {f"u{i}": {"pred": float(i)} for i in range(10)}
+
+    def resample_fn_for_a_string_metric(units: UnitTable) -> float | None:
+        value = "high"  # what `aggregate` returning {"m": "high"} looks like
+        return None if value is None else float(value)  # cli.py's resample_fn
+
+    interval, draws_used = percentile_of_derived(
+        collapsed, resample_fn_for_a_string_metric, seed=7, draws=20
+    )
+    assert interval is None
+    assert draws_used == 0
+
+
 def test_a_derived_key_colliding_with_a_dropped_non_numeric_column_is_refused():
     """The collision check runs against every recorded column, including one
     dropped from `out` for being non-numeric — otherwise a bool column named

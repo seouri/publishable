@@ -1593,6 +1593,33 @@ def test_check_contrasts_still_refuses_a_non_list_when_called_directly():
     assert "E-STATS-CONTRAST-SHAPE" in {f.code for f in c.findings}
 
 
+def test_check_contrasts_guards_expand_when_called_directly():
+    """`_check_contrasts` calls `expand(doc)` unguarded to resolve condition
+    labels for `of`/`against`. Through `validate_config` this is unreachable:
+    `_check_sweep` calls the same pure `expand(doc)` on the same doc one line
+    earlier (`validate_config` runs it first), so any sweep malformed enough
+    to make `expand` raise already crashes there first — `_check_shape`'s
+    per-axis `list` guard does not cover a `null` axis value (`not None` is
+    how this module always treats an absent key), and `itertools.product`
+    raises `TypeError` on a `None` iterable. The guard here is for a caller
+    that reaches `_check_contrasts` directly, the same reason
+    `test_check_contrasts_still_refuses_a_non_list_when_called_directly`'s
+    own shape guard was kept rather than deleted as redundant."""
+    c = Collector()
+    _check_contrasts(
+        {
+            "sweep": {"grid": {"analysis.method": None}},
+            "statistics": {"contrasts": [{"id": "x", "of": "a", "against": "b"}]},
+        },
+        c,
+    )
+    # `conditions = []` on the guarded `expand`, not a bare early `return`: the
+    # shape checks still run and both sides resolve against an empty `labels`,
+    # so each is reported unknown rather than the whole block going unchecked.
+    codes_found = [f.code for f in c.findings]
+    assert codes_found.count("E-STATS-CONTRAST-UNKNOWN") == 2
+
+
 def test_a_scalar_contrasts_block_is_refused_once_in_the_shape_pass(write_config):
     """`_check_shape` runs first and `validate_config` early-returns on it, so a
     nested key refused there is refused for every later reader at once. Its own

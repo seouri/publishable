@@ -1095,7 +1095,22 @@ def _check_contrasts(doc: dict[str, Any], c: Collector) -> None:
         for entry in entries
         if isinstance(entry, dict) and isinstance(entry.get("id"), str) and entry["id"]
     }
-    conditions = expand(doc)
+    # Guarded the same way `_condition_labels` guards its own `expand(doc)`:
+    # `validate` collects findings and never raises. Unreachable through
+    # `validate_config` itself — `_check_sweep` calls this same pure function
+    # on this same doc one statement earlier, so any sweep malformed enough to
+    # make `expand` raise (a `null` grid axis value, past `_check_shape`'s
+    # per-axis `list` guard) already crashes there first. This guard is for a
+    # caller that reaches `_check_contrasts` directly, the same reason the
+    # `isinstance(entries, list)` guard just above was kept rather than
+    # deleted as newly redundant. `conditions = []` rather than returning:
+    # the shape and `id`-collision checks below don't need a resolved sweep at
+    # all, and every `of`/`against` correctly reports `E-STATS-CONTRAST-UNKNOWN`
+    # against an empty `labels` rather than the block going silently unchecked.
+    try:
+        conditions = expand(doc)
+    except Exception:
+        conditions = []
     labels = {cond.label for cond in conditions if cond.label is not None}
     declared_attrs = set(((doc.get("data") or {}).get("units") or {}).get("attributes") or [])
     seen_ids: set[str] = set()

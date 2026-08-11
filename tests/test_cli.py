@@ -528,6 +528,28 @@ def test_a_derived_metric_reaches_run_yaml_with_a_resampled_interval(tmp_path, m
     assert metric["cohens_d"] is None
 
 
+def test_a_non_numeric_derived_metric_is_disclosed_not_a_traceback(tmp_path, monkeypatch, capsys):
+    """A template returning `{"total": "high"}` is a scalar `coerce_scalars`
+    accepts, so it reaches `run.yaml` as the reported `value` — but the
+    resample closure floats that same return on every draw, and
+    `float("high")` fails on every one of them. The run must still complete,
+    with a null interval and a warning naming the failure, not a traceback."""
+    import publishable.generators.experiment as experiment_gen
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    monkeypatch.setattr(GenericTemplate, "aggregate", lambda self, units, cfg: {"total": "high"})
+    doc = run_a_project(tmp_path, capsys=capsys)
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "completed"
+    metric = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["total"]
+    assert metric["value"] == "high"
+    assert metric["ci95"] is None
+    assert metric["resample_draws"] == 0
+    assert "W-STATS-AGGREGATE-FAILED" in doc["stdout"]
+    assert "every resample draw failed" in doc["stdout"]
+
+
 def test_a_project_without_aggregate_records_only_the_recorded_column(tmp_path, monkeypatch):
     """The regression guard: a run whose template never overrides `aggregate`
     (the base's `{}`) must record only the recorded column, exactly as before
