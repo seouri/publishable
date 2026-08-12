@@ -252,6 +252,23 @@ class StepIO:
                 code="E-STEP-UNIT-SETTLED",
             )
 
+    def _check_unmeasured(self, unit_key: str) -> None:
+        """The other half of the rule `record`'s measurement branch already
+        enforces one direction of: a unit may be measured many times, but never
+        both measured and skipped, in either order. `record(measurement=...)`
+        refuses a unit already in `self._skipped`; this refuses the mirror —
+        `skip` on a unit already in `self._measurement_rows` — so the two call
+        orders agree. A skipped unit that also carries a measurement row would
+        be counted `ineligible` and produce a result once task 5 collapses it,
+        breaking `resolved == completed + ineligible + failed`
+        (`reference.md` § The unit table is the inference base).
+        """
+        if any(key == unit_key for key, _ in self._measurement_rows):
+            raise ContractError(
+                f"{unit_key!r} already has a measurement recorded in this execution",
+                code="E-STEP-UNIT-SETTLED",
+            )
+
     def _declared_attributes(self) -> set[str]:
         if self._units is None or len(self._units) == 0:
             return set()
@@ -281,13 +298,15 @@ class StepIO:
             if key in self._measurement_rows:
                 return  # first write wins, so a resumed measurement is idempotent too
             self._check_roster(unit_key)
-            # Only the skipped half of `_settle`'s settled-check applies here: a
-            # second measurement of one unit is the whole point of this path, so
-            # `_rows`-membership must not block it, but `io.skip` declares the unit
-            # ineligible — admitting no result by design — and a later measurement
-            # re-entering it as a completed result is exactly the accounting
-            # failure `ineligible` exists to prevent (`reference.md` § The unit
-            # table is the inference base).
+            # The rule: a unit may be measured many times, but never both measured
+            # and skipped, in either order. `_settle`'s `_rows`-membership half must
+            # not apply here — a second measurement of one unit is the whole point
+            # of this path — but the `_skipped` half still must: `io.skip` declares
+            # the unit ineligible, admitting no result by design, and a later
+            # measurement re-entering it as a completed result is exactly the
+            # accounting failure `ineligible` exists to prevent. `skip`'s
+            # `_check_unmeasured` enforces the mirror, so the two call orders agree
+            # (`reference.md` § The unit table is the inference base).
             if unit_key in self._skipped:
                 raise ContractError(
                     f"{unit_key!r} was already skipped in this execution",
@@ -340,8 +359,14 @@ class StepIO:
         self._recorded_keys.add(unit_key)
 
     def skip(self, unit_key: str, reason: str) -> None:
-        """Declare that this unit admits no result by design — `ineligible`, not `failed`."""
+        """Declare that this unit admits no result by design — `ineligible`, not `failed`.
+
+        Refused for a unit that already carries a measurement row, the mirror of
+        `record(measurement=...)` refusing an already-skipped unit: a unit may be
+        measured many times, but never both measured and skipped, in either order.
+        """
         self._settle(unit_key)
+        self._check_unmeasured(unit_key)
         self._skipped[unit_key] = reason
 
     def rows(self) -> list[dict[str, Any]]:

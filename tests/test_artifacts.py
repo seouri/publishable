@@ -507,6 +507,43 @@ def test_a_second_measurement_of_an_unskipped_unit_is_not_settled(tmp_path: Path
     assert len(io.measurement_rows()) == 2
 
 
+def test_skipping_a_measured_unit_is_settled(tmp_path: Path):
+    """The mirror of `test_measuring_a_skipped_unit_is_settled`: a unit already
+    carrying a measurement row must not then be skipped, or it would be counted
+    `ineligible` and produce a result once task 5 collapses it — the same rule,
+    the other call order."""
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    io = StepIO(
+        step_dir=sd,
+        input_dir=tmp_path / "in",
+        run_dir=tmp_path / "run",
+        measurements={"by": "read_id", "collapse": "mean"},
+    )
+    io.record("p1", {"score": 1}, measurement="r1")
+    with pytest.raises(ContractError) as e:
+        io.skip("p1", "reason")
+    assert e.value.code == "E-STEP-UNIT-SETTLED"
+    assert io.skipped == {}
+
+
+def test_skipping_an_unmeasured_unit_still_succeeds(tmp_path: Path):
+    """Control for the previous test: a unit that was never measured must still
+    be skippable — the new check must not block the ordinary case."""
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    io = StepIO(
+        step_dir=sd,
+        input_dir=tmp_path / "in",
+        run_dir=tmp_path / "run",
+        measurements={"by": "read_id", "collapse": "mean"},
+    )
+    io.skip("p1", "reason")
+    assert io.skipped == {"p1": "reason"}
+
+
 def test_a_measurement_column_matching_a_declared_attribute_is_a_key_collision(
     tmp_path: Path,
 ):
