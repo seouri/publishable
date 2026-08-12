@@ -1427,8 +1427,31 @@ def test_removing_a_boolean_the_baseline_leaves_free_is_refused(write_config):
     )
     finding = next(f for f in c.findings if f.code == "E-SWEEP-ABLATE-TARGET")
     assert finding.path == "sweep.ablate.remove[0]"
-    assert "fixes no value for" in finding.message
+    assert "fixes no *boolean* value for" in finding.message
     assert "null" in finding.message
+
+
+def test_a_non_boolean_baseline_value_is_not_a_boolean_the_remove_can_turn_off(
+    write_config,
+):
+    """The baseline *does* fix a value here — it is just not a boolean, so
+    `removal_value` still takes the `null` reading. The condition branch 2 states
+    is "no boolean value", not "no value", and this is the config that tells the
+    two apart."""
+    c = Collector()
+    validate_config(
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"analysis.drop_missing": "yes"},
+                    "ablate": {"remove": ["analysis.drop_missing"]},
+                }
+            }
+        ),
+        c,
+    )
+    finding = next(f for f in c.findings if f.code == "E-SWEEP-ABLATE-TARGET")
+    assert "fixes no *boolean* value for" in finding.message
 
 
 @pytest.mark.parametrize(

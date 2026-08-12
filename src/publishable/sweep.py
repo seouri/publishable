@@ -359,17 +359,42 @@ AXIS_MODES = ("grid", "paired", "sample")
 """The modes that are *axes*: each contributes to `_axes`'s product, and each
 varies a parameter.
 
-Named once rather than spelled out at each site, because three places now ask
-the same question of a `sweep` block — `_axes` builds the product from exactly
+Named once rather than spelled out at each site, because three places ask the
+same question of a `sweep` block — `_axes` builds the product from exactly
 these, `_swept_paths` collects their paths, and `validate`'s
-`E-SWEEP-ABLATE-CROSSED` refuses `ablate` composed with any of them. A fourth
-axis mode added to `_axes` and not to this tuple would silently become one
-`ablate` composes with, which is the rule § Expansion modes states with no
-mode named ("a second parameter axis"), so the enumeration belongs here beside
-the product rather than in the check. `baseline` is not here (it fixes values,
-it does not vary them), `ablate` is not (it applies after the product), and
-`groups` is not (it varies units, not parameters — which is exactly why
-§ Expansion modes permits `ablate × groups`).
+`E-SWEEP-ABLATE-CROSSED` refuses `ablate` composed with any of them. The rule
+§ Expansion modes states names no mode ("a second parameter axis"), so its
+enforcement should not either.
+
+**What makes that real is `SWEEP_MODES` below, not this tuple.** A mode added
+to `_axes` and not here would silently become one `ablate` composes with —
+`_axes` is not a choke point, since nothing forces a new mode through it. The
+mode *vocabulary* is one: `validate` refuses any `sweep` key outside
+`SWEEP_MODES` (`E-SWEEP-KEY-UNKNOWN`), so a seventh mode is unusable until it
+is added there, and `SWEEP_MODES` is derived from this tuple and
+`NON_AXIS_MODES` — which makes classifying it the only way to add it.
+"""
+
+NON_AXIS_MODES = ("baseline", "ablate", "groups")
+"""The modes that are not axes, each for its own reason.
+
+`baseline` fixes values rather than varying them; `ablate` applies after the
+product rather than joining it; `groups` varies units rather than parameters —
+which is exactly why § Expansion modes permits `ablate × groups` and why
+`E-SWEEP-ABLATE-CROSSED` must not fire on it.
+"""
+
+SWEEP_MODES = AXIS_MODES + NON_AXIS_MODES
+"""The six modes `sweep` may declare, per § Expansion modes.
+
+Derived rather than written out, and this is the load-bearing part: `validate`
+reads this set to refuse an unrecognised `sweep` key, so a seventh mode cannot
+be used at all until it appears here — and it can only appear here by being
+put in `AXIS_MODES` or `NON_AXIS_MODES`. Whoever adds one therefore has to say
+which it is, and `E-SWEEP-ABLATE-CROSSED` gets the right answer either way.
+The alternative — a literal set in `validate` beside a hand-maintained tuple
+here — leaves the two free to disagree, with the composition refusal
+under-firing silently while every config still validates.
 """
 
 

@@ -1,6 +1,14 @@
 import pytest
 
-from publishable.sweep import AXIS_MODES, Condition, _axes, axis_modes_present, expand
+from publishable.sweep import (
+    AXIS_MODES,
+    NON_AXIS_MODES,
+    SWEEP_MODES,
+    Condition,
+    _axes,
+    axis_modes_present,
+    expand,
+)
 
 
 def test_no_sweep_block_is_one_unlabelled_condition():
@@ -824,17 +832,25 @@ def test_ablate_declares_its_conditions_in_the_order_it_writes_them() -> None:
     assert [c.label for c in conditions] == ["baseline", "method=spearman", "labs=false"]
 
 
-def test_axis_modes_is_every_mode_that_contributes_an_axis() -> None:
-    """`AXIS_MODES` is what `validate`'s `E-SWEEP-ABLATE-CROSSED` refuses `ablate`
-    against, and § Expansion modes states that rule with no mode named ("a second
-    parameter axis"). So the tuple has to stay the set of modes `_axes` actually
-    builds a product from: a seventh mode added there and not here would silently
-    become one `ablate` composes with.
+def test_the_mode_vocabulary_is_partitioned_into_axis_and_non_axis() -> None:
+    """`SWEEP_MODES` is what `validate` refuses an unrecognised `sweep` key
+    against, which makes it the vocabulary's choke point: a seventh mode is
+    unusable until it appears there. It appears there only by being classified —
+    `SWEEP_MODES` *is* `AXIS_MODES + NON_AXIS_MODES` — so `E-SWEEP-ABLATE-CROSSED`
+    cannot be left behind by a mode someone added to `_axes` alone.
 
-    Checked from both ends — every member contributes an axis, and every mode the
-    six-mode vocabulary knows is either a member or one of the three that
-    deliberately are not (`baseline` fixes rather than varies, `ablate` applies
-    after the product, `groups` varies units)."""
+    Pinned here against § Expansion modes' literal six, because the derivation
+    guarantees the partition and only a document can say which six they are."""
+    assert set(AXIS_MODES) | set(NON_AXIS_MODES) == set(SWEEP_MODES)
+    assert set(AXIS_MODES).isdisjoint(NON_AXIS_MODES)
+    assert set(SWEEP_MODES) == {
+        "baseline",
+        "grid",
+        "paired",
+        "ablate",
+        "sample",
+        "groups",
+    }
     declarations = {
         "grid": {"analysis.method": ["pearson", "spearman"]},
         "paired": [{"analysis.method": "pearson"}, {"analysis.method": "spearman"}],
@@ -844,19 +860,13 @@ def test_axis_modes_is_every_mode_that_contributes_an_axis() -> None:
             "ranges": {"analysis.confidence": {"uniform": [0.9, 0.99]}},
         },
     }
+    # And the classification is the true one: every axis mode really does
+    # contribute an axis to the product, and no non-axis mode does.
     assert set(AXIS_MODES) == set(declarations)
     for mode, declaration in declarations.items():
         sweep = {mode: declaration}
         assert _axes(sweep, sample_seed=7), mode
         assert axis_modes_present(sweep) == [mode]
-
-    assert set(AXIS_MODES) | {"baseline", "ablate", "groups"} == {
-        "baseline",
-        "grid",
-        "paired",
-        "ablate",
-        "sample",
-        "groups",
-    }
-    for mode in ("baseline", "ablate", "groups"):
+    for mode in NON_AXIS_MODES:
         assert not _axes({mode: {"analysis.method": "pearson"}}, sample_seed=7)
+        assert axis_modes_present({mode: {"analysis.method": "pearson"}}) == []

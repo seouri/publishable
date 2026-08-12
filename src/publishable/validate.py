@@ -19,6 +19,7 @@ from publishable.replication import resolve_repeats
 from publishable.scope import step_name as _step_name
 from publishable.strata import levels_for
 from publishable.sweep import (
+    SWEEP_MODES,
     _swept_paths,
     axis_modes_present,
     check_swept_value,
@@ -1219,7 +1220,14 @@ def _check_sweep(
     import difflib
 
     sweep = doc.get("sweep") or {}
-    known = {"baseline", "grid", "paired", "ablate", "sample", "groups"}
+    # Not a literal set: `sweep.SWEEP_MODES` is `AXIS_MODES + NON_AXIS_MODES`,
+    # and this check is the vocabulary's choke point — a mode absent from it is
+    # refused here, so no config can use one. Reading the derived tuple is what
+    # makes `E-SWEEP-ABLATE-CROSSED`'s "any axis-shaped mode" true of a mode
+    # added later: it cannot become usable without being classified as an axis
+    # or not. A literal here would let the two drift, with this check accepting
+    # a mode `axis_modes_present` has never heard of.
+    known = set(SWEEP_MODES)
     for key in sweep:
         if key not in known:
             near = difflib.get_close_matches(key, sorted(known), n=1)
@@ -1415,9 +1423,13 @@ def _check_sweep(
     # § Expansion modes: "the product of 'vary one thing at a time' with a
     # second parameter axis is no longer one thing at a time, and there is no
     # defensible reading of what it would mean". The modes come from
-    # `sweep.AXIS_MODES` rather than a tuple written here, so a fourth axis mode
-    # is refused by this check the day it joins `_axes` — the rule names no mode
-    # ("a second parameter axis"), and neither should its enforcement.
+    # `sweep.AXIS_MODES` rather than a tuple written here — the rule names no
+    # mode ("a second parameter axis"), and neither should its enforcement. A
+    # mode added to `_axes` alone would still slip past this, which is why
+    # `AXIS_MODES` is not the pin: `known` above reads `SWEEP_MODES`, derived
+    # from `AXIS_MODES + NON_AXIS_MODES`, so a seventh mode is refused outright
+    # (`E-SWEEP-KEY-UNKNOWN`) until someone classifies it — and classifying it
+    # as an axis is what puts it here.
     # `groups` is deliberately absent from that set and is the row's stated
     # exception: it varies units rather than parameters, so every condition is
     # still exactly one parameter change from its own arm's baseline. (`groups`
@@ -1488,11 +1500,12 @@ def _check_sweep(
                 c.error(
                     "E-SWEEP-ABLATE-TARGET",
                     where,
-                    f"is `{path}`, which `sweep.baseline` fixes no value for — so `remove` "
-                    f"sets it to `null` rather than `false`, and it {problem.lstrip()}. "
-                    "Fix the parameter in `sweep.baseline`: an ablation is one change "
-                    "away from the baseline, so the baseline has to state what is being "
-                    "removed",
+                    f"is `{path}`, which `sweep.baseline` fixes no *boolean* value for — "
+                    "so `remove` reads the baseline, finds nothing it can turn off, and "
+                    f"sets `null` rather than `false`, which {problem.lstrip()}. "
+                    "Fix the parameter to `true` or `false` in `sweep.baseline`: an "
+                    "ablation is one change away from the baseline, so the baseline has "
+                    "to state what is being removed",
                 )
         for i, entry in enumerate(ablate.get("override") or []):
             if not isinstance(entry, dict):
