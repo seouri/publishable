@@ -27,7 +27,7 @@ def input_dir(tmp_path: Path) -> Path:
 
 
 def test_a_table_resolves_in_row_order_not_sorted(input_dir: Path):
-    units, _ = resolve_units(
+    units, _, _ = resolve_units(
         {"from": "index.csv", "key": "patient_id", "attributes": ["label", "site"]}, input_dir
     )
     assert [u.key for u in units] == ["p3", "p1", "p2"], "row order is data, not cosmetic"
@@ -36,7 +36,7 @@ def test_a_table_resolves_in_row_order_not_sorted(input_dir: Path):
 
 
 def test_declared_attributes_are_readable_directly(input_dir: Path):
-    units, _ = resolve_units(
+    units, _, _ = resolve_units(
         {"from": "index.csv", "key": "patient_id", "attributes": ["label", "site"]}, input_dir
     )
     assert units[0].site == "a"
@@ -44,7 +44,7 @@ def test_declared_attributes_are_readable_directly(input_dir: Path):
 
 
 def test_an_undeclared_column_is_not_an_attribute(input_dir: Path):
-    units, _ = resolve_units({"from": "index.csv", "key": "patient_id", "attributes": ["label"]},
+    units, _, _ = resolve_units({"from": "index.csv", "key": "patient_id", "attributes": ["label"]},
                              input_dir)
     assert "site" not in units[0].attributes
     with pytest.raises(AttributeError):
@@ -52,13 +52,13 @@ def test_an_undeclared_column_is_not_an_attribute(input_dir: Path):
 
 
 def test_a_glob_resolves_lexicographically_with_the_path_as_key(input_dir: Path):
-    units, _ = resolve_units({"from": {"glob": "**/*.dcm"}, "key": "path"}, input_dir)
+    units, _, _ = resolve_units({"from": {"glob": "**/*.dcm"}, "key": "path"}, input_dir)
     assert [u.key for u in units] == ["scans/a.dcm", "scans/b.dcm", "top.dcm"]
     assert units[0].paths == ("scans/a.dcm",)
 
 
 def test_a_non_recursive_glob_does_not_descend(input_dir: Path):
-    units, _ = resolve_units({"from": {"glob": "*.dcm"}, "key": "path"}, input_dir)
+    units, _, _ = resolve_units({"from": {"glob": "*.dcm"}, "key": "path"}, input_dir)
     assert [u.key for u in units] == ["top.dcm"]
 
 
@@ -99,7 +99,7 @@ def test_a_genuinely_missing_key_column_with_real_rows_still_reports_key_missing
 
 def test_a_one_unit_roster_still_resolves(input_dir: Path):
     (input_dir / "single.csv").write_text("patient_id\np1\n")
-    units, _ = resolve_units({"from": "single.csv", "key": "patient_id"}, input_dir)
+    units, _, _ = resolve_units({"from": "single.csv", "key": "patient_id"}, input_dir)
     assert len(units) == 1
     assert units[0].key == "p1"
 
@@ -152,7 +152,7 @@ def test_mutating_the_original_dict_after_construction_does_not_leak_in():
 
 
 def test_the_unit_list_is_exactly_four_operations(input_dir: Path):
-    units, _ = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
+    units, _, _ = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
     assert len(list(units)) == 3          # iterate, repeatably
     assert len(list(units)) == 3
     assert len(units) == 3                # len
@@ -162,7 +162,7 @@ def test_the_unit_list_is_exactly_four_operations(input_dir: Path):
 
 
 def test_slicing_is_rejected_not_silently_returning_a_list(input_dir: Path):
-    units, _ = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
+    units, _, _ = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
     with pytest.raises(ContractError) as e:
         _ = units[0:2]
     assert e.value.code == "E-STEP-UNITS-CONTRACT"
@@ -170,7 +170,7 @@ def test_slicing_is_rejected_not_silently_returning_a_list(input_dir: Path):
 
 
 def test_a_string_index_is_rejected(input_dir: Path):
-    units, _ = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
+    units, _, _ = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
     with pytest.raises(ContractError) as e:
         _ = units["p1"]  # type: ignore[call-overload]
     assert e.value.code == "E-STEP-UNITS-CONTRACT"
@@ -181,26 +181,26 @@ def test_membership_and_reversed_are_deliberately_permitted(input_dir: Path):
     # `__iter__` (membership) and `len` + integer indexing (`reversed`), so any
     # backing that satisfies the contract satisfies these for free — unlike
     # slicing, which would return a foreign type. See spec-defects.md.
-    units, _ = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
+    units, _, _ = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
     first = units[0]
     assert first in units
     assert [u.key for u in reversed(units)] == ["p2", "p1", "p3"]
 
 
 def test_train_raises_when_no_partition_is_declared(input_dir: Path):
-    units, _ = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
+    units, _, _ = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
     with pytest.raises(ContractError) as e:
         _ = units.train
     assert e.value.code == "E-STEP-UNITS-UNAVAILABLE"
 
 
 def test_units_hash_follows_order_and_content(input_dir: Path):
-    a, _ = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
-    b, _ = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
+    a, _, _ = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
+    b, _, _ = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
     assert units_hash(a) == units_hash(b)
     assert units_hash(a).startswith("sha256:")
     (input_dir / "index.csv").write_text("patient_id,label,site\np1,0,b\np3,1,a\np2,1,a\n")
-    reordered, _ = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
+    reordered, _, _ = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
     assert units_hash(reordered) != units_hash(a), "order is part of the identity"
 
 
@@ -325,7 +325,7 @@ def test_a_glob_source_reports_a_reserved_attribute_name_as_reserved(input_dir: 
 
 
 def test_a_glob_source_with_no_declared_attributes_still_resolves(input_dir: Path):
-    units, _ = resolve_units(
+    units, _, _ = resolve_units(
         {"from": {"glob": "*.dcm"}, "key": "path", "attributes": []}, input_dir
     )
     assert [u.key for u in units] == ["top.dcm"]
@@ -475,7 +475,7 @@ def test_duplicate_keys_collapse_when_measurements_is_declared(input_dir: Path):
         input_dir,
         "patient_id,read_id,depth\np1,r1,10\np1,r2,20\np2,r3,30\n",
     )
-    roster, technical_n = resolve_units(dict(_MEASURED), input_dir)
+    roster, technical_n, _ = resolve_units(dict(_MEASURED), input_dir)
     assert len(roster) == 2
     assert [u.key for u in roster] == ["p1", "p2"]
     assert technical_n == {"min": 1, "max": 2, "median": 1.5}
@@ -490,7 +490,7 @@ def test_a_csv_sourced_numeric_column_collapses_to_a_number(input_dir: Path):
     which is what keeps the predicate and the conversion from parting ways —
     narrowing back to `int` is the tidy-up that would break that."""
     _write_reads(input_dir, "patient_id,read_id,depth\np1,r1,10\np1,r2,20\n")
-    roster, _ = resolve_units(dict(_MEASURED), input_dir)
+    roster, _, _ = resolve_units(dict(_MEASURED), input_dir)
     assert roster[0].depth == 15.0
     assert isinstance(roster[0].depth, float)
 
@@ -501,7 +501,7 @@ def test_a_constant_numeric_string_column_collapses_to_a_number_too(input_dir: P
     gate. Coercing before `apply_rule` sees them is what makes the shortcut's
     numeric-rule exclusion reachable, so this answers `10.0`."""
     _write_reads(input_dir, "patient_id,read_id,depth\np1,r1,10\np1,r2,10\n")
-    roster, _ = resolve_units(dict(_MEASURED), input_dir)
+    roster, _, _ = resolve_units(dict(_MEASURED), input_dir)
     assert roster[0].depth == 10.0
     assert not isinstance(roster[0].depth, str)
 
@@ -512,7 +512,7 @@ def test_a_sum_over_csv_strings_is_a_sum_and_not_a_type_error(input_dir: Path):
     `sum` reaches a different branch of `apply_rule`."""
     _write_reads(input_dir, "patient_id,read_id,depth\np1,r1,10\np1,r2,20\n")
     decl = dict(_MEASURED, measurements={"by": "read_id", "collapse": {"depth": "sum"}})
-    roster, _ = resolve_units(decl, input_dir)
+    roster, _, _ = resolve_units(decl, input_dir)
     assert roster[0].depth == 30.0
 
 
@@ -543,7 +543,7 @@ def test_a_column_one_row_lacks_collapses_over_the_rows_that_have_it(input_dir: 
     `apply_rule`'s `values[0]` in reach of a value."""
     _write_reads(input_dir, "patient_id,read_id,depth\np1,r1,10\np1,r2\n")
     decl = dict(_MEASURED, measurements={"by": "read_id", "collapse": {"depth": "first"}})
-    roster, technical_n = resolve_units(decl, input_dir)
+    roster, technical_n, _ = resolve_units(decl, input_dir)
     assert roster[0].depth == "10"
     assert technical_n == {"min": 2, "max": 2, "median": 2}
 
@@ -561,14 +561,14 @@ def test_a_single_member_group_keeps_the_constant_shortcut(input_dir: Path):
         "attributes": ["site", "read_id"],
         "measurements": {"by": "read_id", "collapse": {"site": "mean"}},
     }
-    roster, technical_n = resolve_units(decl, input_dir)
+    roster, technical_n, _ = resolve_units(decl, input_dir)
     assert roster[0].site == "north"
     assert technical_n == {"min": 1, "max": 1, "median": 1}
 
 
 def test_the_measurement_axis_is_consumed_by_the_collapse(input_dir: Path):
     _write_reads(input_dir, "patient_id,read_id,depth\np1,r1,10\np1,r2,20\n")
-    roster, _ = resolve_units(dict(_MEASURED), input_dir)
+    roster, _, _ = resolve_units(dict(_MEASURED), input_dir)
     assert "read_id" not in roster[0].attributes
 
 
@@ -633,7 +633,7 @@ def test_the_unit_list_gains_no_new_operation(input_dir: Path):
     (`reference.md` § The unit list is three operations). `technical_n` is a
     second return value precisely so it cannot become a fourth."""
     _write_reads(input_dir, "patient_id,read_id,depth\np1,r1,10\np1,r2,20\n")
-    roster, _ = resolve_units(dict(_MEASURED), input_dir)
+    roster, _, _ = resolve_units(dict(_MEASURED), input_dir)
     assert not hasattr(roster, "technical_n")
     assert not any("technical" in name for name in vars(roster))
 
@@ -649,6 +649,6 @@ def test_duplicate_keys_still_raise_without_measurements(input_dir: Path):
 
 def test_technical_n_is_absent_when_measurements_is_undeclared(input_dir: Path):
     """A design that never measures twice must read exactly as it did before."""
-    roster, technical_n = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
+    roster, technical_n, _ = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
     assert len(roster) == 3
     assert technical_n is None

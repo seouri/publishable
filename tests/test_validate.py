@@ -1969,7 +1969,11 @@ def test_sum_over_a_real_boolean_column_is_refused(write_config):
     )
     c = Collector()
     _check_measurements(
-        {"measurements": {"by": "read_id", "collapse": {"flag": "sum"}}}, roster, None, c
+        {"measurements": {"by": "read_id", "collapse": {"flag": "sum"}}},
+        roster,
+        None,
+        frozenset({"flag", "read_id"}),
+        c,
     )
     assert "E-DATA-MEASUREMENTS-COLLAPSE-TYPE" in {f.code for f in c.findings}
 
@@ -2187,7 +2191,7 @@ _MEASURED_CSV = (
 )
 
 
-def test_a_measurements_by_declaring_nothing_is_refused_when_rows_were_collapsed(
+def test_a_measurements_by_naming_no_column_is_refused_when_rows_were_collapsed(
     write_config, tmp_path
 ):
     """The wrong-answer path retiring `E-DATA-MEASUREMENTS-UNSUPPORTED` would open.
@@ -2214,9 +2218,58 @@ def test_a_measurements_by_declaring_nothing_is_refused_when_rows_were_collapsed
     assert offending[0].path == "data.units.measurements.by"
 
 
-def test_a_by_naming_a_declared_attribute_is_accepted(write_config, tmp_path):
-    """The control the previous test needs: the same table, the same collapse, and
-    a `by` that names something — no finding, or the check refuses every config."""
+def test_the_documents_own_fence_shape_is_accepted(write_config, tmp_path):
+    """`reference.md` § What isn't a repeat and `experimental-designs.md`
+    § Technical and biological replication both print `from`/`key`/`measurements`
+    with **no `attributes` key at all**, and `design-principles.md` — the
+    tiebreaker — lists `measurements.by` beside `attributes` as a parallel namer of
+    an input field rather than a member of it. So `by` naming a real column of the
+    source table is the documented shape, and checking it against the declared
+    attributes would refuse the document's own example."""
+    (tmp_path / "input" / "index.csv").write_text(_MEASURED_CSV)
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "measurements": {"by": "read_id", "collapse": "mean"},
+            }
+        }
+    )
+    found = codes(path)
+    assert "E-UNITS-ATTR-MISSING" not in found
+    assert not [c for c in found if c.startswith("E-")], found
+
+
+def test_a_by_no_column_carries_is_refused_even_with_no_attributes_declared(
+    write_config, tmp_path
+):
+    """The control for the fence test above, and the wrong-answer path itself in
+    the shape the documents print: the same config with a typo'd `by`, which names
+    no column of `index.csv`, must still be refused."""
+    (tmp_path / "input" / "index.csv").write_text(_MEASURED_CSV)
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "measurements": {"by": "raed_id", "collapse": "mean"},
+            }
+        }
+    )
+    c = Collector()
+    validate_config(path, c)
+    offending = [f for f in c.findings if f.code == "E-UNITS-ATTR-MISSING"]
+    assert offending, {f.code for f in c.findings}
+    assert offending[0].path == "data.units.measurements.by"
+    assert "index.csv does not have" in offending[0].message
+
+
+def test_a_by_naming_a_real_column_is_accepted(write_config, tmp_path):
+    """The control the refusal needs: the same table, the same collapse, and a `by`
+    that names a real column — no finding, or the check refuses every config. Here
+    the column is also declared under `attributes`, which is legal and irrelevant:
+    the check reads the source's columns, not the declared set."""
     (tmp_path / "input" / "index.csv").write_text(_MEASURED_CSV)
     path = write_config(
         {
@@ -2323,7 +2376,10 @@ def test_a_non_mapping_measurements_block_is_still_typed(write_config):
         {"data.units": {"from": "index.csv", "key": "patient_id", "measurements": "yes"}}
     )
     found = codes(path)
-    assert "E-CONFIG-TYPE" in found or "E-DATA-MEASUREMENTS-INVALID" in found
+    # Both, not either: an `or` here would let an `E-CONFIG-TYPE` regression pass
+    # on the strength of the finding this task did not add.
+    assert "E-CONFIG-TYPE" in found
+    assert "E-DATA-MEASUREMENTS-INVALID" in found
 
 
 def test_check_measurements_called_directly_with_no_roster_still_finds_shape_faults():
@@ -2332,7 +2388,7 @@ def test_check_measurements_called_directly_with_no_roster_still_finds_shape_fau
     one that proves the `roster is None` branch skips the type half without
     skipping the shape half."""
     c = Collector()
-    _check_measurements({"measurements": {"collapse": "mean"}}, None, None, c)
+    _check_measurements({"measurements": {"collapse": "mean"}}, None, None, frozenset(), c)
     assert "E-DATA-MEASUREMENTS-INVALID" in {f.code for f in c.findings}
     assert "E-DATA-MEASUREMENTS-COLLAPSE-TYPE" not in {f.code for f in c.findings}
 

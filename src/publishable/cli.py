@@ -703,7 +703,9 @@ def command_run(config_path: Path) -> int:
     # two-route rule and which document sentence decides each). `provenance.units`
     # is documented as exactly `{n, key}`, so parking it there would invent a
     # `run.yaml` field no document describes.
-    roster, technical_n = resolve_units(units_decl, input_dir) if units_decl else (None, None)
+    roster, technical_n, _columns = (
+        resolve_units(units_decl, input_dir) if units_decl else (None, None, frozenset())
+    )
     # Carried only when the input path actually merged rows. A run whose STEP does
     # the measuring (`io.record(..., measurement=)`) has one input row per unit, so
     # an ungated `technical_n` would report `{min: 1, max: 1, median: 1}` beside a

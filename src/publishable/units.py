@@ -167,7 +167,20 @@ def _rows_from_table(path: Path) -> list[dict[str, str]]:
         return list(csv.DictReader(fh))
 
 
-def _from_table(decl: dict[str, Any], input_dir: Path, source: str) -> list[Unit]:
+def _from_table(
+    decl: dict[str, Any], input_dir: Path, source: str
+) -> tuple[list[Unit], frozenset[str]]:
+    """The units a table yields, and the column names it has.
+
+    The columns are returned rather than kept private because they are the only
+    honest reference set for `data.units.measurements.by`: `design-principles.md`
+    § The shape your input must have is derived lists `key`, `attributes`,
+    `cluster_by`, `measurements.by`, `holdout.from`, `assign.from` and
+    `stratify_by` as *parallel* namers of input fields, so `by` names a column in
+    its own right and is not a member of `attributes` — the fence in
+    `reference.md` § What isn't a repeat declares no `attributes` at all. Reading
+    the header a second time somewhere else is how the two would come to disagree.
+    """
     path = input_dir / source
     if not path.is_file():
         raise ContractError(
@@ -205,10 +218,12 @@ def _from_table(decl: dict[str, Any], input_dir: Path, source: str) -> list[Unit
     return [
         Unit(key=row[key_col], paths=(), attributes={a: row[a] for a in attrs})
         for row in rows
-    ]
+    ], frozenset(columns)
 
 
-def _from_glob(decl: dict[str, Any], pattern: str, input_dir: Path) -> list[Unit]:
+def _from_glob(
+    decl: dict[str, Any], pattern: str, input_dir: Path
+) -> tuple[list[Unit], frozenset[str]]:
     # A glob yields a key and a path and nothing else, so every name under
     # `data.units.attributes` is one this source cannot supply — `reference.md`
     # § Validation's "Attributes have a source" row states this case with this
@@ -242,26 +257,34 @@ def _from_glob(decl: dict[str, Any], pattern: str, input_dir: Path) -> list[Unit
             "a run measuring zero units has nothing to report",
             code="E-UNITS-EMPTY",
         )
-    return [Unit(key=rel, paths=(rel,), attributes={}) for rel in rels]
+    # An empty column set, not a missing one: a glob yields a key and a path and
+    # nothing else, so there is no name `measurements.by` could correctly hold.
+    return [Unit(key=rel, paths=(rel,), attributes={}) for rel in rels], frozenset()
 
 
 def resolve_units(
     units_decl: dict[str, Any], input_dir: Path
-) -> tuple[UnitList, dict[str, float] | None]:
+) -> tuple[UnitList, dict[str, float] | None, frozenset[str]]:
     """Resolve the roster, preserving the order it was resolved in.
 
-    Returns the roster and `technical_n` — the second `None` unless
-    `data.units.measurements` is declared. `technical_n` is returned *beside* the
-    roster rather than on it because `io.units` **is** a `UnitList` handed to
-    steps, and `reference.md` § The unit list is three operations promises exactly
-    iteration, `len`, and integer indexing, plus `.train`. A fourth operation
-    would be a fourth thing every future backing has to provide.
+    Returns the roster, `technical_n` — `None` unless `data.units.measurements` is
+    declared — and the source's own column names, empty under a `{glob: ...}`
+    source. Both travel *beside* the roster rather than on it because `io.units`
+    **is** a `UnitList` handed to steps, and `reference.md` § The unit list is
+    three operations promises exactly iteration, `len`, and integer indexing, plus
+    `.train`. A fourth operation would be a fourth thing every future backing has
+    to provide.
+
+    The columns are for `validate._check_measurements`, which checks
+    `measurements.by` against the columns the source actually has. They are
+    threaded from the one read `_from_table` already does rather than re-read
+    there, so the two cannot come to disagree about what the table holds.
     """
     source = units_decl.get("from")
     if isinstance(source, str):
-        units = _from_table(units_decl, input_dir, source)
+        units, columns = _from_table(units_decl, input_dir, source)
     elif isinstance(source, dict) and "glob" in source:
-        units = _from_glob(units_decl, str(source["glob"]), input_dir)
+        units, columns = _from_glob(units_decl, str(source["glob"]), input_dir)
     else:
         raise ContractError(
             f"`data.units.from` is {source!r}; expected a table name or {{glob: ...}}",
@@ -297,7 +320,7 @@ def resolve_units(
                 code="E-UNITS-KEY-DUPLICATE",
             )
         seen[u.key] = 1
-    return UnitList(units), technical_n
+    return UnitList(units), technical_n, columns
 
 
 def _measurement_axis(measurements: Any) -> str:

@@ -436,9 +436,9 @@ def validate_config(
     _check_parameters(doc, template, c)
     _check_versions(doc, template, c)
     _check_data(doc, config_path, c)
-    roster, technical_n = _check_units(doc, c)
+    roster, technical_n, columns = _check_units(doc, c)
     _check_measurements(
-        _units_declaration(doc.get("data") or {}, c) or {}, roster, technical_n, c
+        _units_declaration(doc.get("data") or {}, c) or {}, roster, technical_n, columns, c
     )
     _check_replication(
         doc,
@@ -661,7 +661,7 @@ def _units_declaration(data: dict[str, Any], c: Collector) -> dict[str, Any] | N
 
 def _check_units(
     doc: dict[str, Any], c: Collector
-) -> tuple[UnitList | None, dict[str, float] | None]:
+) -> tuple[UnitList | None, dict[str, float] | None, frozenset[str]]:
     """Resolve the roster so unit checks are real rather than deferred to run time.
 
     A `ContractError` from resolution becomes a diagnostic carrying the SAME
@@ -698,10 +698,10 @@ def _check_units(
     data = doc.get("data") or {}
     units_decl = _units_declaration(data, c)
     if units_decl is None:
-        return None, None
+        return None, None, frozenset()
     input_dir = data.get("input_dir")
     if not input_dir:
-        return None, None  # E-DATA-REQUIRED already reported by _check_data
+        return None, None, frozenset()  # E-DATA-REQUIRED already reported by _check_data
     if not isinstance(input_dir, str):
         # `check_envelope` is what REPORTS this (E-CONFIG-TYPE) — this guard
         # exists because this function may be reached without it having run: a
@@ -711,13 +711,15 @@ def _check_units(
         # already guards — the two read the same leaf for two different purposes
         # (whether the directory is usable at all vs. whether a roster resolves
         # against it), so each needs its own guard.
-        return None, None
+        return None, None, frozenset()
     path = Path(input_dir).expanduser()
     if not path.is_absolute() or not path.is_dir() or not any(path.iterdir()):
-        return None, None  # E-DATA-NOT-ABSOLUTE / E-DATA-UNREADABLE already reported by _check_data
+        # E-DATA-NOT-ABSOLUTE / E-DATA-UNREADABLE already reported by _check_data
+        return None, None, frozenset()
     source = units_decl.get("from")
     if isinstance(source, dict) and "resolver" in source:
-        return None, None  # E-DATA-RESOLVER-UNSUPPORTED already reported by _check_unimplemented
+        # E-DATA-RESOLVER-UNSUPPORTED already reported by _check_unimplemented
+        return None, None, frozenset()
     key = units_decl.get("key")
     if key is not None and not isinstance(key, str):
         # `check_envelope` is what REPORTS this (E-CONFIG-TYPE) — this guard
@@ -730,7 +732,7 @@ def _check_units(
         # this guard matching what `check_envelope` already typed the leaf as,
         # rather than only covering the unhashable subset that happens to crash
         # today.
-        return None, None
+        return None, None, frozenset()
     # `LEAF_TYPES` types `data.units.attributes` itself a `list` — and it is one
     # here, so `check_envelope` reports nothing — but names no dotted path for a
     # list ELEMENT (the same reason `sweep.grid`'s axis values aren't in the
@@ -756,22 +758,24 @@ def _check_units(
                     "data.units.attributes",
                     f"names {bad!r}, which {source} does not have",
                 )
-            return None, None
+            return None, None, frozenset()
     try:
-        # `technical_n` is passed out rather than discarded: `run` reports it, and
-        # `_check_measurements` reads its `max` to know whether the input path
-        # merged any rows at all.
-        roster, technical_n = resolve_units(units_decl, path)
-        return roster, technical_n
+        # `technical_n` and the source's columns are passed out rather than
+        # discarded: `run` reports the first, and `_check_measurements` reads its
+        # `max` to know whether the input path merged any rows at all and the
+        # second to know what `measurements.by` could name.
+        roster, technical_n, columns = resolve_units(units_decl, path)
+        return roster, technical_n, columns
     except ContractError as exc:
         c.error(exc.code, "data.units", str(exc))
-        return None, None
+        return None, None, frozenset()
 
 
 def _check_measurements(
     units: dict[str, Any],
     roster: UnitList | None,
     technical_n: dict[str, float] | None,
+    columns: frozenset[str],
     c: Collector,
 ) -> None:
     """`data.units.measurements` — shape, then `by`, then the collapse rule against the column.
@@ -825,30 +829,38 @@ def _check_measurements(
         # a wrong number rather than a missing diagnostic, which is why it is
         # refused before the block stops being refused wholesale.
         #
+        # The source's COLUMNS, never `data.units.attributes`.
+        # `design-principles.md` § The shape your input must have is derived lists
+        # `key`, `attributes`, `cluster_by`, `measurements.by`, `holdout.from`,
+        # `assign.from` and `stratify_by` as parallel namers of input fields, so
+        # `by` names a column in its own right; the fence in `reference.md`
+        # § What isn't a repeat declares no `attributes` at all, and against the
+        # declared set this check would refuse the document's own example.
+        #
         # Gated on `max > 1` rather than checked unconditionally, because the
         # same declaration serves the step path — `io.record(..., measurement=)`
         # — where the measurement identity is one the STEP invents and no input
         # column carries it. `artifacts._collapse_measurements` never reads `by`
-        # at all, so an undeclarable name there costs nothing and refusing it
+        # at all, so an unnameable axis there costs nothing and refusing it
         # would refuse a design `reference.md` § What isn't a repeat documents.
         # (Recorded in `docs/superpowers/spec-defects.md`: `by` means two
         # different things on the two paths and only the first is checkable.)
         #
-        # `E-UNITS-ATTR-MISSING`, not a second identifier: the user-facing
-        # question is the one that code already answers — is this a real
-        # attribute of a unit? — and `attributes` is the declared set.
-        attrs = units.get("attributes")
-        declared = [a for a in attrs if isinstance(a, str)] if isinstance(attrs, list) else []
-        if valid_by not in declared:
+        # `E-UNITS-ATTR-MISSING`, not a second identifier: its own row already
+        # states this predicate — "names a value the source table has no column
+        # for" — and this is that question asked about a second field.
+        if valid_by not in columns:
+            source = units.get("from")
+            where = source if isinstance(source, str) else "the unit source"
             c.error(
                 "E-UNITS-ATTR-MISSING",
                 "data.units.measurements.by",
-                f"names {valid_by!r}, which `data.units.attributes` does not declare, while "
-                f"rows sharing a key were collapsed anyway (up to {int(technical_n['max'])} "
-                "per unit). Nothing declared those rows to be measurements of one unit, so "
-                "the collapsed values average rows the design never said belonged together. "
-                "Declare the attribute that distinguishes one measurement from another, or "
-                "remove `data.units.measurements` if the repeated key is a duplicate",
+                f"names {valid_by!r}, which {where} does not have, while rows sharing a key "
+                f"were collapsed anyway (up to {int(technical_n['max'])} per unit). Nothing "
+                "distinguished those rows as measurements of one unit, so the collapsed "
+                "values average rows the design never said belonged together. Name the "
+                "column that tells one measurement of a unit from another, or remove "
+                "`data.units.measurements` if the repeated key is a duplicate",
             )
     collapse = decl.get("collapse")
     if collapse is None:
