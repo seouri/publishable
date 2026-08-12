@@ -4376,6 +4376,46 @@ def test_a_partly_fixed_baseline_is_silent_while_its_run_marks_confounded(write_
     ]
 
 
+def test_a_half_fixed_paired_axis_is_silent_with_nothing_expanded_and_a_confounded_run(
+    write_config,
+):
+    """The second silent shape § Warnings core reports now names, and the one whose
+    mechanism differs from the row's per-cell sentence.
+
+    A baseline fixing *some* of a multi-path `paired` axis's paths counts that
+    axis fixed (`sweep._baseline_cells` reads fixedness off the cells' paths and
+    takes any match), so nothing expands per cell — there is exactly ONE baseline,
+    not one per cell. Both comparisons against it differ on `analysis.min_samples`
+    *and* on `analysis.confidence`, which the baseline leaves alone, so the run
+    marks them `confounded: true` while `validate` says nothing. The row explained
+    that silence by per-cell expansion, which is false here; the three assertions
+    below are the three halves of the correction."""
+    sweep = {
+        "baseline": {"analysis.min_samples": 30},
+        "paired": [
+            {"analysis.min_samples": 10, "analysis.confidence": 0.9},
+            {"analysis.min_samples": 20, "analysis.confidence": 0.8},
+        ],
+    }
+    assert "W-SWEEP-BASELINE-CONFOUNDED" not in codes(write_config({"sweep": sweep}))
+
+    from publishable.cli import _differing_axes
+    from publishable.contrasts import resolve_contrasts
+
+    conditions = expand({"sweep": sweep})
+    assert [c.index for c in conditions if c.is_baseline] == [0]  # nothing expanded
+
+    by_index = {c.index: c for c in conditions}
+    differing = [
+        _differing_axes(by_index[m.of], by_index[m.against])
+        for m in resolve_contrasts({}, conditions)
+    ]
+    assert differing == [
+        ["analysis.min_samples", "analysis.confidence"],
+        ["analysis.min_samples", "analysis.confidence"],
+    ]
+
+
 def test_a_crossed_grid_whose_cells_each_differ_once_is_not_confounded(write_config):
     """The threshold is *more than one* differing axis, not *more than none*. A
     two-axis grid whose second axis holds only the baseline's own value produces

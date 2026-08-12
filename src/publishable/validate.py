@@ -1608,19 +1608,34 @@ def _check_sweep(
     # declaration alone decides it, so it is warnable here.
     #
     # **The condition is the row's, and it is deliberately narrower than run
-    # time.** Axes are compared over `sweep.grid`'s keys only, and only when the
-    # baseline fixes every one of them — which is the row's own "fixes a value
-    # on every axis". A baseline that leaves an axis free is a different shape:
-    # `sweep._baseline_cells` gives it one baseline per cell of the unfixed
-    # axes rather than one reference for the whole run, so the row's condition
-    # does not hold and the `all(...)` guard below skips it. That is a config
-    # core accepts, and this warning saying nothing about it is silence rather
-    # than a verdict — deliberately so, and NOT a claim that nothing is
-    # confounded there. A baseline fixing *two* of three swept axes leaves the
-    # third free, so this guard is False, while every cell that moves both fixed
-    # axes still differs from its own cell's baseline on both and is marked
-    # `confounded` at run time — measured, and pinned by
+    # time.** Axes are compared over `sweep.grid`'s keys only — `swept_axes =
+    # list(grid)`, no other mode — and only when the baseline fixes every one of
+    # them, which is the row's own "fixes a value on every axis". A baseline that
+    # leaves a *grid* axis free is a different shape: `sweep._baseline_cells`
+    # gives it one baseline per cell of the unfixed axes rather than one
+    # reference for the whole run, so the row's condition does not hold and the
+    # `all(...)` guard below skips it. That is a config core accepts, and this
+    # warning saying nothing about it is silence rather than a verdict —
+    # deliberately so, and NOT a claim that nothing is confounded there. A
+    # baseline fixing *two* of three swept axes leaves the third free, so this
+    # guard is False, while every cell that moves both fixed axes still differs
+    # from its own cell's baseline on both and is marked `confounded` at run
+    # time — measured, and pinned by
     # `test_a_partly_fixed_baseline_is_silent_while_its_run_marks_confounded`.
+    #
+    # **The per-cell mechanism above explains the `grid` case and only that
+    # one.** Two shapes are silent for a narrower reason, and stating the
+    # per-cell expansion as though it covered them would be false. First, a
+    # baseline that fixes *some* of the paths a multi-path `paired` (or
+    # `sample`) axis varies: `_baseline_cells` reads fixedness off the cells'
+    # paths and counts an axis fixed when the baseline names *any* of them, so
+    # nothing expands per cell — there is one baseline, every comparison against
+    # it differs on the paths the baseline left alone as well as the one it
+    # fixed, and the run marks them `confounded: true` while this stays quiet.
+    # Second, a `paired` axis is outside `swept_axes` whether the baseline
+    # touches it or not. Neither is a behaviour claim being made here: widening
+    # the guard is a behaviour change, and this comment's job is to say what the
+    # guard does rather than what a reader might assume from the row above it.
     #
     # **The remedy is in the message, and it is per-cell targeting that earned
     # it.** A run now takes each comparison against its own cell's baseline
@@ -1630,7 +1645,8 @@ def _check_sweep(
     # single-baseline then, and freeing an axis left the same comparison
     # `confounded` — so the message stated the fact and stopped, and the remedy
     # waited for the build to make it true rather than being hedged with build
-    # state. It is true now.
+    # state. It is true now — for a `grid` axis, which is the only kind this
+    # message is ever emitted beside, since the guard reads no other mode.
     #
     # `cli._differing_axes` instead walks the *union* of both sides' keys against
     # a sentinel, so a baseline fixing an
