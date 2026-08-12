@@ -1,6 +1,6 @@
 import pytest
 
-from publishable.sweep import Condition, expand
+from publishable.sweep import AXIS_MODES, Condition, _axes, axis_modes_present, expand
 
 
 def test_no_sweep_block_is_one_unlabelled_condition():
@@ -822,3 +822,41 @@ def test_ablate_declares_its_conditions_in_the_order_it_writes_them() -> None:
     )
 
     assert [c.label for c in conditions] == ["baseline", "method=spearman", "labs=false"]
+
+
+def test_axis_modes_is_every_mode_that_contributes_an_axis() -> None:
+    """`AXIS_MODES` is what `validate`'s `E-SWEEP-ABLATE-CROSSED` refuses `ablate`
+    against, and § Expansion modes states that rule with no mode named ("a second
+    parameter axis"). So the tuple has to stay the set of modes `_axes` actually
+    builds a product from: a seventh mode added there and not here would silently
+    become one `ablate` composes with.
+
+    Checked from both ends — every member contributes an axis, and every mode the
+    six-mode vocabulary knows is either a member or one of the three that
+    deliberately are not (`baseline` fixes rather than varies, `ablate` applies
+    after the product, `groups` varies units)."""
+    declarations = {
+        "grid": {"analysis.method": ["pearson", "spearman"]},
+        "paired": [{"analysis.method": "pearson"}, {"analysis.method": "spearman"}],
+        "sample": {
+            "n": 2,
+            "seed": 7,
+            "ranges": {"analysis.confidence": {"uniform": [0.9, 0.99]}},
+        },
+    }
+    assert set(AXIS_MODES) == set(declarations)
+    for mode, declaration in declarations.items():
+        sweep = {mode: declaration}
+        assert _axes(sweep, sample_seed=7), mode
+        assert axis_modes_present(sweep) == [mode]
+
+    assert set(AXIS_MODES) | {"baseline", "ablate", "groups"} == {
+        "baseline",
+        "grid",
+        "paired",
+        "ablate",
+        "sample",
+        "groups",
+    }
+    for mode in ("baseline", "ablate", "groups"):
+        assert not _axes({mode: {"analysis.method": "pearson"}}, sample_seed=7)

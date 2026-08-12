@@ -1192,7 +1192,8 @@ def test_an_ablate_remove_path_the_template_does_not_declare_is_refused(write_co
     creates a parameter the template never declared and runs a condition whose
     label claims a change nothing made. Same identifier as `grid`, `baseline`
     and `override` get; the *value* `remove` produces is § Validation's
-    "Ablation targets" row and a later slice's check."""
+    "Ablation targets" row, checked separately as `E-SWEEP-ABLATE-TARGET` and
+    gated behind this one, since an unknown path has no `Param` to ask."""
     c = Collector()
     validate_config(
         write_config(
@@ -1226,41 +1227,40 @@ def test_an_ablate_override_value_carrying_the_axis_separator_is_refused(write_c
     assert "E-SWEEP-VALUE-UNNAMEABLE" in found
 
 
-# The two compositions § Expansion modes rules out are UNREFUSED on this build.
-# `E-SWEEP-ABLATE-UNSUPPORTED` used to refuse any truthy `ablate` at all, so
-# retiring it (the slice's task 4) took these two with it; the checks that refuse
-# them for real are § Validation rows 217 and 218, which the next task mints.
-# These two tests are the window's mechanical handle: `xfail(strict=True)` so
-# they FAIL LOUDLY the moment the gap is closed without the marker being
-# removed, which is how the next task's reviewer confirms closure — a red/green
-# fact in a tracked file rather than a claim in a report. Neither names an
-# identifier, because the next task is instructed to grep before minting one;
-# what they assert is that `validate` refuses the config at all.
-_NO_IDENTIFIER_YET = "§ Validation rows 217/218 — refusal retired with E-SWEEP-ABLATE-UNSUPPORTED"
+def _error_codes(path: Path) -> set[str]:
+    """Every ERROR code, warnings excluded.
+
+    The composition tests below assert an exact set rather than membership: both
+    started life asserting only that *some* error was reported, and on the first
+    draft of the crossed one `E-SWEEP-BASELINE-PARTIAL` fired for an unrelated
+    reason and the loose assertion accepted it. An exact set is what proves the
+    refusal under test is the one carrying the config.
+    """
+    c = Collector()
+    validate_config(path, c)
+    return {f.code for f in c.findings if f.level == "error"}
 
 
-@pytest.mark.xfail(strict=True, reason=_NO_IDENTIFIER_YET)
 def test_ablate_without_a_baseline_is_refused(write_config):
     """§ Expansion modes: `ablate` "reads the baseline rather than re-emitting it
-    … It therefore **requires** `sweep.baseline`, which `validate` checks". Today
-    it expands to n conditions each carrying only its own change and no baseline
-    row at all — a design the specification says cannot exist."""
-    c = Collector()
-    validate_config(
-        write_config({"sweep": {"ablate": {"remove": ["analysis.drop_missing"]}}}), c
+    … It therefore **requires** `sweep.baseline`, which `validate` checks".
+    Unrefused it expands to n conditions each carrying only its own change and no
+    baseline row at all — a design the specification says cannot exist."""
+    found = _error_codes(
+        write_config({"sweep": {"ablate": {"remove": ["analysis.drop_missing"]}}})
     )
-    assert [f for f in c.findings if f.level == "error"]
+    # Exactly one error: `E-SWEEP-ABLATE-TARGET`'s baseline branch is gated on a
+    # declared baseline precisely so this config reports its one fault once.
+    assert found == {"E-SWEEP-ABLATE-BASELINE-MISSING"}
 
 
-@pytest.mark.xfail(strict=True, reason=_NO_IDENTIFIER_YET)
 def test_ablate_crossed_with_a_parameter_axis_is_refused(write_config):
     """§ Expansion modes: "the product of 'vary one thing at a time' with a second
     parameter axis is no longer one thing at a time, and there is no defensible
-    reading of what it would mean". Today it expands to the baseline, the grid's
-    rows, and the ablate rows. `E-SWEEP-PATH-DUPLICATE` does not catch it either:
-    ablated paths deliberately do not join the axis-shaped modes' set."""
-    c = Collector()
-    validate_config(
+    reading of what it would mean". Unrefused it expands to the baseline, the
+    grid's rows, and the ablate rows. `E-SWEEP-PATH-DUPLICATE` does not catch it
+    either: ablated paths deliberately do not join the axis-shaped modes' set."""
+    found = _error_codes(
         write_config(
             {
                 "sweep": {
@@ -1277,10 +1277,158 @@ def test_ablate_crossed_with_a_parameter_axis_is_refused(write_config):
                     "ablate": {"remove": ["analysis.drop_missing"]},
                 }
             }
+        )
+    )
+    assert found == {"E-SWEEP-ABLATE-CROSSED"}
+
+
+@pytest.mark.parametrize("mode", ["grid", "paired", "sample"])
+def test_ablate_is_refused_against_every_axis_shaped_mode(write_config, mode):
+    """The rule names no mode — "a second parameter axis" — so the check reads
+    `sweep.AXIS_MODES` and every member of it is pinned here rather than the one
+    § Validation's row happens to illustrate."""
+    axis = {
+        "grid": {"analysis.method": ["pearson", "spearman"]},
+        "paired": [{"analysis.method": "pearson"}, {"analysis.method": "spearman"}],
+        "sample": {
+            "n": 2,
+            "seed": 7,
+            "ranges": {"analysis.confidence": {"uniform": [0.9, 0.99]}},
+        },
+    }[mode]
+    found = _error_codes(
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {
+                        "analysis.method": "pearson",
+                        "analysis.confidence": 0.95,
+                        "analysis.drop_missing": True,
+                    },
+                    mode: axis,
+                    "ablate": {"remove": ["analysis.drop_missing"]},
+                }
+            }
+        )
+    )
+    assert "E-SWEEP-ABLATE-CROSSED" in found
+
+
+def test_ablate_composes_with_a_group_axis(write_config):
+    """§ Validation, "Ablation doesn't compose with a parameter axis": "`groups`
+    is permitted — it varies no parameter". Without this, a mutation adding
+    `groups` to `AXIS_MODES`'s crossed set passes every other test. `groups` is
+    refused on its own identifier in this build, and that is the *only* error
+    this config may carry."""
+    found = _error_codes(
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"analysis.drop_missing": True},
+                    "groups": [{"by": "cohort", "levels": ["derivation", "validation"]}],
+                    "ablate": {"remove": ["analysis.drop_missing"]},
+                }
+            }
+        )
+    )
+    assert found == {"E-SWEEP-GROUPS-UNSUPPORTED"}
+
+
+def test_a_plain_ablation_validates_clean(write_config):
+    """The legal composition, so that a check firing where it should not fails
+    here: a baseline fixing the removed boolean, one `remove`, no axis."""
+    assert (
+        _error_codes(
+            write_config(
+                {
+                    "sweep": {
+                        "baseline": {"analysis.drop_missing": True},
+                        "ablate": {"remove": ["analysis.drop_missing"]},
+                    }
+                }
+            )
+        )
+        == set()
+    )
+
+
+def test_removing_a_parameter_that_is_neither_boolean_nor_nullable_is_refused(
+    write_config,
+):
+    """§ Validation, "Ablation targets", verbatim: "`sweep.ablate.remove[0]` is
+    `analysis.min_samples` (int); `remove` needs a boolean or nullable parameter
+    — use `override`". A fact about the parameter alone, so it fires even though
+    the baseline fixes the path."""
+    c = Collector()
+    validate_config(
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"analysis.min_samples": 30},
+                    "ablate": {"remove": ["analysis.min_samples"]},
+                }
+            }
         ),
         c,
     )
-    assert [f for f in c.findings if f.level == "error"]
+    finding = next(f for f in c.findings if f.code == "E-SWEEP-ABLATE-TARGET")
+    assert finding.path == "sweep.ablate.remove[0]"
+    assert "neither a boolean nor nullable" in finding.message
+    assert "use `override`" in finding.message
+
+
+def test_removing_a_nullable_parameter_is_accepted(write_config):
+    """The other half of the row: a *nullable* parameter is a legal `remove`
+    target even though it is not a boolean. `generic` declares none, so the spec
+    is patched for the duration — without this, deleting `or param.nullable`
+    from the check fails no test at all."""
+    from publishable.param import Param
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    original = GenericTemplate.parameter_spec
+    GenericTemplate.parameter_spec = {
+        **original,
+        "analysis.tag": Param(str, default="a", nullable=True),
+    }
+    try:
+        found = _error_codes(
+            write_config(
+                {
+                    "parameters": {"analysis": {"tag": "a"}},
+                    "sweep": {
+                        "baseline": {"analysis.tag": "a"},
+                        "ablate": {"remove": ["analysis.tag"]},
+                    },
+                }
+            )
+        )
+    finally:
+        GenericTemplate.parameter_spec = original
+    assert found == set()
+
+
+def test_removing_a_boolean_the_baseline_leaves_free_is_refused(write_config):
+    """The coupling task 4 created: `sweep.removal_value` picks `false` versus
+    `null` from the baseline, having no `parameter_spec` to ask, so a boolean the
+    baseline does not fix takes the nullable reading and plants `null` at a
+    parameter that cannot hold it. The declaration is legal — it IS a boolean —
+    and only the produced value shows the fault."""
+    c = Collector()
+    validate_config(
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"analysis.method": "pearson"},
+                    "ablate": {"remove": ["analysis.drop_missing"]},
+                }
+            }
+        ),
+        c,
+    )
+    finding = next(f for f in c.findings if f.code == "E-SWEEP-ABLATE-TARGET")
+    assert finding.path == "sweep.ablate.remove[0]"
+    assert "fixes no value for" in finding.message
+    assert "null" in finding.message
 
 
 @pytest.mark.parametrize(

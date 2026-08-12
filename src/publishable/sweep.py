@@ -355,8 +355,39 @@ def _sample_cells(sample: Any, seed: int) -> list[dict[str, Any]]:
     return cells
 
 
+AXIS_MODES = ("grid", "paired", "sample")
+"""The modes that are *axes*: each contributes to `_axes`'s product, and each
+varies a parameter.
+
+Named once rather than spelled out at each site, because three places now ask
+the same question of a `sweep` block — `_axes` builds the product from exactly
+these, `_swept_paths` collects their paths, and `validate`'s
+`E-SWEEP-ABLATE-CROSSED` refuses `ablate` composed with any of them. A fourth
+axis mode added to `_axes` and not to this tuple would silently become one
+`ablate` composes with, which is the rule § Expansion modes states with no
+mode named ("a second parameter axis"), so the enumeration belongs here beside
+the product rather than in the check. `baseline` is not here (it fixes values,
+it does not vary them), `ablate` is not (it applies after the product), and
+`groups` is not (it varies units, not parameters — which is exactly why
+§ Expansion modes permits `ablate × groups`).
+"""
+
+
+def axis_modes_present(sweep: dict[str, Any]) -> list[str]:
+    """Which of `AXIS_MODES` this `sweep` actually declares, in `AXIS_MODES` order.
+
+    Truthiness, not presence: `init` and a hand-written config alike leave a
+    mode as `null` or `{}`, and an empty axis-shaped mode contributes no axis to
+    `_axes`, so it is not a second axis for anything to be composed with. An
+    empty `grid` has its own refusal (`E-SWEEP-AXIS-EMPTY`) and must not also be
+    reported as a composition fault.
+    """
+    return [mode for mode in AXIS_MODES if sweep.get(mode)]
+
+
 def _swept_paths(sweep: dict[str, Any]) -> list[str]:
-    """Every path any axis-shaped mode sweeps, in declared order.
+    """Every path any axis-shaped mode sweeps, in declared order — `AXIS_MODES`,
+    read one mode at a time because each has its own shape.
 
     `label_for` shortens these to unique suffixes, so it needs the whole set:
     a key is only unambiguous against every other swept path, not against one
@@ -388,6 +419,25 @@ def _swept_paths(sweep: dict[str, Any]) -> list[str]:
     return paths
 
 
+def removal_value(baseline: Mapping[str, Any], path: str) -> Any:
+    """What a `sweep.ablate.remove` entry sets at `path`: `false` for a boolean,
+    `null` otherwise.
+
+    Split out of `ablation_changes` so `validate` can ask what a `remove`
+    *produces* rather than re-deriving it: § Validation's "Ablation targets" row
+    is a rule about the value that lands in the condition's config, and a check
+    that reimplemented this rule would be free to disagree with the expansion it
+    is checking — the same reason `sample_fault` is shared rather than mirrored.
+
+    The baseline decides, because this module is pure and has no
+    `parameter_spec` to consult (see `ablation_changes`). A path the baseline
+    does not fix therefore takes the `null` reading, whatever its parameter is —
+    which is precisely what makes the produced value, not the declaration, the
+    thing worth checking.
+    """
+    return False if isinstance(baseline.get(path), bool) else None
+
+
 def ablation_changes(sweep: dict[str, Any]) -> list[dict[str, Any]]:
     """One `{path: value}` change per `ablate` entry, in declared order.
 
@@ -410,8 +460,10 @@ def ablation_changes(sweep: dict[str, Any]) -> list[dict[str, Any]]:
     defined against (§ Validation, "Ablation targets": every removed path is one
     the baseline fixes), so a boolean *there* is what selects `false`; anything
     else takes the nullable reading and sets `null`. A path the baseline does not
-    fix takes the same `null` reading, and is `validate`'s to refuse rather than
-    this function's to guess at.
+    fix takes the same `null` reading, and is `validate`'s to refuse
+    (`E-SWEEP-ABLATE-TARGET`, whose second branch asks this function's own
+    `removal_value` what a `remove` produces and then asks the parameter's
+    `Param` whether it may hold it) rather than this function's to guess at.
     """
     ablate = sweep.get("ablate")
     if not isinstance(ablate, dict):
@@ -421,7 +473,7 @@ def ablation_changes(sweep: dict[str, Any]) -> list[dict[str, Any]]:
     for key, block in ablate.items():
         if key == "remove":
             for path in block or []:
-                changes.append({path: False if isinstance(baseline.get(path), bool) else None})
+                changes.append({path: removal_value(baseline, path)})
         elif key == "override":
             for entry in block or []:
                 changes.append(dict(entry))

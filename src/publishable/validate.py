@@ -20,8 +20,10 @@ from publishable.scope import step_name as _step_name
 from publishable.strata import levels_for
 from publishable.sweep import (
     _swept_paths,
+    axis_modes_present,
     check_swept_value,
     expand,
+    removal_value,
     render_value,
     sample_fault,
 )
@@ -928,10 +930,13 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     does not multiply: `_check_shape` guards every shape `ablation_changes`
     reads, and `_check_sweep` checks each `override` value against its own
     `Param` on the same `E-PARAM-VALUE`/`E-SWEEP-VALUE-UNNAMEABLE` pair a `grid`
-    value gets. Its remaining composition rules — a `remove` on a parameter that
-    is neither boolean nor nullable, `ablate` without a `baseline`, and `ablate`
-    crossed with a parameter axis — are the next slice's checks, named in
-    § Validation. `.groups` is read by nothing yet. It resolves a unit roster, but
+    value gets. Its composition rules are checked there too, as of this slice —
+    a `remove` on a parameter that can hold neither `false` nor `null`
+    (`E-SWEEP-ABLATE-TARGET`), `ablate` without a `baseline`
+    (`E-SWEEP-ABLATE-BASELINE-MISSING`), and `ablate` crossed with a parameter
+    axis (`E-SWEEP-ABLATE-CROSSED`). The one § Validation row still open is
+    "Ablation baseline isn't a group level", which needs a group axis to have a
+    level for a baseline to fix. `.groups` is read by nothing yet. It resolves a unit roster, but
     several `data.units` sub-fields — allocation other than
     `within`, `assign`, `cluster_by`, `weight_by`, `measurements`, `holdout`,
     and a `resolver` source — are read by nothing yet either. Each of these
@@ -1386,18 +1391,109 @@ def _check_sweep(
     # `resolve_condition_cfg`'s `setdefault` walk, so a misspelling
     # (`remove: [analysis.methdo]`) creates a parameter this template never
     # declared and runs a condition whose label claims a change nothing made.
-    # Only the path is checked here — what `remove` *produces* is `false` or
-    # `null` depending on the parameter, which is § Validation's "Ablation
-    # targets" row ("`remove` needs a boolean or nullable parameter — use
-    # `override`") and the next slice's check to mint, not a second reading of
-    # it here. That split is why this is `_path_resolves` alone rather than
-    # `_value_checks`: the path is a question this build can already answer, the
-    # value is one that needs the row's own identifier.
+    # What `remove` then *produces* at a path that does resolve is
+    # `E-SWEEP-ABLATE-TARGET`'s question, below.
     ablate = sweep.get("ablate")
+
+    # § Expansion modes: `ablate` "reads the baseline rather than re-emitting
+    # it", so without one there is nothing for a change to be one change away
+    # *from* — "It therefore requires `sweep.baseline`, which `validate`
+    # checks". `expand` is permissive here by design (it emits n conditions
+    # each carrying only its own change), which is why the refusal lives here
+    # rather than there. Truthiness, not presence: `init` writes `ablate: null`,
+    # and a null `ablate` expands to nothing and is not a declared ablation.
+    if ablate and not baseline:
+        c.error(
+            "E-SWEEP-ABLATE-BASELINE-MISSING",
+            "sweep.ablate",
+            "is declared but `sweep.baseline` is not — an ablation is one change away "
+            "from the baseline, so there is nothing to ablate from; without one, each "
+            "ablated condition carries only its own change and the run has no reference "
+            "condition to compare against. Declare `sweep.baseline`",
+        )
+
+    # § Expansion modes: "the product of 'vary one thing at a time' with a
+    # second parameter axis is no longer one thing at a time, and there is no
+    # defensible reading of what it would mean". The modes come from
+    # `sweep.AXIS_MODES` rather than a tuple written here, so a fourth axis mode
+    # is refused by this check the day it joins `_axes` — the rule names no mode
+    # ("a second parameter axis"), and neither should its enforcement.
+    # `groups` is deliberately absent from that set and is the row's stated
+    # exception: it varies units rather than parameters, so every condition is
+    # still exactly one parameter change from its own arm's baseline. (`groups`
+    # is refused for its own reason today, `E-SWEEP-GROUPS-UNSUPPORTED`.)
+    crossed_modes = axis_modes_present(sweep) if ablate else []
+    if crossed_modes:
+        c.error(
+            "E-SWEEP-ABLATE-CROSSED",
+            "sweep.ablate",
+            f"cannot be combined with {', '.join(f'`sweep.{m}`' for m in crossed_modes)} — "
+            "`ablate` varies one thing at a time and a parameter axis varies a second, "
+            "so their product is no design with a defensible reading. Split the axis "
+            "into its own run, or express the ablation as `paired` rows. Only "
+            "`sweep.groups` composes with `ablate`, because it varies units rather than "
+            "parameters",
+        )
+
     if isinstance(ablate, dict):
         for i, path in enumerate(ablate.get("remove") or []):
-            if isinstance(path, str):
-                _path_resolves(path, f"sweep.ablate.remove[{i}]")
+            if not isinstance(path, str) or not _path_resolves(
+                path, f"sweep.ablate.remove[{i}]"
+            ):
+                continue
+            # § Validation, "Ablation targets": "`sweep.ablate.remove[0]` is
+            # `analysis.min_samples` (int); `remove` needs a boolean or nullable
+            # parameter — use `override`". Two branches, one identifier, because
+            # they are one question asked of the two things that answer it —
+            # the parameter, and the baseline `sweep.removal_value` reads.
+            #
+            # Branch 1 is the row's own words and is a fact about the parameter
+            # alone, so it is ungated by the baseline: a `remove` on an `int`
+            # with no `null` in its domain has nothing `remove` could set it to,
+            # whatever the baseline says.
+            #
+            # Branch 2 exists because task 4 coupled the two readings (see
+            # `docs/superpowers/spec-defects.md`, "Row 216 has two readings"):
+            # `removal_value` picks `false` versus `null` from the *baseline's*
+            # value, having no `parameter_spec` to ask, so a boolean the
+            # baseline does not fix takes the nullable reading and plants `null`
+            # at a non-nullable parameter — branch 1 passes it (it is a boolean)
+            # and the run executes a value the "Types" row promises to refuse.
+            # Checking what `removal_value` produces rather than what the config
+            # declares is what closes that: the declaration is legal and the
+            # product is not. It is `elif`, and gated on a declared baseline,
+            # because `E-SWEEP-ABLATE-BASELINE-MISSING` owns the no-baseline
+            # config whole — reporting every `remove` entry again there would
+            # restate one fault n times.
+            #
+            # `remove` only, never `override`: an override states its own value,
+            # so the baseline does not decide what it produces, and refusing an
+            # override on a path the baseline leaves free would reject a legal
+            # config (the same line `sweep.ablated_paths` draws for
+            # `E-SWEEP-BASELINE-PARTIAL`).
+            param = spec[path]
+            where = f"sweep.ablate.remove[{i}]"
+            if not (param.type_ is bool or param.nullable):
+                c.error(
+                    "E-SWEEP-ABLATE-TARGET",
+                    where,
+                    f"is `{path}`, which is neither a boolean nor nullable — `remove` "
+                    "sets a boolean parameter to `false` and a nullable one to `null`, "
+                    "and this parameter can hold neither; use `override` to state the "
+                    "value the ablated condition should run instead",
+                )
+                continue
+            problem = param.check(removal_value(baseline, path))
+            if baseline and problem:
+                c.error(
+                    "E-SWEEP-ABLATE-TARGET",
+                    where,
+                    f"is `{path}`, which `sweep.baseline` fixes no value for — so `remove` "
+                    f"sets it to `null` rather than `false`, and it {problem.lstrip()}. "
+                    "Fix the parameter in `sweep.baseline`: an ablation is one change "
+                    "away from the baseline, so the baseline has to state what is being "
+                    "removed",
+                )
         for i, entry in enumerate(ablate.get("override") or []):
             if not isinstance(entry, dict):
                 continue  # `_check_shape` already refused it, fatally
