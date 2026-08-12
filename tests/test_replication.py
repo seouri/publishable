@@ -357,3 +357,43 @@ def test_a_fold_in_non_outermost_position_is_still_found_by_kind():
         "fold01": frozenset({"a", "b"}),
         "fold02": frozenset({"c", "d"}),
     }
+
+
+def test_a_batch_level_declaring_a_field_other_than_n_is_refused():
+    """`reference.md` § Repeat kinds gives a `batch` `n` and "nothing else — a batch
+    has no parameter of its own, which is the point", and § Validation's "Batch
+    takes no fields" row says the same. `_check_count_field` refused only `k`, so
+    `{kind: batch, n: 5, stratify_by: x}` resolved silently — a declaration that
+    reads as a stratified batch and executes as an unstratified one."""
+    with pytest.raises(ContractError) as e:
+        resolve_repeats(cfg([{"kind": "batch", "n": 5, "stratify_by": "x"}]), "d")
+    assert e.value.code == "E-REPL-LEVEL-FIELD"
+    assert "stratify_by" in str(e.value)
+
+
+def test_a_batch_declaring_k_still_reports_the_count_field_message():
+    """The new key check runs after `_check_count_field`, so the documented
+    `{kind: batch, k: 3}` case keeps the message naming `n` as its count rather
+    than being absorbed into the generic unknown-key wording."""
+    with pytest.raises(ContractError) as e:
+        resolve_repeats(cfg([{"kind": "batch", "k": 3}]), "d")
+    assert e.value.code == "E-REPL-LEVEL-FIELD"
+    assert "its count is `n`" in str(e.value)
+
+
+def test_the_key_closure_does_not_reach_a_seed_level():
+    """The closure is `batch`-only. `seeds: [17, 42, …]` is a documented `seed`
+    field (`reference.md` § Repeat kinds), so refusing it here would reject a
+    declaration the document allows; a `fold` level's `stratify_by` reaches its
+    own refusal (`E-REPL-FOLD-STRATIFY-UNSUPPORTED`) rather than this one."""
+    try:
+        resolve_repeats(cfg([{"kind": "seed", "n": 2, "seeds": [17, 42]}]), "d")
+    except ContractError as exc:  # pragma: no cover — nothing raises here today
+        # Asserted as a negative rather than as successful resolution: `seeds` is
+        # read by nothing in this build, so a later slice may well refuse it under
+        # a code of its own. What this test owns is only that the refusal is not
+        # this one.
+        assert exc.code != "E-REPL-LEVEL-FIELD"
+    with pytest.raises(ContractError) as e:
+        resolve_repeats(cfg([{"kind": "fold", "k": 2, "stratify_by": "label"}]), "d", unit_count=4)
+    assert e.value.code == "E-REPL-FOLD-STRATIFY-UNSUPPORTED"

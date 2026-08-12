@@ -97,7 +97,12 @@ def run_a_project(
     that into `partial` and so `EXIT_PARTIAL` — so a caller provoking a step
     contract error on purpose still gets a whole run directory to assert on,
     and states the expected code here rather than losing the run to an
-    `EXIT_OK` assertion.
+    `EXIT_OK` assertion. `EXIT_WRONG` is different in kind, not degree: `validate`
+    runs and refuses *before* `command_run` creates a run directory at all, so
+    there is no `run_*` directory, no `executions.jsonl`, and no `results` to
+    read — a caller expecting `EXIT_WRONG` gets `run_dir`/`results` back as
+    `None` rather than this function raising `StopIteration` looking for output
+    that a refused config never produced.
     """
     tmp_path.mkdir(parents=True, exist_ok=True)
     root = tmp_path / "proj"
@@ -159,6 +164,18 @@ def run_a_project(
 
         assert main(["run", str(cfg)]) == expect_exit
         captured = capsys.readouterr() if capsys is not None else None
+    if expect_exit == EXIT_WRONG:
+        # `validate` refused before any run directory was created — nothing to
+        # read back.
+        return {
+            "root": root,
+            "cfg": cfg,
+            "results_dir": results_dir,
+            "run_dir": None,
+            "results": None,
+            "stdout": captured.out if captured is not None else None,
+            "stderr": captured.err if captured is not None else None,
+        }
     run_dir = next(results_dir.glob("run_*"))
     lines = (run_dir / "executions.jsonl").read_text().splitlines()
     ledger = [json.loads(line) for line in lines]
@@ -1850,50 +1867,76 @@ def test_a_condition_skipping_too_many_units_warns(tmp_path, capsys, monkeypatch
     assert "W-DATA-INELIGIBLE" in doc["stdout"]
 
 
-def test_a_string_ineligible_limit_does_not_raise_or_warn(tmp_path, capsys, monkeypatch):
-    """`limits` is user-written YAML, and `command_run` must not raise on a
-    string threshold. `isinstance(max_ineligible, (int, float))` fails for a
-    string, so the whole guard is skipped — no warning, no traceback — even
-    though 8 of 10 units are ineligible, which would trip a numeric threshold
-    below 0.8."""
+def test_a_string_ineligible_limit_is_refused_at_validate_time(tmp_path, capsys, monkeypatch):
+    """Superseded scenario, kept as the historical case: before the H1 envelope
+    (`publishable.envelope.check_envelope`), `limits` was user-written YAML read
+    at run time by a bare `isinstance(max_ineligible, (int, float))` guard, and
+    `command_run` had to not raise on a string threshold — the guard failed the
+    isinstance check for a string and skipped itself silently, no warning, no
+    traceback, even though 8 of 10 units are ineligible, which would trip a
+    numeric threshold below 0.8. `check_envelope` now types this leaf as a
+    number and reports `E-CONFIG-TYPE` before `run` executes anything at all, so
+    this config is refused rather than reaching the runtime guard — the guard
+    itself is unreachable through any config now (see `docs/superpowers/
+    spec-defects.md`, the `limits.max_ineligible_fraction`/`min_reported_n`
+    runtime-guard entry) but is kept as defence-in-depth, since it also guards
+    a caller that reaches this code without going through `validate` first."""
     import publishable.generators.experiment as experiment_gen
 
     monkeypatch.setattr(experiment_gen, "STARTER_STEP", _SKIP_MOST_STEP)
     doc = run_a_project(
-        tmp_path, capsys=capsys, units=10, limits={"max_ineligible_fraction": "half"}
+        tmp_path,
+        capsys=capsys,
+        units=10,
+        limits={"max_ineligible_fraction": "half"},
+        expect_exit=EXIT_WRONG,
     )
-    assert "W-DATA-INELIGIBLE" not in doc["stdout"]
+    assert "E-CONFIG-TYPE" in doc["stdout"]
 
 
-def test_a_true_ineligible_limit_does_not_warn(tmp_path, capsys, monkeypatch):
-    """Kept as documentation, not as the guard's real test: `True` compares equal
-    to `1`, and a fraction can never exceed `1`, so this case cannot distinguish
-    the `bool` exclusion's presence from its absence — either way nothing warns.
-    `test_a_false_ineligible_limit_does_not_warn` below is the discriminating
-    case."""
+def test_a_true_ineligible_limit_is_refused_at_validate_time(tmp_path, capsys, monkeypatch):
+    """Superseded scenario: kept as documentation, not as the guard's real test —
+    `True` compares equal to `1`, and a fraction can never exceed `1`, so even
+    when the runtime guard could still be reached this case could not distinguish
+    the `bool` exclusion's presence from its absence. `test_a_false_ineligible_
+    limit_is_refused_at_validate_time` below carries the discriminating reasoning.
+    `check_envelope` excludes `bool` from every numeric leaf on the same grounds
+    the runtime guard does (`envelope.py`: "a budget of `true` is not a budget"),
+    so `True` is refused here for the same reason `False` is."""
     import publishable.generators.experiment as experiment_gen
 
     monkeypatch.setattr(experiment_gen, "STARTER_STEP", _SKIP_MOST_STEP)
     doc = run_a_project(
-        tmp_path, capsys=capsys, units=10, limits={"max_ineligible_fraction": True}
+        tmp_path,
+        capsys=capsys,
+        units=10,
+        limits={"max_ineligible_fraction": True},
+        expect_exit=EXIT_WRONG,
     )
-    assert "W-DATA-INELIGIBLE" not in doc["stdout"]
+    assert "E-CONFIG-TYPE" in doc["stdout"]
 
 
-def test_a_false_ineligible_limit_does_not_warn(tmp_path, capsys, monkeypatch):
-    """The case that actually earns the `bool` exclusion: `False == 0`, so
-    without `not isinstance(max_ineligible, bool)` the guard would read
-    `max_ineligible_fraction: false` as a `0.0` threshold and warn the moment
-    any unit is ineligible — `_SKIP_MOST_STEP` skips 8 of 10, well above zero.
-    With the exclusion, `false` is not a real fraction and the whole guard is
-    skipped, so nothing warns."""
+def test_a_false_ineligible_limit_is_refused_at_validate_time(tmp_path, capsys, monkeypatch):
+    """The case that actually earned the runtime guard's `bool` exclusion, and
+    the reasoning to preserve even though this config can no longer reach that
+    guard: `False == 0`, so without `not isinstance(max_ineligible, bool)` the
+    runtime code would have read `max_ineligible_fraction: false` as a `0.0`
+    threshold and warned the moment any unit is ineligible — `_SKIP_MOST_STEP`
+    skips 8 of 10, well above zero. `check_envelope` now refuses `false` here
+    at validate time, before that runtime code ever sees it, on the identical
+    bool-is-not-a-number grounds — so the config is invalid rather than merely
+    guarded against."""
     import publishable.generators.experiment as experiment_gen
 
     monkeypatch.setattr(experiment_gen, "STARTER_STEP", _SKIP_MOST_STEP)
     doc = run_a_project(
-        tmp_path, capsys=capsys, units=10, limits={"max_ineligible_fraction": False}
+        tmp_path,
+        capsys=capsys,
+        units=10,
+        limits={"max_ineligible_fraction": False},
+        expect_exit=EXIT_WRONG,
     )
-    assert "W-DATA-INELIGIBLE" not in doc["stdout"]
+    assert "E-CONFIG-TYPE" in doc["stdout"]
 
 
 # --- Task 10 (correction-family): acceptance ---------------------------------
@@ -2620,15 +2663,26 @@ def test_a_thick_stratum_does_not_warn_stratum_thin(tmp_path, capsys, monkeypatc
     assert "W-STATS-STRATUM-THIN" not in doc["stdout"]
 
 
-def test_min_reported_n_true_over_an_empty_level_does_not_warn(tmp_path, capsys, monkeypatch):
-    """Task 4's reasoning for dropping the `isinstance`/`bool` guard does not
-    transfer here. `strata.levels_for` never emits a zero-count level, so at
-    validate time a floor of `1` (`True`) is unreachable — `len(keys) < 1` never
-    holds. But a level's *completed* count genuinely can be `0` at run time
-    (every unit in the level failed or was skipped), so `min_reported_n: true`
-    giving a floor of `1` would make `0 < 1` fire without the guard. Cohort `a`
-    is skipped entirely here, so its level completes nothing — the guard must
-    keep that from warning."""
+def test_min_reported_n_true_is_now_refused_at_validate_time(tmp_path, capsys, monkeypatch):
+    """Superseded scenario, kept as the historical case for the reasoning it
+    carries about the runtime guard, even though the config below no longer
+    reaches that guard at all. Task 4's reasoning for dropping the
+    `isinstance`/`bool` exclusion did not transfer to this runtime check:
+    `strata.levels_for` never emits a zero-count level, so at *validate* time
+    (in the old, pre-envelope sense — checking the roster's strata, not the
+    leaf's type) a floor of `1` (`True`) looked unreachable, since
+    `len(keys) < 1` never holds. But a level's *completed* count genuinely can
+    be `0` at run time (every unit in the level failed or was skipped), so
+    `min_reported_n: true` giving a floor of `1` would make `0 < 1` fire
+    without the runtime `bool` exclusion — cohort `a` is skipped entirely here,
+    so its level completes nothing, and that is the case the exclusion exists
+    for. `check_envelope` now refuses `min_reported_n: true` before any of
+    that strata reasoning is reached at all: it is a plain leaf-type check
+    (`limits.min_reported_n` is `int`, and `bool` satisfies no numeric leaf),
+    independent of what the roster's strata look like. The runtime guard's own
+    reasoning above still holds for a caller that reaches it without going
+    through `validate` first — see `docs/superpowers/spec-defects.md`, the
+    `limits.max_ineligible_fraction`/`min_reported_n` runtime-guard entry."""
     import publishable.generators.experiment as experiment_gen
 
     monkeypatch.setattr(experiment_gen, "STARTER_STEP", _SKIP_ONE_COHORT_STEP)
@@ -2639,8 +2693,9 @@ def test_min_reported_n_true_over_an_empty_level_does_not_warn(tmp_path, capsys,
         unit_attributes=["cohort"],
         limits={"min_reported_n": True},
         statistics={"report_by": ["cohort"]},
+        expect_exit=EXIT_WRONG,
     )
-    assert "W-STATS-STRATUM-THIN" not in doc["stdout"]
+    assert "E-CONFIG-TYPE" in doc["stdout"]
 
 
 def test_aggregate_failing_for_one_level_only_still_warns_and_reports_the_other(

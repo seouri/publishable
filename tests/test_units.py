@@ -289,3 +289,33 @@ def test_a_units_attributes_copy_the_input_mapping() -> None:
 
     assert unit.attributes["site"] == "A"
     assert "extra" not in unit.attributes
+
+
+def test_a_glob_source_cannot_supply_a_declared_attribute(input_dir: Path):
+    """`reference.md` § Validation's "Attributes have a source" row uses this exact
+    case: `data.units.attributes` names `label` under `from: {glob: "*.dcm"}`,
+    which yields a key and a path and nothing else. `_from_glob` built every unit
+    with `attributes={}` without reading the declaration, so the config validated
+    clean and every `unit.label` raised at run time instead."""
+    with pytest.raises(ContractError) as e:
+        resolve_units(
+            {"from": {"glob": "*.dcm"}, "key": "path", "attributes": ["label"]}, input_dir
+        )
+    assert e.value.code == "E-UNITS-ATTR-MISSING"
+    assert "label" in str(e.value)
+
+
+def test_a_glob_source_reports_a_reserved_attribute_name_as_reserved(input_dir: Path):
+    """Ordered as `_from_table` orders it, so one declaration draws one code
+    whichever source it sits under: `key`, `paths` and `attributes` are refused as
+    reserved rather than as unsourced."""
+    with pytest.raises(ContractError) as e:
+        resolve_units(
+            {"from": {"glob": "*.dcm"}, "key": "path", "attributes": ["paths"]}, input_dir
+        )
+    assert e.value.code == "E-UNITS-ATTR-RESERVED"
+
+
+def test_a_glob_source_with_no_declared_attributes_still_resolves(input_dir: Path):
+    units = resolve_units({"from": {"glob": "*.dcm"}, "key": "path", "attributes": []}, input_dir)
+    assert [u.key for u in units] == ["top.dcm"]

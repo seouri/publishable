@@ -7,8 +7,9 @@ from typing import Any
 import yaml
 
 from publishable.base_experiment import load_experiment
-from publishable.contrasts import resolve_contrasts
+from publishable.contrasts import resolve_contrasts, units_matching
 from publishable.diagnostics import Collector
+from publishable.envelope import check_envelope
 from publishable.errors import ContractError
 from publishable.manifest import POLICIES
 from publishable.materialize import TEMPLATE_VERSION
@@ -155,6 +156,15 @@ def _check_shape(doc: dict[str, Any], c: Collector) -> bool:
         if report_by is not None and not isinstance(report_by, list):
             _bad("statistics.report_by", report_by, "list")
 
+    # The leaf layer, in the same walk as the container layer above: shape and
+    # type are one question asked at two depths, and two walks over one document
+    # is how the two rules drift apart. Leaf faults are deliberately NOT fatal —
+    # `ok` is untouched here. A wrong-typed `metadata.name` must not suppress a
+    # `data.input_dir` finding, while a wrong-typed *container* must, because
+    # every later check indexes into it.
+    for code, field, message in check_envelope(doc):
+        c.error(code, field, message)
+
     return ok
 
 
@@ -248,7 +258,7 @@ def validate_config(
     _check_metadata(doc, config_path, template, c)
     _check_entrypoint(doc, c)
     _check_parameters(doc, template, c)
-    _check_versions(doc, c)
+    _check_versions(doc, template, c)
     _check_data(doc, config_path, c)
     roster = _check_units(doc, c)
     _check_replication(
@@ -260,7 +270,7 @@ def validate_config(
     )
     _check_unimplemented(doc, c)
     _check_sweep(doc, template, c, unit_count=len(roster) if roster is not None else None)
-    _check_contrasts(doc, c)
+    _check_contrasts(doc, c, roster)
     _check_hypotheses(doc, c, experiment, template)
     _check_report_by(doc, c, roster)
     for message in template.validate(doc):
@@ -274,7 +284,14 @@ def _check_metadata(doc: dict[str, Any], config_path: Path, template: Any, c: Co
         if not metadata.get(field):
             c.error("E-META-REQUIRED", f"metadata.{field}", "is empty, and is required")
     name = metadata.get("name", "")
-    if name and not re.match(template.naming_pattern, name):
+    # `check_envelope` is what REPORTS a wrong-typed `name` (E-CONFIG-TYPE) — this
+    # guard exists because this function may be reached without it having run: a
+    # leaf fault is deliberately non-fatal to the pass, so `_check_metadata` still
+    # executes on the still-malformed `doc`, and `re.match` requires a str/bytes-
+    # like second argument. Without this, a list or int name raised `TypeError`
+    # out of `validate` for the exact leaf fault this pass exists to turn into a
+    # diagnostic instead.
+    if name and isinstance(name, str) and not re.match(template.naming_pattern, name):
         c.error(
             "E-NAME-PATTERN",
             "metadata.name",
@@ -324,14 +341,40 @@ def _check_parameters(doc: dict[str, Any], template: Any, c: Collector) -> None:
             c.error("E-PARAM-MISSING", f"parameters.{path}", "is required and absent")
 
 
-def _check_versions(doc: dict[str, Any], c: Collector) -> None:
+def _check_versions(doc: dict[str, Any], template: Any, c: Collector) -> None:
+    """The moved version, and which parameters this config leaves to a default.
+
+    § Validation's "Template version moved" row reports both halves in one
+    warning — the version, and `request.timeout` being unset. The second half is
+    computed from `parameter_spec` alone and named only inside this warning, so
+    it stays gated on the mismatch: a config whose `template_version` matches
+    draws nothing here, and an omitted parameter with no default is
+    `E-PARAM-MISSING`'s to report regardless of any version.
+
+    The message states what is observable — a parameter the installed template
+    defaults and this config does not set. Core cannot tell that apart from one
+    the author deliberately left at its default, and asserting which it is would
+    be a claim the declaration does not carry.
+    """
     declared = doc.get("template_version")
-    if declared and declared != TEMPLATE_VERSION:
-        c.warn(
-            "W-TEMPLATE-VERSION",
-            "template_version",
-            f"is {declared} but the installed template reports {TEMPLATE_VERSION}",
-        )
+    if not declared or declared == TEMPLATE_VERSION:
+        return
+    set_here = _flatten(doc.get("parameters"), "")
+    unset = [
+        path
+        for path, param in template.parameter_spec.items()
+        if path not in set_here and param.default is not MISSING
+    ]
+    detail = (
+        f"; unset here and left to the installed template's default: {', '.join(unset)}"
+        if unset
+        else ""
+    )
+    c.warn(
+        "W-TEMPLATE-VERSION",
+        "template_version",
+        f"is {declared} but the installed template reports {TEMPLATE_VERSION}{detail}",
+    )
 
 
 def _check_data(doc: dict[str, Any], config_path: Path, c: Collector) -> None:
@@ -364,6 +407,12 @@ def _check_data(doc: dict[str, Any], config_path: Path, c: Collector) -> None:
         if not raw:
             c.error("E-DATA-REQUIRED", f"data.{field}", "is empty, and is required")
             continue
+        if not isinstance(raw, str):
+            # `check_envelope` is what REPORTS this (E-CONFIG-TYPE) — this guard
+            # exists because this function may be reached without it having run:
+            # a leaf fault is deliberately non-fatal, so `_check_data` still runs
+            # on a still-malformed `doc`, and `Path()` requires a str/PathLike.
+            continue
         path = Path(raw).expanduser()
         if not path.is_absolute():
             c.error(
@@ -377,7 +426,10 @@ def _check_data(doc: dict[str, Any], config_path: Path, c: Collector) -> None:
         resolvable[field] = path.resolve()
 
     input_dir = data.get("input_dir")
-    if input_dir:
+    # Same reasoning as the `isinstance` guard above: `check_envelope` reports a
+    # wrong-typed `input_dir`, but this function may be reached without it having
+    # run, and `Path()` requires a str/PathLike.
+    if input_dir and isinstance(input_dir, str):
         path = Path(input_dir).expanduser()
         if not path.is_dir() or not any(path.iterdir()):
             c.error("E-DATA-UNREADABLE", "data.input_dir", f"{path} is unreadable or empty")
@@ -464,12 +516,61 @@ def _check_units(doc: dict[str, Any], c: Collector) -> UnitList | None:
     input_dir = data.get("input_dir")
     if not input_dir:
         return None  # E-DATA-REQUIRED already reported by _check_data
+    if not isinstance(input_dir, str):
+        # `check_envelope` is what REPORTS this (E-CONFIG-TYPE) — this guard
+        # exists because this function may be reached without it having run: a
+        # leaf fault is deliberately non-fatal, so `_check_units` still runs on
+        # a still-malformed `doc`, and `Path()` requires a str/PathLike. This is
+        # a second, independent `Path(input_dir)` call from the one `_check_data`
+        # already guards — the two read the same leaf for two different purposes
+        # (whether the directory is usable at all vs. whether a roster resolves
+        # against it), so each needs its own guard.
+        return None
     path = Path(input_dir).expanduser()
     if not path.is_absolute() or not path.is_dir() or not any(path.iterdir()):
         return None  # E-DATA-NOT-ABSOLUTE / E-DATA-UNREADABLE already reported by _check_data
     source = units_decl.get("from")
     if isinstance(source, dict) and "resolver" in source:
         return None  # E-DATA-RESOLVER-UNSUPPORTED already reported by _check_unimplemented
+    key = units_decl.get("key")
+    if key is not None and not isinstance(key, str):
+        # `check_envelope` is what REPORTS this (E-CONFIG-TYPE) — this guard
+        # exists because this function may be reached without it having run.
+        # `_from_table` hashes `key` against a `set` of column names
+        # (`key_col not in columns`), which raises `TypeError: unhashable type`
+        # for a list or dict rather than the `ContractError` the `except` below
+        # is built to catch — a plain wrong-but-hashable type (an int, a bool)
+        # does not crash there, but skipping uniformly on any wrong type keeps
+        # this guard matching what `check_envelope` already typed the leaf as,
+        # rather than only covering the unhashable subset that happens to crash
+        # today.
+        return None
+    # `LEAF_TYPES` types `data.units.attributes` itself a `list` — and it is one
+    # here, so `check_envelope` reports nothing — but names no dotted path for a
+    # list ELEMENT (the same reason `sweep.grid`'s axis values aren't in the
+    # table either). So a non-string item is this function's own finding to
+    # make, not a fault `check_envelope` already caught: unlike the `input_dir`
+    # and `key` guards above, skipping here silently would be a real gap, not a
+    # duplicate. `_from_table` (`units.py`) checks each name against
+    # `RESERVED_FIELDS` (a tuple — tolerates an unhashable name) and then against
+    # `columns` (a `set` — raises `TypeError: unhashable type` for a list or
+    # dict). Reported under `E-UNITS-ATTR-MISSING`, the identifier `_from_table`
+    # itself already raises for a *string* name the table doesn't have — a
+    # non-string name can never equal a CSV column name either, so "the table
+    # does not have it" is exactly as true, and this is one identifier for one
+    # user-facing question ("is this a real column?") rather than a second code
+    # for the type-shaped version of the same fault.
+    attrs = units_decl.get("attributes")
+    if isinstance(source, str) and isinstance(attrs, list):
+        bad_attrs = [a for a in attrs if not isinstance(a, str)]
+        if bad_attrs:
+            for bad in bad_attrs:
+                c.error(
+                    "E-UNITS-ATTR-MISSING",
+                    "data.units.attributes",
+                    f"names {bad!r}, which {source} does not have",
+                )
+            return None
     try:
         return resolve_units(units_decl, path)
     except ContractError as exc:
@@ -551,9 +652,9 @@ def _check_replication(
     # cross-validation that never happened. Caught here, at the declaration,
     # rather than guarded at `run` — a config that validates clean must not
     # then fail (see `docs/superpowers/spec-defects.md`).
-    if any(level.get("kind") == "fold" for level in levels) and not (
-        doc.get("data") or {}
-    ).get("units"):
+    if any(level.get("kind") == "fold" for level in levels) and not (doc.get("data") or {}).get(
+        "units"
+    ):
         c.error(
             "E-REPL-FOLD-NO-UNITS",
             "replication.repeats",
@@ -965,6 +1066,50 @@ def _check_sweep(
                 "`sweep` entirely",
             )
 
+    # `reference.md` § Validation, "Baseline leaves contrasts confounded": a
+    # `sweep.baseline` that "fixes a value on every axis" leaves comparisons that
+    # "differ on both and are reported `confounded: true`". `cli.py` computes
+    # that fact per comparison at run time, after the compute is spent; the
+    # declaration alone decides it, so it is warnable here.
+    #
+    # **The condition is the row's, and it is deliberately narrower than run
+    # time.** Axes are compared over `sweep.grid`'s keys only, and only when the
+    # baseline fixes every one of them — which is the row's own "fixes a value
+    # on every axis", and is also the only baseline-plus-grid shape this build
+    # admits at all (`_check_unimplemented`'s `E-SWEEP-BASELINE-PARTIAL` refuses
+    # a baseline that leaves an axis free, since per-cell baseline expansion is
+    # specified but not implemented). `cli._differing_axes` instead walks the
+    # *union* of both sides' keys against a sentinel, so a baseline fixing an
+    # axis the grid never sweeps adds a differing axis to every comparison and
+    # can mark `confounded` where this warning stays silent. That direction is
+    # the safe one — this never fires where a run would not mark the comparison
+    # — and it is why the three lines below are not `cli._differing_axes` reused:
+    # sharing the helper would import the wider semantics along with it.
+    #
+    # One finding, not one per condition: the fault is a single declaration, and
+    # `sweep.baseline` is the line the reader edits.
+    baseline_fixed = sweep.get("baseline") or {}
+    swept_axes = list(grid)
+    if swept_axes and baseline_fixed and all(axis in baseline_fixed for axis in swept_axes):
+        crossed: list[tuple[Any, list[str]]] = []
+        for cond in conditions:
+            if cond.is_baseline:
+                continue
+            differing = [a for a in swept_axes if cond.values.get(a) != baseline_fixed.get(a)]
+            if len(differing) > 1:
+                crossed.append((cond, differing))
+        if crossed:
+            example, axes = crossed[0]
+            c.warn(
+                "W-SWEEP-BASELINE-CONFOUNDED",
+                "sweep.baseline",
+                f"fixes a value on every swept axis, so {len(crossed)} of "
+                f"{len(conditions) - 1} baseline comparisons differ on more than one axis "
+                f"and are reported `confounded: true` — `{example.label}` differs on "
+                f"{', '.join(f'`{a}`' for a in axes)}, so its delta mixes those effects "
+                "and no amount of correct pairing separates them",
+            )
+
     repeat_total = _repeat_total(doc, unit_count)
     budget = (doc.get("limits") or {}).get("max_executions")
     # `repeat_total` is `None` only when a declared count cannot be resolved at
@@ -973,7 +1118,18 @@ def _check_sweep(
     # against a guessed 1× is deliberate: an unknown total must not be reported
     # as a small one. A `k: all` over a roster that DID resolve is a real number
     # here, and warns like any other count.
-    if repeat_total is not None and isinstance(budget, int):
+    # `check_envelope` is what REPORTS a wrong-typed `budget` (E-CONFIG-TYPE) —
+    # this guard exists because this function may be reached without it having
+    # run: a leaf fault is deliberately non-fatal, so `_check_sweep` still runs
+    # on a still-malformed `doc`, and `executions > budget` below would raise
+    # `TypeError` comparing an `int` to a `str`. `bool` is excluded explicitly,
+    # matching `envelope._is_type`'s own bool-excluding rule for the same leaf
+    # (`LEAF_TYPES` types `max_executions` as `int`, not `int | bool`): without
+    # the exclusion, `isinstance(True, int)` is `True`, so a `max_executions:
+    # true` would both get `E-CONFIG-TYPE` from the envelope AND run this check
+    # against a `bool` budget, warning "exceeds True" — a message a wrong-typed
+    # value should never be able to produce.
+    if repeat_total is not None and isinstance(budget, int) and not isinstance(budget, bool):
         executions = len(conditions) * repeat_total
         if executions > budget:
             c.warn(
@@ -1034,14 +1190,19 @@ def _check_sweep(
         c.warn(
             "W-STATS-CORRECTION-INAPPLICABLE",
             "statistics.correction",
-            "`fdr_bh` adjusts p-values, and no comparison in this family will carry one "
-            "(`statistics.null_test` is undeclared, and a parameter-axis contrast cannot "
-            "supply one) — every `ci95_corrected` will be null. Use `holm` or `bonferroni`, "
+            # The parenthetical this replaces asserted "`statistics.null_test` is
+            # undeclared", which is false of a config that declares one — and such
+            # a config reaches here, drawing `E-STATS-NULLTEST-UNSUPPORTED` and
+            # this warning together. Removing a false assertion is independent of
+            # the condition, which still fires on `fdr_bh` over a non-empty family
+            # and is narrowed by whichever slice implements `null_test`.
+            "`fdr_bh` adjusts p-values, and no comparison in this family can carry one in "
+            "this build — every `ci95_corrected` will be null. Use `holm` or `bonferroni`, "
             "whose corrections are interval-shaped",
         )
 
 
-def _check_contrasts(doc: dict[str, Any], c: Collector) -> None:
+def _check_contrasts(doc: dict[str, Any], c: Collector, roster: UnitList | None = None) -> None:
     """Each declared `statistics.contrasts` entry, checked for real now that the
     block is no longer refused wholesale (`_check_unimplemented` used to raise
     `E-STATS-CONTRASTS-UNSUPPORTED` for any non-empty declaration).
@@ -1072,6 +1233,23 @@ def _check_contrasts(doc: dict[str, Any], c: Collector) -> None:
     `data.units.attributes` list — analogous to the `report_by` unknown-attribute
     rule (`reference.md` § Reporting strata) — rather than left to look like a
     silently-empty stratum.
+
+    **A `within` stratum too thin to disclose is warned about here too**
+    (`reference.md` § Validation, "Contrast stratum is populated"), under the
+    same `W-STATS-CONTRAST-THIN` the run emits — one code fired at two
+    observation points, the way `report_by`'s roster-time and completed-time
+    counts are two (`W-STATS-REPORTBY-THIN`/`W-STATS-STRATUM-THIN`). Which of
+    those two shapes a future thinness check should take is not settled by
+    anything in this function, so this comment does not argue it.
+
+    The count here is over *resolved roster* units matching the stratum, which is
+    all `validate` can see: pairing is a fact about which units both sides
+    *completed*, and `cli.py`'s `allowed` set is `units_matching` over this same
+    roster, so `n_paired` is bounded above by this number — the run-time check is
+    what sees the attrition between them, which no declaration predicts.
+    Only `roster` is optional in this function's signature: a caller with no
+    resolved roster (`_check_contrasts` is called directly by tests) still gets
+    every declaration-only check, and skips only the one that needs units.
 
     **The shape is checked here too, and it has to be.** `resolve_contrasts`
     reads `entry["of"]` and `entry.get("id")` off whatever the list holds, and
@@ -1138,8 +1316,28 @@ def _check_contrasts(doc: dict[str, Any], c: Collector) -> None:
     except Exception:
         conditions = []
     labels = {cond.label for cond in conditions if cond.label is not None}
-    declared_attrs = set(((doc.get("data") or {}).get("units") or {}).get("attributes") or [])
+    # Same reasoning as `_check_report_by`'s `declared` set: a non-string item in
+    # `data.units.attributes` is `_check_units`'s finding to make, not this
+    # function's, but `set(...)` over the raw list would crash on it first.
+    declared_attrs = {
+        a
+        for a in (((doc.get("data") or {}).get("units") or {}).get("attributes") or [])
+        if isinstance(a, str)
+    }
     seen_ids: set[str] = set()
+    # The same guard `_check_report_by` puts on its own floor, for the same
+    # reason: `check_envelope` is what REPORTS a wrong-typed `min_reported_n`
+    # (`E-CONFIG-TYPE`), a leaf fault is deliberately non-fatal, so this function
+    # still runs on a doc holding a `str` floor and `len(matched) < floor` would
+    # raise `TypeError`. `bool` is excluded explicitly because `isinstance(True,
+    # int)` is `True`, and a value the envelope already flagged must not also
+    # drive a warning nobody can act on ("below limits.min_reported_n (True)").
+    raw_floor = (doc.get("limits") or {}).get("min_reported_n")
+    floor: float | None = (
+        raw_floor
+        if not isinstance(raw_floor, bool) and isinstance(raw_floor, (int, float))
+        else None
+    )
 
     for i, entry in enumerate(entries):
         if not isinstance(entry, dict):
@@ -1211,12 +1409,30 @@ def _check_contrasts(doc: dict[str, Any], c: Collector) -> None:
             )
         within = entry.get("within")
         if isinstance(within, dict):
+            unknown = False
             for name in within:
                 if name not in declared_attrs:
+                    unknown = True
                     c.error(
                         "E-STATS-CONTRAST-WITHIN",
                         f"statistics.contrasts[{i}].within",
                         f"names `{name}`, which is not in `data.units.attributes`",
+                    )
+            # Skipped for a stratum already refused above, the way
+            # `_check_report_by` skips a level of an attribute it just refused:
+            # an unknown attribute matches no unit, so counting it would report
+            # a thin stratum as well as an undeclared one for a single typo.
+            if not unknown and within and roster is not None and floor is not None:
+                matched = units_matching(roster, within) or set()
+                if len(matched) < floor:
+                    stratum = ", ".join(f"`{k}={v}`" for k, v in sorted(within.items()))
+                    c.warn(
+                        "W-STATS-CONTRAST-THIN",
+                        f"statistics.contrasts[{i}].within",
+                        f"selects {stratum}, which {len(matched)} of {len(roster)} units "
+                        f"match, below limits.min_reported_n ({floor}). The run counts "
+                        f"`n_paired` over the two sides' completed units, which attrition "
+                        f"can only make smaller",
                     )
 
 
@@ -1239,9 +1455,7 @@ def _condition_labels(doc: dict[str, Any]) -> tuple[set[str], set[str]] | None:
     except Exception:
         return None
     labels = {cond.label for cond in conditions if cond.label is not None}
-    baselines = {
-        cond.label for cond in conditions if cond.label is not None and cond.is_baseline
-    }
+    baselines = {cond.label for cond in conditions if cond.label is not None and cond.is_baseline}
     return labels, baselines
 
 
@@ -1264,12 +1478,27 @@ def _check_hypotheses(
     reported elsewhere as `E-ENTRYPOINT-IMPORT`) is not a hypothesis fault, so
     that case is silently skipped rather than double-reported.
 
-    **`compare.to: baseline` needs a declared baseline.** `reference.md` §
-    Validation, "Hypothesis needs baseline": `hypotheses[0].compare.to:
-    baseline` but `sweep.baseline` is not declared. Nothing downstream guards
-    this — `hypotheses.resolve` reads `vs_baseline`, which `cli` never
-    populates without a declared baseline, so the hypothesis would silently
-    resolve to no observation rather than being refused before a run starts.
+    **`compare.to: baseline` needs a declared baseline — and so does a bare
+    `compare.condition` with no `to` at all, because `hypotheses.resolve` reads
+    `compare.condition` as a baseline comparison whether or not `to` spells it
+    out.** `reference.md` § Validation, "Hypothesis needs baseline":
+    `hypotheses[0].compare.to: baseline` but `sweep.baseline` is not declared.
+    Nothing downstream guards this — `hypotheses.resolve` reads `vs_baseline`,
+    which `cli` never populates without a declared baseline, so the hypothesis
+    would silently resolve to no observation rather than being refused before a
+    run starts. The same gap exists one form earlier: `compare: {condition: X}`
+    with neither `to: baseline` nor a declared `sweep.baseline` used to fire
+    neither this check (no `to` to read) nor `E-HYPOTHESIS-CONDITION` (the label
+    can resolve just fine), so it validated clean while naming a condition and
+    nothing to compare it against — `reference.md` § Pre-registration's ruling
+    is to refuse that form rather than default the missing side to baseline, so
+    `E-HYPOTHESIS-BASELINE`'s condition is widened to `to == "baseline"` *or*
+    (`condition` present, `to` absent, and `contrast` absent too) — the last
+    exclusion because `hypotheses.resolve` checks `"contrast" in compare` first
+    and returns from that branch without ever reading `condition`, so a
+    `{contrast: x, condition: y}` hypothesis resolves through the contrast and
+    needs no baseline at all — rather than minting a second code for one fault
+    that is the same fault under a different spelling.
     `E-HYPOTHESIS-BASELINE`.
 
     **`compare.to` has exactly one value, and it is `baseline`.**
@@ -1392,11 +1621,15 @@ def _check_hypotheses(
     has_baseline = bool((doc.get("sweep") or {}).get("baseline"))
     labels = _condition_labels(doc)
     contrast_entries = ((doc.get("statistics") or {}).get("contrasts")) or []
-    contrast_ids = {
-        entry["id"]
-        for entry in contrast_entries
-        if isinstance(entry, dict) and isinstance(entry.get("id"), str) and entry["id"]
-    } if isinstance(contrast_entries, list) else set()
+    contrast_ids = (
+        {
+            entry["id"]
+            for entry in contrast_entries
+            if isinstance(entry, dict) and isinstance(entry.get("id"), str) and entry["id"]
+        }
+        if isinstance(contrast_entries, list)
+        else set()
+    )
     # The bound-exists error and the inference-base warning share one condition:
     # no metric this run computes could ever carry an interval, because that
     # needs a `basis: units` metric and the only source of one is a resolved
@@ -1406,9 +1639,10 @@ def _check_hypotheses(
     # discriminates in practice; the `type(...) is not BaseTemplate.aggregate`
     # check is what would let a future template with a real `aggregate` clear
     # this condition without either check changing.
-    no_interval_possible = not bool(
-        (doc.get("data") or {}).get("units")
-    ) and type(template).aggregate is BaseTemplate.aggregate
+    no_interval_possible = (
+        not bool((doc.get("data") or {}).get("units"))
+        and type(template).aggregate is BaseTemplate.aggregate
+    )
 
     for i, hyp in enumerate(entries):
         if not isinstance(hyp, dict):
@@ -1478,14 +1712,40 @@ def _check_hypotheses(
                     "comparison that will never be made and is silently evaluated against "
                     "the baseline instead",
                 )
-            missing_baseline = compare.get("to") == "baseline" and not has_baseline
+            # `to: baseline` is the ordinary spelling, but `hypotheses.resolve`
+            # reads `compare.condition` as a baseline comparison whether or not
+            # `to` says so — so a bare `{condition: X}` implies the same
+            # comparison `to: baseline` spells out, and needs the same declared
+            # baseline. Without this second branch, that bare form fired neither
+            # this check (no `to` to read) nor `E-HYPOTHESIS-CONDITION` (the
+            # label can resolve just fine), and validated clean while naming a
+            # condition and nothing to compare it against.
+            #
+            # Excludes `contrast in compare`: `resolve` checks `"contrast" in
+            # compare` first and returns from that branch without ever reading
+            # `condition` — so `{contrast: x, condition: y}` resolves through the
+            # contrast, not the baseline, and needs no baseline at all. Without
+            # this exclusion, a hypothesis that names both would be refused for a
+            # comparison it was never going to make.
+            implies_baseline = compare.get("to") == "baseline" or (
+                "condition" in compare and "to" not in compare and "contrast" not in compare
+            )
+            missing_baseline = implies_baseline and not has_baseline
             if missing_baseline:
+                if "to" in compare:
+                    detail = "sets `to: baseline`, but `sweep.baseline` is not declared"
+                else:
+                    detail = (
+                        "names `condition` with no `to` and no declared `sweep.baseline` — "
+                        "a `compare` names both sides of the comparison, and `to: baseline` "
+                        "is the ordinary spelling of the side this is missing"
+                    )
                 c.error(
                     "E-HYPOTHESIS-BASELINE",
                     f"hypotheses[{i}].compare",
-                    "sets `to: baseline`, but `sweep.baseline` is not declared — nothing "
-                    "populates a baseline comparison without one, so this hypothesis would "
-                    "silently resolve to no observation rather than the comparison it names",
+                    f"{detail} — nothing populates a baseline comparison without one, so this "
+                    "hypothesis would silently resolve to no observation rather than the "
+                    "comparison it names",
                 )
             # Gated on `missing_baseline` so one fault gets one code: with no
             # declared baseline there is no comparison for *any* label to name,
@@ -1519,8 +1779,7 @@ def _check_hypotheses(
                     c.error(
                         "E-HYPOTHESIS-CONTRAST",
                         f"hypotheses[{i}].compare.contrast",
-                        f"names `{contrast_id!r}`, which `statistics.contrasts` does not "
-                        "declare",
+                        f"names `{contrast_id!r}`, which `statistics.contrasts` does not declare",
                     )
 
         metric = hyp.get("metric")
@@ -1598,14 +1857,14 @@ def _check_hypotheses(
             c.error(
                 "E-HYPOTHESIS-FORM",
                 f"hypotheses[{i}]",
-                f"names `{metric}`, a `scope: \"summary\"` metric, and declares `compare` — "
+                f'names `{metric}`, a `scope: "summary"` metric, and declares `compare` — '
                 "a summary metric is one value per run, not a contrast between conditions",
             )
         elif scope != "summary" and not has_compare:
             c.error(
                 "E-HYPOTHESIS-FORM",
                 f"hypotheses[{i}]",
-                f"names `{metric}`, a `scope: \"{scope}\"` metric, without declaring `compare` "
+                f'names `{metric}`, a `scope: "{scope}"` metric, without declaring `compare` '
                 "— that quantity only exists per condition, so the hypothesis must say which "
                 "conditions it compares",
             )
@@ -1633,7 +1892,17 @@ def _check_report_by(doc: dict[str, Any], c: Collector, roster: UnitList | None)
     entries = ((doc.get("statistics") or {}).get("report_by")) or []
     if not isinstance(entries, list):
         return  # `_check_shape` already refused it, and returned early
-    declared = set(((doc.get("data") or {}).get("units") or {}).get("attributes") or [])
+    # A non-string item in `data.units.attributes` is `_check_units`'s own
+    # finding to make (`E-UNITS-ATTR-MISSING`), not this function's — but
+    # `set(...)` over the raw list would still crash on it before that finding
+    # is ever reached (`TypeError: unhashable type` for a list or dict item).
+    # Filtering to strings here just means a non-string item is treated as "not
+    # declared", which is already true of it regardless.
+    declared = {
+        a
+        for a in (((doc.get("data") or {}).get("units") or {}).get("attributes") or [])
+        if isinstance(a, str)
+    }
     for i, name in enumerate(entries):
         if not isinstance(name, str) or name not in declared:
             c.error(
@@ -1643,7 +1912,20 @@ def _check_report_by(doc: dict[str, Any], c: Collector, roster: UnitList | None)
             )
 
     floor = (doc.get("limits") or {}).get("min_reported_n")
-    if roster is None or not isinstance(floor, (int, float)):
+    # `check_envelope` is what REPORTS a wrong-typed `floor` (E-CONFIG-TYPE) —
+    # this guard exists because this function may be reached without it having
+    # run: a leaf fault is deliberately non-fatal, so `_check_report_by` still
+    # runs on a still-malformed `doc`, and `len(keys) < floor` below would raise
+    # `TypeError` comparing an `int` to a `str`. `bool` is excluded explicitly,
+    # the same rule as the budget guard above: `isinstance(True, (int, float))`
+    # is `True` in Python, and a value already flagged wrong-typed by the
+    # envelope must not also drive this check — whether or not the result
+    # would be visibly wrong. (Here it happens not to be: every level in
+    # `levels_for` holds at least one unit, so `len(keys) < floor` can never
+    # hold for `floor` coerced to `0` or `1` either. The exclusion still
+    # belongs here, on the same principle as the budget guard, rather than
+    # relying on that being true forever.)
+    if roster is None or isinstance(floor, bool) or not isinstance(floor, (int, float)):
         return
     for i, name in enumerate(entries):
         if not isinstance(name, str) or name not in declared:

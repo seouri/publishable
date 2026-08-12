@@ -76,17 +76,20 @@ data:
   output_dir: /secure/results/cohort-pilot
   input_manifest_policy: hash_all          # hash_all | hash_index | none
   units:                                   # optional; required by fold, resample, null_test
-    from: index.csv                        # index.csv | {glob: "*.dcm"} | {resolver: <name>}
+    from: index.csv                        # index.csv | {glob: "*.dcm"} | {resolver: <name>} (NOT BUILT)
     key: patient_id                        # stable, unique identity
     attributes: [label, age, sex]          # available for stratification and reporting
-    allocation: within                     # within | between — feeds paired vs unpaired, per contrast
-    cluster_by: null                       # e.g. site, when units aren't independent
-    weight_by: null                        # e.g. sampling_weight, when the sample is enriched or
-                                           #   stratified — see "Weighted samples"
-    measurements: null                     # e.g. {by: read_id, collapse: mean} for technical replicates
-    holdout: null                          # optional single fixed train/test split; see "A fixed holdout split"
-    assign: {}                             # REQUIRED when allocation is `between` — one block per
-                                           # sweep.groups axis, keyed by the axis name:
+    allocation: within                     # within | between (NOT BUILT) — feeds paired vs unpaired,
+                                           #   per contrast
+    cluster_by: null                       # NOT BUILT — e.g. site, when units aren't independent
+    weight_by: null                        # NOT BUILT — e.g. sampling_weight, when the sample is
+                                           #   enriched or stratified — see "Weighted samples"
+    measurements: null                     # NOT BUILT — e.g. {by: read_id, collapse: mean} for
+                                           #   technical replicates
+    holdout: null                          # NOT BUILT — optional single fixed train/test split;
+                                           #   see "A fixed holdout split"
+    assign: {}                             # NOT BUILT; REQUIRED when allocation is `between` — one
+                                           # block per sweep.groups axis, keyed by the axis name:
                                            #   arm:
                                            #     method: random     # random | by_attribute | blocked
                                            #     from: arm          # by_attribute; defaults to the axis name
@@ -107,13 +110,17 @@ sweep:
   # ---- What varies. Omit entirely for a single-condition experiment. ----
   # Keys are dotted paths into `parameters`; modes compose. See "Sweeps and repeats".
   baseline: {analysis.method: pearson}   # optional reference condition; enables deltas
-  groups: []                             # optional list of unit-group axes, e.g. [{by: arm, levels: [...]}]
-  paired: []                             # optional coupled settings, e.g. [{analysis.min_samples: 30,
+  groups: []                             # NOT BUILT; optional list of unit-group axes,
+                                         #   e.g. [{by: arm, levels: [...]}]
+  paired: []                             # NOT BUILT; optional coupled settings,
+                                         #   e.g. [{analysis.min_samples: 30,
                                          #   analysis.confidence: 0.95}] — one axis, not a product
-  ablate: null                           # optional; 1 + n one-change conditions, e.g. {from: baseline,
-                                         #   remove: [...]} or {override: [...]} — requires baseline
-  sample: null                           # optional; continuous ranges instead of enumeration,
-                                         #   e.g. {n: 40, method: sobol, seed: auto, ranges: {...}}
+  ablate: null                           # NOT BUILT; optional; 1 + n one-change conditions, e.g.
+                                         #   {from: baseline, remove: [...]} or {override: [...]}
+                                         #   — requires baseline
+  sample: null                           # NOT BUILT; optional; continuous ranges instead of
+                                         #   enumeration, e.g. {n: 40, method: sobol, seed: auto,
+                                         #   ranges: {...}}
   grid:
     analysis.method: [spearman, kendall]
   # 1 baseline + 2 grid = 3 conditions
@@ -121,7 +128,7 @@ sweep:
 replication:
   # ---- How each condition repeats. Kind determines the statistics core applies. ----
   repeats:
-    - {kind: seed, n: 5}                 # seed | batch | fold
+    - {kind: seed, n: 5}                 # seed | batch | fold — a fold's `stratify_by` is NOT BUILT
   order: as_declared                     # as_declared | randomized
   rationale: ""
 
@@ -133,10 +140,11 @@ statistics:
                                          #   of: "shift=abnormal", against: "shift=normal",
                                          #   within: {sex: f}}] — `within` is optional and
                                          #   restricts to a stratum. See "Contrasts"
-  resample: null                         # {method: bootstrap, n: 2000, stratify_by: []} →
-                                         #   percentile CIs for column metrics too; derived
+  resample: null                         # NOT BUILT; {method: bootstrap, n: 2000, stratify_by: []}
+                                         #   → percentile CIs for column metrics too; derived
                                          #   metrics resample either way
-  null_test: null                        # e.g. {method: permutation, n: 5000, shuffle: label}
+  null_test: null                        # NOT BUILT; e.g. {method: permutation, n: 5000,
+                                         #   shuffle: label}
   report_by: []                          # optional unit attributes to repeat every aggregated
                                          #   metric over — marginally, never crossed,
                                          #   e.g. [sex, site]. Strata, not design axes — they add
@@ -170,7 +178,7 @@ hypotheses:
     evaluate_on: observed                # observed | ci95_lower | ci95_upper
 ```
 
-`init` materializes **every parameter the template declares**, each with its default and its inline comment. The four optional `statistics` sub-blocks are shown above at their full expansion because this section is the complete config *schema*, which is a wider thing than the literal output of `init`; a materialized file that does not carry them is not an incomplete config. For `contrasts` and `report_by`, declaring one by hand is how a run asks for it, and `validate` accepts the key whether or not `init` wrote it. **`resample` and `null_test` are not yet built**: a config declaring either is refused today, naming the `-UNSUPPORTED` code its slice will retire — the same treatment [an unbuilt module](#package-layout) and [an unbuilt import](#the-importable-surface) get, because a contract that appears only once its implementation lands is a contract nobody could have designed to. What `init` writes is complete with respect to [`parameter_spec`](#templates-where-parameters-are-defined), which is the only source of truth there is one of.
+`init` materializes **every parameter the template declares**, each with its default and its inline comment. The four optional `statistics` sub-blocks are shown above at their full expansion because this section is the complete config *schema*, which is a wider thing than the literal output of `init`; a materialized file that does not carry them is not an incomplete config. For `contrasts` and `report_by`, declaring one by hand is how a run asks for it, and `validate` accepts the key whether or not `init` wrote it. **Fourteen declarations above are not yet built, and each is marked `NOT BUILT` where it appears**: `sweep.groups`, `sweep.paired`, `sweep.ablate` and `sweep.sample`; `data.units.assign`, `.cluster_by`, `.weight_by`, `.measurements` and `.holdout`, the `{resolver: <name>}` form of `data.units.from`, and any `data.units.allocation` other than `within`; a `fold` repeat level's `stratify_by`; and `statistics.resample` and `statistics.null_test`. A config declaring any of them is refused today, naming the `-UNSUPPORTED` code its slice will retire — the same treatment [an unbuilt module](#package-layout) and [an unbuilt import](#the-importable-surface) get, because a contract that appears only once its implementation lands is a contract nobody could have designed to. That whole family is [deliberately absent from the validate-time registry](#errors-validate-reports) for the same reason, which is why this list, and not that table, is where a refused block is named. What `init` writes is complete with respect to [`parameter_spec`](#templates-where-parameters-are-defined), which is the only source of truth there is one of.
 
 **The four identifying fields above `metadata` say what this config is written against, and `validate` checks each.** `experiment_type` names the template and must resolve to one an installed package registers; `template_version` records the spec this file was materialized from, and a mismatch with the installed template gets a [warning](#warnings-core-reports) — `W-TEMPLATE-VERSION` — not an error, because upgrading a plugin is ordinary and [nothing ever writes back into your config](#the-one-config-file). What makes an incompatibility *fail* is already covered without a version check: a retired parameter is an unknown key, and a new required one is a missing key. So the version tells you where to look and the existing checks decide whether it matters; `plugin` names where the template came from, and is a readable note beside the authoritative pin in `uv.lock` rather than a second one — core never installs from it. `schema_version` is the config format's own version: core reads any minor at or below its own and refuses a higher one, or a major it doesn't implement, rather than guessing at a field it doesn't recognize. Through v0.x a change that would break an existing config bumps the major, and there is no migration command — a config is small, `init` writes a fresh one, and the [defaults-file argument](#there-is-no-separate-defaults-file) applies to a migration file too. What protects an old *result* is that `run.yaml` embeds its config verbatim alongside the `schema_version` it was written under, so a record stays readable whether or not the format moved. All four are inside [`parameters_hash`](#three-hashes), because a config read against a different spec is a different declaration.
 
@@ -198,6 +206,8 @@ The authoritative catalog of parameters is the template's `parameter_spec` — i
 ```bash
 uv run publishable validate configs/cohort-pilot/config.yaml
 ```
+
+The table below states each check by the mistake it catches. What `validate` *prints* for one is a [diagnostic](#exit-codes-and-diagnostics) carrying a stable identifier, and the two registries of those are [§ Errors `validate` reports](#errors-validate-reports) and [§ Warnings core reports](#warnings-core-reports) — a row here and a code there are the same check seen from the two ends, so a reader who has an identifier in hand should start there rather than matching prose against this table.
 
 | Check | Example failure |
 |---|---|
@@ -289,7 +299,7 @@ uv run publishable validate configs/cohort-pilot/config.yaml
 | Hypothesis form matches its metric | `hypotheses[1].metric` names a metric of a `scope: "summary"` step but declares `compare`; a summary metric is one value per run, not a contrast between conditions — and a condition-step metric without `compare` is the same mistake inverted |
 | Hypothesis has an inference base | `hypotheses[0]` names a metric under the same declarations, without a bound: every metric will be `basis: repeats`, so it can be reported but not tested (warning) |
 
-The unknown-key check matters more than it looks: a mistyped key in a hand-edited YAML file is otherwise silently ignored, and the run proceeds with a default while you believe you changed something. Since [the schema is closed and `validate` checks every key against it](#the-one-config-file), any key not in the spec is a typo by construction.
+The unknown-key check matters more than it looks: a mistyped key in a hand-edited YAML file is otherwise silently ignored, and the run proceeds with a default while you believe you changed something. Since [the schema is closed and `validate` checks every key against it](#the-one-config-file), any key not in the spec is a typo by construction — except inside a block the schema declares as a whole leaf, where the walk stops and the keys within it are not reached: a `hypotheses` or a `statistics.contrasts` entry, a `replication.repeats` entry of kind `seed` or `fold` (a `batch` level is closed), and the mapping form of `data.units.from`. A key not in the spec there is ignored rather than reported — which in the first three means a misspelled `evaluate_on`, `within`, or `n` silently keeps its default — and each is closed by the slice that owns its block.
 
 **Every threshold in that table lives in `limits`**, not in a flag, an environment variable, or a core default nobody can see. A threshold is a parameter of the run like any other: it decides whether the run is allowed to proceed, or whether a reader is warned about the number they're looking at, and a value with that much authority belongs in the file being hashed rather than in the tool's source. `init` writes the defaults; changing one is an ordinary edit, and it moves `parameters_hash` along with everything else — so `diff` prints a raised `max_failed_fraction` as the parameter delta it is, and two runs that disagreed about what counted as too much attrition can be told apart rather than looking identical. This is [Everything is in the file](design-principles.md#everything-is-in-the-file) applied to core's own knobs, which would otherwise be the one set of parameters living outside it.
 
@@ -331,7 +341,7 @@ Each row states the condition, not the wording.
 | [`replication.repeats`](#a-batch-says-when-not-what) declares a `batch` level but no step in the pipeline sets `nondeterministic = True` | `W-REPL-DETERMINISTIC` |
 | `replication.repeats`'s total across every declared level is below the template's `default_repeats`, checked only once every level's count is resolvable — a floor warning derived from an already-invalid design would be noise | `W-REPL-FLOOR` |
 | A template's `aggregate` produced no usable value for a completed condition and step — it raised, a returned key collided with one a step already recorded, or every resample draw of it was degenerate. Reported at `run` time; the recorded columns' own summaries are unaffected, and only the derived metric is lost | `W-STATS-AGGREGATE-FAILED` |
-| A [comparison](#contrasts-claims-that-arent-condition-vs-baseline) declaring `within` reports `n_paired` below `limits.min_reported_n` | `W-STATS-CONTRAST-THIN` |
+| A [comparison](#contrasts-claims-that-arent-condition-vs-baseline) declaring `within` is thinner than `limits.min_reported_n`, at either of two points: at `validate`, when fewer units of the roster it can already see match the stratum — skipped for a `within` naming an attribute `E-STATS-CONTRAST-WITHIN` just refused — and at `run`, when the comparison's realized `n_paired` is below it | `W-STATS-CONTRAST-THIN` |
 | A family's size implies a corrected level (`correction_level`) smaller than the resample's surviving draws can support — the *corrected*, smaller level is the one that can't be met, so `ci95_corrected` is left `null` rather than reported too narrow | `W-STATS-CORRECTED-THIN` |
 | `statistics.correction: fdr_bh` is declared over a family with at least one comparison, but nothing in it will carry a p-value — `statistics.null_test` is undeclared, or a parameter-axis contrast, which can never supply one, accounts for every member — so every `ci95_corrected` will be `null` | `W-STATS-CORRECTION-INAPPLICABLE` |
 | A family of more than zero comparisons per metric exists and `statistics.correction` is `none` — every interval is reported uncorrected, and each records `correction: null` to say so | `W-STATS-FAMILY` |
@@ -340,9 +350,116 @@ Each row states the condition, not the wording.
 | A step records a metric named `by` — the reserved key the reporting strata are attached under — so that column keeps its recorded value but is reported with no contrast delta, and no strata are reported for the step at all | `W-STATS-STRATUM-SHADOWED` |
 | A `statistics.report_by` level *completed* fewer units than `limits.min_reported_n`, checked at `run` time against what actually finished — the attrition between the roster `validate` saw and what a run completes is exactly what this catches beyond `W-STATS-REPORTBY-THIN` | `W-STATS-STRATUM-THIN` |
 | A `summary`-step [`Estimate`](#estimate-carries-your-interval-without-core-claiming-it) carries a `ci95` but no `n` — an interval with no stated denominator is the disclosure risk `limits.min_reported_n` exists to catch, and `study add` cannot check what it cannot see | `W-STEP-ESTIMATE-N` |
-| A config's declared `template_version` differs from the installed template's reported version | `W-TEMPLATE-VERSION` |
+| A [`sweep.baseline`](#expansion-modes) fixing a value on every `sweep.grid` axis leaves at least one condition differing from it on more than one of them, so that comparison is reported `confounded: true` and its delta mixes two effects. Checked at `validate` over the declared axes alone, and only for a baseline that fixes every one of them — a baseline leaving an axis free is refused outright by `E-SWEEP-BASELINE-PARTIAL` until per-cell baselines land, so the warning's own alternative is not yet a config core accepts | `W-SWEEP-BASELINE-CONFOUNDED` |
+| A config's declared `template_version` differs from the installed template's reported version — in this build, compared against the one version core itself writes, since `generic` is the only installed template and a template class reports no version of its own; a plugin's own version is read once the [registry](#creating-a-plugin-publishable-plugin-new) resolves it. The message also names every `parameter_spec` parameter carrying a default that this config does not set — computed only under that mismatch, and stated as unset-and-defaulted rather than as new, since the declaration does not say which | `W-TEMPLATE-VERSION` |
 
 `W-ENV-UNLOCKED` is the one row above that names a gap in this project rather than in yours: it fires on every scaffolded run right now, because `publishable` cannot yet be resolved from an index a lockfile pins against. That is bootstrapping, not a defect — a reader hitting it on their first run is seeing an accurate, expected state, not a misconfigured one.
+
+### Errors `validate` reports
+
+A validate-time error is a [diagnostic](#exit-codes-and-diagnostics), not an exception —
+`validate` collects every fault it can find in one pass, and modelling each as a raise would
+force it to stop at the first. [§ Errors core raises](#errors-core-raises) covers the run-time
+surface, where there is a step to raise into; these are the codes a *command* reports. Each
+carries a stable `E-` identifier for the same reason a raise-time code does: a message gets
+clearer over time, and something pinned to the wording breaks when it does.
+
+Some of these are raised where the roster and the repeat levels are resolved, rather than in
+`validate` itself — `validate` resolves both while checking a declaration and reports whatever
+it catches under the same code. That reuse is not a guarantee that one problem always gets one
+identifier regardless of surface: `{kind: fold, k: 0}` reports `E-REPL-N` at `validate` (its
+budget loop returns before the roster-partitioning code runs) and `E-REPL-FOLD-K` at `run`
+(where that code is what runs) — the same declaration, two codes, split exactly by which surface
+caught it first.
+
+A code ending `-UNSUPPORTED` is deliberately absent from this table: it refuses a block this
+build reads but does not yet execute, and it retires with the slice that implements the feature
+it names — [§ The one config file](#the-one-config-file) is where that family's rule lives, and
+where each currently-refused block is named and marked `NOT BUILT` in the config it shows.
+Documenting one here would pin a row this project
+already commits to deleting on a schedule neither this table nor its author controls.
+
+Each row states the condition, not the wording.
+
+Three faults return `validate_config` early, in this order: a config that does not parse
+(`E-CONFIG-PARSE`), a container-shaped `E-CONFIG-SHAPE` fault, and an unresolvable
+`experiment_type` (`E-TEMPLATE-UNKNOWN`). Each returns because every check after it reads
+what it just found wrong, and each is what triggers its own return rather than sitting
+behind it. Every other row in this table fires only once all three have passed — except
+`E-CONFIG-TYPE` and `E-CONFIG-KEY-UNKNOWN`, which `check_envelope` finds as the document
+loads, before either of the later two returns is possible.
+
+So a parse fault reports `E-CONFIG-PARSE` and nothing else at all. A container-shape fault
+reports every `E-CONFIG-SHAPE` finding `_check_shape` turns up — it loops over every block
+rather than stopping at the first — plus whichever of those two envelope rows the document
+also earned, and none of this table's other rows — including `E-TEMPLATE-UNKNOWN`, whose
+check the shape return comes before, so those two never appear together however wrong both
+are. An unresolvable `experiment_type` reports
+`E-TEMPLATE-UNKNOWN` exactly once, since that check returns immediately after, and,
+likewise apart from those same two envelope rows, none of the others.
+
+| Reported when | Code |
+|---|---|
+| A key under a container `check_envelope`'s `LEAF_TYPES` table declares, or a top-level key, that the table does not name — checked with a `difflib` hint, skipping the `parameters` and `sweep` subtrees entirely since each has its own closure (`E-PARAM-UNKNOWN`, `E-SWEEP-KEY-UNKNOWN`), and never descending into a known leaf's own value (a typo inside `data.units.holdout` or a `from` mapping is reached by no check at all — not by `_check_shape` either, which checks a container's shape and never the names inside one; [§ Validation](#validation) names the whole-leaf blocks that costs and the slice that closes each, and `holdout` is not among them only because the whole block is refused today as `E-DATA-HOLDOUT-UNSUPPORTED`, which makes its gap latent rather than live); a non-string YAML mapping key is coerced with `str()` first so it is still reported | `E-CONFIG-KEY-UNKNOWN` |
+| The config file does not parse as YAML, or parses to something other than a mapping | `E-CONFIG-PARSE` |
+| A top-level block, or a nested container `_check_shape` walks before its items — `data.units` and its `attributes`, `sweep.baseline`, `sweep.grid` and each axis's values, `replication.repeats` and each level, `statistics.contrasts`, `statistics.report_by` — is present and not the mapping, list, or string its position requires; unset (`null`) is treated as absent, matching `E-CONFIG-TYPE` | `E-CONFIG-SHAPE` |
+| A leaf `check_envelope`'s `LEAF_TYPES` table declares is present and not its declared type — a `bool` never satisfies any leaf's type, since the table declares none as `bool`, and an `int` satisfies a `float` one; unset (`null`) is treated as absent | `E-CONFIG-TYPE` |
+| `data.input_dir` or `data.output_dir` resolves inside the git repository, checked once a repo root is found | `E-DATA-IN-REPO` |
+| `data.input_dir` or `data.output_dir`, after `expanduser()`, is not an absolute path | `E-DATA-NOT-ABSOLUTE` |
+| `data.input_manifest_policy` is empty, or is a value outside the declared policies | `E-DATA-POLICY` |
+| `data.input_dir` or `data.output_dir` is empty | `E-DATA-REQUIRED` |
+| `data.input_dir` is not a directory, or is a directory with nothing in it | `E-DATA-UNREADABLE` |
+| Once no experiment was preloaded, `entrypoint` is a non-empty string, and a repository root was found for it, importing it raises anything — a `SystemExit` at module scope, `entrypoint` not shaped `<module>:<attribute>`, or any other exception; skipped without a report when no repository root exists at all, since there is then no `src/` to import from | `E-ENTRYPOINT-IMPORT` |
+| `entrypoint` is empty, or is not a string | `E-ENTRYPOINT-REQUIRED` |
+| A hypothesis's `compare.to` is `baseline` — explicit, or implicit when `compare.condition` is present and neither `to` nor `compare.contrast` is — and `sweep.baseline` is not declared. Presence is the test, so `condition: null` counts and is *not* treated as absent the way an unset `E-CONFIG-TYPE` or `E-CONFIG-SHAPE` leaf is: `hypotheses` is a whole-leaf block whose entries `hypotheses.resolve` reads by key, stringifying whatever `condition` holds into a label lookup, so a present-but-`null` `condition` names a label that resolves to nothing rather than leaving a field unset. With a baseline declared it draws `E-HYPOTHESIS-CONDITION` instead, for that same reason | `E-HYPOTHESIS-BASELINE` |
+| Once the entrypoint has imported and the metric's step is one it declares, a hypothesis names a metric whose scope is not `summary`, sets `evaluate_on` to `ci95_lower` or `ci95_upper`, and no metric this run computes could ever carry an interval — `data.units` is undeclared and the template defines no `aggregate` | `E-HYPOTHESIS-BOUND` |
+| A hypothesis's `compare` declares `to`, and its value is not `baseline` | `E-HYPOTHESIS-COMPARE-TO` |
+| A hypothesis's `compare.condition` names a label the run's `sweep` does not declare, or names the baseline's own label — checked only once a baseline is declared, since `E-HYPOTHESIS-BASELINE` already covers the case where none is, and only once `sweep` expands cleanly enough to resolve condition labels at all | `E-HYPOTHESIS-CONDITION` |
+| A hypothesis's `compare.contrast` names an `id` `statistics.contrasts` does not declare | `E-HYPOTHESIS-CONTRAST` |
+| A hypothesis's `direction` is missing or is a value other than `greater` or `less` | `E-HYPOTHESIS-DIRECTION` |
+| A hypothesis's `evaluate_on` is set and is a value other than `observed`, `ci95_lower`, or `ci95_upper` — unset (`null`) is accepted, since `observed` is the documented default | `E-HYPOTHESIS-EVALUATE-ON` |
+| Once the entrypoint has imported, a hypothesis names a `scope: summary` metric and declares `compare`, or names a `condition`- or `repeat`-scoped metric without declaring `compare` | `E-HYPOTHESIS-FORM` |
+| A hypothesis's `kind` is missing or is a value other than `confirmatory` or `exploratory` | `E-HYPOTHESIS-KIND` |
+| A hypothesis entry is not a mapping, or its `metric` is missing or not a `step.metric` string, or — once the entrypoint has imported — names a step the entrypoint's `steps` list does not declare | `E-HYPOTHESIS-METRIC` |
+| A hypothesis's `threshold` is missing or is not a number — a `bool` does not count as one | `E-HYPOTHESIS-THRESHOLD` |
+| `metadata.description` or `metadata.authors` — the two fields this check covers — is empty; one finding per field, and `metadata.name` is not among them | `E-META-REQUIRED` |
+| `metadata.name` is truthy and differs from the name of the directory its config file sits in — checked regardless of `name`'s type, so a wrongly-typed truthy `name` reports this alongside `E-CONFIG-TYPE` rather than being skipped, unlike `E-NAME-PATTERN`; and checked only once the config path names a directory at all — a bare filename with no parent segment (`validate config.yaml`, run from inside that config's own directory) resolves to an empty directory name and skips the check | `E-NAME-DIR` |
+| `metadata.name` is a non-empty string that does not match the template's `naming_pattern` | `E-NAME-PATTERN` |
+| A `parameter_spec` parameter with no `default` is not declared under `parameters` | `E-PARAM-MISSING` |
+| A key under `parameters`, flattened to its dotted path, is not one `parameter_spec` declares — checked with a `difflib` hint | `E-PARAM-UNKNOWN` |
+| A value declared under `parameters`, or a value fixed by `sweep.grid`/`sweep.baseline`, fails its `Param`'s own check | `E-PARAM-VALUE` |
+| A `fold` level's `k` is `all` with no resolved roster to size it against, or is not a whole number ≥ 2 — including exactly 1, which `E-REPL-N`'s floor of 1 does not catch | `E-REPL-FOLD-K` |
+| A `fold` level's `k` exceeds the resolved unit count, which would leave a fold with nothing to test | `E-REPL-FOLD-K-TOO-LARGE` |
+| `replication.repeats` declares a `fold` level and `data.units` is not declared, so there is no roster to partition | `E-REPL-FOLD-NO-UNITS` |
+| A repeat level's `kind` is one of the rejected legacy names (`bootstrap`, `permutation`, `technical`, `biological`, `holdout`), or is not one of the supported kinds (`seed`, `batch`, `fold`) | `E-REPL-KIND` |
+| A `batch` level is declared anywhere but the outermost position in `replication.repeats` | `E-REPL-LEVEL-BATCH-INNER` |
+| `replication.repeats` declares more than two levels | `E-REPL-LEVEL-DEPTH` |
+| Two levels of `replication.repeats` declare the same `kind` | `E-REPL-LEVEL-DUPLICATE` |
+| A level declares the count field belonging to the other kind — `n` on a `fold` level, or `k` on a `seed`/`batch` level — or a `batch` level declares any key besides `kind` and `n`, checked after the count-field clause so `{kind: batch, k: 3}` still reports its count rather than an unrecognized key. Applied to `batch` alone; no other kind's keys are closed | `E-REPL-LEVEL-FIELD` |
+| A `seed` or `batch` level's `n`, or a `fold` level's `k`, resolves to an integer less than 1 | `E-REPL-N` |
+| `replication.order` is set and is a value other than `as_declared` or `randomized` — unset (`null`) is accepted | `E-REPL-ORDER` |
+| Two members of one repeat level derive the same seed, or resolve to the same label, from the digest the check ran against | `E-REPL-SEED-COLLISION` |
+| A `statistics.contrasts` entry's `of` or `against` names another entry's `id` rather than a condition's label — contrasts compare conditions and do not nest | `E-STATS-CONTRAST-NESTED` |
+| A `statistics.contrasts` entry sets `of` and `against` to the same condition | `E-STATS-CONTRAST-SAME-SIDES` |
+| `statistics.contrasts` is not a list, an entry in it is not a mapping, or an entry's `id` is missing, is not a string, or repeats an earlier entry's | `E-STATS-CONTRAST-SHAPE` |
+| A `statistics.contrasts` entry's `of` or `against` names a value that matches no declared condition's label and no other entry's `id` | `E-STATS-CONTRAST-UNKNOWN` |
+| A `statistics.contrasts` entry's `within` names an attribute `data.units.attributes` does not declare | `E-STATS-CONTRAST-WITHIN` |
+| `statistics.correction` is set and is a value other than `none`, `bonferroni`, `holm`, or `fdr_bh` — unset (`null`) is accepted | `E-STATS-CORRECTION-UNKNOWN` |
+| A `statistics.report_by` entry is not a string, or names an attribute `data.units.attributes` does not declare | `E-STATS-REPORTBY-UNKNOWN` |
+| A `sweep.grid` axis declares an empty (falsy) list of values, so the sweep would expand to zero conditions | `E-SWEEP-AXIS-EMPTY` |
+| `sweep.baseline` is declared and leaves at least one of `sweep.grid`'s axes unfixed — per-cell baseline expansion is specified but not implemented in this build | `E-SWEEP-BASELINE-PARTIAL` |
+| `sweep` is declared and resolves to zero conditions, whatever shape produced that — a backstop beneath the per-axis checks above | `E-SWEEP-EXPANDS-EMPTY` |
+| `sweep` declares a key that is not one of the six recognized sweep modes (`baseline`, `grid`, `paired`, `ablate`, `sample`, `groups`) | `E-SWEEP-KEY-UNKNOWN` |
+| `sweep.grid` or `sweep.baseline` names a dotted path the template's `parameter_spec` does not declare | `E-SWEEP-PATH-UNKNOWN` |
+| A `sweep.grid` value cannot be rendered into a condition label — a `sweep.baseline` value is exempt, since it is never rendered into one | `E-SWEEP-VALUE-UNNAMEABLE` |
+| `template.validate(doc)` yields a message — run last, after every other check in this table, and ungated by their findings, so a cross-block rule can report on `parameters` another row already refused | `E-TEMPLATE-RULE` |
+| `experiment_type` names a template no installed package registers | `E-TEMPLATE-UNKNOWN` |
+| `data.units.attributes` names a value the source table has no column for, or names any value at all under a `{glob: ...}` source, which yields a key and a path and nothing else — reported for the first such name, and after `E-UNITS-ATTR-RESERVED` under either source; or — for a table source only — names a non-string item | `E-UNITS-ATTR-MISSING` |
+| `data.units.attributes` names a field of `Unit` itself (`key`, `paths`, or `attributes`), which cannot also be a declared attribute | `E-UNITS-ATTR-RESERVED` |
+| The table `data.units.from` names has no data rows, or the `glob` it names matches no files under `input_dir` | `E-UNITS-EMPTY` |
+| Two resolved units share the same `data.units.key` value | `E-UNITS-KEY-DUPLICATE` |
+| `data.units.key` names a column the source table does not have | `E-UNITS-KEY-MISSING` |
+| `data.units.from` names a table that is not a file under `input_dir`, or is neither a table name nor a `{glob: ...}` mapping | `E-UNITS-SOURCE-MISSING` |
 
 ---
 
@@ -2510,6 +2627,8 @@ Not every key above is required, and `validate` enforces the set below rather th
 | `evaluate_on` | optional | `observed` when absent; `ci95_lower` or `ci95_upper` otherwise (`E-HYPOTHESIS-EVALUATE-ON` when present and none of the three) |
 | `compare` | conditional | absent exactly when `metric` names a `scope: "summary"` step — a summary metric is one value per run, not a contrast between conditions — and required for every other scope; both directions are `E-HYPOTHESIS-FORM` |
 
+**`compare` names both sides of the comparison, not one.** A condition alone says *what's being measured*; a comparison also needs *what it's measured against*. `to: baseline` is the ordinary spelling of the second side — the named condition against the declared baseline — and a declared contrast, named through `compare.contrast`, is the other. `compare: {condition: X}` with neither `to: baseline` nor a declared `sweep.baseline` names a condition and nothing to compare it against, and `validate` refuses it (`E-HYPOTHESIS-BASELINE`) rather than defaulting the missing side to baseline: a hypothesis whose comparison cannot be resolved has no quantity under test, the same reason `metric` is required, and a silent default would decide what a pre-registered hypothesis tested rather than what the config declared.
+
 Core evaluates each hypothesis against the results and writes the verdict into `run.yaml`:
 
 ```yaml
@@ -2818,7 +2937,7 @@ configs/cohort-pilot/config.yaml
 2 problems (1 error, 1 warning)
 ```
 
-The identifier is part of the contract and outlives the wording: a message gets clearer over time, and something that pinned the wording would break when it did. It's one registry rather than two — the `E-` codes the [errors core raises](#errors-core-raises) carry are the same namespace as the ones printed here, since a run-time failure and a pre-flight one are equally worth grepping and there is no reader for whom they are different vocabularies. There is no `--json`, because [an operation command takes paths and nothing else](design-principles.md#everything-is-in-the-file) and a flag that switches the output format is still a flag. The identifier is what a tool should key on, and it is equally stable in the output there is.
+The identifier is part of the contract and outlives the wording: a message gets clearer over time, and something that pinned the wording would break when it did. It's one namespace rather than two — the `E-` codes the [errors core raises](#errors-core-raises) carry and the ones [`validate` reports](#errors-validate-reports) are drawn from the same vocabulary, since a run-time failure and a pre-flight one are equally worth grepping and there is no reader for whom they are different languages. They are written as two tables because a raise and a printed finding are documented by different things — what raises it, versus what reports it — and not because a code belongs to one or the other; nothing keys on which table a code is listed in. There is no `--json`, because [an operation command takes paths and nothing else](design-principles.md#everything-is-in-the-file) and a flag that switches the output format is still a flag. The identifier is what a tool should key on, and it is equally stable in the output there is.
 
 A local filesystem failure — an unwritable `output_dir`, a full disk — is reported as `E-IO-FAILED` and exits `1`. It is not a `ContractError`: nothing in your declarations asked for it, and no `except` in a step improves it. A creation command refusing to overwrite an existing file reports `E-STEP-EXISTS` and exits `1` for a related reason — [creation commands take arguments](#creation-commands), and refusing is how one stays safe to re-run.
 
@@ -3229,6 +3348,7 @@ publishable/
 │   ├── docs.py                # `docs`: regenerates managed README regions from live specs — not yet built
 │   ├── readme_templates/      # the shipped README/CITATION.cff/LICENSE scaffolds
 │   ├── param.py               # Param: type, default, constraints, help
+│   ├── envelope.py            # the config envelope's leaf types and the closed-schema walk
 │   ├── validate.py            # the value-level validation engine
 │   ├── base_experiment.py     # BaseExperiment: one ordered steps list, scopes resolved from it
 │   ├── base_step.py           # BaseStep: scope, run(cfg, io), self.condition/self.repeat,

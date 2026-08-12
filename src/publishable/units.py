@@ -206,7 +206,27 @@ def _from_table(decl: dict[str, Any], input_dir: Path, source: str) -> list[Unit
     ]
 
 
-def _from_glob(pattern: str, input_dir: Path) -> list[Unit]:
+def _from_glob(decl: dict[str, Any], pattern: str, input_dir: Path) -> list[Unit]:
+    # A glob yields a key and a path and nothing else, so every name under
+    # `data.units.attributes` is one this source cannot supply — `reference.md`
+    # § Validation's "Attributes have a source" row states this case with this
+    # example. Ordered as `_from_table` orders it, reserved before unsourced, so
+    # one declaration draws one code whichever source it sits under.
+    for name in decl.get("attributes") or []:
+        if name in RESERVED_FIELDS:
+            raise ContractError(
+                f"`data.units.attributes` names {name!r}, which is a field of `Unit` itself; "
+                f"{', '.join(RESERVED_FIELDS)} cannot also be attributes",
+                code="E-UNITS-ATTR-RESERVED",
+            )
+        raise ContractError(
+            f"`data.units.attributes` names {name!r}, which `from: {{glob: {pattern!r}}}` "
+            "cannot supply — a glob yields a key and a path and nothing else. Declare a "
+            "table or a resolver, or drop the attribute",
+            code="E-UNITS-ATTR-MISSING",
+        )
+    # The loop above reports the first declared name and stops, which is
+    # `_from_table`'s behavior for a name its table has no column for.
     # Lexicographic over relative paths: filesystems walk directories differently,
     # and a roster whose order depends on that is not reproducible.
     rels = sorted(
@@ -229,7 +249,7 @@ def resolve_units(units_decl: dict[str, Any], input_dir: Path) -> UnitList:
     if isinstance(source, str):
         units = _from_table(units_decl, input_dir, source)
     elif isinstance(source, dict) and "glob" in source:
-        units = _from_glob(str(source["glob"]), input_dir)
+        units = _from_glob(units_decl, str(source["glob"]), input_dir)
     else:
         raise ContractError(
             f"`data.units.from` is {source!r}; expected a table name or {{glob: ...}}",
