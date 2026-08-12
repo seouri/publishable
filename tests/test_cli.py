@@ -3969,3 +3969,27 @@ def test_a_sampled_path_is_unreadable_at_run_scope(tmp_path: Path, capsys):
     ledger = (doc["run_dir"] / "executions.jsonl").read_text()
     assert '"status": "failed"' in ledger
     assert "E-STEP-SWEPT-PARAM" in doc["stdout"] + ledger
+
+
+def test_an_ablate_override_path_is_unreadable_at_run_scope(tmp_path: Path, capsys):
+    """The same rule from the other side of the axis/non-axis split. `ablate` is
+    not an axis, so its paths are deliberately not in `_swept_paths`; they still
+    vary across conditions, so `command_run` unions `ablated_paths` into the set
+    it makes unreadable. A `remove` path is already covered by the `baseline`
+    term — the baseline is what an ablation removes from — so the residue this
+    test pins is an `override` path the baseline leaves alone."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        extra_steps=["summarize"],
+        extra_step_source=_READS_A_SWEPT_PARAM_SUMMARY_STEP,
+        expect_exit=EXIT_PARTIAL,
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "ablate": {"override": [{"analysis.confidence": 0.9}]},
+        },
+    )
+    ledger = (doc["run_dir"] / "executions.jsonl").read_text()
+    assert '"status": "failed"' in ledger
+    assert "E-STEP-SWEPT-PARAM" in doc["stdout"] + ledger
