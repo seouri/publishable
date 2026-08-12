@@ -351,6 +351,20 @@ def test_rows_sharing_a_key_collapse_to_one_unit():
     assert "read_id" not in collapsed[0].attributes   # the measurement axis is consumed
 
 
+def test_mean_over_three_measurements_is_a_mean_and_not_a_median():
+    """Every other `mean` case here collapses two symmetric values (10 and 20 →
+    15 under either rule), so none of them can tell `mean` from `median`. Three
+    asymmetric values can, which is what makes this the input-path half of the
+    pair that pins the step path and this one to one shared `apply_rule`."""
+    units = [
+        Unit(key="p1", paths=(), attributes={"read_id": "r1", "depth": 10}),
+        Unit(key="p1", paths=(), attributes={"read_id": "r2", "depth": 20}),
+        Unit(key="p1", paths=(), attributes={"read_id": "r3", "depth": 60}),
+    ]
+    collapsed, _ = collapse_measurements(units, by="read_id", collapse="mean")
+    assert collapsed[0].depth == 30.0
+
+
 def test_median_and_sum_are_collapse_rules():
     units = [
         Unit(key="p1", paths=(), attributes={"read_id": "r1", "depth": 10}),
