@@ -745,11 +745,11 @@ def test_an_ablated_path_is_disambiguated_against_every_other_ablated_path() -> 
 
 
 def test_ablated_paths_are_not_axis_shaped_paths() -> None:
-    """`_swept_paths` is the axis-shaped modes' set, and `E-SWEEP-BASELINE-PARTIAL`
-    reads it to ask which axis a baseline leaves free. `ablate` is not an axis and
-    has no cells to expand a baseline over, so its paths are carried separately —
-    `expand` and `cli` union the two where labelling and scope-readability need
-    the whole set."""
+    """`_swept_paths` is the axis-shaped modes' set, and `_baseline_cells` reads it
+    (through `_axes`' cells) to ask which axis a baseline leaves free. `ablate` is
+    not an axis and has no cells to expand a baseline over, so its paths are
+    carried separately — `expand` and `cli` union the two where labelling and
+    scope-readability need the whole set."""
     from publishable.sweep import _swept_paths, ablated_paths
 
     sweep = {
@@ -991,6 +991,41 @@ def test_a_baseline_naming_one_path_of_a_paired_entry_fixes_that_whole_axis() ->
     assert len(baselines) == 1
     assert baselines[0].label == "baseline"
     assert dict(baselines[0].values) == {"analysis.min_samples": 30}
+
+
+def test_a_baseline_fixing_no_swept_path_expands_over_every_axis() -> None:
+    """A truthy baseline naming only paths no axis sweeps leaves *every* axis
+    unfixed, so it expands over all of them: a four-cell grid becomes four
+    baselines beside four product rows.
+
+    Pinned as the behaviour that ships rather than the behaviour that is wanted.
+    It follows from the rule § Expansion modes states without a caveat — the
+    baseline expands over whichever axes it doesn't fix — and the shape is a
+    legitimate one when the fixed path is a real reference setting (a per-cell
+    arm at `drop_missing: false`). It is degenerate when the fixed value equals
+    the base config's own, which the second assertion below is: every baseline
+    row then resolves to the same parameters as the product row in its cell, so
+    the run pays twice for one answer and the correction family doubles.
+    Recorded under `docs/superpowers/spec-defects.md`, "Three baseline shapes
+    per-cell expansion makes reachable", not refused here — refusing it would
+    also refuse the non-degenerate reading."""
+    conditions = expand(
+        {
+            "sweep": {
+                "baseline": {"analysis.drop_missing": True},
+                "grid": {
+                    "analysis.method": ["pearson", "spearman"],
+                    "data.sex": ["f", "m"],
+                },
+            }
+        }
+    )
+
+    assert [c.is_baseline for c in conditions] == [True] * 4 + [False] * 4
+    # Cell for cell, the baseline row differs from its product row in the one
+    # path the baseline names — and in nothing else.
+    for baseline, product in zip(conditions[:4], conditions[4:], strict=True):
+        assert dict(baseline.values) == dict(product.values) | {"analysis.drop_missing": True}
 
 
 def test_an_empty_axis_leaves_no_conditions_even_under_a_baseline() -> None:

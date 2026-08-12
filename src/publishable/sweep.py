@@ -438,12 +438,13 @@ def _swept_paths(sweep: dict[str, Any]) -> list[str]:
                 paths.append(path)
     sample = sweep.get("sample")
     if isinstance(sample, dict) and isinstance(sample.get("ranges"), dict):
-        # Read defensively rather than through `sample_fault`: this function is
-        # called by `validate._check_unimplemented` on a config no check has
-        # cleared yet, and a malformed `sample` must not stop the swept-path
-        # list — which `E-SWEEP-BASELINE-PARTIAL` reads — from being built out
-        # of the modes that *are* well-formed. `_sample_cells` is where a
-        # malformed `sample` is refused.
+        # Read defensively rather than through `sample_fault`: `expand` calls
+        # this on a config no check has cleared yet — `validate` expands inside
+        # a `try` precisely because it collects findings rather than raising —
+        # and a malformed `sample` must not stop the swept-path list, which is
+        # what `label_for` shortens each path against, from being built out of
+        # the modes that *are* well-formed. `_sample_cells` is where a malformed
+        # `sample` is refused.
         for path in sample["ranges"]:
             if isinstance(path, str) and path not in paths:
                 paths.append(path)
@@ -514,12 +515,12 @@ def ablation_changes(sweep: dict[str, Any]) -> list[dict[str, Any]]:
 def ablated_paths(sweep: dict[str, Any]) -> list[str]:
     """Every path `ablate` changes, deduped, in declared order.
 
-    Deliberately NOT part of `_swept_paths`, which is the axis-shaped modes' set
-    and is what `validate`'s `E-SWEEP-BASELINE-PARTIAL` reads: that refusal is
-    about a baseline leaving an *axis* free, which expands to one baseline per
-    cell — a sentence with no meaning for a mode that is not an axis and cannot
-    compose with one. An ablated path in there would refuse a legal `override`
-    on a path the baseline does not fix, with a message about cells.
+    Deliberately NOT part of `_swept_paths`, which is the axis-shaped modes'
+    set: an axis is a thing a baseline can leave free and a thing
+    `_baseline_cells` can expand over, and `ablate` is neither — it does not
+    multiply and cannot compose with an axis. An ablated path in that set would
+    make a legal `override` on a path the baseline does not fix look like an
+    unfixed axis, and there are no cells for a baseline to expand over.
 
     The two places that need it say so themselves instead. `expand` labels
     against the union of both, because `_keys_for` can only shorten a path
@@ -627,8 +628,9 @@ def _baseline_cells(
     paths per cell, and expanding one the baseline half-fixes would have to
     choose between the baseline's declared value and the cell's — discarding a
     declared value either way. Fixing it keeps the baseline's declaration
-    authoritative; whether such a config is legal at all is `validate`'s to say
-    (it is refused today by `E-SWEEP-BASELINE-PARTIAL`).
+    authoritative; whether such a config is legal at all is `validate`'s to say,
+    and today it says nothing — see `docs/superpowers/spec-defects.md`, "Three
+    baseline shapes per-cell expansion makes reachable".
 
     **Fixedness is read off the cells' paths, not off the mode's declaration**,
     which decides the empty-axis case: an axis with no cells carries no paths,

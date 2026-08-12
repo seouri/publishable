@@ -20,7 +20,6 @@ from publishable.scope import step_name as _step_name
 from publishable.strata import levels_for
 from publishable.sweep import (
     SWEEP_MODES,
-    _swept_paths,
     axis_modes_present,
     check_swept_value,
     expand,
@@ -914,7 +913,11 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     """Declared-but-unimplemented blocks, refused rather than silently ignored.
 
     This build expands `sweep.baseline`, `sweep.grid`, `sweep.paired`,
-    `sweep.sample` and `sweep.ablate` only. Both declared orders are honored — `randomized`
+    `sweep.sample` and `sweep.ablate` only. A `baseline` fixing only *some* of
+    the swept axes is no longer refused here: `sweep._baseline_cells` expands it
+    over the rest, one baseline condition per cell of the unfixed axes, which is
+    § Expansion modes' second row and the row it tells a reader to prefer.
+    Both declared orders are honored — `randomized`
     shuffles within each batch and `as_declared` leaves the plan's step-major
     layout alone. `sweep.paired` is no longer refused here: `_axes` composes it
     as a single axis whose cells set several paths at once, per § Expansion
@@ -983,45 +986,6 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
                 "will be "
                 "honored in a later slice",
             )
-
-    # A baseline that leaves some swept PATH unfixed. `reference.md`:1415-1422
-    # states one rule with two cases: the baseline expands over whichever axes it
-    # does not fix, giving one baseline condition per cell of the unfixed axes.
-    # `expand` emits exactly one `00_baseline` row carrying only what the baseline
-    # literally names, so the declared design is not the executed design — the
-    # failure every other refusal in this function exists to prevent. Per-cell
-    # expansion is a real feature; until it lands, refuse rather than diverge.
-    # A baseline fixing every swept path (including the no-sweep-axis case) is
-    # the supported row and is unaffected. `_swept_paths` is every axis-shaped
-    # mode's paths, not `grid`'s alone — `paired` composes into this same product
-    # now, and a baseline that fixes `grid` but leaves a `paired` axis free is the
-    # identical declared-vs-executed mismatch this check exists to catch. An
-    # *ablated* path is deliberately not in that set (see `sweep.ablated_paths`):
-    # `ablate` is not an axis, there are no cells for a baseline to expand over,
-    # and firing this refusal on an `override` path the baseline does not fix
-    # would refuse a legal config with a message about cells that do not exist.
-    #
-    # This check is path-granular, not axis-granular: it asks "does every swept
-    # path have some baseline value", not "does the baseline supply a whole cell
-    # of a `paired` axis". A baseline naming only half of one `paired` entry's
-    # paths passes this check pointing at the still-unfixed path, exactly as it
-    # would for two independent `grid` axes — and a value that isn't any declared
-    # `paired` cell (a mix-and-match the axis never produces) is not itself
-    # caught here, since per-cell baseline expansion (which would need to resolve
-    # a baseline against actual cells) is Task 6's feature, not this refusal's.
-    baseline = sweep.get("baseline") or {}
-    unfixed = [path for path in _swept_paths(sweep) if path not in baseline]
-    if baseline and unfixed:
-        c.error(
-            "E-SWEEP-BASELINE-PARTIAL",
-            "sweep.baseline",
-            f"fixes no value for {', '.join(f'`{p}`' for p in unfixed)}, and a baseline "
-            "that leaves an axis free expands to one baseline condition per cell of the "
-            "unfixed axes — which is specified but not implemented in this build; this "
-            "build emits a single `00_baseline` condition, so the design executed would "
-            "not be the design declared. Per-cell baselines will be honored in a later "
-            "slice; fix a value on every swept axis for now",
-        )
 
     units = _units_declaration(doc.get("data") or {}, c) or {}
     source = units.get("from")
@@ -1487,8 +1451,8 @@ def _check_sweep(
             # `remove` only, never `override`: an override states its own value,
             # so the baseline does not decide what it produces, and refusing an
             # override on a path the baseline leaves free would reject a legal
-            # config (the same line `sweep.ablated_paths` draws for
-            # `E-SWEEP-BASELINE-PARTIAL`).
+            # config (the same line `sweep.ablated_paths` draws when it keeps
+            # ablated paths out of the axis-shaped modes' set).
             param = spec[path]
             where = f"sweep.ablate.remove[{i}]"
             if not (param.type_ is bool or param.nullable):
@@ -1560,10 +1524,14 @@ def _check_sweep(
     # **The condition is the row's, and it is deliberately narrower than run
     # time.** Axes are compared over `sweep.grid`'s keys only, and only when the
     # baseline fixes every one of them — which is the row's own "fixes a value
-    # on every axis", and is also the only baseline-plus-grid shape this build
-    # admits at all (`_check_unimplemented`'s `E-SWEEP-BASELINE-PARTIAL` refuses
-    # a baseline that leaves an axis free, since per-cell baseline expansion is
-    # specified but not implemented). `cli._differing_axes` instead walks the
+    # on every axis". A baseline that leaves an axis free is not merely out of
+    # scope here, it is the shape where nothing is confounded by construction:
+    # `sweep._baseline_cells` gives it one baseline per cell of the unfixed
+    # axes, so every comparison differs on the fixed axes alone. That is the
+    # row's own remedy, and since per-cell expansion landed it is a config core
+    # accepts — the `all(...)` guard below is what routes such a config past
+    # this warning rather than warning about a design that fixed the fault.
+    # `cli._differing_axes` instead walks the
     # *union* of both sides' keys against a sentinel, so a baseline fixing an
     # axis the grid never sweeps adds a differing axis to every comparison and
     # can mark `confounded` where this warning stays silent. That direction is
@@ -1592,7 +1560,10 @@ def _check_sweep(
                 f"{len(conditions) - 1} baseline comparisons differ on more than one axis "
                 f"and are reported `confounded: true` — `{example.label}` differs on "
                 f"{', '.join(f'`{a}`' for a in axes)}, so its delta mixes those effects "
-                "and no amount of correct pairing separates them",
+                "and no amount of correct pairing separates them. Fix only the axis you "
+                "are measuring and leave the rest out of `sweep.baseline`: the baseline "
+                "then expands to one condition per cell of the free axes, and every "
+                "comparison differs in exactly one place",
             )
 
     repeat_total = _repeat_total(doc, unit_count)

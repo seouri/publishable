@@ -6,6 +6,7 @@ import yaml
 from tests.conftest import write_experiment_module
 
 from publishable.diagnostics import Collector
+from publishable.sweep import expand
 from publishable.validate import _check_contrasts, validate_config
 
 
@@ -1232,9 +1233,9 @@ def _error_codes(path: Path) -> set[str]:
 
     The composition tests below assert an exact set rather than membership: both
     started life asserting only that *some* error was reported, and on the first
-    draft of the crossed one `E-SWEEP-BASELINE-PARTIAL` fired for an unrelated
-    reason and the loose assertion accepted it. An exact set is what proves the
-    refusal under test is the one carrying the config.
+    draft of the crossed one a since-retired refusal on the config's `baseline`
+    fired for an unrelated reason and the loose assertion accepted it. An exact
+    set is what proves the refusal under test is the one carrying the config.
     """
     c = Collector()
     validate_config(path, c)
@@ -1264,10 +1265,10 @@ def test_ablate_crossed_with_a_parameter_axis_is_refused(write_config):
         write_config(
             {
                 "sweep": {
-                    # The baseline fixes the grid axis too, so the only fault
-                    # left in this config is the composition itself —
-                    # `E-SWEEP-BASELINE-PARTIAL` would otherwise make this test
-                    # pass for a reason that has nothing to do with `ablate`.
+                    # The baseline fixes the grid axis too. It no longer has to
+                    # — a baseline leaving an axis free is legal now — but the
+                    # config is kept as written so the exact-set assertion below
+                    # still proves `ablate`'s composition is the only fault.
                     "baseline": {
                         "analysis.method": "pearson",
                         "analysis.drop_missing": True,
@@ -2307,8 +2308,7 @@ def test_a_baseline_value_is_not_subject_to_the_nameability_check(write_config):
 
     The value has to be one `check_swept_value` actually refuses, or the test
     passes under either setting of `_value_checks`'s `nameable`. `pear son` fails
-    `SWEPT_VALUE_PATTERN` on the space, and the baseline still fixes every grid
-    axis, so `E-SWEEP-BASELINE-PARTIAL` does not fire either. Both directions are
+    `SWEPT_VALUE_PATTERN` on the space. Both directions are
     asserted on the one config: the `Param` check *is* applied to a baseline entry
     (`reference.md`:218), the nameability check is not."""
     found = codes(
@@ -2323,108 +2323,144 @@ def test_a_baseline_value_is_not_subject_to_the_nameability_check(write_config):
     )
     assert "E-PARAM-VALUE" in found
     assert "E-SWEEP-VALUE-UNNAMEABLE" not in found
-    assert "E-SWEEP-BASELINE-PARTIAL" not in found
 
 
-def test_a_baseline_that_leaves_a_grid_axis_free_is_refused(write_config):
-    """`reference.md`:1415-1422 requires one baseline condition per cell of the
-    unfixed axes; `expand` emits exactly one. Refused rather than diverging."""
-    found = messages_by_code(
-        write_config(
-            {
-                "sweep": {
-                    "baseline": {"analysis.method": "pearson"},
-                    "grid": {
-                        "analysis.method": ["spearman", "kendall"],
-                        "analysis.min_samples": [10, 20],
-                    },
-                }
+def test_a_baseline_that_leaves_a_grid_axis_free_validates_and_expands(write_config):
+    """§ Expansion modes' second row — the one the section tells a reader to prefer
+    — is a config core accepts, and it executes the design it declares.
+
+    `E-SWEEP-BASELINE-PARTIAL` refused exactly this shape while `expand` emitted a
+    single `00_baseline`. Both halves are asserted on the one config, because a
+    clean `validate` over a wrong expansion is what the retired refusal existed to
+    prevent: the baseline fixes `analysis.method` and leaves `analysis.min_samples`
+    free, so it expands to one baseline per level of the free axis, ahead of the
+    2 × 2 product."""
+    path = write_config(
+        {
+            "sweep": {
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {
+                    "analysis.method": ["spearman", "kendall"],
+                    "analysis.min_samples": [10, 20],
+                },
             }
-        )
+        }
     )
-    assert "E-SWEEP-BASELINE-PARTIAL" in found
-    assert "analysis.min_samples" in found["E-SWEEP-BASELINE-PARTIAL"]
-    assert "not implemented in this build" in found["E-SWEEP-BASELINE-PARTIAL"]
+    assert codes(path) == set()
+
+    conditions = expand(yaml.safe_load(path.read_text()))
+    assert [c.label for c in conditions] == [
+        "min_samples=10__baseline",
+        "min_samples=20__baseline",
+        "method=spearman__min_samples=10",
+        "method=spearman__min_samples=20",
+        "method=kendall__min_samples=10",
+        "method=kendall__min_samples=20",
+    ]
+    assert [c.is_baseline for c in conditions] == [True, True, False, False, False, False]
+    # Each baseline carries the axis it fixes *and* its own cell — the point of
+    # the expansion, and what a single `00_baseline` could not say.
+    assert dict(conditions[0].values) == {
+        "analysis.method": "pearson",
+        "analysis.min_samples": 10,
+    }
 
 
-def test_a_baseline_that_leaves_a_paired_axis_free_is_refused(write_config):
-    """`paired` now composes into the same product `grid` does (Task 2), so a
-    baseline that fixes `grid` but leaves a `paired` axis unfixed is the identical
-    declared-vs-executed mismatch `test_a_baseline_that_leaves_a_grid_axis_free_is_refused`
-    covers for `grid` — the check must read `_swept_paths`, not `grid` alone."""
-    found = messages_by_code(
-        write_config(
-            {
-                "sweep": {
-                    "baseline": {"analysis.method": "pearson"},
-                    "grid": {"analysis.method": ["spearman", "kendall"]},
-                    "paired": [
-                        {"analysis.min_samples": 30, "analysis.confidence": 0.95},
-                        {"analysis.min_samples": 50, "analysis.confidence": 0.99},
-                    ],
-                }
+def test_a_baseline_that_leaves_a_paired_axis_free_validates_and_expands(write_config):
+    """The same shape one mode over: a `paired` axis sets several paths per cell, so
+    the baseline that leaves it free expands over its *cells* rather than over a
+    list of values, and each baseline row carries both of the cell's paths."""
+    path = write_config(
+        {
+            "sweep": {
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {"analysis.method": ["spearman", "kendall"]},
+                "paired": [
+                    {"analysis.min_samples": 30, "analysis.confidence": 0.95},
+                    {"analysis.min_samples": 50, "analysis.confidence": 0.99},
+                ],
             }
-        )
+        }
     )
-    assert "E-SWEEP-BASELINE-PARTIAL" in found
-    assert "analysis.min_samples" in found["E-SWEEP-BASELINE-PARTIAL"]
-    assert "analysis.confidence" in found["E-SWEEP-BASELINE-PARTIAL"]
+    assert codes(path) == set()
+
+    conditions = expand(yaml.safe_load(path.read_text()))
+    assert [c.is_baseline for c in conditions] == [True, True, False, False, False, False]
+    assert dict(conditions[1].values) == {
+        "analysis.method": "pearson",
+        "analysis.min_samples": 50,
+        "analysis.confidence": 0.99,
+    }
 
 
-def test_a_baseline_fixing_every_axis_including_paired_is_supported(write_config):
-    """The mirror of the refusal above: a baseline naming every path any axis-shaped
-    mode sweeps — `grid`'s and `paired`'s alike — stays the supported row."""
-    found = codes(
-        write_config(
-            {
-                "sweep": {
-                    "baseline": {
-                        "analysis.method": "pearson",
-                        "analysis.min_samples": 30,
-                        "analysis.confidence": 0.95,
-                    },
-                    "grid": {"analysis.method": ["spearman", "kendall"]},
-                    "paired": [
-                        {"analysis.min_samples": 30, "analysis.confidence": 0.95},
-                        {"analysis.min_samples": 50, "analysis.confidence": 0.99},
-                    ],
-                }
+def test_a_baseline_fixing_every_axis_including_paired_is_one_condition(write_config):
+    """The other row of the same table: a baseline naming every path any axis-shaped
+    mode sweeps — `grid`'s and `paired`'s alike — has nothing to expand over and is
+    condition `00` alone."""
+    path = write_config(
+        {
+            "sweep": {
+                "baseline": {
+                    "analysis.method": "pearson",
+                    "analysis.min_samples": 30,
+                    "analysis.confidence": 0.95,
+                },
+                "grid": {"analysis.method": ["spearman", "kendall"]},
+                "paired": [
+                    {"analysis.min_samples": 30, "analysis.confidence": 0.95},
+                    {"analysis.min_samples": 50, "analysis.confidence": 0.99},
+                ],
             }
-        )
+        }
     )
-    assert "E-SWEEP-BASELINE-PARTIAL" not in found
+    assert codes(path) == set()
+
+    conditions = expand(yaml.safe_load(path.read_text()))
+    assert [c.label for c in conditions][0] == "baseline"
+    assert [c.is_baseline for c in conditions] == [True, False, False, False, False]
 
 
-def test_a_baseline_fixing_every_axis_is_supported(write_config):
+def test_a_baseline_fixing_every_axis_is_one_condition(write_config):
     """The row the slice's worked example uses, and it must keep working."""
-    found = codes(
-        write_config(
-            {
-                "sweep": {
-                    "baseline": {"analysis.method": "pearson", "analysis.min_samples": 10},
-                    "grid": {"analysis.min_samples": [10, 20]},
-                }
+    path = write_config(
+        {
+            "sweep": {
+                "baseline": {"analysis.method": "pearson", "analysis.min_samples": 10},
+                "grid": {"analysis.min_samples": [10, 20]},
             }
-        )
+        }
     )
-    assert "E-SWEEP-BASELINE-PARTIAL" not in found
+    assert codes(path) == set()
+    assert [c.is_baseline for c in expand(yaml.safe_load(path.read_text()))] == [
+        True,
+        False,
+        False,
+    ]
 
 
-def test_a_bare_baseline_with_no_grid_is_supported(write_config):
-    """No grid means no unfixed axis, so the bare-baseline level stays legal."""
-    found = codes(write_config({"sweep": {"baseline": {"analysis.method": "pearson"}}}))
-    assert "E-SWEEP-BASELINE-PARTIAL" not in found
+def test_a_bare_baseline_with_no_grid_is_one_condition(write_config):
+    """No axis means nothing to expand over, so the bare-baseline level stays what
+    it was: one condition, labelled `baseline`."""
+    path = write_config({"sweep": {"baseline": {"analysis.method": "pearson"}}})
+    assert codes(path) == set()
+    conditions = expand(yaml.safe_load(path.read_text()))
+    assert [(c.label, c.is_baseline) for c in conditions] == [("baseline", True)]
 
 
-def test_an_empty_baseline_beside_a_grid_is_not_a_partial_baseline(write_config):
-    """`baseline: {}` declares nothing and yields no baseline condition; "present
-    but empty is not a declaration" is this repo's convention elsewhere too."""
-    found = codes(
-        write_config(
-            {"sweep": {"baseline": {}, "grid": {"analysis.method": ["spearman", "kendall"]}}}
-        )
+def test_an_empty_baseline_beside_a_grid_yields_no_baseline_condition(write_config):
+    """`baseline: {}` declares nothing; "present but empty is not a declaration" is
+    this repo's convention elsewhere too. It is *not* read as a baseline fixing no
+    swept path and expanded over every axis — that would double a grid whose author
+    declared no reference at all."""
+    path = write_config(
+        {"sweep": {"baseline": {}, "grid": {"analysis.method": ["spearman", "kendall"]}}}
     )
-    assert "E-SWEEP-BASELINE-PARTIAL" not in found
+    assert codes(path) == set()
+    conditions = expand(yaml.safe_load(path.read_text()))
+    assert [(c.label, c.is_baseline) for c in conditions] == [
+        ("method=spearman", False),
+        ("method=kendall", False),
+    ]
 
 
 def test_a_list_grid_is_a_diagnostic_not_a_traceback(write_config):
@@ -4222,8 +4258,7 @@ def test_a_crossed_grid_whose_cells_each_differ_once_is_not_confounded(write_con
             }
         )
     )
-    assert "E-SWEEP-BASELINE-PARTIAL" not in found  # the baseline fixes both axes
-    assert "W-SWEEP-BASELINE-CONFOUNDED" not in found
+    assert "W-SWEEP-BASELINE-CONFOUNDED" not in found  # the baseline fixes both axes
 
 
 def test_a_single_axis_sweep_is_never_confounded(write_config):
@@ -4439,22 +4474,34 @@ def test_a_sample_only_sweep_is_not_a_correction_family(write_config):
     assert not c.findings, [f.code for f in c.findings]
 
 
-def test_a_baseline_that_leaves_a_sampled_path_free_is_refused(write_config):
-    """The same widening `paired` forced: `_swept_paths` now carries the sampled
-    paths, so a baseline fixing none of them leaves an axis free — which expands
-    to one baseline condition per cell, specified but not implemented in this
-    build. Retires with per-cell baseline expansion, not before."""
-    found = codes(
-        write_config(
-            {
-                "sweep": {
-                    "baseline": {"analysis.method": "pearson"},
-                    "sample": {"n": 6, "ranges": {"analysis.confidence": {"uniform": [0.8, 0.99]}}},
-                }
+def test_a_baseline_that_leaves_a_sampled_axis_free_doubles_the_draws(write_config):
+    """A `sample` axis is an axis, so a baseline fixing none of its paths expands
+    over every drawn cell: `n: 6` gives 6 baseline conditions beside the 6 draws.
+
+    Pinned as the behaviour that *ships*, not as the behaviour that is wanted.
+    `sweep._baseline_cells` reads fixedness off the cells' paths and the rule §
+    Expansion modes states is unconditional, so this falls out of it — and here
+    the baseline fixes no swept path at all, which is one of the three shapes
+    `docs/superpowers/spec-defects.md`, "Three baseline shapes per-cell expansion
+    makes reachable", records as open. If a later slice warns or refuses, this
+    test is where the decision lands rather than somewhere the doubling shows up
+    as a surprising condition count."""
+    path = write_config(
+        {
+            "sweep": {
+                "baseline": {"analysis.method": "pearson"},
+                "sample": {"n": 6, "ranges": {"analysis.confidence": {"uniform": [0.8, 0.99]}}},
             }
-        )
+        }
     )
-    assert "E-SWEEP-BASELINE-PARTIAL" in found
+    assert codes(path) == set()
+
+    conditions = expand(yaml.safe_load(path.read_text()))
+    assert [c.is_baseline for c in conditions] == [True] * 6 + [False] * 6
+    # Each baseline carries its own draw, and the draws are the same six values.
+    assert [c.values["analysis.confidence"] for c in conditions[:6]] == [
+        c.values["analysis.confidence"] for c in conditions[6:]
+    ]
 
 
 def test_a_uniform_range_over_an_int_parameter_is_refused_by_what_it_draws(write_config):
