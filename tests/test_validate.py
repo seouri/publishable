@@ -2048,7 +2048,7 @@ def test_an_empty_collapse_map_defaults_every_column_to_first_and_is_accepted(
     write_config, tmp_path
 ):
     """A per-column map's un-named column falls back to `first`
-    (`units._rule_for`'s own fallback), so an empty map names no column and
+    (`units.rule_for`'s own fallback), so an empty map names no column and
     every column takes that fallback — the same declaration as `collapse:
     first` written out for nothing. Pinned as accepted rather than as a second
     empty-mapping refusal: `measurements.collapse: {}` is a coherent (if

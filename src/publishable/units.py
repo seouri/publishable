@@ -278,7 +278,7 @@ COLLAPSE_RULES = ("mean", "median", "sum", "first", "mode")
 NUMERIC_COLLAPSE_RULES = ("mean", "median", "sum")
 
 
-def _rule_for(column: str, collapse: Any) -> str:
+def rule_for(column: str, collapse: Any) -> str:
     """One rule for every column, or a per-column map falling back to `first`.
 
     A column the config did not name is one the design did not ask to average,
@@ -363,7 +363,7 @@ def collapse_measurements(
                     names.append(name)
         merged = {
             name: _apply(
-                _rule_for(name, collapse),
+                rule_for(name, collapse),
                 [m.attributes[name] for m in members if name in m.attributes],
             )
             for name in names

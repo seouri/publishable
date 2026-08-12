@@ -29,7 +29,13 @@ from publishable.sweep import (
 )
 from publishable.templates.base import BaseTemplate
 from publishable.templates.registry import get_template, template_names
-from publishable.units import COLLAPSE_RULES, NUMERIC_COLLAPSE_RULES, UnitList, resolve_units
+from publishable.units import (
+    COLLAPSE_RULES,
+    NUMERIC_COLLAPSE_RULES,
+    UnitList,
+    resolve_units,
+    rule_for,
+)
 
 REQUIRED_METADATA = ("description", "authors")
 
@@ -790,7 +796,7 @@ def _check_measurements(units: dict[str, Any], roster: UnitList | None, c: Colle
     absence swallow an unrelated fault.
 
     A single rule applies to every collapsed column (a per-column map's un-named
-    columns fall back to `first`, the same fallback `units._rule_for` uses), so a
+    columns fall back to `first`, the same fallback `units.rule_for` uses), so a
     *constant* string column is refused here even though `units._apply`'s
     constant-column shortcut would let `mean` survive it at run time: whether a
     check's verdict depends on the data happening to be constant is not something a
@@ -838,7 +844,12 @@ def _check_measurements(units: dict[str, Any], roster: UnitList | None, c: Colle
     if roster is None:
         return
     for name in sorted({n for u in roster for n in u.attributes} - {valid_by}):
-        rule = collapse.get(name, "first") if isinstance(collapse, dict) else collapse
+        # `units.rule_for`, not a second copy of its fallback: this check and the
+        # collapse it guards must not come to hold two different ideas of which
+        # rule a column gets. The two copies had already drifted — the inline one
+        # skipped `rule_for`'s `str()` coercion — which is how a config could
+        # validate against one reading and run under the other.
+        rule = rule_for(name, collapse)
         if rule not in NUMERIC_COLLAPSE_RULES:
             continue
         offenders = [
