@@ -1219,6 +1219,80 @@ def test_a_baseline_sweep_reports_a_corrected_interval(tmp_path, capsys, monkeyp
     assert strongest["ci95_corrected"][1] > strongest["ci95"][1]
 
 
+def test_per_cell_baselines_correct_against_four_comparisons_not_five(
+    tmp_path, capsys, monkeypatch
+):
+    """§ Expansion modes: "six conditions under two per-arm baselines are four
+    comparisons in the correction family, not five."
+
+    The reach of task 8's rule, observed where it is actually spent. `family_size`
+    is `comparisons × metrics` and every `ci95_corrected` in the run is computed
+    from it, so first-baseline targeting made this a family of 5 — the second
+    baseline entering as a comparison of one reference against another — and
+    corrected every interval in the run at α/5 through α. Nothing diagnosed it,
+    which is why this is pinned end to end rather than at `resolve_contrasts`.
+
+    `analysis.min_samples` is the free axis, `analysis.method` the fixed one: two
+    baselines, one per `min_samples` cell, four product rows each taken against
+    the baseline of its own cell.
+    """
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {
+                "analysis.method": ["pearson", "spearman"],
+                "analysis.min_samples": [10, 20],
+            },
+        },
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    conditions = run["results"]["conditions"]
+    assert [c["label"] for c in conditions] == [
+        "min_samples=10__baseline",
+        "min_samples=20__baseline",
+        "method=pearson__min_samples=10",
+        "method=pearson__min_samples=20",
+        "method=spearman__min_samples=10",
+        "method=spearman__min_samples=20",
+    ]
+    # A baseline is a reference, so it carries no `vs_baseline` at all — the
+    # second one being compared against the first is exactly the fifth member.
+    assert [c["label"] for c in conditions if c.get("vs_baseline")] == [
+        "method=pearson__min_samples=10",
+        "method=pearson__min_samples=20",
+        "method=spearman__min_samples=10",
+        "method=spearman__min_samples=20",
+    ]
+    entries = [
+        metric
+        for condition in conditions
+        for step_block in condition.get("vs_baseline", {}).values()
+        for metric in step_block.values()
+    ]
+    assert len(entries) == 4
+    for entry in entries:
+        assert entry["family"] == {"comparisons": 4, "metrics": 1}
+        assert entry["family_size"] == 4
+    # Holm over four members: α/4 … α, and no level is α/5.
+    assert sorted(e["correction_level"] for e in entries) == [
+        pytest.approx(0.05 / 4),
+        pytest.approx(0.05 / 3),
+        pytest.approx(0.05 / 2),
+        pytest.approx(0.05),
+    ]
+    # Each comparison is taken against its own cell's baseline, so it differs on
+    # the fixed axis alone — never on `analysis.min_samples`, which is what a
+    # cross-cell target would show here.
+    assert all("analysis.min_samples" not in e.get("differs_on", []) for e in entries)
+    assert not any(e.get("confounded") for e in entries)
+
+
 def test_a_comparison_reads_its_own_condition_not_condition_zero():
     """A comparison whose `of` is deliberately not `0` — the same
     called-directly treatment `_check_contrasts`'s kept guard gets in

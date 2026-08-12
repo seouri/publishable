@@ -1656,7 +1656,7 @@ The baseline is condition `00`, and `results.conditions[i].vs_baseline` carries 
 | `sweep.baseline` | Baseline conditions | Each `vs_baseline` targets |
 |---|---|---|
 | A value on every axis — `{arm: control, analysis.method: pearson}` | One, condition `00` | That single condition. A contrast differing on two axes at once is marked [`confounded: true`](#allocation-within-subjects-or-between-subjects) |
-| A value on some axes — `{analysis.method: pearson}`, with `arm` and `sex` left free | One per cell of the unfixed axes | Its own cell's baseline: `sex=f__arm=treatment` compares against `sex=f__arm=control` |
+| A value on some axes — `{analysis.method: pearson}`, over a grid sweeping `analysis.method` and `data.sex`, so `data.sex` is left free | One per cell of the unfixed axes — `sex=f__baseline` and `sex=m__baseline` | Its own cell's baseline: `method=spearman__sex=f` compares against `sex=f__baseline`, resolved by matching the free axes' values rather than by position |
 
 **The rule underneath both is that the baseline expands over whichever axes it doesn't fix** — group axes and parameter axes alike. The second row is the one to design around, because it's the row where nothing is confounded: fix the factor you're measuring, leave the axes you're stratifying over free, and every contrast differs in exactly one place.
 

@@ -4237,6 +4237,63 @@ def test_a_baseline_fixing_every_axis_of_a_crossed_grid_warns_before_the_run(wri
     assert "2 of 4 baseline comparisons" in message
     assert "`method=spearman__min_samples=20`" in message
     assert "`analysis.method`" in message and "`analysis.min_samples`" in message
+    # The remedy, which only per-cell targeting made true: freeing the
+    # stratifying axis now gives each cell its own baseline, and the freed axis
+    # stops appearing in `differs_on` at all. Task 7 deliberately left this out
+    # while `resolve_contrasts` targeted the first baseline for every condition.
+    assert "leave the ones you are stratifying over free" in message
+
+
+def test_a_partly_fixed_baseline_is_silent_while_its_run_marks_confounded(write_config):
+    """Why § Warnings core reports still says silence here "is not a verdict that
+    such a design confounds nothing", after per-cell targeting.
+
+    The guard is "the baseline fixes every swept axis". A baseline fixing two of
+    three leaves the third free, so this warning stays silent — while the cells that
+    move both fixed axes differ from *their own cell's* baseline on both and are
+    marked `confounded: true` at run time. Per-cell targeting removes the free axis
+    from `differs_on`; it does not remove a difference on two fixed ones, so the
+    caution is still the honest phrasing and is deliberately not softened."""
+    path = write_config(
+        {
+            "sweep": {
+                "baseline": {"analysis.method": "pearson", "analysis.min_samples": 10},
+                "grid": {
+                    "analysis.method": ["pearson", "spearman"],
+                    "analysis.min_samples": [10, 20],
+                    "analysis.confidence": [0.95, 0.99],
+                },
+            }
+        }
+    )
+    assert "W-SWEEP-BASELINE-CONFOUNDED" not in codes(path)
+
+    from publishable.cli import _differing_axes
+    from publishable.contrasts import resolve_contrasts
+    from publishable.sweep import expand
+
+    conditions = expand(
+        {
+            "sweep": {
+                "baseline": {"analysis.method": "pearson", "analysis.min_samples": 10},
+                "grid": {
+                    "analysis.method": ["pearson", "spearman"],
+                    "analysis.min_samples": [10, 20],
+                    "analysis.confidence": [0.95, 0.99],
+                },
+            }
+        }
+    )
+    by_index = {c.index: c for c in conditions}
+    differing = [
+        _differing_axes(by_index[m.of], by_index[m.against])
+        for m in resolve_contrasts({}, conditions)
+    ]
+    assert all("analysis.confidence" not in axes for axes in differing)
+    assert [axes for axes in differing if len(axes) > 1] == [
+        ["analysis.method", "analysis.min_samples"],
+        ["analysis.method", "analysis.min_samples"],
+    ]
 
 
 def test_a_crossed_grid_whose_cells_each_differ_once_is_not_confounded(write_config):

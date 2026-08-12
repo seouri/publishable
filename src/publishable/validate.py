@@ -920,9 +920,10 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     A `baseline` fixing only *some* of the swept axes is no longer refused here:
     `sweep._baseline_cells` expands it over the rest, one baseline condition per
     cell of the unfixed axes, which is § Expansion modes' second row and the row
-    it tells a reader to prefer. What each of those baselines is compared
-    *against* is a separate question and is not settled — see the strict xfails
-    in `tests/test_contrasts.py`.
+    it tells a reader to prefer. Each condition is compared against the baseline
+    of its own cell (`contrasts.baseline_for`), and a baseline is never a
+    comparison's subject, so the correction family counts comparisons rather
+    than conditions.
 
     `sweep.paired` is no longer refused here: `_axes` composes it
     as a single axis whose cells set several paths at once, per § Expansion
@@ -1532,27 +1533,24 @@ def _check_sweep(
     # on every axis". A baseline that leaves an axis free is a different shape:
     # `sweep._baseline_cells` gives it one baseline per cell of the unfixed
     # axes rather than one reference for the whole run, so the row's condition
-    # does not hold and the `all(...)` guard below skips it. Since per-cell
-    # expansion landed that is a config core accepts, and this warning saying
-    # nothing about it is silence rather than a verdict — deliberately so, and
-    # NOT a claim that nothing is confounded there. `contrasts.resolve_contrasts`
-    # still targets the *first* baseline for every condition, so a run over such
-    # a design does mark cross-cell comparisons `confounded` (and admits the
-    # other baselines as comparisons at all); per-cell targeting is task 8's,
-    # pinned by the two strict xfails in `tests/test_contrasts.py`. Until it
-    # lands this is the same under-warning direction the paragraph below
-    # describes, not a shape the warning has cleared.
+    # does not hold and the `all(...)` guard below skips it. That is a config
+    # core accepts, and this warning saying nothing about it is silence rather
+    # than a verdict — deliberately so, and NOT a claim that nothing is
+    # confounded there. A baseline fixing *two* of three swept axes leaves the
+    # third free, so this guard is False, while every cell that moves both fixed
+    # axes still differs from its own cell's baseline on both and is marked
+    # `confounded` at run time — measured, and pinned by
+    # `test_a_partly_fixed_baseline_is_silent_while_its_run_marks_confounded`.
     #
-    # **The remedy lives here and in the row, deliberately not in the message.**
-    # A message that told the reader to free an axis would promise an outcome
-    # this build does not deliver — the run still marks the same comparison
-    # `confounded`, because contrasts still resolve against the first baseline —
-    # and the one hedge that would make it true is another subsystem's build
-    # state, which this project only ever puts in a message when the build gap
-    # *is* the finding (`fold.stratify_by`, the resolver refusals, the
-    # `-UNSUPPORTED` family). Here the finding is a fault in the user's own
-    # config. So the message states the fact and stops; add the remedy back only
-    # once per-cell targeting makes it true.
+    # **The remedy is in the message, and it is per-cell targeting that earned
+    # it.** A run now takes each comparison against its own cell's baseline
+    # (`contrasts.baseline_for`), so "leave the axis you are stratifying over
+    # free" names an outcome this build delivers: the free axis stops appearing
+    # in `differs_on` at all. Task 7 could not say that — targeting was
+    # single-baseline then, and freeing an axis left the same comparison
+    # `confounded` — so the message stated the fact and stopped, and the remedy
+    # waited for the build to make it true rather than being hedged with build
+    # state. It is true now.
     #
     # `cli._differing_axes` instead walks the *union* of both sides' keys against
     # a sentinel, so a baseline fixing an
@@ -1583,7 +1581,9 @@ def _check_sweep(
                 f"{len(conditions) - 1} baseline comparisons differ on more than one axis "
                 f"and are reported `confounded: true` — `{example.label}` differs on "
                 f"{', '.join(f'`{a}`' for a in axes)}, so its delta mixes those effects "
-                "and no amount of correct pairing separates them",
+                "and no amount of correct pairing separates them; fix the axis you are "
+                "measuring and leave the ones you are stratifying over free, and each "
+                "cell gets its own baseline",
             )
 
     repeat_total = _repeat_total(doc, unit_count)
