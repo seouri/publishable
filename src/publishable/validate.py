@@ -830,9 +830,9 @@ def _check_measurements(
         # refused before the block stops being refused wholesale.
         #
         # The source's COLUMNS, never `data.units.attributes`.
-        # `design-principles.md` § The shape your input must have is derived lists
-        # `key`, `attributes`, `cluster_by`, `measurements.by`, `holdout.from`,
-        # `assign.from` and `stratify_by` as parallel namers of input fields, so
+        # `design-principles.md` § Core vs. plugin lists `key`, `attributes`,
+        # `cluster_by`, `measurements.by`, `holdout.from`, `assign.from`,
+        # `stratify_by` and `null_test.shuffle` as parallel namers of input fields, so
         # `by` names a column in its own right; the fence in `reference.md`
         # § What isn't a repeat declares no `attributes` at all, and against the
         # declared set this check would refuse the document's own example.

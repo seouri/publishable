@@ -174,9 +174,9 @@ def _from_table(
 
     The columns are returned rather than kept private because they are the only
     honest reference set for `data.units.measurements.by`: `design-principles.md`
-    § The shape your input must have is derived lists `key`, `attributes`,
-    `cluster_by`, `measurements.by`, `holdout.from`, `assign.from` and
-    `stratify_by` as *parallel* namers of input fields, so `by` names a column in
+    § Core vs. plugin lists `key`, `attributes`, `cluster_by`, `measurements.by`,
+    `holdout.from`, `assign.from`, `stratify_by` and `null_test.shuffle` as
+    *parallel* namers of input fields, so `by` names a column in
     its own right and is not a member of `attributes` — the fence in
     `reference.md` § What isn't a repeat declares no `attributes` at all. Reading
     the header a second time somewhere else is how the two would come to disagree.
