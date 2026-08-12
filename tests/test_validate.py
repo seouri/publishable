@@ -2044,6 +2044,27 @@ def test_an_unknown_collapse_rule_name_draws_the_shared_collapse_rule_code(write
     assert "E-DATA-MEASUREMENTS-INVALID" not in found
 
 
+def test_an_omitted_collapse_draws_invalid_not_the_named_rule_code(write_config):
+    """`E-UNITS-COLLAPSE-RULE`'s own row says it fires for a rule that *names*
+    something outside `mean`/`median`/`sum`/`first`/`mode` — an omission names
+    nothing, so it belongs to the shape family instead. Routing it there also
+    keeps `E-UNITS-COLLAPSE-RULE` meaning exactly what both its registry rows
+    say, which matters more than usual since it is dual-listed with the code
+    `units._apply` itself raises."""
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "measurements": {"by": "read_id"},
+            }
+        }
+    )
+    found = codes(path)
+    assert "E-DATA-MEASUREMENTS-INVALID" in found
+    assert "E-UNITS-COLLAPSE-RULE" not in found
+
+
 def test_an_empty_collapse_map_defaults_every_column_to_first_and_is_accepted(
     write_config, tmp_path
 ):

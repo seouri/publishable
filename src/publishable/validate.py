@@ -33,6 +33,7 @@ from publishable.units import (
     COLLAPSE_RULES,
     NUMERIC_COLLAPSE_RULES,
     UnitList,
+    is_measurement_numeric,
     resolve_units,
     rule_for,
 )
@@ -754,35 +755,6 @@ def _check_units(doc: dict[str, Any], c: Collector) -> UnitList | None:
         return None
 
 
-def _measurement_value_is_numeric(value: Any) -> bool:
-    """Whether `value` can stand under `mean`/`median`/`sum`, matching `_apply`'s own gate.
-
-    `bool` is excluded even though `isinstance(True, int)` is `True` in Python —
-    `units._apply` excludes it for the same reason (`sum([True, False])` and
-    `sum([True, True])` would answer in two different types depending on the data,
-    which is incoherent whichever way it's read). A `str` that parses as a `float`
-    is accepted: a table-sourced column arrives through `csv.DictReader` as `str`
-    regardless of what it holds (`resolve_units` does no coercion, and neither does
-    this function — `attributes` is a projection of column names, not types), so
-    treating every table column as non-numeric would refuse `collapse: mean` over
-    the ordinary case — a numeric column — everywhere it appears, not just over the
-    `site`-shaped column row 243 exists to catch. `"10"` and `"3.5"` pass; `"north"`
-    and `"True"`/`"False"` do not, which is what actually distinguishes a value that
-    could be averaged from one that couldn't, independent of which source produced it.
-    """
-    if isinstance(value, bool):
-        return False
-    if isinstance(value, (int, float)):
-        return True
-    if isinstance(value, str):
-        try:
-            float(value)
-        except ValueError:
-            return False
-        return True
-    return False
-
-
 def _check_measurements(units: dict[str, Any], roster: UnitList | None, c: Collector) -> None:
     """`data.units.measurements` — shape, then the collapse rule against the column.
 
@@ -826,6 +798,20 @@ def _check_measurements(units: dict[str, Any], roster: UnitList | None, c: Colle
             "and the two collapse in opposite directions",
         )
     collapse = decl.get("collapse")
+    if collapse is None:
+        # `E-UNITS-COLLAPSE-RULE`, below, is reserved for a rule that NAMES
+        # something invalid — `reference.md`'s row for it says exactly that
+        # ("names a rule that is none of `mean`, `median`, `sum`, `first`, or
+        # `mode`"), and an omission names nothing. Routing a missing `collapse`
+        # there would make that row, which is dual-listed with `units._apply`'s
+        # own raise, mean two different things depending on which surface hit it.
+        c.error(
+            "E-DATA-MEASUREMENTS-INVALID",
+            "data.units.measurements.collapse",
+            "is missing; `collapse` is required alongside `by` — how rows sharing "
+            "a key become one",
+        )
+        return
     rules = list(collapse.values()) if isinstance(collapse, dict) else [collapse]
     for rule in rules:
         if rule not in COLLAPSE_RULES:
@@ -855,7 +841,7 @@ def _check_measurements(units: dict[str, Any], roster: UnitList | None, c: Colle
         offenders = [
             u.attributes[name]
             for u in roster
-            if name in u.attributes and not _measurement_value_is_numeric(u.attributes[name])
+            if name in u.attributes and not is_measurement_numeric(u.attributes[name])
         ]
         if offenders:
             c.error(
