@@ -1908,6 +1908,23 @@ def test_a_list_grid_is_a_diagnostic_not_a_traceback(write_config):
     assert "E-CONFIG-SHAPE" in found
 
 
+def test_a_grid_with_a_non_string_int_key_is_a_diagnostic_not_a_traceback(write_config):
+    """Same class as `paired`'s non-string-key guard, reached through `grid`
+    instead: YAML permits `123: [...]` as a mapping key, but `_keys_for` feeds
+    every swept path into `.split(".")`, so this crashed
+    `AttributeError: 'int' object has no attribute 'split'` before this guard
+    existed. Pre-existing and independent of the `paired` finding — found by
+    the same review pattern applied to `grid`."""
+    found = codes(write_config({"sweep": {"grid": {123: ["a", "b"]}}}))
+    assert "E-CONFIG-SHAPE" in found
+
+
+def test_a_grid_with_a_non_string_float_key_is_a_diagnostic_not_a_traceback(write_config):
+    """Same crash, via a `float` key instead of `int`."""
+    found = codes(write_config({"sweep": {"grid": {1.5: ["a", "b"]}}}))
+    assert "E-CONFIG-SHAPE" in found
+
+
 def test_a_list_baseline_is_a_diagnostic_not_a_traceback(write_config):
     """`sweep.expand` calls `dict(baseline)`; without the guard this escaped as
     `ValueError: dictionary update sequence element #0 has length 15`."""

@@ -123,6 +123,17 @@ def _check_shape(doc: dict[str, Any], c: Collector) -> bool:
             _bad("sweep.grid", grid, "mapping")
         elif isinstance(grid, dict):
             for path, values in grid.items():
+                # Same crash as `paired`'s non-string-key guard below, reached
+                # through `grid` instead: YAML permits a non-string mapping key
+                # (`123: [...]` parses fine), but `_keys_for` feeds every swept
+                # path into `.split(".")`, so a non-string `grid` key crashes
+                # `AttributeError: 'int' object has no attribute 'split'` before
+                # this guard existed. Pre-existing and outside the review's
+                # original finding for `paired` — closed here rather than left
+                # as the one axis-shaped mode without the guard its sibling has.
+                if not isinstance(path, str):
+                    _bad("sweep.grid", path, "string")
+                    continue
                 if values is not None and not isinstance(values, list):
                     _bad(f"sweep.grid.{path}", values, "list")
 
