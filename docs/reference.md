@@ -3330,6 +3330,7 @@ publishable/
 │   ├── docs.py                # `docs`: regenerates managed README regions from live specs — not yet built
 │   ├── readme_templates/      # the shipped README/CITATION.cff/LICENSE scaffolds
 │   ├── param.py               # Param: type, default, constraints, help
+│   ├── envelope.py            # the config envelope's leaf types and the closed-schema walk
 │   ├── validate.py            # the value-level validation engine
 │   ├── base_experiment.py     # BaseExperiment: one ordered steps list, scopes resolved from it
 │   ├── base_step.py           # BaseStep: scope, run(cfg, io), self.condition/self.repeat,
