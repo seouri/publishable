@@ -2134,6 +2134,52 @@ def test_the_roster_skip_does_not_swallow_the_shape_check(write_config, tmp_path
     assert "E-DATA-MEASUREMENTS-COLLAPSE-TYPE" not in found
 
 
+def test_a_repeated_key_is_not_a_duplicate_once_measurements_is_declared(write_config, tmp_path):
+    """Resolution collapses before it checks uniqueness, and `validate` resolves
+    the same roster `run` will — so the repeated key that is the *point* of a
+    `measurements` declaration must not also be reported as a defect."""
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id,depth,read_id\np1,10,r1\np1,20,r2\np2,30,r3\n"
+    )
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["depth", "read_id"],
+                "measurements": {"by": "read_id", "collapse": {"depth": "mean"}},
+            }
+        }
+    )
+    found = codes(path)
+    assert "E-UNITS-KEY-DUPLICATE" not in found
+    assert "E-DATA-MEASUREMENTS-COLLAPSE-TYPE" not in found
+
+
+def test_a_mixed_column_under_mean_is_a_finding_rather_than_an_escaping_type_error(
+    write_config, tmp_path
+):
+    """The invariant this task is most able to break: `validate` collects findings
+    and never raises. `_check_units` wraps resolution in `except ContractError`
+    only, so the arithmetic the collapse now performs has to refuse with a code —
+    a bare `TypeError` out of `sum` would come straight out of `validate_config`.
+    `codes(path)` calls it, so this test fails by erroring if that ever regresses."""
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id,depth,read_id\np1,10,r1\np1,north,r2\n"
+    )
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["depth", "read_id"],
+                "measurements": {"by": "read_id", "collapse": {"depth": "mean"}},
+            }
+        }
+    )
+    assert "E-DATA-MEASUREMENTS-COLLAPSE-TYPE" in codes(path)
+
+
 def test_check_measurements_called_directly_with_no_roster_still_finds_shape_faults():
     """The check must be exercisable on its own, not only reachable through
     `validate_config` — this is the direct-call route the brief asks for, and the

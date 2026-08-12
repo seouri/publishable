@@ -749,7 +749,10 @@ def _check_units(doc: dict[str, Any], c: Collector) -> UnitList | None:
                 )
             return None
     try:
-        return resolve_units(units_decl, path)
+        # `technical_n` is discarded here: it is a fact about the run's roster,
+        # reported by `run`, and nothing `validate` checks reads it.
+        roster, _technical_n = resolve_units(units_decl, path)
+        return roster
     except ContractError as exc:
         c.error(exc.code, "data.units", str(exc))
         return None

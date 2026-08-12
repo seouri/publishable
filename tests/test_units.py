@@ -27,7 +27,7 @@ def input_dir(tmp_path: Path) -> Path:
 
 
 def test_a_table_resolves_in_row_order_not_sorted(input_dir: Path):
-    units = resolve_units(
+    units, _ = resolve_units(
         {"from": "index.csv", "key": "patient_id", "attributes": ["label", "site"]}, input_dir
     )
     assert [u.key for u in units] == ["p3", "p1", "p2"], "row order is data, not cosmetic"
@@ -36,7 +36,7 @@ def test_a_table_resolves_in_row_order_not_sorted(input_dir: Path):
 
 
 def test_declared_attributes_are_readable_directly(input_dir: Path):
-    units = resolve_units(
+    units, _ = resolve_units(
         {"from": "index.csv", "key": "patient_id", "attributes": ["label", "site"]}, input_dir
     )
     assert units[0].site == "a"
@@ -44,21 +44,21 @@ def test_declared_attributes_are_readable_directly(input_dir: Path):
 
 
 def test_an_undeclared_column_is_not_an_attribute(input_dir: Path):
-    units = resolve_units({"from": "index.csv", "key": "patient_id", "attributes": ["label"]},
-                          input_dir)
+    units, _ = resolve_units({"from": "index.csv", "key": "patient_id", "attributes": ["label"]},
+                             input_dir)
     assert "site" not in units[0].attributes
     with pytest.raises(AttributeError):
         _ = units[0].site
 
 
 def test_a_glob_resolves_lexicographically_with_the_path_as_key(input_dir: Path):
-    units = resolve_units({"from": {"glob": "**/*.dcm"}, "key": "path"}, input_dir)
+    units, _ = resolve_units({"from": {"glob": "**/*.dcm"}, "key": "path"}, input_dir)
     assert [u.key for u in units] == ["scans/a.dcm", "scans/b.dcm", "top.dcm"]
     assert units[0].paths == ("scans/a.dcm",)
 
 
 def test_a_non_recursive_glob_does_not_descend(input_dir: Path):
-    units = resolve_units({"from": {"glob": "*.dcm"}, "key": "path"}, input_dir)
+    units, _ = resolve_units({"from": {"glob": "*.dcm"}, "key": "path"}, input_dir)
     assert [u.key for u in units] == ["top.dcm"]
 
 
@@ -99,7 +99,7 @@ def test_a_genuinely_missing_key_column_with_real_rows_still_reports_key_missing
 
 def test_a_one_unit_roster_still_resolves(input_dir: Path):
     (input_dir / "single.csv").write_text("patient_id\np1\n")
-    units = resolve_units({"from": "single.csv", "key": "patient_id"}, input_dir)
+    units, _ = resolve_units({"from": "single.csv", "key": "patient_id"}, input_dir)
     assert len(units) == 1
     assert units[0].key == "p1"
 
@@ -152,7 +152,7 @@ def test_mutating_the_original_dict_after_construction_does_not_leak_in():
 
 
 def test_the_unit_list_is_exactly_four_operations(input_dir: Path):
-    units = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
+    units, _ = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
     assert len(list(units)) == 3          # iterate, repeatably
     assert len(list(units)) == 3
     assert len(units) == 3                # len
@@ -162,7 +162,7 @@ def test_the_unit_list_is_exactly_four_operations(input_dir: Path):
 
 
 def test_slicing_is_rejected_not_silently_returning_a_list(input_dir: Path):
-    units = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
+    units, _ = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
     with pytest.raises(ContractError) as e:
         _ = units[0:2]
     assert e.value.code == "E-STEP-UNITS-CONTRACT"
@@ -170,7 +170,7 @@ def test_slicing_is_rejected_not_silently_returning_a_list(input_dir: Path):
 
 
 def test_a_string_index_is_rejected(input_dir: Path):
-    units = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
+    units, _ = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
     with pytest.raises(ContractError) as e:
         _ = units["p1"]  # type: ignore[call-overload]
     assert e.value.code == "E-STEP-UNITS-CONTRACT"
@@ -181,26 +181,26 @@ def test_membership_and_reversed_are_deliberately_permitted(input_dir: Path):
     # `__iter__` (membership) and `len` + integer indexing (`reversed`), so any
     # backing that satisfies the contract satisfies these for free — unlike
     # slicing, which would return a foreign type. See spec-defects.md.
-    units = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
+    units, _ = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
     first = units[0]
     assert first in units
     assert [u.key for u in reversed(units)] == ["p2", "p1", "p3"]
 
 
 def test_train_raises_when_no_partition_is_declared(input_dir: Path):
-    units = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
+    units, _ = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
     with pytest.raises(ContractError) as e:
         _ = units.train
     assert e.value.code == "E-STEP-UNITS-UNAVAILABLE"
 
 
 def test_units_hash_follows_order_and_content(input_dir: Path):
-    a = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
-    b = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
+    a, _ = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
+    b, _ = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
     assert units_hash(a) == units_hash(b)
     assert units_hash(a).startswith("sha256:")
     (input_dir / "index.csv").write_text("patient_id,label,site\np1,0,b\np3,1,a\np2,1,a\n")
-    reordered = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
+    reordered, _ = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
     assert units_hash(reordered) != units_hash(a), "order is part of the identity"
 
 
@@ -325,7 +325,9 @@ def test_a_glob_source_reports_a_reserved_attribute_name_as_reserved(input_dir: 
 
 
 def test_a_glob_source_with_no_declared_attributes_still_resolves(input_dir: Path):
-    units = resolve_units({"from": {"glob": "*.dcm"}, "key": "path", "attributes": []}, input_dir)
+    units, _ = resolve_units(
+        {"from": {"glob": "*.dcm"}, "key": "path", "attributes": []}, input_dir
+    )
     assert [u.key for u in units] == ["top.dcm"]
 
 
@@ -432,3 +434,207 @@ def test_a_column_absent_from_the_collapse_map_falls_back_to_first():
     assert counts == [2]
     assert collapsed[0].depth == 15.0
     assert collapsed[0].batch == "b1"
+
+
+def _write_reads(input_dir: Path, body: str, name: str = "reads.csv") -> Path:
+    """A table whose rows are measurements of a unit, not units.
+
+    Written as text rather than through a row-builder because what these tests
+    are about is exactly what `csv.DictReader` hands back — every value a `str`,
+    a short row's missing column a `None` — and a builder that took Python values
+    would hide the property under test.
+    """
+    (input_dir / name).write_text(body)
+    return input_dir / name
+
+
+_MEASURED = {
+    "from": "reads.csv",
+    "key": "patient_id",
+    "attributes": ["depth", "read_id"],
+    "measurements": {"by": "read_id", "collapse": {"depth": "mean"}},
+}
+
+
+def test_duplicate_keys_collapse_when_measurements_is_declared(input_dir: Path):
+    _write_reads(
+        input_dir,
+        "patient_id,read_id,depth\np1,r1,10\np1,r2,20\np2,r3,30\n",
+    )
+    roster, technical_n = resolve_units(dict(_MEASURED), input_dir)
+    assert len(roster) == 2
+    assert [u.key for u in roster] == ["p1", "p2"]
+    assert technical_n == {"min": 1, "max": 2, "median": 1.5}
+
+
+def test_a_csv_sourced_numeric_column_collapses_to_a_number(input_dir: Path):
+    """The headline: `validate` accepts `mean` over a numeric-looking column
+    (`is_measurement_numeric("10")` is `True`), so resolution has to be able to
+    compute it. `csv.DictReader` yields `"10"`/`"20"`, and without the coercion
+    this is a `TypeError` for `sum`/`median` and a *string* for `mean` over a
+    constant column. `15.0` and not `15`: the gate is `float`'s own grammar,
+    which is what keeps the predicate and the conversion from parting ways —
+    narrowing back to `int` is the tidy-up that would break that."""
+    _write_reads(input_dir, "patient_id,read_id,depth\np1,r1,10\np1,r2,20\n")
+    roster, _ = resolve_units(dict(_MEASURED), input_dir)
+    assert roster[0].depth == 15.0
+    assert isinstance(roster[0].depth, float)
+
+
+def test_a_constant_numeric_string_column_collapses_to_a_number_too(input_dir: Path):
+    """`_apply("mean", ["10", "10"])` returns the *string* `"10"` — its
+    constant-column shortcut fires because the strings fail its own isinstance
+    gate. Coercing before `_apply` sees them is what makes the shortcut's
+    numeric-rule exclusion reachable, so this answers `10.0`."""
+    _write_reads(input_dir, "patient_id,read_id,depth\np1,r1,10\np1,r2,10\n")
+    roster, _ = resolve_units(dict(_MEASURED), input_dir)
+    assert roster[0].depth == 10.0
+    assert not isinstance(roster[0].depth, str)
+
+
+def test_a_sum_over_csv_strings_is_a_sum_and_not_a_type_error(input_dir: Path):
+    """`sum(["10", "20"])` is a bare `TypeError` — no `.code`, and not caught by
+    `validate`'s `except ContractError`. Pinned separately from `mean` because
+    `sum` reaches a different branch of `_apply`."""
+    _write_reads(input_dir, "patient_id,read_id,depth\np1,r1,10\np1,r2,20\n")
+    decl = dict(_MEASURED, measurements={"by": "read_id", "collapse": {"depth": "sum"}})
+    roster, _ = resolve_units(decl, input_dir)
+    assert roster[0].depth == 30.0
+
+
+@pytest.mark.parametrize(
+    "body",
+    [
+        "patient_id,read_id,depth\np1,r1,10\np1,r2,north\n",  # a mixed group
+        "patient_id,read_id,depth\np1,r1,10\np1,r2,\n",  # an empty cell
+        "patient_id,read_id,depth\np1,r1,10\np1,r2\n",  # a short row: depth is None
+    ],
+    ids=["mixed", "empty-cell", "short-row"],
+)
+def test_a_numeric_rule_over_a_value_it_cannot_compute_is_refused(input_dir: Path, body: str):
+    """Every one of these is arithmetic `_apply` cannot do, and every one would
+    otherwise leave `resolve_units` as a bare `TypeError` — which escapes
+    `validate` itself, since it resolves the roster inside `except ContractError`.
+    The identifier is `validate`'s own collapse-type code, not a second one for
+    the run-time half of one fault."""
+    _write_reads(input_dir, body)
+    with pytest.raises(ContractError) as e:
+        resolve_units(dict(_MEASURED), input_dir)
+    assert e.value.code == "E-DATA-MEASUREMENTS-COLLAPSE-TYPE"
+
+
+def test_a_column_one_row_lacks_collapses_over_the_rows_that_have_it(input_dir: Path):
+    """The short row again, under a rule that *can* answer it: the group is the
+    members carrying the column, never an empty list — which is what keeps
+    `_apply`'s `values[0]` in reach of a value."""
+    _write_reads(input_dir, "patient_id,read_id,depth\np1,r1,10\np1,r2\n")
+    decl = dict(_MEASURED, measurements={"by": "read_id", "collapse": {"depth": "first"}})
+    roster, technical_n = resolve_units(decl, input_dir)
+    assert roster[0].depth == "10"
+    assert technical_n == {"min": 2, "max": 2, "median": 2}
+
+
+def test_a_single_member_group_keeps_the_constant_shortcut(input_dir: Path):
+    """A non-numeric column under a numeric rule is refused by `validate` (row
+    243) whether or not the data happens to be constant — but this function must
+    stay total over what `_apply` documents as the constant case, or a
+    one-measurement-per-unit roster would raise here before `validate` could
+    report the real finding with the column's name on it."""
+    _write_reads(input_dir, "patient_id,read_id,site\np1,r1,north\np2,r2,south\n")
+    decl = {
+        "from": "reads.csv",
+        "key": "patient_id",
+        "attributes": ["site", "read_id"],
+        "measurements": {"by": "read_id", "collapse": {"site": "mean"}},
+    }
+    roster, technical_n = resolve_units(decl, input_dir)
+    assert roster[0].site == "north"
+    assert technical_n == {"min": 1, "max": 1, "median": 1}
+
+
+def test_the_measurement_axis_is_consumed_by_the_collapse(input_dir: Path):
+    _write_reads(input_dir, "patient_id,read_id,depth\np1,r1,10\np1,r2,20\n")
+    roster, _ = resolve_units(dict(_MEASURED), input_dir)
+    assert "read_id" not in roster[0].attributes
+
+
+@pytest.mark.parametrize(
+    "measurements",
+    [{"collapse": "mean"}, {"by": "", "collapse": "mean"}, {"by": ["read_id"]}, "yes"],
+    ids=["no-by", "empty-by", "non-string-by", "not-a-mapping"],
+)
+def test_a_malformed_measurements_block_is_a_contract_error_not_a_crash(
+    input_dir: Path, measurements: object
+):
+    """`validate._check_units` resolves the roster *before* `_check_measurements`
+    reports shape faults, so a malformed block reaches resolution first. A
+    `KeyError` or an `AttributeError` here would escape `validate`, which collects
+    findings and never raises — and the code is the one `_check_measurements`
+    reports for the same shapes."""
+    _write_reads(input_dir, "patient_id,read_id,depth\np1,r1,10\np1,r2,20\n")
+    with pytest.raises(ContractError) as e:
+        resolve_units(dict(_MEASURED, measurements=measurements), input_dir)
+    assert e.value.code == "E-DATA-MEASUREMENTS-INVALID"
+
+
+def test_an_unknown_collapse_rule_is_refused_at_resolution(input_dir: Path):
+    _write_reads(input_dir, "patient_id,read_id,depth\np1,r1,10\np1,r2,20\n")
+    with pytest.raises(ContractError) as e:
+        resolve_units(
+            dict(_MEASURED, measurements={"by": "read_id", "collapse": "bogus"}), input_dir
+        )
+    assert e.value.code == "E-UNITS-COLLAPSE-RULE"
+
+
+def test_nothing_but_a_contract_error_escapes_resolve_units(input_dir: Path):
+    """The adversarial sweep, as one claim: whatever the declaration and whatever
+    the table, resolution either answers or raises a `ContractError` carrying a
+    code. Anything else escapes `validate`."""
+    bodies = [
+        "patient_id,read_id,depth\np1,r1,10\np1,r2,north\n",
+        "patient_id,read_id,depth\np1,r1,nan\np1,r2,10\n",
+        "patient_id,read_id,depth\np1,r1,\np1,r2,\n",
+        "patient_id,read_id,depth\np1,r1,10\n",
+        "patient_id,read_id,depth\np1,r1,10,extra\np1,r2,20\n",
+    ]
+    declarations = [
+        dict(_MEASURED),
+        dict(_MEASURED, measurements={"by": "read_id", "collapse": "sum"}),
+        dict(_MEASURED, measurements={"by": "read_id", "collapse": "median"}),
+        dict(_MEASURED, measurements={"by": "read_id", "collapse": "mode"}),
+        dict(_MEASURED, measurements={"by": "depth", "collapse": "first"}),
+        dict(_MEASURED, measurements={"by": "read_id"}),
+    ]
+    for body in bodies:
+        _write_reads(input_dir, body)
+        for decl in declarations:
+            try:
+                resolve_units(dict(decl), input_dir)
+            except ContractError as exc:
+                assert exc.code.startswith("E-")
+
+
+def test_the_unit_list_gains_no_new_operation(input_dir: Path):
+    """The contract is exactly three operations plus `.train`
+    (`reference.md` § The unit list is three operations). `technical_n` is a
+    second return value precisely so it cannot become a fourth."""
+    _write_reads(input_dir, "patient_id,read_id,depth\np1,r1,10\np1,r2,20\n")
+    roster, _ = resolve_units(dict(_MEASURED), input_dir)
+    assert not hasattr(roster, "technical_n")
+    assert not any("technical" in name for name in vars(roster))
+
+
+def test_duplicate_keys_still_raise_without_measurements(input_dir: Path):
+    """The collapse is what makes a repeated key legal. Without the declaration
+    it is the duplicate it always was."""
+    _write_reads(input_dir, "patient_id,read_id,depth\np1,r1,10\np1,r2,20\n")
+    with pytest.raises(ContractError) as e:
+        resolve_units({"from": "reads.csv", "key": "patient_id"}, input_dir)
+    assert e.value.code == "E-UNITS-KEY-DUPLICATE"
+
+
+def test_technical_n_is_absent_when_measurements_is_undeclared(input_dir: Path):
+    """A design that never measures twice must read exactly as it did before."""
+    roster, technical_n = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
+    assert len(roster) == 3
+    assert technical_n is None

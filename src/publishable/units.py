@@ -245,8 +245,18 @@ def _from_glob(decl: dict[str, Any], pattern: str, input_dir: Path) -> list[Unit
     return [Unit(key=rel, paths=(rel,), attributes={}) for rel in rels]
 
 
-def resolve_units(units_decl: dict[str, Any], input_dir: Path) -> UnitList:
-    """Resolve the roster, preserving the order it was resolved in."""
+def resolve_units(
+    units_decl: dict[str, Any], input_dir: Path
+) -> tuple[UnitList, dict[str, float] | None]:
+    """Resolve the roster, preserving the order it was resolved in.
+
+    Returns the roster and `technical_n` — the second `None` unless
+    `data.units.measurements` is declared. `technical_n` is returned *beside* the
+    roster rather than on it because `io.units` **is** a `UnitList` handed to
+    steps, and `reference.md` § The unit list is three operations promises exactly
+    iteration, `len`, and integer indexing, plus `.train`. A fourth operation
+    would be a fourth thing every future backing has to provide.
+    """
     source = units_decl.get("from")
     if isinstance(source, str):
         units = _from_table(units_decl, input_dir, source)
@@ -257,6 +267,28 @@ def resolve_units(units_decl: dict[str, Any], input_dir: Path) -> UnitList:
             f"`data.units.from` is {source!r}; expected a table name or {{glob: ...}}",
             code="E-UNITS-SOURCE-MISSING",
         )
+    # Before the uniqueness loop, not after: under a `measurements` declaration a
+    # repeated key is the point — rows sharing one are technical replicates of the
+    # same unit — and after the collapse there is one row per key again, so the
+    # check below still means what it always did for every other design.
+    technical_n: dict[str, float] | None = None
+    measurements = units_decl.get("measurements")
+    if measurements:
+        by = _measurement_axis(measurements)
+        units, counts = collapse_measurements(
+            units, by, measurements.get("collapse", "first")
+        )
+        # `{min, max, median}` rather than a scalar, per `reference.md` § What
+        # isn't a repeat: real files are uneven, and a bare `technical_n: 3`
+        # would be a claim of balance nobody checked. Not a shape waiting to be
+        # simplified — a unit measured once and a unit measured five times
+        # contribute equally to `n` after collapsing, and this is what makes
+        # that visible.
+        technical_n = {
+            "min": min(counts),
+            "max": max(counts),
+            "median": statistics.median(counts),
+        }
     seen: dict[str, int] = {}
     for u in units:
         if u.key in seen:
@@ -265,7 +297,29 @@ def resolve_units(units_decl: dict[str, Any], input_dir: Path) -> UnitList:
                 code="E-UNITS-KEY-DUPLICATE",
             )
         seen[u.key] = 1
-    return UnitList(units)
+    return UnitList(units), technical_n
+
+
+def _measurement_axis(measurements: Any) -> str:
+    """`measurements.by`, or the same code `validate` reports for its absence.
+
+    `validate._check_units` resolves the roster *before* `_check_measurements`
+    runs, so a malformed block reaches this function first — and `validate`
+    collects findings rather than raising, so a `KeyError` on a missing `by` or an
+    `AttributeError` on `measurements: yes` would escape `validate` itself.
+    `E-DATA-MEASUREMENTS-INVALID` is what `_check_measurements` reports for both
+    shapes, so one problem carries one code whichever surface reached it first.
+    """
+    by = measurements.get("by") if isinstance(measurements, Mapping) else None
+    if not isinstance(by, str) or not by:
+        raise ContractError(
+            f"`data.units.measurements` is {measurements!r}; it needs `by`, the "
+            "attribute distinguishing one measurement of a unit from another. "
+            "Without it nothing distinguishes a second measurement of one unit "
+            "from a resumed retry of the same one",
+            code="E-DATA-MEASUREMENTS-INVALID",
+        )
+    return by
 
 
 COLLAPSE_RULES = ("mean", "median", "sum", "first", "mode")
@@ -336,6 +390,47 @@ def is_measurement_numeric(value: Any) -> bool:
             return False
         return True
     return False
+
+
+def coerce_for_rule(column: str, rule: str, values: list[Any]) -> list[Any]:
+    """Numbers for a numeric rule, or the values exactly as they arrived.
+
+    A table-sourced column arrives through `csv.DictReader` as `str` whatever it
+    holds, so without this step `collapse: mean` over a column `validate` accepted
+    — `is_measurement_numeric("10")` is `True` — either returns a string (`_apply`'s
+    constant-column shortcut) or raises a bare `TypeError` (`sum` over strings).
+    Both are the same defect: a config that validates clean and then misbehaves on
+    a value `validate` already approved.
+
+    `is_measurement_numeric` is the gate, and `float` is the conversion, precisely
+    because the predicate accepts exactly what `float` accepts — an int-first
+    coercion, or a stricter parse, would part ways with the predicate and reopen
+    the divergence it exists to close. The visible consequence is that an
+    integer-looking column collapses to `15.0` rather than `15`; narrowing that
+    back to `int` is the tidy-up that would break the correspondence.
+
+    The constant-value case is handed on untouched so `_apply`'s own shortcut
+    still answers it — `reference.md` § What isn't a repeat: "Attributes constant
+    within a key collapse to that value with no rule needed." Everything else a
+    numeric rule cannot operate on is refused here, carrying the identifier
+    `validate`'s own collapse-type check reports, rather than reaching arithmetic
+    that would raise a bare `TypeError` — which, since `validate` resolves the
+    roster inside an `except ContractError`, would escape `validate` itself.
+    """
+    if rule not in NUMERIC_COLLAPSE_RULES:
+        return values
+    if all(is_measurement_numeric(v) for v in values):
+        return [float(v) for v in values]
+    if values and all(v == values[0] for v in values):
+        return values
+    offender = next(v for v in values if not is_measurement_numeric(v))
+    raise ContractError(
+        f"`data.units.measurements.collapse` is {rule!r} over {column!r}, which holds "
+        f"{offender!r} — a {type(offender).__name__} that is not numeric and does not "
+        "parse as one. Use `first` or `mode` for it, or a per-column map giving each "
+        "column the rule that fits it",
+        code="E-DATA-MEASUREMENTS-COLLAPSE-TYPE",
+    )
 
 
 def _apply(rule: str, values: list[Any]) -> Any:
@@ -410,13 +505,14 @@ def collapse_measurements(
             for name in member.attributes:
                 if name != by and name not in names:
                     names.append(name)
-        merged = {
-            name: _apply(
-                rule_for(name, collapse),
-                [m.attributes[name] for m in members if name in m.attributes],
-            )
-            for name in names
-        }
+        merged: dict[str, Any] = {}
+        for name in names:
+            rule = rule_for(name, collapse)
+            # Never empty: `names` is built from the members' own attribute keys,
+            # so every name here is one at least one member carries — which is
+            # what keeps `_apply`'s `values[0]` in reach of a value.
+            values = [m.attributes[name] for m in members if name in m.attributes]
+            merged[name] = _apply(rule, coerce_for_rule(name, rule, values))
         paths = tuple(p for m in members for p in m.paths)
         collapsed.append(Unit(key=key, paths=paths, attributes=merged))
         counts.append(len(members))

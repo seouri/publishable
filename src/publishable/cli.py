@@ -696,7 +696,16 @@ def command_run(config_path: Path) -> int:
     input_dir = Path(doc["data"]["input_dir"]).expanduser()
     output_dir = Path(doc["data"]["output_dir"]).expanduser()
     units_decl: dict[str, Any] | None = (doc.get("data") or {}).get("units")
-    roster = resolve_units(units_decl, input_dir) if units_decl else None  # phase 5: roster
+    # phase 5: roster. `technical_n` — `{min, max, median}` over the measurement
+    # counts rows sharing a key collapsed from — is resolved here and not yet
+    # carried anywhere: `reference.md` § What isn't a repeat shows it beside a
+    # metric's `n` in `run.yaml`, and the route to a metric is the `counts`
+    # argument `runner.attrition` builds and `stats.summarize_step` consumes.
+    # That plumbing belongs to the task that widens `counts` for `effective`,
+    # which faces the identical "a sibling of `n`, not a part of it" decision;
+    # `provenance.units` is documented as exactly `{n, key}`, so parking it there
+    # instead would invent a `run.yaml` field no document describes.
+    roster, _technical_n = resolve_units(units_decl, input_dir) if units_decl else (None, None)
     # `unit_count` is what turns `{kind: fold, k: all}` into a real count and
     # what `_fold_k` checks a declared `k` against — the same roster
     # `_check_units`/`_check_replication` resolved at `validate` time, threaded
