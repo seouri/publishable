@@ -10,6 +10,7 @@ import csv
 import hashlib
 import json
 import random
+import statistics
 from collections import Counter
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
@@ -267,7 +268,14 @@ def resolve_units(units_decl: dict[str, Any], input_dir: Path) -> UnitList:
     return UnitList(units)
 
 
-COLLAPSE_RULES = ("mean", "first", "mode")
+COLLAPSE_RULES = ("mean", "median", "sum", "first", "mode")
+
+# `reference.md` § What isn't a repeat: "`collapse` is `mean`, `median`, or `sum`
+# for numeric columns and `first` or `mode` for the rest." Exported so task 2's
+# validate-time check — which numeric-only rule was named over a non-numeric
+# column — reads the same set rather than re-deriving it, which is how the two
+# would come to disagree.
+NUMERIC_COLLAPSE_RULES = ("mean", "median", "sum")
 
 
 def _rule_for(column: str, collapse: Any) -> str:
@@ -298,7 +306,15 @@ def _apply(rule: str, values: list[Any]) -> Any:
     if rule == "first":
         return values[0]
     if rule == "mode":
+        # `Counter.most_common` breaks a count-tie by insertion order on
+        # Python 3.7+, which is what pins the documented "by whichever tied
+        # value appeared first" — a property of `dict` iteration order the
+        # standard library commits to, not an accident of this call.
         return Counter(values).most_common(1)[0][0]
+    if rule == "median":
+        return statistics.median(values)
+    if rule == "sum":
+        return sum(values)
     return sum(values) / len(values)  # rule == "mean"
 
 
@@ -315,6 +331,11 @@ def collapse_measurements(
     Returns the collapsed units and their measurement counts in the same order,
     because `technical_n` is `{min, max, median}` over exactly these counts and
     recomputing them from a second walk is how the two come to disagree.
+
+    Each group's member list is built by appending in `units`' own iteration
+    order, so it *is* resolution order — which is what makes `_apply`'s `first`
+    branch (`values[0]`) match the documented "earliest row in resolution
+    order" rather than an incidental artifact of `dict` grouping.
     """
     groups: dict[str, list[Unit]] = {}
     for unit in units:

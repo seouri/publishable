@@ -329,6 +329,12 @@ def test_a_glob_source_with_no_declared_attributes_still_resolves(input_dir: Pat
 
 
 def test_rows_sharing_a_key_collapse_to_one_unit():
+    """`collapse="mean"` here applies to every column, including the non-numeric
+    `site` — a config shape task 2's row-243 check refuses at `validate` time
+    (`collapse: mean` over a non-numeric column). It is legal input to this
+    *function*, which must stay total over the constant case regardless of what
+    `validate` will later reject, so `site` collapsing cleanly via the
+    "constant needs no rule" path is not evidence the config itself is legal."""
     units = [
         Unit(key="p1", paths=(), attributes={"read_id": "r1", "depth": 10, "site": "A"}),
         Unit(key="p1", paths=(), attributes={"read_id": "r2", "depth": 20, "site": "A"}),
@@ -340,6 +346,33 @@ def test_rows_sharing_a_key_collapse_to_one_unit():
     assert collapsed[0].depth == 15.0        # mean of 10 and 20
     assert collapsed[0].site == "A"          # non-numeric, constant: carried
     assert "read_id" not in collapsed[0].attributes   # the measurement axis is consumed
+
+
+def test_median_and_sum_are_collapse_rules():
+    units = [
+        Unit(key="p1", paths=(), attributes={"read_id": "r1", "depth": 10}),
+        Unit(key="p1", paths=(), attributes={"read_id": "r2", "depth": 20}),
+        Unit(key="p1", paths=(), attributes={"read_id": "r3", "depth": 60}),
+    ]
+    median_collapsed, _ = collapse_measurements(units, by="read_id", collapse="median")
+    assert median_collapsed[0].depth == 20
+    sum_collapsed, _ = collapse_measurements(units, by="read_id", collapse="sum")
+    assert sum_collapsed[0].depth == 90
+
+
+def test_mode_breaks_a_genuine_tie_by_whichever_value_appeared_first():
+    """`reference.md` § What isn't a repeat pins the tie-break: `mode` breaks a
+    tie "by whichever tied value appeared first" — resolution order, not an
+    incidental property of `Counter.most_common`. `"b"` and `"a"` each appear
+    twice; `"b"` is first in resolution order, so it must win."""
+    units = [
+        Unit(key="p1", paths=(), attributes={"read_id": "r1", "label": "b"}),
+        Unit(key="p1", paths=(), attributes={"read_id": "r2", "label": "a"}),
+        Unit(key="p1", paths=(), attributes={"read_id": "r3", "label": "a"}),
+        Unit(key="p1", paths=(), attributes={"read_id": "r4", "label": "b"}),
+    ]
+    collapsed, _ = collapse_measurements(units, by="read_id", collapse="mode")
+    assert collapsed[0].label == "b"
 
 
 def test_a_column_absent_from_the_collapse_map_falls_back_to_first():
