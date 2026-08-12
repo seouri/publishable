@@ -136,6 +136,24 @@ def _check_shape(doc: dict[str, Any], c: Collector) -> bool:
         # not a shape one) — every `paired` entry is fed straight into `dict()`,
         # so a `null` entry is itself the crash (`dict(None)` raises `TypeError`)
         # and is refused here rather than treated as absent.
+        #
+        # A third guard, same reasoning: `dict()` itself tolerates a non-string
+        # key (`{123: 30}` parses fine off YAML), but `_swept_paths`/`_keys_for`
+        # feed every `paired` key straight into `.split(".")` and an `endswith`
+        # scan, both string-only, so `123.split(".")` is the crash — one level
+        # further down than the entry-shape guard above, reached only once an
+        # entry *is* a mapping. `envelope.py`'s `_check_unknown_keys` faces a
+        # structurally similar non-string YAML key and chooses the other
+        # route — coerce to `str` and report `E-CONFIG-KEY-UNKNOWN` — but that
+        # works there because every leaf sits under a closed, known vocabulary
+        # a coerced string can be compared against and reported as unmatched.
+        # A `paired` key is an open dotted path into `parameters`, not a member
+        # of any closed set `_check_shape` knows here (that resolution is
+        # `_check_sweep`'s `E-SWEEP-PATH-UNKNOWN`, reached only for a *string*
+        # key); coercing and continuing would just move today's crash one
+        # frame deeper for no reporting benefit, so this stays a shape fault —
+        # `E-CONFIG-SHAPE`, fatal, consistent with every other guard in this
+        # function — rather than `envelope.py`'s coerce-and-report.
         paired = sweep.get("paired")
         if paired is not None and not isinstance(paired, list):
             _bad("sweep.paired", paired, "list")
@@ -143,6 +161,10 @@ def _check_shape(doc: dict[str, Any], c: Collector) -> bool:
             for i, entry in enumerate(paired):
                 if not isinstance(entry, dict):
                     _bad(f"sweep.paired[{i}]", entry, "mapping")
+                    continue
+                for key in entry:
+                    if not isinstance(key, str):
+                        _bad(f"sweep.paired[{i}]", key, "string")
 
     replication = doc.get("replication")
     if isinstance(replication, dict):

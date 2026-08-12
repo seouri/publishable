@@ -2012,6 +2012,43 @@ def test_a_null_whole_paired_block_is_absent_not_malformed(write_config):
     assert "E-CONFIG-SHAPE" not in found
 
 
+def test_a_paired_entry_with_a_non_string_int_key_is_a_diagnostic_not_a_traceback(write_config):
+    """`dict()` tolerates a non-string key (`{123: 30}` parses fine off YAML), but
+    `_swept_paths`/`_keys_for` feed every `paired` key into `.split(".")` and an
+    `endswith` scan, both string-only — `123.split(".")` is
+    `AttributeError: 'int' object has no attribute 'endswith'` (actually raised
+    inside `_keys_for`'s `path.split(".")` first) once `expand` reaches
+    `label_for`. Reproduced directly against `expand` before this guard existed:
+    `AttributeError: 'int' object has no attribute 'endswith'`."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {
+                    "grid": {"analysis.method": ["pearson", "spearman"]},
+                    "paired": [{123: 30}, {123: 50}],
+                }
+            }
+        )
+    )
+    assert "E-CONFIG-SHAPE" in found
+
+
+def test_a_paired_entry_with_a_non_string_float_key_is_a_diagnostic_not_a_traceback(write_config):
+    """Same crash, via a `float` key instead of `int` — confirms the guard checks
+    `isinstance(key, str)` rather than special-casing one non-string type."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {
+                    "grid": {"analysis.method": ["pearson", "spearman"]},
+                    "paired": [{1.5: 30}, {1.5: 50}],
+                }
+            }
+        )
+    )
+    assert "E-CONFIG-SHAPE" in found
+
+
 def test_check_contrasts_still_refuses_a_non_list_when_called_directly():
     """`_check_contrasts`'s own `isinstance(entries, list)` guard is kept even
     though `_check_shape` now refuses that shape first in the normal pipeline
