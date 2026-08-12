@@ -399,6 +399,23 @@ def test_a_bogus_rule_raises_even_over_a_single_trivially_constant_value():
     assert e.value.code == "E-UNITS-COLLAPSE-RULE"
 
 
+def test_a_constant_boolean_column_carries_rather_than_summing():
+    """`bool` is deliberately outside the numeric gate, so the constant shortcut
+    still fires for it. `isinstance(True, int)` is True in Python, and without
+    the explicit exclusion a constant boolean column would be summed — a
+    different intent than summing depths.
+
+    Pinning it because the exclusion was a claim in a comment that nothing
+    provided: including `bool` as numeric left every test in this file passing.
+
+    The asymmetry this leaves — `sum([True, False])` is `1`, an int — is real and
+    is deliberately not fixed here: `sum` over a boolean column is incoherent
+    whichever branch it takes, and refusing it belongs to the validate-time
+    collapse-rule/column-type check rather than to this function."""
+    assert _apply("sum", [True, True]) is True
+    assert _apply("sum", [False, False]) is False
+
+
 def test_a_column_absent_from_the_collapse_map_falls_back_to_first():
     """`collapse` may be a per-column map; a column it does not name falls back
     to `first` rather than being averaged. `batch` differs across the two rows,
