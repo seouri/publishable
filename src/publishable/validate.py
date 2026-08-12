@@ -258,7 +258,7 @@ def validate_config(
     _check_metadata(doc, config_path, template, c)
     _check_entrypoint(doc, c)
     _check_parameters(doc, template, c)
-    _check_versions(doc, c)
+    _check_versions(doc, template, c)
     _check_data(doc, config_path, c)
     roster = _check_units(doc, c)
     _check_replication(
@@ -341,14 +341,40 @@ def _check_parameters(doc: dict[str, Any], template: Any, c: Collector) -> None:
             c.error("E-PARAM-MISSING", f"parameters.{path}", "is required and absent")
 
 
-def _check_versions(doc: dict[str, Any], c: Collector) -> None:
+def _check_versions(doc: dict[str, Any], template: Any, c: Collector) -> None:
+    """The moved version, and which parameters this config leaves to a default.
+
+    § Validation's "Template version moved" row reports both halves in one
+    warning — the version, and `request.timeout` being unset. The second half is
+    computed from `parameter_spec` alone and named only inside this warning, so
+    it stays gated on the mismatch: a config whose `template_version` matches
+    draws nothing here, and an omitted parameter with no default is
+    `E-PARAM-MISSING`'s to report regardless of any version.
+
+    The message states what is observable — a parameter the installed template
+    defaults and this config does not set. Core cannot tell that apart from one
+    the author deliberately left at its default, and asserting which it is would
+    be a claim the declaration does not carry.
+    """
     declared = doc.get("template_version")
-    if declared and declared != TEMPLATE_VERSION:
-        c.warn(
-            "W-TEMPLATE-VERSION",
-            "template_version",
-            f"is {declared} but the installed template reports {TEMPLATE_VERSION}",
-        )
+    if not declared or declared == TEMPLATE_VERSION:
+        return
+    set_here = _flatten(doc.get("parameters"), "")
+    unset = [
+        path
+        for path, param in template.parameter_spec.items()
+        if path not in set_here and param.default is not MISSING
+    ]
+    detail = (
+        f"; unset here and left to the installed template's default: {', '.join(unset)}"
+        if unset
+        else ""
+    )
+    c.warn(
+        "W-TEMPLATE-VERSION",
+        "template_version",
+        f"is {declared} but the installed template reports {TEMPLATE_VERSION}{detail}",
+    )
 
 
 def _check_data(doc: dict[str, Any], config_path: Path, c: Collector) -> None:
@@ -1164,9 +1190,14 @@ def _check_sweep(
         c.warn(
             "W-STATS-CORRECTION-INAPPLICABLE",
             "statistics.correction",
-            "`fdr_bh` adjusts p-values, and no comparison in this family will carry one "
-            "(`statistics.null_test` is undeclared, and a parameter-axis contrast cannot "
-            "supply one) — every `ci95_corrected` will be null. Use `holm` or `bonferroni`, "
+            # The parenthetical this replaces asserted "`statistics.null_test` is
+            # undeclared", which is false of a config that declares one — and such
+            # a config reaches here, drawing `E-STATS-NULLTEST-UNSUPPORTED` and
+            # this warning together. Removing a false assertion is independent of
+            # the condition, which still fires on `fdr_bh` over a non-empty family
+            # and is narrowed by whichever slice implements `null_test`.
+            "`fdr_bh` adjusts p-values, and no comparison in this family can carry one in "
+            "this build — every `ci95_corrected` will be null. Use `holm` or `bonferroni`, "
             "whose corrections are interval-shaped",
         )
 

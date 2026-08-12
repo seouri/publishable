@@ -341,7 +341,7 @@ Each row states the condition, not the wording.
 | A `statistics.report_by` level *completed* fewer units than `limits.min_reported_n`, checked at `run` time against what actually finished — the attrition between the roster `validate` saw and what a run completes is exactly what this catches beyond `W-STATS-REPORTBY-THIN` | `W-STATS-STRATUM-THIN` |
 | A `summary`-step [`Estimate`](#estimate-carries-your-interval-without-core-claiming-it) carries a `ci95` but no `n` — an interval with no stated denominator is the disclosure risk `limits.min_reported_n` exists to catch, and `study add` cannot check what it cannot see | `W-STEP-ESTIMATE-N` |
 | A [`sweep.baseline`](#expansion-modes) fixing a value on every `sweep.grid` axis leaves at least one condition differing from it on more than one of them, so that comparison is reported `confounded: true` and its delta mixes two effects. Checked at `validate` over the declared axes alone, and only for a baseline that fixes every one of them — a baseline leaving an axis free is refused outright by `E-SWEEP-BASELINE-PARTIAL` until per-cell baselines land, so the warning's own alternative is not yet a config core accepts | `W-SWEEP-BASELINE-CONFOUNDED` |
-| A config's declared `template_version` differs from the installed template's reported version | `W-TEMPLATE-VERSION` |
+| A config's declared `template_version` differs from the installed template's reported version — in this build, compared against the one version core itself writes, since `generic` is the only installed template and a template class reports no version of its own; a plugin's own version is read once the [registry](#creating-a-plugin-publishable-plugin-new) resolves it. The message also names every `parameter_spec` parameter carrying a default that this config does not set — computed only under that mismatch, and stated as unset-and-defaulted rather than as new, since the declaration does not say which | `W-TEMPLATE-VERSION` |
 
 `W-ENV-UNLOCKED` is the one row above that names a gap in this project rather than in yours: it fires on every scaffolded run right now, because `publishable` cannot yet be resolved from an index a lockfile pins against. That is bootstrapping, not a defect — a reader hitting it on their first run is seeing an accurate, expected state, not a misconfigured one.
 
@@ -417,7 +417,7 @@ returns immediately after, and, likewise apart from those exceptions, none of th
 | A `batch` level is declared anywhere but the outermost position in `replication.repeats` | `E-REPL-LEVEL-BATCH-INNER` |
 | `replication.repeats` declares more than two levels | `E-REPL-LEVEL-DEPTH` |
 | Two levels of `replication.repeats` declare the same `kind` | `E-REPL-LEVEL-DUPLICATE` |
-| A level declares the count field belonging to the other kind — `n` on a `fold` level, or `k` on a `seed`/`batch` level | `E-REPL-LEVEL-FIELD` |
+| A level declares the count field belonging to the other kind — `n` on a `fold` level, or `k` on a `seed`/`batch` level — or a `batch` level declares any key besides `kind` and `n`, checked after the count-field clause so `{kind: batch, k: 3}` still reports its count rather than an unrecognized key. Applied to `batch` alone; no other kind's keys are closed | `E-REPL-LEVEL-FIELD` |
 | A `seed` or `batch` level's `n`, or a `fold` level's `k`, resolves to an integer less than 1 | `E-REPL-N` |
 | `replication.order` is set and is a value other than `as_declared` or `randomized` — unset (`null`) is accepted | `E-REPL-ORDER` |
 | Two members of one repeat level derive the same seed, or resolve to the same label, from the digest the check ran against | `E-REPL-SEED-COLLISION` |
@@ -436,7 +436,7 @@ returns immediately after, and, likewise apart from those exceptions, none of th
 | A `sweep.grid` value cannot be rendered into a condition label — a `sweep.baseline` value is exempt, since it is never rendered into one | `E-SWEEP-VALUE-UNNAMEABLE` |
 | `template.validate(doc)` yields a message — run last, after every other check in this table, and ungated by their findings, so a cross-block rule can report on `parameters` another row already refused | `E-TEMPLATE-RULE` |
 | `experiment_type` names a template no installed package registers | `E-TEMPLATE-UNKNOWN` |
-| `data.units.attributes` names a value the source table has no column for, or — for a table source only — names a non-string item | `E-UNITS-ATTR-MISSING` |
+| `data.units.attributes` names a value the source table has no column for, or names any value at all under a `{glob: ...}` source, which yields a key and a path and nothing else — reported for the first such name, and after `E-UNITS-ATTR-RESERVED` under either source; or — for a table source only — names a non-string item | `E-UNITS-ATTR-MISSING` |
 | `data.units.attributes` names a field of `Unit` itself (`key`, `paths`, or `attributes`), which cannot also be a declared attribute | `E-UNITS-ATTR-RESERVED` |
 | The table `data.units.from` names has no data rows, or the `glob` it names matches no files under `input_dir` | `E-UNITS-EMPTY` |
 | Two resolved units share the same `data.units.key` value | `E-UNITS-KEY-DUPLICATE` |

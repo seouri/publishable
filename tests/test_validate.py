@@ -3604,3 +3604,52 @@ def test_a_string_min_reported_n_does_not_crash_the_contrast_stratum_count(write
     found = codes(path)
     assert "E-CONFIG-TYPE" in found
     assert "W-STATS-CONTRAST-THIN" not in found
+
+
+def test_a_glob_source_with_a_declared_attribute_is_reported_by_validate(write_config):
+    """The unit-level refusal has to arrive as a *finding*: `_check_units` catches
+    `ContractError` out of `resolve_units`, so a glob that cannot supply a declared
+    attribute is a diagnostic rather than a traceback."""
+    path = write_config(
+        {"data.units": {"from": {"glob": "*.csv"}, "key": "path", "attributes": ["label"]}}
+    )
+    assert "E-UNITS-ATTR-MISSING" in codes(path)
+
+
+def test_a_moved_template_version_names_a_parameter_the_config_leaves_unset(write_config):
+    """§ Validation's "Template version moved" row reports two things — the moved
+    version and `request.timeout` being new and unset. Only the first was reported,
+    so the warning said where to look without saying what to look at."""
+    path = write_config({"template_version": "0.9.0", "parameters.analysis.confidence": _DELETE})
+    c = Collector()
+    validate_config(path, c)
+    warnings = [f for f in c.findings if f.code == "W-TEMPLATE-VERSION"]
+    assert len(warnings) == 1
+    assert "analysis.confidence" in warnings[0].message
+    assert "analysis.method" not in warnings[0].message
+
+
+def test_an_unset_parameter_is_named_only_when_the_version_moved(write_config):
+    """The naming is gated on the mismatch: a config matching the installed version
+    draws no warning at all, so a defaulted parameter it omits is not reported."""
+    path = write_config({"parameters.analysis.confidence": _DELETE})
+    assert "W-TEMPLATE-VERSION" not in codes(path)
+
+
+def test_the_inapplicable_correction_warning_asserts_nothing_about_null_test(write_config):
+    """A config declaring `statistics.null_test` reaches this warning — the block is
+    refused (`E-STATS-NULLTEST-UNSUPPORTED`) but `validate` collects rather than
+    stopping — and the message used to tell that config its `null_test` was
+    undeclared. The condition is unchanged and still over-broad against the row it
+    implements; what this pins is only that the message asserts nothing false."""
+    path = write_config(
+        {
+            "sweep": _TWO_CONDITIONS,
+            "statistics": {"correction": "fdr_bh", "null_test": {"shuffle": "label"}},
+        }
+    )
+    c = Collector()
+    validate_config(path, c)
+    found = {f.code: f.message for f in c.findings}
+    assert "E-STATS-NULLTEST-UNSUPPORTED" in found
+    assert "undeclared" not in found["W-STATS-CORRECTION-INAPPLICABLE"]

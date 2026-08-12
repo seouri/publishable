@@ -143,6 +143,34 @@ def _check_count_field(kind: str, level: dict[str, Any]) -> None:
         )
 
 
+# What a `batch` level may hold. `reference.md` § Repeat kinds gives it `n` and
+# "nothing else", and § Validation's "Batch takes no fields" row says the same.
+_BATCH_KEYS = frozenset({"kind", "n"})
+
+
+def _check_batch_keys(kind: str, level: dict[str, Any]) -> None:
+    """A `batch` level's keys, closed against `_BATCH_KEYS`.
+
+    Only `batch`. A `seed` level takes `seeds` and a `fold` level takes
+    `stratify_by` besides its count, so the same closure over those kinds would
+    refuse declarations the document allows.
+
+    Runs after `_check_count_field`, so `{kind: batch, k: 3}` keeps the message
+    naming `n` as a batch's count rather than being reported as an unknown key.
+    """
+    if kind != "batch":
+        return
+    extra = sorted(k for k in level if k not in _BATCH_KEYS)
+    if extra:
+        raise ContractError(
+            f"`{{kind: batch}}` declares {', '.join(f'`{k}`' for k in extra)}, which a "
+            "`batch` level does not take — its only field is `n`. A batch varies "
+            "nothing the pipeline declares, so a field on one is read by nobody and "
+            "describes a design core does not execute",
+            code="E-REPL-LEVEL-FIELD",
+        )
+
+
 def resolve_repeats(
     config: dict[str, Any], digest: str, unit_count: int | None = None
 ) -> list[RepeatLevel]:
@@ -167,6 +195,7 @@ def resolve_repeats(
         if kind not in SUPPORTED_KINDS:
             raise ContractError(f"`{kind}` is not a repeat kind", code="E-REPL-KIND")
         _check_count_field(kind, level)
+        _check_batch_keys(kind, level)
         if kind == "fold":
             n = _fold_k(level, unit_count)
         else:
