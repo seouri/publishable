@@ -1234,10 +1234,17 @@ def _check_sweep(
             c.error(
                 "E-SWEEP-KEY-UNKNOWN",
                 f"sweep.{key}",
-                f"is not a sweep mode{hint} — `expand` understands only `baseline`, "
-                "`grid`, `paired`, `sample` and `ablate` in this build, so an unrecognised key "
-                "would expand to zero conditions and the run would execute nothing "
-                "while reporting success",
+                # The vocabulary comes from `SWEEP_MODES`, the same tuple the
+                # check gates on. Naming the *implemented* modes here instead
+                # made the message contradict its own emit site the moment the
+                # two lists diverged: this branch accepts `groups` and the
+                # sentence said `expand` does not understand it. A mode that is
+                # recognized but not built is refused by its own
+                # `-UNSUPPORTED` code, which is where that fact belongs.
+                f"is not a sweep mode{hint} — the modes are "
+                + ", ".join(f"`{mode}`" for mode in sorted(SWEEP_MODES))
+                + ", so an unrecognised key would expand to zero conditions and the run "
+                "would execute nothing while reporting success",
             )
 
     spec = template.parameter_spec
