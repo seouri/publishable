@@ -668,3 +668,157 @@ def test_a_pinned_integer_seed_overrides_the_derivation() -> None:
     assert [dict(c.values) for c in expand(one)] != [
         dict(c.values) for c in expand(_sample_config())
     ]
+
+
+def test_ablate_emits_one_baseline_and_one_condition_per_removal() -> None:
+    """§ Expansion modes: 1 + n conditions, not 2^n, and the baseline appears
+    exactly once — read, not re-emitted."""
+    conditions = expand(
+        {
+            "sweep": {
+                "baseline": {
+                    "features.demographics": True,
+                    "features.labs": True,
+                    "features.notes": True,
+                },
+                "ablate": {
+                    "from": "baseline",
+                    "remove": ["features.demographics", "features.labs", "features.notes"],
+                },
+            }
+        }
+    )
+
+    assert len(conditions) == 4
+    assert conditions[0].is_baseline
+    assert [c.is_baseline for c in conditions[1:]] == [False, False, False]
+    assert dict(conditions[1].values)["features.demographics"] is False
+    assert dict(conditions[1].values)["features.labs"] is True
+
+
+def test_an_ablation_is_labelled_by_its_one_change_not_by_what_it_inherited() -> None:
+    """§ Expansion modes labels an ablation `labs=false` (in the `groups` example,
+    `01_cohort=derivation__labs=false`) — the change alone. An ablate row carries
+    the whole baseline in `values` because it must *run* as the baseline with one
+    thing different, but a label restating every inherited value would name the
+    condition by what it did not vary, and a label is also a selector."""
+    conditions = expand(
+        {
+            "sweep": {
+                "baseline": {"features.labs": True, "features.notes": True},
+                "ablate": {"from": "baseline", "remove": ["features.labs", "features.notes"]},
+            }
+        }
+    )
+
+    assert [c.label for c in conditions] == ["baseline", "labs=false", "notes=false"]
+
+
+def test_an_ablated_path_is_disambiguated_against_every_other_ablated_path() -> None:
+    """`_keys_for` can only shorten a path unambiguously when it is shown every
+    path in the run. `features.notes` and `clinical.notes` share a leaf, so
+    ablated paths must reach the labelling set — otherwise both render as
+    `notes=false` and two conditions share one label, which is also a selector
+    and a directory name."""
+    conditions = expand(
+        {
+            "sweep": {
+                "baseline": {"features.notes": True, "clinical.notes": True},
+                "ablate": {"from": "baseline", "remove": ["features.notes", "clinical.notes"]},
+            }
+        }
+    )
+
+    assert [c.label for c in conditions] == [
+        "baseline",
+        "features.notes=false",
+        "clinical.notes=false",
+    ]
+
+
+def test_ablated_paths_are_not_axis_shaped_paths() -> None:
+    """`_swept_paths` is the axis-shaped modes' set, and `E-SWEEP-BASELINE-PARTIAL`
+    reads it to ask which axis a baseline leaves free. `ablate` is not an axis and
+    has no cells to expand a baseline over, so its paths are carried separately —
+    `expand` and `cli` union the two where labelling and scope-readability need
+    the whole set."""
+    from publishable.sweep import _swept_paths, ablated_paths
+
+    sweep = {
+        "grid": {"analysis.method": ["pearson"]},
+        "baseline": {"features.labs": True},
+        "ablate": {
+            "from": "baseline",
+            "remove": ["features.labs"],
+            "override": [{"analysis.min_samples": 10}, {"analysis.min_samples": 20}],
+        },
+    }
+
+    assert _swept_paths(sweep) == ["analysis.method"]
+    assert ablated_paths(sweep) == ["features.labs", "analysis.min_samples"]
+
+
+def test_override_is_the_non_boolean_one_at_a_time_form() -> None:
+    """§ Expansion modes: "Use `override` for non-boolean one-at-a-time
+    variation". Each entry is one condition, one change from the baseline, and
+    the baseline's other values come with it."""
+    conditions = expand(
+        {
+            "sweep": {
+                "baseline": {"analysis.method": "pearson", "analysis.min_samples": 30},
+                "ablate": {
+                    "override": [
+                        {"analysis.method": "spearman"},
+                        {"analysis.min_samples": 10},
+                    ]
+                },
+            }
+        }
+    )
+
+    assert len(conditions) == 3
+    assert dict(conditions[1].values) == {
+        "analysis.method": "spearman",
+        "analysis.min_samples": 30,
+    }
+    assert dict(conditions[2].values) == {
+        "analysis.method": "pearson",
+        "analysis.min_samples": 10,
+    }
+    assert [c.label for c in conditions] == ["baseline", "method=spearman", "min_samples=10"]
+
+
+def test_remove_sets_false_for_a_boolean_and_null_for_anything_else() -> None:
+    """§ Expansion modes: "`remove` sets a boolean parameter to `false` or a
+    nullable one to `null`". This module is pure and has no `parameter_spec` to
+    consult, so the baseline's own value — the value the ablation is defined
+    against — is what says which of the two a path takes."""
+    conditions = expand(
+        {
+            "sweep": {
+                "baseline": {"features.labs": True, "analysis.cutoff": 0.5},
+                "ablate": {"from": "baseline", "remove": ["features.labs", "analysis.cutoff"]},
+            }
+        }
+    )
+
+    assert dict(conditions[1].values)["features.labs"] is False
+    assert dict(conditions[2].values)["analysis.cutoff"] is None
+
+
+def test_ablate_declares_its_conditions_in_the_order_it_writes_them() -> None:
+    """`remove` and `override` are read in the order the `ablate` mapping declares
+    them, so the condition numbering matches what the user wrote."""
+    conditions = expand(
+        {
+            "sweep": {
+                "baseline": {"features.labs": True, "analysis.method": "pearson"},
+                "ablate": {
+                    "override": [{"analysis.method": "spearman"}],
+                    "remove": ["features.labs"],
+                },
+            }
+        }
+    )
+
+    assert [c.label for c in conditions] == ["baseline", "method=spearman", "labs=false"]

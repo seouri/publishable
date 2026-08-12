@@ -1064,17 +1064,17 @@ def test_baseline_and_grid_are_now_accepted(write_config):
 @pytest.mark.parametrize(
     "mode,value,code",
     [
-        ("ablate", {"from": "baseline", "remove": ["a.b"]}, "E-SWEEP-ABLATE-UNSUPPORTED"),
         ("groups", [{"by": "arm", "levels": ["a", "b"]}], "E-SWEEP-GROUPS-UNSUPPORTED"),
     ],
 )
 def test_each_unimplemented_mode_is_refused_on_its_own(write_config, mode, value, code):
-    """`ablate` and `groups` each get their own refusal now that the old
-    blanket sweep refusal is retired — otherwise each would fall through into
-    silence the moment `baseline`/`grid`/`paired`/`sample` stopped covering the
-    whole block. `paired` and `sample` are no longer in this family: both expand
-    for real now, see `test_paired_is_accepted_and_expands_for_real` and
-    `test_sample_is_accepted_and_expands_for_real` below."""
+    """`groups` keeps its own refusal now that the old blanket sweep refusal is
+    retired — otherwise it would fall through into silence the moment
+    `baseline`/`grid`/`paired`/`sample`/`ablate` stopped covering the whole
+    block. `paired`, `sample` and `ablate` are no longer in this family: all
+    three expand for real now, see `test_paired_is_accepted_and_expands_for_real`,
+    `test_sample_is_accepted_and_expands_for_real` and
+    `test_ablate_is_accepted_and_expands_for_real` below."""
     assert code in codes(write_config({"sweep": {mode: value}}))
 
 
@@ -1122,6 +1122,142 @@ def test_sample_is_accepted_and_expands_for_real(write_config):
     )
     assert "E-SWEEP-SAMPLE-UNSUPPORTED" not in found
     assert not [c for c in found if c.startswith("E-SWEEP")]
+
+
+def test_ablate_is_accepted_and_expands_for_real(write_config):
+    """§ Expansion modes retires `E-SWEEP-ABLATE-UNSUPPORTED`: `ablate` is the one
+    mode that does not multiply, applied after the product and reading the
+    baseline rather than re-emitting it, and a config declaring it validates
+    clean rather than tripping the refusal `groups` still gets."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"analysis.method": "pearson", "analysis.drop_missing": True},
+                    "ablate": {
+                        "from": "baseline",
+                        "remove": ["analysis.drop_missing"],
+                        "override": [{"analysis.method": "spearman"}],
+                    },
+                }
+            }
+        )
+    )
+    assert "E-SWEEP-ABLATE-UNSUPPORTED" not in found
+    assert not [c for c in found if c.startswith("E-SWEEP")]
+
+
+def test_an_ablate_override_value_is_checked_against_its_own_param(write_config):
+    """An `override` entry is structurally a `grid` value — user-written, planted
+    into a condition's config and rendered into its label — so it goes through the
+    same `Param.check` on the same identifier. Unchecked, the condition would run
+    a value § Validation's "Choices" row promises to refuse."""
+    c = Collector()
+    validate_config(
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"analysis.method": "pearson"},
+                    "ablate": {"override": [{"analysis.method": "pearsonn"}]},
+                }
+            }
+        ),
+        c,
+    )
+    finding = next(f for f in c.findings if f.code == "E-PARAM-VALUE")
+    assert finding.path == "sweep.ablate.override[0].analysis.method"
+
+
+def test_an_ablate_override_path_the_template_does_not_declare_is_refused(write_config):
+    """Gated on `_path_resolves` before `_value_checks` indexes `spec[path]`, the
+    same order `grid` and `sample` use — otherwise an unknown path is a `KeyError`
+    inside a function contracted never to raise."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"analysis.method": "pearson"},
+                    "ablate": {"override": [{"analysis.methdo": "spearman"}]},
+                }
+            }
+        )
+    )
+    assert "E-SWEEP-PATH-UNKNOWN" in found
+    assert "E-PARAM-VALUE" not in found
+
+
+def test_an_ablate_override_value_carrying_the_axis_separator_is_refused(write_config):
+    """Unlike a `baseline` value, an `override` value IS rendered into the label,
+    so it takes the nameability check too: a value containing `__` makes a label
+    that cannot be parsed back into axes, and a label is also a selector."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"analysis.method": "pearson"},
+                    "ablate": {"override": [{"analysis.method": "a__b"}]},
+                }
+            }
+        )
+    )
+    assert "E-SWEEP-VALUE-UNNAMEABLE" in found
+
+
+@pytest.mark.parametrize(
+    "ablate",
+    [
+        "notamapping",
+        ["notamapping"],
+        {"remove": "analysis.drop_missing"},
+        {"remove": {"analysis.drop_missing": True}},
+        {"remove": [123]},
+        {"remove": [["analysis.drop_missing"]]},
+        {"override": {"analysis.method": "spearman"}},
+        {"override": "analysis.method"},
+        {"override": [None]},
+        {"override": ["analysis.method"]},
+        {"override": [{123: "spearman"}]},
+    ],
+)
+def test_a_misshapen_ablate_is_refused_as_a_shape_fault(write_config, ablate):
+    """The class, not the inputs: every type `ablation_changes` would iterate, use
+    as a dict key or feed into `_keys_for`'s `.split(".")` is guarded in
+    `_check_shape`, fatally, exactly as `grid`, `paired` and `sample` are —
+    `validate` swallows expansion crashes, so a shape that makes `expand` raise
+    must never reach it."""
+    assert "E-CONFIG-SHAPE" in codes(write_config({"sweep": {"ablate": ablate}}))
+
+
+def test_every_misshapen_ablate_really_does_break_expand():
+    """The other half of the guard's claim, asserted rather than argued. Each
+    shape above breaks `expand` in one of the two documented ways: a bare
+    exception out of a function `validate` calls inside a bare `except`, or —
+    for a string where a list belongs — the quiet failure `grid`'s own axis
+    guard closed, iterating character by character into one condition per letter.
+    `remove: [123]` is the one that raises late, inside `_keys_for`'s
+    `.split(".")`, which is why the guard is at the path level and not only at
+    the list level."""
+    from publishable.sweep import expand
+
+    def _expand(ablate):
+        return expand({"sweep": {"baseline": {"analysis.method": "pearson"}, "ablate": ablate}})
+
+    for ablate in (
+        {"remove": [123]},
+        {"remove": [["analysis.drop_missing"]]},
+        {"override": [None]},
+        {"override": ["analysis.method"]},
+        {"override": [{123: "spearman"}]},
+        {"override": "analysis.method"},
+    ):
+        with pytest.raises((TypeError, AttributeError, ValueError)):
+            _expand(ablate)
+
+    # `remove` is the one that fails quietly rather than loudly: one condition
+    # per letter of `analysis.drop_missing`, plus the baseline — legal-looking
+    # output for a design nobody declared, which is why a string is refused as a
+    # shape fault rather than left to expand.
+    assert len(_expand({"remove": "analysis.drop_missing"})) == len("analysis.drop_missing") + 1
 
 
 def test_a_sample_range_bound_outside_its_parameters_constraint_is_refused(write_config):
@@ -1304,7 +1440,6 @@ def test_an_empty_or_null_mode_is_not_a_declaration(write_config):
 
 def test_every_sweep_refusal_message_defers_rather_than_scolds(write_config):
     for mode, value, code in [
-        ("ablate", {"from": "baseline"}, "E-SWEEP-ABLATE-UNSUPPORTED"),
         ("groups", [{"by": "arm"}], "E-SWEEP-GROUPS-UNSUPPORTED"),
     ]:
         c = Collector()

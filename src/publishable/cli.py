@@ -66,6 +66,7 @@ from publishable.stats import (
 from publishable.strata import levels_for
 from publishable.sweep import (
     _swept_paths,
+    ablated_paths,
     condition_dir_name,
     expand,
     sample_seed_for,
@@ -735,7 +736,17 @@ def command_run(config_path: Path) -> int:
     # and resolved to the base config's value, which is exactly the "a value no
     # condition in the run used" failure the baseline half of this line exists to
     # prevent, reached through a mode added after it was written.
-    swept_paths = set(_swept_paths(sweep_block)) | set(sweep_block.get("baseline") or {})
+    # `ablated_paths` is unioned in for the same reason and by the same rule,
+    # from the other side of the axis/non-axis split: an ablated path varies
+    # across conditions too. Most are already covered by the `baseline` term —
+    # a removed path is one the baseline fixes — but an `override` path the
+    # baseline leaves alone is not, and it is exactly the residue this line has
+    # now been widened for three times.
+    swept_paths = (
+        set(_swept_paths(sweep_block))
+        | set(ablated_paths(sweep_block))
+        | set(sweep_block.get("baseline") or {})
+    )
     plan = build_plan(  # phase 4
         experiment,
         conditions=[(c.index, c.label) for c in conditions],

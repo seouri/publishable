@@ -388,6 +388,73 @@ def _swept_paths(sweep: dict[str, Any]) -> list[str]:
     return paths
 
 
+def ablation_changes(sweep: dict[str, Any]) -> list[dict[str, Any]]:
+    """One `{path: value}` change per `ablate` entry, in declared order.
+
+    `ablate` is not an axis, so it produces changes rather than cells: § Expansion
+    modes says it "emits `n` conditions, each one change away from the baseline",
+    and `expand` applies each of these *after* the product rather than crossing
+    them into it.
+
+    `remove` and `override` are read in the order the `ablate` mapping declares
+    them, not `remove`-then-`override`, so the condition numbering a reader sees
+    is the order they wrote. Any other key is ignored here — `expand` cannot
+    refuse, and a typo (`removes:`) is a value-level fault for `validate` to
+    report, not a shape one (see `docs/superpowers/spec-defects.md`).
+
+    **What `remove` sets is decided by the baseline's value for that path**, and
+    it has to be: § Expansion modes says `remove` "sets a boolean parameter to
+    `false` or a nullable one to `null`", which is a fact about the parameter's
+    `Param` — and this module is pure, with no template and so no
+    `parameter_spec` to consult. The baseline is the one thing `ablate` is
+    defined against (§ Validation, "Ablation targets": every removed path is one
+    the baseline fixes), so a boolean *there* is what selects `false`; anything
+    else takes the nullable reading and sets `null`. A path the baseline does not
+    fix takes the same `null` reading, and is `validate`'s to refuse rather than
+    this function's to guess at.
+    """
+    ablate = sweep.get("ablate")
+    if not isinstance(ablate, dict):
+        return []
+    baseline = sweep.get("baseline") or {}
+    changes: list[dict[str, Any]] = []
+    for key, block in ablate.items():
+        if key == "remove":
+            for path in block or []:
+                changes.append({path: False if isinstance(baseline.get(path), bool) else None})
+        elif key == "override":
+            for entry in block or []:
+                changes.append(dict(entry))
+    return changes
+
+
+def ablated_paths(sweep: dict[str, Any]) -> list[str]:
+    """Every path `ablate` changes, deduped, in declared order.
+
+    Deliberately NOT part of `_swept_paths`, which is the axis-shaped modes' set
+    and is what `validate`'s `E-SWEEP-BASELINE-PARTIAL` reads: that refusal is
+    about a baseline leaving an *axis* free, which expands to one baseline per
+    cell — a sentence with no meaning for a mode that is not an axis and cannot
+    compose with one. An ablated path in there would refuse a legal `override`
+    on a path the baseline does not fix, with a message about cells.
+
+    The two places that need it say so themselves instead. `expand` labels
+    against the union of both, because `_keys_for` can only shorten a path
+    unambiguously when it sees every path in the run — `features.notes` and
+    `clinical.notes` both fall back to `notes` otherwise, and two conditions
+    would share a label that is also a selector. `cli.command_run` unions it
+    into the paths made unreadable at `run`/`summary` scope, for the reason the
+    comment there already gives twice over: a path that varies across conditions
+    resolves, at those scopes, to a value no condition in the run used.
+    """
+    paths: list[str] = []
+    for change in ablation_changes(sweep):
+        for path in change:
+            if isinstance(path, str) and path not in paths:
+                paths.append(path)
+    return paths
+
+
 def label_for(values: dict[str, Any], swept: list[str], is_baseline: bool) -> str:
     if is_baseline:
         return "baseline"
@@ -446,19 +513,34 @@ def _axes(sweep: dict[str, Any], sample_seed: int | None = None) -> list[list[di
 
 
 def expand(config: dict[str, Any]) -> list[Condition]:
-    """Ordered conditions: a declared baseline as 00, then the product of every axis.
+    """Ordered conditions: a declared baseline as 00, then the product of every axis,
+    then one condition per `ablate` entry.
 
     With no `sweep` block, one condition whose label is None — which is what
     keeps the `conditions/` level out of the artifact tree.
+
+    Two phases, because `ablate` is not an axis: everything axis-shaped is
+    crossed into the product, and `ablate` is applied to the result. § Expansion
+    modes: it "emits `n` conditions, each one change away from the baseline, and
+    it **reads** the baseline rather than re-emitting it — so a declared baseline
+    is condition `00` exactly once, never both as `00_baseline` and as an ablate
+    row". That reading is why the baseline row is appended once, above, and each
+    ablate row starts from a *copy* of the same values.
+
+    A row therefore carries a third thing: the values its label is rendered from.
+    For a product row that is the whole cell; for an ablate row it is the one
+    change alone, which is what makes `01_labs=false` — the label § Expansion
+    modes shows — rather than a label restating every baseline value the
+    condition inherited but did not vary.
     """
     sweep = config.get("sweep") or {}
     if not sweep:
         return [Condition(index=0, label=None, values={}, is_baseline=False)]
 
-    rows: list[tuple[dict[str, Any], bool]] = []
+    rows: list[tuple[dict[str, Any], dict[str, Any], bool]] = []
     baseline = sweep.get("baseline")
     if baseline:
-        rows.append((dict(baseline), True))
+        rows.append((dict(baseline), dict(baseline), True))
 
     axes = _axes(sweep, sample_seed_for(config))
     if axes:
@@ -469,13 +551,30 @@ def expand(config: dict[str, Any]) -> list[Condition]:
             values: dict[str, Any] = {}
             for cell in combo:
                 values.update(cell)
-            rows.append((values, False))
+            rows.append((values, values, False))
 
+    for change in ablation_changes(sweep):
+        # `dict(baseline or {})` first, then the change: an ablation is the
+        # baseline with one thing different, so it has to carry the baseline's
+        # other values — a row holding the change alone would leave every other
+        # parameter at the base config's value and measure two differences at
+        # once. `validate` refuses `ablate` without a `baseline`; expanding one
+        # anyway (as the change alone) keeps this function total.
+        ablated = dict(baseline or {})
+        ablated.update(change)
+        rows.append((ablated, dict(change), False))
+
+    # The union, not `_swept_paths` alone: `_keys_for` shortens each path to a
+    # suffix unique among the ones it is *shown*, so an ablated path missing here
+    # falls back to `label_for`'s last-segment rule and two paths ending in the
+    # same segment produce one label for two conditions. See `ablated_paths` for
+    # why the union is taken here rather than inside `_swept_paths`.
     swept = _swept_paths(sweep)
+    swept += [path for path in ablated_paths(sweep) if path not in swept]
     return [
-        Condition(index=i, label=label_for(values, swept, is_baseline),
+        Condition(index=i, label=label_for(labelled, swept, is_baseline),
                   values=values, is_baseline=is_baseline)
-        for i, (values, is_baseline) in enumerate(rows)
+        for i, (values, labelled, is_baseline) in enumerate(rows)
     ]
 
 
