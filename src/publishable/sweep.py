@@ -247,12 +247,21 @@ def sample_seed_for(config: dict[str, Any]) -> int | None:
     anything you intend to cite", so a pinned sample must draw the same
     conditions whatever the roster does.
 
-    The digest is computed only when a `sample` is declared. `design_digest`
-    json-dumps `data.units`, which is arbitrary user YAML — a bare date parses
-    as `datetime.date` and is not JSON serializable — so computing it
-    unconditionally would make every config pay for a crash only this mode's
-    configs can be exposed to. Reached here, that `TypeError` becomes the same
-    coded error every other `sample` fault does.
+    The digest is computed only when a `sample` is declared, and only on the
+    `auto` path. `design_digest` json-dumps `data.units`, which is arbitrary
+    user YAML — a bare date parses as `datetime.date` and is not JSON
+    serializable — so the narrower call is the cheaper exposure.
+
+    **The `TypeError` conversion below is defensive, not the user-visible
+    route, and saying so is the point of this paragraph.** `cli.command_run`
+    computes `design_digest(doc)` itself at phase 5, before `expand` is ever
+    called, so on the run path that same bad date raises there first, as a bare
+    traceback, for any config at all — a pre-existing crash independent of
+    `sweep.sample` and recorded in `docs/superpowers/spec-defects.md`. What the
+    conversion buys is this module's own contract: `expand` is public and
+    documented to raise `PublishableError`, and a caller reaching it without
+    going through `cli` (a test, a future tool) gets a coded error rather than
+    a `TypeError` from a hashing helper it never called.
     """
     sample = (config.get("sweep") or {}).get("sample")
     if not sample:

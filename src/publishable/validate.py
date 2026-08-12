@@ -54,6 +54,7 @@ _KIND_LABEL = {
     "string": "a string",
     "integer": "an integer",
     "number": "a number",
+    "string_or_integer": "a string or an integer",
 }
 
 
@@ -218,7 +219,11 @@ def _check_shape(doc: dict[str, Any], c: Collector) -> bool:
                 _bad("sweep.sample.method", method, "string")
             seed = sample.get("seed")
             if seed is not None and not isinstance(seed, str | int):
-                _bad("sweep.sample.seed", seed, "string")
+                # Both types, because both are legal: `auto` and a pinned
+                # integer (§ What `auto` derives from). Reporting "expected a
+                # string" would send a user who wrote `seed: [1]` toward
+                # quoting a number.
+                _bad("sweep.sample.seed", seed, "string_or_integer")
             ranges = sample.get("ranges")
             if ranges is not None and not isinstance(ranges, dict):
                 _bad("sweep.sample.ranges", ranges, "mapping")

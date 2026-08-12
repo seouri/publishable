@@ -602,8 +602,15 @@ def test_a_malformed_sample_raises_a_coded_error_rather_than_crashing() -> None:
 def test_a_yaml_date_under_data_units_does_not_crash_expansion() -> None:
     """`design_digest` json-dumps `data.units`, which is arbitrary user YAML: a
     bare date (`enrolled: 2026-08-12`) parses as `datetime.date` and is not JSON
-    serializable. Only a `sweep.sample` config reaches the digest at all, and it
-    arrives as a coded error rather than a bare `TypeError` out of `json.dumps`."""
+    serializable. `expand` is public and documented to raise `PublishableError`,
+    so it converts rather than leaking a `TypeError` from a hashing helper its
+    caller never called.
+
+    This is `expand`'s own contract, **not** the user-visible route: `cli`
+    computes the same digest at phase 5 before `expand` runs, so on the run path
+    that date raises there first — for any config, `sample` or not. That
+    pre-existing crash is recorded in `docs/superpowers/spec-defects.md` rather
+    than papered over here."""
     import datetime
 
     from publishable.errors import ContractError
