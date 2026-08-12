@@ -1626,8 +1626,9 @@ def _check_sweep(
     # **The per-cell mechanism above explains the `grid` case and only that
     # one.** Two shapes are silent for a narrower reason, and stating the
     # per-cell expansion as though it covered them would be false. First, a
-    # baseline that fixes *some* of the paths a multi-path `paired` (or
-    # `sample`) axis varies: `_baseline_cells` reads fixedness off the cells'
+    # baseline that fixes *some* of the paths a multi-path `paired` axis varies
+    # — `paired` and not `sample`, which cannot be declared beside a baseline at
+    # all (`E-SWEEP-SAMPLE-BASELINE`): `_baseline_cells` reads fixedness off the cells'
     # paths and counts an axis fixed when the baseline names *any* of them, so
     # nothing expands per cell — there is one baseline, every comparison against
     # it differs on the paths the baseline left alone as well as the one it
