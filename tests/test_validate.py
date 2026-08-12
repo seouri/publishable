@@ -1064,17 +1064,39 @@ def test_baseline_and_grid_are_now_accepted(write_config):
 @pytest.mark.parametrize(
     "mode,value,code",
     [
-        ("paired", [{"analysis.method": "pearson"}], "E-SWEEP-PAIRED-UNSUPPORTED"),
         ("ablate", {"from": "baseline", "remove": ["a.b"]}, "E-SWEEP-ABLATE-UNSUPPORTED"),
         ("sample", {"n": 40, "ranges": {}}, "E-SWEEP-SAMPLE-UNSUPPORTED"),
         ("groups", [{"by": "arm", "levels": ["a", "b"]}], "E-SWEEP-GROUPS-UNSUPPORTED"),
     ],
 )
 def test_each_unimplemented_mode_is_refused_on_its_own(write_config, mode, value, code):
-    """`paired`, `ablate`, `sample`, and `groups` each get their own refusal now that
-    the old blanket sweep refusal is retired — otherwise each would fall through
-    into silence the moment `baseline`/`grid` stopped covering the whole block."""
+    """`ablate`, `sample`, and `groups` each get their own refusal now that the old
+    blanket sweep refusal is retired — otherwise each would fall through into
+    silence the moment `baseline`/`grid`/`paired` stopped covering the whole
+    block. `paired` is no longer in this family: it expands for real now, see
+    `test_paired_is_accepted_and_expands_for_real` below."""
     assert code in codes(write_config({"sweep": {mode: value}}))
+
+
+def test_paired_is_accepted_and_expands_for_real(write_config):
+    """§ Expansion modes retires `E-SWEEP-PAIRED-UNSUPPORTED`: `paired` is now one
+    of the axis-shaped modes `_axes` composes, and a config declaring it validates
+    clean rather than tripping the refusal `ablate`/`sample`/`groups` still get."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {
+                    "grid": {"analysis.method": ["pearson", "spearman"]},
+                    "paired": [
+                        {"analysis.min_samples": 30, "analysis.confidence": 0.95},
+                        {"analysis.min_samples": 50, "analysis.confidence": 0.99},
+                    ],
+                }
+            }
+        )
+    )
+    assert "E-SWEEP-PAIRED-UNSUPPORTED" not in found
+    assert not [c for c in found if c.startswith("E-SWEEP")]
 
 
 def test_an_empty_or_null_mode_is_not_a_declaration(write_config):
@@ -1097,7 +1119,6 @@ def test_an_empty_or_null_mode_is_not_a_declaration(write_config):
 
 def test_every_sweep_refusal_message_defers_rather_than_scolds(write_config):
     for mode, value, code in [
-        ("paired", [{"a.b": 1}], "E-SWEEP-PAIRED-UNSUPPORTED"),
         ("ablate", {"from": "baseline"}, "E-SWEEP-ABLATE-UNSUPPORTED"),
         ("sample", {"n": 1}, "E-SWEEP-SAMPLE-UNSUPPORTED"),
         ("groups", [{"by": "arm"}], "E-SWEEP-GROUPS-UNSUPPORTED"),
@@ -1754,6 +1775,54 @@ def test_a_baseline_that_leaves_a_grid_axis_free_is_refused(write_config):
     assert "E-SWEEP-BASELINE-PARTIAL" in found
     assert "analysis.min_samples" in found["E-SWEEP-BASELINE-PARTIAL"]
     assert "not implemented in this build" in found["E-SWEEP-BASELINE-PARTIAL"]
+
+
+def test_a_baseline_that_leaves_a_paired_axis_free_is_refused(write_config):
+    """`paired` now composes into the same product `grid` does (Task 2), so a
+    baseline that fixes `grid` but leaves a `paired` axis unfixed is the identical
+    declared-vs-executed mismatch `test_a_baseline_that_leaves_a_grid_axis_free_is_refused`
+    covers for `grid` — the check must read `_swept_paths`, not `grid` alone."""
+    found = messages_by_code(
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"analysis.method": "pearson"},
+                    "grid": {"analysis.method": ["spearman", "kendall"]},
+                    "paired": [
+                        {"analysis.min_samples": 30, "analysis.confidence": 0.95},
+                        {"analysis.min_samples": 50, "analysis.confidence": 0.99},
+                    ],
+                }
+            }
+        )
+    )
+    assert "E-SWEEP-BASELINE-PARTIAL" in found
+    assert "analysis.min_samples" in found["E-SWEEP-BASELINE-PARTIAL"]
+    assert "analysis.confidence" in found["E-SWEEP-BASELINE-PARTIAL"]
+
+
+def test_a_baseline_fixing_every_axis_including_paired_is_supported(write_config):
+    """The mirror of the refusal above: a baseline naming every path any axis-shaped
+    mode sweeps — `grid`'s and `paired`'s alike — stays the supported row."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {
+                        "analysis.method": "pearson",
+                        "analysis.min_samples": 30,
+                        "analysis.confidence": 0.95,
+                    },
+                    "grid": {"analysis.method": ["spearman", "kendall"]},
+                    "paired": [
+                        {"analysis.min_samples": 30, "analysis.confidence": 0.95},
+                        {"analysis.min_samples": 50, "analysis.confidence": 0.99},
+                    ],
+                }
+            }
+        )
+    )
+    assert "E-SWEEP-BASELINE-PARTIAL" not in found
 
 
 def test_a_baseline_fixing_every_axis_is_supported(write_config):

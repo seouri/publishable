@@ -120,8 +120,20 @@ def _swept_paths(sweep: dict[str, Any]) -> list[str]:
     `label_for` shortens these to unique suffixes, so it needs the whole set:
     a key is only unambiguous against every other swept path, not against one
     mode's. Later modes extend this and nothing else about labelling changes.
+
+    A path may recur across `paired` entries (each entry sets the same keys to
+    different values) or even reappear from `grid` in a hand-written config;
+    it is added at most once, in the order it was first seen — a duplicate
+    would make `_keys_for` compare a path against itself, which is trivially
+    "unique" (`p != path` excludes it) and would silently under-disambiguate
+    every other path sharing that suffix.
     """
-    return list(sweep.get("grid") or {})
+    paths = list(sweep.get("grid") or {})
+    for entry in sweep.get("paired") or []:
+        for path in entry:
+            if path not in paths:
+                paths.append(path)
+    return paths
 
 
 def label_for(values: dict[str, Any], swept: list[str], is_baseline: bool) -> str:
@@ -156,6 +168,12 @@ def _axes(sweep: dict[str, Any]) -> list[list[dict[str, Any]]]:
     axes: list[list[dict[str, Any]]] = []
     for path, values in (sweep.get("grid") or {}).items():
         axes.append([{path: value} for value in values])
+    paired = sweep.get("paired") or []
+    if paired:
+        # One axis, not one per key: a paired entry is a single setting that
+        # happens to set several paths. Treating its keys as separate axes is
+        # exactly the combinatorial reading § Expansion modes rejects.
+        axes.append([dict(entry) for entry in paired])
     return axes
 
 

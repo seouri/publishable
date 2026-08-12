@@ -18,7 +18,7 @@ from publishable.provenance import find_repo_root, resolves_inside_repo
 from publishable.replication import resolve_repeats
 from publishable.scope import step_name as _step_name
 from publishable.strata import levels_for
-from publishable.sweep import check_swept_value, expand
+from publishable.sweep import _swept_paths, check_swept_value, expand
 from publishable.templates.base import BaseTemplate
 from publishable.templates.registry import get_template, template_names
 from publishable.units import UnitList, resolve_units
@@ -743,10 +743,13 @@ def _check_replication(
 def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     """Declared-but-unimplemented blocks, refused rather than silently ignored.
 
-    This build expands `sweep.baseline` and `sweep.grid` only. Both declared
-    orders are honored — `randomized` shuffles within each batch and
-    `as_declared` leaves the plan's step-major layout alone. `sweep.paired`,
-    `.ablate`, `.sample`, and `.groups` are read by nothing yet. It resolves a
+    This build expands `sweep.baseline`, `sweep.grid`, and `sweep.paired`
+    only. Both declared orders are honored — `randomized` shuffles within
+    each batch and `as_declared` leaves the plan's step-major layout alone.
+    `sweep.paired` is no longer refused here — `_axes` composes it as a
+    single axis whose cells set several paths at once, per § Expansion
+    modes. `.ablate`, `.sample`, and `.groups` are read by nothing yet. It
+    resolves a
     unit roster, but several `data.units` sub-fields — allocation other than
     `within`, `assign`, `cluster_by`, `weight_by`, `measurements`, `holdout`,
     and a `resolver` source — are read by nothing yet either. Each of these
@@ -776,7 +779,6 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     """
     sweep = doc.get("sweep") or {}
     for mode, code, why in (
-        ("paired", "E-SWEEP-PAIRED-UNSUPPORTED", "couples parameters into one axis"),
         (
             "ablate",
             "E-SWEEP-ABLATE-UNSUPPORTED",
@@ -799,22 +801,24 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
                 code,
                 f"sweep.{mode}",
                 f"{why}, and is specified but not implemented in this build — this build "
-                "expands `baseline` and `grid` only; the other modes will be honored in a "
-                "later slice",
+                "expands `baseline`, `grid`, and `paired` only; the other modes will be "
+                "honored in a later slice",
             )
 
-    # A baseline that fixes only *some* of the grid's axes. `reference.md`:1415-1422
+    # A baseline that fixes only *some* of the swept axes. `reference.md`:1415-1422
     # states one rule with two cases: the baseline expands over whichever axes it
     # does not fix, giving one baseline condition per cell of the unfixed axes.
     # `expand` emits exactly one `00_baseline` row carrying only what the baseline
     # literally names, so the declared design is not the executed design — the
     # failure every other refusal in this function exists to prevent. Per-cell
     # expansion is a real feature; until it lands, refuse rather than diverge.
-    # A baseline fixing every declared axis (including the no-grid case) is the
-    # supported row and is unaffected.
+    # A baseline fixing every declared axis (including the no-sweep-axis case) is
+    # the supported row and is unaffected. `_swept_paths` is every axis-shaped
+    # mode's paths, not `grid`'s alone — `paired` composes into this same product
+    # now, and a baseline that fixes `grid` but leaves a `paired` axis free is the
+    # identical declared-vs-executed mismatch this check exists to catch.
     baseline = sweep.get("baseline") or {}
-    grid = sweep.get("grid") or {}
-    unfixed = [path for path in grid if path not in baseline]
+    unfixed = [path for path in _swept_paths(sweep) if path not in baseline]
     if baseline and unfixed:
         c.error(
             "E-SWEEP-BASELINE-PARTIAL",

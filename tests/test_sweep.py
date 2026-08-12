@@ -138,6 +138,56 @@ def test_a_single_underscore_is_still_accepted():
     assert check_swept_value("a_b") is None
 
 
+def test_paired_is_one_axis_not_a_product_of_its_keys() -> None:
+    """§ Expansion modes' own example: grid × paired = 2 × 2 = 4, not 2 × 2 × 2.
+    A paired entry sets several paths at once and counts once."""
+    conditions = expand(
+        {
+            "sweep": {
+                "grid": {"analysis.method": ["pearson", "spearman"]},
+                "paired": [
+                    {"analysis.min_samples": 30, "analysis.confidence": 0.95},
+                    {"analysis.min_samples": 50, "analysis.confidence": 0.99},
+                ],
+            }
+        }
+    )
+
+    assert len(conditions) == 4
+    assert dict(conditions[0].values) == {
+        "analysis.method": "pearson",
+        "analysis.min_samples": 30,
+        "analysis.confidence": 0.95,
+    }
+    # `_swept_paths` now carries `paired`'s paths alongside `grid`'s, so
+    # `label_for` disambiguates all three — none is a shared leaf, so each
+    # keeps its shortest suffix.
+    assert [c.label for c in conditions] == [
+        "method=pearson__min_samples=30__confidence=0.95",
+        "method=pearson__min_samples=50__confidence=0.99",
+        "method=spearman__min_samples=30__confidence=0.95",
+        "method=spearman__min_samples=50__confidence=0.99",
+    ]
+
+
+def test_swept_paths_lists_a_paired_path_once_even_when_every_entry_names_it():
+    """Every `paired` entry here names both `min_samples` and `confidence`; a
+    naive walk would append each twice, and a duplicate path would make
+    `_keys_for` compare a path against itself (trivially "unique") instead of
+    against every other swept path."""
+    from publishable.sweep import _swept_paths
+    paths = _swept_paths(
+        {
+            "grid": {"analysis.method": ["pearson", "spearman"]},
+            "paired": [
+                {"analysis.min_samples": 30, "analysis.confidence": 0.95},
+                {"analysis.min_samples": 50, "analysis.confidence": 0.99},
+            ],
+        }
+    )
+    assert paths == ["analysis.method", "analysis.min_samples", "analysis.confidence"]
+
+
 def test_values_already_refused_by_the_pattern_are_still_refused():
     """The separator check is on top of the pattern check, not instead of it."""
     from publishable.sweep import check_swept_value
