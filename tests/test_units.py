@@ -4,7 +4,14 @@ from pathlib import Path
 import pytest
 
 from publishable import ContractError
-from publishable.units import Unit, UnitList, partition_units, resolve_units, units_hash
+from publishable.units import (
+    Unit,
+    UnitList,
+    collapse_measurements,
+    partition_units,
+    resolve_units,
+    units_hash,
+)
 
 
 @pytest.fixture
@@ -319,3 +326,35 @@ def test_a_glob_source_reports_a_reserved_attribute_name_as_reserved(input_dir: 
 def test_a_glob_source_with_no_declared_attributes_still_resolves(input_dir: Path):
     units = resolve_units({"from": {"glob": "*.dcm"}, "key": "path", "attributes": []}, input_dir)
     assert [u.key for u in units] == ["top.dcm"]
+
+
+def test_rows_sharing_a_key_collapse_to_one_unit():
+    units = [
+        Unit(key="p1", paths=(), attributes={"read_id": "r1", "depth": 10, "site": "A"}),
+        Unit(key="p1", paths=(), attributes={"read_id": "r2", "depth": 20, "site": "A"}),
+        Unit(key="p2", paths=(), attributes={"read_id": "r3", "depth": 30, "site": "B"}),
+    ]
+    collapsed, counts = collapse_measurements(units, by="read_id", collapse="mean")
+    assert [u.key for u in collapsed] == ["p1", "p2"]
+    assert counts == [2, 1]
+    assert collapsed[0].depth == 15.0        # mean of 10 and 20
+    assert collapsed[0].site == "A"          # non-numeric, constant: carried
+    assert "read_id" not in collapsed[0].attributes   # the measurement axis is consumed
+
+
+def test_a_column_absent_from_the_collapse_map_falls_back_to_first():
+    """`collapse` may be a per-column map; a column it does not name falls back
+    to `first` rather than being averaged. `batch` differs across the two rows,
+    so this is the case `collapse_measurements`'s blanket `"mean"` test above
+    cannot reach: it exercises `_apply`'s `first` branch on values that are not
+    already constant."""
+    units = [
+        Unit(key="p1", paths=(), attributes={"read_id": "r1", "depth": 10, "batch": "b1"}),
+        Unit(key="p1", paths=(), attributes={"read_id": "r2", "depth": 20, "batch": "b2"}),
+    ]
+    collapsed, counts = collapse_measurements(
+        units, by="read_id", collapse={"depth": "mean"}
+    )
+    assert counts == [2]
+    assert collapsed[0].depth == 15.0
+    assert collapsed[0].batch == "b1"

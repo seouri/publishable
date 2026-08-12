@@ -10,6 +10,7 @@ import csv
 import hashlib
 import json
 import random
+from collections import Counter
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -264,6 +265,79 @@ def resolve_units(units_decl: dict[str, Any], input_dir: Path) -> UnitList:
             )
         seen[u.key] = 1
     return UnitList(units)
+
+
+COLLAPSE_RULES = ("mean", "first", "mode")
+
+
+def _rule_for(column: str, collapse: Any) -> str:
+    """One rule for every column, or a per-column map falling back to `first`.
+
+    A column the config did not name is one the design did not ask to average,
+    so the fallback carries the first value rather than guessing at a statistic.
+    """
+    if isinstance(collapse, Mapping):
+        return str(collapse.get(column, "first"))
+    return str(collapse)
+
+
+def _apply(rule: str, values: list[Any]) -> Any:
+    if rule not in COLLAPSE_RULES:
+        raise ContractError(
+            f"`data.units.measurements.collapse` names {rule!r}; expected one of "
+            f"{', '.join(COLLAPSE_RULES)}",
+            code="E-UNITS-COLLAPSE-RULE",
+        )
+    # `reference.md` § What isn't a repeat: "Attributes constant within a key
+    # collapse to that value with no rule needed." Checked after the rule-name
+    # validation above (a bogus rule still raises even over a single-member
+    # group) and before dispatch, so a non-numeric column that happens to agree
+    # across a unit's replicates never reaches `sum()`.
+    if all(v == values[0] for v in values):
+        return values[0]
+    if rule == "first":
+        return values[0]
+    if rule == "mode":
+        return Counter(values).most_common(1)[0][0]
+    return sum(values) / len(values)  # rule == "mean"
+
+
+def collapse_measurements(
+    units: list[Unit], by: str, collapse: Any
+) -> tuple[list[Unit], list[int]]:
+    """Collapse rows sharing a `key` into one unit, in first-seen order.
+
+    `reference.md` § What isn't a repeat: rows sharing a key are technical
+    replicates, collapsed at resolution, before any step sees them — which is
+    what keeps them out of `n`. The measurement axis `by` is consumed: it
+    distinguished the rows and has no value once they are one unit.
+
+    Returns the collapsed units and their measurement counts in the same order,
+    because `technical_n` is `{min, max, median}` over exactly these counts and
+    recomputing them from a second walk is how the two come to disagree.
+    """
+    groups: dict[str, list[Unit]] = {}
+    for unit in units:
+        groups.setdefault(unit.key, []).append(unit)
+    collapsed: list[Unit] = []
+    counts: list[int] = []
+    for key, members in groups.items():
+        names: list[str] = []
+        for member in members:
+            for name in member.attributes:
+                if name != by and name not in names:
+                    names.append(name)
+        merged = {
+            name: _apply(
+                _rule_for(name, collapse),
+                [m.attributes[name] for m in members if name in m.attributes],
+            )
+            for name in names
+        }
+        paths = tuple(p for m in members for p in m.paths)
+        collapsed.append(Unit(key=key, paths=paths, attributes=merged))
+        counts.append(len(members))
+    return collapsed, counts
 
 
 def partition_units(roster: UnitList, k: int, digest: str) -> list[list[Unit]]:
