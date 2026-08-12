@@ -76,17 +76,20 @@ data:
   output_dir: /secure/results/cohort-pilot
   input_manifest_policy: hash_all          # hash_all | hash_index | none
   units:                                   # optional; required by fold, resample, null_test
-    from: index.csv                        # index.csv | {glob: "*.dcm"} | {resolver: <name>}
+    from: index.csv                        # index.csv | {glob: "*.dcm"} | {resolver: <name>} (NOT BUILT)
     key: patient_id                        # stable, unique identity
     attributes: [label, age, sex]          # available for stratification and reporting
-    allocation: within                     # within | between — feeds paired vs unpaired, per contrast
-    cluster_by: null                       # e.g. site, when units aren't independent
-    weight_by: null                        # e.g. sampling_weight, when the sample is enriched or
-                                           #   stratified — see "Weighted samples"
-    measurements: null                     # e.g. {by: read_id, collapse: mean} for technical replicates
-    holdout: null                          # optional single fixed train/test split; see "A fixed holdout split"
-    assign: {}                             # REQUIRED when allocation is `between` — one block per
-                                           # sweep.groups axis, keyed by the axis name:
+    allocation: within                     # within | between (NOT BUILT) — feeds paired vs unpaired,
+                                           #   per contrast
+    cluster_by: null                       # NOT BUILT — e.g. site, when units aren't independent
+    weight_by: null                        # NOT BUILT — e.g. sampling_weight, when the sample is
+                                           #   enriched or stratified — see "Weighted samples"
+    measurements: null                     # NOT BUILT — e.g. {by: read_id, collapse: mean} for
+                                           #   technical replicates
+    holdout: null                          # NOT BUILT — optional single fixed train/test split;
+                                           #   see "A fixed holdout split"
+    assign: {}                             # NOT BUILT; REQUIRED when allocation is `between` — one
+                                           # block per sweep.groups axis, keyed by the axis name:
                                            #   arm:
                                            #     method: random     # random | by_attribute | blocked
                                            #     from: arm          # by_attribute; defaults to the axis name
@@ -107,13 +110,17 @@ sweep:
   # ---- What varies. Omit entirely for a single-condition experiment. ----
   # Keys are dotted paths into `parameters`; modes compose. See "Sweeps and repeats".
   baseline: {analysis.method: pearson}   # optional reference condition; enables deltas
-  groups: []                             # optional list of unit-group axes, e.g. [{by: arm, levels: [...]}]
-  paired: []                             # optional coupled settings, e.g. [{analysis.min_samples: 30,
+  groups: []                             # NOT BUILT; optional list of unit-group axes,
+                                         #   e.g. [{by: arm, levels: [...]}]
+  paired: []                             # NOT BUILT; optional coupled settings,
+                                         #   e.g. [{analysis.min_samples: 30,
                                          #   analysis.confidence: 0.95}] — one axis, not a product
-  ablate: null                           # optional; 1 + n one-change conditions, e.g. {from: baseline,
-                                         #   remove: [...]} or {override: [...]} — requires baseline
-  sample: null                           # optional; continuous ranges instead of enumeration,
-                                         #   e.g. {n: 40, method: sobol, seed: auto, ranges: {...}}
+  ablate: null                           # NOT BUILT; optional; 1 + n one-change conditions, e.g.
+                                         #   {from: baseline, remove: [...]} or {override: [...]}
+                                         #   — requires baseline
+  sample: null                           # NOT BUILT; optional; continuous ranges instead of
+                                         #   enumeration, e.g. {n: 40, method: sobol, seed: auto,
+                                         #   ranges: {...}}
   grid:
     analysis.method: [spearman, kendall]
   # 1 baseline + 2 grid = 3 conditions
@@ -121,7 +128,7 @@ sweep:
 replication:
   # ---- How each condition repeats. Kind determines the statistics core applies. ----
   repeats:
-    - {kind: seed, n: 5}                 # seed | batch | fold
+    - {kind: seed, n: 5}                 # seed | batch | fold — a fold's `stratify_by` is NOT BUILT
   order: as_declared                     # as_declared | randomized
   rationale: ""
 
@@ -133,10 +140,11 @@ statistics:
                                          #   of: "shift=abnormal", against: "shift=normal",
                                          #   within: {sex: f}}] — `within` is optional and
                                          #   restricts to a stratum. See "Contrasts"
-  resample: null                         # {method: bootstrap, n: 2000, stratify_by: []} →
-                                         #   percentile CIs for column metrics too; derived
+  resample: null                         # NOT BUILT; {method: bootstrap, n: 2000, stratify_by: []}
+                                         #   → percentile CIs for column metrics too; derived
                                          #   metrics resample either way
-  null_test: null                        # e.g. {method: permutation, n: 5000, shuffle: label}
+  null_test: null                        # NOT BUILT; e.g. {method: permutation, n: 5000,
+                                         #   shuffle: label}
   report_by: []                          # optional unit attributes to repeat every aggregated
                                          #   metric over — marginally, never crossed,
                                          #   e.g. [sex, site]. Strata, not design axes — they add
@@ -170,7 +178,7 @@ hypotheses:
     evaluate_on: observed                # observed | ci95_lower | ci95_upper
 ```
 
-`init` materializes **every parameter the template declares**, each with its default and its inline comment. The four optional `statistics` sub-blocks are shown above at their full expansion because this section is the complete config *schema*, which is a wider thing than the literal output of `init`; a materialized file that does not carry them is not an incomplete config. For `contrasts` and `report_by`, declaring one by hand is how a run asks for it, and `validate` accepts the key whether or not `init` wrote it. **`resample` and `null_test` are not yet built**: a config declaring either is refused today, naming the `-UNSUPPORTED` code its slice will retire — the same treatment [an unbuilt module](#package-layout) and [an unbuilt import](#the-importable-surface) get, because a contract that appears only once its implementation lands is a contract nobody could have designed to. What `init` writes is complete with respect to [`parameter_spec`](#templates-where-parameters-are-defined), which is the only source of truth there is one of.
+`init` materializes **every parameter the template declares**, each with its default and its inline comment. The four optional `statistics` sub-blocks are shown above at their full expansion because this section is the complete config *schema*, which is a wider thing than the literal output of `init`; a materialized file that does not carry them is not an incomplete config. For `contrasts` and `report_by`, declaring one by hand is how a run asks for it, and `validate` accepts the key whether or not `init` wrote it. **Fourteen declarations above are not yet built, and each is marked `NOT BUILT` where it appears**: `sweep.groups`, `sweep.paired`, `sweep.ablate` and `sweep.sample`; `data.units.assign`, `.cluster_by`, `.weight_by`, `.measurements` and `.holdout`, the `{resolver: <name>}` form of `data.units.from`, and any `data.units.allocation` other than `within`; a `fold` repeat level's `stratify_by`; and `statistics.resample` and `statistics.null_test`. A config declaring any of them is refused today, naming the `-UNSUPPORTED` code its slice will retire — the same treatment [an unbuilt module](#package-layout) and [an unbuilt import](#the-importable-surface) get, because a contract that appears only once its implementation lands is a contract nobody could have designed to. That whole family is [deliberately absent from the validate-time registry](#errors-validate-reports) for the same reason, which is why this list, and not that table, is where a refused block is named. What `init` writes is complete with respect to [`parameter_spec`](#templates-where-parameters-are-defined), which is the only source of truth there is one of.
 
 **The four identifying fields above `metadata` say what this config is written against, and `validate` checks each.** `experiment_type` names the template and must resolve to one an installed package registers; `template_version` records the spec this file was materialized from, and a mismatch with the installed template gets a [warning](#warnings-core-reports) — `W-TEMPLATE-VERSION` — not an error, because upgrading a plugin is ordinary and [nothing ever writes back into your config](#the-one-config-file). What makes an incompatibility *fail* is already covered without a version check: a retired parameter is an unknown key, and a new required one is a missing key. So the version tells you where to look and the existing checks decide whether it matters; `plugin` names where the template came from, and is a readable note beside the authoritative pin in `uv.lock` rather than a second one — core never installs from it. `schema_version` is the config format's own version: core reads any minor at or below its own and refuses a higher one, or a major it doesn't implement, rather than guessing at a field it doesn't recognize. Through v0.x a change that would break an existing config bumps the major, and there is no migration command — a config is small, `init` writes a fresh one, and the [defaults-file argument](#there-is-no-separate-defaults-file) applies to a migration file too. What protects an old *result* is that `run.yaml` embeds its config verbatim alongside the `schema_version` it was written under, so a record stays readable whether or not the format moved. All four are inside [`parameters_hash`](#three-hashes), because a config read against a different spec is a different declaration.
 
@@ -198,6 +206,8 @@ The authoritative catalog of parameters is the template's `parameter_spec` — i
 ```bash
 uv run publishable validate configs/cohort-pilot/config.yaml
 ```
+
+The table below states each check by the mistake it catches. What `validate` *prints* for one is a [diagnostic](#exit-codes-and-diagnostics) carrying a stable identifier, and the two registries of those are [§ Errors `validate` reports](#errors-validate-reports) and [§ Warnings core reports](#warnings-core-reports) — a row here and a code there are the same check seen from the two ends, so a reader who has an identifier in hand should start there rather than matching prose against this table.
 
 | Check | Example failure |
 |---|---|
@@ -365,24 +375,32 @@ caught it first.
 A code ending `-UNSUPPORTED` is deliberately absent from this table: it refuses a block this
 build reads but does not yet execute, and it retires with the slice that implements the feature
 it names — [§ The one config file](#the-one-config-file) is where that family's rule lives, and
-where each currently-refused block is named. Documenting one here would pin a row this project
+where each currently-refused block is named and marked `NOT BUILT` in the config it shows.
+Documenting one here would pin a row this project
 already commits to deleting on a schedule neither this table nor its author controls.
 
 Each row states the condition, not the wording.
 
-Two faults return `validate_config` before any row below runs: a container-shaped
-`E-CONFIG-SHAPE` fault, and `E-TEMPLATE-UNKNOWN`. Every row in this table fires only after
-both have already passed, except the four `E-CONFIG-*` rows, which are found before that
-return is possible, and `E-TEMPLATE-UNKNOWN` itself, which is what triggers it rather than
-sitting behind it. A container-shape fault reports every `E-CONFIG-SHAPE` finding
-`_check_shape` turns up — it loops over every block rather than stopping at the first — and,
-apart from the `E-CONFIG-*` exceptions above, none of this table's other rows; an
-unresolvable `experiment_type` reports `E-TEMPLATE-UNKNOWN` exactly once, since that check
-returns immediately after, and, likewise apart from those exceptions, none of the others.
+Three faults return `validate_config` early, in this order: a config that does not parse
+(`E-CONFIG-PARSE`), a container-shaped `E-CONFIG-SHAPE` fault, and an unresolvable
+`experiment_type` (`E-TEMPLATE-UNKNOWN`). Each returns because every check after it reads
+what it just found wrong, and each is what triggers its own return rather than sitting
+behind it. Every other row in this table fires only once all three have passed — except
+`E-CONFIG-TYPE` and `E-CONFIG-KEY-UNKNOWN`, which `check_envelope` finds as the document
+loads, before either of the later two returns is possible.
+
+So a parse fault reports `E-CONFIG-PARSE` and nothing else at all. A container-shape fault
+reports every `E-CONFIG-SHAPE` finding `_check_shape` turns up — it loops over every block
+rather than stopping at the first — plus whichever of those two envelope rows the document
+also earned, and none of this table's other rows — including `E-TEMPLATE-UNKNOWN`, whose
+check the shape return comes before, so those two never appear together however wrong both
+are. An unresolvable `experiment_type` reports
+`E-TEMPLATE-UNKNOWN` exactly once, since that check returns immediately after, and,
+likewise apart from those same two envelope rows, none of the others.
 
 | Reported when | Code |
 |---|---|
-| A key under a container `check_envelope`'s `LEAF_TYPES` table declares, or a top-level key, that the table does not name — checked with a `difflib` hint, skipping the `parameters` and `sweep` subtrees entirely since each has its own closure (`E-PARAM-UNKNOWN`, `E-SWEEP-KEY-UNKNOWN`), and never descending into a known leaf's own value (a typo inside `data.units.holdout` or a `from` mapping is `_check_shape`'s job, not this one's); a non-string YAML mapping key is coerced with `str()` first so it is still reported | `E-CONFIG-KEY-UNKNOWN` |
+| A key under a container `check_envelope`'s `LEAF_TYPES` table declares, or a top-level key, that the table does not name — checked with a `difflib` hint, skipping the `parameters` and `sweep` subtrees entirely since each has its own closure (`E-PARAM-UNKNOWN`, `E-SWEEP-KEY-UNKNOWN`), and never descending into a known leaf's own value (a typo inside `data.units.holdout` or a `from` mapping is reached by no check at all — not by `_check_shape` either, which checks a container's shape and never the names inside one; [§ Validation](#validation) names the whole-leaf blocks that costs and the slice that closes each, and `holdout` is not among them only because the whole block is refused today as `E-DATA-HOLDOUT-UNSUPPORTED`, which makes its gap latent rather than live); a non-string YAML mapping key is coerced with `str()` first so it is still reported | `E-CONFIG-KEY-UNKNOWN` |
 | The config file does not parse as YAML, or parses to something other than a mapping | `E-CONFIG-PARSE` |
 | A top-level block, or a nested container `_check_shape` walks before its items — `data.units` and its `attributes`, `sweep.baseline`, `sweep.grid` and each axis's values, `replication.repeats` and each level, `statistics.contrasts`, `statistics.report_by` — is present and not the mapping, list, or string its position requires; unset (`null`) is treated as absent, matching `E-CONFIG-TYPE` | `E-CONFIG-SHAPE` |
 | A leaf `check_envelope`'s `LEAF_TYPES` table declares is present and not its declared type — a `bool` never satisfies any leaf's type, since the table declares none as `bool`, and an `int` satisfies a `float` one; unset (`null`) is treated as absent | `E-CONFIG-TYPE` |
@@ -393,7 +411,7 @@ returns immediately after, and, likewise apart from those exceptions, none of th
 | `data.input_dir` is not a directory, or is a directory with nothing in it | `E-DATA-UNREADABLE` |
 | Once no experiment was preloaded, `entrypoint` is a non-empty string, and a repository root was found for it, importing it raises anything — a `SystemExit` at module scope, `entrypoint` not shaped `<module>:<attribute>`, or any other exception; skipped without a report when no repository root exists at all, since there is then no `src/` to import from | `E-ENTRYPOINT-IMPORT` |
 | `entrypoint` is empty, or is not a string | `E-ENTRYPOINT-REQUIRED` |
-| A hypothesis's `compare.to` is `baseline` — explicit, or implicit when `compare.condition` is set and neither `to` nor `compare.contrast` is — and `sweep.baseline` is not declared | `E-HYPOTHESIS-BASELINE` |
+| A hypothesis's `compare.to` is `baseline` — explicit, or implicit when `compare.condition` is present and neither `to` nor `compare.contrast` is — and `sweep.baseline` is not declared. Presence is the test, so `condition: null` counts and is *not* treated as absent the way an unset `E-CONFIG-TYPE` or `E-CONFIG-SHAPE` leaf is: `hypotheses` is a whole-leaf block whose entries `hypotheses.resolve` reads by key, stringifying whatever `condition` holds into a label lookup, so a present-but-`null` `condition` names a label that resolves to nothing rather than leaving a field unset. With a baseline declared it draws `E-HYPOTHESIS-CONDITION` instead, for that same reason | `E-HYPOTHESIS-BASELINE` |
 | Once the entrypoint has imported and the metric's step is one it declares, a hypothesis names a metric whose scope is not `summary`, sets `evaluate_on` to `ci95_lower` or `ci95_upper`, and no metric this run computes could ever carry an interval — `data.units` is undeclared and the template defines no `aggregate` | `E-HYPOTHESIS-BOUND` |
 | A hypothesis's `compare` declares `to`, and its value is not `baseline` | `E-HYPOTHESIS-COMPARE-TO` |
 | A hypothesis's `compare.condition` names a label the run's `sweep` does not declare, or names the baseline's own label — checked only once a baseline is declared, since `E-HYPOTHESIS-BASELINE` already covers the case where none is, and only once `sweep` expands cleanly enough to resolve condition labels at all | `E-HYPOTHESIS-CONDITION` |
@@ -2919,7 +2937,7 @@ configs/cohort-pilot/config.yaml
 2 problems (1 error, 1 warning)
 ```
 
-The identifier is part of the contract and outlives the wording: a message gets clearer over time, and something that pinned the wording would break when it did. It's one registry rather than two — the `E-` codes the [errors core raises](#errors-core-raises) carry are the same namespace as the ones printed here, since a run-time failure and a pre-flight one are equally worth grepping and there is no reader for whom they are different vocabularies. There is no `--json`, because [an operation command takes paths and nothing else](design-principles.md#everything-is-in-the-file) and a flag that switches the output format is still a flag. The identifier is what a tool should key on, and it is equally stable in the output there is.
+The identifier is part of the contract and outlives the wording: a message gets clearer over time, and something that pinned the wording would break when it did. It's one namespace rather than two — the `E-` codes the [errors core raises](#errors-core-raises) carry and the ones [`validate` reports](#errors-validate-reports) are drawn from the same vocabulary, since a run-time failure and a pre-flight one are equally worth grepping and there is no reader for whom they are different languages. They are written as two tables because a raise and a printed finding are documented by different things — what raises it, versus what reports it — and not because a code belongs to one or the other; nothing keys on which table a code is listed in. There is no `--json`, because [an operation command takes paths and nothing else](design-principles.md#everything-is-in-the-file) and a flag that switches the output format is still a flag. The identifier is what a tool should key on, and it is equally stable in the output there is.
 
 A local filesystem failure — an unwritable `output_dir`, a full disk — is reported as `E-IO-FAILED` and exits `1`. It is not a `ContractError`: nothing in your declarations asked for it, and no `except` in a step improves it. A creation command refusing to overwrite an existing file reports `E-STEP-EXISTS` and exits `1` for a related reason — [creation commands take arguments](#creation-commands), and refusing is how one stays safe to re-run.
 

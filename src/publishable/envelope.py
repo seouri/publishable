@@ -24,9 +24,20 @@ from typing import Any
 # section documents but a materialized config omits — `sweep`'s modes,
 # `statistics.contrasts` / `.resample` / `.null_test` / `.report_by`, and
 # `data.units.assign` — are declared at their own key with the one outer type
-# that section gives them; the dynamic child keys inside `grid`, `baseline`,
-# and `assign` (a swept parameter path, an axis name) have no fixed dotted
-# path a table entry could name, so they stay `_check_shape`'s job.
+# that section gives them.
+#
+# The table stopping at a key is the end of the line for everything under it:
+# the closure below never descends into a known leaf, and `_check_shape`
+# checks a container's *shape* and never the names inside one, so a
+# misspelled `resolverr` in a `data.units.from` mapping or `methodd` in
+# `holdout` is reported by no check in this build. That is the documented
+# cost of a whole leaf (`reference.md` § Validation names the blocks it
+# applies to and the slice that closes each), not a claim that such a key
+# could never be named: `holdout`'s children have fixed names. The keys that
+# genuinely cannot be named are the dynamic ones inside `grid`, `baseline`,
+# and `assign` — a swept parameter path, an axis name — which no fixed dotted
+# path reaches; closing the nameable leaves here and not those would leave a
+# partial closure reading like a total one.
 LEAF_TYPES: dict[str, type | tuple[type, ...]] = {
     "schema_version": str,
     "experiment_type": str,
@@ -117,9 +128,10 @@ def _check_unknown_keys(
     """Walk `node` reporting any key not implied by `LEAF_TYPES`, skipping the
     two exempt subtrees entirely and never descending into a known LEAF's
     value — a leaf's own children (`data.units.holdout`'s `method`, a `from`
-    dict's `resolver`) have no fixed dotted path a table entry could name, so
-    they are `_check_shape`'s job, exactly as the module docstring already
-    says for `sweep.grid`'s axis values.
+    dict's `resolver`) are reached by no check in this build: not here, and
+    not by `_check_shape`, which checks a container's shape and never the
+    names inside one. See the module docstring for why the leaf is left whole
+    rather than half-closed.
     """
     if not isinstance(node, dict):
         return
