@@ -29,7 +29,7 @@ from publishable.sweep import (
 )
 from publishable.templates.base import BaseTemplate
 from publishable.templates.registry import get_template, template_names
-from publishable.units import UnitList, resolve_units
+from publishable.units import COLLAPSE_RULES, NUMERIC_COLLAPSE_RULES, UnitList, resolve_units
 
 REQUIRED_METADATA = ("description", "authors")
 
@@ -430,6 +430,7 @@ def validate_config(
     _check_versions(doc, template, c)
     _check_data(doc, config_path, c)
     roster = _check_units(doc, c)
+    _check_measurements(_units_declaration(doc.get("data") or {}, c) or {}, roster, c)
     _check_replication(
         doc,
         template,
@@ -745,6 +746,115 @@ def _check_units(doc: dict[str, Any], c: Collector) -> UnitList | None:
     except ContractError as exc:
         c.error(exc.code, "data.units", str(exc))
         return None
+
+
+def _measurement_value_is_numeric(value: Any) -> bool:
+    """Whether `value` can stand under `mean`/`median`/`sum`, matching `_apply`'s own gate.
+
+    `bool` is excluded even though `isinstance(True, int)` is `True` in Python —
+    `units._apply` excludes it for the same reason (`sum([True, False])` and
+    `sum([True, True])` would answer in two different types depending on the data,
+    which is incoherent whichever way it's read). A `str` that parses as a `float`
+    is accepted: a table-sourced column arrives through `csv.DictReader` as `str`
+    regardless of what it holds (`resolve_units` does no coercion, and neither does
+    this function — `attributes` is a projection of column names, not types), so
+    treating every table column as non-numeric would refuse `collapse: mean` over
+    the ordinary case — a numeric column — everywhere it appears, not just over the
+    `site`-shaped column row 243 exists to catch. `"10"` and `"3.5"` pass; `"north"`
+    and `"True"`/`"False"` do not, which is what actually distinguishes a value that
+    could be averaged from one that couldn't, independent of which source produced it.
+    """
+    if isinstance(value, bool):
+        return False
+    if isinstance(value, (int, float)):
+        return True
+    if isinstance(value, str):
+        try:
+            float(value)
+        except ValueError:
+            return False
+        return True
+    return False
+
+
+def _check_measurements(units: dict[str, Any], roster: UnitList | None, c: Collector) -> None:
+    """`data.units.measurements` — shape, then the collapse rule against the column.
+
+    `reference.md` § Validation, "Collapse rule fits the column": `measurements.collapse:
+    mean` over `site`, which is a string, has no meaning — use `first` or `mode`, or a
+    per-column map. The type comes from the *resolved roster's own attribute values*
+    rather than from the declaration, because `attributes` declares names, not types.
+    When the roster does not resolve, the type half is skipped, but the shape half
+    still runs below it: a config can be wrong about `measurements`'s shape with no
+    `input_dir` in reach at all, and skipping both together would make the roster's
+    absence swallow an unrelated fault.
+
+    A single rule applies to every collapsed column (a per-column map's un-named
+    columns fall back to `first`, the same fallback `units._rule_for` uses), so a
+    *constant* string column is refused here even though `units._apply`'s
+    constant-column shortcut would let `mean` survive it at run time: whether a
+    check's verdict depends on the data happening to be constant is not something a
+    reader can act on, and the document draws no such exception for row 243.
+    """
+    decl = units.get("measurements")
+    if decl is None:
+        return
+    if not isinstance(decl, dict) or not decl:
+        c.error(
+            "E-DATA-MEASUREMENTS-INVALID",
+            "data.units.measurements",
+            "is empty or is not a mapping; it needs `by` (the attribute distinguishing "
+            "one measurement of a unit from another) and `collapse` (how rows sharing a "
+            "key become one). An empty declaration changes no behavior, which is the "
+            "failure the refusal it replaces exists to prevent",
+        )
+        return
+    by = decl.get("by")
+    valid_by = by if isinstance(by, str) and by else None
+    if valid_by is None:
+        c.error(
+            "E-DATA-MEASUREMENTS-INVALID",
+            "data.units.measurements.by",
+            "is missing or is not an attribute name; without it nothing distinguishes "
+            "a second measurement of one unit from a resumed retry of the same one, "
+            "and the two collapse in opposite directions",
+        )
+    collapse = decl.get("collapse")
+    rules = list(collapse.values()) if isinstance(collapse, dict) else [collapse]
+    for rule in rules:
+        if rule not in COLLAPSE_RULES:
+            # Same code `units._apply` raises once task 3 wires collapse into
+            # `resolve_units` — `reference.md` § Errors `validate` reports already
+            # lists `E-UNITS-COLLAPSE-RULE` as one identifier reached from both
+            # surfaces, the same reuse `E-REPL-SEED-COLLISION` illustrates, so this
+            # is not a second code for the fault `_apply` will also raise on.
+            c.error(
+                "E-UNITS-COLLAPSE-RULE",
+                "data.units.measurements.collapse",
+                f"is {rule!r}; expected one of {', '.join(COLLAPSE_RULES)}, or a "
+                "mapping of column name to one of them",
+            )
+            return
+    if roster is None:
+        return
+    for name in sorted({n for u in roster for n in u.attributes} - {valid_by}):
+        rule = collapse.get(name, "first") if isinstance(collapse, dict) else collapse
+        if rule not in NUMERIC_COLLAPSE_RULES:
+            continue
+        offenders = [
+            u.attributes[name]
+            for u in roster
+            if name in u.attributes and not _measurement_value_is_numeric(u.attributes[name])
+        ]
+        if offenders:
+            c.error(
+                "E-DATA-MEASUREMENTS-COLLAPSE-TYPE",
+                f"data.units.measurements.collapse.{name}",
+                f"is {rule!r} over {name!r}, which holds {offenders[0]!r} — a "
+                f"{type(offenders[0]).__name__} that is not numeric and does not parse "
+                "as one. Use `first` or `mode` for it, or a per-column map giving each "
+                "column the rule that fits it",
+            )
 
 
 # Refusals that are properties of the DECLARATION, so `validate` reports them as
