@@ -4069,3 +4069,92 @@ def test_a_baseline_that_leaves_a_sampled_path_free_is_refused(write_config):
         )
     )
     assert "E-SWEEP-BASELINE-PARTIAL" in found
+
+
+def test_a_uniform_range_over_an_int_parameter_is_refused_by_what_it_draws(write_config):
+    """The bounds are two legal integers, so a bounds-only check reports nothing —
+    and the draw is `118.38…`, which a step reads where `parameter_spec` declares
+    `int`. § Validation's "Types" row promises to refuse exactly that, and the
+    value that executes is the drawn one, not the bound."""
+    c = Collector()
+    validate_config(
+        write_config(
+            {
+                "sweep": {
+                    "sample": {
+                        "n": 4,
+                        "ranges": {"analysis.min_samples": {"uniform": [10, 200]}},
+                    }
+                }
+            }
+        ),
+        c,
+    )
+    found = [f for f in c.findings if f.code == "E-PARAM-VALUE"]
+    assert found, [f.code for f in c.findings]
+    assert found[0].path == "sweep.sample.ranges.analysis.min_samples.uniform"
+    assert "expected integer" in found[0].message
+    assert "int_uniform" in found[0].message
+    # One mistake, one finding — not one per drawn condition.
+    assert len(found) == 1
+
+
+def test_a_sampled_value_outside_the_parameters_choices_is_refused(write_config):
+    """The other half of the same class, and the one a form-level rule could not
+    catch: both `int_uniform` endpoints are declared choices, the form is right
+    for an `int` parameter, and the draws in between are not choices at all."""
+    from publishable.param import Param
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    original = GenericTemplate.parameter_spec
+    GenericTemplate.parameter_spec = {
+        **original,
+        "analysis.min_samples": Param(int, default=10, choices=[10, 50]),
+    }
+    try:
+        c = Collector()
+        validate_config(
+            write_config(
+                {
+                    "parameters.analysis": {
+                        "method": "pearson",
+                        "min_samples": 10,
+                        "confidence": 0.95,
+                        "drop_missing": True,
+                    },
+                    "sweep": {
+                        "sample": {
+                            "n": 8,
+                            "ranges": {"analysis.min_samples": {"int_uniform": [10, 50]}},
+                        }
+                    },
+                }
+            ),
+            c,
+        )
+        found = [f for f in c.findings if f.code == "E-PARAM-VALUE"]
+        assert found, [f.code for f in c.findings]
+        assert "expected one of 10, 50" in found[0].message
+    finally:
+        GenericTemplate.parameter_spec = original
+
+
+def test_a_well_typed_sample_draws_no_value_findings(write_config):
+    """The mirror: `int_uniform` over an `int` parameter and `uniform` over a
+    float one draw legal values, and neither reports anything."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {
+                    "sample": {
+                        "n": 16,
+                        "ranges": {
+                            "analysis.min_samples": {"int_uniform": [10, 200]},
+                            "analysis.confidence": {"uniform": [0.80, 0.99]},
+                        },
+                    }
+                }
+            }
+        )
+    )
+    assert "E-PARAM-VALUE" not in found

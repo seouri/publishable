@@ -18,7 +18,13 @@ from publishable.provenance import find_repo_root, resolves_inside_repo
 from publishable.replication import resolve_repeats
 from publishable.scope import step_name as _step_name
 from publishable.strata import levels_for
-from publishable.sweep import _swept_paths, check_swept_value, expand, sample_fault
+from publishable.sweep import (
+    _swept_paths,
+    check_swept_value,
+    expand,
+    render_value,
+    sample_fault,
+)
 from publishable.templates.base import BaseTemplate
 from publishable.templates.registry import get_template, template_names
 from publishable.units import UnitList, resolve_units
@@ -1068,6 +1074,63 @@ def _repeat_total(doc: dict[str, Any], unit_count: int | None) -> int | None:
     return total
 
 
+def _check_sampled_values(
+    sample: Any, spec: dict[str, Any], conditions: list[Any], c: Collector
+) -> None:
+    """Every value `sweep.sample` actually draws satisfies its own `Param`.
+
+    **Checking the bounds is not checking the values, and only the values
+    execute.** `uniform: [10, 200]` over `Param(int, ge=2)` has two perfectly
+    legal integer bounds and draws `118.38516808291541`, which a step then reads
+    where the template declares an `int`; `int_uniform: [10, 50]` over
+    `Param(int, choices=[10, 50])` passes on both endpoints and draws `37`,
+    which is neither choice. Both validate clean under a bounds-only check and
+    then run a config § Validation's "Types" and "Choices" rows promise to
+    refuse — the validates-clean-misbehaves-at-run class, one level up from the
+    shape class `_check_shape` and `sample_fault` close.
+
+    **The realized values are checked rather than the declaration's *form*,**
+    deliberately. Refusing "a non-`int_uniform` range on an `int` parameter"
+    would catch the first example and nothing else: it says nothing about
+    `choices`, `pattern`, `ge`/`lt`, or a `log_uniform` range that dips under a
+    `gt=0`, and the constraint vocabulary is closed but not small. What executes
+    is the drawn value, so that is what `Param.check` is asked about — the same
+    call `grid` values and `baseline` values already go through, on the same
+    identifier (`E-PARAM-VALUE`), rather than a `sample`-shaped approximation of
+    it.
+
+    Its cost, stated rather than hidden: the finding names a value the user did
+    not literally write. That is why the message quotes both the drawn value and
+    the range that produced it. It is not flaky — the draw is deterministic
+    given the config, so "this config draws an illegal value" is as stable a
+    claim as any other check here, and re-running `validate` on an unedited
+    config reports the same value. Only the *first* offending draw per path is
+    reported: `n: 50` over a wrong-typed range is one mistake, not fifty.
+    """
+    if not sample or sample_fault(sample) is not None:
+        return
+    for path in sample["ranges"]:
+        if path not in spec:
+            continue  # already reported as `E-SWEEP-PATH-UNKNOWN`
+        for condition in conditions:
+            if path not in condition.values:
+                continue
+            value = condition.values[path]
+            problem = spec[path].check(value)
+            if problem is None:
+                continue
+            form = next(iter(sample["ranges"][path]))
+            hint = ""
+            if spec[path].type_ is int and form != "int_uniform":
+                hint = " — `int_uniform` is the form that draws integers"
+            c.error(
+                "E-PARAM-VALUE",
+                f"sweep.sample.ranges.{path}.{form}",
+                f"draws `{render_value(value)}`, which {problem.lstrip()}{hint}",
+            )
+            break
+
+
 def _check_sweep(
     doc: dict[str, Any], template: Any, c: Collector, *, unit_count: int | None = None
 ) -> None:
@@ -1276,6 +1339,7 @@ def _check_sweep(
                 "reporting success — declare `baseline`, a non-empty `grid`, or remove "
                 "`sweep` entirely",
             )
+        _check_sampled_values(sample, spec, conditions, c)
 
     # `reference.md` § Validation, "Baseline leaves contrasts confounded": a
     # `sweep.baseline` that "fixes a value on every axis" leaves comparisons that
