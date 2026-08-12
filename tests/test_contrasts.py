@@ -1,5 +1,7 @@
+import pytest
+
 from publishable.contrasts import resolve_contrasts, units_matching
-from publishable.sweep import Condition
+from publishable.sweep import Condition, expand
 from publishable.units import Unit, UnitList
 
 
@@ -120,3 +122,75 @@ def test_values_compare_as_strings():
     `"1"`; comparing them raw would silently match nothing."""
     r = _roster(("u1", {"cohort": "1"}))
     assert units_matching(r, {"cohort": 1}) == {"u1"}
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="Task 8 owns per-cell `vs_baseline` targeting. `resolve_contrasts` takes the "
+    "FIRST baseline for every condition, so a per-cell expansion's other baselines "
+    "become comparisons: 6 conditions / 2 baselines gives 5, not the 4 § Expansion "
+    "modes states. `correction.family_shape` counts `len({m.where})`, so `family_size` "
+    "and every corrected interval in the run rest on that number.",
+)
+def test_two_per_cell_baselines_are_four_comparisons_not_five():
+    """§ Expansion modes, last line of the baseline table's section: "six conditions
+    under two per-arm baselines are four comparisons in the correction family, not
+    five."
+
+    The tracked handle for the window H2 task 7 opened. Task 6 implemented per-cell
+    baseline expansion and `E-SWEEP-BASELINE-PARTIAL` was the only thing keeping any
+    config from reaching it; task 7 retired that refusal, which makes a
+    multi-baseline run reachable while contrast targeting is still single-baseline.
+    Nothing diagnoses the wrong family size, so this is `strict=True` rather than a
+    note in a file: it fails loudly the moment task 8 lands and cannot be forgotten
+    at merge.
+
+    Built from `expand` rather than hand-written `Condition`s deliberately — the
+    count under test is a property of the real expansion, and a hand-built list
+    would let the two drift apart."""
+    conditions = expand(
+        {
+            "sweep": {
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {
+                    "analysis.method": ["pearson", "spearman"],
+                    "data.sex": ["f", "m"],
+                },
+            }
+        }
+    )
+    assert [c.is_baseline for c in conditions] == [True, True, False, False, False, False]
+
+    assert len(resolve_contrasts({}, conditions)) == 4
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="Same window as above: the first baseline is every condition's target, so "
+    "the second baseline is compared against the first and enters the correction "
+    "family as a member.",
+)
+def test_no_comparison_has_a_baseline_condition_as_its_subject():
+    """§ Expansion modes: "Baseline conditions are references rather than comparisons,
+    so they never count as one."
+
+    The second half of the handle above, and the sharper of the two: the count being
+    5 is a family-size error, but a *baseline* appearing as a comparison's `of` is a
+    comparison of one reference against another — `sex=m__baseline` vs
+    `sex=f__baseline` differs on `data.sex` alone and is exactly the confounded
+    cross-cell contrast per-cell baselines exist to avoid."""
+    conditions = expand(
+        {
+            "sweep": {
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {
+                    "analysis.method": ["pearson", "spearman"],
+                    "data.sex": ["f", "m"],
+                },
+            }
+        }
+    )
+    baselines = {c.index for c in conditions if c.is_baseline}
+
+    subjects = [c.id for c in resolve_contrasts({}, conditions) if c.of in baselines]
+    assert subjects == []

@@ -913,13 +913,18 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     """Declared-but-unimplemented blocks, refused rather than silently ignored.
 
     This build expands `sweep.baseline`, `sweep.grid`, `sweep.paired`,
-    `sweep.sample` and `sweep.ablate` only. A `baseline` fixing only *some* of
-    the swept axes is no longer refused here: `sweep._baseline_cells` expands it
-    over the rest, one baseline condition per cell of the unfixed axes, which is
-    § Expansion modes' second row and the row it tells a reader to prefer.
-    Both declared orders are honored — `randomized`
-    shuffles within each batch and `as_declared` leaves the plan's step-major
-    layout alone. `sweep.paired` is no longer refused here: `_axes` composes it
+    `sweep.sample` and `sweep.ablate` only. Both declared orders are honored —
+    `randomized` shuffles within each batch and `as_declared` leaves the plan's
+    step-major layout alone.
+
+    A `baseline` fixing only *some* of the swept axes is no longer refused here:
+    `sweep._baseline_cells` expands it over the rest, one baseline condition per
+    cell of the unfixed axes, which is § Expansion modes' second row and the row
+    it tells a reader to prefer. What each of those baselines is compared
+    *against* is a separate question and is not settled — see the strict xfails
+    in `tests/test_contrasts.py`.
+
+    `sweep.paired` is no longer refused here: `_axes` composes it
     as a single axis whose cells set several paths at once, per § Expansion
     modes — `_check_shape` guards its container and entry shapes, and
     `_check_sweep` refuses a path it shares with another axis-shaped mode
@@ -1524,13 +1529,19 @@ def _check_sweep(
     # **The condition is the row's, and it is deliberately narrower than run
     # time.** Axes are compared over `sweep.grid`'s keys only, and only when the
     # baseline fixes every one of them — which is the row's own "fixes a value
-    # on every axis". A baseline that leaves an axis free is not merely out of
-    # scope here, it is the shape where nothing is confounded by construction:
+    # on every axis". A baseline that leaves an axis free is a different shape:
     # `sweep._baseline_cells` gives it one baseline per cell of the unfixed
-    # axes, so every comparison differs on the fixed axes alone. That is the
-    # row's own remedy, and since per-cell expansion landed it is a config core
-    # accepts — the `all(...)` guard below is what routes such a config past
-    # this warning rather than warning about a design that fixed the fault.
+    # axes rather than one reference for the whole run, so the row's condition
+    # does not hold and the `all(...)` guard below skips it. Since per-cell
+    # expansion landed that is a config core accepts, and this warning saying
+    # nothing about it is silence rather than a verdict — deliberately so, and
+    # NOT a claim that nothing is confounded there. `contrasts.resolve_contrasts`
+    # still targets the *first* baseline for every condition, so a run over such
+    # a design does mark cross-cell comparisons `confounded` (and admits the
+    # other baselines as comparisons at all); per-cell targeting is task 8's,
+    # pinned by the two strict xfails in `tests/test_contrasts.py`. Until it
+    # lands this is the same under-warning direction the paragraph below
+    # describes, not a shape the warning has cleared.
     # `cli._differing_axes` instead walks the
     # *union* of both sides' keys against a sentinel, so a baseline fixing an
     # axis the grid never sweeps adds a differing axis to every comparison and
@@ -1560,10 +1571,13 @@ def _check_sweep(
                 f"{len(conditions) - 1} baseline comparisons differ on more than one axis "
                 f"and are reported `confounded: true` — `{example.label}` differs on "
                 f"{', '.join(f'`{a}`' for a in axes)}, so its delta mixes those effects "
-                "and no amount of correct pairing separates them. Fix only the axis you "
-                "are measuring and leave the rest out of `sweep.baseline`: the baseline "
-                "then expands to one condition per cell of the free axes, and every "
-                "comparison differs in exactly one place",
+                "and no amount of correct pairing separates them. The design that avoids "
+                "this is a baseline fixing only the axis you are measuring: it expands to "
+                "one baseline per cell of the axes it leaves free, which is the row § "
+                "Expansion modes tells you to prefer when the levels are peers — though "
+                "in this build each comparison still resolves against the run's first "
+                "baseline, so those per-cell references are not yet what its contrasts "
+                "are taken from",
             )
 
     repeat_total = _repeat_total(doc, unit_count)
