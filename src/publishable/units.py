@@ -346,38 +346,38 @@ def rule_for(column: str, collapse: Any) -> str:
 def is_measurement_numeric(value: Any) -> bool:
     """Whether `value` may stand under a numeric collapse rule (`mean`, `median`, `sum`).
 
-    **The single authority** for that question: `validate`'s row-243 collapse-type
-    check reads it today, and a run-time coercion step must read it too, once one
-    exists — two different ideas of "numeric" for the same declaration is exactly
-    the failure this predicate exists to prevent, a config that validates clean and
-    then crashes on a value `validate` already approved.
+    **The single authority** for that question, and it now has both its readers:
+    `validate`'s row-243 collapse-type check, and `coerce_for_rule` below, which
+    `collapse_measurements` calls immediately before `_apply`. Two different ideas
+    of "numeric" for the same declaration is exactly the failure this predicate
+    exists to prevent — a config that validates clean and then crashes on a value
+    `validate` already approved.
 
     `bool` is excluded even though `isinstance(True, int)` is `True` in Python —
     `sum([True, False])` and `sum([True, True])` would answer in two different
     types depending on the data, which is incoherent whichever way it's read. A
     `str` that parses as `float` is accepted: a table-sourced column arrives
-    through `csv.DictReader` as `str` regardless of what it holds, and nothing
-    coerces it today, so refusing every table column outright would refuse
-    `collapse: mean` over the ordinary numeric case wherever it appears, not just
-    over the `site`-shaped column row 243 exists to catch.
+    through `csv.DictReader` as `str` regardless of what it holds, so refusing
+    every table column outright would refuse `collapse: mean` over the ordinary
+    numeric case wherever it appears, not just over the `site`-shaped column
+    row 243 exists to catch.
 
     **`_apply`'s own constant-column shortcut, below, does NOT read this
-    predicate** — it runs on whatever value actually reaches it, which today is
-    never coerced, and its narrower, isinstance-only gate is the right one for a
-    value that is already a real number rather than one that merely looks like
-    it. Two facts for whoever adds that coercion, both reachable only once
-    `collapse_measurements` is wired into `resolve_units` and the `-UNSUPPORTED`
-    refusal on `measurements` is lifted — neither is reachable today:
+    predicate**, and that stays deliberate: its narrower, isinstance-only gate is
+    the right one for a value that is already a real number rather than one that
+    merely looks like it. What closes the gap is `coerce_for_rule` running first,
+    so under a numeric rule `_apply` only ever sees a value already converted.
+    Two constraints that arrangement carries, both load-bearing:
 
-    - `_apply("mean", ["10", "10"])` returns the *string* `"10"` right now — the
-      constant shortcut fires because `"10"` fails `_apply`'s own isinstance gate,
-      not this one. Coercion has to happen *before* `_apply` sees the values, or a
-      numeric rule over a constant numeric column keeps handing back a string
-      regardless of what this predicate says about it.
-    - Whatever parses a string into a number for that coercion has to accept
-      *exactly* `float`'s grammar — no more, no less — or this predicate's
-      "numeric-looking" and the coercion's "successfully converted" part ways,
-      which is the same divergence this predicate exists to close, one layer down.
+    - Coercion happens *before* `_apply`, never inside it. The other way round,
+      `_apply("mean", ["10", "10"])` returns the *string* `"10"` — the constant
+      shortcut fires because `"10"` fails `_apply`'s own isinstance gate, not this
+      one — so a numeric rule over a constant numeric column would hand back a
+      string no matter what this predicate said about it.
+    - `coerce_for_rule` must accept *exactly* `float`'s grammar — no more, no
+      less — or this predicate's "numeric-looking" and the coercion's
+      "successfully converted" part ways, which is the same divergence this
+      predicate exists to close, one layer down.
     """
     if isinstance(value, bool):
         return False
