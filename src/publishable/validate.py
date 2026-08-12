@@ -1381,12 +1381,23 @@ def _check_sweep(
     # are: `_value_checks` indexes `spec[path]` unguarded, so an unknown path
     # would raise `KeyError` inside a function contracted never to raise.
     #
-    # `remove` is NOT checked here: what it produces is `false` or `null`
-    # depending on the parameter, which is § Validation's "Ablation targets" row
-    # ("`remove` needs a boolean or nullable parameter — use `override`") and the
-    # next slice's check to mint, not a second reading of it here.
+    # A `remove` path takes the SAME path check, on the same identifier, for the
+    # same reason `baseline` does: `expand` plants `false`/`null` at it through
+    # `resolve_condition_cfg`'s `setdefault` walk, so a misspelling
+    # (`remove: [analysis.methdo]`) creates a parameter this template never
+    # declared and runs a condition whose label claims a change nothing made.
+    # Only the path is checked here — what `remove` *produces* is `false` or
+    # `null` depending on the parameter, which is § Validation's "Ablation
+    # targets" row ("`remove` needs a boolean or nullable parameter — use
+    # `override`") and the next slice's check to mint, not a second reading of
+    # it here. That split is why this is `_path_resolves` alone rather than
+    # `_value_checks`: the path is a question this build can already answer, the
+    # value is one that needs the row's own identifier.
     ablate = sweep.get("ablate")
     if isinstance(ablate, dict):
+        for i, path in enumerate(ablate.get("remove") or []):
+            if isinstance(path, str):
+                _path_resolves(path, f"sweep.ablate.remove[{i}]")
         for i, entry in enumerate(ablate.get("override") or []):
             if not isinstance(entry, dict):
                 continue  # `_check_shape` already refused it, fatally

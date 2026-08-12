@@ -1186,6 +1186,29 @@ def test_an_ablate_override_path_the_template_does_not_declare_is_refused(write_
     assert "E-PARAM-VALUE" not in found
 
 
+def test_an_ablate_remove_path_the_template_does_not_declare_is_refused(write_config):
+    """A `remove` path is planted into a condition's config exactly as an
+    `override` path is — `expand` sets `false`/`null` at it — so a misspelling
+    creates a parameter the template never declared and runs a condition whose
+    label claims a change nothing made. Same identifier as `grid`, `baseline`
+    and `override` get; the *value* `remove` produces is § Validation's
+    "Ablation targets" row and a later slice's check."""
+    c = Collector()
+    validate_config(
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"analysis.method": "pearson"},
+                    "ablate": {"remove": ["analysis.methdo"]},
+                }
+            }
+        ),
+        c,
+    )
+    finding = next(f for f in c.findings if f.code == "E-SWEEP-PATH-UNKNOWN")
+    assert finding.path == "sweep.ablate.remove[0]"
+
+
 def test_an_ablate_override_value_carrying_the_axis_separator_is_refused(write_config):
     """Unlike a `baseline` value, an `override` value IS rendered into the label,
     so it takes the nameability check too: a value containing `__` makes a label
@@ -1201,6 +1224,63 @@ def test_an_ablate_override_value_carrying_the_axis_separator_is_refused(write_c
         )
     )
     assert "E-SWEEP-VALUE-UNNAMEABLE" in found
+
+
+# The two compositions § Expansion modes rules out are UNREFUSED on this build.
+# `E-SWEEP-ABLATE-UNSUPPORTED` used to refuse any truthy `ablate` at all, so
+# retiring it (the slice's task 4) took these two with it; the checks that refuse
+# them for real are § Validation rows 217 and 218, which the next task mints.
+# These two tests are the window's mechanical handle: `xfail(strict=True)` so
+# they FAIL LOUDLY the moment the gap is closed without the marker being
+# removed, which is how the next task's reviewer confirms closure — a red/green
+# fact in a tracked file rather than a claim in a report. Neither names an
+# identifier, because the next task is instructed to grep before minting one;
+# what they assert is that `validate` refuses the config at all.
+_NO_IDENTIFIER_YET = "§ Validation rows 217/218 — refusal retired with E-SWEEP-ABLATE-UNSUPPORTED"
+
+
+@pytest.mark.xfail(strict=True, reason=_NO_IDENTIFIER_YET)
+def test_ablate_without_a_baseline_is_refused(write_config):
+    """§ Expansion modes: `ablate` "reads the baseline rather than re-emitting it
+    … It therefore **requires** `sweep.baseline`, which `validate` checks". Today
+    it expands to n conditions each carrying only its own change and no baseline
+    row at all — a design the specification says cannot exist."""
+    c = Collector()
+    validate_config(
+        write_config({"sweep": {"ablate": {"remove": ["analysis.drop_missing"]}}}), c
+    )
+    assert [f for f in c.findings if f.level == "error"]
+
+
+@pytest.mark.xfail(strict=True, reason=_NO_IDENTIFIER_YET)
+def test_ablate_crossed_with_a_parameter_axis_is_refused(write_config):
+    """§ Expansion modes: "the product of 'vary one thing at a time' with a second
+    parameter axis is no longer one thing at a time, and there is no defensible
+    reading of what it would mean". Today it expands to the baseline, the grid's
+    rows, and the ablate rows. `E-SWEEP-PATH-DUPLICATE` does not catch it either:
+    ablated paths deliberately do not join the axis-shaped modes' set."""
+    c = Collector()
+    validate_config(
+        write_config(
+            {
+                "sweep": {
+                    # The baseline fixes the grid axis too, so the only fault
+                    # left in this config is the composition itself —
+                    # `E-SWEEP-BASELINE-PARTIAL` would otherwise make this test
+                    # pass for a reason that has nothing to do with `ablate`.
+                    "baseline": {
+                        "analysis.method": "pearson",
+                        "analysis.drop_missing": True,
+                        "analysis.min_samples": 30,
+                    },
+                    "grid": {"analysis.min_samples": [30, 50]},
+                    "ablate": {"remove": ["analysis.drop_missing"]},
+                }
+            }
+        ),
+        c,
+    )
+    assert [f for f in c.findings if f.level == "error"]
 
 
 @pytest.mark.parametrize(
