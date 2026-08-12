@@ -298,6 +298,7 @@ def execute_plan(
     units: UnitList | None = None,
     max_failed_fraction: float | None = None,
     fold_members: dict[str, frozenset[str]] | None = None,
+    measurements: dict[str, Any] | None = None,
 ) -> list[ExecutionResult]:
     """Run every execution in the plan, in order, one at a time.
 
@@ -397,6 +398,12 @@ def execute_plan(
             condition_index=execution.condition_index,
             condition_label=execution.condition_label,
             repeat_label=execution.repeat_label,
+            # `data.units.measurements` itself, threaded rather than re-read: it is
+            # what tells `io.record` a `measurement=` has a rule to collapse under,
+            # and what `finalize` collapses by. Without it a config that declares
+            # measurements is honoured at the input path and refused at the step
+            # path, which is the same declaration answering two different ways.
+            measurements=measurements,
         )
         io.step_dir.mkdir(parents=True, exist_ok=True)
         recorded: frozenset[str] = frozenset()

@@ -348,7 +348,7 @@ def is_measurement_numeric(value: Any) -> bool:
 
     **The single authority** for that question, and it now has both its readers:
     `validate`'s row-243 collapse-type check, and `coerce_for_rule` below, which
-    `collapse_measurements` calls immediately before `_apply`. Two different ideas
+    `collapse_measurements` calls immediately before `apply_rule`. Two different ideas
     of "numeric" for the same declaration is exactly the failure this predicate
     exists to prevent — a config that validates clean and then crashes on a value
     `validate` already approved.
@@ -362,16 +362,16 @@ def is_measurement_numeric(value: Any) -> bool:
     numeric case wherever it appears, not just over the `site`-shaped column
     row 243 exists to catch.
 
-    **`_apply`'s own constant-column shortcut, below, does NOT read this
+    **`apply_rule`'s own constant-column shortcut, below, does NOT read this
     predicate**, and that stays deliberate: its narrower, isinstance-only gate is
     the right one for a value that is already a real number rather than one that
     merely looks like it. What closes the gap is `coerce_for_rule` running first,
-    so under a numeric rule `_apply` only ever sees a value already converted.
+    so under a numeric rule `apply_rule` only ever sees a value already converted.
     Two constraints that arrangement carries, both load-bearing:
 
-    - Coercion happens *before* `_apply`, never inside it. The other way round,
-      `_apply("mean", ["10", "10"])` returns the *string* `"10"` — the constant
-      shortcut fires because `"10"` fails `_apply`'s own isinstance gate, not this
+    - Coercion happens *before* `apply_rule`, never inside it. The other way round,
+      `apply_rule("mean", ["10", "10"])` returns the *string* `"10"` — the constant
+      shortcut fires because `"10"` fails `apply_rule`'s own isinstance gate, not this
       one — so a numeric rule over a constant numeric column would hand back a
       string no matter what this predicate said about it.
     - `coerce_for_rule` must accept *exactly* `float`'s grammar — no more, no
@@ -397,7 +397,7 @@ def coerce_for_rule(column: str, rule: str, values: list[Any]) -> list[Any]:
 
     A table-sourced column arrives through `csv.DictReader` as `str` whatever it
     holds, so without this step `collapse: mean` over a column `validate` accepted
-    — `is_measurement_numeric("10")` is `True` — either returns a string (`_apply`'s
+    — `is_measurement_numeric("10")` is `True` — either returns a string (`apply_rule`'s
     constant-column shortcut) or raises a bare `TypeError` (`sum` over strings).
     Both are the same defect: a config that validates clean and then misbehaves on
     a value `validate` already approved.
@@ -409,7 +409,7 @@ def coerce_for_rule(column: str, rule: str, values: list[Any]) -> list[Any]:
     integer-looking column collapses to `15.0` rather than `15`; narrowing that
     back to `int` is the tidy-up that would break the correspondence.
 
-    The constant-value case is handed on untouched so `_apply`'s own shortcut
+    The constant-value case is handed on untouched so `apply_rule`'s own shortcut
     still answers it — `reference.md` § What isn't a repeat: "Attributes constant
     within a key collapse to that value with no rule needed." Everything else a
     numeric rule cannot operate on is refused here, carrying the identifier
@@ -433,7 +433,7 @@ def coerce_for_rule(column: str, rule: str, values: list[Any]) -> list[Any]:
     )
 
 
-def _apply(rule: str, values: list[Any]) -> Any:
+def apply_rule(rule: str, values: list[Any]) -> Any:
     if rule not in COLLAPSE_RULES:
         raise ContractError(
             f"`data.units.measurements.collapse` names {rule!r}; expected one of "
@@ -490,7 +490,7 @@ def collapse_measurements(
     recomputing them from a second walk is how the two come to disagree.
 
     Each group's member list is built by appending in `units`' own iteration
-    order, so it *is* resolution order — which is what makes `_apply`'s `first`
+    order, so it *is* resolution order — which is what makes `apply_rule`'s `first`
     branch (`values[0]`) match the documented "earliest row in resolution
     order" rather than an incidental artifact of `dict` grouping.
     """
@@ -510,9 +510,9 @@ def collapse_measurements(
             rule = rule_for(name, collapse)
             # Never empty: `names` is built from the members' own attribute keys,
             # so every name here is one at least one member carries — which is
-            # what keeps `_apply`'s `values[0]` in reach of a value.
+            # what keeps `apply_rule`'s `values[0]` in reach of a value.
             values = [m.attributes[name] for m in members if name in m.attributes]
-            merged[name] = _apply(rule, coerce_for_rule(name, rule, values))
+            merged[name] = apply_rule(rule, coerce_for_rule(name, rule, values))
         paths = tuple(p for m in members for p in m.paths)
         collapsed.append(Unit(key=key, paths=paths, attributes=merged))
         counts.append(len(members))

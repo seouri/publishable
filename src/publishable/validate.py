@@ -772,7 +772,7 @@ def _check_measurements(units: dict[str, Any], roster: UnitList | None, c: Colle
 
     A single rule applies to every collapsed column (a per-column map's un-named
     columns fall back to `first`, the same fallback `units.rule_for` uses), so a
-    *constant* string column is refused here even though `units._apply`'s
+    *constant* string column is refused here even though `units.apply_rule`'s
     constant-column shortcut would let `mean` survive it at run time: whether a
     check's verdict depends on the data happening to be constant is not something a
     reader can act on, and the document draws no such exception for row 243.
@@ -806,7 +806,7 @@ def _check_measurements(units: dict[str, Any], roster: UnitList | None, c: Colle
         # something invalid — `reference.md`'s row for it says exactly that
         # ("names a rule that is none of `mean`, `median`, `sum`, `first`, or
         # `mode`"), and an omission names nothing. Routing a missing `collapse`
-        # there would make that row, which is dual-listed with `units._apply`'s
+        # there would make that row, which is dual-listed with `units.apply_rule`'s
         # own raise, mean two different things depending on which surface hit it.
         c.error(
             "E-DATA-MEASUREMENTS-INVALID",
@@ -818,11 +818,11 @@ def _check_measurements(units: dict[str, Any], roster: UnitList | None, c: Colle
     rules = list(collapse.values()) if isinstance(collapse, dict) else [collapse]
     for rule in rules:
         if rule not in COLLAPSE_RULES:
-            # Same code `units._apply` raises once task 3 wires collapse into
+            # Same code `units.apply_rule` raises once task 3 wires collapse into
             # `resolve_units` — `reference.md` § Errors `validate` reports already
             # lists `E-UNITS-COLLAPSE-RULE` as one identifier reached from both
             # surfaces, the same reuse `E-REPL-SEED-COLLISION` illustrates, so this
-            # is not a second code for the fault `_apply` will also raise on.
+            # is not a second code for the fault `apply_rule` will also raise on.
             c.error(
                 "E-UNITS-COLLAPSE-RULE",
                 "data.units.measurements.collapse",

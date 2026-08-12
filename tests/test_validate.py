@@ -1937,7 +1937,7 @@ def test_an_empty_measurements_block_is_a_finding_not_a_default(write_config):
 
 
 def test_a_constant_string_column_is_refused_despite_surviving_at_run_time(write_config, tmp_path):
-    """`units._apply`'s constant-column shortcut would let `mean` over a *constant*
+    """`units.apply_rule`'s constant-column shortcut would let `mean` over a *constant*
     `site` string survive at run time without ever dispatching to a numeric
     operation. `validate` refuses it anyway: a check whose verdict depends on
     whether the data happened to be constant is one nobody could act on, and the
@@ -1961,7 +1961,7 @@ def test_a_constant_string_column_is_refused_despite_surviving_at_run_time(write
 def test_sum_over_a_real_boolean_column_is_refused(write_config):
     """A CSV cannot carry a genuine `bool` attribute — `csv.DictReader` yields
     strings — so this exercises the check directly with a hand-built roster, the
-    same gate `units._apply` uses (`bool` is excluded from "numeric" even though
+    same gate `units.apply_rule` uses (`bool` is excluded from "numeric" even though
     `isinstance(True, int)` is `True`)."""
     roster = UnitList(
         [
@@ -2003,7 +2003,7 @@ def test_a_numeric_looking_csv_string_column_is_accepted_under_mean(write_config
     Treating every table column as non-numeric would refuse `collapse: mean` over
     the ordinary numeric case everywhere it appears. `"10"`/`"20"` parse as
     `float`, so they are accepted; only a value that does NOT parse (`"north"`) is
-    refused. **Consequence, not yet closed**: `units._apply`'s `sum`/`median` on
+    refused. **Consequence, not yet closed**: `units.apply_rule`'s `sum`/`median` on
     these same strings raises a bare `TypeError` at run time until task 3 adds the
     coercion this check does not perform — a cross-task gap, not a bug here."""
     (tmp_path / "input" / "index.csv").write_text(
@@ -2025,9 +2025,9 @@ def test_a_numeric_looking_csv_string_column_is_accepted_under_mean(write_config
 def test_an_unknown_collapse_rule_name_draws_the_shared_collapse_rule_code(write_config):
     """`reference.md` § Errors `validate` reports already dual-lists
     `E-UNITS-COLLAPSE-RULE` for exactly this fault — the same code
-    `units._apply` raises once task 3 wires collapse into `resolve_units` — so
+    `units.apply_rule` raises once task 3 wires collapse into `resolve_units` — so
     this check reuses it rather than minting a second code (`-INVALID`) for the
-    fault `_apply` will also raise on, the "one problem, two codes" split
+    fault `apply_rule` will also raise on, the "one problem, two codes" split
     `_check_units`'s own docstring names as the failure to avoid absent a
     surface-split reason."""
     path = write_config(
@@ -2050,7 +2050,7 @@ def test_an_omitted_collapse_draws_invalid_not_the_named_rule_code(write_config)
     nothing, so it belongs to the shape family instead. Routing it there also
     keeps `E-UNITS-COLLAPSE-RULE` meaning exactly what both its registry rows
     say, which matters more than usual since it is dual-listed with the code
-    `units._apply` itself raises."""
+    `units.apply_rule` itself raises."""
     path = write_config(
         {
             "data.units": {

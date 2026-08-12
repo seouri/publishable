@@ -852,6 +852,7 @@ def command_run(config_path: Path) -> int:
             units=roster,
             max_failed_fraction=(doc.get("limits") or {}).get("max_failed_fraction"),
             fold_members=fold_members,
+            measurements=(units_decl or {}).get("measurements"),
         )
 
         status = run_status(results)

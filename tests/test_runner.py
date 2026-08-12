@@ -104,6 +104,7 @@ def harness(
     max_failed_fraction=None,
     conditions=None,
     fold_members=None,
+    measurements=None,
 ):
     class P(BaseExperiment):
         pass
@@ -127,6 +128,7 @@ def harness(
         units=units,
         max_failed_fraction=max_failed_fraction,
         fold_members=fold_members,
+        measurements=measurements,
     )
     return run_dir, results, repeats
 
@@ -293,6 +295,70 @@ def test_attrition_reconciles_exactly(tmp_path: Path):
     _, results, _ = harness(tmp_path, [Partial], units=roster)
     counts = attrition(results, roster, "partial", condition_index=0)
     assert counts == {"resolved": 10, "completed": 7, "ineligible": 1, "failed": 2}
+    assert counts["resolved"] == counts["completed"] + counts["ineligible"] + counts["failed"]
+
+
+class Measures(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        for u in io.units:
+            io.record(u.key, {"v": 1.0}, measurement="r1")
+            io.record(u.key, {"v": 3.0}, measurement="r2")
+        return {}
+
+
+def test_a_real_step_may_measure_when_the_config_declares_measurements(tmp_path: Path):
+    """`data.units.measurements` must reach the `StepIO` the runner builds, or a
+    config that declares it is honoured at the input path and raises
+    `E-STEP-MEASUREMENT-UNDECLARED` at the step path. A directly-constructed
+    `StepIO` cannot catch that, which is how it went missing."""
+    roster = UnitList([Unit(key=f"p{i}") for i in range(3)])
+    _, results, _ = harness(
+        tmp_path,
+        [Measures],
+        units=roster,
+        measurements={"by": "read_id", "collapse": "mean"},
+    )
+    assert [r.status for r in results] == ["completed", "completed"]
+    assert results[0].rows == tuple({"unit": f"p{i}", "v": 2.0} for i in range(3))
+
+
+def test_a_step_that_only_measures_is_refused_without_the_declaration(tmp_path: Path):
+    """Control for the previous test: the declaration is what makes it reachable,
+    so the same step under no declaration must still fail that execution."""
+    roster = UnitList([Unit(key=f"p{i}") for i in range(3)])
+    _, results, _ = harness(tmp_path, [Measures], units=roster)
+    assert [r.status for r in results] == ["failed", "failed"]
+    assert "E-STEP-MEASUREMENT-UNDECLARED" in (results[0].error or "")
+
+
+def test_attrition_reconciles_for_a_step_that_only_measures(tmp_path: Path):
+    """The measured unit must be `completed`, not `failed`. `completed` counts
+    distinct unit keys that reached `io.record` (`reference.md` § The unit table is
+    the inference base), and `failed` is the subtraction left over — so a unit
+    whose rows never collapse into `recorded_keys` is silently a failure while its
+    step succeeded and its measurements sit on disk."""
+    roster = UnitList([Unit(key=f"p{i}") for i in range(4)])
+
+    class MeasuresSome(BaseStep):
+        scope = "repeat"
+
+        def run(self, cfg, io):
+            for u in list(io.units)[:3]:
+                io.record(u.key, {"v": 1.0}, measurement="r1")
+                io.record(u.key, {"v": 3.0}, measurement="r2")
+            io.skip("p3", "by design")
+            return {}
+
+    _, results, _ = harness(
+        tmp_path,
+        [MeasuresSome],
+        units=roster,
+        measurements={"by": "read_id", "collapse": "mean"},
+    )
+    counts = attrition(results, roster, "measures_some", condition_index=0)
+    assert counts == {"resolved": 4, "completed": 3, "ineligible": 1, "failed": 0}
     assert counts["resolved"] == counts["completed"] + counts["ineligible"] + counts["failed"]
 
 

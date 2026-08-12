@@ -7,7 +7,7 @@ from publishable import ContractError
 from publishable.units import (
     Unit,
     UnitList,
-    _apply,
+    apply_rule,
     collapse_measurements,
     partition_units,
     resolve_units,
@@ -384,11 +384,11 @@ def test_the_constant_shortcut_does_not_corrupt_a_numeric_aggregation():
     string). It must not also swallow a genuine numeric aggregation: `sum` over
     two constant depths is still a sum, not a no-op — `sum([5, 5])` is `10`,
     not `5`, even though the two reads agree."""
-    assert _apply("sum", [5, 5]) == 10
-    assert _apply("sum", [1000, 1000]) == 2000
-    assert _apply("sum", [1, 2]) == 3          # already covered above; kept for contrast
-    assert _apply("mean", [5, 5]) == 5         # mean over constant numeric: still a mean
-    assert _apply("mean", ["A", "A"]) == "A"   # round-1 behaviour, must survive
+    assert apply_rule("sum", [5, 5]) == 10
+    assert apply_rule("sum", [1000, 1000]) == 2000
+    assert apply_rule("sum", [1, 2]) == 3          # already covered above; kept for contrast
+    assert apply_rule("mean", [5, 5]) == 5         # mean over constant numeric: still a mean
+    assert apply_rule("mean", ["A", "A"]) == "A"   # round-1 behaviour, must survive
 
 
 def test_a_bogus_rule_raises_even_over_a_single_trivially_constant_value():
@@ -397,7 +397,7 @@ def test_a_bogus_rule_raises_even_over_a_single_trivially_constant_value():
     is trivially true for a single-member group — the common case for an
     unmeasured unit that never repeats."""
     with pytest.raises(ContractError) as e:
-        _apply("bogus", ["A"])
+        apply_rule("bogus", ["A"])
     assert e.value.code == "E-UNITS-COLLAPSE-RULE"
 
 
@@ -414,15 +414,15 @@ def test_a_constant_boolean_column_carries_rather_than_summing():
     is deliberately not fixed here: `sum` over a boolean column is incoherent
     whichever branch it takes, and refusing it belongs to the validate-time
     collapse-rule/column-type check rather than to this function."""
-    assert _apply("sum", [True, True]) is True
-    assert _apply("sum", [False, False]) is False
+    assert apply_rule("sum", [True, True]) is True
+    assert apply_rule("sum", [False, False]) is False
 
 
 def test_a_column_absent_from_the_collapse_map_falls_back_to_first():
     """`collapse` may be a per-column map; a column it does not name falls back
     to `first` rather than being averaged. `batch` differs across the two rows,
     so this is the case `collapse_measurements`'s blanket `"mean"` test above
-    cannot reach: it exercises `_apply`'s `first` branch on values that are not
+    cannot reach: it exercises `apply_rule`'s `first` branch on values that are not
     already constant."""
     units = [
         Unit(key="p1", paths=(), attributes={"read_id": "r1", "depth": 10, "batch": "b1"}),
@@ -482,9 +482,9 @@ def test_a_csv_sourced_numeric_column_collapses_to_a_number(input_dir: Path):
 
 
 def test_a_constant_numeric_string_column_collapses_to_a_number_too(input_dir: Path):
-    """`_apply("mean", ["10", "10"])` returns the *string* `"10"` — its
+    """`apply_rule("mean", ["10", "10"])` returns the *string* `"10"` — its
     constant-column shortcut fires because the strings fail its own isinstance
-    gate. Coercing before `_apply` sees them is what makes the shortcut's
+    gate. Coercing before `apply_rule` sees them is what makes the shortcut's
     numeric-rule exclusion reachable, so this answers `10.0`."""
     _write_reads(input_dir, "patient_id,read_id,depth\np1,r1,10\np1,r2,10\n")
     roster, _ = resolve_units(dict(_MEASURED), input_dir)
@@ -495,7 +495,7 @@ def test_a_constant_numeric_string_column_collapses_to_a_number_too(input_dir: P
 def test_a_sum_over_csv_strings_is_a_sum_and_not_a_type_error(input_dir: Path):
     """`sum(["10", "20"])` is a bare `TypeError` — no `.code`, and not caught by
     `validate`'s `except ContractError`. Pinned separately from `mean` because
-    `sum` reaches a different branch of `_apply`."""
+    `sum` reaches a different branch of `apply_rule`."""
     _write_reads(input_dir, "patient_id,read_id,depth\np1,r1,10\np1,r2,20\n")
     decl = dict(_MEASURED, measurements={"by": "read_id", "collapse": {"depth": "sum"}})
     roster, _ = resolve_units(decl, input_dir)
@@ -512,7 +512,7 @@ def test_a_sum_over_csv_strings_is_a_sum_and_not_a_type_error(input_dir: Path):
     ids=["mixed", "empty-cell", "short-row"],
 )
 def test_a_numeric_rule_over_a_value_it_cannot_compute_is_refused(input_dir: Path, body: str):
-    """Every one of these is arithmetic `_apply` cannot do, and every one would
+    """Every one of these is arithmetic `apply_rule` cannot do, and every one would
     otherwise leave `resolve_units` as a bare `TypeError` — which escapes
     `validate` itself, since it resolves the roster inside `except ContractError`.
     The identifier is `validate`'s own collapse-type code, not a second one for
@@ -526,7 +526,7 @@ def test_a_numeric_rule_over_a_value_it_cannot_compute_is_refused(input_dir: Pat
 def test_a_column_one_row_lacks_collapses_over_the_rows_that_have_it(input_dir: Path):
     """The short row again, under a rule that *can* answer it: the group is the
     members carrying the column, never an empty list — which is what keeps
-    `_apply`'s `values[0]` in reach of a value."""
+    `apply_rule`'s `values[0]` in reach of a value."""
     _write_reads(input_dir, "patient_id,read_id,depth\np1,r1,10\np1,r2\n")
     decl = dict(_MEASURED, measurements={"by": "read_id", "collapse": {"depth": "first"}})
     roster, technical_n = resolve_units(decl, input_dir)
@@ -537,7 +537,7 @@ def test_a_column_one_row_lacks_collapses_over_the_rows_that_have_it(input_dir: 
 def test_a_single_member_group_keeps_the_constant_shortcut(input_dir: Path):
     """A non-numeric column under a numeric rule is refused by `validate` (row
     243) whether or not the data happens to be constant — but this function must
-    stay total over what `_apply` documents as the constant case, or a
+    stay total over what `apply_rule` documents as the constant case, or a
     one-measurement-per-unit roster would raise here before `validate` could
     report the real finding with the column's name on it."""
     _write_reads(input_dir, "patient_id,read_id,site\np1,r1,north\np2,r2,south\n")

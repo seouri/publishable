@@ -253,15 +253,22 @@ class StepIO:
             )
 
     def _check_unmeasured(self, unit_key: str) -> None:
-        """The other half of the rule `record`'s measurement branch already
-        enforces one direction of: a unit may be measured many times, but never
-        both measured and skipped, in either order. `record(measurement=...)`
-        refuses a unit already in `self._skipped`; this refuses the mirror —
-        `skip` on a unit already in `self._measurement_rows` — so the two call
-        orders agree. A skipped unit that also carries a measurement row would
-        be counted `ineligible` and produce a result once task 5 collapses it,
-        breaking `resolved == completed + ineligible + failed`
-        (`reference.md` § The unit table is the inference base).
+        """The mirror half of the rule `record`'s measurement branch enforces:
+        a unit may be measured many times, but never measured and also settled by
+        another path — skipped, or plain-recorded — in either order.
+        `record(measurement=...)` refuses a unit already in `self._skipped` or
+        already in `self._rows`; this refuses the other order for both callers,
+        `skip` and `record`'s plain branch, so no call order can produce a unit
+        that carries both kinds of row.
+
+        A skipped unit that also carried a measurement row would be counted
+        `ineligible` and still produce a result once `finalize` collapses it,
+        breaking `resolved == completed + ineligible + failed` (`reference.md` §
+        The unit table is the inference base). A plain-recorded one would collide
+        with the collapsed row `finalize` writes to the same `_rows` slot, so the
+        declared `collapse` rule would apply or not depending on which call came
+        first inside the step — the retry-versus-measurement ambiguity
+        `measurement=` exists to remove, one layer down.
         """
         if any(key == unit_key for key, _ in self._measurement_rows):
             raise ContractError(
@@ -298,18 +305,31 @@ class StepIO:
             if key in self._measurement_rows:
                 return  # first write wins, so a resumed measurement is idempotent too
             self._check_roster(unit_key)
-            # The rule: a unit may be measured many times, but never both measured
-            # and skipped, in either order. `_settle`'s `_rows`-membership half must
-            # not apply here — a second measurement of one unit is the whole point
-            # of this path — but the `_skipped` half still must: `io.skip` declares
-            # the unit ineligible, admitting no result by design, and a later
-            # measurement re-entering it as a completed result is exactly the
-            # accounting failure `ineligible` exists to prevent. `skip`'s
-            # `_check_unmeasured` enforces the mirror, so the two call orders agree
-            # (`reference.md` § The unit table is the inference base).
+            # The rule: a unit may be measured many times, but never measured and
+            # settled by another path — skipped, or plain-recorded — in either
+            # order. A second measurement is not settling, because measurement
+            # rows never land in `_rows`; membership in `_rows` means a *plain*
+            # row, which is the mixture refused below.
+            #
+            # `io.skip` declares the unit ineligible, admitting no result by
+            # design, and a later measurement re-entering it as a completed
+            # result is exactly the accounting failure `ineligible` exists to
+            # prevent (`reference.md` § The unit table is the inference base).
+            # A plain row is refused for the reason `finalize` makes concrete:
+            # the collapse writes its result to `_rows[unit_key]`, so a unit
+            # holding both would have the declared `collapse` rule apply or not
+            # depending on which call the step happened to make first. `skip`
+            # and the plain branch call `_check_unmeasured` for the mirrors, so
+            # every call order agrees.
             if unit_key in self._skipped:
                 raise ContractError(
                     f"{unit_key!r} was already skipped in this execution",
+                    code="E-STEP-UNIT-SETTLED",
+                )
+            if unit_key in self._rows:
+                raise ContractError(
+                    f"{unit_key!r} was already recorded without a measurement in this "
+                    "execution: a unit arrives by one path or the other, never both",
                     code="E-STEP-UNIT-SETTLED",
                 )
             if "unit" in values:
@@ -341,6 +361,9 @@ class StepIO:
         if unit_key in self._rows:
             return  # first write wins, matching io.append's idempotency
         self._settle(unit_key)
+        # The mirror of the measurement branch's `_rows` check above: a measured
+        # unit is not in `_rows`, so first-write-wins never catches this order.
+        self._check_unmeasured(unit_key)
         if "unit" in values:
             raise ContractError(
                 "`unit` collides with the unit key column: a recorded column may not "
@@ -376,6 +399,60 @@ class StepIO:
         """The uncollapsed `(unit, measurement)` rows — task 5 collapses these."""
         return [dict(row) for row in self._measurement_rows.values()]
 
+    def _collapse_measurements(self) -> None:
+        """Fold this execution's measurement rows into one recorded row per unit.
+
+        This is what makes a measured unit *exist* to the rest of core, not merely
+        what tidies its table: `reference.md` § The unit table is the inference
+        base counts `completed` as "how many distinct unit keys reached
+        `io.record` in it — measurements of one unit collapse before they are
+        counted", and the runner derives `failed` by subtracting `completed` and
+        `ineligible` from `resolved`. A unit left only in `_measurement_rows`
+        would therefore be silently counted as a failure.
+
+        The result goes into `_rows`/`_recorded_keys` rather than a parallel
+        table, so a collapsed unit flows through the path a plain recorded one
+        already takes — including `finalize`'s declared-attribute merge, which a
+        second table would have had to duplicate and could then disagree with.
+
+        `rule_for`, `coerce_for_rule` and `apply_rule` are the same three calls
+        `units.collapse_measurements` makes for the input path. Sharing them is
+        what keeps the two paths from coming to disagree about what `mean` means
+        over identical-looking rows; the signatures differ only because that path
+        holds `Unit`s and this one holds rows.
+        """
+        from publishable.units import apply_rule, coerce_for_rule, rule_for
+
+        if not self._measurement_rows:
+            return
+        collapse = (self._measurements or {}).get("collapse", "first")
+        groups: dict[str, list[dict[str, Any]]] = {}
+        # `_measurement_rows` is insertion-ordered, so each group's member list is
+        # recording order — which is what makes `first` mean "earliest recorded",
+        # the same property `collapse_measurements` rests on for resolution order.
+        for (unit_key, _measurement), row in self._measurement_rows.items():
+            groups.setdefault(unit_key, []).append(row)
+        for unit_key, members in groups.items():
+            names: list[str] = []
+            for member in members:
+                for name in member:
+                    # `unit` and `measurement` are the row's structural columns,
+                    # and the measurement axis is consumed by the collapse exactly
+                    # as `by` is on the input path: it distinguished the rows and
+                    # has no value once they are one unit.
+                    if name not in ("unit", "measurement") and name not in names:
+                        names.append(name)
+            merged: dict[str, Any] = {"unit": unit_key}
+            for name in names:
+                rule = rule_for(name, collapse)
+                # Rows need not agree on columns, so a column absent from a member
+                # contributes no value rather than a `None` — which a numeric rule
+                # would refuse outright.
+                values = [m[name] for m in members if name in m]
+                merged[name] = apply_rule(rule, coerce_for_rule(name, rule, values))
+            self._rows[unit_key] = merged
+            self._recorded_keys.add(unit_key)
+
     def finalize(self) -> None:
         """Write this execution's per-unit tables. Called by the runner when a step returns.
 
@@ -384,7 +461,15 @@ class StepIO:
         failed unit has no row anywhere: `units.parquet` holds one row per completed
         (recorded) unit, `ineligible.jsonl` one line per skipped unit, and nothing is
         written for either table when there is nothing to put in it.
+
+        `measurements.parquet` holds the uncollapsed `(unit, measurement)` rows and
+        is written only when this execution's step actually passed `measurement=`
+        — guarded on the rows, never on `self._measurements`, since a run whose
+        input carries the replicates has that declaration in every execution and
+        must produce no such file (`reference.md` § The per-unit tables: "present
+        only when a step passed `measurement=`").
         """
+        self._collapse_measurements()
         if self._rows:
             attribute_names: list[str] = []
             if self._units is not None:
@@ -409,6 +494,8 @@ class StepIO:
                     merged[name] = row.get(name)
                 rows.append({c: merged.get(c) for c in columns})
             self.write("units.parquet", rows)
+        if self._measurement_rows:
+            self.write("measurements.parquet", list(self._measurement_rows.values()))
         for key, reason in self._skipped.items():
             self.append("ineligible.jsonl", {"unit": key, "reason": reason})
 
