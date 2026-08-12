@@ -1305,6 +1305,44 @@ def _check_sweep(
         for i, value in enumerate(values):
             _value_checks(path, value, f"sweep.grid.{path}[{i}]", nameable=True)
 
+    # `sweep.paired`, through the same two checks `grid` gets, for the same
+    # reason and in `_axes` order. A `paired` entry is structurally a `grid`
+    # cell written the other way round — one value per path, several paths per
+    # condition — so every fault a `grid` value can carry, a `paired` value
+    # carries identically: `resolve_condition_cfg`'s `setdefault` walk *creates*
+    # a misspelled path (`analysis.methdo`) rather than failing on it, so the
+    # swept parameter keeps the config's own value in every condition while each
+    # condition still earns a distinct `parameters_hash` — one experiment
+    # executed twice and recorded as a two-arm sweep, which is
+    # `experimental-designs.md` § Mistakes core prevents' "a typo'd parameter
+    # silently using a default". `nameable=True` because a `paired` value IS
+    # what `label_for` renders (unlike a `baseline` one): a value carrying `/`
+    # passes into a condition *directory* segment, so `analysis.method: ../../x`
+    # would resolve outside the condition directory.
+    #
+    # Task 2 promoted `paired` from refused to executable and left these behind;
+    # it was the sole axis-shaped mode without them.
+    #
+    # Both `isinstance` guards are unreachable today — `_check_shape` refuses a
+    # non-list `paired`, a non-mapping entry and a non-string key fatally, and
+    # `validate_config` returns before this function runs — and are kept anyway,
+    # exactly as the `ablate.override` loop keeps its own: `_check_sweep` is
+    # called directly by tests, and `validate` collects findings and never
+    # raises.
+    paired = sweep.get("paired") or []
+    if isinstance(paired, list):
+        for i, entry in enumerate(paired):
+            if not isinstance(entry, dict):
+                continue  # `_check_shape` already refused it, fatally
+            for path, value in entry.items():
+                if not isinstance(path, str):
+                    continue  # likewise
+                where = f"sweep.paired[{i}].{path}"
+                # Gated on the path first: `_value_checks` indexes `spec[path]`
+                # unguarded, so an unknown path would raise `KeyError`.
+                if _path_resolves(path, where):
+                    _value_checks(path, value, where, nameable=True)
+
     # `sweep.sample`, from three angles, in the order a reader would ask them.
     # First whether the declaration can be drawn from at all: `sample_fault` is
     # `sweep.py`'s own gate, shared rather than reimplemented so the check that

@@ -724,6 +724,86 @@ def test_a_value_with_a_single_underscore_is_accepted(write_config):
     assert "E-SWEEP-VALUE-UNNAMEABLE" not in found
 
 
+def test_a_paired_path_must_be_a_real_parameter(write_config):
+    """The identical `E-SWEEP-PATH-UNKNOWN` a `grid` axis gets, one mode over.
+    Task 2 made `paired` executable without bringing the value-level checks with
+    it, so a one-character typo validated clean: `resolve_condition_cfg`'s
+    `setdefault` walk then *creates* `parameters.analysis.methdo`, leaving
+    `analysis.method` at the config's own value in every condition while each
+    still earns a distinct `parameters_hash` — one experiment executed twice and
+    recorded as a two-arm sweep."""
+    c = Collector()
+    validate_config(
+        write_config(
+            {
+                "sweep": {
+                    "paired": [{"analysis.methdo": "pearson"}, {"analysis.methdo": "spearman"}]
+                }
+            }
+        ),
+        c,
+    )
+    finding = next(f for f in c.findings if f.code == "E-SWEEP-PATH-UNKNOWN")
+    assert finding.path == "sweep.paired[0].analysis.methdo"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param("pearsonn", id="outside_choices"),
+        pytest.param("thirty", id="wrong_type"),
+    ],
+)
+def test_a_paired_value_must_satisfy_its_param(write_config, value):
+    """§ Validation's "Choices" and "Types" rows are properties of the value, not
+    of the mode that wrote it. `pearsonn` is outside `analysis.method`'s choices;
+    `thirty` is a string at the integer `analysis.min_samples`."""
+    path = "analysis.method" if value == "pearsonn" else "analysis.min_samples"
+    found = codes(write_config({"sweep": {"paired": [{path: value}]}}))
+    assert "E-PARAM-VALUE" in found
+
+
+def test_a_paired_value_containing_a_path_separator_is_refused(write_config):
+    """The security-shaped case, and `CLAUDE.md`'s own named trap ("a path or a
+    slashed identifier as a swept value"). A `paired` value — unlike a `baseline`
+    one — IS what `label_for` renders, and the label becomes a directory segment:
+    unchecked, `analysis.method: ../../evil` produces `00_method=../../evil` and
+    resolves outside the condition directory. `a/b` is the minimal form."""
+    found = codes(write_config({"sweep": {"paired": [{"analysis.method": "a/b"}]}}))
+    assert "E-SWEEP-VALUE-UNNAMEABLE" in found
+
+
+def test_a_paired_list_level_is_refused_as_unnameable(write_config):
+    """A list where a scalar belongs. It renders into a label that is not a name,
+    and `contrasts._cell_paths` compares condition values with `!=` precisely
+    because such a value is unhashable."""
+    found = codes(write_config({"sweep": {"paired": [{"analysis.method": ["a", "b"]}]}}))
+    assert "E-SWEEP-VALUE-UNNAMEABLE" in found
+
+
+def test_a_legal_paired_axis_is_not_flagged_by_any_of_the_four(write_config):
+    """The mirror: the value-level checks must not fire on the shape § Expansion
+    modes tells a reader to write. Without this, deleting a check's *condition*
+    rather than the check passes every test above."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {
+                    "paired": [
+                        {"analysis.method": "pearson", "analysis.min_samples": 30},
+                        {"analysis.method": "spearman", "analysis.min_samples": 50},
+                    ]
+                }
+            }
+        )
+    )
+    assert not [
+        code
+        for code in found
+        if code in {"E-SWEEP-PATH-UNKNOWN", "E-SWEEP-VALUE-UNNAMEABLE", "E-PARAM-VALUE"}
+    ]
+
+
 def test_the_execution_budget_is_checked_against_the_real_expansion(write_config):
     found = codes(
         write_config(
