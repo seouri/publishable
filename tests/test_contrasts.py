@@ -286,7 +286,10 @@ def test_no_comparison_has_a_baseline_condition_as_its_subject():
 @pytest.mark.xfail(
     strict=True,
     reason="reference.md § Sweeps and repeats says the family skips `sample`; resolve_contrasts "
-    "counts every draw. Recorded in docs/superpowers/spec-defects.md by H2 Sweeps task 9",
+    "counts every draw. No config reaches it today — `E-SWEEP-SAMPLE-BASELINE` refuses "
+    "`baseline` + `sample` — so this pins unimplemented semantics, not a live user-facing "
+    "defect. Owner: the slice that owns the correction family, which lands the exclusion and "
+    "retires the refusal together. Recorded in docs/superpowers/spec-defects.md by H2 task 9",
 )
 def test_sample_draws_are_not_comparisons_in_the_correction_family() -> None:
     """§ Sweeps and repeats: "So `family` counts conditions from `grid`, `paired`,
@@ -304,7 +307,17 @@ def test_sample_draws_are_not_comparisons_in_the_correction_family() -> None:
     `grid × sample` is the shape that breaks the claim under any reading of
     "sample-only": counting the grid's two levels and skipping the three draws gives
     two comparisons, and the code gives six. Strict, so the marker cannot survive the
-    fix."""
+    fix.
+
+    **What ships instead is a refusal, not the semantics.** `validate` rejects
+    `sweep.baseline` beside `sweep.sample` with `E-SWEEP-SAMPLE-BASELINE`, which is
+    the protection `E-SWEEP-BASELINE-PARTIAL` used to give incidentally, so no user
+    reaches the inflated family. The expected count here is **2, not 0** — the
+    document collapses the three draws into the grid's own comparisons rather than
+    dropping sampled conditions as subjects, and a filter that skipped them would
+    ship a second wrong number under this same assertion. That is why the semantics
+    belong to whoever owns the family, and why this test is written at
+    `expand`/`resolve_contrasts` level rather than through `validate`."""
     conditions = expand(
         {
             "sweep": {

@@ -4531,18 +4531,20 @@ def test_a_sample_only_sweep_is_not_a_correction_family(write_config):
     assert not c.findings, [f.code for f in c.findings]
 
 
-def test_a_baseline_that_leaves_a_sampled_axis_free_doubles_the_draws(write_config):
-    """A `sample` axis is an axis, so a baseline fixing none of its paths expands
-    over every drawn cell: `n: 6` gives 6 baseline conditions beside the 6 draws.
+def test_a_baseline_beside_a_sampled_axis_is_refused(write_config):
+    """§ Sweeps and repeats: the correction family "counts conditions from `grid`,
+    `paired`, `ablate`, and `groups`, and skips `sample`". Nothing implements that
+    exclusion, so every draw beside a declared baseline becomes a comparison and
+    every interval is corrected against a family several times the documented size.
+    `E-SWEEP-SAMPLE-BASELINE` refuses the combination until the family excludes
+    drawn conditions.
 
-    Pinned as the behaviour that *ships*, not as the behaviour that is wanted.
-    `sweep._baseline_cells` reads fixedness off the cells' paths and the rule §
-    Expansion modes states is unconditional, so this falls out of it — and here
-    the baseline fixes no swept path at all, which is one of the three shapes
-    `docs/superpowers/spec-defects.md`, "Three baseline shapes per-cell expansion
-    makes reachable", records as open. If a later slice warns or refuses, this
-    test is where the decision lands rather than somewhere the doubling shows up
-    as a surprising condition count."""
+    This is the decision the previous version of this test invited: it pinned the
+    doubling "as the behaviour that ships, not as the behaviour that is wanted",
+    and said "if a later slice warns or refuses, this test is where the decision
+    lands". It lands here. The expansion assertions below are kept unchanged
+    — `expand` is not what moved, and § Expansion modes' rule that a baseline
+    expands over the axes it does not fix still holds of a `sample` axis."""
     path = write_config(
         {
             "sweep": {
@@ -4551,7 +4553,7 @@ def test_a_baseline_that_leaves_a_sampled_axis_free_doubles_the_draws(write_conf
             }
         }
     )
-    assert codes(path) == set()
+    assert codes(path) == {"E-SWEEP-SAMPLE-BASELINE"}
 
     conditions = expand(yaml.safe_load(path.read_text()))
     assert [c.is_baseline for c in conditions] == [True] * 6 + [False] * 6
@@ -4648,3 +4650,65 @@ def test_a_well_typed_sample_draws_no_value_findings(write_config):
         )
     )
     assert "E-PARAM-VALUE" not in found
+
+
+def test_a_sample_sweep_with_no_baseline_stays_legal(write_config):
+    """The refusal above is scoped to the combination that inflates the family, and
+    this is the shape it must not touch: `resolve_contrasts` generates a comparison
+    only against a *declared* baseline, so a sample-only sweep produces none and
+    nothing is corrected against anything. A refusal wider than the harm would
+    strand `sample` for the dose-response designs § Expansion modes shows it for."""
+    path = write_config(
+        {
+            "sweep": {
+                "sample": {
+                    "n": 4,
+                    "seed": 7,
+                    "ranges": {"analysis.confidence": {"uniform": [0.8, 0.99]}},
+                }
+            }
+        }
+    )
+    assert codes(path) == set()
+    assert len(expand(yaml.safe_load(path.read_text()))) == 4
+
+
+def test_a_declared_contrast_over_a_sample_sweep_stays_legal(write_config):
+    """A declared `statistics.contrasts` entry names its two sides, so it adds
+    exactly the members the user asked for rather than one per drawn condition.
+    The refusal is about the *generated* family, and this pins that it does not
+    reach a declared one."""
+    doc_path = write_config(
+        {
+            "sweep": {
+                "sample": {
+                    "n": 2,
+                    "seed": 7,
+                    "ranges": {"analysis.confidence": {"uniform": [0.8, 0.99]}},
+                }
+            }
+        }
+    )
+    doc = yaml.safe_load(doc_path.read_text())
+    labels = [c.label for c in expand(doc)]
+    doc["statistics"] = {
+        "contrasts": [{"id": "hi_vs_lo", "of": labels[0], "against": labels[1]}]
+    }
+    doc_path.write_text(yaml.safe_dump(doc))
+    assert not [c for c in codes(doc_path) if c.startswith("E-")]
+
+
+def test_a_baseline_beside_a_grid_is_untouched_by_the_sample_refusal(write_config):
+    """The neighbouring shape the refusal must leave alone: a baseline over an
+    enumerated axis is the ordinary design, its comparisons are the family the
+    document counts, and nothing here changed."""
+    assert codes(
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"analysis.method": "pearson"},
+                    "grid": {"analysis.method": ["spearman", "kendall"]},
+                }
+            }
+        )
+    ) == set()

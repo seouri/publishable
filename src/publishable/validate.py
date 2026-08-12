@@ -993,6 +993,47 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
                 "honored in a later slice",
             )
 
+    # A `baseline` declared beside a `sample` axis. `reference.md` § Sweeps and
+    # repeats states that the correction family "counts conditions from `grid`,
+    # `paired`, `ablate`, and `groups`, and skips `sample`", because "forty sobol
+    # draws … are forty points feeding one downstream curve, and nobody claims a
+    # finding about draw 17 against draw 1". Nothing in this build implements
+    # that exclusion: `contrasts.resolve_contrasts` emits one `vs_baseline`
+    # comparison per non-baseline condition whatever mode produced it, and
+    # `cli.command_run` corrects every interval against the whole set — so a
+    # `grid × sample` design is corrected against six comparisons where the
+    # document says two, and the intervals a reader is shown are narrower than
+    # the design supports. The declared design is not the executed design, which
+    # is the failure every other refusal in this function exists to prevent.
+    #
+    # **A `sample` sweep with no `baseline` is untouched and stays legal**:
+    # `resolve_contrasts` generates a comparison only against a *declared*
+    # baseline, so a sample-only sweep produces none and nothing is inflated. A
+    # declared `statistics.contrasts` entry is untouched too — its members are
+    # named by the user rather than generated per condition, so the family is
+    # exactly what was asked for.
+    #
+    # This restores, narrowly, the protection `E-SWEEP-BASELINE-PARTIAL` gave
+    # until it was retired: that refusal is what made `baseline` + `sample`
+    # unreachable, which is why the family semantics were never needed. Retiring
+    # it made the shape reachable without implementing them. The exclusion is
+    # `statistics`-family work rather than sweep work, so it lands with the slice
+    # that owns the correction family, and this refusal retires with it.
+    if sweep.get("baseline") and sweep.get("sample"):
+        c.error(
+            "E-SWEEP-SAMPLE-BASELINE",
+            "sweep.baseline",
+            "is declared beside a `sweep.sample` axis, so every draw becomes a comparison "
+            "against it — and a `sample` draw is not a comparison: the correction family "
+            "skips `sample` conditions, which is specified but not implemented in this "
+            "build, so each interval would be corrected against a family several times the "
+            "size the design has. Sample draws feed one downstream fit rather than being "
+            "compared to a reference, so drop the `baseline` here; compare a specific pair "
+            "with a declared `statistics.contrasts` entry, or run the reference condition "
+            "as its own run and join the two in a `study`. The combination will be honored "
+            "once the family excludes drawn conditions",
+        )
+
     units = _units_declaration(doc.get("data") or {}, c) or {}
     source = units.get("from")
     if isinstance(source, dict) and "resolver" in source:
