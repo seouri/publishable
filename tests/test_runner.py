@@ -305,6 +305,7 @@ class Measures(BaseStep):
         for u in io.units:
             io.record(u.key, {"v": 1.0}, measurement="r1")
             io.record(u.key, {"v": 3.0}, measurement="r2")
+            io.record(u.key, {"v": 8.0}, measurement="r3")
         return {}
 
 
@@ -321,7 +322,11 @@ def test_a_real_step_may_measure_when_the_config_declares_measurements(tmp_path:
         measurements={"by": "read_id", "collapse": "mean"},
     )
     assert [r.status for r in results] == ["completed", "completed"]
-    assert results[0].rows == tuple({"unit": f"p{i}", "v": 2.0} for i in range(3))
+    # 1, 3, 8 rather than a symmetric pair: mean is 4.0 and median is 3.0, so this
+    # assertion fails if the collapse silently uses the wrong rule. Two symmetric
+    # values agree under both, which is how the step-path mutation this slice
+    # prescribed was unable to fail.
+    assert results[0].rows == tuple({"unit": f"p{i}", "v": 4.0} for i in range(3))
 
 
 def test_a_step_that_only_measures_is_refused_without_the_declaration(tmp_path: Path):
@@ -348,6 +353,7 @@ def test_attrition_reconciles_for_a_step_that_only_measures(tmp_path: Path):
             for u in list(io.units)[:3]:
                 io.record(u.key, {"v": 1.0}, measurement="r1")
                 io.record(u.key, {"v": 3.0}, measurement="r2")
+                io.record(u.key, {"v": 8.0}, measurement="r3")
             io.skip("p3", "by design")
             return {}
 
