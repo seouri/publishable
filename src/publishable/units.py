@@ -299,9 +299,22 @@ def _apply(rule: str, values: list[Any]) -> Any:
     # `reference.md` § What isn't a repeat: "Attributes constant within a key
     # collapse to that value with no rule needed." Checked after the rule-name
     # validation above (a bogus rule still raises even over a single-member
-    # group) and before dispatch, so a non-numeric column that happens to agree
-    # across a unit's replicates never reaches `sum()`.
-    if all(v == values[0] for v in values):
+    # group), because the shortcut's job is narrower than "all values equal":
+    # it is what lets a *non-numeric* rule succeed over values it cannot
+    # actually operate on (`mean` over a constant `site` string), not a
+    # general-purpose no-op. Gated to exclude a numeric rule over genuinely
+    # numeric values — `sum([5, 5])` must still be `10`, not `5` — because a
+    # numeric rule meeting numeric values is the user asking for an
+    # aggregation and is entitled to get one, even where the answer happens
+    # to equal the input. `bool` is excluded from "numeric" explicitly:
+    # `isinstance(True, int)` is `True` in Python, and summing booleans is a
+    # different intent than summing depths.
+    numeric_values = all(
+        isinstance(v, (int, float)) and not isinstance(v, bool) for v in values
+    )
+    if all(v == values[0] for v in values) and not (
+        rule in NUMERIC_COLLAPSE_RULES and numeric_values
+    ):
         return values[0]
     if rule == "first":
         return values[0]

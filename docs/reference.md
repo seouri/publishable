@@ -463,6 +463,7 @@ likewise apart from those same two envelope rows, none of the others.
 | `experiment_type` names a template no installed package registers | `E-TEMPLATE-UNKNOWN` |
 | `data.units.attributes` names a value the source table has no column for, or names any value at all under a `{glob: ...}` source, which yields a key and a path and nothing else — reported for the first such name, and after `E-UNITS-ATTR-RESERVED` under either source; or — for a table source only — names a non-string item | `E-UNITS-ATTR-MISSING` |
 | `data.units.attributes` names a field of `Unit` itself (`key`, `paths`, or `attributes`), which cannot also be a declared attribute | `E-UNITS-ATTR-RESERVED` |
+| `data.units.measurements.collapse` names a rule that is none of `mean`, `median`, `sum`, `first`, or `mode` — raised where [technical replicates](#what-isnt-a-repeat) are collapsed, which `validate` also resolves and reports under the same code, the same reuse `E-REPL-SEED-COLLISION` above illustrates | `E-UNITS-COLLAPSE-RULE` |
 | The table `data.units.from` names has no data rows, or the `glob` it names matches no files under `input_dir` | `E-UNITS-EMPTY` |
 | Two resolved units share the same `data.units.key` value | `E-UNITS-KEY-DUPLICATE` |
 | `data.units.key` names a column the source table does not have | `E-UNITS-KEY-MISSING` |

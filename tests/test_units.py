@@ -7,6 +7,7 @@ from publishable import ContractError
 from publishable.units import (
     Unit,
     UnitList,
+    _apply,
     collapse_measurements,
     partition_units,
     resolve_units,
@@ -373,6 +374,29 @@ def test_mode_breaks_a_genuine_tie_by_whichever_value_appeared_first():
     ]
     collapsed, _ = collapse_measurements(units, by="read_id", collapse="mode")
     assert collapsed[0].label == "b"
+
+
+def test_the_constant_shortcut_does_not_corrupt_a_numeric_aggregation():
+    """The "constant needs no rule" shortcut exists to let a non-numeric rule
+    survive constant values it can't operate on (`mean` over a constant `site`
+    string). It must not also swallow a genuine numeric aggregation: `sum` over
+    two constant depths is still a sum, not a no-op — `sum([5, 5])` is `10`,
+    not `5`, even though the two reads agree."""
+    assert _apply("sum", [5, 5]) == 10
+    assert _apply("sum", [1000, 1000]) == 2000
+    assert _apply("sum", [1, 2]) == 3          # already covered above; kept for contrast
+    assert _apply("mean", [5, 5]) == 5         # mean over constant numeric: still a mean
+    assert _apply("mean", ["A", "A"]) == "A"   # round-1 behaviour, must survive
+
+
+def test_a_bogus_rule_raises_even_over_a_single_trivially_constant_value():
+    """The rule-name check runs before the constant shortcut, so a bogus rule
+    still raises even where the shortcut's own condition (`values` all equal)
+    is trivially true for a single-member group — the common case for an
+    unmeasured unit that never repeats."""
+    with pytest.raises(ContractError) as e:
+        _apply("bogus", ["A"])
+    assert e.value.code == "E-UNITS-COLLAPSE-RULE"
 
 
 def test_a_column_absent_from_the_collapse_map_falls_back_to_first():
