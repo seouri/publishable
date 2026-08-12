@@ -6,6 +6,7 @@ import yaml
 from tests.conftest import write_experiment_module
 
 from publishable.diagnostics import Collector
+from publishable.sweep import expand
 from publishable.validate import _check_contrasts, validate_config
 
 
@@ -723,6 +724,87 @@ def test_a_value_with_a_single_underscore_is_accepted(write_config):
     assert "E-SWEEP-VALUE-UNNAMEABLE" not in found
 
 
+def test_a_paired_path_must_be_a_real_parameter(write_config):
+    """The identical `E-SWEEP-PATH-UNKNOWN` a `grid` axis gets, one mode over.
+    Task 2 made `paired` executable without bringing the value-level checks with
+    it, so a one-character typo validated clean: `resolve_condition_cfg`'s
+    `setdefault` walk then *creates* `parameters.analysis.methdo`, leaving
+    `analysis.method` at the config's own value in every condition while each
+    still earns a distinct `parameters_hash` — one experiment executed twice and
+    recorded as a two-arm sweep."""
+    c = Collector()
+    validate_config(
+        write_config(
+            {
+                "sweep": {
+                    "paired": [{"analysis.methdo": "pearson"}, {"analysis.methdo": "spearman"}]
+                }
+            }
+        ),
+        c,
+    )
+    finding = next(f for f in c.findings if f.code == "E-SWEEP-PATH-UNKNOWN")
+    assert finding.path == "sweep.paired[0].analysis.methdo"
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        pytest.param("pearsonn", id="outside_choices"),
+        pytest.param("thirty", id="wrong_type"),
+    ],
+)
+def test_a_paired_value_must_satisfy_its_param(write_config, value):
+    """§ Validation's "Choices" and "Types" rows are properties of the value, not
+    of the mode that wrote it. `pearsonn` is outside `analysis.method`'s choices;
+    `thirty` is a string at the integer `analysis.min_samples`."""
+    path = "analysis.method" if value == "pearsonn" else "analysis.min_samples"
+    found = codes(write_config({"sweep": {"paired": [{path: value}]}}))
+    assert "E-PARAM-VALUE" in found
+
+
+def test_a_paired_value_containing_a_path_separator_is_refused(write_config):
+    """The security-shaped case, and `CLAUDE.md`'s own named trap ("a path or a
+    slashed identifier as a swept value"). A `paired` value — unlike a `baseline`
+    one — IS what `label_for` renders, and the label becomes a directory segment:
+    unchecked, `analysis.method: ../../evil` produces `00_method=../../evil` and
+    resolves outside the condition directory. `a/b` is the minimal form."""
+    found = codes(write_config({"sweep": {"paired": [{"analysis.method": "a/b"}]}}))
+    assert "E-SWEEP-VALUE-UNNAMEABLE" in found
+
+
+def test_a_paired_list_level_is_refused_as_unnameable(write_config):
+    """A list where a scalar belongs. It renders into a label that is not a name,
+    and `contrasts._free_axis_paths` compares condition values with `!=` rather
+    than through a set, which is what keeps it total on an unhashable value —
+    it takes `expand`'s output and cannot assume `validate` ran at all."""
+    found = codes(write_config({"sweep": {"paired": [{"analysis.method": ["a", "b"]}]}}))
+    assert "E-SWEEP-VALUE-UNNAMEABLE" in found
+
+
+def test_a_legal_paired_axis_is_not_flagged_by_any_of_the_four(write_config):
+    """The mirror: the value-level checks must not fire on the shape § Expansion
+    modes tells a reader to write. Without this, deleting a check's *condition*
+    rather than the check passes every test above."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {
+                    "paired": [
+                        {"analysis.method": "pearson", "analysis.min_samples": 30},
+                        {"analysis.method": "spearman", "analysis.min_samples": 50},
+                    ]
+                }
+            }
+        )
+    )
+    assert not [
+        code
+        for code in found
+        if code in {"E-SWEEP-PATH-UNKNOWN", "E-SWEEP-VALUE-UNNAMEABLE", "E-PARAM-VALUE"}
+    ]
+
+
 def test_the_execution_budget_is_checked_against_the_real_expansion(write_config):
     found = codes(
         write_config(
@@ -1064,17 +1146,611 @@ def test_baseline_and_grid_are_now_accepted(write_config):
 @pytest.mark.parametrize(
     "mode,value,code",
     [
-        ("paired", [{"analysis.method": "pearson"}], "E-SWEEP-PAIRED-UNSUPPORTED"),
-        ("ablate", {"from": "baseline", "remove": ["a.b"]}, "E-SWEEP-ABLATE-UNSUPPORTED"),
-        ("sample", {"n": 40, "ranges": {}}, "E-SWEEP-SAMPLE-UNSUPPORTED"),
         ("groups", [{"by": "arm", "levels": ["a", "b"]}], "E-SWEEP-GROUPS-UNSUPPORTED"),
     ],
 )
 def test_each_unimplemented_mode_is_refused_on_its_own(write_config, mode, value, code):
-    """`paired`, `ablate`, `sample`, and `groups` each get their own refusal now that
-    the old blanket sweep refusal is retired — otherwise each would fall through
-    into silence the moment `baseline`/`grid` stopped covering the whole block."""
+    """`groups` keeps its own refusal now that the old blanket sweep refusal is
+    retired — otherwise it would fall through into silence the moment
+    `baseline`/`grid`/`paired`/`sample`/`ablate` stopped covering the whole
+    block. `paired`, `sample` and `ablate` are no longer in this family: all
+    three expand for real now, see `test_paired_is_accepted_and_expands_for_real`,
+    `test_sample_is_accepted_and_expands_for_real` and
+    `test_ablate_is_accepted_and_expands_for_real` below."""
     assert code in codes(write_config({"sweep": {mode: value}}))
+
+
+def test_paired_is_accepted_and_expands_for_real(write_config):
+    """§ Expansion modes retires `E-SWEEP-PAIRED-UNSUPPORTED`: `paired` is now one
+    of the axis-shaped modes `_axes` composes, and a config declaring it validates
+    clean rather than tripping the refusal `ablate`/`sample`/`groups` still get."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {
+                    "grid": {"analysis.method": ["pearson", "spearman"]},
+                    "paired": [
+                        {"analysis.min_samples": 30, "analysis.confidence": 0.95},
+                        {"analysis.min_samples": 50, "analysis.confidence": 0.99},
+                    ],
+                }
+            }
+        )
+    )
+    assert "E-SWEEP-PAIRED-UNSUPPORTED" not in found
+    assert not [c for c in found if c.startswith("E-SWEEP")]
+
+
+def test_sample_is_accepted_and_expands_for_real(write_config):
+    """§ Expansion modes retires `E-SWEEP-SAMPLE-UNSUPPORTED`: `sample` is one of
+    the axis-shaped modes `_axes` composes, drawing `n` conditions over the
+    declared ranges, and a config declaring it validates clean."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {
+                    "sample": {
+                        "n": 8,
+                        "method": "sobol",
+                        "seed": "auto",
+                        "ranges": {
+                            "analysis.confidence": {"uniform": [0.80, 0.99]},
+                            "analysis.min_samples": {"int_uniform": [10, 200]},
+                        },
+                    }
+                }
+            }
+        )
+    )
+    assert "E-SWEEP-SAMPLE-UNSUPPORTED" not in found
+    assert not [c for c in found if c.startswith("E-SWEEP")]
+
+
+def test_ablate_is_accepted_and_expands_for_real(write_config):
+    """§ Expansion modes retires `E-SWEEP-ABLATE-UNSUPPORTED`: `ablate` is the one
+    mode that does not multiply, applied after the product and reading the
+    baseline rather than re-emitting it, and a config declaring it validates
+    clean rather than tripping the refusal `groups` still gets."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"analysis.method": "pearson", "analysis.drop_missing": True},
+                    "ablate": {
+                        "from": "baseline",
+                        "remove": ["analysis.drop_missing"],
+                        "override": [{"analysis.method": "spearman"}],
+                    },
+                }
+            }
+        )
+    )
+    assert "E-SWEEP-ABLATE-UNSUPPORTED" not in found
+    assert not [c for c in found if c.startswith("E-SWEEP")]
+
+
+def test_an_ablate_override_value_is_checked_against_its_own_param(write_config):
+    """An `override` entry is structurally a `grid` value — user-written, planted
+    into a condition's config and rendered into its label — so it goes through the
+    same `Param.check` on the same identifier. Unchecked, the condition would run
+    a value § Validation's "Choices" row promises to refuse."""
+    c = Collector()
+    validate_config(
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"analysis.method": "pearson"},
+                    "ablate": {"override": [{"analysis.method": "pearsonn"}]},
+                }
+            }
+        ),
+        c,
+    )
+    finding = next(f for f in c.findings if f.code == "E-PARAM-VALUE")
+    assert finding.path == "sweep.ablate.override[0].analysis.method"
+
+
+def test_an_ablate_override_path_the_template_does_not_declare_is_refused(write_config):
+    """Gated on `_path_resolves` before `_value_checks` indexes `spec[path]`, the
+    same order `grid` and `sample` use — otherwise an unknown path is a `KeyError`
+    inside a function contracted never to raise."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"analysis.method": "pearson"},
+                    "ablate": {"override": [{"analysis.methdo": "spearman"}]},
+                }
+            }
+        )
+    )
+    assert "E-SWEEP-PATH-UNKNOWN" in found
+    assert "E-PARAM-VALUE" not in found
+
+
+def test_an_ablate_remove_path_the_template_does_not_declare_is_refused(write_config):
+    """A `remove` path is planted into a condition's config exactly as an
+    `override` path is — `expand` sets `false`/`null` at it — so a misspelling
+    creates a parameter the template never declared and runs a condition whose
+    label claims a change nothing made. Same identifier as `grid`, `baseline`
+    and `override` get; the *value* `remove` produces is § Validation's
+    "Ablation targets" row, checked separately as `E-SWEEP-ABLATE-TARGET` and
+    gated behind this one, since an unknown path has no `Param` to ask."""
+    c = Collector()
+    validate_config(
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"analysis.method": "pearson"},
+                    "ablate": {"remove": ["analysis.methdo"]},
+                }
+            }
+        ),
+        c,
+    )
+    finding = next(f for f in c.findings if f.code == "E-SWEEP-PATH-UNKNOWN")
+    assert finding.path == "sweep.ablate.remove[0]"
+
+
+def test_an_ablate_override_value_carrying_the_axis_separator_is_refused(write_config):
+    """Unlike a `baseline` value, an `override` value IS rendered into the label,
+    so it takes the nameability check too: a value containing `__` makes a label
+    that cannot be parsed back into axes, and a label is also a selector."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"analysis.method": "pearson"},
+                    "ablate": {"override": [{"analysis.method": "a__b"}]},
+                }
+            }
+        )
+    )
+    assert "E-SWEEP-VALUE-UNNAMEABLE" in found
+
+
+def _error_codes(path: Path) -> set[str]:
+    """Every ERROR code, warnings excluded.
+
+    The composition tests below assert an exact set rather than membership: both
+    started life asserting only that *some* error was reported, and on the first
+    draft of the crossed one a since-retired refusal on the config's `baseline`
+    fired for an unrelated reason and the loose assertion accepted it. An exact
+    set is what proves the refusal under test is the one carrying the config.
+    """
+    c = Collector()
+    validate_config(path, c)
+    return {f.code for f in c.findings if f.level == "error"}
+
+
+def test_ablate_without_a_baseline_is_refused(write_config):
+    """§ Expansion modes: `ablate` "reads the baseline rather than re-emitting it
+    … It therefore **requires** `sweep.baseline`, which `validate` checks".
+    Unrefused it expands to n conditions each carrying only its own change and no
+    baseline row at all — a design the specification says cannot exist."""
+    found = _error_codes(
+        write_config({"sweep": {"ablate": {"remove": ["analysis.drop_missing"]}}})
+    )
+    # Exactly one error: `E-SWEEP-ABLATE-TARGET`'s baseline branch is gated on a
+    # declared baseline precisely so this config reports its one fault once.
+    assert found == {"E-SWEEP-ABLATE-BASELINE-MISSING"}
+
+
+def test_ablate_crossed_with_a_parameter_axis_is_refused(write_config):
+    """§ Expansion modes: "the product of 'vary one thing at a time' with a second
+    parameter axis is no longer one thing at a time, and there is no defensible
+    reading of what it would mean". Unrefused it expands to the baseline, the
+    grid's rows, and the ablate rows. `E-SWEEP-PATH-DUPLICATE` does not catch it
+    either: ablated paths deliberately do not join the axis-shaped modes' set."""
+    found = _error_codes(
+        write_config(
+            {
+                "sweep": {
+                    # The baseline fixes the grid axis too. It no longer has to
+                    # — a baseline leaving an axis free is legal now — but the
+                    # config is kept as written so the exact-set assertion below
+                    # still proves `ablate`'s composition is the only fault.
+                    "baseline": {
+                        "analysis.method": "pearson",
+                        "analysis.drop_missing": True,
+                        "analysis.min_samples": 30,
+                    },
+                    "grid": {"analysis.min_samples": [30, 50]},
+                    "ablate": {"remove": ["analysis.drop_missing"]},
+                }
+            }
+        )
+    )
+    assert found == {"E-SWEEP-ABLATE-CROSSED"}
+
+
+@pytest.mark.parametrize("mode", ["grid", "paired", "sample"])
+def test_ablate_is_refused_against_every_axis_shaped_mode(write_config, mode):
+    """The rule names no mode — "a second parameter axis" — so the check reads
+    `sweep.AXIS_MODES` and every member of it is pinned here rather than the one
+    § Validation's row happens to illustrate."""
+    axis = {
+        "grid": {"analysis.method": ["pearson", "spearman"]},
+        "paired": [{"analysis.method": "pearson"}, {"analysis.method": "spearman"}],
+        "sample": {
+            "n": 2,
+            "seed": 7,
+            "ranges": {"analysis.confidence": {"uniform": [0.9, 0.99]}},
+        },
+    }[mode]
+    found = _error_codes(
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {
+                        "analysis.method": "pearson",
+                        "analysis.confidence": 0.95,
+                        "analysis.drop_missing": True,
+                    },
+                    mode: axis,
+                    "ablate": {"remove": ["analysis.drop_missing"]},
+                }
+            }
+        )
+    )
+    assert "E-SWEEP-ABLATE-CROSSED" in found
+
+
+def test_ablate_composes_with_a_group_axis(write_config):
+    """§ Validation, "Ablation doesn't compose with a parameter axis": "`groups`
+    is permitted — it varies no parameter". Without this, a mutation adding
+    `groups` to `AXIS_MODES`'s crossed set passes every other test. `groups` is
+    refused on its own identifier in this build, and that is the *only* error
+    this config may carry."""
+    found = _error_codes(
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"analysis.drop_missing": True},
+                    "groups": [{"by": "cohort", "levels": ["derivation", "validation"]}],
+                    "ablate": {"remove": ["analysis.drop_missing"]},
+                }
+            }
+        )
+    )
+    assert found == {"E-SWEEP-GROUPS-UNSUPPORTED"}
+
+
+def test_a_plain_ablation_validates_clean(write_config):
+    """The legal composition, so that a check firing where it should not fails
+    here: a baseline fixing the removed boolean, one `remove`, no axis."""
+    assert (
+        _error_codes(
+            write_config(
+                {
+                    "sweep": {
+                        "baseline": {"analysis.drop_missing": True},
+                        "ablate": {"remove": ["analysis.drop_missing"]},
+                    }
+                }
+            )
+        )
+        == set()
+    )
+
+
+def test_removing_a_parameter_that_is_neither_boolean_nor_nullable_is_refused(
+    write_config,
+):
+    """§ Validation, "Ablation targets", verbatim: "`sweep.ablate.remove[0]` is
+    `analysis.min_samples` (int); `remove` needs a boolean or nullable parameter
+    — use `override`". A fact about the parameter alone, so it fires even though
+    the baseline fixes the path."""
+    c = Collector()
+    validate_config(
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"analysis.min_samples": 30},
+                    "ablate": {"remove": ["analysis.min_samples"]},
+                }
+            }
+        ),
+        c,
+    )
+    finding = next(f for f in c.findings if f.code == "E-SWEEP-ABLATE-TARGET")
+    assert finding.path == "sweep.ablate.remove[0]"
+    assert "neither a boolean nor nullable" in finding.message
+    assert "use `override`" in finding.message
+
+
+def test_removing_a_nullable_parameter_is_accepted(write_config):
+    """The other half of the row: a *nullable* parameter is a legal `remove`
+    target even though it is not a boolean. `generic` declares none, so the spec
+    is patched for the duration — without this, deleting `or param.nullable`
+    from the check fails no test at all."""
+    from publishable.param import Param
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    original = GenericTemplate.parameter_spec
+    GenericTemplate.parameter_spec = {
+        **original,
+        "analysis.tag": Param(str, default="a", nullable=True),
+    }
+    try:
+        found = _error_codes(
+            write_config(
+                {
+                    "parameters": {"analysis": {"tag": "a"}},
+                    "sweep": {
+                        "baseline": {"analysis.tag": "a"},
+                        "ablate": {"remove": ["analysis.tag"]},
+                    },
+                }
+            )
+        )
+    finally:
+        GenericTemplate.parameter_spec = original
+    assert found == set()
+
+
+def test_removing_a_boolean_the_baseline_leaves_free_is_refused(write_config):
+    """The coupling task 4 created: `sweep.removal_value` picks `false` versus
+    `null` from the baseline, having no `parameter_spec` to ask, so a boolean the
+    baseline does not fix takes the nullable reading and plants `null` at a
+    parameter that cannot hold it. The declaration is legal — it IS a boolean —
+    and only the produced value shows the fault."""
+    c = Collector()
+    validate_config(
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"analysis.method": "pearson"},
+                    "ablate": {"remove": ["analysis.drop_missing"]},
+                }
+            }
+        ),
+        c,
+    )
+    finding = next(f for f in c.findings if f.code == "E-SWEEP-ABLATE-TARGET")
+    assert finding.path == "sweep.ablate.remove[0]"
+    assert "fixes no *boolean* value for" in finding.message
+    assert "null" in finding.message
+
+
+def test_a_non_boolean_baseline_value_is_not_a_boolean_the_remove_can_turn_off(
+    write_config,
+):
+    """The baseline *does* fix a value here — it is just not a boolean, so
+    `removal_value` still takes the `null` reading. The condition branch 2 states
+    is "no boolean value", not "no value", and this is the config that tells the
+    two apart."""
+    c = Collector()
+    validate_config(
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"analysis.drop_missing": "yes"},
+                    "ablate": {"remove": ["analysis.drop_missing"]},
+                }
+            }
+        ),
+        c,
+    )
+    finding = next(f for f in c.findings if f.code == "E-SWEEP-ABLATE-TARGET")
+    assert "fixes no *boolean* value for" in finding.message
+
+
+@pytest.mark.parametrize(
+    "ablate",
+    [
+        "notamapping",
+        ["notamapping"],
+        {"remove": "analysis.drop_missing"},
+        {"remove": {"analysis.drop_missing": True}},
+        {"remove": [123]},
+        {"remove": [["analysis.drop_missing"]]},
+        {"override": {"analysis.method": "spearman"}},
+        {"override": "analysis.method"},
+        {"override": [None]},
+        {"override": ["analysis.method"]},
+        {"override": [{123: "spearman"}]},
+    ],
+)
+def test_a_misshapen_ablate_is_refused_as_a_shape_fault(write_config, ablate):
+    """The class, not the inputs: every type `ablation_changes` would iterate, use
+    as a dict key or feed into `_keys_for`'s `.split(".")` is guarded in
+    `_check_shape`, fatally, exactly as `grid`, `paired` and `sample` are —
+    `validate` swallows expansion crashes, so a shape that makes `expand` raise
+    must never reach it."""
+    assert "E-CONFIG-SHAPE" in codes(write_config({"sweep": {"ablate": ablate}}))
+
+
+def test_every_misshapen_ablate_really_does_break_expand():
+    """The other half of the guard's claim, asserted rather than argued. Each
+    shape above breaks `expand` in one of the two documented ways: a bare
+    exception out of a function `validate` calls inside a bare `except`, or —
+    for a string where a list belongs — the quiet failure `grid`'s own axis
+    guard closed, iterating character by character into one condition per letter.
+    `remove: [123]` is the one that raises late, inside `_keys_for`'s
+    `.split(".")`, which is why the guard is at the path level and not only at
+    the list level."""
+    from publishable.sweep import expand
+
+    def _expand(ablate):
+        return expand({"sweep": {"baseline": {"analysis.method": "pearson"}, "ablate": ablate}})
+
+    for ablate in (
+        {"remove": [123]},
+        {"remove": [["analysis.drop_missing"]]},
+        {"override": [None]},
+        {"override": ["analysis.method"]},
+        {"override": [{123: "spearman"}]},
+        {"override": "analysis.method"},
+    ):
+        with pytest.raises((TypeError, AttributeError, ValueError)):
+            _expand(ablate)
+
+    # `remove` is the one that fails quietly rather than loudly: one condition
+    # per letter of `analysis.drop_missing`, plus the baseline — legal-looking
+    # output for a design nobody declared, which is why a string is refused as a
+    # shape fault rather than left to expand.
+    assert len(_expand({"remove": "analysis.drop_missing"})) == len("analysis.drop_missing") + 1
+
+
+def test_a_sample_range_bound_outside_its_parameters_constraint_is_refused(write_config):
+    """§ Validation, "Sample ranges": `sweep.sample.ranges.analysis.confidence`
+    upper bound 1.4 violates the parameter's `lt=1`. The bound is checked with
+    the parameter's own `Param`, so it reports `E-PARAM-VALUE` like every other
+    illegal value rather than minting a code for the same question."""
+    c = Collector()
+    validate_config(
+        write_config(
+            {
+                "sweep": {
+                    "sample": {
+                        "n": 4,
+                        "ranges": {"analysis.confidence": {"uniform": [0.80, 1.4]}},
+                    }
+                }
+            }
+        ),
+        c,
+    )
+    found = [f for f in c.findings if f.code == "E-PARAM-VALUE"]
+    assert found
+    assert found[0].path == "sweep.sample.ranges.analysis.confidence.uniform[1]"
+    assert "< 1" in found[0].message
+
+
+def test_a_sample_range_on_an_undeclared_path_is_refused(write_config):
+    """The same `E-SWEEP-PATH-UNKNOWN` a `grid` axis gets — a sampled path is a
+    parameter path, and a typo there draws 40 conditions over a parameter the
+    template has never heard of."""
+    c = Collector()
+    validate_config(
+        write_config(
+            {"sweep": {"sample": {"n": 4, "ranges": {"analysis.confidenc": {"uniform": [0, 1]}}}}}
+        ),
+        c,
+    )
+    found = [f for f in c.findings if f.code == "E-SWEEP-PATH-UNKNOWN"]
+    assert found
+    assert found[0].path == "sweep.sample.ranges.analysis.confidenc"
+
+
+@pytest.mark.parametrize(
+    "sample",
+    [
+        {"ranges": {"analysis.confidence": {"uniform": [0.8, 0.99]}}},
+        {"n": 0, "ranges": {"analysis.confidence": {"uniform": [0.8, 0.99]}}},
+        {"n": 4},
+        {"n": 4, "ranges": {}},
+        {"n": 4, "ranges": {"analysis.confidence": {}}},
+        {"n": 4, "ranges": {"analysis.confidence": {"gaussian": [0.8, 0.99]}}},
+        {"n": 4, "ranges": {"analysis.confidence": {"uniform": [0.99, 0.8]}}},
+        {"n": 4, "ranges": {"analysis.confidence": {"log_uniform": [0, 0.99]}}},
+        {"n": 4, "method": "gaussian", "ranges": {"analysis.confidence": {"uniform": [0, 1]}}},
+        {"n": 4, "seed": "17", "ranges": {"analysis.confidence": {"uniform": [0, 1]}}},
+    ],
+)
+def test_a_sample_that_cannot_be_drawn_from_is_refused(write_config, sample):
+    """Every value-level fault `sweep.sample` can carry is reported before
+    anything executes, under one identifier. `validate` swallows expansion
+    crashes on the premise that these checks report them, so a fault reaching
+    `expand` unreported is a config that validates clean and crashes `run`."""
+    assert "E-SWEEP-SAMPLE-INVALID" in codes(write_config({"sweep": {"sample": sample}}))
+
+
+@pytest.mark.parametrize(
+    "sample",
+    [
+        "notamapping",
+        ["notamapping"],
+        {"n": "8", "ranges": {"analysis.confidence": {"uniform": [0.8, 0.99]}}},
+        {"n": True, "ranges": {"analysis.confidence": {"uniform": [0.8, 0.99]}}},
+        {"n": 4, "method": ["sobol"], "ranges": {"analysis.confidence": {"uniform": [0, 1]}}},
+        {"n": 4, "seed": ["auto"], "ranges": {"analysis.confidence": {"uniform": [0, 1]}}},
+        {"n": 4, "ranges": []},
+        {"n": 4, "ranges": {123: {"uniform": [0, 1]}}},
+        {"n": 4, "ranges": {"analysis.confidence": "uniform"}},
+        {"n": 4, "ranges": {"analysis.confidence": {123: [0, 1]}}},
+        {"n": 4, "ranges": {"analysis.confidence": {"uniform": 0.5}}},
+        {"n": 4, "ranges": {"analysis.confidence": {"uniform": ["0", "1"]}}},
+        {"n": 4, "ranges": {"analysis.confidence": {"uniform": [True, False]}}},
+    ],
+)
+def test_a_misshapen_sample_is_refused_as_a_shape_fault(write_config, sample):
+    """The class, not the inputs: every type `_sample_cells` would index, split,
+    compare or use as a dict key is guarded in `_check_shape`, fatally, exactly
+    as `grid` and `paired` are — a YAML-expressible type that makes the drawing
+    code raise must not reach it."""
+    assert "E-CONFIG-SHAPE" in codes(write_config({"sweep": {"sample": sample}}))
+
+
+def test_a_sample_path_shared_with_grid_is_refused(write_config):
+    """`sample` joins the same product `grid` and `paired` do, so a path written
+    by two axis-shaped modes is the same silent overwrite — worse here, since
+    `sweep.yaml` records the drawn value as the condition's while the run used
+    the `grid` cell's."""
+    c = Collector()
+    validate_config(
+        write_config(
+            {
+                "sweep": {
+                    "grid": {"analysis.min_samples": [30, 50]},
+                    "sample": {
+                        "n": 4,
+                        "ranges": {"analysis.min_samples": {"int_uniform": [10, 200]}},
+                    },
+                }
+            }
+        ),
+        c,
+    )
+    found = [f for f in c.findings if f.code == "E-SWEEP-PATH-DUPLICATE"]
+    assert found
+    assert found[0].path == "sweep.sample.analysis.min_samples"
+    assert "sweep.grid.analysis.min_samples" in found[0].message
+
+
+def test_grid_and_paired_naming_the_same_path_is_refused(write_config):
+    """`expand`'s product applies each axis's cell to `values` in order, so a
+    path named by both `grid` and `paired` lets whichever mode is later silently
+    overwrite the other's value on every combination — collapsing two of the
+    four combinations to byte-identical `values` (grid=30/paired-30 and
+    grid=50/paired-30 both resolve to `min_samples=30`). Filed as a spec gap
+    (`docs/superpowers/spec-defects.md`) and refused rather than executed."""
+    path = write_config(
+        {
+            "sweep": {
+                "grid": {"analysis.min_samples": [30, 50]},
+                "paired": [
+                    {"analysis.min_samples": 30, "analysis.confidence": 0.95},
+                    {"analysis.min_samples": 50, "analysis.confidence": 0.99},
+                ],
+            }
+        }
+    )
+    c = Collector()
+    validate_config(path, c)
+    found = [f for f in c.findings if f.code == "E-SWEEP-PATH-DUPLICATE"]
+    assert found
+    assert found[0].path == "sweep.paired.analysis.min_samples"
+
+
+def test_grid_and_paired_on_disjoint_paths_is_not_a_duplicate(write_config):
+    """The mirror case: `grid` and `paired` naming different paths is exactly
+    the brief's own worked example and must stay clean."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {
+                    "grid": {"analysis.method": ["pearson", "spearman"]},
+                    "paired": [
+                        {"analysis.min_samples": 30, "analysis.confidence": 0.95},
+                        {"analysis.min_samples": 50, "analysis.confidence": 0.99},
+                    ],
+                }
+            }
+        )
+    )
+    assert "E-SWEEP-PATH-DUPLICATE" not in found
 
 
 def test_an_empty_or_null_mode_is_not_a_declaration(write_config):
@@ -1097,9 +1773,6 @@ def test_an_empty_or_null_mode_is_not_a_declaration(write_config):
 
 def test_every_sweep_refusal_message_defers_rather_than_scolds(write_config):
     for mode, value, code in [
-        ("paired", [{"a.b": 1}], "E-SWEEP-PAIRED-UNSUPPORTED"),
-        ("ablate", {"from": "baseline"}, "E-SWEEP-ABLATE-UNSUPPORTED"),
-        ("sample", {"n": 1}, "E-SWEEP-SAMPLE-UNSUPPORTED"),
         ("groups", [{"by": "arm"}], "E-SWEEP-GROUPS-UNSUPPORTED"),
     ]:
         c = Collector()
@@ -1716,8 +2389,7 @@ def test_a_baseline_value_is_not_subject_to_the_nameability_check(write_config):
 
     The value has to be one `check_swept_value` actually refuses, or the test
     passes under either setting of `_value_checks`'s `nameable`. `pear son` fails
-    `SWEPT_VALUE_PATTERN` on the space, and the baseline still fixes every grid
-    axis, so `E-SWEEP-BASELINE-PARTIAL` does not fire either. Both directions are
+    `SWEPT_VALUE_PATTERN` on the space. Both directions are
     asserted on the one config: the `Param` check *is* applied to a baseline entry
     (`reference.md`:218), the nameability check is not."""
     found = codes(
@@ -1732,66 +2404,167 @@ def test_a_baseline_value_is_not_subject_to_the_nameability_check(write_config):
     )
     assert "E-PARAM-VALUE" in found
     assert "E-SWEEP-VALUE-UNNAMEABLE" not in found
-    assert "E-SWEEP-BASELINE-PARTIAL" not in found
 
 
-def test_a_baseline_that_leaves_a_grid_axis_free_is_refused(write_config):
-    """`reference.md`:1415-1422 requires one baseline condition per cell of the
-    unfixed axes; `expand` emits exactly one. Refused rather than diverging."""
-    found = messages_by_code(
-        write_config(
-            {
-                "sweep": {
-                    "baseline": {"analysis.method": "pearson"},
-                    "grid": {
-                        "analysis.method": ["spearman", "kendall"],
-                        "analysis.min_samples": [10, 20],
-                    },
-                }
+def test_a_baseline_that_leaves_a_grid_axis_free_validates_and_expands(write_config):
+    """§ Expansion modes' second row — the one the section tells a reader to prefer
+    — is a config core accepts, and it executes the design it declares.
+
+    `E-SWEEP-BASELINE-PARTIAL` refused exactly this shape while `expand` emitted a
+    single `00_baseline`. Both halves are asserted on the one config, because a
+    clean `validate` over a wrong expansion is what the retired refusal existed to
+    prevent: the baseline fixes `analysis.method` and leaves `analysis.min_samples`
+    free, so it expands to one baseline per level of the free axis, ahead of the
+    2 × 2 product."""
+    path = write_config(
+        {
+            "sweep": {
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {
+                    "analysis.method": ["spearman", "kendall"],
+                    "analysis.min_samples": [10, 20],
+                },
             }
-        )
+        }
     )
-    assert "E-SWEEP-BASELINE-PARTIAL" in found
-    assert "analysis.min_samples" in found["E-SWEEP-BASELINE-PARTIAL"]
-    assert "not implemented in this build" in found["E-SWEEP-BASELINE-PARTIAL"]
+    assert codes(path) == set()
+
+    conditions = expand(yaml.safe_load(path.read_text()))
+    assert [c.label for c in conditions] == [
+        "min_samples=10__baseline",
+        "min_samples=20__baseline",
+        "method=spearman__min_samples=10",
+        "method=spearman__min_samples=20",
+        "method=kendall__min_samples=10",
+        "method=kendall__min_samples=20",
+    ]
+    assert [c.is_baseline for c in conditions] == [True, True, False, False, False, False]
+    # Each baseline carries the axis it fixes *and* its own cell — the point of
+    # the expansion, and what a single `00_baseline` could not say.
+    assert dict(conditions[0].values) == {
+        "analysis.method": "pearson",
+        "analysis.min_samples": 10,
+    }
 
 
-def test_a_baseline_fixing_every_axis_is_supported(write_config):
+def test_a_baseline_that_leaves_a_paired_axis_free_validates_and_expands(write_config):
+    """The same shape one mode over: a `paired` axis sets several paths per cell, so
+    the baseline that leaves it free expands over its *cells* rather than over a
+    list of values, and each baseline row carries both of the cell's paths."""
+    path = write_config(
+        {
+            "sweep": {
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {"analysis.method": ["spearman", "kendall"]},
+                "paired": [
+                    {"analysis.min_samples": 30, "analysis.confidence": 0.95},
+                    {"analysis.min_samples": 50, "analysis.confidence": 0.99},
+                ],
+            }
+        }
+    )
+    assert codes(path) == set()
+
+    conditions = expand(yaml.safe_load(path.read_text()))
+    assert [c.is_baseline for c in conditions] == [True, True, False, False, False, False]
+    assert dict(conditions[1].values) == {
+        "analysis.method": "pearson",
+        "analysis.min_samples": 50,
+        "analysis.confidence": 0.99,
+    }
+
+
+def test_a_baseline_fixing_every_axis_including_paired_is_one_condition(write_config):
+    """The other row of the same table: a baseline naming every path any axis-shaped
+    mode sweeps — `grid`'s and `paired`'s alike — has nothing to expand over and is
+    condition `00` alone."""
+    path = write_config(
+        {
+            "sweep": {
+                "baseline": {
+                    "analysis.method": "pearson",
+                    "analysis.min_samples": 30,
+                    "analysis.confidence": 0.95,
+                },
+                "grid": {"analysis.method": ["spearman", "kendall"]},
+                "paired": [
+                    {"analysis.min_samples": 30, "analysis.confidence": 0.95},
+                    {"analysis.min_samples": 50, "analysis.confidence": 0.99},
+                ],
+            }
+        }
+    )
+    assert codes(path) == set()
+
+    conditions = expand(yaml.safe_load(path.read_text()))
+    assert [c.label for c in conditions][0] == "baseline"
+    assert [c.is_baseline for c in conditions] == [True, False, False, False, False]
+
+
+def test_a_baseline_fixing_every_axis_is_one_condition(write_config):
     """The row the slice's worked example uses, and it must keep working."""
-    found = codes(
-        write_config(
-            {
-                "sweep": {
-                    "baseline": {"analysis.method": "pearson", "analysis.min_samples": 10},
-                    "grid": {"analysis.min_samples": [10, 20]},
-                }
+    path = write_config(
+        {
+            "sweep": {
+                "baseline": {"analysis.method": "pearson", "analysis.min_samples": 10},
+                "grid": {"analysis.min_samples": [10, 20]},
             }
-        )
+        }
     )
-    assert "E-SWEEP-BASELINE-PARTIAL" not in found
+    assert codes(path) == set()
+    assert [c.is_baseline for c in expand(yaml.safe_load(path.read_text()))] == [
+        True,
+        False,
+        False,
+    ]
 
 
-def test_a_bare_baseline_with_no_grid_is_supported(write_config):
-    """No grid means no unfixed axis, so the bare-baseline level stays legal."""
-    found = codes(write_config({"sweep": {"baseline": {"analysis.method": "pearson"}}}))
-    assert "E-SWEEP-BASELINE-PARTIAL" not in found
+def test_a_bare_baseline_with_no_grid_is_one_condition(write_config):
+    """No axis means nothing to expand over, so the bare-baseline level stays what
+    it was: one condition, labelled `baseline`."""
+    path = write_config({"sweep": {"baseline": {"analysis.method": "pearson"}}})
+    assert codes(path) == set()
+    conditions = expand(yaml.safe_load(path.read_text()))
+    assert [(c.label, c.is_baseline) for c in conditions] == [("baseline", True)]
 
 
-def test_an_empty_baseline_beside_a_grid_is_not_a_partial_baseline(write_config):
-    """`baseline: {}` declares nothing and yields no baseline condition; "present
-    but empty is not a declaration" is this repo's convention elsewhere too."""
-    found = codes(
-        write_config(
-            {"sweep": {"baseline": {}, "grid": {"analysis.method": ["spearman", "kendall"]}}}
-        )
+def test_an_empty_baseline_beside_a_grid_yields_no_baseline_condition(write_config):
+    """`baseline: {}` declares nothing; "present but empty is not a declaration" is
+    this repo's convention elsewhere too. It is *not* read as a baseline fixing no
+    swept path and expanded over every axis — that would double a grid whose author
+    declared no reference at all."""
+    path = write_config(
+        {"sweep": {"baseline": {}, "grid": {"analysis.method": ["spearman", "kendall"]}}}
     )
-    assert "E-SWEEP-BASELINE-PARTIAL" not in found
+    assert codes(path) == set()
+    conditions = expand(yaml.safe_load(path.read_text()))
+    assert [(c.label, c.is_baseline) for c in conditions] == [
+        ("method=spearman", False),
+        ("method=kendall", False),
+    ]
 
 
 def test_a_list_grid_is_a_diagnostic_not_a_traceback(write_config):
     """`_check_sweep` calls `grid.items()`; without the shape guard this escaped
     `main`'s handler as `AttributeError: 'list' object has no attribute 'items'`."""
     found = codes(write_config({"sweep": {"grid": ["analysis.method"]}}))
+    assert "E-CONFIG-SHAPE" in found
+
+
+def test_a_grid_with_a_non_string_int_key_is_a_diagnostic_not_a_traceback(write_config):
+    """Same class as `paired`'s non-string-key guard, reached through `grid`
+    instead: YAML permits `123: [...]` as a mapping key, but `_keys_for` feeds
+    every swept path into `.split(".")`, so this crashed
+    `AttributeError: 'int' object has no attribute 'split'` before this guard
+    existed. Pre-existing and independent of the `paired` finding — found by
+    the same review pattern applied to `grid`."""
+    found = codes(write_config({"sweep": {"grid": {123: ["a", "b"]}}}))
+    assert "E-CONFIG-SHAPE" in found
+
+
+def test_a_grid_with_a_non_string_float_key_is_a_diagnostic_not_a_traceback(write_config):
+    """Same crash, via a `float` key instead of `int`."""
+    found = codes(write_config({"sweep": {"grid": {1.5: ["a", "b"]}}}))
     assert "E-CONFIG-SHAPE" in found
 
 
@@ -1828,6 +2601,112 @@ def test_a_null_grid_or_baseline_is_absent_not_malformed(write_config):
     module (`doc.get("x") or {}`), and the shape guard must not diverge."""
     found = codes(write_config({"sweep": {"baseline": None, "grid": None}}))
     assert "E-CONFIG-SHAPE" not in found
+
+
+def test_a_non_list_paired_is_a_diagnostic_not_a_traceback(write_config):
+    """`_axes` now reads `paired` unconditionally (`dict(entry) for entry in
+    paired`), same as `grid`'s unguarded `.items()` before ad6cf3d — so a
+    non-list `paired` needs the identical container guard `grid` already has,
+    or it crashes `expand` inside `cli.run` rather than `validate`."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {
+                    "grid": {"analysis.method": ["spearman"]},
+                    "paired": "analysis.min_samples",
+                }
+            }
+        )
+    )
+    assert "E-CONFIG-SHAPE" in found
+
+
+def test_a_paired_entry_that_is_not_a_mapping_is_a_diagnostic_not_a_traceback(write_config):
+    """`dict(entry)` inside `_axes`'s paired branch raises `ValueError` on a
+    non-mapping entry — `["notadict"]` reproduces exactly the crash the
+    reviewer found: zero `validate` findings, then a bare `ValueError:
+    dictionary update sequence element #0 has length 1; 2 is required` out of
+    `cli.py`'s `expand(doc)`, past `main`'s `PublishableError` handler."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {
+                    "grid": {"analysis.method": ["spearman", "kendall"]},
+                    "paired": ["notadict"],
+                }
+            }
+        )
+    )
+    assert "E-CONFIG-SHAPE" in found
+
+
+def test_a_null_paired_entry_is_a_diagnostic_not_a_traceback(write_config):
+    """`sweep`-level `null` (`sweep.paired: null`) is absent, matching the rest
+    of this module — but a `null` *entry inside* an otherwise-list `paired` is
+    not the same case: `_axes` feeds every entry straight to `dict()`, and
+    `dict(None)` raises `TypeError` exactly like `dict(["notadict"][0])` raises
+    `ValueError` above. A `grid` axis value stays legal as `null` because it is
+    used as-is (a param-value question); a `paired` entry has no such out."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {
+                    "grid": {"analysis.method": ["spearman", "kendall"]},
+                    "paired": [None],
+                }
+            }
+        )
+    )
+    assert "E-CONFIG-SHAPE" in found
+
+
+def test_a_null_whole_paired_block_is_absent_not_malformed(write_config):
+    """`sweep.paired: null` is the block-level case the rest of this module
+    treats as absent (`doc.get("x") or {}`), distinct from a `null` entry
+    inside a present list, which the test above refuses."""
+    found = codes(
+        write_config(
+            {"sweep": {"grid": {"analysis.method": ["spearman", "kendall"]}, "paired": None}}
+        )
+    )
+    assert "E-CONFIG-SHAPE" not in found
+
+
+def test_a_paired_entry_with_a_non_string_int_key_is_a_diagnostic_not_a_traceback(write_config):
+    """`dict()` tolerates a non-string key (`{123: 30}` parses fine off YAML), but
+    `_swept_paths`/`_keys_for` feed every `paired` key into `.split(".")` and an
+    `endswith` scan, both string-only — `123.split(".")` is
+    `AttributeError: 'int' object has no attribute 'endswith'` (actually raised
+    inside `_keys_for`'s `path.split(".")` first) once `expand` reaches
+    `label_for`. Reproduced directly against `expand` before this guard existed:
+    `AttributeError: 'int' object has no attribute 'endswith'`."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {
+                    "grid": {"analysis.method": ["pearson", "spearman"]},
+                    "paired": [{123: 30}, {123: 50}],
+                }
+            }
+        )
+    )
+    assert "E-CONFIG-SHAPE" in found
+
+
+def test_a_paired_entry_with_a_non_string_float_key_is_a_diagnostic_not_a_traceback(write_config):
+    """Same crash, via a `float` key instead of `int` — confirms the guard checks
+    `isinstance(key, str)` rather than special-casing one non-string type."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {
+                    "grid": {"analysis.method": ["pearson", "spearman"]},
+                    "paired": [{1.5: 30}, {1.5: 50}],
+                }
+            }
+        )
+    )
+    assert "E-CONFIG-SHAPE" in found
 
 
 def test_check_contrasts_still_refuses_a_non_list_when_called_directly():
@@ -3439,6 +4318,103 @@ def test_a_baseline_fixing_every_axis_of_a_crossed_grid_warns_before_the_run(wri
     assert "2 of 4 baseline comparisons" in message
     assert "`method=spearman__min_samples=20`" in message
     assert "`analysis.method`" in message and "`analysis.min_samples`" in message
+    # The remedy, which only per-cell targeting made true: freeing the
+    # stratifying axis now gives each cell its own baseline, and the freed axis
+    # stops appearing in `differs_on` at all. Task 7 deliberately left this out
+    # while `resolve_contrasts` targeted the first baseline for every condition.
+    assert "leave the ones you are stratifying over free" in message
+
+
+def test_a_partly_fixed_baseline_is_silent_while_its_run_marks_confounded(write_config):
+    """Why § Warnings core reports still says silence here "is not a verdict that
+    such a design confounds nothing", after per-cell targeting.
+
+    The guard is "the baseline fixes every swept axis". A baseline fixing two of
+    three leaves the third free, so this warning stays silent — while the cells that
+    move both fixed axes differ from *their own cell's* baseline on both and are
+    marked `confounded: true` at run time. Per-cell targeting removes the free axis
+    from `differs_on`; it does not remove a difference on two fixed ones, so the
+    caution is still the honest phrasing and is deliberately not softened."""
+    path = write_config(
+        {
+            "sweep": {
+                "baseline": {"analysis.method": "pearson", "analysis.min_samples": 10},
+                "grid": {
+                    "analysis.method": ["pearson", "spearman"],
+                    "analysis.min_samples": [10, 20],
+                    "analysis.confidence": [0.95, 0.99],
+                },
+            }
+        }
+    )
+    assert "W-SWEEP-BASELINE-CONFOUNDED" not in codes(path)
+
+    from publishable.cli import _differing_axes
+    from publishable.contrasts import resolve_contrasts
+    from publishable.sweep import expand
+
+    conditions = expand(
+        {
+            "sweep": {
+                "baseline": {"analysis.method": "pearson", "analysis.min_samples": 10},
+                "grid": {
+                    "analysis.method": ["pearson", "spearman"],
+                    "analysis.min_samples": [10, 20],
+                    "analysis.confidence": [0.95, 0.99],
+                },
+            }
+        }
+    )
+    by_index = {c.index: c for c in conditions}
+    differing = [
+        _differing_axes(by_index[m.of], by_index[m.against])
+        for m in resolve_contrasts({}, conditions)
+    ]
+    assert all("analysis.confidence" not in axes for axes in differing)
+    assert [axes for axes in differing if len(axes) > 1] == [
+        ["analysis.method", "analysis.min_samples"],
+        ["analysis.method", "analysis.min_samples"],
+    ]
+
+
+def test_a_half_fixed_paired_axis_is_silent_with_nothing_expanded_and_a_confounded_run(
+    write_config,
+):
+    """The second silent shape § Warnings core reports now names, and the one whose
+    mechanism differs from the row's per-cell sentence.
+
+    A baseline fixing *some* of a multi-path `paired` axis's paths counts that
+    axis fixed (`sweep._baseline_cells` reads fixedness off the cells' paths and
+    takes any match), so nothing expands per cell — there is exactly ONE baseline,
+    not one per cell. Both comparisons against it differ on `analysis.min_samples`
+    *and* on `analysis.confidence`, which the baseline leaves alone, so the run
+    marks them `confounded: true` while `validate` says nothing. The row explained
+    that silence by per-cell expansion, which is false here; the three assertions
+    below are the three halves of the correction."""
+    sweep = {
+        "baseline": {"analysis.min_samples": 30},
+        "paired": [
+            {"analysis.min_samples": 10, "analysis.confidence": 0.9},
+            {"analysis.min_samples": 20, "analysis.confidence": 0.8},
+        ],
+    }
+    assert "W-SWEEP-BASELINE-CONFOUNDED" not in codes(write_config({"sweep": sweep}))
+
+    from publishable.cli import _differing_axes
+    from publishable.contrasts import resolve_contrasts
+
+    conditions = expand({"sweep": sweep})
+    assert [c.index for c in conditions if c.is_baseline] == [0]  # nothing expanded
+
+    by_index = {c.index: c for c in conditions}
+    differing = [
+        _differing_axes(by_index[m.of], by_index[m.against])
+        for m in resolve_contrasts({}, conditions)
+    ]
+    assert differing == [
+        ["analysis.min_samples", "analysis.confidence"],
+        ["analysis.min_samples", "analysis.confidence"],
+    ]
 
 
 def test_a_crossed_grid_whose_cells_each_differ_once_is_not_confounded(write_config):
@@ -3460,8 +4436,7 @@ def test_a_crossed_grid_whose_cells_each_differ_once_is_not_confounded(write_con
             }
         )
     )
-    assert "E-SWEEP-BASELINE-PARTIAL" not in found  # the baseline fixes both axes
-    assert "W-SWEEP-BASELINE-CONFOUNDED" not in found
+    assert "W-SWEEP-BASELINE-CONFOUNDED" not in found  # the baseline fixes both axes
 
 
 def test_a_single_axis_sweep_is_never_confounded(write_config):
@@ -3653,3 +4628,208 @@ def test_the_inapplicable_correction_warning_asserts_nothing_about_null_test(wri
     found = {f.code: f.message for f in c.findings}
     assert "E-STATS-NULLTEST-UNSUPPORTED" in found
     assert "undeclared" not in found["W-STATS-CORRECTION-INAPPLICABLE"]
+
+
+def test_a_sample_only_sweep_is_not_a_correction_family(write_config):
+    """§ Validation, "Correction declared for a family": the warning is "not raised
+    for a `sample`-only sweep, whose draws aren't a family". That exception was
+    unreachable while `sample` was refused, and is live now. It holds
+    structurally rather than by a special case: `resolve_contrasts` compares
+    every condition against a *declared* baseline, and a `sample`-only sweep
+    declares none, so there are no comparisons to correct."""
+    c = Collector()
+    validate_config(
+        write_config(
+            {
+                "sweep": {
+                    "sample": {"n": 6, "ranges": {"analysis.confidence": {"uniform": [0.8, 0.99]}}}
+                },
+                "statistics": {"correction": "none"},
+            }
+        ),
+        c,
+    )
+    assert not c.findings, [f.code for f in c.findings]
+
+
+def test_a_baseline_beside_a_sampled_axis_is_refused(write_config):
+    """§ Sweeps and repeats: the correction family "counts conditions from `grid`,
+    `paired`, `ablate`, and `groups`, and skips `sample`". Nothing implements that
+    exclusion, so every draw beside a declared baseline becomes a comparison and
+    every interval is corrected against a family several times the documented size.
+    `E-SWEEP-SAMPLE-BASELINE` refuses the combination until the family excludes
+    drawn conditions.
+
+    This is the decision the previous version of this test invited: it pinned the
+    doubling "as the behaviour that ships, not as the behaviour that is wanted",
+    and said "if a later slice warns or refuses, this test is where the decision
+    lands". It lands here. The expansion assertions below are kept unchanged
+    — `expand` is not what moved, and § Expansion modes' rule that a baseline
+    expands over the axes it does not fix still holds of a `sample` axis."""
+    path = write_config(
+        {
+            "sweep": {
+                "baseline": {"analysis.method": "pearson"},
+                "sample": {"n": 6, "ranges": {"analysis.confidence": {"uniform": [0.8, 0.99]}}},
+            }
+        }
+    )
+    assert codes(path) == {"E-SWEEP-SAMPLE-BASELINE"}
+
+    conditions = expand(yaml.safe_load(path.read_text()))
+    assert [c.is_baseline for c in conditions] == [True] * 6 + [False] * 6
+    # Each baseline carries its own draw, and the draws are the same six values.
+    assert [c.values["analysis.confidence"] for c in conditions[:6]] == [
+        c.values["analysis.confidence"] for c in conditions[6:]
+    ]
+
+
+def test_a_uniform_range_over_an_int_parameter_is_refused_by_what_it_draws(write_config):
+    """The bounds are two legal integers, so a bounds-only check reports nothing —
+    and the draw is `118.38…`, which a step reads where `parameter_spec` declares
+    `int`. § Validation's "Types" row promises to refuse exactly that, and the
+    value that executes is the drawn one, not the bound."""
+    c = Collector()
+    validate_config(
+        write_config(
+            {
+                "sweep": {
+                    "sample": {
+                        "n": 4,
+                        "ranges": {"analysis.min_samples": {"uniform": [10, 200]}},
+                    }
+                }
+            }
+        ),
+        c,
+    )
+    found = [f for f in c.findings if f.code == "E-PARAM-VALUE"]
+    assert found, [f.code for f in c.findings]
+    assert found[0].path == "sweep.sample.ranges.analysis.min_samples.uniform"
+    assert "expected integer" in found[0].message
+    assert "int_uniform" in found[0].message
+    # One mistake, one finding — not one per drawn condition.
+    assert len(found) == 1
+
+
+def test_a_sampled_value_outside_the_parameters_choices_is_refused(write_config):
+    """The other half of the same class, and the one a form-level rule could not
+    catch: both `int_uniform` endpoints are declared choices, the form is right
+    for an `int` parameter, and the draws in between are not choices at all."""
+    from publishable.param import Param
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    original = GenericTemplate.parameter_spec
+    GenericTemplate.parameter_spec = {
+        **original,
+        "analysis.min_samples": Param(int, default=10, choices=[10, 50]),
+    }
+    try:
+        c = Collector()
+        validate_config(
+            write_config(
+                {
+                    "parameters.analysis": {
+                        "method": "pearson",
+                        "min_samples": 10,
+                        "confidence": 0.95,
+                        "drop_missing": True,
+                    },
+                    "sweep": {
+                        "sample": {
+                            "n": 8,
+                            "ranges": {"analysis.min_samples": {"int_uniform": [10, 50]}},
+                        }
+                    },
+                }
+            ),
+            c,
+        )
+        found = [f for f in c.findings if f.code == "E-PARAM-VALUE"]
+        assert found, [f.code for f in c.findings]
+        assert "expected one of 10, 50" in found[0].message
+    finally:
+        GenericTemplate.parameter_spec = original
+
+
+def test_a_well_typed_sample_draws_no_value_findings(write_config):
+    """The mirror: `int_uniform` over an `int` parameter and `uniform` over a
+    float one draw legal values, and neither reports anything."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {
+                    "sample": {
+                        "n": 16,
+                        "ranges": {
+                            "analysis.min_samples": {"int_uniform": [10, 200]},
+                            "analysis.confidence": {"uniform": [0.80, 0.99]},
+                        },
+                    }
+                }
+            }
+        )
+    )
+    assert "E-PARAM-VALUE" not in found
+
+
+def test_a_sample_sweep_with_no_baseline_stays_legal(write_config):
+    """The refusal above is scoped to the combination that inflates the family, and
+    this is the shape it must not touch: `resolve_contrasts` generates a comparison
+    only against a *declared* baseline, so a sample-only sweep produces none and
+    nothing is corrected against anything. A refusal wider than the harm would
+    strand `sample` for the dose-response designs § Expansion modes shows it for."""
+    path = write_config(
+        {
+            "sweep": {
+                "sample": {
+                    "n": 4,
+                    "seed": 7,
+                    "ranges": {"analysis.confidence": {"uniform": [0.8, 0.99]}},
+                }
+            }
+        }
+    )
+    assert codes(path) == set()
+    assert len(expand(yaml.safe_load(path.read_text()))) == 4
+
+
+def test_a_declared_contrast_over_a_sample_sweep_stays_legal(write_config):
+    """A declared `statistics.contrasts` entry names its two sides, so it adds
+    exactly the members the user asked for rather than one per drawn condition.
+    The refusal is about the *generated* family, and this pins that it does not
+    reach a declared one."""
+    doc_path = write_config(
+        {
+            "sweep": {
+                "sample": {
+                    "n": 2,
+                    "seed": 7,
+                    "ranges": {"analysis.confidence": {"uniform": [0.8, 0.99]}},
+                }
+            }
+        }
+    )
+    doc = yaml.safe_load(doc_path.read_text())
+    labels = [c.label for c in expand(doc)]
+    doc["statistics"] = {
+        "contrasts": [{"id": "hi_vs_lo", "of": labels[0], "against": labels[1]}]
+    }
+    doc_path.write_text(yaml.safe_dump(doc))
+    assert not [c for c in codes(doc_path) if c.startswith("E-")]
+
+
+def test_a_baseline_beside_a_grid_is_untouched_by_the_sample_refusal(write_config):
+    """The neighbouring shape the refusal must leave alone: a baseline over an
+    enumerated axis is the ordinary design, its comparisons are the family the
+    document counts, and nothing here changed."""
+    assert codes(
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"analysis.method": "pearson"},
+                    "grid": {"analysis.method": ["spearman", "kendall"]},
+                }
+            }
+        )
+    ) == set()

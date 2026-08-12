@@ -18,7 +18,15 @@ from publishable.provenance import find_repo_root, resolves_inside_repo
 from publishable.replication import resolve_repeats
 from publishable.scope import step_name as _step_name
 from publishable.strata import levels_for
-from publishable.sweep import check_swept_value, expand
+from publishable.sweep import (
+    SWEEP_MODES,
+    axis_modes_present,
+    check_swept_value,
+    expand,
+    removal_value,
+    render_value,
+    sample_fault,
+)
 from publishable.templates.base import BaseTemplate
 from publishable.templates.registry import get_template, template_names
 from publishable.units import UnitList, resolve_units
@@ -42,7 +50,14 @@ _MAPPING_BLOCKS = (
 _LIST_BLOCKS = ("hypotheses",)
 _STRING_BLOCKS = ("schema_version", "experiment_type", "template_version", "entrypoint", "plugin")
 
-_KIND_LABEL = {"mapping": "a mapping", "list": "a list", "string": "a string"}
+_KIND_LABEL = {
+    "mapping": "a mapping",
+    "list": "a list",
+    "string": "a string",
+    "integer": "an integer",
+    "number": "a number",
+    "string_or_integer": "a string or an integer",
+}
 
 
 def _flatten(node: Any, prefix: str = "") -> dict[str, Any]:
@@ -123,8 +138,162 @@ def _check_shape(doc: dict[str, Any], c: Collector) -> bool:
             _bad("sweep.grid", grid, "mapping")
         elif isinstance(grid, dict):
             for path, values in grid.items():
+                # Same crash as `paired`'s non-string-key guard below, reached
+                # through `grid` instead: YAML permits a non-string mapping key
+                # (`123: [...]` parses fine), but `_keys_for` feeds every swept
+                # path into `.split(".")`, so a non-string `grid` key crashes
+                # `AttributeError: 'int' object has no attribute 'split'` before
+                # this guard existed. Pre-existing and outside the review's
+                # original finding for `paired` — closed here rather than left
+                # as the one axis-shaped mode without the guard its sibling has.
+                if not isinstance(path, str):
+                    _bad("sweep.grid", path, "string")
+                    continue
                 if values is not None and not isinstance(values, list):
                     _bad(f"sweep.grid.{path}", values, "list")
+
+        # `paired` closes the same gap `grid` does, one level down: `_axes` now
+        # reads it unconditionally (`dict(entry) for entry in paired`), so a
+        # non-list `paired` or a non-mapping entry escaped as a bare `TypeError`/
+        # `ValueError` from `expand`, past `_check_sweep`'s premise that it is the
+        # check that reports an expansion crash. Two guards, same shape as
+        # `grid`'s: the container, then each entry. Unlike a `grid` axis value —
+        # which is used as-is and stays legal as `null` (a param-value question,
+        # not a shape one) — every `paired` entry is fed straight into `dict()`,
+        # so a `null` entry is itself the crash (`dict(None)` raises `TypeError`)
+        # and is refused here rather than treated as absent.
+        #
+        # A third guard, same reasoning: `dict()` itself tolerates a non-string
+        # key (`{123: 30}` parses fine off YAML), but `_swept_paths`/`_keys_for`
+        # feed every `paired` key straight into `.split(".")` and an `endswith`
+        # scan, both string-only, so `123.split(".")` is the crash — one level
+        # further down than the entry-shape guard above, reached only once an
+        # entry *is* a mapping. `envelope.py`'s `_check_unknown_keys` faces a
+        # structurally similar non-string YAML key and chooses the other
+        # route — coerce to `str` and report `E-CONFIG-KEY-UNKNOWN` — but that
+        # works there because every leaf sits under a closed, known vocabulary
+        # a coerced string can be compared against and reported as unmatched.
+        # A `paired` key is an open dotted path into `parameters`, not a member
+        # of any closed set `_check_shape` knows here (that resolution is
+        # `_check_sweep`'s `E-SWEEP-PATH-UNKNOWN`, reached only for a *string*
+        # key); coercing and continuing would just move today's crash one
+        # frame deeper for no reporting benefit, so this stays a shape fault —
+        # `E-CONFIG-SHAPE`, fatal, consistent with every other guard in this
+        # function — rather than `envelope.py`'s coerce-and-report.
+        paired = sweep.get("paired")
+        if paired is not None and not isinstance(paired, list):
+            _bad("sweep.paired", paired, "list")
+        elif isinstance(paired, list):
+            for i, entry in enumerate(paired):
+                if not isinstance(entry, dict):
+                    _bad(f"sweep.paired[{i}]", entry, "mapping")
+                    continue
+                for key in entry:
+                    if not isinstance(key, str):
+                        _bad(f"sweep.paired[{i}]", key, "string")
+
+        # `ablate` gets the same walk `paired` gets, at every depth
+        # `sweep.ablation_changes` reads — enumerated from the operations that
+        # function performs, not from inputs someone imagined:
+        #   `ablate.items()`                → the block must be a mapping
+        #   `for path in remove`            → a list (a bare string iterates
+        #                                     character by character into one
+        #                                     condition per letter, the quiet
+        #                                     failure `grid`'s axis guard closed)
+        #   `{path: ...}` then `.split(".")` in `_keys_for` → a string path
+        #                                     (a list entry is unhashable and
+        #                                     raises at the dict literal; an int
+        #                                     is hashable and raises later, in
+        #                                     `_keys_for`)
+        #   `for entry in override`         → a list, same reasoning
+        #   `dict(entry)`                   → a mapping, exactly `paired`'s guard
+        #   each override key               → a string, for `_keys_for` again
+        # `from` is deliberately absent: `expand` reads `sweep.baseline`
+        # directly and performs no operation on `from` at all, so there is no
+        # type that makes it raise, and guarding it here would be guessing at
+        # inputs rather than closing a crash. A `from` naming anything but
+        # `baseline` is a value fault nothing yet reports — recorded in
+        # `docs/superpowers/spec-defects.md`. `dict(baseline)` is now read by
+        # ablate rows too; its guard is `sweep.baseline`'s above, unchanged.
+        ablate = sweep.get("ablate")
+        if ablate is not None and not isinstance(ablate, dict):
+            _bad("sweep.ablate", ablate, "mapping")
+        elif isinstance(ablate, dict):
+            remove = ablate.get("remove")
+            if remove is not None and not isinstance(remove, list):
+                _bad("sweep.ablate.remove", remove, "list")
+            elif isinstance(remove, list):
+                for i, path in enumerate(remove):
+                    if not isinstance(path, str):
+                        _bad(f"sweep.ablate.remove[{i}]", path, "string")
+            override = ablate.get("override")
+            if override is not None and not isinstance(override, list):
+                _bad("sweep.ablate.override", override, "list")
+            elif isinstance(override, list):
+                for i, entry in enumerate(override):
+                    if not isinstance(entry, dict):
+                        _bad(f"sweep.ablate.override[{i}]", entry, "mapping")
+                        continue
+                    for key in entry:
+                        if not isinstance(key, str):
+                            _bad(f"sweep.ablate.override[{i}]", key, "string")
+
+        # `sample` gets the same treatment at every depth `_sample_cells` reads,
+        # rather than one guard per input someone thought of: the container, then
+        # `n`/`method`/`seed`, then the `ranges` mapping, then each range's path,
+        # its single form key, and the two-element bound list the scaling
+        # indexes into. Each of these is an operation on user data — a
+        # comparison, a `dict` key, a `.split(".")`, a subscript — and each has a
+        # YAML-expressible type that makes it raise, which is why the walk is
+        # exhaustive over the *shapes* rather than over the examples. `bool` is
+        # excluded from `n` deliberately (`n: true` is an `int` to Python and
+        # nothing to a reader), and from a bound for the same reason.
+        # `sweep.sample_fault` refuses this same family from the other end, so a
+        # config reaching `expand` without passing here still gets a coded
+        # error; the value-level residue it also names (a `method` outside the
+        # enum, `n < 1`, an unknown form, inverted bounds) is `_check_sweep`'s
+        # `E-SWEEP-SAMPLE-INVALID`, because those are legal shapes carrying
+        # illegal values — the same division `grid` draws between its `list`
+        # guard here and `E-SWEEP-AXIS-EMPTY` there.
+        sample = sweep.get("sample")
+        if sample is not None and not isinstance(sample, dict):
+            _bad("sweep.sample", sample, "mapping")
+        elif isinstance(sample, dict):
+            n = sample.get("n")
+            if n is not None and (isinstance(n, bool) or not isinstance(n, int)):
+                _bad("sweep.sample.n", n, "integer")
+            method = sample.get("method")
+            if method is not None and not isinstance(method, str):
+                _bad("sweep.sample.method", method, "string")
+            seed = sample.get("seed")
+            if seed is not None and not isinstance(seed, str | int):
+                # Both types, because both are legal: `auto` and a pinned
+                # integer (§ What `auto` derives from). Reporting "expected a
+                # string" would send a user who wrote `seed: [1]` toward
+                # quoting a number.
+                _bad("sweep.sample.seed", seed, "string_or_integer")
+            ranges = sample.get("ranges")
+            if ranges is not None and not isinstance(ranges, dict):
+                _bad("sweep.sample.ranges", ranges, "mapping")
+            elif isinstance(ranges, dict):
+                for path, spec in ranges.items():
+                    if not isinstance(path, str):
+                        _bad("sweep.sample.ranges", path, "string")
+                        continue
+                    if not isinstance(spec, dict):
+                        _bad(f"sweep.sample.ranges.{path}", spec, "mapping")
+                        continue
+                    for form, bounds in spec.items():
+                        if not isinstance(form, str):
+                            _bad(f"sweep.sample.ranges.{path}", form, "string")
+                            continue
+                        where = f"sweep.sample.ranges.{path}.{form}"
+                        if not isinstance(bounds, list):
+                            _bad(where, bounds, "list")
+                            continue
+                        for bound in bounds:
+                            if isinstance(bound, bool) or not isinstance(bound, int | float):
+                                _bad(where, bound, "number")
 
     replication = doc.get("replication")
     if isinstance(replication, dict):
@@ -743,11 +912,42 @@ def _check_replication(
 def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     """Declared-but-unimplemented blocks, refused rather than silently ignored.
 
-    This build expands `sweep.baseline` and `sweep.grid` only. Both declared
-    orders are honored — `randomized` shuffles within each batch and
-    `as_declared` leaves the plan's step-major layout alone. `sweep.paired`,
-    `.ablate`, `.sample`, and `.groups` are read by nothing yet. It resolves a
-    unit roster, but several `data.units` sub-fields — allocation other than
+    This build expands `sweep.baseline`, `sweep.grid`, `sweep.paired`,
+    `sweep.sample` and `sweep.ablate` only. Both declared orders are honored —
+    `randomized` shuffles within each batch and `as_declared` leaves the plan's
+    step-major layout alone.
+
+    A `baseline` fixing only *some* of the swept axes is no longer refused here:
+    `sweep._baseline_cells` expands it over the rest, one baseline condition per
+    cell of the unfixed axes, which is § Expansion modes' second row and the row
+    it tells a reader to prefer. Each condition is compared against the baseline
+    of its own cell (`contrasts.baseline_for`), and a baseline is never a
+    comparison's subject, so the correction family counts comparisons rather
+    than conditions.
+
+    `sweep.paired` is no longer refused here: `_axes` composes it
+    as a single axis whose cells set several paths at once, per § Expansion
+    modes — `_check_shape` guards its container and entry shapes, and
+    `_check_sweep` refuses a path it shares with another axis-shaped mode
+    (`E-SWEEP-PATH-DUPLICATE`), the same way a bad `grid` shape or an
+    unresolvable `grid` path already were. Neither is `sweep.sample`, which
+    composes as one axis of `n` realized draws seeded from the design digest:
+    `_check_shape` guards every shape `_sample_cells` reads and `_check_sweep`
+    reports the value-level residue as `E-SWEEP-SAMPLE-INVALID`, its paths
+    through the same `E-SWEEP-PATH-UNKNOWN` `grid` uses, and its bounds through
+    the same `E-PARAM-VALUE` (§ Validation, "Sample ranges"). Neither is
+    `sweep.ablate`, which `expand` applies after the product as the one mode that
+    does not multiply: `_check_shape` guards every shape `ablation_changes`
+    reads, and `_check_sweep` checks each `override` value against its own
+    `Param` on the same `E-PARAM-VALUE`/`E-SWEEP-VALUE-UNNAMEABLE` pair a `grid`
+    value gets. Its composition rules are checked there too, as of this slice —
+    a `remove` on a parameter that can hold neither `false` nor `null`
+    (`E-SWEEP-ABLATE-TARGET`), `ablate` without a `baseline`
+    (`E-SWEEP-ABLATE-BASELINE-MISSING`), and `ablate` crossed with a parameter
+    axis (`E-SWEEP-ABLATE-CROSSED`). The one § Validation row still open is
+    "Ablation baseline isn't a group level", which needs a group axis to have a
+    level for a baseline to fix. `.groups` is read by nothing yet. It resolves a unit roster, but
+    several `data.units` sub-fields — allocation other than
     `within`, `assign`, `cluster_by`, `weight_by`, `measurements`, `holdout`,
     and a `resolver` source — are read by nothing yet either. Each of these
     would otherwise validate clean and then run something other than what the
@@ -776,17 +976,6 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     """
     sweep = doc.get("sweep") or {}
     for mode, code, why in (
-        ("paired", "E-SWEEP-PAIRED-UNSUPPORTED", "couples parameters into one axis"),
-        (
-            "ablate",
-            "E-SWEEP-ABLATE-UNSUPPORTED",
-            "emits 1 + n one-change conditions and reads the baseline rather than re-emitting it",
-        ),
-        (
-            "sample",
-            "E-SWEEP-SAMPLE-UNSUPPORTED",
-            "draws continuous ranges and labels its conditions `NN_sample`",
-        ),
         (
             "groups",
             "E-SWEEP-GROUPS-UNSUPPORTED",
@@ -799,32 +988,58 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
                 code,
                 f"sweep.{mode}",
                 f"{why}, and is specified but not implemented in this build — this build "
-                "expands `baseline` and `grid` only; the other modes will be honored in a "
-                "later slice",
+                "expands `baseline`, `grid`, `paired`, `sample` and `ablate` only; `groups` "
+                "will be "
+                "honored in a later slice",
             )
 
-    # A baseline that fixes only *some* of the grid's axes. `reference.md`:1415-1422
-    # states one rule with two cases: the baseline expands over whichever axes it
-    # does not fix, giving one baseline condition per cell of the unfixed axes.
-    # `expand` emits exactly one `00_baseline` row carrying only what the baseline
-    # literally names, so the declared design is not the executed design — the
-    # failure every other refusal in this function exists to prevent. Per-cell
-    # expansion is a real feature; until it lands, refuse rather than diverge.
-    # A baseline fixing every declared axis (including the no-grid case) is the
-    # supported row and is unaffected.
-    baseline = sweep.get("baseline") or {}
-    grid = sweep.get("grid") or {}
-    unfixed = [path for path in grid if path not in baseline]
-    if baseline and unfixed:
+    # A `baseline` declared beside a `sample` axis. `reference.md` § Sweeps and
+    # repeats states that the correction family "counts conditions from `grid`,
+    # `paired`, `ablate`, and `groups`, and skips `sample`", because "forty sobol
+    # draws … are forty points feeding one downstream curve, and nobody claims a
+    # finding about draw 17 against draw 1". Nothing in this build implements
+    # that exclusion: `contrasts.resolve_contrasts` emits one `vs_baseline`
+    # comparison per non-baseline condition whatever mode produced it, and
+    # `cli.command_run` corrects every interval against the whole set — so a
+    # `grid × sample` design is corrected against six comparisons where the
+    # document says two, and the intervals a reader is shown are narrower than
+    # the design supports. The declared design is not the executed design, which
+    # is the failure every other refusal in this function exists to prevent.
+    #
+    # **A `sample` sweep with no `baseline` is untouched and stays legal**:
+    # `resolve_contrasts` generates a comparison only against a *declared*
+    # baseline, so a sample-only sweep produces none and nothing is inflated. A
+    # declared `statistics.contrasts` entry is untouched too — its members are
+    # named by the user rather than generated per condition, so the family is
+    # exactly what was asked for.
+    #
+    # This restores, narrowly, the protection `E-SWEEP-BASELINE-PARTIAL` gave
+    # until it was retired: that refusal is what made `baseline` + `sample`
+    # unreachable, which is why the family semantics were never needed. Retiring
+    # it made the shape reachable without implementing them. The exclusion is
+    # `statistics`-family work rather than sweep work, so it lands with the slice
+    # that owns the correction family, and this refusal retires with it.
+    #
+    # **Whoever retires it: grep `E-SWEEP-SAMPLE-BASELINE` first.** Two comments
+    # elsewhere argue from this refusal rather than merely mentioning it —
+    # `sweep._baseline_cells` ("only `paired` reaches it from a baseline today")
+    # and `sweep.check_swept_value` — and both become false the moment a baseline
+    # may sit beside a `sample` axis again. They are marked as temporary at each
+    # site; this is the marker that makes them findable from here.
+    if sweep.get("baseline") and sweep.get("sample"):
         c.error(
-            "E-SWEEP-BASELINE-PARTIAL",
+            "E-SWEEP-SAMPLE-BASELINE",
             "sweep.baseline",
-            f"fixes no value for {', '.join(f'`{p}`' for p in unfixed)}, and a baseline "
-            "that leaves an axis free expands to one baseline condition per cell of the "
-            "unfixed axes — which is specified but not implemented in this build; this "
-            "build emits a single `00_baseline` condition, so the design executed would "
-            "not be the design declared. Per-cell baselines will be honored in a later "
-            "slice; fix a value on every swept axis for now",
+            "is declared beside a `sweep.sample` axis, so every non-baseline cell — every "
+            "combination of a draw with the other axes' levels, not every draw — becomes a "
+            "comparison against it, and a `sample` draw is not a comparison: the correction family "
+            "skips `sample` conditions, which is specified but not implemented in this "
+            "build, so each interval would be corrected against a family several times the "
+            "size the design has. Sample draws feed one downstream fit rather than being "
+            "compared to a reference, so declare only one of the two here; compare a "
+            "specific pair with a declared `statistics.contrasts` entry, or run the "
+            "reference condition as its own run and join the two in a `study`. The "
+            "combination will be honored once the family excludes drawn conditions",
         )
 
     units = _units_declaration(doc.get("data") or {}, c) or {}
@@ -941,6 +1156,63 @@ def _repeat_total(doc: dict[str, Any], unit_count: int | None) -> int | None:
     return total
 
 
+def _check_sampled_values(
+    sample: Any, spec: dict[str, Any], conditions: list[Any], c: Collector
+) -> None:
+    """Every value `sweep.sample` actually draws satisfies its own `Param`.
+
+    **Checking the bounds is not checking the values, and only the values
+    execute.** `uniform: [10, 200]` over `Param(int, ge=2)` has two perfectly
+    legal integer bounds and draws `118.38516808291541`, which a step then reads
+    where the template declares an `int`; `int_uniform: [10, 50]` over
+    `Param(int, choices=[10, 50])` passes on both endpoints and draws `37`,
+    which is neither choice. Both validate clean under a bounds-only check and
+    then run a config § Validation's "Types" and "Choices" rows promise to
+    refuse — the validates-clean-misbehaves-at-run class, one level up from the
+    shape class `_check_shape` and `sample_fault` close.
+
+    **The realized values are checked rather than the declaration's *form*,**
+    deliberately. Refusing "a non-`int_uniform` range on an `int` parameter"
+    would catch the first example and nothing else: it says nothing about
+    `choices`, `pattern`, `ge`/`lt`, or a `log_uniform` range that dips under a
+    `gt=0`, and the constraint vocabulary is closed but not small. What executes
+    is the drawn value, so that is what `Param.check` is asked about — the same
+    call `grid` values and `baseline` values already go through, on the same
+    identifier (`E-PARAM-VALUE`), rather than a `sample`-shaped approximation of
+    it.
+
+    Its cost, stated rather than hidden: the finding names a value the user did
+    not literally write. That is why the message quotes both the drawn value and
+    the range that produced it. It is not flaky — the draw is deterministic
+    given the config, so "this config draws an illegal value" is as stable a
+    claim as any other check here, and re-running `validate` on an unedited
+    config reports the same value. Only the *first* offending draw per path is
+    reported: `n: 50` over a wrong-typed range is one mistake, not fifty.
+    """
+    if not sample or sample_fault(sample) is not None:
+        return
+    for path in sample["ranges"]:
+        if path not in spec:
+            continue  # already reported as `E-SWEEP-PATH-UNKNOWN`
+        for condition in conditions:
+            if path not in condition.values:
+                continue
+            value = condition.values[path]
+            problem = spec[path].check(value)
+            if problem is None:
+                continue
+            form = next(iter(sample["ranges"][path]))
+            hint = ""
+            if spec[path].type_ is int and form != "int_uniform":
+                hint = " — `int_uniform` is the form that draws integers"
+            c.error(
+                "E-PARAM-VALUE",
+                f"sweep.sample.ranges.{path}.{form}",
+                f"draws `{render_value(value)}`, which {problem.lstrip()}{hint}",
+            )
+            break
+
+
 def _check_sweep(
     doc: dict[str, Any], template: Any, c: Collector, *, unit_count: int | None = None
 ) -> None:
@@ -967,17 +1239,31 @@ def _check_sweep(
     import difflib
 
     sweep = doc.get("sweep") or {}
-    known = {"baseline", "grid", "paired", "ablate", "sample", "groups"}
+    # Not a literal set: `sweep.SWEEP_MODES` is `AXIS_MODES + NON_AXIS_MODES`,
+    # and this check is the vocabulary's choke point — a mode absent from it is
+    # refused here, so no config can use one. Reading the derived tuple is what
+    # makes `E-SWEEP-ABLATE-CROSSED`'s "any axis-shaped mode" true of a mode
+    # added later: it cannot become usable without being classified as an axis
+    # or not. A literal here would let the two drift, with this check accepting
+    # a mode `axis_modes_present` has never heard of.
     for key in sweep:
-        if key not in known:
-            near = difflib.get_close_matches(key, sorted(known), n=1)
+        if key not in SWEEP_MODES:
+            near = difflib.get_close_matches(key, sorted(SWEEP_MODES), n=1)
             hint = f" — did you mean `{near[0]}`?" if near else ""
             c.error(
                 "E-SWEEP-KEY-UNKNOWN",
                 f"sweep.{key}",
-                f"is not a sweep mode{hint} — `expand` understands only `baseline` and "
-                "`grid` in this build, so an unrecognised key would expand to zero "
-                "conditions and the run would execute nothing while reporting success",
+                # The vocabulary comes from `SWEEP_MODES`, the same tuple the
+                # check gates on. Naming the *implemented* modes here instead
+                # made the message contradict its own emit site the moment the
+                # two lists diverged: this branch accepts `groups` and the
+                # sentence said `expand` does not understand it. A mode that is
+                # recognized but not built is refused by its own
+                # `-UNSUPPORTED` code, which is where that fact belongs.
+                f"is not a sweep mode{hint} — the modes are "
+                + ", ".join(f"`{mode}`" for mode in sorted(SWEEP_MODES))
+                + ", so an unrecognised key would expand to zero conditions and the run "
+                "would execute nothing while reporting success",
             )
 
     spec = template.parameter_spec
@@ -1026,6 +1312,127 @@ def _check_sweep(
         for i, value in enumerate(values):
             _value_checks(path, value, f"sweep.grid.{path}[{i}]", nameable=True)
 
+    # `sweep.paired`, through the same two checks `grid` gets, for the same
+    # reason and in `_axes` order. A `paired` entry is structurally a `grid`
+    # cell written the other way round — one value per path, several paths per
+    # condition — so every fault a `grid` value can carry, a `paired` value
+    # carries identically: `resolve_condition_cfg`'s `setdefault` walk *creates*
+    # a misspelled path (`analysis.methdo`) rather than failing on it, so the
+    # swept parameter keeps the config's own value in every condition while each
+    # condition still earns a distinct `parameters_hash` — one experiment
+    # executed twice and recorded as a two-arm sweep, which is
+    # `experimental-designs.md` § Mistakes core prevents' "a typo'd parameter
+    # silently using a default". `nameable=True` because a `paired` value IS
+    # what `label_for` renders (unlike a `baseline` one): a value carrying `/`
+    # passes into a condition *directory* segment, so `analysis.method: ../../x`
+    # would resolve outside the condition directory.
+    #
+    # Task 2 promoted `paired` from refused to executable and left these behind;
+    # it was the sole axis-shaped mode without them.
+    #
+    # Both `isinstance` guards are unreachable today — `_check_shape` refuses a
+    # non-list `paired`, a non-mapping entry and a non-string key fatally, and
+    # `validate_config` returns before this function runs — and are kept anyway,
+    # exactly as the `ablate.override` loop keeps its own: `_check_sweep` is
+    # called directly by tests, and `validate` collects findings and never
+    # raises.
+    paired = sweep.get("paired") or []
+    if isinstance(paired, list):
+        for i, entry in enumerate(paired):
+            if not isinstance(entry, dict):
+                continue  # `_check_shape` already refused it, fatally
+            for path, value in entry.items():
+                if not isinstance(path, str):
+                    continue  # likewise
+                where = f"sweep.paired[{i}].{path}"
+                # Gated on the path first: `_value_checks` indexes `spec[path]`
+                # unguarded, so an unknown path would raise `KeyError`.
+                if _path_resolves(path, where):
+                    _value_checks(path, value, where, nameable=True)
+
+    # `sweep.sample`, from three angles, in the order a reader would ask them.
+    # First whether the declaration can be drawn from at all: `sample_fault` is
+    # `sweep.py`'s own gate, shared rather than reimplemented so the check that
+    # reports and the code that draws can never disagree about what is legal.
+    # Then, only once it can, the two checks that need the template: each swept
+    # path is a parameter it declares (`E-SWEEP-PATH-UNKNOWN`, the same check
+    # `grid` gets), and each bound satisfies that parameter's own constraints —
+    # which is § Validation's "Sample ranges" row exactly, whose example
+    # ("upper bound 1.4 violates the parameter's `lt=1`") is `Param.check` on
+    # the bound, and so reports `E-PARAM-VALUE` like every other illegal value
+    # rather than a code of its own. A bound is checked `nameable=False`: it is
+    # never rendered into a label — the *drawn* value is — and a drawn float
+    # always renders inside `SWEPT_VALUE_PATTERN`.
+    sample = sweep.get("sample")
+    if sample:
+        fault = sample_fault(sample)
+        if fault is not None:
+            c.error("E-SWEEP-SAMPLE-INVALID", "sweep.sample", fault)
+        else:
+            # Not `spec` — that name is this function's `template.parameter_spec`,
+            # which `_path_resolves` and `_value_checks` both close over.
+            for path, declared_range in sample["ranges"].items():
+                if not _path_resolves(path, f"sweep.sample.ranges.{path}"):
+                    continue
+                form, bounds = next(iter(declared_range.items()))
+                for i, bound in enumerate(bounds):
+                    _value_checks(
+                        path, bound, f"sweep.sample.ranges.{path}.{form}[{i}]", nameable=False
+                    )
+
+    # `grid` and `paired` writing the same path is not a shape fault — both are
+    # well-formed on their own — but `expand`'s product applies each axis's cell
+    # to `values` in declared order, so whichever mode is later in `_axes`
+    # silently overwrites the other's value for that path on every combination.
+    # Some combinations then collapse to byte-identical `values`: two different
+    # `grid` settings paired with the same `paired` entry both resolve to that
+    # entry's value, producing duplicate conditions `_condition_labels` cannot
+    # see (it collects into a `set`). Filed as a spec gap in
+    # `docs/superpowers/spec-defects.md` — § Expansion modes never states that a
+    # path belongs to at most one axis-shaped mode — and refused here rather
+    # than left to execute a design other than the one declared.
+    #
+    # Walked over every axis-shaped mode rather than the `grid`/`paired` pair it
+    # started as: `sample` joins the same product, so a path it shares with
+    # either would reopen exactly this hole through a third route — and a draw
+    # overwritten by a `grid` cell is worse than the enumerated case, since the
+    # drawn value is recorded in `sweep.yaml` as the condition's while the run
+    # used another. The report names the *later* mode, which is the one whose
+    # value wins, in `_axes` order (grid, then paired, then sample).
+    named_by: dict[str, list[tuple[str, str]]] = {}
+
+    def _names(mode: str, path: Any, where: str) -> None:
+        if isinstance(path, str):
+            named_by.setdefault(path, []).append((mode, where))
+
+    for path in grid:
+        _names("grid", path, f"sweep.grid.{path}")
+    for i, entry in enumerate(sweep.get("paired") or []):
+        if isinstance(entry, dict):
+            for path in entry:
+                _names("paired", path, f"sweep.paired[{i}]")
+    if isinstance(sample, dict) and isinstance(sample.get("ranges"), dict):
+        for path in sample["ranges"]:
+            _names("sample", path, f"sweep.sample.ranges.{path}")
+
+    for path in sorted(named_by):
+        occurrences = named_by[path]
+        modes = {mode for mode, _ in occurrences}
+        if len(modes) < 2:
+            continue  # one mode naming a path repeatedly is that mode's own business
+        last_mode = occurrences[-1][0]
+        earlier = ", ".join(
+            f"`{where}`" for mode, where in occurrences if mode != last_mode
+        )
+        c.error(
+            "E-SWEEP-PATH-DUPLICATE",
+            f"sweep.{last_mode}.{path}",
+            f"is also written by {earlier} — two axis-shaped modes "
+            "writing the same path make `expand`'s product overwrite one mode's value "
+            "with the other's on every combination, collapsing some conditions to "
+            "duplicates the run would silently execute twice",
+        )
+
     # `sweep.baseline` gets the same per-entry checks — one value, not a list.
     # `reference.md`:218 names this by example ("Baseline is a valid condition |
     # `sweep.baseline` sets `analysis.method: pearsonn`"). Unchecked, a misspelled
@@ -1036,6 +1443,140 @@ def _check_sweep(
     for path, value in baseline.items():
         if _path_resolves(path, f"sweep.baseline.{path}"):
             _value_checks(path, value, f"sweep.baseline.{path}", nameable=False)
+
+    # `sweep.ablate.override`, through the same two checks, because an override
+    # entry is structurally a `grid` value: a value the user wrote at a dotted
+    # path, planted into a condition's config and rendered into its label. Left
+    # unchecked, `override: [{analysis.method: pearsonn}]` executes a condition
+    # whose config holds a value § Validation's "Choices" row promises to refuse,
+    # and `nameable=True` because an override value — unlike a `baseline` one —
+    # *is* what `label_for` renders, so a value carrying the axis separator would
+    # produce a label that cannot be parsed back into axes.
+    #
+    # Gated on `_path_resolves` first, exactly as the `grid` and `sample` loops
+    # are: `_value_checks` indexes `spec[path]` unguarded, so an unknown path
+    # would raise `KeyError` inside a function contracted never to raise.
+    #
+    # A `remove` path takes the SAME path check, on the same identifier, for the
+    # same reason `baseline` does: `expand` plants `false`/`null` at it through
+    # `resolve_condition_cfg`'s `setdefault` walk, so a misspelling
+    # (`remove: [analysis.methdo]`) creates a parameter this template never
+    # declared and runs a condition whose label claims a change nothing made.
+    # What `remove` then *produces* at a path that does resolve is
+    # `E-SWEEP-ABLATE-TARGET`'s question, below.
+    ablate = sweep.get("ablate")
+
+    # § Expansion modes: `ablate` "reads the baseline rather than re-emitting
+    # it", so without one there is nothing for a change to be one change away
+    # *from* — "It therefore requires `sweep.baseline`, which `validate`
+    # checks". `expand` is permissive here by design (it emits n conditions
+    # each carrying only its own change), which is why the refusal lives here
+    # rather than there. Truthiness, not presence: `init` writes `ablate: null`,
+    # and a null `ablate` expands to nothing and is not a declared ablation.
+    if ablate and not baseline:
+        c.error(
+            "E-SWEEP-ABLATE-BASELINE-MISSING",
+            "sweep.ablate",
+            "is declared but `sweep.baseline` is not — an ablation is one change away "
+            "from the baseline, so there is nothing to ablate from; without one, each "
+            "ablated condition carries only its own change and the run has no reference "
+            "condition to compare against. Declare `sweep.baseline`",
+        )
+
+    # § Expansion modes: "the product of 'vary one thing at a time' with a
+    # second parameter axis is no longer one thing at a time, and there is no
+    # defensible reading of what it would mean". The modes come from
+    # `sweep.AXIS_MODES` rather than a tuple written here — the rule names no
+    # mode ("a second parameter axis"), and neither should its enforcement. A
+    # mode added to `_axes` alone would still slip past this, which is why
+    # `AXIS_MODES` is not the pin: `known` above reads `SWEEP_MODES`, derived
+    # from `AXIS_MODES + NON_AXIS_MODES`, so a seventh mode is refused outright
+    # (`E-SWEEP-KEY-UNKNOWN`) until someone classifies it — and classifying it
+    # as an axis is what puts it here.
+    # `groups` is deliberately absent from that set and is the row's stated
+    # exception: it varies units rather than parameters, so every condition is
+    # still exactly one parameter change from its own arm's baseline. (`groups`
+    # is refused for its own reason today, `E-SWEEP-GROUPS-UNSUPPORTED`.)
+    crossed_modes = axis_modes_present(sweep) if ablate else []
+    if crossed_modes:
+        c.error(
+            "E-SWEEP-ABLATE-CROSSED",
+            "sweep.ablate",
+            f"cannot be combined with {', '.join(f'`sweep.{m}`' for m in crossed_modes)} — "
+            "`ablate` varies one thing at a time and a parameter axis varies a second, "
+            "so their product is no design with a defensible reading. Split the axis "
+            "into its own run, or express the ablation as `paired` rows. Only "
+            "`sweep.groups` composes with `ablate`, because it varies units rather than "
+            "parameters",
+        )
+
+    if isinstance(ablate, dict):
+        for i, path in enumerate(ablate.get("remove") or []):
+            if not isinstance(path, str) or not _path_resolves(
+                path, f"sweep.ablate.remove[{i}]"
+            ):
+                continue
+            # § Validation, "Ablation targets": "`sweep.ablate.remove[0]` is
+            # `analysis.min_samples` (int); `remove` needs a boolean or nullable
+            # parameter — use `override`". Two branches, one identifier, because
+            # they are one question asked of the two things that answer it —
+            # the parameter, and the baseline `sweep.removal_value` reads.
+            #
+            # Branch 1 is the row's own words and is a fact about the parameter
+            # alone, so it is ungated by the baseline: a `remove` on an `int`
+            # with no `null` in its domain has nothing `remove` could set it to,
+            # whatever the baseline says.
+            #
+            # Branch 2 exists because task 4 coupled the two readings (see
+            # `docs/superpowers/spec-defects.md`, "Row 216 has two readings"):
+            # `removal_value` picks `false` versus `null` from the *baseline's*
+            # value, having no `parameter_spec` to ask, so a boolean the
+            # baseline does not fix takes the nullable reading and plants `null`
+            # at a non-nullable parameter — branch 1 passes it (it is a boolean)
+            # and the run executes a value the "Types" row promises to refuse.
+            # Checking what `removal_value` produces rather than what the config
+            # declares is what closes that: the declaration is legal and the
+            # product is not. It is `elif`, and gated on a declared baseline,
+            # because `E-SWEEP-ABLATE-BASELINE-MISSING` owns the no-baseline
+            # config whole — reporting every `remove` entry again there would
+            # restate one fault n times.
+            #
+            # `remove` only, never `override`: an override states its own value,
+            # so the baseline does not decide what it produces, and refusing an
+            # override on a path the baseline leaves free would reject a legal
+            # config (the same line `sweep.ablated_paths` draws when it keeps
+            # ablated paths out of the axis-shaped modes' set).
+            param = spec[path]
+            where = f"sweep.ablate.remove[{i}]"
+            if not (param.type_ is bool or param.nullable):
+                c.error(
+                    "E-SWEEP-ABLATE-TARGET",
+                    where,
+                    f"is `{path}`, which is neither a boolean nor nullable — `remove` "
+                    "sets a boolean parameter to `false` and a nullable one to `null`, "
+                    "and this parameter can hold neither; use `override` to state the "
+                    "value the ablated condition should run instead",
+                )
+                continue
+            problem = param.check(removal_value(baseline, path))
+            if baseline and problem:
+                c.error(
+                    "E-SWEEP-ABLATE-TARGET",
+                    where,
+                    f"is `{path}`, which `sweep.baseline` fixes no *boolean* value for — "
+                    "so `remove` reads the baseline, finds nothing it can turn off, and "
+                    f"sets `null` rather than `false`, which {problem.lstrip()}. "
+                    "Fix the parameter to `true` or `false` in `sweep.baseline`: an "
+                    "ablation is one change away from the baseline, so the baseline has "
+                    "to state what is being removed",
+                )
+        for i, entry in enumerate(ablate.get("override") or []):
+            if not isinstance(entry, dict):
+                continue  # `_check_shape` already refused it, fatally
+            for path, value in entry.items():
+                where = f"sweep.ablate.override[{i}].{path}"
+                if _path_resolves(path, where):
+                    _value_checks(path, value, where, nameable=True)
 
     # Guarded the same way `_condition_labels` guards its own `expand(doc)`:
     # `validate` collects findings and never raises. A `sweep.grid` axis value
@@ -1065,6 +1606,7 @@ def _check_sweep(
                 "reporting success — declare `baseline`, a non-empty `grid`, or remove "
                 "`sweep` entirely",
             )
+        _check_sampled_values(sample, spec, conditions, c)
 
     # `reference.md` § Validation, "Baseline leaves contrasts confounded": a
     # `sweep.baseline` that "fixes a value on every axis" leaves comparisons that
@@ -1073,13 +1615,54 @@ def _check_sweep(
     # declaration alone decides it, so it is warnable here.
     #
     # **The condition is the row's, and it is deliberately narrower than run
-    # time.** Axes are compared over `sweep.grid`'s keys only, and only when the
-    # baseline fixes every one of them — which is the row's own "fixes a value
-    # on every axis", and is also the only baseline-plus-grid shape this build
-    # admits at all (`_check_unimplemented`'s `E-SWEEP-BASELINE-PARTIAL` refuses
-    # a baseline that leaves an axis free, since per-cell baseline expansion is
-    # specified but not implemented). `cli._differing_axes` instead walks the
-    # *union* of both sides' keys against a sentinel, so a baseline fixing an
+    # time.** Axes are compared over `sweep.grid`'s keys only — `swept_axes =
+    # list(grid)`, no other mode — and only when the baseline fixes every one of
+    # them, which is the row's own "fixes a value on every axis". A baseline that
+    # leaves a *grid* axis free is a different shape: `sweep._baseline_cells`
+    # gives it one baseline per cell of the unfixed axes rather than one
+    # reference for the whole run, so the row's condition does not hold and the
+    # `all(...)` guard below skips it. That is a config core accepts, and this
+    # warning saying nothing about it is silence rather than a verdict —
+    # deliberately so, and NOT a claim that nothing is confounded there. A
+    # baseline fixing *two* of three swept axes leaves the third free, so this
+    # guard is False, while every cell that moves both fixed axes still differs
+    # from its own cell's baseline on both and is marked `confounded` at run
+    # time — measured, and pinned by
+    # `test_a_partly_fixed_baseline_is_silent_while_its_run_marks_confounded`.
+    #
+    # **The per-cell mechanism above explains the `grid` case and only that
+    # one.** Two shapes are silent for a narrower reason, and stating the
+    # per-cell expansion as though it covered them would be false. First, a
+    # baseline that fixes *some* of the paths a multi-path `paired` axis varies
+    # — `paired` and not `sample`, which cannot be declared beside a baseline at
+    # all (`E-SWEEP-SAMPLE-BASELINE`): `_baseline_cells` reads fixedness off the cells'
+    # paths and counts an axis fixed when the baseline names *any* of them, so
+    # nothing expands per cell — there is one baseline, every comparison against
+    # it differs on the paths the baseline left alone, and the run marks a
+    # comparison `confounded: true` while this stays quiet whenever that level
+    # *also* differs on a fixed path. Not every one of them does: `confounded` is
+    # more than one differing path rather than any, so a level whose value on the
+    # fixed path equals the baseline's differs on one path only and is reported
+    # clean. The same half-fixed axis can yield both verdicts at once, and saying
+    # otherwise here would be the claim-wider-than-the-code this comment replaced.
+    # Second, a `paired` axis is outside `swept_axes` whether the baseline
+    # touches it or not. Neither is a behaviour claim being made here: widening
+    # the guard is a behaviour change, and this comment's job is to say what the
+    # guard does rather than what a reader might assume from the row above it.
+    #
+    # **The remedy is in the message, and it is per-cell targeting that earned
+    # it.** A run now takes each comparison against its own cell's baseline
+    # (`contrasts.baseline_for`), so "leave the axis you are stratifying over
+    # free" names an outcome this build delivers: the free axis stops appearing
+    # in `differs_on` at all. Task 7 could not say that — targeting was
+    # single-baseline then, and freeing an axis left the same comparison
+    # `confounded` — so the message stated the fact and stopped, and the remedy
+    # waited for the build to make it true rather than being hedged with build
+    # state. It is true now — for a `grid` axis, which is the only kind this
+    # message is ever emitted beside, since the guard reads no other mode.
+    #
+    # `cli._differing_axes` instead walks the *union* of both sides' keys against
+    # a sentinel, so a baseline fixing an
     # axis the grid never sweeps adds a differing axis to every comparison and
     # can mark `confounded` where this warning stays silent. That direction is
     # the safe one — this never fires where a run would not mark the comparison
@@ -1107,7 +1690,9 @@ def _check_sweep(
                 f"{len(conditions) - 1} baseline comparisons differ on more than one axis "
                 f"and are reported `confounded: true` — `{example.label}` differs on "
                 f"{', '.join(f'`{a}`' for a in axes)}, so its delta mixes those effects "
-                "and no amount of correct pairing separates them",
+                "and no amount of correct pairing separates them; fix the axis you are "
+                "measuring and leave the ones you are stratifying over free, and each "
+                "cell gets its own baseline",
             )
 
     repeat_total = _repeat_total(doc, unit_count)

@@ -64,7 +64,14 @@ from publishable.stats import (
     unit_table_from_rows,
 )
 from publishable.strata import levels_for
-from publishable.sweep import condition_dir_name, expand, sweep_document
+from publishable.sweep import (
+    _swept_paths,
+    ablated_paths,
+    condition_dir_name,
+    expand,
+    sample_seed_for,
+    sweep_document,
+)
 from publishable.templates.base import BaseTemplate
 from publishable.templates.registry import get_template
 from publishable.units import Unit, UnitList, partition_units, resolve_units, units_hash
@@ -191,13 +198,15 @@ def _differing_axes(of: "Condition", against: "Condition") -> list[str]:
     `Condition.values` is built by `sweep.expand` from `grid.items()`, so
     iterating `of.values` first gives declaration order — which is what
     makes `differs_on` stable across runs rather than set-ordered. But the
-    two sides' key sets are not guaranteed equal: `validate` requires every
-    swept `sweep.grid` axis to also be fixed in `sweep.baseline`, not the
-    reverse, so a baseline may fix an axis the grid never sweeps — present
-    in the baseline condition's `values` and absent from every grid
-    condition's. Iterating only `of.values` would silently skip exactly that
-    axis whenever it differs from that axis's own parameter default, so this
-    walks the union of both sides' keys instead, comparing with `.get` against
+    two sides' key sets are not guaranteed equal, and since
+    `E-SWEEP-BASELINE-PARTIAL` was retired they can differ in *both*
+    directions: a baseline may fix an axis the grid never sweeps (present in
+    the baseline condition's `values`, absent from every grid condition's),
+    and a grid axis need no longer be fixed in the baseline at all, which is
+    what per-cell expansion made legal. Iterating only `of.values` would
+    silently skip an axis of the first kind whenever it differs from that
+    axis's own parameter default, so this walks the union of both sides' keys
+    — required rather than merely defensive — comparing with `.get` against
     a sentinel (not `None`, which a real swept value could legitimately be)
     so a key present on one side and absent on the other always counts as
     differing rather than being skipped.
@@ -723,7 +732,23 @@ def command_run(config_path: Path) -> int:
     # grid axis is. Reading the grid alone left a baseline-only path resolving
     # to the base value, which is a value no condition in the run used.
     sweep_block = doc.get("sweep") or {}
-    swept_paths = set(sweep_block.get("grid") or {}) | set(sweep_block.get("baseline") or {})
+    # `_swept_paths` rather than `grid` alone: every axis-shaped mode's paths vary
+    # across conditions, and `paired`'s and `sample`'s did not reach here when each
+    # became a real axis — a sampled path stayed readable at `run`/`summary` scope
+    # and resolved to the base config's value, which is exactly the "a value no
+    # condition in the run used" failure the baseline half of this line exists to
+    # prevent, reached through a mode added after it was written.
+    # `ablated_paths` is unioned in for the same reason and by the same rule,
+    # from the other side of the axis/non-axis split: an ablated path varies
+    # across conditions too. Most are already covered by the `baseline` term —
+    # a removed path is one the baseline fixes — but an `override` path the
+    # baseline leaves alone is not, and it is exactly the residue this line has
+    # now been widened for three times.
+    swept_paths = (
+        set(_swept_paths(sweep_block))
+        | set(ablated_paths(sweep_block))
+        | set(sweep_block.get("baseline") or {})
+    )
     plan = build_plan(  # phase 4
         experiment,
         conditions=[(c.index, c.label) for c in conditions],
@@ -802,6 +827,7 @@ def command_run(config_path: Path) -> int:
                     execution_order,
                     order_seed,
                     partitions=partitions,
+                    sample_seed=sample_seed_for(doc),
                 ),
                 sort_keys=False,
             )

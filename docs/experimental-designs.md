@@ -118,7 +118,7 @@ data:
 
 Axes resolve in declaration order and `stratify_by` may name an earlier axis, which is what lets one declaration cover every crossed case: two `by_attribute` axes when both factors already exist, an observed axis followed by a randomized one stratified on it, or two randomized axes for a true factorial randomization. `ratio` always names its own axis's levels, so no cell tuple appears in the config.
 
-Every cell is a condition, so cells get their own `values`, their own labels, and their own partitions — folds and holdouts are drawn *within* each cell, and `limits.min_units_per_cell` is checked per cell, which is where a 2×2 over a fixed roster starts to bite. Fixing the randomized axis in `sweep.baseline` while leaving the observed one free gives one baseline per stratum, so `sex=f__arm=treatment` compares against `sex=f__arm=control` and nothing is confounded. See [reference.md § Expansion modes](reference.md#expansion-modes).
+Every cell is a condition, so cells get their own `values`, their own labels, and their own partitions — folds and holdouts are drawn *within* each cell, and `limits.min_units_per_cell` is checked per cell, which is where a 2×2 over a fixed roster starts to bite. Fixing the randomized axis in `sweep.baseline` while leaving the observed one free gives one baseline per stratum, so `sex=f__arm=treatment` compares against `sex=f__baseline` — that stratum's own reference, holding `arm: control` — and nothing is confounded. See [reference.md § Expansion modes](reference.md#expansion-modes).
 
 As with a parameter factorial below, **main effects and interaction terms are not computed** — core reports each cell and its contrasts, and the model is yours.
 

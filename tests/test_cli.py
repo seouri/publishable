@@ -1219,6 +1219,80 @@ def test_a_baseline_sweep_reports_a_corrected_interval(tmp_path, capsys, monkeyp
     assert strongest["ci95_corrected"][1] > strongest["ci95"][1]
 
 
+def test_per_cell_baselines_correct_against_four_comparisons_not_five(
+    tmp_path, capsys, monkeypatch
+):
+    """§ Expansion modes: "six conditions under two per-arm baselines are four
+    comparisons in the correction family, not five."
+
+    The reach of task 8's rule, observed where it is actually spent. `family_size`
+    is `comparisons × metrics` and every `ci95_corrected` in the run is computed
+    from it, so first-baseline targeting made this a family of 5 — the second
+    baseline entering as a comparison of one reference against another — and
+    corrected every interval in the run at α/5 through α. Nothing diagnosed it,
+    which is why this is pinned end to end rather than at `resolve_contrasts`.
+
+    `analysis.min_samples` is the free axis, `analysis.method` the fixed one: two
+    baselines, one per `min_samples` cell, four product rows each taken against
+    the baseline of its own cell.
+    """
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {
+                "analysis.method": ["pearson", "spearman"],
+                "analysis.min_samples": [10, 20],
+            },
+        },
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    conditions = run["results"]["conditions"]
+    assert [c["label"] for c in conditions] == [
+        "min_samples=10__baseline",
+        "min_samples=20__baseline",
+        "method=pearson__min_samples=10",
+        "method=pearson__min_samples=20",
+        "method=spearman__min_samples=10",
+        "method=spearman__min_samples=20",
+    ]
+    # A baseline is a reference, so it carries no `vs_baseline` at all — the
+    # second one being compared against the first is exactly the fifth member.
+    assert [c["label"] for c in conditions if c.get("vs_baseline")] == [
+        "method=pearson__min_samples=10",
+        "method=pearson__min_samples=20",
+        "method=spearman__min_samples=10",
+        "method=spearman__min_samples=20",
+    ]
+    entries = [
+        metric
+        for condition in conditions
+        for step_block in condition.get("vs_baseline", {}).values()
+        for metric in step_block.values()
+    ]
+    assert len(entries) == 4
+    for entry in entries:
+        assert entry["family"] == {"comparisons": 4, "metrics": 1}
+        assert entry["family_size"] == 4
+    # Holm over four members: α/4 … α, and no level is α/5.
+    assert sorted(e["correction_level"] for e in entries) == [
+        pytest.approx(0.05 / 4),
+        pytest.approx(0.05 / 3),
+        pytest.approx(0.05 / 2),
+        pytest.approx(0.05),
+    ]
+    # Each comparison is taken against its own cell's baseline, so it differs on
+    # the fixed axis alone — never on `analysis.min_samples`, which is what a
+    # cross-cell target would show here.
+    assert all("analysis.min_samples" not in e.get("differs_on", []) for e in entries)
+    assert not any(e.get("confounded") for e in entries)
+
+
 def test_a_comparison_reads_its_own_condition_not_condition_zero():
     """A comparison whose `of` is deliberately not `0` — the same
     called-directly treatment `_check_contrasts`'s kept guard gets in
@@ -3896,3 +3970,100 @@ def test_acceptance_the_verdict_record_carries_every_field(tmp_path, capsys, mon
         "family_size": 2,
         "family": {"hypotheses": 2},
     }
+
+
+def test_a_sampled_sweep_runs_and_records_its_seed_and_draws(tmp_path: Path):
+    """§ "`sweep.yaml` — the resolved plan": a `sample` sweep adds the drawn
+    `values` per condition and the seed they came from, so a reader never
+    re-derives the design. End to end, because a drawn value has to survive
+    `yaml.safe_dump` (a NumPy scalar would not), has to render into a condition
+    directory name, and has to reach the executed condition's `cfg` — three
+    things `expand`'s own tests cannot see.
+    """
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        sweep={
+            "sample": {
+                "n": 3,
+                "method": "latin_hypercube",
+                "seed": "auto",
+                "ranges": {"analysis.confidence": {"uniform": [0.80, 0.99]}},
+            }
+        },
+    )
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+
+    assert isinstance(sweep["sample_seed"], int)
+    drawn = [c["values"]["analysis.confidence"] for c in sweep["conditions"]]
+    assert len(drawn) == 3
+    assert all(isinstance(v, float) and 0.80 <= v <= 0.99 for v in drawn)
+    assert len(set(drawn)) == 3
+    for i, value in enumerate(drawn):
+        assert (doc["run_dir"] / "conditions" / f"{i:02d}_confidence={value!r}").is_dir()
+
+
+_READS_A_SWEPT_PARAM_SUMMARY_STEP = '''\
+# generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "summary"
+
+    def run(self, cfg, io):
+        # `analysis.confidence` is sampled, so `summary` scope has no single
+        # condition to read it from.
+        return {{"confidence": cfg.parameters.analysis.confidence}}
+'''
+
+
+def test_a_sampled_path_is_unreadable_at_run_scope(tmp_path: Path, capsys):
+    """A path any axis-shaped mode sweeps varies across conditions, so a `run`- or
+    `summary`-scoped step cannot read it: `resolve_wide_cfg` plants a `SweptAway`
+    marker and `E-STEP-SWEPT-PARAM` is raised the moment it is read, rather than
+    the base config's value being handed back — a value no condition in the run
+    used. `command_run` built that path set from `sweep.grid` and `sweep.baseline`
+    alone, so a sampled (or `paired`) path silently stayed readable once each
+    became a real axis."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        extra_steps=["summarize"],
+        extra_step_source=_READS_A_SWEPT_PARAM_SUMMARY_STEP,
+        expect_exit=EXIT_PARTIAL,
+        sweep={
+            "sample": {
+                "n": 2,
+                "ranges": {"analysis.confidence": {"uniform": [0.80, 0.99]}},
+            }
+        },
+    )
+    ledger = (doc["run_dir"] / "executions.jsonl").read_text()
+    assert '"status": "failed"' in ledger
+    assert "E-STEP-SWEPT-PARAM" in doc["stdout"] + ledger
+
+
+def test_an_ablate_override_path_is_unreadable_at_run_scope(tmp_path: Path, capsys):
+    """The same rule from the other side of the axis/non-axis split. `ablate` is
+    not an axis, so its paths are deliberately not in `_swept_paths`; they still
+    vary across conditions, so `command_run` unions `ablated_paths` into the set
+    it makes unreadable. A `remove` path is already covered by the `baseline`
+    term — the baseline is what an ablation removes from — so the residue this
+    test pins is an `override` path the baseline leaves alone."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        extra_steps=["summarize"],
+        extra_step_source=_READS_A_SWEPT_PARAM_SUMMARY_STEP,
+        expect_exit=EXIT_PARTIAL,
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "ablate": {"override": [{"analysis.confidence": 0.9}]},
+        },
+    )
+    ledger = (doc["run_dir"] / "executions.jsonl").read_text()
+    assert '"status": "failed"' in ledger
+    assert "E-STEP-SWEPT-PARAM" in doc["stdout"] + ledger

@@ -1,5 +1,8 @@
+import pytest
+
+from publishable.cli import _differing_axes
 from publishable.contrasts import resolve_contrasts, units_matching
-from publishable.sweep import Condition
+from publishable.sweep import Condition, expand
 from publishable.units import Unit, UnitList
 
 
@@ -120,3 +123,213 @@ def test_values_compare_as_strings():
     `"1"`; comparing them raw would silently match nothing."""
     r = _roster(("u1", {"cohort": "1"}))
     assert units_matching(r, {"cohort": 1}) == {"u1"}
+
+
+def test_two_per_cell_baselines_are_four_comparisons_not_five():
+    """§ Expansion modes, last line of the baseline table's section: "six conditions
+    under two per-arm baselines are four comparisons in the correction family, not
+    five."
+
+    The tracked handle for the window H2 task 7 opened. Task 6 implemented per-cell
+    baseline expansion and `E-SWEEP-BASELINE-PARTIAL` was the only thing keeping any
+    config from reaching it; task 7 retired that refusal, which makes a
+    multi-baseline run reachable while contrast targeting is still single-baseline.
+    Nothing diagnosed the wrong family size, so this was carried as an
+    `xfail(strict=True)` until task 8 landed per-cell targeting.
+
+    Built from `expand` rather than hand-written `Condition`s deliberately — the
+    count under test is a property of the real expansion, and a hand-built list
+    would let the two drift apart.
+
+    **The pairs are asserted, not only the count.** Four comparisons all pointing at
+    baseline `0` would satisfy `== 4` while every `sex=m` row was still taken against
+    the `sex=f` reference, which is the confound this test exists to catch rather than
+    the number it exists to state."""
+    conditions = expand(
+        {
+            "sweep": {
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {
+                    "analysis.method": ["pearson", "spearman"],
+                    "data.sex": ["f", "m"],
+                },
+            }
+        }
+    )
+    assert [c.is_baseline for c in conditions] == [True, True, False, False, False, False]
+    assert [c.label for c in conditions[:2]] == ["sex=f__baseline", "sex=m__baseline"]
+
+    got = resolve_contrasts({}, conditions)
+    assert len(got) == 4
+    # `sex=f` rows against baseline 0, `sex=m` rows against baseline 1 — each
+    # against the reference of its own cell of the one free axis, `data.sex`.
+    assert [(c.of, c.against) for c in got] == [(2, 0), (3, 1), (4, 0), (5, 1)]
+
+
+def test_each_per_cell_comparison_differs_on_at_most_the_swept_axis():
+    """The other half of "right number for the right reason": a cross-cell target
+    would show `data.sex` among the axes a comparison differs on.
+
+    `method=pearson__sex=f` differs on *nothing* from `sex=f__baseline` — the
+    baseline fixes `analysis.method: pearson` while `pearson` is also a grid level,
+    so the two rows coincide, which `sweep`'s module docstring calls the ordinary
+    case under per-cell expansion and deliberately does not dedup. What matters here
+    is that `data.sex` never appears: no comparison crosses a cell."""
+    conditions = expand(
+        {
+            "sweep": {
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {
+                    "analysis.method": ["pearson", "spearman"],
+                    "data.sex": ["f", "m"],
+                },
+            }
+        }
+    )
+    by_index = {c.index: c for c in conditions}
+    differing = [
+        _differing_axes(by_index[c.of], by_index[c.against])
+        for c in resolve_contrasts({}, conditions)
+    ]
+    assert differing == [[], [], ["analysis.method"], ["analysis.method"]]
+
+
+def test_a_condition_whose_cell_has_no_baseline_gets_no_comparison():
+    """`baseline_for` returns None rather than falling back to the first baseline,
+    and this is the shape that reaches it.
+
+    `expand` builds an `ablate` row beside a grid — the composition
+    `E-SWEEP-ABLATE-CROSSED` refuses, so `run` never sees one — and that row carries
+    the baseline's fixed paths plus its one change, holding no value for the free
+    `data.sex` axis. It therefore belongs to no cell. Dropping it is the deliberate
+    answer: a fallback would compare it against the `sex=f` reference, a two-axis
+    difference of exactly the kind per-cell baselines exist to remove."""
+    conditions = expand(
+        {
+            "sweep": {
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {
+                    "analysis.method": ["pearson", "spearman"],
+                    "data.sex": ["f", "m"],
+                },
+                "ablate": {"remove": ["analysis.drop_missing"]},
+            }
+        }
+    )
+    assert conditions[6].label == "drop_missing=None"
+    assert [(c.of, c.against) for c in resolve_contrasts({}, conditions)] == [
+        (2, 0),
+        (3, 1),
+        (4, 0),
+        (5, 1),
+    ]
+
+
+def test_a_declared_contrast_naming_a_baseline_as_its_subject_survives():
+    """The baseline skip is scoped to the generated loop, not applied to the result.
+
+    `Comparison.declared`'s own docstring says a declared entry may legitimately name
+    the baseline — and it may name it as `of`, not only as `against`. A filter over
+    the returned list would satisfy both per-cell tests above and silently drop this
+    contrast."""
+    conditions = expand(
+        {
+            "sweep": {
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {
+                    "analysis.method": ["pearson", "spearman"],
+                    "data.sex": ["f", "m"],
+                },
+            }
+        }
+    )
+    cfg = {
+        "statistics": {
+            "contrasts": [
+                {"id": "references", "of": "sex=m__baseline", "against": "sex=f__baseline"}
+            ]
+        }
+    }
+    got = resolve_contrasts(cfg, conditions)
+    assert [(c.id, c.of, c.against, c.declared) for c in got][-1] == ("references", 1, 0, True)
+    assert len(got) == 5
+
+
+def test_no_comparison_has_a_baseline_condition_as_its_subject():
+    """§ Expansion modes: "Baseline conditions are references rather than comparisons,
+    so they never count as one."
+
+    The second half of the handle above, and the sharper of the two: the count being
+    5 is a family-size error, but a *baseline* appearing as a comparison's `of` is a
+    comparison of one reference against another — `sex=m__baseline` vs
+    `sex=f__baseline` differs on `data.sex` alone and is exactly the confounded
+    cross-cell contrast per-cell baselines exist to avoid. A *declared*
+    `statistics.contrasts` entry may still name one, which is why this reads the
+    generated comparisons of a config that declares none."""
+    conditions = expand(
+        {
+            "sweep": {
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {
+                    "analysis.method": ["pearson", "spearman"],
+                    "data.sex": ["f", "m"],
+                },
+            }
+        }
+    )
+    baselines = {c.index for c in conditions if c.is_baseline}
+
+    subjects = [c.id for c in resolve_contrasts({}, conditions) if c.of in baselines]
+    assert subjects == []
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="reference.md § Sweeps and repeats says the family skips `sample`; resolve_contrasts "
+    "counts every draw. No config reaches it today — `E-SWEEP-SAMPLE-BASELINE` refuses "
+    "`baseline` + `sample` — so this pins unimplemented semantics, not a live user-facing "
+    "defect. Owner: the slice that owns the correction family, which lands the exclusion and "
+    "retires the refusal together. Recorded in docs/superpowers/spec-defects.md by H2 task 9",
+)
+def test_sample_draws_are_not_comparisons_in_the_correction_family() -> None:
+    """§ Sweeps and repeats: "So `family` counts conditions from `grid`, `paired`,
+    `ablate`, and `groups`, and skips `sample`" — because "forty sobol draws over
+    `drug.dose_mg` are forty points feeding one downstream curve, and nobody claims a
+    finding about draw 17 against draw 1 … it would shrink every interval the curve is
+    fitted through."
+
+    The tracked handle for a claim this slice made live. Task 3 verified the sibling
+    § Validation exemption and recorded that it held *structurally*, because
+    `resolve_contrasts` needs a declared baseline and `E-SWEEP-BASELINE-PARTIAL`
+    refused `baseline` + `sample`. Task 6 retired that refusal, which removed the
+    protection; nothing re-derived the verdict.
+
+    `grid × sample` is the shape that breaks the claim under any reading of
+    "sample-only": counting the grid's two levels and skipping the three draws gives
+    two comparisons, and the code gives six. Strict, so the marker cannot survive the
+    fix.
+
+    **What ships instead is a refusal, not the semantics.** `validate` rejects
+    `sweep.baseline` beside `sweep.sample` with `E-SWEEP-SAMPLE-BASELINE`, which is
+    the protection `E-SWEEP-BASELINE-PARTIAL` used to give incidentally, so no user
+    reaches the inflated family. The expected count here is **2, not 0** — the
+    document collapses the three draws into the grid's own comparisons rather than
+    dropping sampled conditions as subjects, and a filter that skipped them would
+    ship a second wrong number under this same assertion. That is why the semantics
+    belong to whoever owns the family, and why this test is written at
+    `expand`/`resolve_contrasts` level rather than through `validate`."""
+    conditions = expand(
+        {
+            "sweep": {
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {"analysis.method": ["spearman", "kendall"]},
+                "sample": {
+                    "n": 3,
+                    "method": "random",
+                    "seed": 7,
+                    "ranges": {"analysis.confidence": {"uniform": [0.8, 0.99]}},
+                },
+            }
+        }
+    )
+    assert len(resolve_contrasts({}, conditions)) == 2
