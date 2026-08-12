@@ -231,12 +231,21 @@ class StepIO:
     def skipped(self) -> dict[str, str]:
         return dict(self._skipped)
 
-    def _settle(self, unit_key: str) -> None:
+    def _check_roster(self, unit_key: str) -> None:
+        """The roster half of settling — the one check every arrival path needs,
+        including the measurement path: a measurement of a unit this execution was
+        never given is as wrong as a plain record of one, and `reference.md` §
+        Errors core raises documents `E-STEP-UNIT-UNKNOWN` for `io.record` with no
+        measurement exception.
+        """
         if self._units is not None and unit_key not in {u.key for u in self._units}:
             raise ContractError(
                 f"{unit_key!r} is not in this execution's roster",
                 code="E-STEP-UNIT-UNKNOWN",
             )
+
+    def _settle(self, unit_key: str) -> None:
+        self._check_roster(unit_key)
         if unit_key in self._rows or unit_key in self._skipped:
             raise ContractError(
                 f"{unit_key!r} was already recorded or skipped in this execution",
@@ -271,6 +280,19 @@ class StepIO:
             key = (unit_key, measurement)
             if key in self._measurement_rows:
                 return  # first write wins, so a resumed measurement is idempotent too
+            self._check_roster(unit_key)
+            # Only the skipped half of `_settle`'s settled-check applies here: a
+            # second measurement of one unit is the whole point of this path, so
+            # `_rows`-membership must not block it, but `io.skip` declares the unit
+            # ineligible — admitting no result by design — and a later measurement
+            # re-entering it as a completed result is exactly the accounting
+            # failure `ineligible` exists to prevent (`reference.md` § The unit
+            # table is the inference base).
+            if unit_key in self._skipped:
+                raise ContractError(
+                    f"{unit_key!r} was already skipped in this execution",
+                    code="E-STEP-UNIT-SETTLED",
+                )
             if "unit" in values:
                 raise ContractError(
                     "`unit` collides with the unit key column: a recorded column may "
@@ -281,6 +303,14 @@ class StepIO:
                 raise ContractError(
                     "`measurement` collides with the measurement column: a recorded "
                     "column may not be named `measurement`",
+                    code="E-STEP-KEY-COLLISION",
+                )
+            collision = self._declared_attributes() & values.keys()
+            if collision:
+                name = sorted(collision)[0]
+                raise ContractError(
+                    f"{name!r} collides with a declared unit attribute of the same "
+                    "name: a recorded column may not shadow it",
                     code="E-STEP-KEY-COLLISION",
                 )
             self._measurement_rows[key] = {

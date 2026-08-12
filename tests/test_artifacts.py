@@ -447,6 +447,93 @@ def test_a_measurement_row_may_not_name_a_column_unit_or_measurement(tmp_path: P
     assert e.value.code == "E-STEP-KEY-COLLISION"
 
 
+def test_measuring_a_key_not_in_the_roster_is_refused(tmp_path: Path):
+    """Control: the plain path already refuses this (`E-STEP-UNIT-UNKNOWN`); the
+    measurement path must not bypass the roster just because it skips the rest
+    of `_settle`."""
+    from publishable.units import Unit, UnitList
+
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    io = StepIO(
+        step_dir=sd,
+        input_dir=tmp_path / "in",
+        run_dir=tmp_path / "run",
+        units=UnitList([Unit(key="p0")]),
+        measurements={"by": "read_id", "collapse": "mean"},
+    )
+    with pytest.raises(ContractError) as e:
+        io.record("ghost", {"score": 1}, measurement="r1")
+    assert e.value.code == "E-STEP-UNIT-UNKNOWN"
+
+
+def test_measuring_a_skipped_unit_is_settled(tmp_path: Path):
+    """A `skip`ped unit is ineligible by design; a later measurement re-entering
+    it as a completed result is exactly the accounting failure `ineligible`
+    exists to prevent, so this must raise even though a second measurement of
+    an *unskipped* unit (the next test) must not."""
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    io = StepIO(
+        step_dir=sd,
+        input_dir=tmp_path / "in",
+        run_dir=tmp_path / "run",
+        measurements={"by": "read_id", "collapse": "mean"},
+    )
+    io.skip("p1", "no baseline visit")
+    with pytest.raises(ContractError) as e:
+        io.record("p1", {"score": 10}, measurement="r1")
+    assert e.value.code == "E-STEP-UNIT-SETTLED"
+    assert io.measurement_rows() == []
+
+
+def test_a_second_measurement_of_an_unskipped_unit_is_not_settled(tmp_path: Path):
+    """Control for the previous test: a unit that was neither skipped nor
+    plain-recorded must still accept a second, *different* measurement — the
+    whole point of `measurement=`."""
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    io = StepIO(
+        step_dir=sd,
+        input_dir=tmp_path / "in",
+        run_dir=tmp_path / "run",
+        measurements={"by": "read_id", "collapse": "mean"},
+    )
+    io.record("p1", {"score": 10}, measurement="r1")
+    io.record("p1", {"score": 20}, measurement="r2")
+    assert len(io.measurement_rows()) == 2
+
+
+def test_a_measurement_column_matching_a_declared_attribute_is_a_key_collision(
+    tmp_path: Path,
+):
+    """Control: the plain path already refuses this for `site`; the measurement
+    path must refuse it identically rather than folding a shadowed attribute
+    into a row task 5 will later merge against the same unit's `site`."""
+    from publishable.units import Unit, UnitList
+
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    roster = UnitList([Unit(key="p0", attributes={"site": "A"})])
+    io = StepIO(
+        step_dir=sd,
+        input_dir=tmp_path / "in",
+        run_dir=tmp_path / "run",
+        units=roster,
+        measurements={"by": "read_id", "collapse": "mean"},
+    )
+    with pytest.raises(ContractError) as e:
+        io.record("p0", {"site": "x"}, measurement="r1")
+    assert e.value.code == "E-STEP-KEY-COLLISION"
+    assert "site" in str(e.value)
+    io.record("p0", {"score": 1}, measurement="r1")
+    assert io.measurement_rows() == [{"unit": "p0", "measurement": "r1", "score": 1}]
+
+
 def test_recorded_keys_skipped_and_rows_are_not_live_handles(tmp_path: Path):
     from publishable.units import Unit, UnitList
 
