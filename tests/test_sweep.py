@@ -50,6 +50,22 @@ def test_the_last_declared_axis_varies_fastest():
     ]
 
 
+def test_grid_axes_vary_the_last_declared_axis_fastest() -> None:
+    """`itertools.product` varies its last argument fastest, which is the
+    declared-order nesting § Expansion modes asks for. The refactor moves this
+    loop, so pin the order it produces before moving it."""
+    conditions = expand(
+        {"sweep": {"grid": {"a.x": [1, 2], "b.y": ["p", "q"]}}}
+    )
+
+    assert [dict(c.values) for c in conditions] == [
+        {"a.x": 1, "b.y": "p"},
+        {"a.x": 1, "b.y": "q"},
+        {"a.x": 2, "b.y": "p"},
+        {"a.x": 2, "b.y": "q"},
+    ]
+
+
 def test_an_empty_grid_axis_still_expands_to_nothing_here():
     """`expand` is pure and reports what the declaration says; `validate` is what
     refuses it (E-SWEEP-AXIS-EMPTY, Task 4). Pinned so the refusal has something

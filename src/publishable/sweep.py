@@ -114,10 +114,20 @@ def _keys_for(paths: list[str]) -> dict[str, str]:
     return keys
 
 
-def label_for(values: dict[str, Any], grid: dict[str, Any], is_baseline: bool) -> str:
+def _swept_paths(sweep: dict[str, Any]) -> list[str]:
+    """Every path any axis-shaped mode sweeps, in declared order.
+
+    `label_for` shortens these to unique suffixes, so it needs the whole set:
+    a key is only unambiguous against every other swept path, not against one
+    mode's. Later modes extend this and nothing else about labelling changes.
+    """
+    return list(sweep.get("grid") or {})
+
+
+def label_for(values: dict[str, Any], swept: list[str], is_baseline: bool) -> str:
     if is_baseline:
         return "baseline"
-    keys = _keys_for(list(grid))
+    keys = _keys_for(swept)
     return AXIS_SEPARATOR.join(
         f"{keys.get(path, path.rsplit('.', 1)[-1])}={render_value(value)}"
         for path, value in values.items()
@@ -134,8 +144,23 @@ def condition_dir_name(index: int, label: str) -> str:
     return f"{index:02d}_{label}"
 
 
+def _axes(sweep: dict[str, Any]) -> list[list[dict[str, Any]]]:
+    """One entry per axis-shaped mode present, each a list of `{path: value}` cells.
+
+    The product of these is the condition set. `grid` contributes one axis per
+    key; later modes contribute one axis each, whose cells may set several paths
+    at once. Keeping every mode in this one list is what makes the composition
+    rule — "the product of every axis-shaped mode present" — a property of the
+    structure rather than a sentence someone has to remember.
+    """
+    axes: list[list[dict[str, Any]]] = []
+    for path, values in (sweep.get("grid") or {}).items():
+        axes.append([{path: value} for value in values])
+    return axes
+
+
 def expand(config: dict[str, Any]) -> list[Condition]:
-    """Ordered conditions: a declared baseline as 00, then the grid product.
+    """Ordered conditions: a declared baseline as 00, then the product of every axis.
 
     With no `sweep` block, one condition whose label is None — which is what
     keeps the `conditions/` level out of the artifact tree.
@@ -149,18 +174,20 @@ def expand(config: dict[str, Any]) -> list[Condition]:
     if baseline:
         rows.append((dict(baseline), True))
 
-    grid = sweep.get("grid") or {}
-    if grid:
-        axes = list(grid.items())
-        # itertools.product varies the LAST argument fastest, which is exactly
-        # the declared-order nesting the specification asks for.
-        for combo in itertools.product(*(values for _, values in axes)):
-            rows.append(
-                ({path: value for (path, _), value in zip(axes, combo, strict=True)}, False)
-            )
+    axes = _axes(sweep)
+    if axes:
+        # `itertools.product` varies its LAST argument fastest, which is the
+        # declared-order nesting the specification asks for. Preserved from the
+        # grid-only implementation this replaces.
+        for combo in itertools.product(*axes):
+            values: dict[str, Any] = {}
+            for cell in combo:
+                values.update(cell)
+            rows.append((values, False))
 
+    swept = _swept_paths(sweep)
     return [
-        Condition(index=i, label=label_for(values, grid, is_baseline),
+        Condition(index=i, label=label_for(values, swept, is_baseline),
                   values=values, is_baseline=is_baseline)
         for i, (values, is_baseline) in enumerate(rows)
     ]
