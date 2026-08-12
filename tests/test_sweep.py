@@ -870,3 +870,133 @@ def test_the_mode_vocabulary_is_partitioned_into_axis_and_non_axis() -> None:
     for mode in NON_AXIS_MODES:
         assert not _axes({mode: {"analysis.method": "pearson"}}, sample_seed=7)
         assert axis_modes_present({mode: {"analysis.method": "pearson"}}) == []
+
+
+def test_a_baseline_fixing_some_axes_expands_over_the_rest() -> None:
+    """§ Expansion modes' second row: a baseline that fixes `analysis.method`
+    and leaves `data.sex` free gives one baseline per level of `sex`, each
+    carrying its own cell as well as the fixed value. The rule underneath is
+    that the baseline expands over whichever axes it doesn't fix."""
+    conditions = expand(
+        {
+            "sweep": {
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {
+                    "analysis.method": ["pearson", "spearman"],
+                    "data.sex": ["f", "m"],
+                },
+            }
+        }
+    )
+
+    baselines = [c for c in conditions if c.is_baseline]
+    assert len(baselines) == 2
+    assert {dict(c.values)["data.sex"] for c in baselines} == {"f", "m"}
+    assert all(dict(c.values)["analysis.method"] == "pearson" for c in baselines)
+    # The rest of the run is the product, unchanged and following them.
+    assert [c.index for c in conditions] == list(range(6))
+    assert [c.is_baseline for c in conditions] == [True, True, False, False, False, False]
+
+
+def test_a_per_cell_baseline_label_carries_its_cell() -> None:
+    """§ Expansion modes shows `00_cohort=derivation__baseline` — the cell, then
+    the literal. A label is a directory name and a selector, so two baselines
+    that differ only in their cell must not both be `baseline`."""
+    conditions = expand(
+        {
+            "sweep": {
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {
+                    "analysis.method": ["pearson", "spearman"],
+                    "data.sex": ["f", "m"],
+                },
+            }
+        }
+    )
+
+    assert [c.label for c in conditions] == [
+        "sex=f__baseline",
+        "sex=m__baseline",
+        "method=pearson__sex=f",
+        "method=pearson__sex=m",
+        "method=spearman__sex=f",
+        "method=spearman__sex=m",
+    ]
+    assert len({c.label for c in conditions}) == len(conditions)
+
+
+def test_a_baseline_fixing_every_axis_is_still_one_condition_labelled_baseline() -> None:
+    """The table's first row, pinned against the second: nothing expands, the
+    label gains no cell, and the baseline is condition `00`."""
+    conditions = expand(
+        {
+            "sweep": {
+                "baseline": {"analysis.method": "pearson", "data.sex": "f"},
+                "grid": {"analysis.method": ["pearson", "spearman"], "data.sex": ["f", "m"]},
+            }
+        }
+    )
+
+    assert [c.is_baseline for c in conditions] == [True, False, False, False, False]
+    assert conditions[0].index == 0
+    assert conditions[0].label == "baseline"
+    assert dict(conditions[0].values) == {"analysis.method": "pearson", "data.sex": "f"}
+
+
+def test_a_baseline_expands_over_an_unfixed_paired_axis_as_one_cell() -> None:
+    """A `paired` entry is one cell that sets several paths, so a baseline that
+    fixes none of them expands over the entries — not over their keys crossed."""
+    conditions = expand(
+        {
+            "sweep": {
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {"analysis.method": ["pearson", "spearman"]},
+                "paired": [
+                    {"analysis.min_samples": 30, "analysis.confidence": 0.95},
+                    {"analysis.min_samples": 50, "analysis.confidence": 0.99},
+                ],
+            }
+        }
+    )
+
+    baselines = [c for c in conditions if c.is_baseline]
+    assert [c.label for c in baselines] == [
+        "min_samples=30__confidence=0.95__baseline",
+        "min_samples=50__confidence=0.99__baseline",
+    ]
+    assert [dict(c.values) for c in baselines] == [
+        {"analysis.min_samples": 30, "analysis.confidence": 0.95, "analysis.method": "pearson"},
+        {"analysis.min_samples": 50, "analysis.confidence": 0.99, "analysis.method": "pearson"},
+    ]
+
+
+def test_a_baseline_naming_one_path_of_a_paired_entry_fixes_that_whole_axis() -> None:
+    """An axis counts as fixed when the baseline names *any* path it varies.
+    Expanding a half-fixed `paired` axis would have to discard either the
+    baseline's declared `min_samples` or the cell's, so the declaration wins and
+    the axis contributes no cells for the baseline to expand over."""
+    conditions = expand(
+        {
+            "sweep": {
+                "baseline": {"analysis.min_samples": 30},
+                "paired": [
+                    {"analysis.min_samples": 30, "analysis.confidence": 0.95},
+                    {"analysis.min_samples": 50, "analysis.confidence": 0.99},
+                ],
+            }
+        }
+    )
+
+    baselines = [c for c in conditions if c.is_baseline]
+    assert len(baselines) == 1
+    assert baselines[0].label == "baseline"
+    assert dict(baselines[0].values) == {"analysis.min_samples": 30}
+
+
+def test_an_empty_axis_leaves_no_conditions_even_under_a_baseline() -> None:
+    """An axis with no cells carries no paths, so nothing can fix it and the
+    product over it is empty — for the baseline's rows exactly as for the
+    product's. `expand` returns nothing rather than a lone baseline row standing
+    in for a design with no cells; `E-SWEEP-AXIS-EMPTY` is the refusal."""
+    assert expand({"sweep": {"baseline": {"a.x": 1}, "grid": {"a.x": []}}}) == []
+    assert expand({"sweep": {"baseline": {"b.y": 1}, "grid": {"a.x": []}}}) == []

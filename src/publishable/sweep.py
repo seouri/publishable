@@ -12,10 +12,13 @@ Taking a digest *parameter* instead would push that derivation onto every
 caller of `expand`, which is the drift this module exists to prevent.
 
 A `baseline` whose values happen to coincide with a grid cell produces two
-conditions with identical `values` — `00_baseline` and the matching grid
+conditions with identical `values` — a baseline row and the matching grid
 row — and `expand` deliberately does not dedup them: the baseline is
 declared and the grid is mechanical, and reconciling the two is not
-`expand`'s job.
+`expand`'s job. Per-cell expansion makes that coincidence the ordinary case
+rather than the odd one — a baseline fixing `analysis.method: pearson` while
+`pearson` is also a `grid` level coincides once per cell of the axes it
+leaves free — and the policy is unchanged for the same reason.
 """
 
 import hashlib
@@ -89,8 +92,11 @@ def check_swept_value(value: Any) -> str | None:
 
     `validate._check_sweep` calls this per swept `grid` value and reports
     `E-SWEEP-VALUE-UNNAMEABLE`; a `baseline` entry is exempt, because
-    `label_for` renders a baseline condition as the literal `baseline` and
-    never joins its fixed values into a label.
+    `label_for` never joins a baseline's *fixed* values into a label — a
+    baseline that fixes every axis renders as the literal `baseline`, and a
+    per-cell baseline renders its cell of the axes it left *free* and then the
+    literal `baseline`. Every value in that cell is an axis value, checked here
+    already as the axis's own.
     """
     rendered = render_value(value)
     if not re.match(SWEPT_VALUE_PATTERN, rendered):
@@ -533,13 +539,24 @@ def ablated_paths(sweep: dict[str, Any]) -> list[str]:
 
 
 def label_for(values: dict[str, Any], swept: list[str], is_baseline: bool) -> str:
-    if is_baseline:
-        return "baseline"
+    """The label body for one row: its axis values, and `baseline` when it is one.
+
+    A baseline's `values` here are its *cell* of the axes it does not fix — never
+    the values it fixes, which is what keeps `check_swept_value`'s exemption
+    honest. § Expansion modes shows `00_cohort=derivation__baseline`: the cell
+    first, then the literal, joined by the same `AXIS_SEPARATOR` every other axis
+    is. A baseline that fixes every axis has an empty cell and stays the bare
+    `baseline` — appending the separator to nothing would give `__baseline`, a
+    label whose first axis is empty and which no reader would type as a selector.
+    """
     keys = _keys_for(swept)
-    return AXIS_SEPARATOR.join(
+    body = AXIS_SEPARATOR.join(
         f"{keys.get(path, path.rsplit('.', 1)[-1])}={render_value(value)}"
         for path, value in values.items()
     )
+    if is_baseline:
+        return f"{body}{AXIS_SEPARATOR}baseline" if body else "baseline"
+    return body
 
 
 def condition_dir_name(index: int, label: str) -> str:
@@ -589,9 +606,68 @@ def _axes(sweep: dict[str, Any], sample_seed: int | None = None) -> list[list[di
     return axes
 
 
+def _baseline_cells(
+    axes: list[list[dict[str, Any]]], baseline: Mapping[str, Any]
+) -> list[dict[str, Any]]:
+    """One cell per combination of the axes `baseline` does not fix, in axis order.
+
+    § Expansion modes states one rule with two cases: "the baseline expands over
+    whichever axes it doesn't fix — group axes and parameter axes alike", giving
+    "one per cell of the unfixed axes". This function is that rule; `expand`
+    turns each cell into a baseline row by laying the fixed values over it.
+
+    A baseline fixing every axis leaves nothing to cross, and
+    `itertools.product()` over no axes yields exactly one empty tuple — so the
+    first row of the table falls out of the same expression rather than needing
+    a branch that could disagree with it. One baseline, empty cell, label
+    `baseline`, index 0.
+
+    **An axis counts as fixed when the baseline names *any* path it varies**,
+    not only when it names them all. A `paired` or `sample` axis sets several
+    paths per cell, and expanding one the baseline half-fixes would have to
+    choose between the baseline's declared value and the cell's — discarding a
+    declared value either way. Fixing it keeps the baseline's declaration
+    authoritative; whether such a config is legal at all is `validate`'s to say
+    (it is refused today by `E-SWEEP-BASELINE-PARTIAL`).
+
+    **Fixedness is read off the cells' paths, not off the mode's declaration**,
+    which decides the empty-axis case: an axis with no cells carries no paths,
+    so no baseline can fix it, so it is unfixed and the product over it is
+    empty. `expand` therefore returns no conditions at all for an empty `grid`
+    list — the same answer it already gave without a baseline, rather than a
+    lone baseline row standing in for a design that has no cells. It is
+    `E-SWEEP-AXIS-EMPTY` that says why.
+    """
+    unfixed = [
+        axis
+        for axis in axes
+        if not any(path in baseline for cell in axis for path in cell)
+    ]
+    cells: list[dict[str, Any]] = []
+    for combo in itertools.product(*unfixed):
+        cell: dict[str, Any] = {}
+        for part in combo:
+            cell.update(part)
+        cells.append(cell)
+    return cells
+
+
 def expand(config: dict[str, Any]) -> list[Condition]:
-    """Ordered conditions: a declared baseline as 00, then the product of every axis,
-    then one condition per `ablate` entry.
+    """Ordered conditions: the declared baseline's rows first, then the product of
+    every axis, then one condition per `ablate` entry.
+
+    A baseline fixing every axis is one row, condition `00`, exactly as before.
+    A baseline fixing only some expands over the rest — one row per cell of the
+    unfixed axes, every one of them `is_baseline` — which is § Expansion modes'
+    second row and the design it tells a reader to prefer. Those rows come first
+    as a block rather than being interleaved into their cells, because the
+    product's own numbering is declared-order nested loops (the last axis
+    varying fastest) and reordering it to make each cell contiguous would
+    renumber every condition in every existing design. § Expansion modes' one
+    interleaved example is `ablate × groups`, which no config can reach here:
+    `ablate` composes with no axis (`E-SWEEP-ABLATE-CROSSED`) and `groups` is
+    not expanded in this build, so an `ablate` sweep has no axes and therefore
+    exactly one baseline.
 
     With no `sweep` block, one condition whose label is None — which is what
     keeps the `conditions/` level out of the artifact tree.
@@ -616,10 +692,26 @@ def expand(config: dict[str, Any]) -> list[Condition]:
 
     rows: list[tuple[dict[str, Any], dict[str, Any], bool]] = []
     baseline = sweep.get("baseline")
-    if baseline:
-        rows.append((dict(baseline), dict(baseline), True))
-
     axes = _axes(sweep, sample_seed_for(config))
+    if baseline:
+        # `dict(baseline)` before anything reads it, so a non-mapping `baseline`
+        # raises here as it always has rather than half-expanding: `path in
+        # baseline` would happily answer for a string. `_check_shape` refuses
+        # that shape fatally, and this is the guard for reaching `expand`
+        # without it.
+        fixed = dict(baseline)
+        for cell in _baseline_cells(axes, fixed):
+            # The cell first, then the fixed values over it — the fixed values
+            # are what the baseline *declares*, so they win any collision, and
+            # a cell path can only collide when the baseline half-fixed a
+            # multi-path axis (see `_baseline_cells`). The cell alone is what
+            # the label is rendered from: `sex=f__baseline` names the cell this
+            # reference belongs to, and restating the fixed values would name
+            # the condition by what every row in the run holds constant.
+            row_values = dict(cell)
+            row_values.update(fixed)
+            rows.append((row_values, cell, True))
+
     if axes:
         # `itertools.product` varies its LAST argument fastest, which is the
         # declared-order nesting the specification asks for. Preserved from the
