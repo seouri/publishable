@@ -4090,17 +4090,19 @@ def test_an_ablate_override_path_is_unreadable_at_run_scope(tmp_path: Path, caps
 # `depth` values differ within every key so a collapse rule swapped for another
 # would change the recorded numbers.
 _MEASURED_ROSTER = (
-    "patient_id,depth,read_id\n"
-    "p1,10,r1\np1,20,r2\n"
-    "p2,30,r1\np2,40,r2\np2,90,r3\n"
-    "p3,11,r1\np3,22,r2\np3,66,r3\n"
-    "p4,12,r1\np4,24,r2\n"
-    "p5,13,r1\np5,26,r2\np5,78,r3\n"
-    "p6,14,r1\np6,28,r2\n"
+    "patient_id,cohort,depth,read_id\n"
+    "p1,a,10,r1\np1,a,20,r2\n"
+    "p2,b,30,r1\np2,b,40,r2\np2,b,90,r3\n"
+    "p3,a,11,r1\np3,a,22,r2\np3,a,66,r3\n"
+    "p4,b,12,r1\np4,b,24,r2\n"
+    "p5,a,13,r1\np5,a,26,r2\np5,a,78,r3\n"
+    "p6,b,14,r1\np6,b,28,r2\n"
 )
 
+# `cohort` is constant within a key and takes `rule_for`'s `first` fallback, which
+# is what lets it survive a collapse and still name a `report_by` stratum.
 _MEASURED_UNITS = {
-    "attributes": ["depth", "read_id"],
+    "attributes": ["cohort", "depth", "read_id"],
     "measurements": {"by": "read_id", "collapse": {"depth": "mean"}},
 }
 
@@ -4160,3 +4162,27 @@ def test_no_all_ones_technical_n_when_the_input_merged_nothing(tmp_path: Path):
     run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
     aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
     assert "technical_n" not in aggregated["pred"]
+
+
+def test_a_report_by_level_block_carries_no_technical_n(tmp_path: Path):
+    """`technical_n` is `{min, max, median}` over the WHOLE roster, and a stratum's
+    own units may have collapsed a different number of measurements each. Copying
+    the parent's figure onto a subset would state a spread nobody computed over it
+    — the same reason a level block carries no `repeat_spread`."""
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        aggregate_returns="total",
+        roster_csv=_MEASURED_ROSTER,
+        units_overrides=_MEASURED_UNITS,
+        statistics={"correction": "holm", "report_by": ["cohort"]},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert "technical_n" in aggregated["pred"]
+    levels = aggregated["by"]["cohort"]
+    assert levels, aggregated
+    for block in levels.values():
+        for metric in block.values():
+            assert "technical_n" not in metric
+
