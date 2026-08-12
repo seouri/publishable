@@ -90,13 +90,23 @@ def check_swept_value(value: Any) -> str | None:
     resolves the conflict by refusing the value rather than the character —
     `_` alone stays legal.
 
-    `validate._check_sweep` calls this per swept `grid` value and reports
+    `validate._check_sweep` calls this per value of every mode `label_for`
+    renders — `grid`, `paired` and `ablate.override` — and reports
     `E-SWEEP-VALUE-UNNAMEABLE`; a `baseline` entry is exempt, because
     `label_for` never joins a baseline's *fixed* values into a label — a
     baseline that fixes every axis renders as the literal `baseline`, and a
     per-cell baseline renders its cell of the axes it left *free* and then the
-    literal `baseline`. Every value in that cell is an axis value, checked here
-    already as the axis's own.
+    literal `baseline`.
+
+    Every value in that cell is an axis value that has been checked here
+    already as the axis's own, so the exemption costs nothing. That holds
+    because the only axes a baseline can leave free are `grid` and `paired`,
+    both of which `_check_sweep` now checks: `sample` cannot be declared beside
+    a baseline at all (`E-SWEEP-SAMPLE-BASELINE`), and `ablate` is not an axis
+    and composes with none (`E-SWEEP-ABLATE-CROSSED`). It did *not* hold while
+    `paired` went unchecked — a free `paired` axis put unchecked values into a
+    baseline's rendered cell — which is the half of this claim commit 884959a
+    made true rather than the half it deleted.
     """
     rendered = render_value(value)
     if not re.match(SWEPT_VALUE_PATTERN, rendered):

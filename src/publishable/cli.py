@@ -198,13 +198,15 @@ def _differing_axes(of: "Condition", against: "Condition") -> list[str]:
     `Condition.values` is built by `sweep.expand` from `grid.items()`, so
     iterating `of.values` first gives declaration order — which is what
     makes `differs_on` stable across runs rather than set-ordered. But the
-    two sides' key sets are not guaranteed equal: `validate` requires every
-    swept `sweep.grid` axis to also be fixed in `sweep.baseline`, not the
-    reverse, so a baseline may fix an axis the grid never sweeps — present
-    in the baseline condition's `values` and absent from every grid
-    condition's. Iterating only `of.values` would silently skip exactly that
-    axis whenever it differs from that axis's own parameter default, so this
-    walks the union of both sides' keys instead, comparing with `.get` against
+    two sides' key sets are not guaranteed equal, and since
+    `E-SWEEP-BASELINE-PARTIAL` was retired they can differ in *both*
+    directions: a baseline may fix an axis the grid never sweeps (present in
+    the baseline condition's `values`, absent from every grid condition's),
+    and a grid axis need no longer be fixed in the baseline at all, which is
+    what per-cell expansion made legal. Iterating only `of.values` would
+    silently skip an axis of the first kind whenever it differs from that
+    axis's own parameter default, so this walks the union of both sides' keys
+    — required rather than merely defensive — comparing with `.get` against
     a sentinel (not `None`, which a real swept value could legitimately be)
     so a key present on one side and absent on the other always counts as
     differing rather than being skipped.

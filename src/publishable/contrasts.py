@@ -56,10 +56,15 @@ def _free_axis_paths(baselines: list["Condition"]) -> list[str]:
     distinguishes nothing.
 
     Compared pairwise with `!=` against the first row rather than collected into
-    a set: a condition's values are arbitrary YAML, and a list level (refused by
-    `E-SWEEP-VALUE-UNNAMEABLE` at `validate`, not by `expand`) is unhashable —
-    `{...}` over it would raise `TypeError` from a function whose answer does
-    not need hashing.
+    a set: a condition's values are arbitrary YAML, and a list level is
+    unhashable — `{...}` over it would raise `TypeError` from a function whose
+    answer does not need hashing. `!=` needs nothing of a value at all, which is
+    the point: this function takes `expand`'s output, and `expand` neither
+    refuses a list level nor requires that `validate` ran, so resting the choice
+    on `E-SWEEP-VALUE-UNNAMEABLE` having fired would be resting a pure
+    function's defensiveness on a caller. (That refusal did not even cover a
+    `paired` level until commit 884959a — the way such a justification goes
+    stale, rather than a reason to restate it against today's coverage.)
 
     Order is the first row's key order, then any path a later row adds, so the
     comparison list this drives is stable rather than set-ordered.
