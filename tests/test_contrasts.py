@@ -1,3 +1,5 @@
+import pytest
+
 from publishable.cli import _differing_axes
 from publishable.contrasts import resolve_contrasts, units_matching
 from publishable.sweep import Condition, expand
@@ -279,3 +281,42 @@ def test_no_comparison_has_a_baseline_condition_as_its_subject():
 
     subjects = [c.id for c in resolve_contrasts({}, conditions) if c.of in baselines]
     assert subjects == []
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="reference.md § Sweeps and repeats says the family skips `sample`; resolve_contrasts "
+    "counts every draw. Recorded in docs/superpowers/spec-defects.md by H2 Sweeps task 9",
+)
+def test_sample_draws_are_not_comparisons_in_the_correction_family() -> None:
+    """§ Sweeps and repeats: "So `family` counts conditions from `grid`, `paired`,
+    `ablate`, and `groups`, and skips `sample`" — because "forty sobol draws over
+    `drug.dose_mg` are forty points feeding one downstream curve, and nobody claims a
+    finding about draw 17 against draw 1 … it would shrink every interval the curve is
+    fitted through."
+
+    The tracked handle for a claim this slice made live. Task 3 verified the sibling
+    § Validation exemption and recorded that it held *structurally*, because
+    `resolve_contrasts` needs a declared baseline and `E-SWEEP-BASELINE-PARTIAL`
+    refused `baseline` + `sample`. Task 6 retired that refusal, which removed the
+    protection; nothing re-derived the verdict.
+
+    `grid × sample` is the shape that breaks the claim under any reading of
+    "sample-only": counting the grid's two levels and skipping the three draws gives
+    two comparisons, and the code gives six. Strict, so the marker cannot survive the
+    fix."""
+    conditions = expand(
+        {
+            "sweep": {
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {"analysis.method": ["spearman", "kendall"]},
+                "sample": {
+                    "n": 3,
+                    "method": "random",
+                    "seed": 7,
+                    "ranges": {"analysis.confidence": {"uniform": [0.8, 0.99]}},
+                },
+            }
+        }
+    )
+    assert len(resolve_contrasts({}, conditions)) == 2

@@ -1046,3 +1046,39 @@ def test_an_empty_axis_leaves_no_conditions_even_under_a_baseline() -> None:
     in for a design with no cells; `E-SWEEP-AXIS-EMPTY` is the refusal."""
     assert expand({"sweep": {"baseline": {"a.x": 1}, "grid": {"a.x": []}}}) == []
     assert expand({"sweep": {"baseline": {"b.y": 1}, "grid": {"a.x": []}}}) == []
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="reference.md § How artifacts are organized specifies `01_sample`; `label_for` renders "
+    "the drawn value. Recorded in docs/superpowers/spec-defects.md by H2 Sweeps task 9",
+)
+def test_a_sampled_condition_is_labelled_sample_not_by_its_drawn_value() -> None:
+    """§ How artifacts are organized: "`sample` conditions are the exception, and
+    deliberately: a sobol draw of `dose_mg` has no short exact spelling, and rounding
+    one into a directory name makes two distinct conditions collide at some
+    precision. Sampled conditions are labelled `01_sample`, `02_sample`, with the
+    drawn values in `sweep.yaml` and in `results.conditions[i].values`."
+
+    The tracked handle for a claim this slice made live: `sample` was refused until
+    task 3, so the rule was dormant. Today the labels are
+    `confidence=0.8615282253183009`, and the condition directories are named from
+    them. Strict, so whoever implements the rule is forced to remove this marker
+    rather than leaving a passing-for-the-wrong-reason test behind.
+
+    Implementing it is a ruling, not a rendering tweak: every draw's label *body*
+    becomes the literal `sample`, while a selector names the body rather than the
+    prefix — see the spec-defects entry."""
+    conditions = expand(
+        {
+            "sweep": {
+                "sample": {
+                    "n": 2,
+                    "method": "random",
+                    "seed": 7,
+                    "ranges": {"analysis.confidence": {"uniform": [0.8, 0.99]}},
+                }
+            }
+        }
+    )
+    assert [c.label for c in conditions] == ["sample", "sample"]
