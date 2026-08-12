@@ -1205,13 +1205,17 @@ def _check_contrasts(doc: dict[str, Any], c: Collector, roster: UnitList | None 
 
     **A `within` stratum too thin to disclose is warned about here too**
     (`reference.md` § Validation, "Contrast stratum is populated"), under the
-    same `W-STATS-CONTRAST-THIN` the run emits, and the two halves are the split
-    `W-STATS-REPORTBY-THIN`/`W-STATS-STRATUM-THIN` already draws for `report_by`.
+    same `W-STATS-CONTRAST-THIN` the run emits — one code fired at two
+    observation points, the way `report_by`'s roster-time and completed-time
+    counts are two (`W-STATS-REPORTBY-THIN`/`W-STATS-STRATUM-THIN`). Which of
+    those two shapes a future thinness check should take is not settled by
+    anything in this function, so this comment does not argue it.
+
     The count here is over *resolved roster* units matching the stratum, which is
     all `validate` can see: pairing is a fact about which units both sides
-    *completed*, so `cli.py`'s `n_paired` can only be smaller than this number,
-    never larger — a stratum thin on the roster is thin in the record. The
-    reverse does not hold, which is why the run-time check stays where it is.
+    *completed*, and `cli.py`'s `allowed` set is `units_matching` over this same
+    roster, so `n_paired` is bounded above by this number — the run-time check is
+    what sees the attrition between them, which no declaration predicts.
     Only `roster` is optional in this function's signature: a caller with no
     resolved roster (`_check_contrasts` is called directly by tests) still gets
     every declaration-only check, and skips only the one that needs units.
