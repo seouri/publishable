@@ -638,9 +638,15 @@ def _baseline_cells(
     paths per cell, and expanding one the baseline half-fixes would have to
     choose between the baseline's declared value and the cell's — discarding a
     declared value either way. Fixing it keeps the baseline's declaration
-    authoritative; whether such a config is legal at all is `validate`'s to say,
-    and today it says nothing — see `docs/superpowers/spec-defects.md`, "Three
-    baseline shapes per-cell expansion makes reachable".
+    authoritative.
+
+    The rule is written for both mode shapes, but only `paired` reaches it from
+    a baseline today: `sample` beside a `baseline` is refused outright by
+    `E-SWEEP-SAMPLE-BASELINE`, so a baseline cannot half-fix a `sample` axis at
+    all. **That refusal is temporary** — it retires with the slice that makes
+    the correction family exclude drawn conditions, and this paragraph goes
+    stale the day it does. Whether a half-fixed `paired` baseline should be
+    legal at all is `validate`'s to say, and today it says nothing.
 
     **Fixedness is read off the cells' paths, not off the mode's declaration**,
     which decides the empty-axis case: an axis with no cells carries no paths,

@@ -775,8 +775,9 @@ def test_a_paired_value_containing_a_path_separator_is_refused(write_config):
 
 def test_a_paired_list_level_is_refused_as_unnameable(write_config):
     """A list where a scalar belongs. It renders into a label that is not a name,
-    and `contrasts._cell_paths` compares condition values with `!=` precisely
-    because such a value is unhashable."""
+    and `contrasts._free_axis_paths` compares condition values with `!=` rather
+    than through a set, which is what keeps it total on an unhashable value —
+    it takes `expand`'s output and cannot assume `validate` ran at all."""
     found = codes(write_config({"sweep": {"paired": [{"analysis.method": ["a", "b"]}]}}))
     assert "E-SWEEP-VALUE-UNNAMEABLE" in found
 

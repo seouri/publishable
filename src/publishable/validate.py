@@ -1019,6 +1019,13 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     # it made the shape reachable without implementing them. The exclusion is
     # `statistics`-family work rather than sweep work, so it lands with the slice
     # that owns the correction family, and this refusal retires with it.
+    #
+    # **Whoever retires it: grep `E-SWEEP-SAMPLE-BASELINE` first.** Two comments
+    # elsewhere argue from this refusal rather than merely mentioning it —
+    # `sweep._baseline_cells` ("only `paired` reaches it from a baseline today")
+    # and `sweep.check_swept_value` — and both become false the moment a baseline
+    # may sit beside a `sample` axis again. They are marked as temporary at each
+    # site; this is the marker that makes them findable from here.
     if sweep.get("baseline") and sweep.get("sample"):
         c.error(
             "E-SWEEP-SAMPLE-BASELINE",
@@ -1631,8 +1638,13 @@ def _check_sweep(
     # all (`E-SWEEP-SAMPLE-BASELINE`): `_baseline_cells` reads fixedness off the cells'
     # paths and counts an axis fixed when the baseline names *any* of them, so
     # nothing expands per cell — there is one baseline, every comparison against
-    # it differs on the paths the baseline left alone as well as the one it
-    # fixed, and the run marks them `confounded: true` while this stays quiet.
+    # it differs on the paths the baseline left alone, and the run marks a
+    # comparison `confounded: true` while this stays quiet whenever that level
+    # *also* differs on a fixed path. Not every one of them does: `confounded` is
+    # more than one differing path rather than any, so a level whose value on the
+    # fixed path equals the baseline's differs on one path only and is reported
+    # clean. The same half-fixed axis can yield both verdicts at once, and saying
+    # otherwise here would be the claim-wider-than-the-code this comment replaced.
     # Second, a `paired` axis is outside `swept_axes` whether the baseline
     # touches it or not. Neither is a behaviour claim being made here: widening
     # the guard is a behaviour change, and this comment's job is to say what the
