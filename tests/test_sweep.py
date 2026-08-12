@@ -423,14 +423,19 @@ def _sample_config(**sample):
     return {"sweep": {"sample": base}}
 
 
-def test_two_configs_the_digest_can_tell_apart_draw_differently() -> None:
+@pytest.mark.parametrize("method", ("sobol", "latin_hypercube", "random"))
+def test_two_configs_the_digest_can_tell_apart_draw_differently(method) -> None:
     """The discriminating half of determinism. `design_digest` reads `data.units`
     and `sweep.groups`, so two configs differing in `data.units` derive different
     sample seeds and must not draw the same conditions — a constant seed would
-    pass the same-config test above while ignoring the config entirely."""
-    one = _sample_config()
+    pass the same-config test above while ignoring the config entirely.
+
+    Every method, not just one: an unscrambled `qmc.Sobol` ignores its seed and
+    returns the same points for every config, which is exactly this failure
+    reached through the sampler rather than through the derivation."""
+    one = _sample_config(method=method)
     one["data"] = {"units": {"from": "cohort.csv", "key": "patient_id"}}
-    other = _sample_config()
+    other = _sample_config(method=method)
     other["data"] = {"units": {"from": "other.csv", "key": "patient_id"}}
 
     assert [dict(c.values) for c in expand(one)] != [dict(c.values) for c in expand(other)]
@@ -508,13 +513,23 @@ def test_log_uniform_is_uniform_in_the_log_of_the_interval() -> None:
 def test_a_sample_axis_multiplies_with_grid() -> None:
     """§ Expansion modes: the condition set is the product of every axis-shaped
     mode present — `sample` is one axis of realized draws, not a mode of its own."""
-    config = _sample_config(n=3)
+    config = _sample_config(
+        n=3,
+        ranges={
+            "analysis.confidence": {"uniform": [0.80, 0.99]},
+            "analysis.min_samples": {"int_uniform": [10, 200]},
+        },
+    )
     config["sweep"]["grid"] = {"analysis.method": ["pearson", "spearman"]}
     conditions = expand(config)
 
+    # Two sampled paths and `n: 3` is 3 draws, not 3 × 3 points: a draw is one
+    # point in the space, so its coordinates are one cell rather than two axes.
     assert len(conditions) == 6
-    assert all("analysis.method" in c.values and "analysis.confidence" in c.values
-               for c in conditions)
+    assert all(
+        {"analysis.method", "analysis.confidence", "analysis.min_samples"} == set(c.values)
+        for c in conditions
+    )
     assert [c.label.split("__")[0] for c in conditions] == [
         "method=pearson", "method=pearson", "method=pearson",
         "method=spearman", "method=spearman", "method=spearman",
