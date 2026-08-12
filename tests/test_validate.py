@@ -3410,3 +3410,197 @@ def test_a_condition_scoped_bound_is_still_refused(write_config_three_scopes):
         )
     )
     assert "E-HYPOTHESIS-BOUND" in found
+
+
+def test_a_baseline_fixing_every_axis_of_a_crossed_grid_warns_before_the_run(write_config):
+    """`reference.md` § Validation, "Baseline leaves contrasts confounded":
+    `sweep.baseline` "fixes a value on every axis ... so 2 of 3 contrasts differ
+    on both and are reported `confounded: true`". `cli.py` marks each such
+    comparison at run time, after the compute is spent; the declaration alone
+    decides it, so `validate` says it first.
+
+    Two axes of two values each, against a baseline fixing both to values the
+    grid does not repeat: every cell differs from the baseline on the method
+    axis, and the two carrying the raised `min_samples` differ on both."""
+    path = write_config(
+        {
+            "sweep": {
+                "baseline": {"analysis.method": "pearson", "analysis.min_samples": 10},
+                "grid": {
+                    "analysis.method": ["spearman", "kendall"],
+                    "analysis.min_samples": [10, 20],
+                },
+            }
+        }
+    )
+    found = codes(path)
+    assert "W-SWEEP-BASELINE-CONFOUNDED" in found
+    message = messages_by_code(path)["W-SWEEP-BASELINE-CONFOUNDED"]
+    assert "2 of 4 baseline comparisons" in message
+    assert "`method=spearman__min_samples=20`" in message
+    assert "`analysis.method`" in message and "`analysis.min_samples`" in message
+
+
+def test_a_crossed_grid_whose_cells_each_differ_once_is_not_confounded(write_config):
+    """The threshold is *more than one* differing axis, not *more than none*. A
+    two-axis grid whose second axis holds only the baseline's own value produces
+    cells differing in exactly one place — interpretable contrasts, and the
+    design `allocation` and `sweep.baseline` are meant to produce. A check that
+    warned here would fire on every baseline-plus-grid config in the repo."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"analysis.method": "pearson", "analysis.min_samples": 10},
+                    "grid": {
+                        "analysis.method": ["pearson", "spearman"],
+                        "analysis.min_samples": [10],
+                    },
+                }
+            }
+        )
+    )
+    assert "E-SWEEP-BASELINE-PARTIAL" not in found  # the baseline fixes both axes
+    assert "W-SWEEP-BASELINE-CONFOUNDED" not in found
+
+
+def test_a_single_axis_sweep_is_never_confounded(write_config):
+    """The worked example's own shape: one swept axis, so no comparison can
+    differ on two. `test_a_normal_baseline_plus_grid_config_still_validates_clean`
+    asserts the whole config is clean; this one names the code, so a widened
+    check is diagnosed rather than showing up as a distant fixture failure."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"analysis.method": "pearson"},
+                    "grid": {"analysis.method": ["spearman", "kendall"]},
+                }
+            }
+        )
+    )
+    assert "W-SWEEP-BASELINE-CONFOUNDED" not in found
+
+
+_UNITS_WITH_DX = {"from": "index.csv", "key": "patient_id", "attributes": ["dx_family"]}
+
+
+def _roster_with_dx(tmp_path: Path, rare: int, total: int = 12) -> Path:
+    """An `index.csv` carrying one attribute, `rare` of whose units are `rare`.
+
+    The same shape `test_a_thin_report_by_level_warns_before_the_run` writes for
+    `sex`, under its own directory so `data.input_dir` still resolves outside the
+    repo."""
+    data = tmp_path / "dx"
+    data.mkdir()
+    levels = ["rare"] * rare + ["common"] * (total - rare)
+    rows = "\n".join(f"p{i},{levels[i - 1]}" for i in range(1, total + 1))
+    (data / "index.csv").write_text(f"patient_id,dx_family\n{rows}\n")
+    return data
+
+
+_ONE_AXIS_SWEEP = {
+    "baseline": {"analysis.method": "pearson"},
+    "grid": {"analysis.method": ["spearman"]},
+}
+
+
+def _contrast_within(level: str) -> list:
+    return [
+        {
+            "id": "stratified",
+            "of": "method=spearman",
+            "against": "baseline",
+            "within": {"dx_family": level},
+        }
+    ]
+
+
+def test_a_thin_contrast_stratum_warns_before_the_run(write_config, tmp_path):
+    """`reference.md` § Validation, "Contrast stratum is populated":
+    `contrasts[1].within: {dx_family: rare}` "leaves 6 paired units; below
+    `limits.min_reported_n` (warning)". Counting is over *resolved roster* units
+    matching the stratum, which is all `validate` sees — `n_paired` at run time
+    is that intersection after attrition, so it can only be smaller."""
+    path = write_config(
+        {
+            "data.units": _UNITS_WITH_DX,
+            "data.input_dir": str(_roster_with_dx(tmp_path, rare=2)),
+            "limits": {"min_reported_n": 10},
+            "sweep": _ONE_AXIS_SWEEP,
+            "statistics": {"contrasts": _contrast_within("rare")},
+        }
+    )
+    found = codes(path)
+    assert "W-STATS-CONTRAST-THIN" in found
+    message = messages_by_code(path)["W-STATS-CONTRAST-THIN"]
+    assert "`dx_family=rare`" in message
+    assert "2 of 12 units" in message
+
+
+def test_a_populated_contrast_stratum_does_not_warn(write_config, tmp_path):
+    """Exactly at the floor is not below it — the same boundary
+    `W-STATS-REPORTBY-THIN`'s `m` level pins. Without this, a check that dropped
+    the comparison and always warned would pass its own positive test."""
+    path = write_config(
+        {
+            "data.units": _UNITS_WITH_DX,
+            "data.input_dir": str(_roster_with_dx(tmp_path, rare=10)),
+            "limits": {"min_reported_n": 10},
+            "sweep": _ONE_AXIS_SWEEP,
+            "statistics": {"contrasts": _contrast_within("rare")},
+        }
+    )
+    found = codes(path)
+    assert "E-STATS-CONTRAST-WITHIN" not in found  # the attribute is declared
+    assert "W-STATS-CONTRAST-THIN" not in found
+
+
+def test_an_unknown_within_attribute_is_refused_without_also_being_called_thin(
+    write_config, tmp_path
+):
+    """One typo, one finding. An undeclared attribute matches no unit, so the
+    thinness count would report `0 of 12` beside `E-STATS-CONTRAST-WITHIN` and
+    send the reader looking for missing units instead of a misspelled name."""
+    path = write_config(
+        {
+            "data.units": _UNITS_WITH_DX,
+            "data.input_dir": str(_roster_with_dx(tmp_path, rare=2)),
+            "limits": {"min_reported_n": 10},
+            "sweep": _ONE_AXIS_SWEEP,
+            "statistics": {
+                "contrasts": [
+                    {
+                        "id": "stratified",
+                        "of": "method=spearman",
+                        "against": "baseline",
+                        "within": {"dx_familly": "rare"},
+                    }
+                ]
+            },
+        }
+    )
+    found = codes(path)
+    assert "E-STATS-CONTRAST-WITHIN" in found
+    assert "W-STATS-CONTRAST-THIN" not in found
+
+
+def test_a_string_min_reported_n_does_not_crash_the_contrast_stratum_count(write_config, tmp_path):
+    """The same silent-skip-or-crash class `test_a_string_min_reported_n_is_reported`
+    pins one guard over in `_check_report_by`: a leaf type fault is deliberately
+    non-fatal, so `_check_contrasts` still runs on a doc holding a `str` floor,
+    and `len(matched) < floor` would raise `TypeError` out of a module whose
+    contract is that it collects. The envelope reports the type; nothing else
+    does."""
+    path = write_config(
+        {
+            "data.units": _UNITS_WITH_DX,
+            "data.input_dir": str(_roster_with_dx(tmp_path, rare=2)),
+            "limits": {"min_reported_n": "ten"},
+            "sweep": _ONE_AXIS_SWEEP,
+            "statistics": {"contrasts": _contrast_within("rare")},
+        }
+    )
+    found = codes(path)
+    assert "E-CONFIG-TYPE" in found
+    assert "W-STATS-CONTRAST-THIN" not in found

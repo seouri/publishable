@@ -7,7 +7,7 @@ from typing import Any
 import yaml
 
 from publishable.base_experiment import load_experiment
-from publishable.contrasts import resolve_contrasts
+from publishable.contrasts import resolve_contrasts, units_matching
 from publishable.diagnostics import Collector
 from publishable.envelope import check_envelope
 from publishable.errors import ContractError
@@ -270,7 +270,7 @@ def validate_config(
     )
     _check_unimplemented(doc, c)
     _check_sweep(doc, template, c, unit_count=len(roster) if roster is not None else None)
-    _check_contrasts(doc, c)
+    _check_contrasts(doc, c, roster)
     _check_hypotheses(doc, c, experiment, template)
     _check_report_by(doc, c, roster)
     for message in template.validate(doc):
@@ -1040,6 +1040,50 @@ def _check_sweep(
                 "`sweep` entirely",
             )
 
+    # `reference.md` § Validation, "Baseline leaves contrasts confounded": a
+    # `sweep.baseline` that "fixes a value on every axis" leaves comparisons that
+    # "differ on both and are reported `confounded: true`". `cli.py` computes
+    # that fact per comparison at run time, after the compute is spent; the
+    # declaration alone decides it, so it is warnable here.
+    #
+    # **The condition is the row's, and it is deliberately narrower than run
+    # time.** Axes are compared over `sweep.grid`'s keys only, and only when the
+    # baseline fixes every one of them — which is the row's own "fixes a value
+    # on every axis", and is also the only baseline-plus-grid shape this build
+    # admits at all (`_check_unimplemented`'s `E-SWEEP-BASELINE-PARTIAL` refuses
+    # a baseline that leaves an axis free, since per-cell baseline expansion is
+    # specified but not implemented). `cli._differing_axes` instead walks the
+    # *union* of both sides' keys against a sentinel, so a baseline fixing an
+    # axis the grid never sweeps adds a differing axis to every comparison and
+    # can mark `confounded` where this warning stays silent. That direction is
+    # the safe one — this never fires where a run would not mark the comparison
+    # — and it is why the three lines below are not `cli._differing_axes` reused:
+    # sharing the helper would import the wider semantics along with it.
+    #
+    # One finding, not one per condition: the fault is a single declaration, and
+    # `sweep.baseline` is the line the reader edits.
+    baseline_fixed = sweep.get("baseline") or {}
+    swept_axes = list(grid)
+    if swept_axes and baseline_fixed and all(axis in baseline_fixed for axis in swept_axes):
+        crossed: list[tuple[Any, list[str]]] = []
+        for cond in conditions:
+            if cond.is_baseline:
+                continue
+            differing = [a for a in swept_axes if cond.values.get(a) != baseline_fixed.get(a)]
+            if len(differing) > 1:
+                crossed.append((cond, differing))
+        if crossed:
+            example, axes = crossed[0]
+            c.warn(
+                "W-SWEEP-BASELINE-CONFOUNDED",
+                "sweep.baseline",
+                f"fixes a value on every swept axis, so {len(crossed)} of "
+                f"{len(conditions) - 1} baseline comparisons differ on more than one axis "
+                f"and are reported `confounded: true` — `{example.label}` differs on "
+                f"{', '.join(f'`{a}`' for a in axes)}, so its delta mixes those effects "
+                "and no amount of correct pairing separates them",
+            )
+
     repeat_total = _repeat_total(doc, unit_count)
     budget = (doc.get("limits") or {}).get("max_executions")
     # `repeat_total` is `None` only when a declared count cannot be resolved at
@@ -1127,7 +1171,7 @@ def _check_sweep(
         )
 
 
-def _check_contrasts(doc: dict[str, Any], c: Collector) -> None:
+def _check_contrasts(doc: dict[str, Any], c: Collector, roster: UnitList | None = None) -> None:
     """Each declared `statistics.contrasts` entry, checked for real now that the
     block is no longer refused wholesale (`_check_unimplemented` used to raise
     `E-STATS-CONTRASTS-UNSUPPORTED` for any non-empty declaration).
@@ -1158,6 +1202,19 @@ def _check_contrasts(doc: dict[str, Any], c: Collector) -> None:
     `data.units.attributes` list — analogous to the `report_by` unknown-attribute
     rule (`reference.md` § Reporting strata) — rather than left to look like a
     silently-empty stratum.
+
+    **A `within` stratum too thin to disclose is warned about here too**
+    (`reference.md` § Validation, "Contrast stratum is populated"), under the
+    same `W-STATS-CONTRAST-THIN` the run emits, and the two halves are the split
+    `W-STATS-REPORTBY-THIN`/`W-STATS-STRATUM-THIN` already draws for `report_by`.
+    The count here is over *resolved roster* units matching the stratum, which is
+    all `validate` can see: pairing is a fact about which units both sides
+    *completed*, so `cli.py`'s `n_paired` can only be smaller than this number,
+    never larger — a stratum thin on the roster is thin in the record. The
+    reverse does not hold, which is why the run-time check stays where it is.
+    Only `roster` is optional in this function's signature: a caller with no
+    resolved roster (`_check_contrasts` is called directly by tests) still gets
+    every declaration-only check, and skips only the one that needs units.
 
     **The shape is checked here too, and it has to be.** `resolve_contrasts`
     reads `entry["of"]` and `entry.get("id")` off whatever the list holds, and
@@ -1233,6 +1290,19 @@ def _check_contrasts(doc: dict[str, Any], c: Collector) -> None:
         if isinstance(a, str)
     }
     seen_ids: set[str] = set()
+    # The same guard `_check_report_by` puts on its own floor, for the same
+    # reason: `check_envelope` is what REPORTS a wrong-typed `min_reported_n`
+    # (`E-CONFIG-TYPE`), a leaf fault is deliberately non-fatal, so this function
+    # still runs on a doc holding a `str` floor and `len(matched) < floor` would
+    # raise `TypeError`. `bool` is excluded explicitly because `isinstance(True,
+    # int)` is `True`, and a value the envelope already flagged must not also
+    # drive a warning nobody can act on ("below limits.min_reported_n (True)").
+    raw_floor = (doc.get("limits") or {}).get("min_reported_n")
+    floor: float | None = (
+        raw_floor
+        if not isinstance(raw_floor, bool) and isinstance(raw_floor, (int, float))
+        else None
+    )
 
     for i, entry in enumerate(entries):
         if not isinstance(entry, dict):
@@ -1304,12 +1374,30 @@ def _check_contrasts(doc: dict[str, Any], c: Collector) -> None:
             )
         within = entry.get("within")
         if isinstance(within, dict):
+            unknown = False
             for name in within:
                 if name not in declared_attrs:
+                    unknown = True
                     c.error(
                         "E-STATS-CONTRAST-WITHIN",
                         f"statistics.contrasts[{i}].within",
                         f"names `{name}`, which is not in `data.units.attributes`",
+                    )
+            # Skipped for a stratum already refused above, the way
+            # `_check_report_by` skips a level of an attribute it just refused:
+            # an unknown attribute matches no unit, so counting it would report
+            # a thin stratum as well as an undeclared one for a single typo.
+            if not unknown and within and roster is not None and floor is not None:
+                matched = units_matching(roster, within) or set()
+                if len(matched) < floor:
+                    stratum = ", ".join(f"`{k}={v}`" for k, v in sorted(within.items()))
+                    c.warn(
+                        "W-STATS-CONTRAST-THIN",
+                        f"statistics.contrasts[{i}].within",
+                        f"selects {stratum}, which {len(matched)} of {len(roster)} units "
+                        f"match, below limits.min_reported_n ({floor}). The run counts "
+                        f"`n_paired` over the two sides' completed units, which attrition "
+                        f"can only make smaller",
                     )
 
 
