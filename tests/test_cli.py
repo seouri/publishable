@@ -3927,3 +3927,45 @@ def test_a_sampled_sweep_runs_and_records_its_seed_and_draws(tmp_path: Path):
     assert len(set(drawn)) == 3
     for i, value in enumerate(drawn):
         assert (doc["run_dir"] / "conditions" / f"{i:02d}_confidence={value!r}").is_dir()
+
+
+_READS_A_SWEPT_PARAM_SUMMARY_STEP = '''\
+# generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "summary"
+
+    def run(self, cfg, io):
+        # `analysis.confidence` is sampled, so `summary` scope has no single
+        # condition to read it from.
+        return {{"confidence": cfg.parameters.analysis.confidence}}
+'''
+
+
+def test_a_sampled_path_is_unreadable_at_run_scope(tmp_path: Path, capsys):
+    """A path any axis-shaped mode sweeps varies across conditions, so a `run`- or
+    `summary`-scoped step cannot read it: `resolve_wide_cfg` plants a `SweptAway`
+    marker and `E-STEP-SWEPT-PARAM` is raised the moment it is read, rather than
+    the base config's value being handed back — a value no condition in the run
+    used. `command_run` built that path set from `sweep.grid` and `sweep.baseline`
+    alone, so a sampled (or `paired`) path silently stayed readable once each
+    became a real axis."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        extra_steps=["summarize"],
+        extra_step_source=_READS_A_SWEPT_PARAM_SUMMARY_STEP,
+        expect_exit=EXIT_PARTIAL,
+        sweep={
+            "sample": {
+                "n": 2,
+                "ranges": {"analysis.confidence": {"uniform": [0.80, 0.99]}},
+            }
+        },
+    )
+    ledger = (doc["run_dir"] / "executions.jsonl").read_text()
+    assert '"status": "failed"' in ledger
+    assert "E-STEP-SWEPT-PARAM" in doc["stdout"] + ledger

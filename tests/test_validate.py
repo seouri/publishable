@@ -4029,3 +4029,43 @@ def test_the_inapplicable_correction_warning_asserts_nothing_about_null_test(wri
     found = {f.code: f.message for f in c.findings}
     assert "E-STATS-NULLTEST-UNSUPPORTED" in found
     assert "undeclared" not in found["W-STATS-CORRECTION-INAPPLICABLE"]
+
+
+def test_a_sample_only_sweep_is_not_a_correction_family(write_config):
+    """§ Validation, "Correction declared for a family": the warning is "not raised
+    for a `sample`-only sweep, whose draws aren't a family". That exception was
+    unreachable while `sample` was refused, and is live now. It holds
+    structurally rather than by a special case: `resolve_contrasts` compares
+    every condition against a *declared* baseline, and a `sample`-only sweep
+    declares none, so there are no comparisons to correct."""
+    c = Collector()
+    validate_config(
+        write_config(
+            {
+                "sweep": {
+                    "sample": {"n": 6, "ranges": {"analysis.confidence": {"uniform": [0.8, 0.99]}}}
+                },
+                "statistics": {"correction": "none"},
+            }
+        ),
+        c,
+    )
+    assert not c.findings, [f.code for f in c.findings]
+
+
+def test_a_baseline_that_leaves_a_sampled_path_free_is_refused(write_config):
+    """The same widening `paired` forced: `_swept_paths` now carries the sampled
+    paths, so a baseline fixing none of them leaves an axis free — which expands
+    to one baseline condition per cell, specified but not implemented in this
+    build. Retires with per-cell baseline expansion, not before."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {
+                    "baseline": {"analysis.method": "pearson"},
+                    "sample": {"n": 6, "ranges": {"analysis.confidence": {"uniform": [0.8, 0.99]}}},
+                }
+            }
+        )
+    )
+    assert "E-SWEEP-BASELINE-PARTIAL" in found

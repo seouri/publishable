@@ -65,6 +65,7 @@ from publishable.stats import (
 )
 from publishable.strata import levels_for
 from publishable.sweep import (
+    _swept_paths,
     condition_dir_name,
     expand,
     sample_seed_for,
@@ -728,7 +729,13 @@ def command_run(config_path: Path) -> int:
     # grid axis is. Reading the grid alone left a baseline-only path resolving
     # to the base value, which is a value no condition in the run used.
     sweep_block = doc.get("sweep") or {}
-    swept_paths = set(sweep_block.get("grid") or {}) | set(sweep_block.get("baseline") or {})
+    # `_swept_paths` rather than `grid` alone: every axis-shaped mode's paths vary
+    # across conditions, and `paired`'s and `sample`'s did not reach here when each
+    # became a real axis — a sampled path stayed readable at `run`/`summary` scope
+    # and resolved to the base config's value, which is exactly the "a value no
+    # condition in the run used" failure the baseline half of this line exists to
+    # prevent, reached through a mode added after it was written.
+    swept_paths = set(_swept_paths(sweep_block)) | set(sweep_block.get("baseline") or {})
     plan = build_plan(  # phase 4
         experiment,
         conditions=[(c.index, c.label) for c in conditions],
