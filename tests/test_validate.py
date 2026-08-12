@@ -1099,6 +1099,50 @@ def test_paired_is_accepted_and_expands_for_real(write_config):
     assert not [c for c in found if c.startswith("E-SWEEP")]
 
 
+def test_grid_and_paired_naming_the_same_path_is_refused(write_config):
+    """`expand`'s product applies each axis's cell to `values` in order, so a
+    path named by both `grid` and `paired` lets whichever mode is later silently
+    overwrite the other's value on every combination — collapsing two of the
+    four combinations to byte-identical `values` (grid=30/paired-30 and
+    grid=50/paired-30 both resolve to `min_samples=30`). Filed as a spec gap
+    (`docs/superpowers/spec-defects.md`) and refused rather than executed."""
+    path = write_config(
+        {
+            "sweep": {
+                "grid": {"analysis.min_samples": [30, 50]},
+                "paired": [
+                    {"analysis.min_samples": 30, "analysis.confidence": 0.95},
+                    {"analysis.min_samples": 50, "analysis.confidence": 0.99},
+                ],
+            }
+        }
+    )
+    c = Collector()
+    validate_config(path, c)
+    found = [f for f in c.findings if f.code == "E-SWEEP-PATH-DUPLICATE"]
+    assert found
+    assert found[0].path == "sweep.paired.analysis.min_samples"
+
+
+def test_grid_and_paired_on_disjoint_paths_is_not_a_duplicate(write_config):
+    """The mirror case: `grid` and `paired` naming different paths is exactly
+    the brief's own worked example and must stay clean."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {
+                    "grid": {"analysis.method": ["pearson", "spearman"]},
+                    "paired": [
+                        {"analysis.min_samples": 30, "analysis.confidence": 0.95},
+                        {"analysis.min_samples": 50, "analysis.confidence": 0.99},
+                    ],
+                }
+            }
+        )
+    )
+    assert "E-SWEEP-PATH-DUPLICATE" not in found
+
+
 def test_an_empty_or_null_mode_is_not_a_declaration(write_config):
     """`init` may write these absent or null; only a truthy value is refused."""
     found = codes(
@@ -1896,6 +1940,75 @@ def test_a_null_grid_or_baseline_is_absent_not_malformed(write_config):
     """A key present but `null` is treated as absent everywhere else in this
     module (`doc.get("x") or {}`), and the shape guard must not diverge."""
     found = codes(write_config({"sweep": {"baseline": None, "grid": None}}))
+    assert "E-CONFIG-SHAPE" not in found
+
+
+def test_a_non_list_paired_is_a_diagnostic_not_a_traceback(write_config):
+    """`_axes` now reads `paired` unconditionally (`dict(entry) for entry in
+    paired`), same as `grid`'s unguarded `.items()` before ad6cf3d — so a
+    non-list `paired` needs the identical container guard `grid` already has,
+    or it crashes `expand` inside `cli.run` rather than `validate`."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {
+                    "grid": {"analysis.method": ["spearman"]},
+                    "paired": "analysis.min_samples",
+                }
+            }
+        )
+    )
+    assert "E-CONFIG-SHAPE" in found
+
+
+def test_a_paired_entry_that_is_not_a_mapping_is_a_diagnostic_not_a_traceback(write_config):
+    """`dict(entry)` inside `_axes`'s paired branch raises `ValueError` on a
+    non-mapping entry — `["notadict"]` reproduces exactly the crash the
+    reviewer found: zero `validate` findings, then a bare `ValueError:
+    dictionary update sequence element #0 has length 1; 2 is required` out of
+    `cli.py`'s `expand(doc)`, past `main`'s `PublishableError` handler."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {
+                    "grid": {"analysis.method": ["spearman", "kendall"]},
+                    "paired": ["notadict"],
+                }
+            }
+        )
+    )
+    assert "E-CONFIG-SHAPE" in found
+
+
+def test_a_null_paired_entry_is_a_diagnostic_not_a_traceback(write_config):
+    """`sweep`-level `null` (`sweep.paired: null`) is absent, matching the rest
+    of this module — but a `null` *entry inside* an otherwise-list `paired` is
+    not the same case: `_axes` feeds every entry straight to `dict()`, and
+    `dict(None)` raises `TypeError` exactly like `dict(["notadict"][0])` raises
+    `ValueError` above. A `grid` axis value stays legal as `null` because it is
+    used as-is (a param-value question); a `paired` entry has no such out."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {
+                    "grid": {"analysis.method": ["spearman", "kendall"]},
+                    "paired": [None],
+                }
+            }
+        )
+    )
+    assert "E-CONFIG-SHAPE" in found
+
+
+def test_a_null_whole_paired_block_is_absent_not_malformed(write_config):
+    """`sweep.paired: null` is the block-level case the rest of this module
+    treats as absent (`doc.get("x") or {}`), distinct from a `null` entry
+    inside a present list, which the test above refuses."""
+    found = codes(
+        write_config(
+            {"sweep": {"grid": {"analysis.method": ["spearman", "kendall"]}, "paired": None}}
+        )
+    )
     assert "E-CONFIG-SHAPE" not in found
 
 

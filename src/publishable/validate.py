@@ -126,6 +126,24 @@ def _check_shape(doc: dict[str, Any], c: Collector) -> bool:
                 if values is not None and not isinstance(values, list):
                     _bad(f"sweep.grid.{path}", values, "list")
 
+        # `paired` closes the same gap `grid` does, one level down: `_axes` now
+        # reads it unconditionally (`dict(entry) for entry in paired`), so a
+        # non-list `paired` or a non-mapping entry escaped as a bare `TypeError`/
+        # `ValueError` from `expand`, past `_check_sweep`'s premise that it is the
+        # check that reports an expansion crash. Two guards, same shape as
+        # `grid`'s: the container, then each entry. Unlike a `grid` axis value —
+        # which is used as-is and stays legal as `null` (a param-value question,
+        # not a shape one) — every `paired` entry is fed straight into `dict()`,
+        # so a `null` entry is itself the crash (`dict(None)` raises `TypeError`)
+        # and is refused here rather than treated as absent.
+        paired = sweep.get("paired")
+        if paired is not None and not isinstance(paired, list):
+            _bad("sweep.paired", paired, "list")
+        elif isinstance(paired, list):
+            for i, entry in enumerate(paired):
+                if not isinstance(entry, dict):
+                    _bad(f"sweep.paired[{i}]", entry, "mapping")
+
     replication = doc.get("replication")
     if isinstance(replication, dict):
         repeats = replication.get("repeats")
@@ -746,11 +764,14 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     This build expands `sweep.baseline`, `sweep.grid`, and `sweep.paired`
     only. Both declared orders are honored — `randomized` shuffles within
     each batch and `as_declared` leaves the plan's step-major layout alone.
-    `sweep.paired` is no longer refused here — `_axes` composes it as a
+    `sweep.paired` is no longer refused here: `_axes` composes it as a
     single axis whose cells set several paths at once, per § Expansion
-    modes. `.ablate`, `.sample`, and `.groups` are read by nothing yet. It
-    resolves a
-    unit roster, but several `data.units` sub-fields — allocation other than
+    modes — `_check_shape` guards its container and entry shapes, and
+    `_check_sweep` refuses a path it shares with `sweep.grid`
+    (`E-SWEEP-PATH-DUPLICATE`), the same way a bad `grid` shape or an
+    unresolvable `grid` path already were. `.ablate`, `.sample`, and
+    `.groups` are read by nothing yet. It resolves a unit roster, but
+    several `data.units` sub-fields — allocation other than
     `within`, `assign`, `cluster_by`, `weight_by`, `measurements`, `holdout`,
     and a `resolver` source — are read by nothing yet either. Each of these
     would otherwise validate clean and then run something other than what the
@@ -805,18 +826,27 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
                 "honored in a later slice",
             )
 
-    # A baseline that fixes only *some* of the swept axes. `reference.md`:1415-1422
+    # A baseline that leaves some swept PATH unfixed. `reference.md`:1415-1422
     # states one rule with two cases: the baseline expands over whichever axes it
     # does not fix, giving one baseline condition per cell of the unfixed axes.
     # `expand` emits exactly one `00_baseline` row carrying only what the baseline
     # literally names, so the declared design is not the executed design — the
     # failure every other refusal in this function exists to prevent. Per-cell
     # expansion is a real feature; until it lands, refuse rather than diverge.
-    # A baseline fixing every declared axis (including the no-sweep-axis case) is
+    # A baseline fixing every swept path (including the no-sweep-axis case) is
     # the supported row and is unaffected. `_swept_paths` is every axis-shaped
     # mode's paths, not `grid`'s alone — `paired` composes into this same product
     # now, and a baseline that fixes `grid` but leaves a `paired` axis free is the
     # identical declared-vs-executed mismatch this check exists to catch.
+    #
+    # This check is path-granular, not axis-granular: it asks "does every swept
+    # path have some baseline value", not "does the baseline supply a whole cell
+    # of a `paired` axis". A baseline naming only half of one `paired` entry's
+    # paths passes this check pointing at the still-unfixed path, exactly as it
+    # would for two independent `grid` axes — and a value that isn't any declared
+    # `paired` cell (a mix-and-match the axis never produces) is not itself
+    # caught here, since per-cell baseline expansion (which would need to resolve
+    # a baseline against actual cells) is Task 6's feature, not this refusal's.
     baseline = sweep.get("baseline") or {}
     unfixed = [path for path in _swept_paths(sweep) if path not in baseline]
     if baseline and unfixed:
@@ -1029,6 +1059,33 @@ def _check_sweep(
             continue
         for i, value in enumerate(values):
             _value_checks(path, value, f"sweep.grid.{path}[{i}]", nameable=True)
+
+    # `grid` and `paired` writing the same path is not a shape fault — both are
+    # well-formed on their own — but `expand`'s product applies each axis's cell
+    # to `values` in declared order, so whichever mode is later in `_axes`
+    # silently overwrites the other's value for that path on every combination.
+    # Some combinations then collapse to byte-identical `values`: two different
+    # `grid` settings paired with the same `paired` entry both resolve to that
+    # entry's value, producing duplicate conditions `_condition_labels` cannot
+    # see (it collects into a `set`). Filed as a spec gap in
+    # `docs/superpowers/spec-defects.md` — § Expansion modes never states that a
+    # path belongs to at most one axis-shaped mode — and refused here rather
+    # than left to execute a design other than the one declared.
+    paired_paths: dict[str, list[int]] = {}
+    for i, entry in enumerate(sweep.get("paired") or []):
+        if isinstance(entry, dict):
+            for path in entry:
+                paired_paths.setdefault(path, []).append(i)
+    for path in sorted(set(grid) & set(paired_paths)):
+        indices = ", ".join(f"paired[{i}]" for i in paired_paths[path])
+        c.error(
+            "E-SWEEP-PATH-DUPLICATE",
+            f"sweep.paired.{path}",
+            f"is also a `sweep.grid` axis (named in {indices}) — two axis-shaped modes "
+            "writing the same path make `expand`'s product overwrite one mode's value "
+            "with the other's on every combination, collapsing some conditions to "
+            "duplicates the run would silently execute twice",
+        )
 
     # `sweep.baseline` gets the same per-entry checks — one value, not a list.
     # `reference.md`:218 names this by example ("Baseline is a valid condition |

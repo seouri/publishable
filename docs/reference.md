@@ -447,9 +447,10 @@ likewise apart from those same two envelope rows, none of the others.
 | `statistics.correction` is set and is a value other than `none`, `bonferroni`, `holm`, or `fdr_bh` — unset (`null`) is accepted | `E-STATS-CORRECTION-UNKNOWN` |
 | A `statistics.report_by` entry is not a string, or names an attribute `data.units.attributes` does not declare | `E-STATS-REPORTBY-UNKNOWN` |
 | A `sweep.grid` axis declares an empty (falsy) list of values, so the sweep would expand to zero conditions | `E-SWEEP-AXIS-EMPTY` |
-| `sweep.baseline` is declared and leaves at least one of `sweep.grid`'s axes unfixed — per-cell baseline expansion is specified but not implemented in this build | `E-SWEEP-BASELINE-PARTIAL` |
+| `sweep.baseline` is declared and leaves at least one of the swept axes unfixed — per-cell baseline expansion is specified but not implemented in this build | `E-SWEEP-BASELINE-PARTIAL` |
 | `sweep` is declared and resolves to zero conditions, whatever shape produced that — a backstop beneath the per-axis checks above | `E-SWEEP-EXPANDS-EMPTY` |
 | `sweep` declares a key that is not one of the six recognized sweep modes (`baseline`, `grid`, `paired`, `ablate`, `sample`, `groups`) | `E-SWEEP-KEY-UNKNOWN` |
+| `sweep.grid` and `sweep.paired` write the same dotted path — `expand`'s product would let whichever mode is later silently overwrite the other's value on every combination | `E-SWEEP-PATH-DUPLICATE` |
 | `sweep.grid` or `sweep.baseline` names a dotted path the template's `parameter_spec` does not declare | `E-SWEEP-PATH-UNKNOWN` |
 | A `sweep.grid` value cannot be rendered into a condition label — a `sweep.baseline` value is exempt, since it is never rendered into one | `E-SWEEP-VALUE-UNNAMEABLE` |
 | `template.validate(doc)` yields a message — run last, after every other check in this table, and ungated by their findings, so a cross-block rule can report on `parameters` another row already refused | `E-TEMPLATE-RULE` |
