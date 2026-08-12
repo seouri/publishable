@@ -20,7 +20,15 @@ from typing import Any
 # The table stops at every key's own materialized or documented type in
 # § The one config file — `data.units.measurements` and `.holdout` are always
 # mappings there (`{by: read_id, collapse: mean}`, `{method: random, ...}`),
-# never a bare scalar, so both are typed `dict`. The optional blocks that
+# never a bare scalar, so both are typed `dict`. `measurements` is typed a
+# second time one level down, at `.by` and `.collapse`: its children have fixed
+# names and the block is no longer refused wholesale, so leaving it whole would
+# have made a `colapse` typo unreachable by any check the moment
+# `E-DATA-MEASUREMENTS-UNSUPPORTED` retired — a latent gap turning live. A path
+# that is both a leaf and a container is typed by the loop below AND descended
+# into by the closure, which is why the closure checks containers first.
+# `holdout` stays whole for now: `E-DATA-HOLDOUT-UNSUPPORTED` still refuses the
+# block, so its gap is latent, and H3d closes it. The optional blocks that
 # section documents but a materialized config omits — `sweep`'s modes,
 # `statistics.contrasts` / `.resample` / `.null_test` / `.report_by`, and
 # `data.units.assign` — are declared at their own key with the one outer type
@@ -58,6 +66,12 @@ LEAF_TYPES: dict[str, type | tuple[type, ...]] = {
     "data.units.cluster_by": str,
     "data.units.weight_by": str,
     "data.units.measurements": dict,
+    "data.units.measurements.by": str,
+    # `str` or `dict`: one rule for every collapsed column, or a per-column map
+    # (`{depth: mean, site: first}`). It stays a LEAF under either form — the
+    # map's keys are column names, which no fixed dotted path reaches, exactly
+    # like a `grid` axis's swept path.
+    "data.units.measurements.collapse": (str, dict),
     "data.units.holdout": dict,
     "data.units.assign": dict,
     "replication.repeats": list,
@@ -127,11 +141,12 @@ def _check_unknown_keys(
 ) -> None:
     """Walk `node` reporting any key not implied by `LEAF_TYPES`, skipping the
     two exempt subtrees entirely and never descending into a known LEAF's
-    value — a leaf's own children (`data.units.holdout`'s `method`, a `from`
-    dict's `resolver`) are reached by no check in this build: not here, and
-    not by `_check_shape`, which checks a container's shape and never the
-    names inside one. See the module docstring for why the leaf is left whole
-    rather than half-closed.
+    value unless the table also declares paths BENEATH it — a leaf's own
+    children (`data.units.holdout`'s `method`, a `from` dict's `resolver`) are
+    reached by no check in this build: not here, and not by `_check_shape`,
+    which checks a container's shape and never the names inside one. See the
+    module docstring for why a leaf is left whole rather than half-closed, and
+    why `data.units.measurements` is not one of them.
     """
     if not isinstance(node, dict):
         return
@@ -153,10 +168,15 @@ def _check_unknown_keys(
         path = f"{prefix}.{key_name}" if prefix else key_name
         if path in EXEMPT_SUBTREES:
             continue
-        if path in _KNOWN_LEAVES:
-            continue
+        # Containers before leaves: `data.units.measurements` is both — typed a
+        # mapping by the loop in `check_envelope`, and descended into here so a
+        # typo among its fixed-name children is reported. Checking leaves first
+        # would stop at it and leave that closure open. Every other path is one
+        # or the other, so the order changes nothing for them.
         if path in _KNOWN_CONTAINERS:
             _check_unknown_keys(value, findings, path)
+            continue
+        if path in _KNOWN_LEAVES:
             continue
         near = difflib.get_close_matches(key_name, _immediate_children(prefix), n=1)
         hint = f" — did you mean `{near[0]}`?" if near else ""

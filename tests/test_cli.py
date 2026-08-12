@@ -30,6 +30,8 @@ def run_a_project(
     aggregate_returns: str | None = None,
     units: int = 10,
     unit_attributes: list[str] | None = None,
+    roster_csv: str | None = None,
+    units_overrides: dict[str, Any] | None = None,
     expect_exit: int = EXIT_OK,
     **overrides: Any,
 ) -> dict[str, Any]:
@@ -91,6 +93,13 @@ def run_a_project(
     are written unconditionally because an undeclared column is simply never
     read.
 
+    `roster_csv` replaces the whole `index.csv` the default roster writes, for a
+    caller whose design needs columns or a row shape the `patient_id,cohort,arm`
+    default cannot express — a table carrying several measurement rows per key,
+    say. `units_overrides` merges into `data.units`, which is how such a caller
+    declares the block that reads them (`measurements`); `unit_attributes` stays
+    the shorthand for the one sub-field every other caller needs.
+
     `expect_exit` is the exit code `main(["run", ...])` must return, `EXIT_OK`
     by default. A step whose `run` raises is *contained* — that execution lands
     `status: "failed"`, the rest of the plan still runs, and `run_status` turns
@@ -118,7 +127,9 @@ def run_a_project(
     patients = "\n".join(
         f"p{i},{'ab'[i % 2]},{'xy'[(i // 2) % 2]}" for i in range(1, units + 1)
     )
-    (data / "index.csv").write_text(f"patient_id,cohort,arm\n{patients}\n")
+    (data / "index.csv").write_text(
+        roster_csv if roster_csv is not None else f"patient_id,cohort,arm\n{patients}\n"
+    )
     assert main(["new", str(root)]) == EXIT_OK
     with pytest.MonkeyPatch.context() as mp:
         if aggregate_returns is not None:
@@ -155,6 +166,8 @@ def run_a_project(
         doc.update(overrides)
         if unit_attributes is not None:
             doc["data"]["units"]["attributes"] = list(unit_attributes)
+        if units_overrides is not None:
+            doc["data"]["units"].update(units_overrides)
         cfg.write_text(yaml.safe_dump(doc))
         for args in (
             ["add", "."],
@@ -4067,3 +4080,83 @@ def test_an_ablate_override_path_is_unreadable_at_run_scope(tmp_path: Path, caps
     ledger = (doc["run_dir"] / "executions.jsonl").read_text()
     assert '"status": "failed"' in ledger
     assert "E-STEP-SWEPT-PARAM" in doc["stdout"] + ledger
+
+
+# --- H3a task 6: `technical_n` reaches `run.yaml` beside every metric's `n` ----
+
+# Six patients, unevenly measured: two rows for p1/p4/p6 and three for p2/p3/p5,
+# so `technical_n` is {min: 2, max: 3, median: 2.5} — a shape a balanced table
+# could not produce, which is what makes the assertion below discriminating.
+# `depth` values differ within every key so a collapse rule swapped for another
+# would change the recorded numbers.
+_MEASURED_ROSTER = (
+    "patient_id,depth,read_id\n"
+    "p1,10,r1\np1,20,r2\n"
+    "p2,30,r1\np2,40,r2\np2,90,r3\n"
+    "p3,11,r1\np3,22,r2\np3,66,r3\n"
+    "p4,12,r1\np4,24,r2\n"
+    "p5,13,r1\np5,26,r2\np5,78,r3\n"
+    "p6,14,r1\np6,28,r2\n"
+)
+
+_MEASURED_UNITS = {
+    "attributes": ["depth", "read_id"],
+    "measurements": {"by": "read_id", "collapse": {"depth": "mean"}},
+}
+
+
+def test_technical_n_reaches_run_yaml_beside_every_metrics_n(tmp_path: Path):
+    """`reference.md` § What isn't a repeat: `technical_n` "is reported for
+    transparency — as `{min, max, median}`". Read back from a real run's
+    `run.yaml`, not from a return value, and asserted on both metric shapes:
+    `pred` is a recorded column and `total` is derived by `aggregate`, which is
+    the shape the document's own example (`r`) has."""
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        aggregate_returns="total",
+        roster_csv=_MEASURED_ROSTER,
+        units_overrides=_MEASURED_UNITS,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    expected = {"min": 2, "max": 3, "median": 2.5}
+    assert aggregated["pred"]["technical_n"] == expected
+    assert aggregated["total"]["technical_n"] == expected
+    # Beside `n`, never inside it: the three-part `n` is a different claim.
+    assert set(aggregated["pred"]["n"]) == {"resolved", "completed", "ineligible", "failed"}
+    assert aggregated["pred"]["n"]["resolved"] == 6
+
+
+def test_no_technical_n_when_measurements_is_undeclared(tmp_path: Path):
+    """The control. Every other run must read exactly as it did before."""
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        aggregate_returns="total",
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert "technical_n" not in aggregated["pred"]
+    assert "technical_n" not in aggregated["total"]
+
+
+def test_no_all_ones_technical_n_when_the_input_merged_nothing(tmp_path: Path):
+    """A run whose STEP does the measuring declares `measurements` over an input
+    holding one row per unit. Reporting `{min: 1, max: 1, median: 1}` there would
+    be a false claim of no replication beside a `measurements.parquet` the step
+    filled, so nothing is reported instead — the step path's own counts are not
+    carried in this build (`docs/superpowers/spec-defects.md`)."""
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        aggregate_returns="total",
+        roster_csv="patient_id,depth\np1,10\np2,30\np3,50\np4,70\n",
+        units_overrides={
+            "attributes": ["depth"],
+            "measurements": {"by": "read_id", "collapse": {"depth": "mean"}},
+        },
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert "technical_n" not in aggregated["pred"]

@@ -1809,7 +1809,6 @@ def test_a_plain_units_block_is_now_accepted(write_config):
         ("assign", {"arm": {"method": "random"}}, "E-DATA-ASSIGN-UNSUPPORTED"),
         ("cluster_by", "site", "E-DATA-CLUSTER-UNSUPPORTED"),
         ("weight_by", "sampling_weight", "E-DATA-WEIGHT-UNSUPPORTED"),
-        ("measurements", {"by": "read_id"}, "E-DATA-MEASUREMENTS-UNSUPPORTED"),
         ("holdout", {"method": "random", "frac": 0.2}, "E-DATA-HOLDOUT-UNSUPPORTED"),
     ],
 )
@@ -1836,7 +1835,6 @@ def test_a_resolver_source_is_refused_until_plugins_exist(write_config):
         {"from": "index.csv", "key": "patient_id", "assign": {"arm": {"method": "random"}}},
         {"from": "index.csv", "key": "patient_id", "cluster_by": "site"},
         {"from": "index.csv", "key": "patient_id", "weight_by": "sampling_weight"},
-        {"from": "index.csv", "key": "patient_id", "measurements": {"by": "read_id"}},
         {"from": "index.csv", "key": "patient_id", "holdout": {"method": "random", "frac": 0.2}},
     ],
 )
@@ -1971,7 +1969,7 @@ def test_sum_over_a_real_boolean_column_is_refused(write_config):
     )
     c = Collector()
     _check_measurements(
-        {"measurements": {"by": "read_id", "collapse": {"flag": "sum"}}}, roster, c
+        {"measurements": {"by": "read_id", "collapse": {"flag": "sum"}}}, roster, None, c
     )
     assert "E-DATA-MEASUREMENTS-COLLAPSE-TYPE" in {f.code for f in c.findings}
 
@@ -2180,13 +2178,161 @@ def test_a_mixed_column_under_mean_is_a_finding_rather_than_an_escaping_type_err
     assert "E-DATA-MEASUREMENTS-COLLAPSE-TYPE" in codes(path)
 
 
+_MEASURED_CSV = (
+    # Asymmetric on purpose: mean 30, median 20, sum 90, first 10 all differ, so a
+    # rule swapped for another one cannot pass by coincidence.
+    "patient_id,depth,read_id\n"
+    "p1,10,r1\np1,20,r2\np1,60,r3\n"
+    "p2,30,r1\np2,40,r2\np2,80,r3\n"
+)
+
+
+def test_a_measurements_by_declaring_nothing_is_refused_when_rows_were_collapsed(
+    write_config, tmp_path
+):
+    """The wrong-answer path retiring `E-DATA-MEASUREMENTS-UNSUPPORTED` would open.
+
+    `units.collapse_measurements` groups on the unit key alone, so a `by` naming
+    nothing collapses exactly as a correct one would — and reports a `technical_n`
+    claiming the merge was intentional. Rows nothing declared to be measurements of
+    one unit, averaged."""
+    (tmp_path / "input" / "index.csv").write_text(_MEASURED_CSV)
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["depth", "read_id"],
+                "measurements": {"by": "nonexistent", "collapse": {"depth": "mean"}},
+            }
+        }
+    )
+    c = Collector()
+    validate_config(path, c)
+    offending = [f for f in c.findings if f.code == "E-UNITS-ATTR-MISSING"]
+    assert offending, {f.code for f in c.findings}
+    assert offending[0].path == "data.units.measurements.by"
+
+
+def test_a_by_naming_a_declared_attribute_is_accepted(write_config, tmp_path):
+    """The control the previous test needs: the same table, the same collapse, and
+    a `by` that names something — no finding, or the check refuses every config."""
+    (tmp_path / "input" / "index.csv").write_text(_MEASURED_CSV)
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["depth", "read_id"],
+                "measurements": {"by": "read_id", "collapse": {"depth": "mean"}},
+            }
+        }
+    )
+    found = codes(path)
+    assert "E-UNITS-ATTR-MISSING" not in found
+    assert not [c for c in found if c.startswith("E-DATA-MEASUREMENTS")]
+
+
+def test_a_by_no_input_column_carries_is_accepted_when_nothing_was_collapsed(
+    write_config, tmp_path
+):
+    """The step path's `by` names a measurement identity the STEP invents —
+    `io.record(unit.key, values, measurement=read_id)` — and no input column
+    carries it. `artifacts._collapse_measurements` never reads `by`, and with one
+    row per unit the input path merged nothing, so there is no wrong number to
+    refuse and refusing would refuse a documented design."""
+    (tmp_path / "input" / "index.csv").write_text("patient_id,depth\np1,10\np2,30\n")
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["depth"],
+                "measurements": {"by": "read_id", "collapse": {"depth": "mean"}},
+            }
+        }
+    )
+    assert "E-UNITS-ATTR-MISSING" not in codes(path)
+
+
+def test_a_declared_measurements_block_is_no_longer_refused(write_config, tmp_path):
+    """The retirement. Over a table that really carries two rows per patient, so
+    the honoured path is the one exercised — a config whose roster fails to
+    resolve would pass this assertion without ever reaching the collapse."""
+    (tmp_path / "input" / "index.csv").write_text(_MEASURED_CSV)
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["depth", "read_id"],
+                "measurements": {"by": "read_id", "collapse": {"depth": "mean"}},
+            }
+        }
+    )
+    found = codes(path)
+    assert "E-DATA-MEASUREMENTS-UNSUPPORTED" not in found
+    assert not [c for c in found if c.startswith("E-")], found
+
+
+def test_a_typo_inside_the_measurements_block_is_now_reported(write_config, tmp_path):
+    """The gap retiring the refusal would otherwise turn live. `measurements` is
+    typed at `.by` and `.collapse` rather than left a whole leaf, so
+    `check_envelope` descends into it and a misspelled child is a finding rather
+    than a silently ignored key."""
+    (tmp_path / "input" / "index.csv").write_text(_MEASURED_CSV)
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["depth", "read_id"],
+                "measurements": {"by": "read_id", "colapse": "mean"},
+            }
+        }
+    )
+    c = Collector()
+    validate_config(path, c)
+    unknown = [f for f in c.findings if f.code == "E-CONFIG-KEY-UNKNOWN"]
+    assert unknown, {f.code for f in c.findings}
+    assert unknown[0].path == "data.units.measurements.colapse"
+
+
+def test_a_per_column_collapse_map_is_a_leaf_not_a_container(write_config, tmp_path):
+    """`collapse: {depth: mean}` names COLUMNS, which no dotted path reaches. The
+    closure must stop at `collapse` — descending would report every column name
+    in the map as an unknown key, which is the trap a half-typed block sets."""
+    (tmp_path / "input" / "index.csv").write_text(_MEASURED_CSV)
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["depth", "read_id"],
+                "measurements": {"by": "read_id", "collapse": {"depth": "mean"}},
+            }
+        }
+    )
+    assert "E-CONFIG-KEY-UNKNOWN" not in codes(path)
+
+
+def test_a_non_mapping_measurements_block_is_still_typed(write_config):
+    """Typing the children must not cost the block its own type check: the leaf
+    entry stays in `LEAF_TYPES` beside them."""
+    path = write_config(
+        {"data.units": {"from": "index.csv", "key": "patient_id", "measurements": "yes"}}
+    )
+    found = codes(path)
+    assert "E-CONFIG-TYPE" in found or "E-DATA-MEASUREMENTS-INVALID" in found
+
+
 def test_check_measurements_called_directly_with_no_roster_still_finds_shape_faults():
     """The check must be exercisable on its own, not only reachable through
     `validate_config` — this is the direct-call route the brief asks for, and the
     one that proves the `roster is None` branch skips the type half without
     skipping the shape half."""
     c = Collector()
-    _check_measurements({"measurements": {"collapse": "mean"}}, None, c)
+    _check_measurements({"measurements": {"collapse": "mean"}}, None, None, c)
     assert "E-DATA-MEASUREMENTS-INVALID" in {f.code for f in c.findings}
     assert "E-DATA-MEASUREMENTS-COLLAPSE-TYPE" not in {f.code for f in c.findings}
 

@@ -1454,3 +1454,19 @@ def test_a_declining_compute_yields_no_delta_on_either_side():
     assert paired_delta_of_derived(of, of, keys, _mean_m, gives_none) is None
     assert paired_delta_of_derived(of, of, keys, raises, _mean_m) is None
     assert paired_delta_of_derived(of, of, keys, _mean_m, raises) is None
+
+
+def test_beside_n_cannot_shadow_a_computed_metric_key():
+    """`beside_n` is core-supplied context copied into every metric block, and the
+    computed keys are merged last so it can never overwrite one. Without that
+    ordering a caller could replace `n` — the block's own inference base — with
+    whatever it happened to name."""
+    collapsed = {"u1": {"score": 1.0}, "u2": {"score": 3.0}}
+    counts = {"resolved": 2, "completed": 2, "ineligible": 0, "failed": 0}
+    out = summarize_step(
+        collapsed,
+        counts,
+        beside_n={"technical_n": {"min": 2, "max": 3, "median": 3}, "n": "clobbered"},
+    )
+    assert out["score"]["n"] == counts
+    assert out["score"]["technical_n"] == {"min": 2, "max": 3, "median": 3}

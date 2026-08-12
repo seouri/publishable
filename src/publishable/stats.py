@@ -687,6 +687,7 @@ def summarize_step(
     seed: int | None = None,
     resample: "dict[str, Callable[[UnitTable], float | None]] | None" = None,
     draws: int = 2000,
+    beside_n: dict[str, Any] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Per-column value, basis, `n`, and interval over the collapsed unit table.
 
@@ -740,6 +741,25 @@ def summarize_step(
     being non-numeric — is refused with the same `E-STEP-KEY-COLLISION`
     `artifacts.py` raises for the sibling case: one name cannot hold both a
     column's mean and a derived value.
+
+    `beside_n` is core-supplied context copied verbatim into every metric block —
+    `technical_n` today. It is the second of two routes a count-shaped fact
+    travels, and which one a new fact takes is decided by where `reference.md`
+    shows it:
+
+    - **A key that JOINS `n` travels in `counts`.** § What isn't a repeat says the
+      three-part `n` is "joined by `clusters` … by `effective` … by `ineligible`",
+      so those are parts of `n` and need no new carrier. (`counts` is annotated
+      `dict[str, int]`; `effective` is Kish's size and is not an integer, so the
+      task that adds it widens that annotation rather than inventing a route.)
+    - **A key that sits BESIDE `n` travels here.** § What isn't a repeat shows
+      `technical_n` as a sibling of `n` in the metric block, and § Weighted
+      samples shows `weighted_by` in the same position.
+
+    Copied into the derived branch as well as the recorded-column one, because
+    the document's own example of a metric carrying `technical_n` is `r`, which
+    `aggregate` derives. The computed keys are merged last and so always win: a
+    caller cannot shadow `n`, `value`, or an interval with a key of this name.
     """
     columns: list[str] = []
     for cols in collapsed.values():
@@ -754,6 +774,7 @@ def summarize_step(
         values = [float(v) for v in raw]
         interval = t_over_units(values)
         out[column] = {
+            **(beside_n or {}),
             "value": mean_of(values),
             "basis": "units",
             "n": {**counts, "completed": len(values)},
@@ -805,6 +826,7 @@ def summarize_step(
             else:
                 derived_interval, draws_used = None, None
             out[key] = {
+                **(beside_n or {}),
                 "value": value,
                 "basis": "units",
                 "n": {**counts, "completed": len(collapsed)},
