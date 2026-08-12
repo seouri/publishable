@@ -1542,8 +1542,20 @@ def _check_sweep(
     # pinned by the two strict xfails in `tests/test_contrasts.py`. Until it
     # lands this is the same under-warning direction the paragraph below
     # describes, not a shape the warning has cleared.
-    # `cli._differing_axes` instead walks the
-    # *union* of both sides' keys against a sentinel, so a baseline fixing an
+    #
+    # **The remedy lives here and in the row, deliberately not in the message.**
+    # A message that told the reader to free an axis would promise an outcome
+    # this build does not deliver — the run still marks the same comparison
+    # `confounded`, because contrasts still resolve against the first baseline —
+    # and the one hedge that would make it true is another subsystem's build
+    # state, which this project only ever puts in a message when the build gap
+    # *is* the finding (`fold.stratify_by`, the resolver refusals, the
+    # `-UNSUPPORTED` family). Here the finding is a fault in the user's own
+    # config. So the message states the fact and stops; add the remedy back only
+    # once per-cell targeting makes it true.
+    #
+    # `cli._differing_axes` instead walks the *union* of both sides' keys against
+    # a sentinel, so a baseline fixing an
     # axis the grid never sweeps adds a differing axis to every comparison and
     # can mark `confounded` where this warning stays silent. That direction is
     # the safe one — this never fires where a run would not mark the comparison
@@ -1571,13 +1583,7 @@ def _check_sweep(
                 f"{len(conditions) - 1} baseline comparisons differ on more than one axis "
                 f"and are reported `confounded: true` — `{example.label}` differs on "
                 f"{', '.join(f'`{a}`' for a in axes)}, so its delta mixes those effects "
-                "and no amount of correct pairing separates them. The design that avoids "
-                "this is a baseline fixing only the axis you are measuring: it expands to "
-                "one baseline per cell of the axes it leaves free, which is the row § "
-                "Expansion modes tells you to prefer when the levels are peers — though "
-                "in this build each comparison still resolves against the run's first "
-                "baseline, so those per-cell references are not yet what its contrasts "
-                "are taken from",
+                "and no amount of correct pairing separates them",
             )
 
     repeat_total = _repeat_total(doc, unit_count)
