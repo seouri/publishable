@@ -1065,16 +1065,16 @@ def test_baseline_and_grid_are_now_accepted(write_config):
     "mode,value,code",
     [
         ("ablate", {"from": "baseline", "remove": ["a.b"]}, "E-SWEEP-ABLATE-UNSUPPORTED"),
-        ("sample", {"n": 40, "ranges": {}}, "E-SWEEP-SAMPLE-UNSUPPORTED"),
         ("groups", [{"by": "arm", "levels": ["a", "b"]}], "E-SWEEP-GROUPS-UNSUPPORTED"),
     ],
 )
 def test_each_unimplemented_mode_is_refused_on_its_own(write_config, mode, value, code):
-    """`ablate`, `sample`, and `groups` each get their own refusal now that the old
+    """`ablate` and `groups` each get their own refusal now that the old
     blanket sweep refusal is retired — otherwise each would fall through into
-    silence the moment `baseline`/`grid`/`paired` stopped covering the whole
-    block. `paired` is no longer in this family: it expands for real now, see
-    `test_paired_is_accepted_and_expands_for_real` below."""
+    silence the moment `baseline`/`grid`/`paired`/`sample` stopped covering the
+    whole block. `paired` and `sample` are no longer in this family: both expand
+    for real now, see `test_paired_is_accepted_and_expands_for_real` and
+    `test_sample_is_accepted_and_expands_for_real` below."""
     assert code in codes(write_config({"sweep": {mode: value}}))
 
 
@@ -1097,6 +1097,147 @@ def test_paired_is_accepted_and_expands_for_real(write_config):
     )
     assert "E-SWEEP-PAIRED-UNSUPPORTED" not in found
     assert not [c for c in found if c.startswith("E-SWEEP")]
+
+
+def test_sample_is_accepted_and_expands_for_real(write_config):
+    """§ Expansion modes retires `E-SWEEP-SAMPLE-UNSUPPORTED`: `sample` is one of
+    the axis-shaped modes `_axes` composes, drawing `n` conditions over the
+    declared ranges, and a config declaring it validates clean."""
+    found = codes(
+        write_config(
+            {
+                "sweep": {
+                    "sample": {
+                        "n": 8,
+                        "method": "sobol",
+                        "seed": "auto",
+                        "ranges": {
+                            "analysis.confidence": {"uniform": [0.80, 0.99]},
+                            "analysis.min_samples": {"int_uniform": [10, 200]},
+                        },
+                    }
+                }
+            }
+        )
+    )
+    assert "E-SWEEP-SAMPLE-UNSUPPORTED" not in found
+    assert not [c for c in found if c.startswith("E-SWEEP")]
+
+
+def test_a_sample_range_bound_outside_its_parameters_constraint_is_refused(write_config):
+    """§ Validation, "Sample ranges": `sweep.sample.ranges.analysis.confidence`
+    upper bound 1.4 violates the parameter's `lt=1`. The bound is checked with
+    the parameter's own `Param`, so it reports `E-PARAM-VALUE` like every other
+    illegal value rather than minting a code for the same question."""
+    c = Collector()
+    validate_config(
+        write_config(
+            {
+                "sweep": {
+                    "sample": {
+                        "n": 4,
+                        "ranges": {"analysis.confidence": {"uniform": [0.80, 1.4]}},
+                    }
+                }
+            }
+        ),
+        c,
+    )
+    found = [f for f in c.findings if f.code == "E-PARAM-VALUE"]
+    assert found
+    assert found[0].path == "sweep.sample.ranges.analysis.confidence.uniform[1]"
+    assert "< 1" in found[0].message
+
+
+def test_a_sample_range_on_an_undeclared_path_is_refused(write_config):
+    """The same `E-SWEEP-PATH-UNKNOWN` a `grid` axis gets — a sampled path is a
+    parameter path, and a typo there draws 40 conditions over a parameter the
+    template has never heard of."""
+    c = Collector()
+    validate_config(
+        write_config(
+            {"sweep": {"sample": {"n": 4, "ranges": {"analysis.confidenc": {"uniform": [0, 1]}}}}}
+        ),
+        c,
+    )
+    found = [f for f in c.findings if f.code == "E-SWEEP-PATH-UNKNOWN"]
+    assert found
+    assert found[0].path == "sweep.sample.ranges.analysis.confidenc"
+
+
+@pytest.mark.parametrize(
+    "sample",
+    [
+        {"ranges": {"analysis.confidence": {"uniform": [0.8, 0.99]}}},
+        {"n": 0, "ranges": {"analysis.confidence": {"uniform": [0.8, 0.99]}}},
+        {"n": 4},
+        {"n": 4, "ranges": {}},
+        {"n": 4, "ranges": {"analysis.confidence": {}}},
+        {"n": 4, "ranges": {"analysis.confidence": {"gaussian": [0.8, 0.99]}}},
+        {"n": 4, "ranges": {"analysis.confidence": {"uniform": [0.99, 0.8]}}},
+        {"n": 4, "ranges": {"analysis.confidence": {"log_uniform": [0, 0.99]}}},
+        {"n": 4, "method": "gaussian", "ranges": {"analysis.confidence": {"uniform": [0, 1]}}},
+        {"n": 4, "seed": "17", "ranges": {"analysis.confidence": {"uniform": [0, 1]}}},
+    ],
+)
+def test_a_sample_that_cannot_be_drawn_from_is_refused(write_config, sample):
+    """Every value-level fault `sweep.sample` can carry is reported before
+    anything executes, under one identifier. `validate` swallows expansion
+    crashes on the premise that these checks report them, so a fault reaching
+    `expand` unreported is a config that validates clean and crashes `run`."""
+    assert "E-SWEEP-SAMPLE-INVALID" in codes(write_config({"sweep": {"sample": sample}}))
+
+
+@pytest.mark.parametrize(
+    "sample",
+    [
+        "notamapping",
+        ["notamapping"],
+        {"n": "8", "ranges": {"analysis.confidence": {"uniform": [0.8, 0.99]}}},
+        {"n": True, "ranges": {"analysis.confidence": {"uniform": [0.8, 0.99]}}},
+        {"n": 4, "method": ["sobol"], "ranges": {"analysis.confidence": {"uniform": [0, 1]}}},
+        {"n": 4, "seed": ["auto"], "ranges": {"analysis.confidence": {"uniform": [0, 1]}}},
+        {"n": 4, "ranges": []},
+        {"n": 4, "ranges": {123: {"uniform": [0, 1]}}},
+        {"n": 4, "ranges": {"analysis.confidence": "uniform"}},
+        {"n": 4, "ranges": {"analysis.confidence": {123: [0, 1]}}},
+        {"n": 4, "ranges": {"analysis.confidence": {"uniform": 0.5}}},
+        {"n": 4, "ranges": {"analysis.confidence": {"uniform": ["0", "1"]}}},
+        {"n": 4, "ranges": {"analysis.confidence": {"uniform": [True, False]}}},
+    ],
+)
+def test_a_misshapen_sample_is_refused_as_a_shape_fault(write_config, sample):
+    """The class, not the inputs: every type `_sample_cells` would index, split,
+    compare or use as a dict key is guarded in `_check_shape`, fatally, exactly
+    as `grid` and `paired` are — a YAML-expressible type that makes the drawing
+    code raise must not reach it."""
+    assert "E-CONFIG-SHAPE" in codes(write_config({"sweep": {"sample": sample}}))
+
+
+def test_a_sample_path_shared_with_grid_is_refused(write_config):
+    """`sample` joins the same product `grid` and `paired` do, so a path written
+    by two axis-shaped modes is the same silent overwrite — worse here, since
+    `sweep.yaml` records the drawn value as the condition's while the run used
+    the `grid` cell's."""
+    c = Collector()
+    validate_config(
+        write_config(
+            {
+                "sweep": {
+                    "grid": {"analysis.min_samples": [30, 50]},
+                    "sample": {
+                        "n": 4,
+                        "ranges": {"analysis.min_samples": {"int_uniform": [10, 200]}},
+                    },
+                }
+            }
+        ),
+        c,
+    )
+    found = [f for f in c.findings if f.code == "E-SWEEP-PATH-DUPLICATE"]
+    assert found
+    assert found[0].path == "sweep.sample.analysis.min_samples"
+    assert "sweep.grid.analysis.min_samples" in found[0].message
 
 
 def test_grid_and_paired_naming_the_same_path_is_refused(write_config):
@@ -1164,7 +1305,6 @@ def test_an_empty_or_null_mode_is_not_a_declaration(write_config):
 def test_every_sweep_refusal_message_defers_rather_than_scolds(write_config):
     for mode, value, code in [
         ("ablate", {"from": "baseline"}, "E-SWEEP-ABLATE-UNSUPPORTED"),
-        ("sample", {"n": 1}, "E-SWEEP-SAMPLE-UNSUPPORTED"),
         ("groups", [{"by": "arm"}], "E-SWEEP-GROUPS-UNSUPPORTED"),
     ]:
         c = Collector()

@@ -118,9 +118,9 @@ sweep:
   ablate: null                           # NOT BUILT; optional; 1 + n one-change conditions, e.g.
                                          #   {from: baseline, remove: [...]} or {override: [...]}
                                          #   — requires baseline
-  sample: null                           # NOT BUILT; optional; continuous ranges instead of
+  sample: null                           # optional; continuous ranges instead of
                                          #   enumeration, e.g. {n: 40, method: sobol, seed: auto,
-                                         #   ranges: {...}}
+                                         #   ranges: {...}} — one axis of n drawn conditions
   grid:
     analysis.method: [spearman, kendall]
   # 1 baseline + 2 grid = 3 conditions
@@ -178,7 +178,7 @@ hypotheses:
     evaluate_on: observed                # observed | ci95_lower | ci95_upper
 ```
 
-`init` materializes **every parameter the template declares**, each with its default and its inline comment. The four optional `statistics` sub-blocks are shown above at their full expansion because this section is the complete config *schema*, which is a wider thing than the literal output of `init`; a materialized file that does not carry them is not an incomplete config. For `contrasts` and `report_by`, declaring one by hand is how a run asks for it, and `validate` accepts the key whether or not `init` wrote it. **Thirteen declarations above are not yet built, and each is marked `NOT BUILT` where it appears**: `sweep.groups`, `sweep.ablate` and `sweep.sample`; `data.units.assign`, `.cluster_by`, `.weight_by`, `.measurements` and `.holdout`, the `{resolver: <name>}` form of `data.units.from`, and any `data.units.allocation` other than `within`; a `fold` repeat level's `stratify_by`; and `statistics.resample` and `statistics.null_test`. A config declaring any of them is refused today, naming the `-UNSUPPORTED` code its slice will retire — the same treatment [an unbuilt module](#package-layout) and [an unbuilt import](#the-importable-surface) get, because a contract that appears only once its implementation lands is a contract nobody could have designed to. That whole family is [deliberately absent from the validate-time registry](#errors-validate-reports) for the same reason, which is why this list, and not that table, is where a refused block is named. What `init` writes is complete with respect to [`parameter_spec`](#templates-where-parameters-are-defined), which is the only source of truth there is one of.
+`init` materializes **every parameter the template declares**, each with its default and its inline comment. The four optional `statistics` sub-blocks are shown above at their full expansion because this section is the complete config *schema*, which is a wider thing than the literal output of `init`; a materialized file that does not carry them is not an incomplete config. For `contrasts` and `report_by`, declaring one by hand is how a run asks for it, and `validate` accepts the key whether or not `init` wrote it. **Twelve declarations above are not yet built, and each is marked `NOT BUILT` where it appears**: `sweep.groups` and `sweep.ablate`; `data.units.assign`, `.cluster_by`, `.weight_by`, `.measurements` and `.holdout`, the `{resolver: <name>}` form of `data.units.from`, and any `data.units.allocation` other than `within`; a `fold` repeat level's `stratify_by`; and `statistics.resample` and `statistics.null_test`. A config declaring any of them is refused today, naming the `-UNSUPPORTED` code its slice will retire — the same treatment [an unbuilt module](#package-layout) and [an unbuilt import](#the-importable-surface) get, because a contract that appears only once its implementation lands is a contract nobody could have designed to. That whole family is [deliberately absent from the validate-time registry](#errors-validate-reports) for the same reason, which is why this list, and not that table, is where a refused block is named. What `init` writes is complete with respect to [`parameter_spec`](#templates-where-parameters-are-defined), which is the only source of truth there is one of.
 
 **The four identifying fields above `metadata` say what this config is written against, and `validate` checks each.** `experiment_type` names the template and must resolve to one an installed package registers; `template_version` records the spec this file was materialized from, and a mismatch with the installed template gets a [warning](#warnings-core-reports) — `W-TEMPLATE-VERSION` — not an error, because upgrading a plugin is ordinary and [nothing ever writes back into your config](#the-one-config-file). What makes an incompatibility *fail* is already covered without a version check: a retired parameter is an unknown key, and a new required one is a missing key. So the version tells you where to look and the existing checks decide whether it matters; `plugin` names where the template came from, and is a readable note beside the authoritative pin in `uv.lock` rather than a second one — core never installs from it. `schema_version` is the config format's own version: core reads any minor at or below its own and refuses a higher one, or a major it doesn't implement, rather than guessing at a field it doesn't recognize. Through v0.x a change that would break an existing config bumps the major, and there is no migration command — a config is small, `init` writes a fresh one, and the [defaults-file argument](#there-is-no-separate-defaults-file) applies to a migration file too. What protects an old *result* is that `run.yaml` embeds its config verbatim alongside the `schema_version` it was written under, so a record stays readable whether or not the format moved. All four are inside [`parameters_hash`](#three-hashes), because a config read against a different spec is a different declaration.
 
@@ -228,6 +228,7 @@ The table below states each check by the mistake it catches. What `validate` *pr
 | Ablation doesn't compose with a parameter axis | `sweep.ablate` cannot be combined with `grid`, `paired`, or `sample`; one change at a time and a second parameter axis are contradictory. `groups` is permitted — it varies no parameter |
 | Ablation baseline isn't a group level | `sweep.baseline` fixes `cohort: derivation` while `ablate` is declared; each cell gets its own baseline condition, so the arms can't have one designated between them |
 | Sample ranges | `sweep.sample.ranges.analysis.confidence` upper bound 1.4 violates the parameter's `lt=1` |
+| Sample is drawable | `sweep.sample.method` is `gaussian` — the methods are sobol, latin_hypercube, random; and `{uniform: [0.99, 0.80]}` has its bounds the wrong way round |
 | Baseline is a valid condition | `sweep.baseline` sets `analysis.method: pearsonn` |
 | Swept values are nameable | `sweep.grid.prompt.text[1]` renders as `a long sentence`, which can't be a [condition label](#how-artifacts-are-organized) — a swept value must render as `[A-Za-z0-9._+-]+` |
 | Repeat kind coherence | `{kind: bootstrap}` is not a repeat kind — declare `statistics.resample` instead |
@@ -450,8 +451,9 @@ likewise apart from those same two envelope rows, none of the others.
 | `sweep.baseline` is declared and leaves at least one of the swept axes unfixed — per-cell baseline expansion is specified but not implemented in this build | `E-SWEEP-BASELINE-PARTIAL` |
 | `sweep` is declared and resolves to zero conditions, whatever shape produced that — a backstop beneath the per-axis checks above | `E-SWEEP-EXPANDS-EMPTY` |
 | `sweep` declares a key that is not one of the six recognized sweep modes (`baseline`, `grid`, `paired`, `ablate`, `sample`, `groups`) | `E-SWEEP-KEY-UNKNOWN` |
-| `sweep.grid` and `sweep.paired` write the same dotted path — `expand`'s product would let whichever mode is later silently overwrite the other's value on every combination | `E-SWEEP-PATH-DUPLICATE` |
-| `sweep.grid` or `sweep.baseline` names a dotted path the template's `parameter_spec` does not declare | `E-SWEEP-PATH-UNKNOWN` |
+| Two axis-shaped modes — any two of `sweep.grid`, `sweep.paired` and `sweep.sample` — write the same dotted path, so `expand`'s product would let whichever mode is later silently overwrite the other's value on every combination | `E-SWEEP-PATH-DUPLICATE` |
+| `sweep.grid`, `sweep.baseline` or a `sweep.sample.ranges` key names a dotted path the template's `parameter_spec` does not declare | `E-SWEEP-PATH-UNKNOWN` |
+| `sweep.sample` cannot be drawn from: no `n` or an `n` below 1, no `ranges` or an empty one, a `method` outside `sobol` \| `latin_hypercube` \| `random`, a `seed` other than `auto`, a range that is not exactly one of `uniform` \| `int_uniform` \| `log_uniform`, or a range whose bounds are not two ordered numbers (positive ones, under `log_uniform`; integral ones, under `int_uniform`). A bound that is legal here but violates its own parameter's constraints is `E-PARAM-VALUE` | `E-SWEEP-SAMPLE-INVALID` |
 | A `sweep.grid` value cannot be rendered into a condition label — a `sweep.baseline` value is exempt, since it is never rendered into one | `E-SWEEP-VALUE-UNNAMEABLE` |
 | `template.validate(doc)` yields a message — run last, after every other check in this table, and ungated by their findings, so a cross-block rule can report on `parameters` another row already refused | `E-TEMPLATE-RULE` |
 | `experiment_type` names a template no installed package registers | `E-TEMPLATE-UNKNOWN` |
@@ -710,7 +712,7 @@ labels: [batch01_seed17, batch01_seed42, batch01_seed137,
 
 The `seeds` a level records are its own three, not one per execution: fifteen leaves over three resolved seeds is the [documented consequence](#a-batch-says-when-not-what) of `batch01_seed42` and `batch02_seed42` drawing alike, and a flattened list of fifteen would assert fifteen streams that don't exist.
 
-A `fold` level adds `partitions` — the unit keys in each fold's train and test side, and the realized fold sizes when [`cluster_by`](#clustered-units) makes them uneven. A `sample` sweep adds the drawn `values` per condition and the seed they came from. `order: randomized` adds the `order_seed` its shuffle used, beside the `execution_order` that shuffle produced — the seed so the plan is derivable, the order because [what happened is not a thing to re-derive](#resuming):
+A `fold` level adds `partitions` — the unit keys in each fold's train and test side, and the realized fold sizes when [`cluster_by`](#clustered-units) makes them uneven. A `sample` sweep adds the drawn `values` per condition — they are the conditions' own values, not a second copy — and `sample_seed`, the seed they came from. `order: randomized` adds the `order_seed` its shuffle used, beside the `execution_order` that shuffle produced — the seed so the plan is derivable, the order because [what happened is not a thing to re-derive](#resuming):
 
 ```yaml
 order: randomized
@@ -1567,7 +1569,8 @@ sweep:
   sample:
     n: 50
     method: sobol                        # sobol | latin_hypercube | random
-    seed: auto                           # derived from the design digest; recorded in sweep.yaml
+    seed: auto                           # auto (the design digest) or a pinned integer;
+                                         #   recorded in sweep.yaml either way
     ranges:                              # uniform | int_uniform | log_uniform
       analysis.confidence: {uniform: [0.80, 0.99]}
       analysis.min_samples: {int_uniform: [10, 200]}

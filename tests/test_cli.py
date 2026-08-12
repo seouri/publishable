@@ -3896,3 +3896,34 @@ def test_acceptance_the_verdict_record_carries_every_field(tmp_path, capsys, mon
         "family_size": 2,
         "family": {"hypotheses": 2},
     }
+
+
+def test_a_sampled_sweep_runs_and_records_its_seed_and_draws(tmp_path: Path):
+    """§ "`sweep.yaml` — the resolved plan": a `sample` sweep adds the drawn
+    `values` per condition and the seed they came from, so a reader never
+    re-derives the design. End to end, because a drawn value has to survive
+    `yaml.safe_dump` (a NumPy scalar would not), has to render into a condition
+    directory name, and has to reach the executed condition's `cfg` — three
+    things `expand`'s own tests cannot see.
+    """
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        sweep={
+            "sample": {
+                "n": 3,
+                "method": "latin_hypercube",
+                "seed": "auto",
+                "ranges": {"analysis.confidence": {"uniform": [0.80, 0.99]}},
+            }
+        },
+    )
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+
+    assert isinstance(sweep["sample_seed"], int)
+    drawn = [c["values"]["analysis.confidence"] for c in sweep["conditions"]]
+    assert len(drawn) == 3
+    assert all(isinstance(v, float) and 0.80 <= v <= 0.99 for v in drawn)
+    assert len(set(drawn)) == 3
+    for i, value in enumerate(drawn):
+        assert (doc["run_dir"] / "conditions" / f"{i:02d}_confidence={value!r}").is_dir()

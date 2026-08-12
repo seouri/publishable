@@ -387,3 +387,262 @@ def test_partitions_with_no_fold_level_raise_a_coded_error_rather_than_asserting
         sweep_document(expand({}), levels, cross_levels(levels), "sha256:x",
                        "as_declared", [], None, partitions=[[_u("a")], [_u("b")]])
     assert excinfo.value.code == "E-RUN-FOLD-UNRESOLVED"
+
+
+def test_sample_draws_are_deterministic_given_the_config() -> None:
+    """§ Expansion modes: "Sampling is deterministic given its seed", and the
+    seed is derived from the design digest — so one config always expands to
+    the same conditions, which is what makes `reproduce` regenerate them."""
+    config = {
+        "sweep": {
+            "sample": {
+                "n": 8,
+                "method": "random",
+                "seed": "auto",
+                "ranges": {"analysis.confidence": {"uniform": [0.80, 0.99]}},
+            }
+        }
+    }
+
+    first = [dict(c.values) for c in expand(config)]
+    second = [dict(c.values) for c in expand(config)]
+
+    assert first == second
+    assert len(first) == 8
+    assert all(0.80 <= row["analysis.confidence"] <= 0.99 for row in first)
+
+
+def _sample_config(**sample):
+    base = {
+        "n": 16,
+        "method": "random",
+        "seed": "auto",
+        "ranges": {"analysis.confidence": {"uniform": [0.80, 0.99]}},
+    }
+    base.update(sample)
+    return {"sweep": {"sample": base}}
+
+
+def test_two_configs_the_digest_can_tell_apart_draw_differently() -> None:
+    """The discriminating half of determinism. `design_digest` reads `data.units`
+    and `sweep.groups`, so two configs differing in `data.units` derive different
+    sample seeds and must not draw the same conditions — a constant seed would
+    pass the same-config test above while ignoring the config entirely."""
+    one = _sample_config()
+    one["data"] = {"units": {"from": "cohort.csv", "key": "patient_id"}}
+    other = _sample_config()
+    other["data"] = {"units": {"from": "other.csv", "key": "patient_id"}}
+
+    assert [dict(c.values) for c in expand(one)] != [dict(c.values) for c in expand(other)]
+
+
+def test_each_method_draws_its_own_points() -> None:
+    """The `method` parameter is not decorative: `sobol`, `latin_hypercube` and
+    `random` are three different constructions, and a sampler whose method
+    argument does nothing is the silent-no-op class this slice exists to avoid."""
+    drawn = {
+        method: [dict(c.values) for c in expand(_sample_config(method=method))]
+        for method in ("sobol", "latin_hypercube", "random")
+    }
+
+    assert drawn["sobol"] != drawn["random"]
+    assert drawn["latin_hypercube"] != drawn["random"]
+    assert drawn["sobol"] != drawn["latin_hypercube"]
+    for rows in drawn.values():
+        assert len(rows) == 16
+        assert all(0.80 <= row["analysis.confidence"] <= 0.99 for row in rows)
+
+
+def test_sobol_accepts_an_n_that_is_not_a_power_of_two() -> None:
+    """`n` is the condition count — it is billed against `limits.max_executions`
+    and printed by `dry-run` — so it is drawn exactly. scipy warns that Sobol's
+    balance properties need a power of two; that warning is about the sequence's
+    uniformity, not about correctness, and rounding `n` would change the declared
+    design and its cost."""
+    conditions = expand(_sample_config(method="sobol", n=50))
+    assert len(conditions) == 50
+
+
+def test_uniform_scales_linearly_into_the_declared_interval() -> None:
+    rows = [dict(c.values) for c in expand(_sample_config(n=64))]
+    values = [row["analysis.confidence"] for row in rows]
+    assert all(isinstance(v, float) for v in values)
+    assert all(0.80 <= v <= 0.99 for v in values)
+    # A linear map of 64 uniform draws fills its interval: both halves are hit,
+    # which a mis-scaled map (into [0,1], or into half the interval) would not do.
+    assert any(v < 0.895 for v in values) and any(v > 0.895 for v in values)
+
+
+def test_int_uniform_draws_integers_inclusive_of_both_endpoints() -> None:
+    rows = [
+        dict(c.values)
+        for c in expand(
+            _sample_config(n=256, ranges={"analysis.min_samples": {"int_uniform": [10, 12]}})
+        )
+    ]
+    values = [row["analysis.min_samples"] for row in rows]
+    assert all(isinstance(v, int) and not isinstance(v, bool) for v in values)
+    assert set(values) == {10, 11, 12}
+
+
+def test_log_uniform_is_uniform_in_the_log_of_the_interval() -> None:
+    """Half the draws fall below the geometric mean, not the arithmetic one —
+    which is the whole difference between `log_uniform` and `uniform`."""
+    import math
+
+    rows = [
+        dict(c.values)
+        for c in expand(
+            _sample_config(n=512, ranges={"learning.rate": {"log_uniform": [0.0001, 1.0]}})
+        )
+    ]
+    values = [row["learning.rate"] for row in rows]
+    assert all(0.0001 <= v <= 1.0 for v in values)
+    geometric_mean = math.sqrt(0.0001 * 1.0)
+    below = sum(1 for v in values if v < geometric_mean)
+    assert 0.4 < below / len(values) < 0.6
+    arithmetic_mean = (0.0001 + 1.0) / 2
+    assert sum(1 for v in values if v < arithmetic_mean) / len(values) > 0.9
+
+
+def test_a_sample_axis_multiplies_with_grid() -> None:
+    """§ Expansion modes: the condition set is the product of every axis-shaped
+    mode present — `sample` is one axis of realized draws, not a mode of its own."""
+    config = _sample_config(n=3)
+    config["sweep"]["grid"] = {"analysis.method": ["pearson", "spearman"]}
+    conditions = expand(config)
+
+    assert len(conditions) == 6
+    assert all("analysis.method" in c.values and "analysis.confidence" in c.values
+               for c in conditions)
+    assert [c.label.split("__")[0] for c in conditions] == [
+        "method=pearson", "method=pearson", "method=pearson",
+        "method=spearman", "method=spearman", "method=spearman",
+    ]
+
+
+def test_swept_paths_carries_the_sample_ranges() -> None:
+    """`label_for` shortens a path against the whole swept set, so a path a mode
+    sweeps but `_swept_paths` omits produces a silently ambiguous label."""
+    from publishable.sweep import _swept_paths
+    paths = _swept_paths(
+        {
+            "grid": {"analysis.method": ["pearson"]},
+            "sample": {"n": 2, "ranges": {"analysis.confidence": {"uniform": [0.8, 0.99]}}},
+        }
+    )
+    assert paths == ["analysis.method", "analysis.confidence"]
+
+
+def test_the_drawn_values_are_plain_python_scalars() -> None:
+    """`sweep.yaml` is written with `yaml.safe_dump`, which refuses a NumPy scalar."""
+    import yaml
+
+    rows = [dict(c.values) for c in expand(_sample_config(n=4))]
+    assert yaml.safe_load(yaml.safe_dump(rows)) == rows
+
+
+def test_a_malformed_sample_raises_a_coded_error_rather_than_crashing() -> None:
+    """Every fault `expand` can hit inside `sweep.sample` arrives as one
+    `ContractError` carrying `E-SWEEP-SAMPLE-INVALID`, never as a bare
+    `AttributeError`/`TypeError`/`KeyError` from the drawing code — `validate`
+    swallows expansion crashes on the premise that `_check_sweep` reports them."""
+    from publishable.errors import ContractError
+
+    malformed = [
+        {"ranges": {"a.b": {"uniform": [0, 1]}}},                       # no `n`
+        {"n": 0, "ranges": {"a.b": {"uniform": [0, 1]}}},               # n below 1
+        {"n": "8", "ranges": {"a.b": {"uniform": [0, 1]}}},             # n not an int
+        {"n": True, "ranges": {"a.b": {"uniform": [0, 1]}}},            # a bool is not an n
+        {"n": 4},                                                        # no `ranges`
+        {"n": 4, "ranges": {}},                                          # empty `ranges`
+        {"n": 4, "ranges": []},                                          # ranges not a mapping
+        {"n": 4, "ranges": {123: {"uniform": [0, 1]}}},                  # non-string path
+        {"n": 4, "ranges": {"a.b": "uniform"}},                          # entry not a mapping
+        {"n": 4, "ranges": {"a.b": {}}},                                 # no form
+        {"n": 4, "ranges": {"a.b": {"uniform": [0, 1], "int_uniform": [0, 1]}}},  # two forms
+        {"n": 4, "ranges": {"a.b": {123: [0, 1]}}},                      # non-string form
+        {"n": 4, "ranges": {"a.b": {"gaussian": [0, 1]}}},               # unknown form
+        {"n": 4, "ranges": {"a.b": {"uniform": 0.5}}},                   # bounds not a list
+        {"n": 4, "ranges": {"a.b": {"uniform": [0, 1, 2]}}},             # three bounds
+        {"n": 4, "ranges": {"a.b": {"uniform": ["0", "1"]}}},            # bounds not numbers
+        {"n": 4, "ranges": {"a.b": {"uniform": [True, False]}}},         # bools are not bounds
+        {"n": 4, "ranges": {"a.b": {"uniform": [1, 0]}}},                # lower above upper
+        {"n": 4, "ranges": {"a.b": {"uniform": [1, 1]}}},                # empty interval
+        {"n": 4, "ranges": {"a.b": {"log_uniform": [0, 1]}}},            # log of zero
+        {"n": 4, "ranges": {"a.b": {"int_uniform": [1.5, 3.5]}}},        # non-integer bounds
+        {"n": 4, "method": "gaussian", "ranges": {"a.b": {"uniform": [0, 1]}}},   # method
+        {"n": 4, "method": 5, "ranges": {"a.b": {"uniform": [0, 1]}}},   # method not a string
+        {"n": 4, "seed": "17", "ranges": {"a.b": {"uniform": [0, 1]}}},  # a seed is auto or an int
+        {"n": 4, "seed": True, "ranges": {"a.b": {"uniform": [0, 1]}}},  # a bool is not a seed
+        "notamapping",
+        ["notamapping"],
+    ]
+    for sample in malformed:
+        with pytest.raises(ContractError) as excinfo:
+            expand({"sweep": {"sample": sample}})
+        assert excinfo.value.code == "E-SWEEP-SAMPLE-INVALID", sample
+
+
+def test_a_yaml_date_under_data_units_does_not_crash_expansion() -> None:
+    """`design_digest` json-dumps `data.units`, which is arbitrary user YAML: a
+    bare date (`enrolled: 2026-08-12`) parses as `datetime.date` and is not JSON
+    serializable. Only a `sweep.sample` config reaches the digest at all, and it
+    arrives as a coded error rather than a bare `TypeError` out of `json.dumps`."""
+    import datetime
+
+    from publishable.errors import ContractError
+
+    config = _sample_config()
+    config["data"] = {"units": {"from": "cohort.csv", "enrolled": datetime.date(2026, 8, 12)}}
+    with pytest.raises(ContractError) as excinfo:
+        expand(config)
+    assert excinfo.value.code == "E-SWEEP-SAMPLE-INVALID"
+
+
+def test_the_sample_seed_is_recorded_in_the_sweep_document() -> None:
+    """§ "`sweep.yaml` — the resolved plan": a `sample` sweep adds the drawn
+    values per condition and the seed they came from. The values are already the
+    conditions' own; the seed is the addition, and is absent when nothing drew."""
+    from publishable.replication import Repeat, RepeatLevel, RepeatMember
+    from publishable.sweep import sample_seed_for, sweep_document
+
+    config = _sample_config(n=2)
+    seed = sample_seed_for(config)
+    assert isinstance(seed, int)
+    assert sample_seed_for({"sweep": {"grid": {"a.x": [1]}}}) is None
+
+    levels = [RepeatLevel("seed", (RepeatMember("seed01", 1),))]
+    doc = sweep_document(expand(config), levels, [Repeat("seed", "seed01", 1)], "sha256:d",
+                         "as_declared", [(0, "seed01")], sample_seed=seed)
+    assert doc["sample_seed"] == seed
+    assert [c["values"]["analysis.confidence"] for c in doc["conditions"]] == [
+        dict(c.values)["analysis.confidence"] for c in expand(config)
+    ]
+
+    without = sweep_document(expand({"sweep": {"grid": {"a.x": [1]}}}), levels,
+                             [Repeat("seed", "seed01", 1)], "sha256:d",
+                             "as_declared", [(0, "seed01")])
+    assert "sample_seed" not in without
+
+
+def test_a_pinned_integer_seed_overrides_the_derivation() -> None:
+    """§ What `auto` derives from: "an omitted `seed` is `auto`, not an error …
+    pinning an integer is the deliberate act, and the one to take for anything
+    you intend to cite". So two configs the design digest tells apart draw
+    identically once both pin the same seed — the pin is what a citation rests
+    on, and a derivation that ignored it would move the draws under it."""
+    from publishable.sweep import sample_seed_for
+
+    one = _sample_config(seed=7)
+    one["data"] = {"units": {"from": "cohort.csv", "key": "patient_id"}}
+    other = _sample_config(seed=7)
+    other["data"] = {"units": {"from": "other.csv", "key": "patient_id"}}
+
+    assert sample_seed_for(one) == 7
+    assert [dict(c.values) for c in expand(one)] == [dict(c.values) for c in expand(other)]
+    # And it is a different design from the derived one, which is the half that
+    # says the pin was read rather than merely accepted.
+    assert [dict(c.values) for c in expand(one)] != [
+        dict(c.values) for c in expand(_sample_config())
+    ]

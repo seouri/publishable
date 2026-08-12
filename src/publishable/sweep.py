@@ -4,6 +4,12 @@ Pure: a config dict in, an ordered condition list out. No filesystem, no
 `Config` object, no git — expansion is a function of the declaration alone,
 so it can be tested exhaustively without a repository. Importing
 `publishable.errors` keeps that: it has no dependencies and no I/O of its own.
+`publishable.hashes.design_digest` is the same kind of import for the same
+reason — it is a pure function of the config dict (`hashes.py` reads a file
+only in `code_hash`, which nothing here calls), and `sweep.sample` needs it
+because § Expansion modes derives the sample seed from the design digest.
+Taking a digest *parameter* instead would push that derivation onto every
+caller of `expand`, which is the drift this module exists to prevent.
 
 A `baseline` whose values happen to coincide with a grid cell produces two
 conditions with identical `values` — `00_baseline` and the matching grid
@@ -12,14 +18,19 @@ declared and the grid is mechanical, and reconciling the two is not
 `expand`'s job.
 """
 
+import hashlib
 import itertools
+import math
+import random
 import re
+import warnings
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any
 
 from publishable.errors import ContractError
+from publishable.hashes import design_digest
 
 if TYPE_CHECKING:
     from publishable.replication import Repeat, RepeatLevel
@@ -114,6 +125,227 @@ def _keys_for(paths: list[str]) -> dict[str, str]:
     return keys
 
 
+SAMPLE_METHODS = ("sobol", "latin_hypercube", "random")
+SAMPLE_RANGE_FORMS = ("uniform", "int_uniform", "log_uniform")
+_DEFAULT_SAMPLE_METHOD = "random"
+
+
+def sample_fault(sample: Any) -> str | None:
+    """None if `sweep.sample` can be drawn from; otherwise why not, as one message.
+
+    Total over arbitrary input on purpose. Two callers need the same answer from
+    two ends: `validate._check_sweep` reports it as `E-SWEEP-SAMPLE-INVALID`
+    before anything executes, and `_sample_cells` raises on it so a config that
+    reached `expand` some other way fails with a coded error rather than an
+    `AttributeError` out of the drawing code. `validate` swallows expansion
+    crashes on the premise that its own checks report them, so a fault this
+    function cannot name is a config that validates clean and crashes `run` —
+    the class this project keeps having to close. Every operation `_sample_cells`
+    performs on `sample`-derived data is gated here: the `n` it draws, the
+    `method` it dispatches on, the `seed` it either pins or derives, the
+    `ranges` mapping it iterates, each path it uses as a dict key and splits in
+    `_keys_for`, each entry's single form key, and both bounds it scales through.
+
+    Shape faults are *also* refused by `validate._check_shape` under
+    `E-CONFIG-SHAPE`, fatally, which is where a wrong-typed block belongs and
+    where a reader of the other modes' guards will look. That overlap is
+    deliberate: `_check_shape`'s guard is what a user sees, this one is what
+    keeps `expand` from crashing when it is reached without one.
+    """
+    if not isinstance(sample, dict):
+        return f"is a {type(sample).__name__} (`{sample!r}`); expected a mapping"
+
+    n = sample.get("n")
+    if n is None:
+        return "declares no `n`, so there is no number of conditions to draw"
+    if not isinstance(n, int) or isinstance(n, bool):
+        return f"`n` is `{n!r}`; expected an integer"
+    if n < 1:
+        return f"`n` is {n}; a sample draws at least one condition"
+
+    method = sample.get("method", _DEFAULT_SAMPLE_METHOD)
+    if method is not None:
+        if not isinstance(method, str):
+            return f"`method` is `{method!r}`; expected a string"
+        if method not in SAMPLE_METHODS:
+            return f"`method` is `{method}`; the methods are {' | '.join(SAMPLE_METHODS)}"
+
+    seed = sample.get("seed", "auto")
+    pinned = isinstance(seed, int) and not isinstance(seed, bool)
+    if seed is not None and seed != "auto" and not pinned:
+        return (
+            f"`seed` is `{seed!r}`; a sample seed is `auto` — derived from the design "
+            "digest — or a pinned integer"
+        )
+
+    ranges = sample.get("ranges")
+    if not isinstance(ranges, dict):
+        if ranges is None:
+            return "declares no `ranges`, so there is nothing to draw over"
+        return f"`ranges` is a {type(ranges).__name__} (`{ranges!r}`); expected a mapping"
+    if not ranges:
+        return "declares an empty `ranges`, so there is nothing to draw over"
+
+    for path, spec in ranges.items():
+        if not isinstance(path, str):
+            return f"`ranges` key `{path!r}` is not a string, so it is not a parameter path"
+        if not isinstance(spec, dict):
+            return f"`ranges.{path}` is a {type(spec).__name__} (`{spec!r}`); expected a mapping"
+        if len(spec) != 1:
+            return (
+                f"`ranges.{path}` declares {len(spec)} forms "
+                f"({', '.join(repr(k) for k in spec) or 'none'}); a range is exactly one of "
+                f"{' | '.join(SAMPLE_RANGE_FORMS)}"
+            )
+        form, bounds = next(iter(spec.items()))
+        if not isinstance(form, str) or form not in SAMPLE_RANGE_FORMS:
+            return (
+                f"`ranges.{path}` declares `{form!r}`; the forms are "
+                f"{' | '.join(SAMPLE_RANGE_FORMS)}"
+            )
+        if not isinstance(bounds, list) or len(bounds) != 2:
+            return f"`ranges.{path}.{form}` is `{bounds!r}`; expected a list of two bounds"
+        low, high = bounds
+        for bound in bounds:
+            if isinstance(bound, bool) or not isinstance(bound, int | float):
+                return f"`ranges.{path}.{form}` bound `{bound!r}` is not a number"
+        if low >= high:
+            return (
+                f"`ranges.{path}.{form}` is [{low}, {high}]; the lower bound must be below "
+                "the upper one"
+            )
+        if form == "int_uniform" and (int(low) != low or int(high) != high):
+            return f"`ranges.{path}.int_uniform` is [{low}, {high}]; both bounds must be integers"
+        if form == "log_uniform" and low <= 0:
+            return (
+                f"`ranges.{path}.log_uniform` is [{low}, {high}]; a log-uniform range is drawn "
+                "in the log of its bounds, so both must be above zero"
+            )
+    return None
+
+
+def _sample_seed(digest: str, index: int = 0) -> int:
+    """The seed a sample draws from, derived from the design digest.
+
+    Same construction as `replication._seed_for`, with `|sample|` in place of
+    `|seed|` so a draw and a repeat seed derived from one digest never collide.
+    """
+    payload = f"{digest}|sample|{index}".encode()
+    return int.from_bytes(hashlib.sha256(payload).digest()[:4], "big")
+
+
+def sample_seed_for(config: dict[str, Any]) -> int | None:
+    """The seed `sweep.sample` draws with, or None when nothing draws.
+
+    Public because `cli.py` records it in `sweep.yaml` beside the realized
+    conditions, and a second derivation of this number is how the recorded seed
+    and the executed draw come apart.
+
+    A pinned integer is returned literally and the digest is not computed at
+    all: § What `auto` derives from says "an omitted `seed` is `auto`, not an
+    error … pinning an integer is the deliberate act, and the one to take for
+    anything you intend to cite", so a pinned sample must draw the same
+    conditions whatever the roster does.
+
+    The digest is computed only when a `sample` is declared. `design_digest`
+    json-dumps `data.units`, which is arbitrary user YAML — a bare date parses
+    as `datetime.date` and is not JSON serializable — so computing it
+    unconditionally would make every config pay for a crash only this mode's
+    configs can be exposed to. Reached here, that `TypeError` becomes the same
+    coded error every other `sample` fault does.
+    """
+    sample = (config.get("sweep") or {}).get("sample")
+    if not sample:
+        return None
+    declared = sample.get("seed", "auto") if isinstance(sample, dict) else "auto"
+    if isinstance(declared, int) and not isinstance(declared, bool):
+        return declared
+    try:
+        digest = design_digest(config)
+    except TypeError as exc:
+        raise ContractError(
+            f"`data.units` or `sweep.groups` holds a value the design digest cannot be "
+            f"computed over ({exc}), and `sweep.sample` derives its seed from that digest",
+            code="E-SWEEP-SAMPLE-INVALID",
+        ) from exc
+    return _sample_seed(digest)
+
+
+def _scaled(form: str, draw: float, low: float, high: float) -> Any:
+    """One unit-hypercube coordinate mapped into one declared range.
+
+    Returns a plain `int`/`float`, never a NumPy scalar: a condition's `values`
+    are written to `sweep.yaml` with `yaml.safe_dump`, which refuses one.
+    """
+    if form == "int_uniform":
+        # Inclusive of both endpoints, which is why the span is `high - low + 1`
+        # and the result is clamped: a draw of exactly 1.0 would otherwise land
+        # one past `high`.
+        return min(int(low) + int(draw * (int(high) - int(low) + 1)), int(high))
+    if form == "log_uniform":
+        return float(math.exp(math.log(low) + draw * (math.log(high) - math.log(low))))
+    return float(low) + draw * (float(high) - float(low))
+
+
+def _sample_cells(sample: Any, seed: int) -> list[dict[str, Any]]:
+    """`n` realized draws over the declared ranges, as one axis's cells.
+
+    Deterministic given `seed`, which is what § Expansion modes promises and
+    what lets `sweep.yaml` record the seed beside the conditions rather than a
+    reader re-deriving them.
+
+    `sobol` and `latin_hypercube` come from `scipy.stats.qmc`, a declared
+    dependency; `random` is the standard library's generator. Both scipy
+    engines are scrambled (the default), which is what makes
+    the seed matter at all — an unscrambled Sobol sequence is the same points
+    for every seed.
+
+    **`n` is drawn exactly, including when it is not a power of two.** scipy
+    warns there that Sobol's balance properties need one; that warning is about
+    the uniformity of the sequence, not about correctness, and `n` is the
+    condition count — billed against `limits.max_executions`, printed by
+    `dry-run`, and recorded as the design. Rounding it would execute a
+    different experiment than the one declared, so the warning is suppressed
+    around that one call and the count stands.
+    """
+    fault = sample_fault(sample)
+    if fault is not None:
+        raise ContractError(f"`sweep.sample` {fault}", code="E-SWEEP-SAMPLE-INVALID")
+
+    ranges: dict[str, Any] = sample["ranges"]
+    paths = list(ranges)
+    n = sample["n"]
+    method = sample.get("method") or _DEFAULT_SAMPLE_METHOD
+    draws: Any
+    if method == "sobol":
+        from scipy.stats import qmc
+
+        engine = qmc.Sobol(d=len(paths), seed=seed)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            draws = engine.random(n)
+    elif method == "latin_hypercube":
+        from scipy.stats import qmc
+
+        draws = qmc.LatinHypercube(d=len(paths), seed=seed).random(n)
+    else:
+        # `random.Random`, not `numpy.random.default_rng`: this is the one place
+        # in `src/` that would import NumPy for a single uniform draw, and the
+        # stream only has to be deterministic given the seed — which both are.
+        # `stats.py` seeds the same stdlib generator for the same reason.
+        rng = random.Random(seed)
+        draws = [[rng.random() for _ in paths] for _ in range(n)]
+
+    cells: list[dict[str, Any]] = []
+    for row in draws:
+        cell: dict[str, Any] = {}
+        for path, draw in zip(paths, row, strict=True):
+            form, bounds = next(iter(ranges[path].items()))
+            cell[path] = _scaled(form, float(draw), bounds[0], bounds[1])
+        cells.append(cell)
+    return cells
+
+
 def _swept_paths(sweep: dict[str, Any]) -> list[str]:
     """Every path any axis-shaped mode sweeps, in declared order.
 
@@ -132,6 +364,17 @@ def _swept_paths(sweep: dict[str, Any]) -> list[str]:
     for entry in sweep.get("paired") or []:
         for path in entry:
             if path not in paths:
+                paths.append(path)
+    sample = sweep.get("sample")
+    if isinstance(sample, dict) and isinstance(sample.get("ranges"), dict):
+        # Read defensively rather than through `sample_fault`: this function is
+        # called by `validate._check_unimplemented` on a config no check has
+        # cleared yet, and a malformed `sample` must not stop the swept-path
+        # list — which `E-SWEEP-BASELINE-PARTIAL` reads — from being built out
+        # of the modes that *are* well-formed. `_sample_cells` is where a
+        # malformed `sample` is refused.
+        for path in sample["ranges"]:
+            if isinstance(path, str) and path not in paths:
                 paths.append(path)
     return paths
 
@@ -156,7 +399,7 @@ def condition_dir_name(index: int, label: str) -> str:
     return f"{index:02d}_{label}"
 
 
-def _axes(sweep: dict[str, Any]) -> list[list[dict[str, Any]]]:
+def _axes(sweep: dict[str, Any], sample_seed: int | None = None) -> list[list[dict[str, Any]]]:
     """One entry per axis-shaped mode present, each a list of `{path: value}` cells.
 
     The product of these is the condition set. `grid` contributes one axis per
@@ -174,6 +417,22 @@ def _axes(sweep: dict[str, Any]) -> list[list[dict[str, Any]]]:
         # happens to set several paths. Treating its keys as separate axes is
         # exactly the combinatorial reading § Expansion modes rejects.
         axes.append([dict(entry) for entry in paired])
+    sample = sweep.get("sample")
+    if sample:
+        # One axis of `n` realized draws, for the same reason `paired` is one
+        # axis: a draw sets every sampled path at once, and the paths are
+        # coordinates of one point rather than dimensions to cross. Crossing
+        # them would give `n ** d` conditions from a declaration that says `n`.
+        if sample_seed is None:
+            # Never a fallback seed. A default here would draw a real,
+            # reproducible-looking sample from a seed no config derived, and
+            # `sweep.yaml` would record a different one beside it.
+            raise ContractError(
+                "`sweep.sample` is declared but no sample seed was derived; `expand` "
+                "derives it from the design digest and is the only caller of `_axes`",
+                code="E-SWEEP-SAMPLE-INVALID",
+            )
+        axes.append(_sample_cells(sample, sample_seed))
     return axes
 
 
@@ -192,7 +451,7 @@ def expand(config: dict[str, Any]) -> list[Condition]:
     if baseline:
         rows.append((dict(baseline), True))
 
-    axes = _axes(sweep)
+    axes = _axes(sweep, sample_seed_for(config))
     if axes:
         # `itertools.product` varies its LAST argument fastest, which is the
         # declared-order nesting the specification asks for. Preserved from the
@@ -220,6 +479,7 @@ def sweep_document(
     execution_order: list[tuple[int, str]],
     order_seed: int | None = None,
     partitions: list[list["Unit"]] | None = None,
+    sample_seed: int | None = None,
 ) -> dict[str, Any]:
     """The `sweep.yaml` payload: the resolved plan, as plain YAML-safe data.
 
@@ -233,7 +493,12 @@ def sweep_document(
 
     `order_seed` is the seed `order: randomized`'s shuffle used, and is
     written only when given — its absence under `as_declared` says nothing
-    was shuffled, not that the seed was lost.
+    was shuffled, not that the seed was lost. `sample_seed` is the same shape
+    for the same reason: § "`sweep.yaml` — the resolved plan" says a `sample`
+    sweep adds "the drawn `values` per condition and the seed they came from",
+    and the values are already `conditions[].values` — a second copy of them
+    is exactly the drift this project keeps finding, so the seed is the only
+    addition, absent when nothing drew.
 
     `levels` and `repeats` are the same design at two grains and both are
     needed. `levels` is the declared structure — one entry per level, outer to
@@ -287,6 +552,8 @@ def sweep_document(
     }
     if order_seed is not None:
         doc["order_seed"] = order_seed
+    if sample_seed is not None:
+        doc["sample_seed"] = sample_seed
     if partitions is not None:
         fold = next((lv for lv in levels if lv.kind == "fold"), None)
         if fold is None:

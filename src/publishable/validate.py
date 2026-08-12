@@ -18,7 +18,7 @@ from publishable.provenance import find_repo_root, resolves_inside_repo
 from publishable.replication import resolve_repeats
 from publishable.scope import step_name as _step_name
 from publishable.strata import levels_for
-from publishable.sweep import _swept_paths, check_swept_value, expand
+from publishable.sweep import _swept_paths, check_swept_value, expand, sample_fault
 from publishable.templates.base import BaseTemplate
 from publishable.templates.registry import get_template, template_names
 from publishable.units import UnitList, resolve_units
@@ -42,7 +42,13 @@ _MAPPING_BLOCKS = (
 _LIST_BLOCKS = ("hypotheses",)
 _STRING_BLOCKS = ("schema_version", "experiment_type", "template_version", "entrypoint", "plugin")
 
-_KIND_LABEL = {"mapping": "a mapping", "list": "a list", "string": "a string"}
+_KIND_LABEL = {
+    "mapping": "a mapping",
+    "list": "a list",
+    "string": "a string",
+    "integer": "an integer",
+    "number": "a number",
+}
 
 
 def _flatten(node: Any, prefix: str = "") -> dict[str, Any]:
@@ -176,6 +182,59 @@ def _check_shape(doc: dict[str, Any], c: Collector) -> bool:
                 for key in entry:
                     if not isinstance(key, str):
                         _bad(f"sweep.paired[{i}]", key, "string")
+
+        # `sample` gets the same treatment at every depth `_sample_cells` reads,
+        # rather than one guard per input someone thought of: the container, then
+        # `n`/`method`/`seed`, then the `ranges` mapping, then each range's path,
+        # its single form key, and the two-element bound list the scaling
+        # indexes into. Each of these is an operation on user data — a
+        # comparison, a `dict` key, a `.split(".")`, a subscript — and each has a
+        # YAML-expressible type that makes it raise, which is why the walk is
+        # exhaustive over the *shapes* rather than over the examples. `bool` is
+        # excluded from `n` deliberately (`n: true` is an `int` to Python and
+        # nothing to a reader), and from a bound for the same reason.
+        # `sweep.sample_fault` refuses this same family from the other end, so a
+        # config reaching `expand` without passing here still gets a coded
+        # error; the value-level residue it also names (a `method` outside the
+        # enum, `n < 1`, an unknown form, inverted bounds) is `_check_sweep`'s
+        # `E-SWEEP-SAMPLE-INVALID`, because those are legal shapes carrying
+        # illegal values — the same division `grid` draws between its `list`
+        # guard here and `E-SWEEP-AXIS-EMPTY` there.
+        sample = sweep.get("sample")
+        if sample is not None and not isinstance(sample, dict):
+            _bad("sweep.sample", sample, "mapping")
+        elif isinstance(sample, dict):
+            n = sample.get("n")
+            if n is not None and (isinstance(n, bool) or not isinstance(n, int)):
+                _bad("sweep.sample.n", n, "integer")
+            method = sample.get("method")
+            if method is not None and not isinstance(method, str):
+                _bad("sweep.sample.method", method, "string")
+            seed = sample.get("seed")
+            if seed is not None and not isinstance(seed, str | int):
+                _bad("sweep.sample.seed", seed, "string")
+            ranges = sample.get("ranges")
+            if ranges is not None and not isinstance(ranges, dict):
+                _bad("sweep.sample.ranges", ranges, "mapping")
+            elif isinstance(ranges, dict):
+                for path, spec in ranges.items():
+                    if not isinstance(path, str):
+                        _bad("sweep.sample.ranges", path, "string")
+                        continue
+                    if not isinstance(spec, dict):
+                        _bad(f"sweep.sample.ranges.{path}", spec, "mapping")
+                        continue
+                    for form, bounds in spec.items():
+                        if not isinstance(form, str):
+                            _bad(f"sweep.sample.ranges.{path}", form, "string")
+                            continue
+                        where = f"sweep.sample.ranges.{path}.{form}"
+                        if not isinstance(bounds, list):
+                            _bad(where, bounds, "list")
+                            continue
+                        for bound in bounds:
+                            if isinstance(bound, bool) or not isinstance(bound, int | float):
+                                _bad(where, bound, "number")
 
     replication = doc.get("replication")
     if isinstance(replication, dict):
@@ -794,15 +853,20 @@ def _check_replication(
 def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     """Declared-but-unimplemented blocks, refused rather than silently ignored.
 
-    This build expands `sweep.baseline`, `sweep.grid`, and `sweep.paired`
-    only. Both declared orders are honored — `randomized` shuffles within
-    each batch and `as_declared` leaves the plan's step-major layout alone.
-    `sweep.paired` is no longer refused here: `_axes` composes it as a
-    single axis whose cells set several paths at once, per § Expansion
+    This build expands `sweep.baseline`, `sweep.grid`, `sweep.paired`, and
+    `sweep.sample` only. Both declared orders are honored — `randomized`
+    shuffles within each batch and `as_declared` leaves the plan's step-major
+    layout alone. `sweep.paired` is no longer refused here: `_axes` composes it
+    as a single axis whose cells set several paths at once, per § Expansion
     modes — `_check_shape` guards its container and entry shapes, and
-    `_check_sweep` refuses a path it shares with `sweep.grid`
+    `_check_sweep` refuses a path it shares with another axis-shaped mode
     (`E-SWEEP-PATH-DUPLICATE`), the same way a bad `grid` shape or an
-    unresolvable `grid` path already were. `.ablate`, `.sample`, and
+    unresolvable `grid` path already were. Neither is `sweep.sample`, which
+    composes as one axis of `n` realized draws seeded from the design digest:
+    `_check_shape` guards every shape `_sample_cells` reads and `_check_sweep`
+    reports the value-level residue as `E-SWEEP-SAMPLE-INVALID`, its paths
+    through the same `E-SWEEP-PATH-UNKNOWN` `grid` uses, and its bounds through
+    the same `E-PARAM-VALUE` (§ Validation, "Sample ranges"). `.ablate` and
     `.groups` are read by nothing yet. It resolves a unit roster, but
     several `data.units` sub-fields — allocation other than
     `within`, `assign`, `cluster_by`, `weight_by`, `measurements`, `holdout`,
@@ -839,11 +903,6 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
             "emits 1 + n one-change conditions and reads the baseline rather than re-emitting it",
         ),
         (
-            "sample",
-            "E-SWEEP-SAMPLE-UNSUPPORTED",
-            "draws continuous ranges and labels its conditions `NN_sample`",
-        ),
-        (
             "groups",
             "E-SWEEP-GROUPS-UNSUPPORTED",
             "is an axis over units rather than parameters, so it needs "
@@ -855,7 +914,8 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
                 code,
                 f"sweep.{mode}",
                 f"{why}, and is specified but not implemented in this build — this build "
-                "expands `baseline`, `grid`, and `paired` only; the other modes will be "
+                "expands `baseline`, `grid`, `paired`, and `sample` only; the other modes "
+                "will be "
                 "honored in a later slice",
             )
 
@@ -1042,9 +1102,10 @@ def _check_sweep(
             c.error(
                 "E-SWEEP-KEY-UNKNOWN",
                 f"sweep.{key}",
-                f"is not a sweep mode{hint} — `expand` understands only `baseline` and "
-                "`grid` in this build, so an unrecognised key would expand to zero "
-                "conditions and the run would execute nothing while reporting success",
+                f"is not a sweep mode{hint} — `expand` understands only `baseline`, "
+                "`grid`, `paired` and `sample` in this build, so an unrecognised key "
+                "would expand to zero conditions and the run would execute nothing "
+                "while reporting success",
             )
 
     spec = template.parameter_spec
@@ -1093,6 +1154,36 @@ def _check_sweep(
         for i, value in enumerate(values):
             _value_checks(path, value, f"sweep.grid.{path}[{i}]", nameable=True)
 
+    # `sweep.sample`, from three angles, in the order a reader would ask them.
+    # First whether the declaration can be drawn from at all: `sample_fault` is
+    # `sweep.py`'s own gate, shared rather than reimplemented so the check that
+    # reports and the code that draws can never disagree about what is legal.
+    # Then, only once it can, the two checks that need the template: each swept
+    # path is a parameter it declares (`E-SWEEP-PATH-UNKNOWN`, the same check
+    # `grid` gets), and each bound satisfies that parameter's own constraints —
+    # which is § Validation's "Sample ranges" row exactly, whose example
+    # ("upper bound 1.4 violates the parameter's `lt=1`") is `Param.check` on
+    # the bound, and so reports `E-PARAM-VALUE` like every other illegal value
+    # rather than a code of its own. A bound is checked `nameable=False`: it is
+    # never rendered into a label — the *drawn* value is — and a drawn float
+    # always renders inside `SWEPT_VALUE_PATTERN`.
+    sample = sweep.get("sample")
+    if sample:
+        fault = sample_fault(sample)
+        if fault is not None:
+            c.error("E-SWEEP-SAMPLE-INVALID", "sweep.sample", fault)
+        else:
+            # Not `spec` — that name is this function's `template.parameter_spec`,
+            # which `_path_resolves` and `_value_checks` both close over.
+            for path, declared_range in sample["ranges"].items():
+                if not _path_resolves(path, f"sweep.sample.ranges.{path}"):
+                    continue
+                form, bounds = next(iter(declared_range.items()))
+                for i, bound in enumerate(bounds):
+                    _value_checks(
+                        path, bound, f"sweep.sample.ranges.{path}.{form}[{i}]", nameable=False
+                    )
+
     # `grid` and `paired` writing the same path is not a shape fault — both are
     # well-formed on their own — but `expand`'s product applies each axis's cell
     # to `values` in declared order, so whichever mode is later in `_axes`
@@ -1104,17 +1195,43 @@ def _check_sweep(
     # `docs/superpowers/spec-defects.md` — § Expansion modes never states that a
     # path belongs to at most one axis-shaped mode — and refused here rather
     # than left to execute a design other than the one declared.
-    paired_paths: dict[str, list[int]] = {}
+    #
+    # Walked over every axis-shaped mode rather than the `grid`/`paired` pair it
+    # started as: `sample` joins the same product, so a path it shares with
+    # either would reopen exactly this hole through a third route — and a draw
+    # overwritten by a `grid` cell is worse than the enumerated case, since the
+    # drawn value is recorded in `sweep.yaml` as the condition's while the run
+    # used another. The report names the *later* mode, which is the one whose
+    # value wins, in `_axes` order (grid, then paired, then sample).
+    named_by: dict[str, list[tuple[str, str]]] = {}
+
+    def _names(mode: str, path: Any, where: str) -> None:
+        if isinstance(path, str):
+            named_by.setdefault(path, []).append((mode, where))
+
+    for path in grid:
+        _names("grid", path, f"sweep.grid.{path}")
     for i, entry in enumerate(sweep.get("paired") or []):
         if isinstance(entry, dict):
             for path in entry:
-                paired_paths.setdefault(path, []).append(i)
-    for path in sorted(set(grid) & set(paired_paths)):
-        indices = ", ".join(f"paired[{i}]" for i in paired_paths[path])
+                _names("paired", path, f"sweep.paired[{i}]")
+    if isinstance(sample, dict) and isinstance(sample.get("ranges"), dict):
+        for path in sample["ranges"]:
+            _names("sample", path, f"sweep.sample.ranges.{path}")
+
+    for path in sorted(named_by):
+        occurrences = named_by[path]
+        modes = {mode for mode, _ in occurrences}
+        if len(modes) < 2:
+            continue  # one mode naming a path repeatedly is that mode's own business
+        last_mode = occurrences[-1][0]
+        earlier = ", ".join(
+            f"`{where}`" for mode, where in occurrences if mode != last_mode
+        )
         c.error(
             "E-SWEEP-PATH-DUPLICATE",
-            f"sweep.paired.{path}",
-            f"is also a `sweep.grid` axis (named in {indices}) — two axis-shaped modes "
+            f"sweep.{last_mode}.{path}",
+            f"is also written by {earlier} — two axis-shaped modes "
             "writing the same path make `expand`'s product overwrite one mode's value "
             "with the other's on every combination, collapsing some conditions to "
             "duplicates the run would silently execute twice",

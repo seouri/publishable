@@ -64,7 +64,12 @@ from publishable.stats import (
     unit_table_from_rows,
 )
 from publishable.strata import levels_for
-from publishable.sweep import condition_dir_name, expand, sweep_document
+from publishable.sweep import (
+    condition_dir_name,
+    expand,
+    sample_seed_for,
+    sweep_document,
+)
 from publishable.templates.base import BaseTemplate
 from publishable.templates.registry import get_template
 from publishable.units import Unit, UnitList, partition_units, resolve_units, units_hash
@@ -802,6 +807,7 @@ def command_run(config_path: Path) -> int:
                     execution_order,
                     order_seed,
                     partitions=partitions,
+                    sample_seed=sample_seed_for(doc),
                 ),
                 sort_keys=False,
             )
