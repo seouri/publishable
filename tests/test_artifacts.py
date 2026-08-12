@@ -349,6 +349,104 @@ def test_recording_a_column_matching_a_declared_attribute_is_a_key_collision(
     assert io.rows() == [{"unit": "p0", "pred": 1}]
 
 
+def test_two_measurements_of_one_unit_are_both_kept(tmp_path: Path):
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    io = StepIO(
+        step_dir=sd,
+        input_dir=tmp_path / "in",
+        run_dir=tmp_path / "run",
+        measurements={"by": "read_id", "collapse": "mean"},
+    )
+    io.record("p1", {"score": 10}, measurement="r1")
+    io.record("p1", {"score": 20}, measurement="r2")
+    assert io.measurement_rows() == [
+        {"unit": "p1", "measurement": "r1", "score": 10},
+        {"unit": "p1", "measurement": "r2", "score": 20},
+    ]
+
+
+def test_two_records_without_a_measurement_are_first_write_wins(tmp_path: Path):
+    """The retry path, unchanged. This is the behaviour `measurement=` exists
+    to be distinguishable from."""
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    io = StepIO(
+        step_dir=sd,
+        input_dir=tmp_path / "in",
+        run_dir=tmp_path / "run",
+        measurements={"by": "read_id", "collapse": "mean"},
+    )
+    io.record("p1", {"score": 10})
+    io.record("p1", {"score": 20})
+    assert io.rows() == [{"unit": "p1", "score": 10}]
+    assert io.measurement_rows() == []
+
+
+def test_a_measurement_without_the_declaration_raises(tmp_path: Path):
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    io = StepIO(step_dir=sd, input_dir=tmp_path / "in", run_dir=tmp_path / "run")
+    with pytest.raises(ContractError) as e:
+        io.record("p1", {"score": 10}, measurement="r1")
+    assert e.value.code == "E-STEP-MEASUREMENT-UNDECLARED"
+
+
+def test_a_record_without_a_measurement_is_untouched_by_the_undeclared_check(
+    tmp_path: Path,
+):
+    """Control for the previous test: an undeclared `data.units.measurements`
+    must not block the ordinary, non-`measurement=` path — only the raise
+    itself is new behaviour."""
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    io = StepIO(step_dir=sd, input_dir=tmp_path / "in", run_dir=tmp_path / "run")
+    io.record("p1", {"score": 10})
+    assert io.rows() == [{"unit": "p1", "score": 10}]
+
+
+def test_a_resumed_measurement_is_idempotent_first_write_wins(tmp_path: Path):
+    """The declaration's other half: a resumed *measurement* deduplicates by
+    `(unit, measurement)` exactly as a resumed plain record deduplicates by
+    unit — same rule, different key."""
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    io = StepIO(
+        step_dir=sd,
+        input_dir=tmp_path / "in",
+        run_dir=tmp_path / "run",
+        measurements={"by": "read_id", "collapse": "mean"},
+    )
+    io.record("p1", {"score": 10}, measurement="r1")
+    io.record("p1", {"score": 99}, measurement="r1")
+    assert io.measurement_rows() == [{"unit": "p1", "measurement": "r1", "score": 10}]
+
+
+def test_a_measurement_row_may_not_name_a_column_unit_or_measurement(tmp_path: Path):
+    """`unit` and `measurement` are the measurement row's own structural columns —
+    reserved for the same reason `record`'s plain path already reserves `unit`."""
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    io = StepIO(
+        step_dir=sd,
+        input_dir=tmp_path / "in",
+        run_dir=tmp_path / "run",
+        measurements={"by": "read_id", "collapse": "mean"},
+    )
+    with pytest.raises(ContractError) as e:
+        io.record("p1", {"unit": "IMPOSTER"}, measurement="r1")
+    assert e.value.code == "E-STEP-KEY-COLLISION"
+    with pytest.raises(ContractError) as e:
+        io.record("p1", {"measurement": "IMPOSTER"}, measurement="r1")
+    assert e.value.code == "E-STEP-KEY-COLLISION"
+
+
 def test_recorded_keys_skipped_and_rows_are_not_live_handles(tmp_path: Path):
     from publishable.units import Unit, UnitList
 

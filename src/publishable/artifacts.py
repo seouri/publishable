@@ -182,6 +182,7 @@ class StepIO:
         condition_index: int | None = None,
         condition_label: str | None = None,
         repeat_label: str | None = None,
+        measurements: dict[str, Any] | None = None,
     ) -> None:
         self.step_dir = step_dir
         self.input_dir = input_dir
@@ -191,6 +192,12 @@ class StepIO:
         self._units = units
         self._rows: dict[str, dict[str, Any]] = {}
         self._skipped: dict[str, str] = {}
+        # The `data.units.measurements` declaration itself, not a bool: task 5's
+        # collapse needs the `by`/`collapse` rule this carries, and one field
+        # carrying the declaration cannot disagree with itself the way a flag and
+        # a rule could.
+        self._measurements = measurements
+        self._measurement_rows: dict[tuple[str, str], dict[str, Any]] = {}
         self._scope = scope
         self._conditions = conditions
         self._repeats = repeats
@@ -241,8 +248,47 @@ class StepIO:
             return set()
         return set(self._units[0].attributes)
 
-    def record(self, unit_key: str, values: dict[str, Any]) -> None:
-        """Append one row to this step's per-unit table, keyed by unit."""
+    def record(
+        self, unit_key: str, values: dict[str, Any], measurement: str | None = None
+    ) -> None:
+        """Append one row, keyed by unit — or by `(unit, measurement)`.
+
+        `measurement=` is the only thing separating a resumed retry from a second
+        measurement of the same unit: without it a second row for the same unit is a
+        retry to be deduplicated under first-write-wins, with it a measurement to
+        be averaged, and nothing in the row itself says which
+        (`reference.md` § What isn't a repeat).
+        """
+        if measurement is not None and not self._measurements:
+            raise ContractError(
+                "`io.record` was given `measurement=` while `data.units.measurements` "
+                "is undeclared, so there is no rule to collapse the rows under. Declare "
+                "it with a `by` and a `collapse`, or drop the argument — without a rule "
+                "a second row for one unit is a resumed retry, not a measurement",
+                code="E-STEP-MEASUREMENT-UNDECLARED",
+            )
+        if measurement is not None:
+            key = (unit_key, measurement)
+            if key in self._measurement_rows:
+                return  # first write wins, so a resumed measurement is idempotent too
+            if "unit" in values:
+                raise ContractError(
+                    "`unit` collides with the unit key column: a recorded column may "
+                    "not be named `unit`",
+                    code="E-STEP-KEY-COLLISION",
+                )
+            if "measurement" in values:
+                raise ContractError(
+                    "`measurement` collides with the measurement column: a recorded "
+                    "column may not be named `measurement`",
+                    code="E-STEP-KEY-COLLISION",
+                )
+            self._measurement_rows[key] = {
+                "unit": unit_key,
+                "measurement": measurement,
+                **coerce_scalars(values, "io.record"),
+            }
+            return
         if unit_key in self._rows:
             return  # first write wins, matching io.append's idempotency
         self._settle(unit_key)
@@ -270,6 +316,10 @@ class StepIO:
 
     def rows(self) -> list[dict[str, Any]]:
         return [dict(row) for row in self._rows.values()]
+
+    def measurement_rows(self) -> list[dict[str, Any]]:
+        """The uncollapsed `(unit, measurement)` rows — task 5 collapses these."""
+        return [dict(row) for row in self._measurement_rows.values()]
 
     def finalize(self) -> None:
         """Write this execution's per-unit tables. Called by the runner when a step returns.
