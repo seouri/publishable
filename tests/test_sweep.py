@@ -974,7 +974,18 @@ def test_a_baseline_naming_one_path_of_a_paired_entry_fixes_that_whole_axis() ->
     """An axis counts as fixed when the baseline names *any* path it varies.
     Expanding a half-fixed `paired` axis would have to discard either the
     baseline's declared `min_samples` or the cell's, so the declaration wins and
-    the axis contributes no cells for the baseline to expand over."""
+    the axis contributes no cells for the baseline to expand over.
+
+    **This shape is open, not settled**, and the assertion below records what
+    ships rather than what is wanted: the baseline row carries `min_samples` and
+    lets `analysis.confidence` fall to the *base config's* value, which may be
+    neither declared cell's — a `paired` combination the axis never produces, and
+    `validate` reports nothing about it (verified: zero findings). It was
+    unreachable until H2 task 7 retired `E-SWEEP-BASELINE-PARTIAL`, and it is
+    left unrefused because refusing it needs a baseline resolved against actual
+    cells. **Owner: the `groups` slice**, with the per-cell numbering question it
+    shares that machinery with. See `docs/superpowers/spec-defects.md`, "Three
+    baseline shapes per-cell expansion makes reachable"."""
     conditions = expand(
         {
             "sweep": {
