@@ -1023,15 +1023,16 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
         c.error(
             "E-SWEEP-SAMPLE-BASELINE",
             "sweep.baseline",
-            "is declared beside a `sweep.sample` axis, so every draw becomes a comparison "
-            "against it — and a `sample` draw is not a comparison: the correction family "
+            "is declared beside a `sweep.sample` axis, so every non-baseline cell — every "
+            "combination of a draw with the other axes' levels, not every draw — becomes a "
+            "comparison against it, and a `sample` draw is not a comparison: the correction family "
             "skips `sample` conditions, which is specified but not implemented in this "
             "build, so each interval would be corrected against a family several times the "
             "size the design has. Sample draws feed one downstream fit rather than being "
-            "compared to a reference, so drop the `baseline` here; compare a specific pair "
-            "with a declared `statistics.contrasts` entry, or run the reference condition "
-            "as its own run and join the two in a `study`. The combination will be honored "
-            "once the family excludes drawn conditions",
+            "compared to a reference, so declare only one of the two here; compare a "
+            "specific pair with a declared `statistics.contrasts` entry, or run the "
+            "reference condition as its own run and join the two in a `study`. The "
+            "combination will be honored once the family excludes drawn conditions",
         )
 
     units = _units_declaration(doc.get("data") or {}, c) or {}
