@@ -1227,10 +1227,9 @@ def _check_sweep(
     # added later: it cannot become usable without being classified as an axis
     # or not. A literal here would let the two drift, with this check accepting
     # a mode `axis_modes_present` has never heard of.
-    known = set(SWEEP_MODES)
     for key in sweep:
-        if key not in known:
-            near = difflib.get_close_matches(key, sorted(known), n=1)
+        if key not in SWEEP_MODES:
+            near = difflib.get_close_matches(key, sorted(SWEEP_MODES), n=1)
             hint = f" — did you mean `{near[0]}`?" if near else ""
             c.error(
                 "E-SWEEP-KEY-UNKNOWN",
