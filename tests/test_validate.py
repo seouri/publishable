@@ -7020,3 +7020,62 @@ def test_a_group_level_must_render_into_a_condition_label(write_config):
             {"sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}}
         )
     ) == {"E-SWEEP-GROUPS-UNSUPPORTED"}
+
+
+def test_a_baseline_may_not_fix_a_group_level_while_ablate_is_declared(write_config):
+    """§ Expansion modes states this twice: "`sweep.baseline` may not name the
+    group axis for this reason — the arms are peers, and `validate` rejects a
+    baseline that fixes a level while `ablate` is declared", and "`ablate ×
+    groups` always lands in the second row, since `validate` rejects a baseline
+    that fixes a group level while `ablate` is declared: an ablation is one
+    change from *its own cell's* full model, and there is no single reference
+    condition when the reference cohort differs".
+
+    Unrefused, the declaration does not merely mis-number — **a declared level
+    disappears from the run**. The baseline fixes the group axis, so it expands
+    over nothing, the crossed ablation has one empty cell to repeat over, and
+    `expand` returns `00_baseline` and `01_labs=false` on the derivation cohort
+    alone: `validation` is executed nowhere while the run reports success.
+
+    Two controls, both of which must report: an ablation whose baseline fixes a
+    *parameter* beside the same group axis is the legal composition and carries
+    the unsupported code alone (it is also
+    `test_ablate_composes_with_a_group_axis`, untouched), and the same baseline
+    without `ablate` is the ordinary per-cell design § Expansion modes' second
+    table row describes."""
+    axis = [{"by": "cohort", "levels": ["derivation", "validation"]}]
+    assert _error_codes(
+        write_config(
+            {
+                "sweep": {
+                    "groups": axis,
+                    "baseline": {"cohort": "derivation", "analysis.drop_missing": True},
+                    "ablate": {"remove": ["analysis.drop_missing"]},
+                }
+            }
+        )
+    ) == {"E-SWEEP-GROUPS-UNSUPPORTED", "E-SWEEP-ABLATE-BASELINE-GROUP"}
+
+    assert _error_codes(
+        write_config(
+            {
+                "sweep": {
+                    "groups": axis,
+                    "baseline": {"analysis.drop_missing": True},
+                    "ablate": {"remove": ["analysis.drop_missing"]},
+                }
+            }
+        )
+    ) == {"E-SWEEP-GROUPS-UNSUPPORTED"}
+
+    assert _error_codes(
+        write_config(
+            {
+                "sweep": {
+                    "groups": axis,
+                    "grid": {"analysis.method": ["pearson", "spearman"]},
+                    "baseline": {"cohort": "derivation"},
+                }
+            }
+        )
+    ) == {"E-SWEEP-GROUPS-UNSUPPORTED"}

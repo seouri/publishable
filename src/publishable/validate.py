@@ -2310,6 +2310,31 @@ def _check_sweep(
     # every condition is still exactly one parameter change from its own arm's
     # baseline. (`groups` is refused for its own reason today,
     # `E-SWEEP-GROUPS-UNSUPPORTED`.)
+    # § Expansion modes, twice: "`sweep.baseline` may not name the group axis for
+    # this reason — the arms are peers, and `validate` rejects a baseline that
+    # fixes a level while `ablate` is declared", because "an ablation is one
+    # change from *its own cell's* full model, and there is no single reference
+    # condition when the reference cohort differs".
+    #
+    # The consequence is worse than a mis-numbering, which is why it is an error
+    # rather than a warning: a fixed group axis is a *fixed* axis to
+    # `_baseline_cells`, so it expands over nothing, the crossed ablation has one
+    # empty cell to repeat over, and every level but the fixed one is executed
+    # nowhere while the run reports success — a record describing an experiment
+    # nobody performed.
+    fixed_levels = [path for path in (sweep.get("baseline") or {}) if path in group_axes]
+    if ablate and fixed_levels:
+        c.error(
+            "E-SWEEP-ABLATE-BASELINE-GROUP",
+            f"sweep.baseline.{fixed_levels[0]}",
+            f"fixes the `sweep.groups` axis `{fixed_levels[0]}` while `sweep.ablate` is "
+            "declared — an ablation is one change from its own cell's full model, and "
+            "there is no single reference condition when the reference cohort differs. "
+            "A fixed group axis also expands over nothing, so every other level of it "
+            "would be executed by no condition at all. Drop the level from the "
+            "baseline: `ablate × groups` gives one baseline and its ablations per level",
+        )
+
     crossed_modes = parameter_axis_modes_present(sweep) if ablate else []
     if crossed_modes:
         c.error(
