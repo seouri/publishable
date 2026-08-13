@@ -6314,6 +6314,38 @@ def test_the_cluster_bound_is_reported_by_a_direct_call_too(write_config, tmp_pa
     assert "E-REPL-FOLD-K-TOO-LARGE" not in {f.code for f in control.findings}
 
 
+def test_the_repeat_floor_counts_a_clustered_k_all_in_clusters_too(write_config):
+    """`_check_replication`'s *other* consumer of the basis. The refusal above goes
+    through `resolve_repeats`; `W-REPL-FLOOR` goes through `_level_count`, and the
+    two must read the same number or a design's repeat total means one thing to the
+    floor and another to the fold it executes.
+
+    `generic`'s `default_repeats` is 1, which no positive count can fall below, so
+    this needs a template that sets a floor — the same `ThreeRepeats` construction
+    the unclustered floor test uses.
+    """
+    from publishable.templates.builtin.generic import GenericTemplate
+    from publishable.validate import _check_replication
+
+    class ThreeRepeats(GenericTemplate):  # type: ignore[misc]
+        default_repeats = 3
+
+    doc = {
+        "data": {"units": dict(_CLUSTERED_UNITS)},
+        "replication": {"repeats": [{"kind": "fold", "k": "all"}]},
+    }
+    two_clusters = Collector()
+    _check_replication(doc, ThreeRepeats(), two_clusters, fold_basis=2)
+    assert "W-REPL-FLOOR" in {f.code for f in two_clusters.findings}
+
+    # The control that must report: the same declaration over the 15-unit basis
+    # those 2 clusters hold is 15 repeats, well above the floor. A floor reading
+    # the roster where the fold reads the clusters would warn here too.
+    fifteen_units = Collector()
+    _check_replication(doc, ThreeRepeats(), fifteen_units, fold_basis=15)
+    assert "W-REPL-FLOOR" not in {f.code for f in fifteen_units.findings}
+
+
 def test_an_unreadable_cluster_leaves_k_all_unresolved_rather_than_raising(
     write_config, tmp_path
 ):
