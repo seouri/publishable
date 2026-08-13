@@ -306,6 +306,15 @@ def resolve_units(
         # `isinstance` filter is load-bearing rather than defensive: a list-valued
         # `cluster_by` is `E-CONFIG-TYPE`'s finding, and using one as a mapping key
         # is a `TypeError` escaping `validate`, which never raises.
+        # **A registry key must be a flat, string-valued key of `data.units`.**
+        # This indexes `units_decl` by the key itself, so it reaches `cluster_by`
+        # and `weight_by` and nothing nested. `assign.<axis>.from` and
+        # `holdout.from` are the next two columns that will want this rule and
+        # **neither is reachable this way** — adding either name to the registry
+        # no-ops silently, and so does spelling it as a dotted path. Verified by
+        # probe, not assumed. Whichever slice needs one owes an accessor here;
+        # the failure it would otherwise ship is the leak this check exists to
+        # close, arriving through a sibling declaration.
         constant = {
             declaration: units_decl[declaration]
             for declaration in CONSTANT_COLUMN_RULES
