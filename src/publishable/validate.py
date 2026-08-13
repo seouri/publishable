@@ -1,6 +1,5 @@
 """The S1 check subset. Collects rather than stops. docs/reference.md § Validation."""
 
-import math
 import re
 from pathlib import Path
 from typing import Any
@@ -37,6 +36,7 @@ from publishable.units import (
     is_measurement_numeric,
     resolve_units,
     rule_for,
+    usable_weight,
 )
 
 REQUIRED_METADATA = ("description", "authors")
@@ -934,29 +934,6 @@ def _check_measurements(
 _WEIGHT_NAME_HINTS = ("weight", "_prob", "probability")
 
 
-def _usable_weight(value: Any) -> float | None:
-    """`value` as a weight core could multiply by, or `None` if it is not one.
-
-    `units.is_measurement_numeric` is the numeric gate rather than a bare
-    `isinstance(value, (int, float))`, and that is load-bearing rather than
-    stylistic: `units._from_table` builds every attribute from `csv.DictReader`,
-    which yields `str` for every column whatever it holds, so an isinstance test
-    would refuse every table-sourced weight there is — the exact shape
-    `reference.md` § Weighted samples prints — and would make the undeclared-weight
-    warning below unreachable in the same stroke.
-
-    Finiteness is checked on top of positivity because `float("nan")` parses and
-    `nan <= 0` is `False`, so a positivity test alone admits a value that turns
-    every weighted mean it touches into `nan`.
-    """
-    if not is_measurement_numeric(value):
-        return None
-    number = float(value)
-    if not math.isfinite(number) or number <= 0:
-        return None
-    return number
-
-
 def _check_weight_by(units: dict[str, Any], roster: UnitList | None, c: Collector) -> None:
     """`data.units.weight_by` — the attribute exists, its values are usable, and a
     column that looks like a weight is not silently going unused.
@@ -1035,7 +1012,7 @@ def _check_weight_by(units: dict[str, Any], roster: UnitList | None, c: Collecto
     bad = [
         (u.key, u.attributes.get(declared))
         for u in roster
-        if _usable_weight(u.attributes.get(declared)) is None
+        if usable_weight(u.attributes.get(declared)) is None
     ]
     if bad:
         key, value = bad[0]
@@ -1077,7 +1054,7 @@ def _warn_undeclared_weight(
     for name in sorted({n for u in roster for n in u.attributes}):
         if not any(hint in name.lower() for hint in _WEIGHT_NAME_HINTS):
             continue
-        weights = [_usable_weight(u.attributes.get(name)) for u in roster]
+        weights = [usable_weight(u.attributes.get(name)) for u in roster]
         if any(w is None for w in weights):
             continue
         if len(set(weights)) < 2:

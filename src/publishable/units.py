@@ -9,6 +9,7 @@ directory and no step for an `io` to belong to.
 import csv
 import hashlib
 import json
+import math
 import random
 import statistics
 from collections import Counter
@@ -413,6 +414,38 @@ def is_measurement_numeric(value: Any) -> bool:
             return False
         return True
     return False
+
+
+def usable_weight(value: Any) -> float | None:
+    """`value` as a weight core could multiply by, or `None` if it is not one.
+
+    **The single authority** for that question, and it sits here beside
+    `is_measurement_numeric` for the same reason that one does: it now has two
+    readers in different modules — `validate`'s `data.units.weight_by` check
+    (`reference.md` § Validation, rows "Weights are usable" and "Weighting looks
+    undeclared") and `stats.weighted_t_over_units`. A weighted mean built on a
+    different notion of a usable weight than the one `validate` approves the
+    config against is the validate-clean-then-crash gap in its exact original
+    shape: a config core accepts whose weights core then cannot use.
+
+    `is_measurement_numeric` is the numeric gate rather than a bare
+    `isinstance(value, (int, float))`, and that is load-bearing rather than
+    stylistic: `_from_table` builds every attribute from `csv.DictReader`, which
+    yields `str` for every column whatever it holds, so an isinstance test would
+    refuse every table-sourced weight there is — the exact shape `reference.md`
+    § Weighted samples prints — and would make the undeclared-weight warning
+    unreachable in the same stroke.
+
+    Finiteness is checked on top of positivity because `float("nan")` parses and
+    `nan <= 0` is `False`, so a positivity test alone admits a value that turns
+    every weighted mean it touches into `nan`.
+    """
+    if not is_measurement_numeric(value):
+        return None
+    number = float(value)
+    if not math.isfinite(number) or number <= 0:
+        return None
+    return number
 
 
 def coerce_for_rule(column: str, rule: str, values: list[Any]) -> list[Any]:

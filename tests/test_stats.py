@@ -13,6 +13,7 @@ from publishable.stats import (
     collapse_repeats,
     handed_to,
     interval_at,
+    kish_effective_n,
     mean_of,
     min_honest_draws,
     paired_delta_of_derived,
@@ -25,6 +26,7 @@ from publishable.stats import (
     resample_seed,
     summarize_step,
     t_over_units,
+    weighted_t_over_units,
 )
 
 
@@ -948,6 +950,152 @@ def test_fewer_than_two_values_has_no_interval(values):
 def test_zero_variance_yields_a_degenerate_but_real_interval():
     iv = t_over_units([5.0, 5.0, 5.0])
     assert iv is not None and iv.low == iv.high == 5.0
+
+
+def test_a_weighted_interval_is_wider_than_the_unweighted_one():
+    """The point of Kish's size. A test asserting only that `weighted_by` was
+    recorded would pass against an implementation that stores the declaration and
+    computes the unweighted interval — which is the bug, not the fix.
+
+    The last unit carries eight units' worth of the population, so Kish's size is
+    3.17 against eight rows. The brief's own `20.0` puts it at 1.79, below the two
+    the construction needs, and returns `None` — pinned separately below.
+    """
+    values = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+    weights = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 8.0]
+    plain = t_over_units(values)
+    weighted = weighted_t_over_units(values, weights)
+    assert plain is not None and weighted is not None
+    assert weighted.method == "weighted_t_over_units"
+    assert (weighted.high - weighted.low) > (plain.high - plain.low)
+
+
+def test_the_weighted_interval_is_the_t_interval_at_kishs_effective_size():
+    """**The discriminating test**, and the one that pins df to Kish's size rather
+    than the row count. Widening alone does not: the weighted variance inflates
+    enough on its own that a df taken from `len(values)` still comes out wider
+    than the unweighted interval, so the headline test above passes under that
+    mutation.
+
+    The weights are chosen so Kish's size is an exact integer, which lets the
+    expectation be built from the already-trusted `t_over_units` rather than from
+    a second copy of the formula under test. Σw = 6 and Σw² = 12, so the effective
+    size is 36/12 = 3 exactly. The weighted mean is 24/6 = 4.0; Σw(v−m)² = 9 + 4 +
+    1 + 12 = 26 over a denominator of Σw − Σw²/Σw = 4, so the weighted variance is
+    6.5. Three points with mean 4.0 and sample variance 6.5 therefore have to give
+    back the same interval.
+
+    Every quantity here discriminates. Dropping the weights from the variance
+    gives 6.0 (unweighted, n − 1) or 4.5 (weighted numerator over the wrong
+    denominator) — never 6.5. Taking df from the row count gives t(3), not t(2).
+    Dividing the sem by √4 rather than √3 moves it again. None of the three is
+    hidden by a coincidence of the values, which `[10, 20]`-shaped data is where
+    this slice has been burned before.
+    """
+    values = [1.0, 2.0, 3.0, 6.0]
+    weights = [1.0, 1.0, 1.0, 3.0]
+    assert kish_effective_n(weights) == pytest.approx(3.0)
+    spread = math.sqrt(6.5)
+    equivalent = t_over_units([4.0 - spread, 4.0, 4.0 + spread])
+    got = weighted_t_over_units(values, weights)
+    assert equivalent is not None and got is not None
+    assert got.low == pytest.approx(equivalent.low)
+    assert got.high == pytest.approx(equivalent.high)
+
+
+def test_the_weights_are_in_the_variance_and_not_only_in_the_mean():
+    """The mutation the equal-weights boundary cannot see: weights kept in the
+    mean and dropped from the variance leaves the point estimate right and the
+    interval wrong, which is the failure that survives an eyeball.
+
+    Two weightings over the *same* values with the *same* Kish size, so df and the
+    sem's divisor are identical and the variance is the only thing left that can
+    differ. Weighting the two extremes makes the spread about the weighted mean
+    larger than weighting the two central values does; with the weights out of the
+    variance both reduce to the same unweighted sum of squares about a mean that
+    is 3.5 either way, and the two intervals come out identical.
+    """
+    values = [1.0, 2.0, 5.0, 6.0]
+    at_the_edges = weighted_t_over_units(values, [3.0, 1.0, 1.0, 3.0])
+    at_the_centre = weighted_t_over_units(values, [1.0, 3.0, 3.0, 1.0])
+    assert at_the_edges is not None and at_the_centre is not None
+    assert kish_effective_n([3.0, 1.0, 1.0, 3.0]) == kish_effective_n([1.0, 3.0, 3.0, 1.0])
+    assert (at_the_edges.high - at_the_edges.low) > (at_the_centre.high - at_the_centre.low)
+
+
+def test_equal_weights_reproduce_the_unweighted_interval():
+    """The boundary that proves the construction is a generalization, not a
+    different statistic wearing the same name."""
+    values = [1.0, 2.0, 3.0, 4.0, 5.0]
+    weighted = weighted_t_over_units(values, [1.0] * 5)
+    plain = t_over_units(values)
+    assert weighted is not None and plain is not None
+    assert weighted.low == pytest.approx(plain.low)
+    assert weighted.high == pytest.approx(plain.high)
+
+
+def test_rescaling_every_weight_changes_nothing():
+    """A weight is how much of the population a unit stands for, and survey
+    weights routinely sum to a population size rather than to the row count. An
+    estimator that moved when every weight was multiplied by the same constant
+    would make the interval depend on that convention."""
+    values = [1.0, 2.0, 3.0, 6.0]
+    small = weighted_t_over_units(values, [1.0, 1.0, 1.0, 3.0])
+    large = weighted_t_over_units(values, [1000.0, 1000.0, 1000.0, 3000.0])
+    assert small is not None and large is not None
+    assert large.low == pytest.approx(small.low)
+    assert large.high == pytest.approx(small.high)
+
+
+def test_kish_effective_n_of_equal_weights_is_the_count():
+    assert kish_effective_n([2.0, 2.0, 2.0, 2.0]) == pytest.approx(4.0)
+
+
+def test_kish_effective_n_falls_as_the_weights_spread():
+    """The property the df rests on, over a case where the count is unchanged."""
+    assert kish_effective_n([1.0, 1.0, 1.0, 9.0]) < kish_effective_n([1.0, 1.0, 1.0, 3.0]) < 4.0
+
+
+def test_kish_effective_n_of_no_weights_is_zero():
+    assert kish_effective_n([]) == 0.0
+
+
+@pytest.mark.parametrize("values", [[], [3.0]])
+def test_a_weighted_interval_needs_two_values(values):
+    assert weighted_t_over_units(values, [1.0] * len(values)) is None
+
+
+def test_an_effective_size_below_two_has_no_interval():
+    """Kish's size is the df's basis, so a weighting that concentrates eight rows
+    onto fewer than two effective units has no dispersion the df can describe —
+    the same refusal `t_over_units` makes at one row, arriving by the weights."""
+    weights = [1.0] * 7 + [20.0]
+    assert kish_effective_n(weights) < 2
+    assert weighted_t_over_units([float(i) for i in range(1, 9)], weights) is None
+
+
+def test_a_table_sourced_weight_is_read_as_the_number_it_holds():
+    """`units.usable_weight` is the gate here and in `validate`, and this is what
+    the sharing buys: `csv.DictReader` yields `str` for every column whatever it
+    holds, so an `isinstance(v, (int, float))` gate would refuse every real weight
+    a `weight_by` config can produce — after `validate` had approved it."""
+    values = [1.0, 2.0, 3.0, 6.0]
+    from_table = weighted_t_over_units(values, ["1", "1.0", "1", "3"])
+    native = weighted_t_over_units(values, [1.0, 1.0, 1.0, 3.0])
+    assert from_table is not None and native is not None
+    assert from_table.low == pytest.approx(native.low)
+    assert from_table.high == pytest.approx(native.high)
+
+
+@pytest.mark.parametrize("bad", [0.0, -1.0, float("nan"), "site-3", True, None])
+def test_a_weight_validate_would_refuse_is_refused_here_too(bad):
+    """The single-authority claim, from the other side. `validate` reports
+    `E-DATA-WEIGHT-INVALID` for exactly these; reaching a weighted mean with one
+    of them still in hand is the validate-clean-then-crash gap, so it is refused
+    under the same identifier rather than by a bare `TypeError` or a `nan`."""
+    with pytest.raises(ContractError) as exc:
+        weighted_t_over_units([1.0, 2.0, 3.0, 6.0], [1.0, 1.0, 1.0, bad])
+    assert exc.value.code == "E-DATA-WEIGHT-INVALID"
 
 
 def test_mean_of_is_none_for_an_empty_sequence():

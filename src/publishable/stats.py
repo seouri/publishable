@@ -18,6 +18,7 @@ from scipy import stats as _scipy_stats
 
 from publishable.errors import ContractError
 from publishable.replication import LABEL_JOIN
+from publishable.units import usable_weight
 
 if TYPE_CHECKING:
     from publishable.replication import RepeatLevel
@@ -58,6 +59,18 @@ def mean_of(values: Sequence[float]) -> float | None:
     return sum(values) / len(values) if values else None
 
 
+def _t_critical(df: float, confidence: float) -> float:
+    """The two-sided t critical value, for every t interval in this module.
+
+    One expression rather than one per construction: two copies is how the
+    weighted and unweighted intervals drift apart, and a drift in a critical
+    value is invisible in every output that isn't compared against the other.
+    `df` is a `float` because Kish's effective size is fractional — `t.ppf`
+    accepts that, and rounding it would be a claim the sample doesn't support.
+    """
+    return float(_scipy_stats.t.ppf(1 - (1 - confidence) / 2, df=df))
+
+
 def t_over_units(values: Sequence[float], confidence: float = 0.95) -> Interval | None:
     """Student's t on the per-unit values, df = completed units − 1.
 
@@ -70,9 +83,97 @@ def t_over_units(values: Sequence[float], confidence: float = 0.95) -> Interval 
     mean = sum(values) / n
     variance = sum((v - mean) ** 2 for v in values) / (n - 1)
     sem = math.sqrt(variance) / math.sqrt(n)
-    critical = float(_scipy_stats.t.ppf(1 - (1 - confidence) / 2, df=n - 1))
-    half = critical * sem
+    half = _t_critical(n - 1, confidence) * sem
     return Interval(low=mean - half, high=mean + half, method="t_over_units")
+
+
+def kish_effective_n(weights: Sequence[float]) -> float:
+    """Kish's effective sample size: (Σw)² / Σw².
+
+    Equals the count when the weights are equal, and falls as they spread — which
+    is the whole reason it is here. `reference.md` § Weighted samples: weighting
+    concentrates the estimate on fewer units, and an interval whose df ignored
+    that would be narrower than the sample supports.
+    """
+    total = sum(weights)
+    squares = sum(w * w for w in weights)
+    if squares == 0:
+        return 0.0
+    return (total * total) / squares
+
+
+def weighted_t_over_units(
+    values: Sequence[float], weights: Sequence[Any], confidence: float = 0.95
+) -> Interval | None:
+    """Student's t on the weighted per-unit values, df = Kish's effective n − 1.
+
+    `reference.md` § Weighted samples: "the weighted mean and the weighted
+    variance, with the degrees of freedom taken from Kish's effective sample size
+    rather than the row count".
+
+    Returns None below two values, matching `t_over_units`: df would be zero and
+    there is no dispersion to describe. Reporting a point with no interval is
+    honest; inventing one is not. The same refusal arrives by the weights when
+    Kish's size falls below two — eight rows concentrated onto 1.8 effective units
+    have no more dispersion for a df to describe than one row does.
+
+    `weights` is annotated `Any` rather than `float` on purpose: a weight is a
+    unit attribute, and `units._from_table` builds those from `csv.DictReader`,
+    which yields `str` for every column whatever it holds. `units.usable_weight`
+    is the gate — the same one `validate` approves the config against, so that a
+    weight core accepts at validate time is exactly a weight core can multiply by
+    here — and a `float` annotation would let a call site pass the real thing
+    only by lying to the type checker.
+
+    Two constructions here that a tidy-up would get wrong:
+
+    - **The variance denominator is Σw − Σw²/Σw, not Σw.** That is what makes
+      equal weights reproduce `t_over_units` exactly, digit for digit, rather
+      than approximately: at w = 1 it is n − 1. Σw narrows the interval instead
+      — in the direction § Weighted samples explicitly warns about — and makes
+      the construction a different statistic wearing the same name.
+    - **The whole thing is invariant to rescaling the weights**, which it must
+      be: survey weights routinely sum to a population size rather than to the
+      row count, and an interval that moved with that convention would be
+      reporting the convention.
+    """
+    if len(values) < 2:
+        return None
+    usable = [usable_weight(w) for w in weights]
+    if any(w is None for w in usable):
+        offender = next(w for w, u in zip(weights, usable, strict=True) if u is None)
+        # `reference.md` § Errors core raises at run time OWES this code a row.
+        # § Validation has one; the run-time table does not, so the document
+        # currently describes `E-DATA-WEIGHT-INVALID` as something `validate`
+        # reports and nothing raises. The arrangement is the one
+        # `E-DATA-MEASUREMENTS-COLLAPSE-TYPE` already has in both tables, for the
+        # same reason: one predicate, so a weight `validate` approves is exactly a
+        # weight core can multiply by. Nothing diverges while no caller reaches
+        # this function; the row is due with the wiring, in the same table that
+        # retires `E-DATA-WEIGHT-UNSUPPORTED`.
+        raise ContractError(
+            f"a weight of {offender!r} — a {type(offender).__name__} that is not a "
+            "positive finite number — reached a weighted estimate. A weight is how much "
+            "of the population a unit stands for, so zero, a negative, a non-number and "
+            "a NaN are each a unit standing for nothing core could weight with",
+            code="E-DATA-WEIGHT-INVALID",
+        )
+    w = [u for u in usable if u is not None]
+    total = sum(w)
+    squares = sum(x * x for x in w)
+    mean = sum(a * v for a, v in zip(w, values, strict=True)) / total
+    effective = kish_effective_n(w)
+    if effective < 2:
+        return None
+    # The weights are in the variance as well as in the mean. Keeping them in only
+    # the mean leaves the point estimate right and the interval wrong, which is
+    # the failure that survives an eyeball.
+    variance = sum(a * (v - mean) ** 2 for a, v in zip(w, values, strict=True)) / (
+        total - squares / total
+    )
+    sem = math.sqrt(variance) / math.sqrt(effective)
+    half = _t_critical(effective - 1, confidence) * sem
+    return Interval(low=mean - half, high=mean + half, method="weighted_t_over_units")
 
 
 def paired_t_over_units(diffs: Sequence[float], confidence: float = 0.95) -> Interval | None:
