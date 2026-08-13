@@ -242,9 +242,11 @@ def _wide_swept_paths(sweep_block: dict[str, Any]) -> set[str]:
     refusal, `E-STEP-PARAM-UNKNOWN` from `Node.__getattr__`.
 
     A function rather than the inline union it was, so the subtraction is
-    testable: `groups` is refused by `validate` in this build
-    (`E-SWEEP-GROUPS-UNSUPPORTED`), so no `run` can reach this line with a group
-    axis declared, and an end-to-end test of it cannot exist yet.
+    testable directly: `tests/test_cli.py`'s
+    `test_a_group_path_gets_no_swept_away_marker` pins the exact set for a
+    hand-built `sweep` block, and `test_a_group_axis_actually_narrows_end_to_end`
+    reaches this line for real through `command_run`, now that `validate` no
+    longer refuses a declared `groups` axis outright.
     """
     selectors = set(selector_paths(sweep_block))
     return (
@@ -284,12 +286,13 @@ def _resolved_group_axes(
     empty `group_axes` that skips arm narrowing for every condition on that
     axis.
 
-    Unreachable from `command_run` today: a declared `sweep.groups` axis draws
-    `E-SWEEP-GROUPS-UNSUPPORTED` from `validate`, an error that stops `run`
-    (`command_run`'s `if doc is None or c.has_errors: return EXIT_WRONG`) before
-    this line is ever reached, until the slice that retires it (task 17) lands
-    — the same "unreachable in this build" `_wide_swept_paths` above notes for
-    the selector-path subtraction it depends on.
+    Reachable from `command_run` now that task 17 retired
+    `E-SWEEP-GROUPS-UNSUPPORTED`: `tests/test_cli.py`'s
+    `test_a_group_axis_actually_narrows_end_to_end` and
+    `test_allocation_json_is_written_with_exact_arm_keys_when_declared` reach
+    this line for real, through a passing `command_run`, the same way
+    `_wide_swept_paths` above is now reachable for the selector-path
+    subtraction it depends on.
     """
     assign = (units_decl or {}).get("assign")
     blocks = assign if isinstance(assign, dict) else {}
@@ -395,9 +398,10 @@ def _report_by_levels(
     BOTH the table and the counts — a number reported against a denominator
     computed over other units." Extracting this loop is what makes that
     defect representable as a unit test at all: the inline block it replaces
-    lived inside `command_run`'s per-condition, per-step loop, which no test
-    reaches with a real group axis declared — `validate` refuses one outright
-    in this build (`E-SWEEP-GROUPS-UNSUPPORTED`).
+    lives inside `command_run`'s per-condition, per-step loop, and no
+    end-to-end test in this build combines a group axis with a declared
+    `statistics.report_by` — extraction is what makes the narrowing testable
+    directly rather than only through such a run.
     """
     out: dict[str, tuple[set[str], UnitList]] = {}
     for level, keys in sorted(levels_for(roster, attribute).items()):
@@ -1139,12 +1143,10 @@ def command_run(config_path: Path) -> int:
     sweep_block = doc.get("sweep") or {}
     swept_paths = _wide_swept_paths(sweep_block)
     # One frozenset of unit keys per condition that selects a group axis — `None`
-    # for a design declaring none. Unreachable today (see `_resolved_group_axes`):
-    # a declared `sweep.groups` axis returns `E-SWEEP-GROUPS-UNSUPPORTED`, which
-    # stops `run` above before this line. Built anyway, rather than left for the
-    # slice that retires that refusal, because `execute_plan`'s subset view is the
-    # rest of this feature and a config that never reaches it is not evidence the
-    # wiring is wrong — only that nothing yet asks for it end to end.
+    # for a design declaring none. Reachable now that task 17 retired
+    # `E-SWEEP-GROUPS-UNSUPPORTED`: `tests/test_cli.py`'s
+    # `test_a_group_axis_actually_narrows_end_to_end` exercises `execute_plan`'s
+    # subset view through a real `command_run`.
     #
     # Gated on `selector_paths(sweep_block)`, not on `group_axes` itself: `expand`
     # already used `selector_paths` to decide which paths are group cells, so
@@ -1152,9 +1154,9 @@ def command_run(config_path: Path) -> int:
     # `selector_paths` names — regardless of whether that axis's `levels` also
     # satisfy `_resolved_group_axes`'s stricter all-`str` requirement, the same
     # requirement `validate._check_assign`'s own `by_attribute` branch applies
-    # before it ever calls `arms_of`. Gating on `group_axes` instead would let a
-    # `sweep.groups` shape fault — no check for it exists yet, see
-    # `_resolved_group_axes` — silently skip arm narrowing entirely: every
+    # before it ever calls `arms_of`. Gating on `group_axes` instead would let an
+    # axis whose `levels` resolves to `[]` — legal shape, no elements — silently
+    # skip arm narrowing entirely: every
     # condition on the malformed axis would get the whole roster, which is
     # exactly the outcome two declared arms exist to make impossible. Gating on
     # `selector_paths` instead means `arm_members` is still called whenever

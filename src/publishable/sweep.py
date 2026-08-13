@@ -409,9 +409,9 @@ of parameter cells, and `groups` contributes an axis of unit arms.
 `_axes` builds a group axis's cells like any other's, and heads the list with
 them — § How artifacts are organized orders "`groups` axes in declaration
 order, then parameter axes in declaration order". A config declaring `groups`
-is still refused at `validate` (`E-SWEEP-GROUPS-UNSUPPORTED`) until the rest of
-the arm machinery lands; that refusal is about `data.units.assign`, not about
-expansion.
+is no longer refused at `validate`: `validate._check_assign` checks `allocation`
+and `assign` against it for real, and `cli.command_run` narrows each condition's
+roster to its own arm.
 
 This tuple is not what `ablate` may not cross — that is
 `PARAMETER_AXIS_MODES`, a strict subset. The two questions were one tuple

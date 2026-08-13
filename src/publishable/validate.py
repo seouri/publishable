@@ -308,6 +308,37 @@ def _check_shape(doc: dict[str, Any], c: Collector) -> bool:
                             if isinstance(bound, bool) or not isinstance(bound, int | float):
                                 _bad(where, bound, "number")
 
+        # `groups` gets the same container/entry walk `grid`'s axis-value guard
+        # and `paired`'s entry guard get, one level shallower than either needs to
+        # go: `sweep._axes` and `selector_paths` both read `entry.get("by")` and
+        # `entry.get("levels")` defensively already (a non-dict entry, a
+        # non-string `by`, or a non-list `levels` is skipped rather than raised),
+        # so nothing here crashes on a malformed block — the failure this guard
+        # closes is quieter than a crash: a non-list `groups`, or an entry that
+        # skips silently, drops the axis from the product with **no** finding at
+        # all, budgeting the parameter-only product as though no axis had been
+        # declared. `_check_assign`'s docstring names the one-code overlap this
+        # produces with `E-DATA-ALLOCATION-NO-ARMS`/`E-DATA-ASSIGN-MISSING` for a
+        # non-string `by` specifically.
+        groups = sweep.get("groups")
+        if groups is not None and not isinstance(groups, list):
+            _bad("sweep.groups", groups, "list")
+        elif isinstance(groups, list):
+            for i, entry in enumerate(groups):
+                if not isinstance(entry, dict):
+                    _bad(f"sweep.groups[{i}]", entry, "mapping")
+                    continue
+                by = entry.get("by")
+                if by is not None and not isinstance(by, str):
+                    _bad(f"sweep.groups[{i}].by", by, "string")
+                levels = entry.get("levels")
+                if levels is not None and not isinstance(levels, list):
+                    _bad(f"sweep.groups[{i}].levels", levels, "list")
+                elif isinstance(levels, list):
+                    for j, level in enumerate(levels):
+                        if not isinstance(level, str):
+                            _bad(f"sweep.groups[{i}].levels[{j}]", level, "string")
+
     replication = doc.get("replication")
     if isinstance(replication, dict):
         repeats = replication.get("repeats")
@@ -1191,6 +1222,18 @@ def _check_cluster_by(
         )
 
 
+ALLOCATION_MODES = ("within", "between")
+"""The allocation values, in § The one config file's own order.
+
+The single source of the enum for `data.units.allocation`. `envelope.py` types the
+field a bare `str`, so nothing there catches a misspelling — `_check_assign` reads
+it against this tuple before either of its own branches (*Allocation needs arms*,
+*Arms need allocation*) run, the same role `ASSIGN_METHODS` plays for
+`assign.<axis>.method` in the same function. An absent or `null` value is `within`,
+the default, and is not in the enum for that reason — the check below reads
+`None` as legal rather than requiring it spelled out.
+"""
+
 ASSIGN_METHODS = ("random", "by_attribute", "blocked")
 """The assignment methods, in § The one config file's own order.
 
@@ -1222,8 +1265,13 @@ def _check_assign(
     doc: dict[str, Any], units: dict[str, Any], roster: UnitList | None, c: Collector
 ) -> None:
     """`data.units.allocation` and `data.units.assign` against each other and against
-    `sweep.groups` — seven § Validation rows, most read from declarations alone, so
+    `sweep.groups` — eight § Validation rows, most read from declarations alone, so
     each reports whether or not a roster resolved; the last two need the roster.
+
+    *Allocation is a known value* — `allocation` present and not one of
+    `ALLOCATION_MODES` (`within`, `between`). Checked first, and both branches below
+    are gated to assume it already passed: an absent or `null` value is `within`,
+    the default, and is not this row's concern.
 
     *Allocation needs arms* — `allocation: between` with no group axis. § Allocation
     puts the reason in one sentence: `between` "answers *how units reach an arm*, not
@@ -1307,13 +1355,18 @@ def _check_assign(
     to partition against.
 
     Group axis names come from `sweep.selector_paths`, which is total over a
-    malformed `sweep.groups` and dedupes. One consequence, stated rather than left
-    to be discovered: `groups: [{by: 123}]` yields no axis name, so `between` beside
-    it reports *Allocation needs arms* — `groups` has no `_check_shape` guard yet
-    (the slice that retires `E-SWEEP-GROUPS-UNSUPPORTED` owes it), and a finding
-    that names the real consequence of an unreadable axis beats silence. The two
-    new rows read `sweep.groups` a second way, entry by entry, since `levels` is
-    not a `by`-path `selector_paths` collects.
+    malformed `sweep.groups` and dedupes — the dedup being exactly why
+    `_check_sweep`'s *Axis names are distinct* row reads `sweep.groups` a third
+    way, entry by entry rather than through this function, to see two entries
+    sharing one name that `selector_paths` would otherwise collapse into one.
+    One consequence, stated rather than left to be discovered: `groups: [{by: 123}]`
+    yields no axis name, so `between` beside
+    it reports *Allocation needs arms* **beside** `_check_shape`'s own
+    `E-CONFIG-SHAPE` on `sweep.groups[0].by` — a non-string `by` is a shape fault
+    `_check_shape` now catches directly, and a finding that also names the real
+    consequence of the unreadable axis beats leaving that consequence silent. The
+    two new rows read `sweep.groups` a second way, entry by entry, since `levels`
+    is not a `by`-path `selector_paths` collects.
 
     A non-mapping `assign` is skipped entirely: `envelope.py` types
     `data.units.assign` a `dict`, so `E-CONFIG-TYPE` already reports it and a
@@ -1332,7 +1385,24 @@ def _check_assign(
     sweep = doc.get("sweep")
     axes = selector_paths(sweep) if isinstance(sweep, dict) else []
 
-    if units.get("allocation") == "between":
+    allocation = units.get("allocation")
+    if allocation is not None and allocation not in ALLOCATION_MODES:
+        # *Allocation is a known value* — checked before either branch below runs,
+        # so both can safely assume `allocation` is already `None`/`within`/`between`
+        # rather than misreading a typo as `within` (the fault the mirror row,
+        # *Arms need allocation*, is gated to avoid) or as `between` (which its own
+        # sibling branch would misread as "no arms declared" instead of "not a
+        # legal value"). Recorded as a gap in `docs/superpowers/spec-defects.md`
+        # while `E-DATA-ALLOCATION-UNSUPPORTED`'s blanket refusal covered every
+        # out-of-enum value anyway; this row is what covers it now that the
+        # blanket refusal is gone.
+        c.error(
+            "E-DATA-ALLOCATION-METHOD",
+            "data.units.allocation",
+            f"is {allocation!r}, which is not an allocation; expected one of "
+            f"{', '.join(ALLOCATION_MODES)}",
+        )
+    elif units.get("allocation") == "between":
         if not axes:
             c.error(
                 "E-DATA-ALLOCATION-NO-ARMS",
@@ -1357,8 +1427,9 @@ def _check_assign(
         # `sweep.groups` names an axis but `allocation` is `within`, or absent
         # (which defaults to it). Gated on `(None, "within")` explicitly, rather
         # than a bare `elif axes:`, so a stray out-of-enum `allocation` value —
-        # left to `E-DATA-ALLOCATION-UNSUPPORTED`'s blanket refusal to catch —
-        # is not misreported here as `within`.
+        # caught above by *Allocation is a known value* (`E-DATA-ALLOCATION-METHOD`)
+        # before this `elif` chain ever reaches here — is not misreported here as
+        # `within`.
         c.error(
             "E-DATA-ALLOCATION-WITHIN-ARMS",
             "data.units.allocation",
@@ -1960,11 +2031,16 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     (`E-SWEEP-ABLATE-BASELINE-MISSING`), and `ablate` crossed with a parameter
     axis (`E-SWEEP-ABLATE-CROSSED`). The one § Validation row still open is
     "Ablation baseline isn't a group level", which needs a group axis to have a
-    level for a baseline to fix. `.groups` is read by nothing yet. It resolves a unit roster, but
-    several `data.units` sub-fields — allocation other than
-    `within`, `assign`, `holdout`,
-    and a `resolver` source — are read by nothing yet either.
-    `data.units.measurements` is no longer among them: `resolve_units` collapses
+    level for a baseline to fix. `sweep.groups` is no longer refused here, and
+    neither is `data.units.allocation: between` nor `data.units.assign`: `expand`
+    crosses a group axis into the condition product, `_check_assign` checks
+    `allocation` and `assign` against each other and against `sweep.groups` for
+    real, `units.arm_members` narrows a condition's roster to its own arm, and
+    `cli.py` writes `allocation.json` and `provenance.allocation_hash` — so each
+    declaration changes the record, which is the test this family applies. It
+    resolves a unit roster, but two `data.units` sub-fields — `holdout` and a
+    `resolver` source — are still read by nothing.
+    `data.units.measurements` is no longer among them either: `resolve_units` collapses
     the rows an input table carries, `StepIO.finalize` collapses the ones a step
     records under `measurement=`, and `technical_n` reaches every metric block,
     so the declaration changes the record. Neither are `weight_by` and
@@ -1994,23 +2070,6 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     their config being malformed.
     """
     sweep = doc.get("sweep") or {}
-    for mode, code, why in (
-        (
-            "groups",
-            "E-SWEEP-GROUPS-UNSUPPORTED",
-            "is an axis over units rather than parameters, so it needs "
-            "`data.units.allocation` and `data.units.assign`",
-        ),
-    ):
-        if sweep.get(mode):
-            c.error(
-                code,
-                f"sweep.{mode}",
-                f"{why}, and is specified but not implemented in this build — `expand` "
-                "crosses a group axis into the condition product, but nothing yet resolves "
-                "a level into the units it names; `groups` will be honored in a later "
-                "slice",
-            )
 
     # A `baseline` declared beside a `sample` axis. `reference.md` § Sweeps and
     # repeats states that the correction family "counts conditions from `grid`,
@@ -2071,18 +2130,22 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
             "plugin registry is not implemented in this build; resolvers will be honored "
             "in a later slice. Use a table or a glob for now",
         )
-    if units.get("allocation") not in (None, "within"):
-        c.error(
-            "E-DATA-ALLOCATION-UNSUPPORTED",
-            "data.units.allocation",
-            f"`{units['allocation']}` allocation is specified but not implemented in this "
-            "build — it needs a `sweep.groups` axis to say what the arms are, and group "
-            "axes are not implemented either; both will be honored in a later slice. "
-            "`within`, the default, is the supported value and is what a single-condition "
-            "run means regardless",
-        )
     for field, code in (
-        ("assign", "E-DATA-ASSIGN-UNSUPPORTED"),
+        # `allocation: between` and `assign` were checked here, as a standalone
+        # `if` and as a loop entry respectively. `_check_assign` now checks both
+        # — against each other and against `sweep.groups` — for real: it reports
+        # an out-of-enum `allocation` value under `E-DATA-ALLOCATION-METHOD`, the
+        # pairing faults under `E-DATA-ALLOCATION-NO-ARMS`/`E-DATA-ASSIGN-MISSING`/
+        # `E-DATA-ALLOCATION-WITHIN-ARMS`, and a malformed or unresolvable `assign`
+        # block under `E-DATA-ASSIGN-METHOD`/`E-DATA-ASSIGN-UNKNOWN`/
+        # `E-DATA-ASSIGN-LEVELS`. `units.arm_members` narrows a condition's roster
+        # to its own arm, and `cli.py` writes `allocation.json` and
+        # `provenance.allocation_hash` — so the declaration changes the record,
+        # which is the test this family applies. What an allocated run may *not*
+        # yet do is publish a cross-arm contrast: `_check_sweep` refuses that
+        # combination under `E-DATA-ALLOCATION-CONTRAST`, a refusal of a
+        # combination rather than of a declaration, so it belongs there rather
+        # than in this loop.
         # `cluster_by` was here. `_check_cluster_by` checks the declaration for
         # real, `attrition` counts the clusters, `partition_units` keeps one out
         # of two folds, and `summarize_step` gives every `basis: units` column a
@@ -2481,6 +2544,39 @@ def _check_sweep(
             "duplicates the run would silently execute twice",
         )
 
+    # Two group axes naming the same `by` — § Validation's *Axis names are
+    # distinct* — under the same code, for the reason the comment beside
+    # `named_by` above gives: a group axis writes no parameter, so this is a
+    # different fault from the collision below, not a milder version of it.
+    # Read `sweep.get("groups")` entry by entry rather than through
+    # `selector_paths`: that function is "total over a malformed `sweep.groups`
+    # and dedupes" (`_check_assign`'s own docstring), and the dedup is exactly
+    # what would hide two axes sharing one name — `sweep._axes`, unlike this
+    # check, builds one axis per entry regardless, so `groups: [{by: arm, ...},
+    # {by: arm, ...}]` crosses two same-named axes into the product and two
+    # conditions render the identical label (`arm=c` for both a
+    # first-axis-`c` and a second-axis-`c` cell) — a design that declares four
+    # distinct cells collapsing into two labels, silently, the same "unpaired
+    # conditions the design didn't ask for" harm a duplicate `grid` path already
+    # gets a code for.
+    by_names: dict[str, list[int]] = {}
+    for i, entry in enumerate(sweep.get("groups") or []):
+        if isinstance(entry, dict):
+            by = entry.get("by")
+            if isinstance(by, str) and by:
+                by_names.setdefault(by, []).append(i)
+    for by, indices in by_names.items():
+        if len(indices) > 1:
+            where = ", ".join(f"sweep.groups[{i}]" for i in indices)
+            c.error(
+                "E-SWEEP-PATH-DUPLICATE",
+                f"sweep.groups.{by}",
+                f"names {by!r} {len(indices)} times ({where}) — a condition can't hold "
+                "two values of one axis, and crossing two same-named axes into the "
+                "product renders two conditions under the identical label. Rename one "
+                "of the two, or drop the duplicate",
+            )
+
     # A group axis's `by` sharing a path with a parameter axis, under the same
     # code and for a sharper harm than the overwrite above. `expand` marks the
     # path a *selector* on every row it reaches, so `runner.resolve_condition_cfg`
@@ -2602,8 +2698,8 @@ def _check_sweep(
     # `groups` is a product mode and deliberately not a parameter axis, which is
     # the row's stated exception: it varies units rather than parameters, so
     # every condition is still exactly one parameter change from its own arm's
-    # baseline. (`groups` is refused for its own reason today,
-    # `E-SWEEP-GROUPS-UNSUPPORTED`.)
+    # baseline — legal beside `ablate`, and no longer refused for its own reason
+    # the way it was before this row's own family of checks landed for real.
     # § Expansion modes, twice: "`sweep.baseline` may not name the group axis for
     # this reason — the arms are peers, and `validate` rejects a baseline that
     # fixes a level while `ablate` is declared", because "an ablation is one

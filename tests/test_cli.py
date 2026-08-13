@@ -382,9 +382,11 @@ def test_a_group_path_gets_no_swept_away_marker():
     refuses, one scope over: a `run`-scoped step reading `cfg.parameters.arm`
     would get "this is varied by `sweep`" for a parameter no template declares.
 
-    Tested here rather than end to end because `validate` refuses `groups`
-    outright in this build (`E-SWEEP-GROUPS-UNSUPPORTED`), so no `run` reaches
-    this code with a group axis declared.
+    A focused unit test on the function itself, kept beside the end-to-end
+    coverage `test_a_group_axis_actually_narrows_end_to_end` provides: this one
+    pins the exact set `_wide_swept_paths` returns for a hand-built `sweep`
+    block, which discriminates the subtraction rule directly rather than
+    through a whole `run`'s aggregated output.
     """
     block = {
         "groups": [{"by": "arm", "levels": ["control", "treatment"]}],
@@ -405,10 +407,11 @@ def test_resolved_group_axes_defaults_from_and_skips_unresolvable_levels():
     against its default — the axis name — mirroring `validate._check_assign`'s
     `by_attribute` branch, and `units.arm_members`'s own input shape.
 
-    Tested here rather than end to end for the reason `test_a_group_path_gets_no_swept_away_marker`
-    above states: `validate` refuses `groups` outright in this build
-    (`E-SWEEP-GROUPS-UNSUPPORTED`), so no `run` reaches this code with a group
-    axis declared."""
+    A focused unit test on the function itself, for the reason
+    `test_a_group_path_gets_no_swept_away_marker` above states: it pins the
+    exact resolved `(column, levels)` pair per axis, including the
+    skipped-rather-than-defaulted `unresolvable` axis, more directly than an
+    end-to-end run's aggregated output would."""
     sweep_block = {
         "groups": [
             {"by": "arm", "levels": ["control", "treatment"]},
@@ -515,21 +518,17 @@ def test_a_group_axis_actually_narrows_end_to_end(tmp_path: Path, monkeypatch):
     actually wired into `command_run` — not merely present and correct in
     isolation, which is what every test above this one can show and no more.
 
-    **What is patched, and why it is the whole gate.** `command_run` calls
-    `validate_config` first and returns `EXIT_WRONG` before creating a run
-    directory if `c.has_errors`. A real `sweep.groups` declaration draws
-    `E-SWEEP-GROUPS-UNSUPPORTED` from exactly one place:
-    `validate._check_unimplemented`, a single, isolated module-level function
-    — not threaded through `_check_assign` (which does the REAL arm-resolution
-    work this test exercises), not through envelope typing, not through any
-    other check. Monkeypatching only that one function to a no-op is therefore
-    sufficient, and it changes nothing else `validate` checks: `_check_assign`'s
-    seven real rules (`E-DATA-ASSIGN-LEVELS` among them) still run against the
-    resolved roster and still would refuse a genuinely malformed assignment.
-    **This patch becomes unnecessary once the slice that retires
-    `E-SWEEP-GROUPS-UNSUPPORTED` lands** (`_check_unimplemented`'s own
-    docstring names it as owed) — whoever does that should delete the
-    `monkeypatch.setattr` line here rather than leave a stale one behind.
+    **No `validate` patch, unlike before task 17.** A real `sweep.groups` +
+    `allocation: between` + `assign` declaration used to draw
+    `E-SWEEP-GROUPS-UNSUPPORTED` from `validate._check_unimplemented` alone —
+    a single, isolated module-level function, not threaded through
+    `_check_assign` (which does the REAL arm-resolution work this test
+    exercises) — so monkeypatching only that one function to a no-op was
+    sufficient to reach `command_run` with this shape. Task 17 retired that
+    refusal, so this config now validates on its own merits: `_check_assign`'s
+    real rules (`E-DATA-ASSIGN-LEVELS` among them) still run against the
+    resolved roster and still refuse a genuinely malformed assignment — this
+    fixture just isn't one.
 
     **Fixture numbers, chosen to discriminate.** 8 `control` units and 3
     `treatment` units, 11 total: every number in play — 8, 3, 11 — is
@@ -541,10 +540,8 @@ def test_a_group_axis_actually_narrows_end_to_end(tmp_path: Path, monkeypatch):
     counting the whole roster reports `resolved: 11` for BOTH arms and
     `failed: {2, 8}` or similar wrong counts for each — never 8 and 3."""
     import publishable.generators.experiment as experiment_gen
-    import publishable.validate as validate_mod
 
     monkeypatch.setattr(experiment_gen, "STARTER_STEP", _ARM_STEP)
-    monkeypatch.setattr(validate_mod, "_check_unimplemented", lambda doc, c: None)
 
     control_rows = "\n".join(f"c{i},control" for i in range(8))
     treatment_rows = "\n".join(f"t{i},treatment" for i in range(3))
@@ -571,11 +568,12 @@ def test_a_group_axis_actually_narrows_end_to_end(tmp_path: Path, monkeypatch):
     assert treatment_n == {"resolved": 3, "completed": 2, "ineligible": 0, "failed": 1}
 
 
-def test_allocation_json_is_written_with_exact_arm_keys_when_declared(tmp_path: Path, monkeypatch):
+def test_allocation_json_is_written_with_exact_arm_keys_when_declared(tmp_path: Path):
     """Task 14: a real `sweep.groups` + `allocation: between` + `assign` config,
-    run all the way to a real `allocation.json` — the same `_check_unimplemented`
-    patch and discipline as `test_a_group_axis_actually_narrows_end_to_end`, and
-    no other route in.
+    run all the way to a real `allocation.json`, with no `validate` patch
+    needed since task 17 retired `E-SWEEP-GROUPS-UNSUPPORTED` — the config
+    validates on its own merits, the same simplification
+    `test_a_group_axis_actually_narrows_end_to_end` above got.
 
     **Fixture numbers, chosen to discriminate.** 4 `control` and 9 `treatment`,
     13 total: 4, 9, and 13 are each distinct from one another, from this
@@ -587,10 +585,6 @@ def test_allocation_json_is_written_with_exact_arm_keys_when_declared(tmp_path: 
     names (row indices instead of keys) fails on the exact key strings *and*
     on their order, not merely on length or set membership.
     """
-    import publishable.validate as validate_mod
-
-    monkeypatch.setattr(validate_mod, "_check_unimplemented", lambda doc, c: None)
-
     control_keys = ["c3", "c0", "c2", "c1"]
     treatment_keys = ["t5", "t1", "t8", "t0", "t3", "t7", "t2", "t6", "t4"]
     control_rows = "\n".join(f"{k},control" for k in control_keys)
@@ -825,11 +819,11 @@ def test_report_by_levels_narrows_a_crossing_stratum_to_the_given_roster():
     """`_report_by_levels` is the piece `command_run`'s `report_by` block calls
     against `_cond_roster`'s answer, extracted specifically so this is
     testable at all: the inline loop it replaces lives inside `command_run`'s
-    per-condition, per-step loop, which no test reaches with a real group
-    axis declared (`validate` refuses one outright in this build,
-    `E-SWEEP-GROUPS-UNSUPPORTED`) — extraction is what makes the narrowing a
-    function with one roster parameter rather than an untestable read of an
-    enclosing-scope name.
+    per-condition, per-step loop, and no end-to-end test in this module
+    combines a group axis with a declared `statistics.report_by` — extraction
+    is what makes the narrowing a function with one roster parameter, testable
+    directly, rather than an inline read of an enclosing-scope name that only
+    a full `report_by` + `groups` run would exercise.
 
     Calling the SAME function with the whole roster reproduces the bug this
     fix removes — the other arm's units join a level that also exists in
