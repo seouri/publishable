@@ -816,7 +816,51 @@ def command_run(config_path: Path) -> int:
                 "disagrees with itself about this fold",
                 code="E-RUN-FOLD-UNRESOLVED",
             )
-        partitions = partition_units(roster, fold_level.n, digest)
+        # `clusters` and `strata` together, or neither. Both change WHICH units a
+        # fold holds rather than how many folds there are, and each is unreachable
+        # from the call that only passes a count:
+        #
+        # - Without `clusters` a clustered design gets the right fold count (the
+        #   basis above) and the wrong membership — every fold trains on other
+        #   units of the cluster it tests on, which `reference.md` § Clustered units
+        #   calls "the difference between a valid evaluation and a leaky one" and
+        #   `experimental-designs.md` § Mistakes core prevents requires to be
+        #   structurally impossible. It is the whole point of declaring one, and no
+        #   interval construction can repair a metric that was already leaked into.
+        # - Without `strata` a declared `fold.stratify_by` is checked and then
+        #   ignored, which § Repeat kinds contradicts by calling such a fold
+        #   "stratified".
+        #
+        # Wiring one and not the other would ship half a guarantee that looks whole,
+        # so they arrive at the same call.
+        #
+        # The stratum mapping is built here rather than by a `strata_of` beside
+        # `clusters_of`, and the difference is deliberate: `clusters_of` raises
+        # `E-DATA-CLUSTER-UNKNOWN`, a code naming the wrong declaration for a reader
+        # whose config declares `fold.stratify_by`, and which code a missing value
+        # belongs under is a property of the declaration being served — `holdout`
+        # and `assign` will each read the same attribute under their own.
+        #
+        # Indexed, not `.get`-ed, and total over the roster because it has to be
+        # (`units.partition_units` raises `KeyError` on a gap, by contract): every
+        # unit carries every declared attribute, since `units._from_table` builds
+        # `Unit.attributes` from `data.units.attributes` for every row and a `glob`
+        # source refuses an `attributes` declaration outright. `validate` guarantees
+        # the name is one of those attributes (`E-REPL-FOLD-STRATIFY-UNKNOWN`), so a
+        # missing key is a core defect, exactly as it is for the weights. A unit
+        # whose cell is blank is stratum `''` — a real stratum of its own, which is
+        # what the source says it is; a sentinel string would instead merge those
+        # units into whatever real stratum happened to be spelled the same way.
+        #
+        # Stringified for the reason `clusters_of` stringifies: a stratum is a label,
+        # nothing downstream does arithmetic on it, and one type keeps a hand-built
+        # roster and a table-sourced one giving the same split.
+        strata: dict[str, str] | None = None
+        if fold_level.stratify_by:
+            strata = {u.key: str(u.attributes[fold_level.stratify_by]) for u in roster}
+        partitions = partition_units(
+            roster, fold_level.n, digest, clusters=clusters, strata=strata
+        )
     fold_members = fold_members_for(levels, partitions) if partitions is not None else None
 
     conditions = expand(doc)

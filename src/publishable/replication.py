@@ -46,6 +46,15 @@ class RepeatMember:
 class RepeatLevel:
     kind: str
     members: tuple[RepeatMember, ...]
+    stratify_by: str | None = None
+    """The attribute a `fold` level balances its split on, `None` for every other
+    kind and for an unstratified fold.
+
+    Carried on the level rather than read from `replication.repeats` a second time
+    where the partition is drawn: `resolve_repeats` is already the single reader of
+    a level's declaration — it is what turns `k: all` into a count — and a caller
+    walking the repeats list again to find the same level would be a second answer
+    to which level is the fold and what it stratifies on."""
 
     @property
     def n(self) -> int:
@@ -238,7 +247,23 @@ def resolve_repeats(
                     f"`{{kind: {kind}, n: {n}}}` executes nothing; n must be at least 1",
                     code="E-REPL-N",
                 )
-        resolved.append(RepeatLevel(kind=kind, members=_seed_members(digest, kind, n)))
+        # Only a truthy string, and only on a `fold`: an empty or wrongly-typed
+        # `stratify_by` names no attribute to balance on and is
+        # `_check_fold_stratify_by`'s finding (`E-REPL-FOLD-STRATIFY-UNKNOWN`), so
+        # carrying it here would hand the partition a name no unit has a value for.
+        # A `stratify_by` on any other kind is a key that level does not take.
+        declared_stratum = level.get("stratify_by") if kind == "fold" else None
+        resolved.append(
+            RepeatLevel(
+                kind=kind,
+                members=_seed_members(digest, kind, n),
+                stratify_by=(
+                    declared_stratum
+                    if isinstance(declared_stratum, str) and declared_stratum
+                    else None
+                ),
+            )
+        )
     kinds = [lv.kind for lv in resolved]
     if len(set(kinds)) != len(kinds):
         raise ContractError(

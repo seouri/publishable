@@ -305,6 +305,92 @@ def t_over_units_clustered(
     return Interval(low=mean - half, high=mean + half, method="t_over_units_clustered")
 
 
+def weighted_t_over_units_clustered(
+    values: Sequence[float],
+    keys: Sequence[str],
+    membership: Mapping[str, str],
+    weights: Sequence[Any],
+    confidence: float = 0.95,
+) -> Interval | None:
+    """Cluster-robust (CR1) *t* on the *weighted* per-unit mean, df = clusters − 1.
+
+    The construction a run declaring both `data.units.weight_by` and
+    `data.units.cluster_by` needs, and `reference.md` decides both halves of it in
+    one sentence each rather than leaving them to be picked here. § Weighted
+    samples: "`cluster_by` still decides the draw when both are declared, since a
+    cluster is what's independent and a weight is what it represents" — so the
+    **draw** is the cluster and the **estimate** is the weighted mean, the weight
+    being what a unit stands for rather than what it is grouped with. § Statistical
+    reporting gives the clustered form "df = clusters − 1" unqualified, and the df
+    is a property of the draw, so it comes from the cluster count here too.
+
+    **Kish's effective size appears nowhere in this interval**, and that is the
+    part worth reading twice. `weighted_t_over_units` takes its df from Kish's
+    size because there the draw *is* the unit and weighting concentrates the
+    estimate on fewer of them; once the cluster is the draw, the thing being
+    counted is clusters, and mixing the two would give an interval whose df came
+    from neither. `n.effective` is still reported beside this interval — it is a
+    fact about the weighting rather than about the construction — which is exactly
+    the arrangement § Weighted samples describes for `effective` and `clusters`
+    both joining `n`.
+
+    The sandwich is `t_over_units_clustered`'s with the weights in the score:
+    the estimating equation for a weighted mean is `Σ w_i (v_i − μ) = 0`, so a
+    cluster's score is `S_g = Σ_{i∈g} w_i (v_i − v̄_w)`, the bread is `1/Σw`, and
+
+        V_CR1 = [G/(G−1)] · Σ_g S_g² / (Σw)²
+
+    **At `w ≡ 1` that is `t_over_units_clustered` digit for digit** — `Σw = n` and
+    the score collapses to the residual sum — and it is a generalization rather
+    than a second construction for exactly that reason. Unlike
+    `weighted_t_over_units`, whose `Σw − Σw²/Σw` denominator is what buys it the
+    same reduction, nothing has to be corrected for here: the scaling that makes
+    CR1 CR1 is `G/(G−1)`, which counts clusters and knows nothing about weights.
+    `test_the_weighted_sandwich_reduces_to_the_unweighted_one_at_equal_weights` is
+    the oracle; if it ever fails, this formula is wrong rather than that test.
+
+    Invariant to rescaling the weights, as `weighted_t_over_units` is and for the
+    same reason: `S_g` scales with the weights and `(Σw)²` divides the square out,
+    so a weight column summing to a population size gives the same interval as one
+    summing to the row count.
+
+    Floors are the clustered ones: `None` below two values (`t_over_units`' own,
+    kept so every construction here refuses the same degenerate input) and `None`
+    below two clusters, where df would be zero. There is deliberately no Kish
+    floor, for the reason above — the effective size does not enter the df, so a
+    weighting that concentrates 10 clusters onto few units still has 9 df, with the
+    concentration showing up in the scores instead.
+
+    `weights` is annotated `Any` and gated by `checked_weights`, the single
+    authority `validate` approves a config against, for the reason
+    `weighted_t_over_units` states: a weight is a unit attribute and
+    `units._from_table` builds those from `csv.DictReader`, so every one of them
+    arrives as `str`.
+    """
+    n = len(values)
+    if n < 2:
+        return None
+    groups = cluster_count_of(membership, keys)
+    if groups < 2:
+        return None
+    w = checked_weights(weights)
+    total = sum(w)
+    mean = _weighted_mean(w, values)
+    # One weighted residual sum per cluster, added up WITHIN the cluster before
+    # being squared — the same reason `t_over_units_clustered` gives, with each
+    # residual carrying the weight of the unit that produced it.
+    scores: dict[str, float] = {}
+    for key, value, weight in zip(keys, values, w, strict=True):
+        label = membership[key]
+        scores[label] = scores.get(label, 0.0) + weight * (value - mean)
+    meat = sum(s * s for s in scores.values())
+    variance = (groups / (groups - 1)) * meat / (total * total)
+    half = _t_critical(groups - 1, confidence) * math.sqrt(variance)
+    return Interval(
+        low=mean - half, high=mean + half, method="weighted_t_over_units_clustered"
+    )
+
+
 def paired_t_over_units(diffs: Sequence[float], confidence: float = 0.95) -> Interval | None:
     """Student's t on the per-unit differences, df = n_paired − 1.
 
@@ -1195,11 +1281,33 @@ def summarize_step(
 
     `clusters` is unit key → that unit's `data.units.cluster_by` value, over the
     whole roster, supplied only when the config declares one — the same mapping
-    `runner.attrition` takes, from the same place. It changes no arithmetic here:
-    it adds `n.clusters`, the number of distinct clusters the column's own units
-    fall in, counted by `units.cluster_count_of` (the single counting expression,
-    so this cannot disagree with `attrition`'s figure or with a fold's partition
-    about what one cluster is).
+    `runner.attrition` takes, from the same place. It adds `n.clusters`, the number
+    of distinct clusters the column's own units fall in, counted by
+    `units.cluster_count_of` (the single counting expression, so this cannot
+    disagree with `attrition`'s figure or with a fold's partition about what one
+    cluster is), **and it decides the interval**: a RECORDED COLUMN's becomes
+    `t_over_units_clustered`, or `weighted_t_over_units_clustered` when a weight is
+    declared too, since § Weighted samples has `cluster_by` decide the draw when
+    both are. § Clustered units calls the unclustered interval over clustered data
+    "too narrow" and § Statistical reporting names the construction, so a
+    `cluster_by` that only added a count would be a declaration accepted whose
+    effect is not delivered — the same half-delivery the weights paragraph above
+    describes, and it survives any check that reads only `n`.
+
+    **The keys the clusters are looked up by are the column's own**, taken in the
+    same pass as its values, for the reason the weights are: a differently filtered
+    vector groups the wrong unit, and the result is a number rather than an error.
+
+    A DERIVED metric's interval is **not** clustered here, and this is a real gap
+    rather than a decision: the clustered draw for a recomputed metric is a
+    different construction from `percentile_over_units_clustered` — each replicate
+    drawing `G` clusters and building a `UnitTable` from their pooled units — and it
+    does not exist. Every clustered design is refused at validate time today
+    (`E-DATA-CLUSTER-UNSUPPORTED`), and the slice retiring that code owes a refusal
+    of *this combination* in its place: without one, every derived interval in a
+    clustered run is drawn as if the units were independent, which is the one thing
+    a clustered design declares they are not
+    (`docs/superpowers/spec-defects.md` records both halves).
 
     **`clusters` is recomputed per column**, for exactly the reasons `completed`
     and `effective` already are: § Clustered units reports the cluster count "as
@@ -1228,19 +1336,33 @@ def summarize_step(
         if not raw or not all(_is_numeric(v) for v in raw):
             continue
         values = [float(v) for v in raw]
+        # The column's own keys, taken from the same pass the values were: the
+        # cluster of a unit is looked up by key, so a vector filtered or ordered
+        # differently would group the wrong unit and produce a plausible number.
+        column_keys = [key for key, _ in carried]
         n_block: dict[str, Any] = {**counts, "completed": len(values)}
         if clusters is not None:
-            n_block["clusters"] = cluster_count_of(clusters, [key for key, _ in carried])
+            n_block["clusters"] = cluster_count_of(clusters, column_keys)
         interval: Interval | None
         value: float | None
         if weights is None:
-            interval = t_over_units(values)
             value = mean_of(values)
+            interval = (
+                t_over_units(values)
+                if clusters is None
+                else t_over_units_clustered(values, column_keys, clusters)
+            )
         else:
             column_weights = [weights[key] for key, _ in carried]
-            interval = weighted_t_over_units(values, column_weights)
             value = weighted_mean_of(values, column_weights)
             n_block["effective"] = kish_effective_n(column_weights)
+            interval = (
+                weighted_t_over_units(values, column_weights)
+                if clusters is None
+                else weighted_t_over_units_clustered(
+                    values, column_keys, clusters, column_weights
+                )
+            )
         out[column] = {
             **(beside_n or {}),
             "value": value,

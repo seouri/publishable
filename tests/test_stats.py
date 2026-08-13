@@ -32,6 +32,7 @@ from publishable.stats import (
     t_over_units,
     t_over_units_clustered,
     weighted_t_over_units,
+    weighted_t_over_units_clustered,
 )
 
 
@@ -1340,6 +1341,211 @@ def test_the_clustered_interval_honours_its_confidence():
     assert (wide.high - wide.low) > (narrow.high - narrow.low)
 
 
+# --- H3b task 11: the weighted sandwich, for a run declaring both -------------
+#
+# `reference.md` § Weighted samples: "`cluster_by` still decides the draw when
+# both are declared, since a cluster is what's independent and a weight is what it
+# represents". The draw is the cluster, so the df is clusters − 1; the estimate is
+# the weighted mean, so the weight is in the score. One fixture serves the group:
+# the unbalanced 1/2/3 clusters the unweighted sandwich is pinned over, with
+# weights that vary WITHIN cluster B (1 and 4) — a weight vector aligned to the
+# cluster rather than to the unit would give a different answer, and the whole
+# failure class here is an alignment that produces a plausible number.
+_WEIGHTED_CLUSTER_VALUES = [6.0, 0.0, 4.0, 1.0, 2.0, 3.0]
+_WEIGHTED_CLUSTER_KEYS = ["a1", "b1", "b2", "c1", "c2", "c3"]
+_WEIGHTED_CLUSTER_MEMBERSHIP = {
+    "a1": "A",
+    "b1": "B",
+    "b2": "B",
+    "c1": "C",
+    "c2": "C",
+    "c3": "C",
+}
+_WEIGHTED_CLUSTER_WEIGHTS = [1, 4, 1, 2, 1, 3]
+
+
+def test_the_weighted_sandwich_reduces_to_the_unweighted_one_at_equal_weights():
+    """The reduction that makes this a generalization rather than a second
+    construction, and the oracle for the formula: at `w ≡ 1`, `Σw = n` and each
+    cluster's weighted score collapses to its residual sum, so the whole thing is
+    `t_over_units_clustered` **digit for digit** — no finite-sample correction has
+    to be arranged for it, unlike `weighted_t_over_units`, whose `Σw − Σw²/Σw`
+    denominator exists to buy exactly this property.
+
+    Asserted as equality on both endpoints rather than `approx`: the two
+    expressions evaluate the same floating-point operations in the same order, and
+    an "almost" here would hide a scaling factor small enough to pass `approx`.
+    Only `method` differs, which is the one thing that must.
+    """
+    plain = t_over_units_clustered(
+        _WEIGHTED_CLUSTER_VALUES, _WEIGHTED_CLUSTER_KEYS, _WEIGHTED_CLUSTER_MEMBERSHIP
+    )
+    weighted = weighted_t_over_units_clustered(
+        _WEIGHTED_CLUSTER_VALUES,
+        _WEIGHTED_CLUSTER_KEYS,
+        _WEIGHTED_CLUSTER_MEMBERSHIP,
+        [1] * len(_WEIGHTED_CLUSTER_VALUES),
+    )
+    assert plain is not None and weighted is not None
+    assert weighted.low == plain.low
+    assert weighted.high == plain.high
+    assert weighted.method == "weighted_t_over_units_clustered"
+
+
+def test_the_weighted_clustered_interval_is_the_weighted_cr1_sandwich():
+    """Computed as exact rationals away from this module, then rendered:
+
+        Σw = 12, v̄_w = 23/12 = 1.9166667
+        S_A = 49/12, S_B = −67/12, S_C = 3/2;  Σ S_g² = 3607/72 = 50.09722
+        V = (3/2)·(3607/72)/144 → se = 0.7223891, df = 2, t = 4.3026527
+
+    giving [−1.19152, 5.02486]. The unweighted sandwich over the same values and
+    the same clusters gives [−0.94270, 6.27604] — the control that must report, and
+    the number this test would return if the weights reached the mean but not the
+    scores, or neither.
+    """
+    got = weighted_t_over_units_clustered(
+        _WEIGHTED_CLUSTER_VALUES,
+        _WEIGHTED_CLUSTER_KEYS,
+        _WEIGHTED_CLUSTER_MEMBERSHIP,
+        _WEIGHTED_CLUSTER_WEIGHTS,
+    )
+    assert got is not None
+    assert got.low == pytest.approx(-1.1915229242750371)
+    assert got.high == pytest.approx(5.024856257608371)
+    unweighted = t_over_units_clustered(
+        _WEIGHTED_CLUSTER_VALUES, _WEIGHTED_CLUSTER_KEYS, _WEIGHTED_CLUSTER_MEMBERSHIP
+    )
+    assert unweighted is not None
+    assert got.low != pytest.approx(unweighted.low)
+    assert got.high != pytest.approx(unweighted.high)
+
+
+def test_the_weighted_clustered_df_is_the_cluster_count_not_kishs_size():
+    """The incoherence this construction had to avoid: `weighted_t_over_units`
+    takes its df from Kish's effective size, `t_over_units_clustered` from the
+    cluster count, and a weighted clustered interval that mixed them would have a
+    df from neither. § Statistical reporting gives the clustered form
+    "df = clusters − 1" unqualified, and a df is a property of the draw — which
+    § Weighted samples hands to the cluster when both are declared.
+
+    Kish's size over these weights is 4.5, so the rival df is 3.5 against the real
+    2, and the two critical values (4.30265 and 3.18) separate the half-width
+    comfortably. The standard error is rebuilt here from the cluster scores rather
+    than divided back out of `got`, so neither assertion can be vacuous.
+    """
+    got = weighted_t_over_units_clustered(
+        _WEIGHTED_CLUSTER_VALUES,
+        _WEIGHTED_CLUSTER_KEYS,
+        _WEIGHTED_CLUSTER_MEMBERSHIP,
+        _WEIGHTED_CLUSTER_WEIGHTS,
+    )
+    assert got is not None
+    assert kish_effective_n(_WEIGHTED_CLUSTER_WEIGHTS) == pytest.approx(4.5)
+    standard_error = math.sqrt((3 / 2) * (3607 / 72) / 12**2)
+    half = (got.high - got.low) / 2
+    assert half == pytest.approx(_t_critical(2, 0.95) * standard_error)
+    assert half != pytest.approx(_t_critical(3.5, 0.95) * standard_error)
+
+
+def test_rescaling_the_weights_leaves_the_weighted_clustered_interval_unmoved():
+    """Survey weights routinely sum to a population size rather than to the row
+    count, and an interval that moved with that convention would be reporting the
+    convention. `S_g` scales with the weights and `(Σw)²` divides the square out,
+    so the invariance is exact rather than approximate — same reason
+    `weighted_t_over_units` claims it."""
+    base = weighted_t_over_units_clustered(
+        _WEIGHTED_CLUSTER_VALUES,
+        _WEIGHTED_CLUSTER_KEYS,
+        _WEIGHTED_CLUSTER_MEMBERSHIP,
+        _WEIGHTED_CLUSTER_WEIGHTS,
+    )
+    scaled = weighted_t_over_units_clustered(
+        _WEIGHTED_CLUSTER_VALUES,
+        _WEIGHTED_CLUSTER_KEYS,
+        _WEIGHTED_CLUSTER_MEMBERSHIP,
+        [w * 100 for w in _WEIGHTED_CLUSTER_WEIGHTS],
+    )
+    assert base is not None and scaled is not None
+    assert scaled.low == pytest.approx(base.low)
+    assert scaled.high == pytest.approx(base.high)
+
+
+def test_the_weighted_clustered_interval_needs_two_clusters():
+    """The clustered floor, on the cluster count and not on Kish's size: df would
+    be zero at one cluster whatever the weights are. There is deliberately no Kish
+    floor here — the effective size does not enter the df — which is what the
+    control below is for."""
+    assert (
+        weighted_t_over_units_clustered(
+            _WEIGHTED_CLUSTER_VALUES,
+            _WEIGHTED_CLUSTER_KEYS,
+            dict.fromkeys(_WEIGHTED_CLUSTER_KEYS, "only"),
+            _WEIGHTED_CLUSTER_WEIGHTS,
+        )
+        is None
+    )
+
+
+def test_a_weighting_that_concentrates_on_one_unit_still_reports():
+    """The control for the floor above, and the visible consequence of taking the
+    df from the clusters: weights of 1000 against 1 put Kish's size below two —
+    where `weighted_t_over_units` returns `None` — while three clusters still give
+    2 df, so this reports. The concentration is not ignored; it shows up in the
+    scores instead of in the df."""
+    weights = [1000, 1, 1, 1, 1, 1]
+    assert kish_effective_n(weights) < 2
+    assert weighted_t_over_units(_WEIGHTED_CLUSTER_VALUES, weights) is None
+    got = weighted_t_over_units_clustered(
+        _WEIGHTED_CLUSTER_VALUES,
+        _WEIGHTED_CLUSTER_KEYS,
+        _WEIGHTED_CLUSTER_MEMBERSHIP,
+        weights,
+    )
+    assert got is not None and got.high > got.low
+
+
+@pytest.mark.parametrize("values", [[], [1.0]])
+def test_the_weighted_clustered_interval_needs_two_values(values):
+    """`t_over_units`' floor, kept in front of the cluster one so every
+    construction in this module refuses the same degenerate input."""
+    keys = [f"u{i}" for i in range(len(values))]
+    assert (
+        weighted_t_over_units_clustered(
+            values, keys, dict.fromkeys(keys, "c"), [1] * len(values)
+        )
+        is None
+    )
+
+
+def test_a_weight_core_cannot_use_reaches_the_weighted_clustered_interval_as_a_code():
+    """`checked_weights` is the gate, the same single authority `validate` approves
+    a config against — so a weight of zero is `E-DATA-WEIGHT-INVALID` here rather
+    than a division that silently drops a unit's contribution to its cluster's
+    score."""
+    with pytest.raises(ContractError) as excinfo:
+        weighted_t_over_units_clustered(
+            _WEIGHTED_CLUSTER_VALUES,
+            _WEIGHTED_CLUSTER_KEYS,
+            _WEIGHTED_CLUSTER_MEMBERSHIP,
+            [1, 4, 1, 2, 1, 0],
+        )
+    assert excinfo.value.code == "E-DATA-WEIGHT-INVALID"
+
+
+def test_a_misaligned_weight_vector_is_not_absorbed_by_the_weighted_sandwich():
+    """`strict=True` on the three-way zip: a weights/values length mismatch is a
+    misaligned vector, and it would weight the wrong unit's residual into the wrong
+    cluster's score — a plausible number rather than an error."""
+    with pytest.raises(ValueError):
+        weighted_t_over_units_clustered(
+            _WEIGHTED_CLUSTER_VALUES,
+            _WEIGHTED_CLUSTER_KEYS,
+            _WEIGHTED_CLUSTER_MEMBERSHIP,
+            [1, 4, 1, 2, 1],
+        )
+
+
 # --- H3a task 10: the weighted estimator, wired into `summarize_step` ---------
 #
 # One roster serves the whole group, and it is built so a misaligned weight
@@ -2498,3 +2704,101 @@ def test_a_derived_metric_carries_the_condition_wide_cluster_count():
     # u1/u2/u3 → clusters {a, b}, which is also 2 — so this pins the derived key's
     # presence, and the ragged case above pins that the recompute is real.
     assert out["score"]["n"]["clusters"] == 2
+
+
+# --- H3b task 11: the declared cluster decides the column's interval -----------
+#
+# Same roster and same ragged table as the two groups above, because the risk is
+# the same one: a cluster vector filtered differently from the values groups the
+# wrong unit. `pred` sits in 2 clusters and `other` in 3, and neither equals its
+# own unit count, so a column reporting the other column's interval — or the
+# whole roster's — is visible.
+
+
+def test_a_recorded_columns_interval_becomes_cluster_robust_when_a_cluster_is_declared():
+    """The wiring this slice exists for, at the function. § Clustered units calls
+    the unclustered interval over clustered data "too narrow" and § Statistical
+    reporting names the construction, so a `cluster_by` that only added
+    `n.clusters` would be a declaration whose effect is not delivered — and one no
+    check reading `n` alone could catch.
+
+    Each column's interval is the construction over ITS OWN units: `pred`'s three
+    carriers sit in 2 clusters, `other`'s four in 3. The rival — the same
+    construction over every collapsed unit — is asserted to differ, so a mapping
+    aligned to the table rather than to the column fails here.
+    """
+    out = summarize_step(_WEIGHTED_COLLAPSED, _WEIGHTED_COUNTS, clusters=_CLUSTERS)
+    own = t_over_units_clustered([0.0, 1.0, 3.0], ["u1", "u2", "u4"], _CLUSTERS)
+    rival = t_over_units_clustered(
+        [1.0, 1.0, 2.0, 1.0], ["u1", "u2", "u3", "u4"], _CLUSTERS
+    )
+    assert own is not None and rival is not None
+    assert out["pred"]["method"] == "t_over_units_clustered"
+    assert out["pred"]["ci95"] == [own.low, own.high]
+    assert out["pred"]["ci95"] != [rival.low, rival.high]
+    # The value is untouched by clustering — clustering changes what the interval
+    # is computed over, not what the estimate is.
+    assert out["pred"]["value"] == pytest.approx(4 / 3)
+    assert out["other"]["method"] == "t_over_units_clustered"
+    assert out["other"]["ci95"] == [rival.low, rival.high]
+
+
+def test_an_unclustered_column_keeps_the_interval_it_always_had():
+    """The regression that guards every unclustered design, including the worked
+    example: with no `clusters` mapping the method is `t_over_units` and the
+    endpoints are the ones this function reported before clusters existed."""
+    out = summarize_step(_WEIGHTED_COLLAPSED, _WEIGHTED_COUNTS)
+    plain = t_over_units([0.0, 1.0, 3.0])
+    assert plain is not None
+    assert out["pred"]["method"] == "t_over_units"
+    assert out["pred"]["ci95"] == [plain.low, plain.high]
+
+
+def test_a_weighted_clustered_column_takes_the_weighted_sandwich():
+    """Both declared: § Weighted samples has the cluster decide the draw and the
+    weight decide what the estimate represents, so the column gets
+    `weighted_t_over_units_clustered` over its own units, its own weights and its
+    own clusters — all three filtered in the same pass.
+
+    `n.effective` survives beside it, which is the part a four-way branch drops:
+    Kish's size is a fact about the weighting rather than about the construction,
+    and § Weighted samples has `effective` and `clusters` both join `n`.
+    """
+    out = summarize_step(
+        _WEIGHTED_COLLAPSED, _WEIGHTED_COUNTS, weights=_WEIGHTS, clusters=_CLUSTERS
+    )
+    expected = weighted_t_over_units_clustered(
+        [0.0, 1.0, 3.0], ["u1", "u2", "u4"], _CLUSTERS, [1.0, 1.0, 3.0]
+    )
+    assert expected is not None
+    assert out["pred"]["method"] == "weighted_t_over_units_clustered"
+    assert out["pred"]["ci95"] == [expected.low, expected.high]
+    assert out["pred"]["value"] == pytest.approx(2.0)
+    assert out["pred"]["n"]["effective"] == pytest.approx(kish_effective_n([1.0, 1.0, 3.0]))
+    assert out["pred"]["n"]["clusters"] == 2
+    # The two controls that must report, and must differ: dropping either
+    # declaration gives a different interval, so neither is being ignored.
+    unweighted = summarize_step(_WEIGHTED_COLLAPSED, _WEIGHTED_COUNTS, clusters=_CLUSTERS)
+    unclustered = summarize_step(_WEIGHTED_COLLAPSED, _WEIGHTED_COUNTS, weights=_WEIGHTS)
+    assert out["pred"]["ci95"] != unweighted["pred"]["ci95"]
+    assert out["pred"]["ci95"] != unclustered["pred"]["ci95"]
+    assert unclustered["pred"]["method"] == "weighted_t_over_units"
+
+
+def test_a_single_cluster_column_reports_its_point_with_no_interval():
+    """The honest floor, reached through the wiring: a column whose units all sit
+    in one cluster has one draw and no df, so `ci95` and `method` are `null` while
+    `value` and `n` are still reported. It reads as a bug to anyone expecting an
+    interval, and it is the correct answer — 300 cells from one animal are one
+    observation."""
+    collapsed = {"u1": {"score": 1.0}, "u2": {"score": 3.0}, "u3": {"score": 5.0}}
+    counts = {"resolved": 3, "completed": 3, "ineligible": 0, "failed": 0}
+    out = summarize_step(collapsed, counts, clusters=dict.fromkeys(collapsed, "one"))
+    assert out["score"]["ci95"] is None
+    assert out["score"]["method"] is None
+    assert out["score"]["value"] == pytest.approx(3.0)
+    assert out["score"]["n"]["clusters"] == 1
+    # The control that must report: the same table over two clusters has an
+    # interval, so the `None` above is the cluster count and not the shape.
+    two = summarize_step(collapsed, counts, clusters={"u1": "a", "u2": "a", "u3": "b"})
+    assert two["score"]["ci95"] is not None

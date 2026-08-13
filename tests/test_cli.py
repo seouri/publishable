@@ -4516,3 +4516,339 @@ def test_n_gains_clusters_under_a_clustered_design(tmp_path, monkeypatch):
     for block in blocks:
         assert "clusters: 5" in block
         assert re.search(r"\d+\.\d+", block) is None, block
+
+
+# --- H3b task 11: the partition and the intervals, reached by a real run -------
+
+
+def _without_the_stratify_refusal(monkeypatch):
+    """Let a `fold.stratify_by` config through `resolve_repeats`.
+
+    The **second** bypass this module carries, for a second refusal by a second
+    mechanism: `E-REPL-FOLD-STRATIFY-UNSUPPORTED` is a `raise` inside
+    `replication._fold_k`, not a `validate` finding, so
+    `_without_the_cluster_refusal` cannot reach it and filtering findings cannot
+    either. Both retire in the same later slice — two bypasses, not one, and
+    neither is a duplicate of the other.
+
+    Only the `stratify_by` key is dropped, so every other refusal `_fold_k` makes
+    (`E-REPL-FOLD-K`, `E-REPL-FOLD-K-TOO-LARGE`) still fires, and the declaration
+    still reaches `validate`'s own checks of it and the level that carries it.
+    """
+    import publishable.replication as repl
+
+    real = repl._fold_k
+
+    def _permitted(
+        level: dict[str, Any], fold_basis: int | None, cluster_by: str | None = None
+    ) -> int:
+        return real(
+            {k: v for k, v in level.items() if k != "stratify_by"}, fold_basis, cluster_by
+        )
+
+    monkeypatch.setattr(repl, "_fold_k", _permitted)
+
+
+def _fold_membership(run_dir: Path) -> dict[str, list[str]]:
+    """Which units each fold actually held, read from the per-fold `units.parquet`.
+
+    The one route to fold *membership* from outside a run — `sweep.yaml` records
+    the fold labels and nothing about which unit went where. A `repeat`-scope step
+    is handed its own fold's units (`runner.execute_plan` narrows `io.units` to
+    them), and the generated step records one row per unit it was handed, so each
+    fold's table *is* its membership. Asserting membership rather than sizes is
+    load-bearing: the clustered and unclustered partitioners agree on the sizes of
+    some rosters while disagreeing about who is in which fold.
+    """
+    from publishable.artifacts import _decode_parquet
+
+    out: dict[str, list[str]] = {}
+    for path in sorted(run_dir.rglob("units.parquet")):
+        rows = _decode_parquet(path.read_bytes())
+        out[path.parent.parent.name] = [row["unit"] for row in rows]
+    return out
+
+
+def test_a_clustered_fold_puts_no_cluster_in_two_folds(tmp_path, monkeypatch):
+    """The leak this slice exists to close, end to end. `reference.md` § Clustered
+    units: a split made without regard to the cluster trains on other units of the
+    cluster it tests on, and that is "the difference between a valid evaluation and
+    a leaky one" — `experimental-designs.md` § Mistakes core prevents requires it to
+    be structurally impossible, which it is only once `run` passes the membership to
+    the partitioner.
+
+    5 clusters of 7/3/3/1/1 at `k = 3`. The partition is pinned as exact
+    membership, never as sizes: the two partitioners give the same fold sizes on
+    some rosters while differing about who is in which fold, so a size assertion
+    would pass against the unwired call. The rule — "as even as indivisible
+    clusters allow" — shows in the 7/4/4 that follows from cluster `a` being
+    indivisible.
+    """
+    _without_the_cluster_refusal(monkeypatch)
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "fold", "k": 3}], "order": "as_declared"},
+        roster_csv=_UNEVEN_CLUSTERS,
+        units_overrides={"attributes": ["site"], "cluster_by": "site"},
+    )
+    folds = _fold_membership(doc["run_dir"])
+    assert folds == {
+        "fold01": ["p0", "p1", "p2", "p3", "p4", "p5", "p6"],
+        "fold02": ["p7", "p8", "p9", "p13"],
+        "fold03": ["p10", "p11", "p12", "p14"],
+    }
+    # The property the membership above is one instance of, asserted separately so
+    # a redrawn partition (a changed digest) still fails for the right reason.
+    sites = dict(
+        zip(
+            (f"p{i}" for i in range(15)),
+            "aaaaaaabbbcccde",
+            strict=True,
+        )
+    )
+    seen: dict[str, str] = {}
+    for fold, keys in folds.items():
+        for key in keys:
+            assert seen.setdefault(sites[key], fold) == fold, (
+                f"cluster {sites[key]} appears in {seen[sites[key]]} and {fold}"
+            )
+    assert sorted(k for keys in folds.values() for k in keys) == sorted(sites)
+
+
+def test_an_unclustered_fold_of_the_same_roster_splits_a_cluster(tmp_path):
+    """The control that must report, and the half that would keep passing if the
+    clustered argument were never wired: the same 15-unit roster with `site`
+    declared as an ordinary attribute puts cluster `a` in all three folds. It needs
+    no bypass — nothing refuses it — and its folds are 5/5/5, which is why the
+    clustered test above cannot rest on sizes."""
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "fold", "k": 3}], "order": "as_declared"},
+        roster_csv=_UNEVEN_CLUSTERS,
+        units_overrides={"attributes": ["site"]},
+    )
+    folds = _fold_membership(doc["run_dir"])
+    assert folds == {
+        "fold01": ["p0", "p2", "p8", "p11", "p13"],
+        "fold02": ["p1", "p3", "p7", "p10", "p14"],
+        "fold03": ["p4", "p5", "p6", "p9", "p12"],
+    }
+    # Cluster `a` is p0..p6, and every fold holds some of it.
+    for keys in folds.values():
+        assert any(int(key[1:]) < 7 for key in keys)
+
+
+# 10 units labelled `0` and 4 labelled `1`, each its own cluster. `k = 2`, so a
+# stratified split gives 5/5 of the first and 2/2 of the second. The digest is what
+# makes this fixture discriminating: the unstratified draw over the same roster is
+# 4/3 and 6/1 (pinned by the control below), so a partition ignoring `strata` lands
+# nowhere near the proportional split — the coincidence that made an earlier 8/4
+# fixture unable to see the stratification at all.
+_STRATIFIED_ROSTER = "patient_id,label\n" + "".join(
+    f"p{i},{label}\n" for i, label in enumerate("00000000001111")
+)
+
+
+def _stratum_counts(run_dir: Path) -> dict[str, tuple[int, int]]:
+    """Each fold's (label `0`, label `1`) counts, from its membership."""
+    labels = dict(
+        zip((f"p{i}" for i in range(14)), "00000000001111", strict=True)
+    )
+    return {
+        fold: (
+            sum(1 for key in keys if labels[key] == "0"),
+            sum(1 for key in keys if labels[key] == "1"),
+        )
+        for fold, keys in _fold_membership(run_dir).items()
+    }
+
+
+def test_a_stratified_fold_balances_the_declared_stratum(tmp_path, monkeypatch):
+    """`reference.md` § Repeat kinds calls a `fold` declaring `stratify_by`
+    "stratified", so a declaration that was checked and then ignored would make
+    that sentence false. Each fold gets its proportional share of both labels —
+    5/2 and 5/2 — which the unstratified control below does not.
+
+    The exact membership is pinned as well as the composition: the composition
+    alone cannot see a merge that pairs the wrong strata's folds together."""
+    _without_the_stratify_refusal(monkeypatch)
+    doc = run_a_project(
+        tmp_path,
+        replication={
+            "repeats": [{"kind": "fold", "k": 2, "stratify_by": "label"}],
+            "order": "as_declared",
+        },
+        roster_csv=_STRATIFIED_ROSTER,
+        units_overrides={"attributes": ["label"]},
+    )
+    assert _stratum_counts(doc["run_dir"]) == {"fold01": (5, 2), "fold02": (5, 2)}
+    folds = _fold_membership(doc["run_dir"])
+    assert sorted(k for keys in folds.values() for k in keys) == sorted(
+        f"p{i}" for i in range(14)
+    )
+
+
+def test_an_unstratified_fold_of_the_same_roster_is_lopsided(tmp_path):
+    """The control that must report: the same roster with the `stratify_by` key
+    removed splits the minority label 3/1 rather than 2/2. Without this, the
+    proportional test above would pass against a partitioner that never read
+    `strata` — which is exactly what an earlier fixture did."""
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "fold", "k": 2}], "order": "as_declared"},
+        roster_csv=_STRATIFIED_ROSTER,
+        units_overrides={"attributes": ["label"]},
+    )
+    assert _stratum_counts(doc["run_dir"]) == {"fold01": (4, 3), "fold02": (6, 1)}
+
+
+# The interval group's roster: the same 5 clusters, with a per-unit sampling weight
+# that varies WITHIN cluster `a` (1 and 2) — a weight vector resolved per cluster
+# rather than per unit would give a different weighted mean. `pred` is the
+# recording step's column, `float(i)` over the roster order, so every expectation
+# below is computable from the declaration alone.
+_CLUSTERED_WEIGHTED = "patient_id,site,sampling_weight,cohort\n" + "".join(
+    f"p{i},{site},{weight},{'inside' if i < 7 else 'spread'}\n"
+    for i, (site, weight) in enumerate(
+        zip("aaaaaaabbbcccde", [1, 2, 1, 2, 1, 2, 1, 3, 3, 3, 1, 1, 1, 5, 2], strict=True)
+    )
+)
+
+
+def _pred(run_dir: Path, stratum: str | None = None) -> dict[str, Any]:
+    run = yaml.safe_load((run_dir / "run.yaml").read_text())
+    block = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    return block["by"]["cohort"][stratum]["pred"] if stratum else block["pred"]
+
+
+def test_a_clustered_run_reports_the_cluster_robust_interval(tmp_path, monkeypatch):
+    """Both halves of "wired", end to end: the `method` names the construction and
+    the endpoints are it. § Clustered units: core "then computes cluster-robust
+    intervals — over the same per-unit table every other interval comes from".
+
+    15 units of `pred` = 0..14 in 5 clusters of 7/3/3/1/1. Σ(v−v̄) per cluster is
+    −28, 3, 12, 6, 7, so ΣS² = 1022 and V = (5/4)·1022/225, giving se = 2.38281 at
+    df 4 (t = 2.776445) — an interval of [0.38426, 13.61574]. Computed from the
+    roster rather than captured from a run.
+    """
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    _without_the_cluster_refusal(monkeypatch)
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        roster_csv=_UNEVEN_CLUSTERS,
+        units_overrides={"attributes": ["site"], "cluster_by": "site"},
+    )
+    pred = _pred(doc["run_dir"])
+    assert pred["method"] == "t_over_units_clustered"
+    assert pred["ci95"][0] == pytest.approx(0.38426217037288346)
+    assert pred["ci95"][1] == pytest.approx(13.615737829627117)
+    assert pred["value"] == pytest.approx(7.0)
+    assert pred["n"] == {
+        "resolved": 15,
+        "completed": 15,
+        "ineligible": 0,
+        "failed": 0,
+        "clusters": 5,
+    }
+    # The reconciliation `run.yaml` must always satisfy — nothing about this
+    # wiring may move units between the parts of `n`.
+    assert pred["n"]["resolved"] == (
+        pred["n"]["completed"] + pred["n"]["ineligible"] + pred["n"]["failed"]
+    )
+
+
+def test_an_unclustered_run_of_the_same_column_keeps_the_plain_interval(tmp_path, monkeypatch):
+    """The control that must report, and the regression guard for the worked
+    example: the same values with `site` an ordinary attribute give `t_over_units`
+    over 14 df — [4.52341, 9.47659], less than half the width above. Both numbers
+    are in the record, so a `method` that changed without the endpoints (or the
+    reverse) fails here."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        roster_csv=_UNEVEN_CLUSTERS,
+        units_overrides={"attributes": ["site"]},
+    )
+    pred = _pred(doc["run_dir"])
+    assert pred["method"] == "t_over_units"
+    assert pred["ci95"][0] == pytest.approx(4.523413656752661)
+    assert pred["ci95"][1] == pytest.approx(9.47658634324734)
+    assert "clusters" not in pred["n"]
+
+
+def test_a_weighted_clustered_run_reports_the_weighted_sandwich(tmp_path, monkeypatch):
+    """The branch a run declaring both lands on. § Weighted samples: "`cluster_by`
+    still decides the draw when both are declared, since a cluster is what's
+    independent and a weight is what it represents" — so the draw (and the df) is
+    the cluster and the estimate is the weighted mean.
+
+    Weights 1/2 alternating inside cluster `a` then 3/3/3, 1/1/1, 5, 2: Σw = 29,
+    v̄_w = 228/29 = 7.86207, and the weighted cluster scores give se = 2.20285 at
+    df 4 — [1.74598, 13.97815]. Kish's size is 11.21333 and appears in `n.effective`
+    but **not** in the df, which is the part a mixed construction would get wrong.
+    """
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    _without_the_cluster_refusal(monkeypatch)
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        roster_csv=_CLUSTERED_WEIGHTED,
+        units_overrides={
+            "attributes": ["site", "sampling_weight", "cohort"],
+            "cluster_by": "site",
+            "weight_by": "sampling_weight",
+        },
+    )
+    pred = _pred(doc["run_dir"])
+    assert pred["method"] == "weighted_t_over_units_clustered"
+    assert pred["value"] == pytest.approx(7.862068965517241)
+    assert pred["ci95"][0] == pytest.approx(1.745983627074943)
+    assert pred["ci95"][1] == pytest.approx(13.978154303959538)
+    assert pred["n"]["effective"] == pytest.approx(11.213333333333333)
+    assert pred["n"]["clusters"] == 5
+    assert pred["weighted_by"] == "sampling_weight"
+
+
+def test_a_reporting_stratum_inside_one_cluster_reports_no_interval(tmp_path, monkeypatch):
+    """A consequence to preserve rather than tidy away. § Reporting strata makes a
+    level block the aggregation repeated over the subset, and a subset's clusters
+    are its own — so the `inside` cohort, whose seven units are all cluster `a`, has
+    one draw and no df, and reports its point with `ci95: null` while its parent
+    block and its sibling both carry intervals. It reads as a bug and it is the
+    honest answer.
+
+    The sibling `spread` cohort is the control that must report: its eight units
+    span 4 clusters, so it gets an interval at df 3.
+    """
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    _without_the_cluster_refusal(monkeypatch)
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        roster_csv=_CLUSTERED_WEIGHTED,
+        units_overrides={"attributes": ["site", "cohort"], "cluster_by": "site"},
+        statistics={"report_by": ["cohort"]},
+    )
+    inside = _pred(doc["run_dir"], "inside")
+    assert inside["ci95"] is None
+    assert inside["method"] is None
+    assert inside["value"] == pytest.approx(3.0)
+    assert inside["n"]["clusters"] == 1
+    spread = _pred(doc["run_dir"], "spread")
+    assert spread["method"] == "t_over_units_clustered"
+    assert spread["n"]["clusters"] == 4
+    assert spread["ci95"][0] == pytest.approx(6.4692503141912505)
+    assert spread["ci95"][1] == pytest.approx(14.53074968580875)
+    # The parent keeps its own interval over all five clusters, so the `null`
+    # above is the stratum's cluster count and not a block-wide loss.
+    assert _pred(doc["run_dir"])["method"] == "t_over_units_clustered"
