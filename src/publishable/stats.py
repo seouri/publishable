@@ -87,16 +87,67 @@ def t_over_units(values: Sequence[float], confidence: float = 0.95) -> Interval 
     return Interval(low=mean - half, high=mean + half, method="t_over_units")
 
 
-def kish_effective_n(weights: Sequence[float]) -> float:
+def checked_weights(weights: Sequence[Any]) -> list[float]:
+    """Every weight as a number core can multiply by, or `ContractError`.
+
+    The one gate for both weighted constructions in this module, reading
+    `units.usable_weight` — the same single authority `validate` approves a
+    `data.units.weight_by` config against. A fourth notion of a usable weight is
+    the thing this arrangement exists to make impossible.
+
+    It raises rather than dropping or substituting because the alternatives are
+    each a wrong number with no error. Dropping the offending unit changes `n`
+    silently; carrying it through gives `nan` for a `nan` weight and `0.0` for an
+    all-negative one, and `effective: nan` in `run.yaml` is exactly the failure
+    class the weight checks exist to prevent. `validate` reports the same
+    condition under the same identifier, but only when it actually ran.
+
+    **`reference.md` § Errors core raises at run time OWES this code a row.**
+    § Validation has one; the run-time table does not, so the document currently
+    describes `E-DATA-WEIGHT-INVALID` as something `validate` reports and nothing
+    raises. The arrangement is the one `E-DATA-MEASUREMENTS-COLLAPSE-TYPE`
+    already has in both tables, for the identical single-authority reason — it is
+    documented there as "Raised at run time too, under the same code". Nothing
+    diverges while no caller reaches these functions; the row is due with the
+    wiring, in the same table that retires `E-DATA-WEIGHT-UNSUPPORTED`.
+    """
+    usable = [usable_weight(w) for w in weights]
+    if any(u is None for u in usable):
+        offender = next(w for w, u in zip(weights, usable, strict=True) if u is None)
+        raise ContractError(
+            f"a weight of {offender!r} — a {type(offender).__name__} that is not a "
+            "positive finite number — reached a weighted estimate. A weight is how much "
+            "of the population a unit stands for, so zero, a negative, a non-number and "
+            "a NaN are each a unit standing for nothing core could weight with",
+            code="E-DATA-WEIGHT-INVALID",
+        )
+    return [u for u in usable if u is not None]
+
+
+def kish_effective_n(weights: Sequence[Any]) -> float:
     """Kish's effective sample size: (Σw)² / Σw².
 
     Equals the count when the weights are equal, and falls as they spread — which
     is the whole reason it is here. `reference.md` § Weighted samples: weighting
     concentrates the estimate on fewer units, and an interval whose df ignored
     that would be narrower than the sample supports.
+
+    **The gate is inside rather than at the call site**, and `weights` is
+    annotated `Any` for the same reason `weighted_t_over_units`'s is: this is a
+    public function that will be handed a roster's weight column, which
+    `units._from_table` builds from `csv.DictReader` and which is therefore `str`
+    for every unit. Ungated it answered `nan` for a `nan` weight, `0.0` for a
+    negative one and a bare `TypeError` for a table-sourced one — three
+    plausible-looking numbers and an uncoded traceback, for input it cannot
+    handle. A caller that has to remember to pre-validate is a caller that
+    eventually forgets, and this value lands in `run.yaml` as `n.effective`.
+
+    The `Σw² == 0` guard survives the gate even though no gated weight is zero:
+    it is what answers the empty sequence, which is a real call and not an error.
     """
-    total = sum(weights)
-    squares = sum(w * w for w in weights)
+    w = checked_weights(weights)
+    total = sum(w)
+    squares = sum(x * x for x in w)
     if squares == 0:
         return 0.0
     return (total * total) / squares
@@ -139,26 +190,7 @@ def weighted_t_over_units(
     """
     if len(values) < 2:
         return None
-    usable = [usable_weight(w) for w in weights]
-    if any(w is None for w in usable):
-        offender = next(w for w, u in zip(weights, usable, strict=True) if u is None)
-        # `reference.md` § Errors core raises at run time OWES this code a row.
-        # § Validation has one; the run-time table does not, so the document
-        # currently describes `E-DATA-WEIGHT-INVALID` as something `validate`
-        # reports and nothing raises. The arrangement is the one
-        # `E-DATA-MEASUREMENTS-COLLAPSE-TYPE` already has in both tables, for the
-        # same reason: one predicate, so a weight `validate` approves is exactly a
-        # weight core can multiply by. Nothing diverges while no caller reaches
-        # this function; the row is due with the wiring, in the same table that
-        # retires `E-DATA-WEIGHT-UNSUPPORTED`.
-        raise ContractError(
-            f"a weight of {offender!r} — a {type(offender).__name__} that is not a "
-            "positive finite number — reached a weighted estimate. A weight is how much "
-            "of the population a unit stands for, so zero, a negative, a non-number and "
-            "a NaN are each a unit standing for nothing core could weight with",
-            code="E-DATA-WEIGHT-INVALID",
-        )
-    w = [u for u in usable if u is not None]
+    w = checked_weights(weights)
     total = sum(w)
     squares = sum(x * x for x in w)
     mean = sum(a * v for a, v in zip(w, values, strict=True)) / total

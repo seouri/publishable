@@ -1057,7 +1057,58 @@ def test_kish_effective_n_falls_as_the_weights_spread():
 
 
 def test_kish_effective_n_of_no_weights_is_zero():
+    """The `Σw² == 0` guard's only reachable input once the gate is in front of
+    it: no weight that passes `usable_weight` is zero, but an empty sequence is a
+    real call rather than an error."""
     assert kish_effective_n([]) == 0.0
+
+
+def test_kish_effective_n_reads_a_table_sourced_column():
+    """**The case task 9 will actually hit.** It wires this onto the roster's
+    weight column, and `units._from_table` builds every attribute from
+    `csv.DictReader`, so every weight arrives as `str`. Ungated this raised a bare
+    `TypeError` from `sum`, with no `code` for a diagnostic to print."""
+    assert kish_effective_n(["1", "1.0", "1", "3"]) == pytest.approx(3.0)
+
+
+@pytest.mark.parametrize(
+    ("label", "weights"),
+    [
+        ("negative", [-1.0, 1.0]),
+        ("nan", [float("nan"), 1.0]),
+        ("inf", [float("inf"), 1.0]),
+        ("zeros", [0.0, 0.0]),
+        ("non-numeric", ["site-3", 1.0]),
+        ("bool", [True, 1.0]),
+    ],
+)
+def test_kish_effective_n_refuses_a_weight_it_cannot_use(label, weights):
+    """The gate belongs *inside* this function, not at its call site.
+
+    It is public, it returns a number that reaches `run.yaml` as `n.effective`,
+    and a caller that has to remember to pre-validate is a caller that eventually
+    forgets. Ungated, every one of these answered rather than raising: `nan` and
+    `inf` gave `nan`, the negative and the zeros gave `0.0`. A plausible-looking
+    number with no error is the failure class the weight checks exist to prevent,
+    and it is strictly worse than the `TypeError` the string case gave, because
+    nothing downstream can tell it apart from a real answer.
+    """
+    with pytest.raises(ContractError) as exc:
+        kish_effective_n(weights)
+    assert exc.value.code == "E-DATA-WEIGHT-INVALID"
+
+
+def test_the_weighted_interval_honours_its_confidence():
+    """`confidence` reaches `_t_critical` on the weighted path too. Hardcoding
+    0.95 there passed every other test in this file — the unweighted path is
+    where the existing confidence test looks."""
+    values, weights = [1.0, 2.0, 3.0, 6.0], [1.0, 1.0, 1.0, 3.0]
+    narrow = weighted_t_over_units(values, weights, confidence=0.80)
+    wide = weighted_t_over_units(values, weights, confidence=0.99)
+    assert narrow is not None and wide is not None
+    assert (wide.high - wide.low) > (narrow.high - narrow.low)
+    assert narrow.low == pytest.approx(1.2244, abs=1e-3)
+    assert wide.low == pytest.approx(-10.6086, abs=1e-3)
 
 
 @pytest.mark.parametrize("values", [[], [3.0]])
@@ -1087,7 +1138,7 @@ def test_a_table_sourced_weight_is_read_as_the_number_it_holds():
     assert from_table.high == pytest.approx(native.high)
 
 
-@pytest.mark.parametrize("bad", [0.0, -1.0, float("nan"), "site-3", True, None])
+@pytest.mark.parametrize("bad", [0.0, -1.0, float("nan"), float("inf"), "site-3", True, None])
 def test_a_weight_validate_would_refuse_is_refused_here_too(bad):
     """The single-authority claim, from the other side. `validate` reports
     `E-DATA-WEIGHT-INVALID` for exactly these; reaching a weighted mean with one
