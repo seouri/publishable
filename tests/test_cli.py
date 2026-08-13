@@ -4244,6 +4244,10 @@ def test_n_gains_effective_under_a_weighted_design(tmp_path: Path):
     )
     run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
     aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
-    assert aggregated["pred"]["weighted_by"] == "sampling_weight"
-    assert aggregated["pred"]["n"]["effective"] == pytest.approx(3.0)
-    assert aggregated["pred"]["n"]["completed"] == 4
+    # Both metric shapes: `pred` is a recorded column and `total` is derived by
+    # `aggregate`, which is the shape § Weighted samples' own example (`r`) has —
+    # and the derived branch builds its `n` from a separate literal.
+    for name in ("pred", "total"):
+        assert aggregated[name]["weighted_by"] == "sampling_weight"
+        assert aggregated[name]["n"]["effective"] == pytest.approx(3.0)
+        assert aggregated[name]["n"]["completed"] == 4

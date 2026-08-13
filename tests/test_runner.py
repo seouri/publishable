@@ -1335,6 +1335,14 @@ def test_n_gains_effective_under_a_weighted_design(tmp_path: Path):
     # what each unit contributes, not how many there were (§ Weighted samples).
     assert counts["completed"] == 4
     assert counts["resolved"] == counts["completed"] + counts["ineligible"] + counts["failed"]
+    # The other four parts stay `int`. `reference.md` § Weighted samples prints
+    # `{resolved: 240, completed: 228, failed: 12, effective: 191.4}` — three whole
+    # numbers and one fractional — and widening the mapping's annotation to
+    # `float` for `effective`'s sake must not turn `resolved` into `240.0` in
+    # `run.yaml`. `5 == 5.0`, so nothing else here can see the difference.
+    whole = ("resolved", "completed", "ineligible", "failed")
+    assert all(isinstance(counts[k], int) for k in whole)
+    assert isinstance(counts["effective"], float)
 
 
 def test_every_attrition_return_site_agrees_about_effective(tmp_path: Path):
