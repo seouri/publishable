@@ -102,14 +102,12 @@ def checked_weights(weights: Sequence[Any]) -> list[float]:
     class the weight checks exist to prevent. `validate` reports the same
     condition under the same identifier, but only when it actually ran.
 
-    **`reference.md` § Errors core raises at run time OWES this code a row.**
-    § Validation has one; the run-time table does not, so the document currently
-    describes `E-DATA-WEIGHT-INVALID` as something `validate` reports and nothing
-    raises. The arrangement is the one `E-DATA-MEASUREMENTS-COLLAPSE-TYPE`
-    already has in both tables, for the identical single-authority reason — it is
-    documented there as "Raised at run time too, under the same code". Nothing
-    diverges while no caller reaches these functions; the row is due with the
-    wiring, in the same table that retires `E-DATA-WEIGHT-UNSUPPORTED`.
+    **This code is dual-listed**, in `reference.md` § Validation's
+    `### Errors validate reports` and in § Errors core raises — the arrangement
+    `E-DATA-MEASUREMENTS-COLLAPSE-TYPE` already has, for the identical
+    single-authority reason, and documented there as "Raised at run time too,
+    under the same code". Both rows describe one condition because one predicate
+    decides it; a reader who meets the code at either surface finds it.
     """
     usable = [usable_weight(w) for w in weights]
     if any(u is None for u in usable):

@@ -729,6 +729,13 @@ def command_run(config_path: Path) -> int:
     # refuses every config that declares `weight_by`, so no run reaches this
     # branch — and a wrong number the moment that refusal is retired. Retiring it
     # without wiring the estimator is the forbidden move; see the task 9 report.
+    #
+    # ⚠️ And one more the wiring has to settle: `summarize_step` recomputes
+    # `completed` PER COLUMN, from the units that actually carry it, while
+    # `effective` is computed once per condition over every completed unit. A
+    # ragged column — recorded for some units and not others — therefore prints a
+    # small `completed` beside an `effective` drawn from a larger set, and the two
+    # numbers a reader is invited to compare would not describe the same units.
     weight_by = (units_decl or {}).get("weight_by")
     weights: dict[str, Any] | None = None
     weighted_beside: dict[str, Any] = {}

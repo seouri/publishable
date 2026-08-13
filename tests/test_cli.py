@@ -4251,3 +4251,14 @@ def test_n_gains_effective_under_a_weighted_design(tmp_path: Path):
         assert aggregated[name]["weighted_by"] == "sampling_weight"
         assert aggregated[name]["n"]["effective"] == pytest.approx(3.0)
         assert aggregated[name]["n"]["completed"] == 4
+    # And the arithmetic, not only the shape. `pred` is 0/1/2/3 under weights
+    # 1/1/1/3, so the unweighted mean is 1.5 and the weighted mean is 2.0. Without
+    # this line the whole test XPASSes the moment `E-DATA-WEIGHT-UNSUPPORTED`
+    # retires, whether or not anything ever wired `weighted_t_over_units` in —
+    # which would make this pin force a reader to *look* rather than to compute,
+    # the same defect as asserting an interval is "wider" when the wrong df is
+    # still wider. `pred` and not `total`: § Weighted samples has core weight a
+    # recorded column, while a derived value is handed to `aggregate` to weight
+    # itself, and which of those cases applies here is a decision this pin must
+    # not pre-empt.
+    assert aggregated["pred"]["value"] == pytest.approx(2.0)
