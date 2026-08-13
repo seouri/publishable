@@ -4448,3 +4448,71 @@ def test_leave_one_out_draws_one_fold_per_unit_when_nothing_is_clustered(tmp_pat
     sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
     assert [p["fold"] for p in sweep["partitions"]] == [f"fold{i:02d}" for i in range(1, 16)]
     assert len(doc["results"]) == 15
+
+
+# --- H3b task 8: `n` gains `clusters`, read back from a real `run.yaml` --------
+
+
+def test_an_unclustered_run_grows_no_clusters_key(tmp_path: Path):
+    """The regression, end to end. `reference.md` § The three-part `n`: `clusters`
+    joins `n` "whenever `cluster_by` makes the cluster the inferential draw", "each
+    present only when it applies so a design that never skips reads as it always
+    did". The roster here is the clustered-shaped one and the `site` column is
+    declared as an ordinary attribute, so `n` stays four parts on the declaration
+    alone — nothing about the data may add the key. Both metric shapes: a recorded
+    column and a derived one."""
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        aggregate_returns="total",
+        roster_csv=_UNEVEN_CLUSTERS,
+        units_overrides={"attributes": ["site"]},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    for name in ("pred", "total"):
+        assert set(aggregated[name]["n"]) == {"resolved", "completed", "ineligible", "failed"}
+    # The control that must report: the run really did produce both metric shapes
+    # over the 15-unit roster, so the sets above are not empty blocks.
+    assert aggregated["pred"]["n"]["completed"] == 15
+    assert aggregated["total"]["value"] is not None
+
+
+def test_n_gains_clusters_under_a_clustered_design(tmp_path, monkeypatch):
+    """§ Clustered units: core "reports the number of clusters as the effective
+    sample size alongside the unit count", and § The three-part `n` has `clusters`
+    join the four parts rather than replace them — its own example being
+    `n: {resolved: 300, completed: 300, failed: 0, clusters: 10}`.
+
+    5 clusters over 15 units, every one completing: the cluster count and the unit
+    count are different numbers, which is the only way a reader — or this test —
+    can tell which of the two is being reported."""
+    _without_the_cluster_refusal(monkeypatch)
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        aggregate_returns="total",
+        roster_csv=_UNEVEN_CLUSTERS,
+        units_overrides={"attributes": ["site"], "cluster_by": "site"},
+    )
+    text = (doc["run_dir"] / "run.yaml").read_text()
+    run = yaml.safe_load(text)
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    for name in ("pred", "total"):
+        assert aggregated[name]["n"] == {
+            "resolved": 15,
+            "completed": 15,
+            "ineligible": 0,
+            "failed": 0,
+            "clusters": 5,
+        }
+    # Every part renders as an integer in the file. `counts` is annotated
+    # `dict[str, float]` for Kish's sake, and a `resolved: 15.0` in the record
+    # would be a visible regression no `isinstance` check can see (`15 == 15.0`),
+    # so this reads the rendered text. Unweighted deliberately: `effective` is
+    # legitimately fractional, and it is absent here.
+    blocks = re.findall(r"\n\s+n:\n((?:\s+[a-z_]+: .*\n)+)", text)
+    assert blocks, "no `n` block found in run.yaml"
+    for block in blocks:
+        assert "clusters: 5" in block
+        assert re.search(r"\d+\.\d+", block) is None, block

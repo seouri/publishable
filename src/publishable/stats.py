@@ -18,7 +18,7 @@ from scipy import stats as _scipy_stats
 
 from publishable.errors import ContractError
 from publishable.replication import LABEL_JOIN
-from publishable.units import usable_weight
+from publishable.units import cluster_count_of, usable_weight
 
 if TYPE_CHECKING:
     from publishable.replication import RepeatLevel
@@ -887,6 +887,7 @@ def summarize_step(
     draws: int = 2000,
     beside_n: dict[str, Any] | None = None,
     weights: dict[str, Any] | None = None,
+    clusters: dict[str, str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Per-column value, basis, `n`, and interval over the collapsed unit table.
 
@@ -1002,6 +1003,27 @@ def summarize_step(
     `effective` still travel beside a derived metric — the declaration is true of
     the run either way, and § Weighted samples' own example of both is `r`, a
     derived metric.
+
+    `clusters` is unit key → that unit's `data.units.cluster_by` value, over the
+    whole roster, supplied only when the config declares one — the same mapping
+    `runner.attrition` takes, from the same place. It changes no arithmetic here:
+    it adds `n.clusters`, the number of distinct clusters the column's own units
+    fall in, counted by `units.cluster_count_of` (the single counting expression,
+    so this cannot disagree with `attrition`'s figure or with a fold's partition
+    about what one cluster is).
+
+    **`clusters` is recomputed per column**, for exactly the reasons `completed`
+    and `effective` already are: § Clustered units reports the cluster count "as
+    the effective sample size alongside the unit count" and § Statistical
+    reporting gives `t_over_units_clustered` "df = clusters − 1", so the figure is
+    the df of *this column's* interval, and a ragged column drawn from a subset of
+    the completed units sits in a subset of their clusters. Printing the
+    condition-wide count beside it would name a df no interval used. A full
+    column's figure is identical to `counts`'; a ragged one's is its own.
+
+    A DERIVED metric takes the condition-wide figure from `counts` instead, as it
+    does for `effective`: `aggregate` returned one number over the whole collapsed
+    table, so there is no per-column carrier set to recompute over.
     """
     columns: list[str] = []
     for cols in collapsed.values():
@@ -1018,6 +1040,8 @@ def summarize_step(
             continue
         values = [float(v) for v in raw]
         n_block: dict[str, Any] = {**counts, "completed": len(values)}
+        if clusters is not None:
+            n_block["clusters"] = cluster_count_of(clusters, [key for key, _ in carried])
         interval: Interval | None
         value: float | None
         if weights is None:

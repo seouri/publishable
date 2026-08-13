@@ -1907,3 +1907,67 @@ def test_a_fractional_effective_rides_counts_into_every_metrics_n():
     # from `counts`, so this is not passing off a verbatim copy of the mapping.
     ragged = summarize_step({"u1": {"score": 1.0}}, counts)
     assert ragged["score"]["n"] == {**counts, "completed": 1}
+
+
+# --- H3b task 8: `n.clusters` in `summarize_step` ------------------------------
+#
+# The same collapsed table the weighted group uses, with a cluster per unit. The
+# clusters are chosen so four different numbers are in play and each column can
+# only report the right one:
+#
+#   pred's own carriers  u1, u2, u4 → clusters {a, c}    → 2   ← pred's answer
+#   every collapsed unit u1..u4     → clusters {a, b, c} → 3   ← other's answer
+#   the roster           u1..u5     → clusters {a,b,c,d} → 4
+#   and the unit counts are 3 and 4, neither equal to its own cluster count.
+_CLUSTERS = {"u1": "a", "u2": "a", "u3": "b", "u4": "c", "u5": "d"}
+
+
+def test_clusters_is_recomputed_over_the_units_the_column_actually_has():
+    """`reference.md` § Clustered units reports the cluster count "as the
+    effective sample size alongside the unit count", and § Statistical reporting
+    gives `t_over_units_clustered` "df = clusters − 1". A df is over the units the
+    interval was computed from, so a ragged column's cluster count must be its
+    own — printing the condition-wide figure beside it would name a df no interval
+    used, which is the argument `summarize_step` already makes for `completed` and
+    for `effective`.
+
+    **`counts` carries a deliberately impossible 99** rather than the 3
+    `runner.attrition` would really pass here. With the true value present,
+    `other`'s recomputed count is *also* 3 and its assertion would pass against an
+    implementation that merely inherits the key from `counts`, leaving `pred`
+    alone to carry the test."""
+    counts = dict(_WEIGHTED_COUNTS, clusters=99)
+    out = summarize_step(_WEIGHTED_COLLAPSED, counts, clusters=_CLUSTERS)
+    assert out["pred"]["n"]["completed"] == 3
+    assert out["pred"]["n"]["clusters"] == 2
+    assert out["other"]["n"]["completed"] == 4
+    assert out["other"]["n"]["clusters"] == 3
+
+
+def test_an_unclustered_summary_grows_no_clusters_key():
+    """The regression, at the function: with no `clusters` mapping every `n` is
+    exactly the parts `counts` carried, on both metric shapes. § The three-part
+    `n` — "each present only when it applies so a design that never skips reads as
+    it always did"."""
+    out = summarize_step(_WEIGHTED_COLLAPSED, _WEIGHTED_COUNTS, derived={"total": 4.0})
+    for name in ("pred", "other", "total"):
+        assert "clusters" not in out[name]["n"]
+    # The control that must report: the call really did summarize both shapes.
+    assert out["pred"]["value"] == pytest.approx(4 / 3)
+    assert out["total"]["value"] == 4.0
+
+
+def test_a_derived_metric_carries_the_condition_wide_cluster_count():
+    """A derived metric's `n` comes from `counts`, exactly as `effective` does
+    there: `aggregate` returned one number over the whole collapsed table, so
+    there is no per-column carrier set to recompute over. `clusters` rides
+    `counts` into the derived block and needs no carrier of its own."""
+    collapsed = {"u1": {"score": 1.0}, "u2": {"score": 3.0}, "u3": {"score": 5.0}}
+    counts = {"resolved": 4, "completed": 3, "ineligible": 1, "failed": 0, "clusters": 2}
+    out = summarize_step(collapsed, counts, derived={"total": 3.0}, clusters=_CLUSTERS)
+    assert out["total"]["n"]["clusters"] == 2
+    assert out["total"]["n"]["completed"] == 3
+    # The control: the recorded column beside it recomputes over its own carriers,
+    # u1/u2/u3 → clusters {a, b}, which is also 2 — so this pins the derived key's
+    # presence, and the ragged case above pins that the recompute is real.
+    assert out["score"]["n"]["clusters"] == 2

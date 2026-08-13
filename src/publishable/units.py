@@ -13,7 +13,7 @@ import math
 import random
 import statistics
 from collections import Counter
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -720,6 +720,27 @@ def clusters_of(roster: UnitList, cluster_by: str) -> dict[str, str]:
     return membership
 
 
+def cluster_count_of(membership: Mapping[str, str], keys: Iterable[str]) -> int:
+    """How many distinct clusters a given set of unit keys falls in.
+
+    The counting expression, in one place. `cluster_count` below is the whole
+    roster's answer and this is the same question asked of a SUBSET — the units a
+    metric was actually computed over, which is what `n.clusters` reports
+    (`runner._counts`, `stats.summarize_step`). Those callers have no roster to
+    hand `cluster_count`: they hold a set of completed keys and the roster-wide
+    membership mapping. Writing `len({m[k] for k in keys})` at each of them would
+    be the second and third notion of "how many clusters is that", which is the
+    thing `clusters_of` exists to prevent one of.
+
+    Indexed rather than `.get`-ed, for the reason `runner._counts` states about
+    weights: every key a caller passes came from the roster the membership was
+    built from, so a missing one is a core defect and must drop out as a
+    `KeyError` rather than being absorbed into a cluster of its own — which would
+    quietly *raise* the count and narrow every interval computed from it.
+    """
+    return len({membership[key] for key in keys})
+
+
 def cluster_count(roster: UnitList, cluster_by: str) -> int:
     """How many distinct clusters the roster holds.
 
@@ -728,7 +749,8 @@ def cluster_count(roster: UnitList, cluster_by: str) -> int:
     count that disagreed with the membership it is supposed to summarize would put
     a `k` past the number of groups the partitioner can actually produce.
     """
-    return len(set(clusters_of(roster, cluster_by).values()))
+    membership = clusters_of(roster, cluster_by)
+    return cluster_count_of(membership, membership)
 
 
 def fold_basis(roster: UnitList, cluster_by: str | None) -> int:

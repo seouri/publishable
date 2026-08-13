@@ -1360,3 +1360,101 @@ def test_every_attrition_return_site_agrees_about_effective(tmp_path: Path):
     # And the mirrored control: without weights, neither site grows the key.
     assert "effective" not in attrition(results, None, "record_four_skip_one", 0)
     assert "effective" not in attrition(results, roster, "never_ran", 0)
+
+
+# --- H3b task 8: `n` gains `clusters` under `data.units.cluster_by` ------------
+
+# Five units in three clusters, a/a/b/b/c, with the single-unit cluster's unit
+# `io.skip`ped by `RecordFourSkipOne` above. Three numbers that cannot be
+# confused: 5 units resolved, 4 completed, 3 clusters resolved and **2** clusters
+# completed. A roster of singleton clusters would make the cluster count and the
+# unit count identical and no assertion below could tell the two apart.
+_SITES = {"p0": "a", "p1": "a", "p2": "b", "p3": "b", "p4": "c"}
+
+
+def _clustered_harness(tmp_path: Path):
+    roster = UnitList([Unit(key=f"p{i}", attributes={"site": _SITES[f"p{i}"]}) for i in range(5)])
+    _, results, _ = harness(tmp_path, [RecordFourSkipOne], units=roster)
+    return roster, results
+
+
+def test_n_has_no_clusters_key_without_cluster_by(tmp_path: Path):
+    """The regression. `reference.md` § The three-part `n`: each part is "present
+    only when it applies so a design that never skips reads as it always did" — so
+    a run over a roster that happens to carry a cluster-shaped attribute, but
+    declares no `cluster_by`, must produce an `n` of exactly the four parts it
+    always had. The roster here is the clustered one, so this fails the moment
+    `clusters` is computed from the data rather than from the declaration."""
+    roster, results = _clustered_harness(tmp_path)
+    counts = attrition(results, roster, "record_four_skip_one", condition_index=0)
+    assert counts == {"resolved": 5, "completed": 4, "ineligible": 1, "failed": 0}
+    assert "clusters" not in counts
+
+
+def test_n_gains_clusters_under_a_clustered_design(tmp_path: Path):
+    """The clusters of the COMPLETED units. `reference.md` § Statistical reporting
+    gives `t_over_units_clustered` "df = clusters − 1", and § Clustered units
+    reports the cluster count "as the effective sample size alongside the unit
+    count" — a df is over the units the interval was computed from, which is the
+    completed ones, so the two counts have to describe the same units.
+
+    Three candidate answers on this fixture, and only one is right: 2 (the
+    completed units' clusters), 3 (the resolved roster's clusters) and 4 (the
+    completed unit count). All three are asserted."""
+    roster, results = _clustered_harness(tmp_path)
+    counts = attrition(
+        results, roster, "record_four_skip_one", condition_index=0, clusters=_SITES
+    )
+    assert counts == {
+        "resolved": 5,
+        "completed": 4,
+        "ineligible": 1,
+        "failed": 0,
+        "clusters": 2,
+    }
+    assert counts["clusters"] != 3  # not the resolved roster's clusters
+    assert counts["clusters"] != counts["completed"]  # not the unit count
+    # Every part stays `int`. § Clustered units' own example is
+    # `n: {resolved: 300, completed: 300, failed: 0, clusters: 10}` — whole numbers
+    # throughout — and `counts` being annotated `dict[str, float]` for Kish's sake
+    # must not turn any of them into `300.0` in `run.yaml`. `10 == 10.0`, so only
+    # the rendered text (see `test_cli.py`) and this check can see the difference.
+    assert all(isinstance(v, int) for v in counts.values())
+
+
+def test_every_attrition_return_site_agrees_about_clusters(tmp_path: Path):
+    """Three sites build `n` — no roster, no recording execution, and the
+    accumulating return — and a clustered design must read the same way at all
+    three. Two of them report over an empty completed set, where the cluster count
+    is 0: a clustered run that completed nothing has a cluster count, and it is
+    zero, not a missing key."""
+    roster, results = _clustered_harness(tmp_path)
+    no_roster = attrition(results, None, "record_four_skip_one", 0, clusters=_SITES)
+    no_recording = attrition(results, roster, "never_ran", 0, clusters=_SITES)
+    assert no_roster["clusters"] == 0
+    assert no_recording["clusters"] == 0
+    assert no_recording["failed"] == 5  # the site really is the no-recording one
+    # And the mirrored control: without the mapping, neither site grows the key.
+    assert "clusters" not in attrition(results, None, "record_four_skip_one", 0)
+    assert "clusters" not in attrition(results, roster, "never_ran", 0)
+
+
+def test_clusters_and_effective_are_independent_parts_of_n(tmp_path: Path):
+    """A design can declare both, and each part arrives on its own declaration —
+    § The three-part `n` joins them one at a time, "each present only when it
+    applies". Kish's size over the completed four weighted 1/1/1/3 is exactly 3.0
+    while their cluster count is 2, so neither figure can be standing in for the
+    other."""
+    roster, results = _clustered_harness(tmp_path)
+    both = attrition(
+        results,
+        roster,
+        "record_four_skip_one",
+        0,
+        weights=_WEIGHTS,
+        clusters=_SITES,
+    )
+    assert both["clusters"] == 2
+    assert both["effective"] == pytest.approx(_KISH_COMPLETED)
+    assert "effective" not in attrition(results, roster, "record_four_skip_one", 0, clusters=_SITES)
+    assert "clusters" not in attrition(results, roster, "record_four_skip_one", 0, weights=_WEIGHTS)

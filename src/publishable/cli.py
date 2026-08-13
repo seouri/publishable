@@ -77,6 +77,7 @@ from publishable.templates.registry import get_template
 from publishable.units import (
     Unit,
     UnitList,
+    clusters_of,
     fold_basis,
     partition_units,
     resolve_units,
@@ -761,6 +762,28 @@ def command_run(config_path: Path) -> int:
     # wrongly-typed one is an error that returned above), so this is the same
     # string `units.clusters_of` was approved against.
     cluster_by = (units_decl or {}).get("cluster_by")
+    # One fact reaches the record from it, and it JOINS `n`: `clusters`, the number
+    # of distinct clusters the units a metric was computed over fall in
+    # (`reference.md` § The three-part `n`, joined by `clusters` "whenever
+    # `cluster_by` makes the cluster the inferential draw"; § Clustered units calls
+    # it "the effective sample size alongside the unit count"). So it travels in
+    # `attrition`'s counts, exactly where `effective` goes, rather than in
+    # `beside_n` — the two routes `stats.summarize_step` describes, and nothing in
+    # the documents shows a `clustered_by` sibling of `weighted_by`.
+    #
+    # The membership mapping itself goes to `summarize_step` as well, for the reason
+    # `weights` does: a ragged column's clusters are its own, and only the call that
+    # sees which units carried the column can count them.
+    #
+    # `units.clusters_of` is the single authority, the same one `validate`, the fold
+    # basis and the partition read, so a unit carrying no value for the attribute
+    # raises `E-DATA-CLUSTER-UNKNOWN` here rather than being invented a cluster of
+    # its own. That window is closed for `run` the same way the weight one is:
+    # `command_run` validates first, against the same roster it then resolves, and
+    # the same code is one of the checks it runs.
+    clusters: dict[str, str] | None = None
+    if isinstance(cluster_by, str) and cluster_by and roster is not None:
+        clusters = clusters_of(roster, cluster_by)
     # `fold_basis` is what turns `{kind: fold, k: all}` into a real count and what
     # `_fold_k` checks a declared `k` against — the resolved roster's units, or its
     # clusters when `data.units.cluster_by` declares the units are not independent
@@ -1043,6 +1066,7 @@ def command_run(config_path: Path) -> int:
                         cond.index,
                         fold_members=fold_members,
                         weights=weights,
+                        clusters=clusters,
                     )
                     max_ineligible = (doc.get("limits") or {}).get("max_ineligible_fraction")
                     if (
@@ -1166,6 +1190,7 @@ def command_run(config_path: Path) -> int:
                             draws=derived_metric_draws,
                             beside_n=beside_n,
                             weights=weights,
+                            clusters=clusters,
                         )
                     except ContractError as exc:
                         prefix = f"{exc.code} " if exc.code else ""
@@ -1185,7 +1210,11 @@ def command_run(config_path: Path) -> int:
                         # arrive here: `attrition` above gates the same mapping
                         # through `kish_effective_n`, outside any `try`.)
                         step_summary = summarize_step(
-                            collapsed, counts, beside_n=beside_n, weights=weights
+                            collapsed,
+                            counts,
+                            beside_n=beside_n,
+                            weights=weights,
+                            clusters=clusters,
                         )
                         # What the parent block dropped, every stratum of it
                         # drops too. A level's table carries the same columns as
@@ -1336,8 +1365,10 @@ def command_run(config_path: Path) -> int:
                                 # below is withheld because it is a whole-roster
                                 # figure that would have to be COPIED down, and
                                 # Kish's size over this stratum is a different
-                                # number this call computes from scratch.
+                                # number this call computes from scratch — as is
+                                # the number of clusters its own units fall in.
                                 weights=weights,
+                                clusters=clusters,
                             )
                             # Attrition happens during the run, so a level the
                             # roster-time `W-STATS-REPORTBY-THIN` counted as
@@ -1462,8 +1493,10 @@ def command_run(config_path: Path) -> int:
                                 # a ragged column's: a stratum's weighted mean
                                 # and its Kish size are its own, which is the
                                 # same reason `level_counts` is recomputed above
-                                # rather than copied down.
+                                # rather than copied down, and the same reason the
+                                # cluster mapping travels with it.
                                 weights=weights,
+                                clusters=clusters,
                             )
                             # At least one entry has to come from the level's own
                             # table. A block holding nothing but derived metrics
