@@ -7231,7 +7231,7 @@ def test_by_attribute_assignment_is_accepted(write_config):
     """`by_attribute` is the one method that executes in this build, so it earns
     neither `E-DATA-ASSIGN-METHOD` (absent or out-of-enum) nor
     `E-DATA-ASSIGN-DRAWN` (in-enum but drawn) — the control for both, and it must
-    still report: the two live `-UNSUPPORTED` refusals below discriminate "the
+    still report: the three live `-UNSUPPORTED` refusals below discriminate "the
     config loaded and only the method-value checks are silent" from "nothing
     ran". The exact set is the number that matters — three codes, none of them
     `E-DATA-ASSIGN-METHOD` or `E-DATA-ASSIGN-DRAWN`."""
