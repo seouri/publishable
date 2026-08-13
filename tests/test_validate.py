@@ -6733,6 +6733,70 @@ def test_the_fold_stratum_clustering_check_runs_on_a_direct_call():
     assert not clean.findings
 
 
+def test_a_fold_stratum_naming_the_measurement_axis_is_reported(write_config, tmp_path):
+    """The hole task 11 named in `cli` and called unreachable, which task 12's
+    retirement of `E-REPL-FOLD-STRATIFY-UNSUPPORTED` made reachable.
+
+    `collapse_measurements` consumes `data.units.measurements.by`, so `rep` is a
+    declared attribute that no *resolved* unit carries — and `cli` rebuilds the
+    strata from the collapsed roster, where the subscript reached a bare `KeyError`
+    rather than a diagnostic. Reported under the name code because that is the fault
+    it already describes: the reference set is `attributes` rather than the source's
+    columns *because* a stratum has to survive resolution."""
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id,rep,val\n" + "".join(f"u{i},r{j},{i}\n" for i in range(6) for j in range(2))
+    )
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["rep", "val"],
+                "measurements": {"by": "rep", "collapse": "first"},
+            },
+            "replication": {"repeats": [{"kind": "fold", "k": 2, "stratify_by": "rep"}]},
+        }
+    )
+    found = codes(path)
+    assert "E-REPL-FOLD-STRATIFY-UNKNOWN" in found
+    assert "measurements.by" in messages_by_code(path)["E-REPL-FOLD-STRATIFY-UNKNOWN"]
+    # The control that must report clean: the identical config stratifying on the
+    # other declared attribute, which does survive the collapse. Without it this
+    # could not tell "the measurement axis is refused" from "any `stratify_by`
+    # beside a `measurements` block is".
+    clean = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["rep", "val"],
+                "measurements": {"by": "rep", "collapse": "first"},
+            },
+            "replication": {"repeats": [{"kind": "fold", "k": 2, "stratify_by": "val"}]},
+        }
+    )
+    assert "E-REPL-FOLD-STRATIFY-UNKNOWN" not in codes(clean)
+
+
+def test_the_measurement_axis_stratum_check_runs_on_a_direct_call():
+    """Direct, with no roster: both halves come from the declaration, which is why
+    this is a `validate` check and not the run-time raise `E-DATA-CLUSTER-VARIES` is
+    for the same declaration shape under `cluster_by` — that one needs the
+    pre-collapse rows in hand to prove the disagreement, and this one needs
+    nothing."""
+    doc = {"replication": {"repeats": [{"kind": "fold", "k": 2, "stratify_by": "rep"}]}}
+    decl = {"attributes": ["rep"], "measurements": {"by": "rep", "collapse": "first"}}
+    c = Collector()
+    _check_fold_stratify_by(doc, decl, None, None, c)
+    assert [f.code for f in c.findings] == ["E-REPL-FOLD-STRATIFY-UNKNOWN"]
+    # A `measurements` block of the wrong shape must not shadow this into a
+    # traceback: `E-DATA-MEASUREMENTS-INVALID` owns that fault, and the axis is
+    # simply unreadable here, so the stratum is left alone.
+    loose = Collector()
+    _check_fold_stratify_by(doc, {"attributes": ["rep"], "measurements": "rep"}, None, None, loose)
+    assert not loose.findings
+
+
 def test_a_varying_stratum_is_not_reported_without_a_cluster_by():
     """Nothing is indivisible without `cluster_by`, so the same varying `label` is
     a perfectly satisfiable stratification — the row is about the interaction, not

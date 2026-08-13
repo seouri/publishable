@@ -1200,6 +1200,14 @@ def _check_fold_stratify_by(
     resolution as an attribute rather than merely be a column of the source. Read
     from the declaration, so the name check runs with no roster at all.
 
+    **A `data.units.measurements.by` fails that test too**, and is refused under the
+    same code for it: the measurement axis is consumed where the rows collapse, so a
+    stratum naming it is declared as an attribute and absent from every resolved
+    unit. Before task 12 retired `E-REPL-FOLD-STRATIFY-UNSUPPORTED` no config
+    reached the partition at all and `cli` merely carried a note about the
+    `KeyError`; retiring it made the path reachable, which is what makes this a
+    check rather than a note.
+
     Unlike `data.units.cluster_by` there is **no `E-CONFIG-TYPE` backstop** for a
     value of the wrong type: `envelope.LEAF_TYPES` types `replication.repeats` a
     `list` and nothing inside a level, so a `stratify_by: [label]` — the list form
@@ -1254,6 +1262,35 @@ def _check_fold_stratify_by(
                 f"declares `fold.stratify_by: {declared}`, which is not a unit attribute — "
                 "a stratum is read per unit when the partition is drawn, so it has to be "
                 f"one. `data.units.attributes` declares {', '.join(names) or 'none'}",
+            )
+            continue
+        # Declared as an attribute *and* named as the measurement axis, which is a
+        # name that does not survive resolution: `collapse_measurements` consumes
+        # `measurements.by` — it distinguished the rows and has no value once they
+        # are one unit — so `cli` would rebuild the strata from an attribute the
+        # collapsed roster no longer carries and reach a bare `KeyError`. Reported
+        # under the same code as an undeclared name because it is the same fault
+        # under this code's own reasoning: the reference set is `attributes` rather
+        # than the source's columns *because* a stratum has to survive resolution,
+        # and this one does not.
+        #
+        # Deliberately asymmetric with `data.units.cluster_by`, which reaches
+        # `E-DATA-CLUSTER-VARIES` at run time for the same declaration shape: a
+        # cluster naming the measurement axis varies within every unit by
+        # construction, and `collapse_measurements` is the one place holding the
+        # pre-collapse rows that prove it. A stratum's fault needs no rows — the two
+        # declarations alone settle it — so it is refused here, from the
+        # declaration, and the two codes say different things about what broke.
+        measurements = units.get("measurements")
+        axis = measurements.get("by") if isinstance(measurements, dict) else None
+        if isinstance(axis, str) and axis == declared:
+            c.error(
+                "E-REPL-FOLD-STRATIFY-UNKNOWN",
+                "replication.repeats",
+                f"declares `fold.stratify_by: {declared}`, which `data.units.measurements.by` "
+                "also names — the measurement axis is consumed when a unit's rows collapse "
+                "and is not an attribute of the resolved unit, so there is nothing left to "
+                "balance the folds on. Stratify on an attribute that survives the collapse",
             )
             continue
         if roster is None or not cluster_by:
