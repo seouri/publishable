@@ -1,6 +1,7 @@
 """The S1 check subset. Collects rather than stops. docs/reference.md § Validation."""
 
 import re
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -441,6 +442,7 @@ def validate_config(
     units_decl = _units_declaration(doc.get("data") or {}, c) or {}
     _check_measurements(units_decl, roster, technical_n, columns, c)
     _check_weight_by(units_decl, roster, c)
+    _check_cluster_by(doc, units_decl, roster, c)
     _check_replication(
         doc,
         template,
@@ -1068,6 +1070,204 @@ def _warn_undeclared_weight(
             "it. An unweighted mean over an enriched sample answers a different question "
             "than the population one, in the same shape. Set `data.units.weight_by` if it "
             "is a weight, or rename the attribute if it is not",
+        )
+        return
+
+
+def _check_cluster_by(
+    doc: dict[str, Any], units: dict[str, Any], roster: UnitList | None, c: Collector
+) -> None:
+    """`data.units.cluster_by` — the attribute exists, and a column that looks like
+    a cluster identifier is not silently going undeclared.
+
+    `reference.md` § Validation, rows "Cluster attribute exists" and "Clustering
+    looks undeclared".
+
+    **`data.units.attributes` is the reference set for the name**, the same side of
+    the line `_check_weight_by` reads and the opposite side from
+    `_check_measurements`'s `by`. The § Validation row says `cluster_by` names
+    something "which is not a unit attribute", where `measurements.by` names a
+    column of "a `reads.csv` with no `read_id` column"; a cluster is read per unit
+    when the partition is drawn, so it has to survive resolution as an attribute,
+    where a `by` is consumed at collapse time and dropped from the merged unit.
+    That also supplies the glob cross-check for free: `_from_glob` refuses every
+    declared attribute, so a `cluster_by` under a `{glob: ...}` source always draws
+    `E-DATA-CLUSTER-UNKNOWN` — truthfully, a glob yielding a key and a path and
+    nothing else.
+
+    The declaration is read rather than the roster's realized attribute names, so
+    the name check runs with no roster at all — `_check_weight_by`'s construction,
+    and equivalent when a roster does resolve, since `_from_table` refuses an
+    attribute its table has no column for.
+
+    There is no *value* half here, unlike the weight check: any label is a usable
+    cluster id, and the one value fault there is — a unit carrying none — is
+    `units.clusters_of`'s raise, under this same code.
+    """
+    declared = units.get("cluster_by")
+    if declared is None:
+        _warn_undeclared_cluster(doc, units, roster, c)
+        return
+    if not isinstance(declared, str):
+        # `check_envelope` reports this (`E-CONFIG-TYPE` — `envelope.py` types
+        # `data.units.cluster_by` a `str`). Reporting it again here would duplicate
+        # the finding and describe `3` as "empty", a word that does not fit it.
+        return
+    if not declared:
+        c.error(
+            "E-DATA-CLUSTER-UNKNOWN",
+            "data.units.cluster_by",
+            "is empty; it names the unit attribute holding the cluster identity, and "
+            "an empty declaration changes no behavior — which is the failure a truthy "
+            "read of it would hide. Name the attribute, or remove the key",
+        )
+        return
+    # A non-string item in `data.units.attributes` is `_check_units`'s own finding
+    # (`E-UNITS-ATTR-MISSING`); filtering it here treats it as undeclared, which it
+    # already is, and keeps `set()` off an unhashable item in a module contracted to
+    # collect rather than raise. An absent or `null` `attributes` is an empty list
+    # rather than a skip, for the reason `_check_weight_by` states: "no attributes
+    # are declared, so `cluster_by` names none of them" is exactly the row's case.
+    attrs = units.get("attributes") or []
+    if not isinstance(attrs, list):
+        return
+    names = sorted({a for a in attrs if isinstance(a, str)})
+    if declared not in names:
+        c.error(
+            "E-DATA-CLUSTER-UNKNOWN",
+            "data.units.cluster_by",
+            f"names {declared!r}, which is not a unit attribute — a cluster is read per "
+            f"unit when the split is drawn, so it has to be one. `data.units.attributes` "
+            f"declares {', '.join(names) or 'none'}",
+        )
+
+
+def _accounted_attribute_names(doc: dict[str, Any], units: dict[str, Any]) -> set[str]:
+    """Attribute names another declaration already accounts for, so the
+    undeclared-cluster warning stays off them.
+
+    `reference.md`'s `W-DATA-CLUSTER-UNDECLARED` row names four: an attribute a
+    `sweep.groups` axis names or an `assign.from` reads, since every `between`
+    design's arm would otherwise report one; any `stratify_by`, which must be
+    constant within a cluster and so is coarser than one; and
+    `statistics.null_test`'s `shuffle`, which names the label a cluster is what
+    shuffling *respects*.
+
+    `stratify_by` is collected by walking the document for the key rather than from
+    an enumerated list of the blocks that carry one (`assign.<axis>`, a `fold`
+    repeat level, `statistics.resample`). The row says *any* `stratify_by`, and an
+    enumeration would quietly stop matching the row the first time a block gains
+    one — which is a live prospect while three of those blocks are still unbuilt.
+    """
+    accounted: set[str] = set()
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key == "stratify_by":
+                    if isinstance(value, str):
+                        accounted.add(value)
+                    elif isinstance(value, list):
+                        accounted.update(v for v in value if isinstance(v, str))
+                walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    walk(doc)
+    groups = (doc.get("sweep") or {}).get("groups") or []
+    if isinstance(groups, list):
+        for axis in groups:
+            if isinstance(axis, dict) and isinstance(axis.get("by"), str):
+                accounted.add(axis["by"])
+    assign = units.get("assign") or {}
+    if isinstance(assign, dict):
+        for axis_name, block in assign.items():
+            # The axis name is the default `from`, per § The one config file's
+            # `from: arm  # by_attribute; defaults to the axis name`, so an
+            # assignment reading its own column accounts for it either way.
+            if isinstance(axis_name, str):
+                accounted.add(axis_name)
+            if isinstance(block, dict) and isinstance(block.get("from"), str):
+                accounted.add(block["from"])
+    null_test = (doc.get("statistics") or {}).get("null_test") or {}
+    if isinstance(null_test, dict) and isinstance(null_test.get("shuffle"), str):
+        accounted.add(null_test["shuffle"])
+    return accounted
+
+
+def _warn_undeclared_cluster(
+    doc: dict[str, Any], units: dict[str, Any], roster: UnitList | None, c: Collector
+) -> None:
+    """`W-DATA-CLUSTER-UNDECLARED` — an attribute that looks like a cluster
+    identifier while `cluster_by` is unset.
+
+    The four clauses are `reference.md`'s row verbatim, and each earns its place
+    against a false positive the documents themselves contain:
+
+    1. **every unit carries a value for it** — a column some units lack is not a
+       grain the whole roster is partitioned on;
+    2. **its values are not all numeric**, read through `units.is_measurement_numeric`
+       so a table-sourced `"37"` counts as the number it holds — this is what keeps
+       the warning off `age`, `dose` and `latency`, whose distinct values are also
+       each held by several units. Its cost is a missed integer-coded identifier,
+       which is the right way to be wrong: a numeric column with repeated values is
+       a measurement far more often than an identifier;
+    3. **more than two distinct values** — two is a level set like `label` or `sex`,
+       and a cluster-robust *t* has df = clusters − 1, so two clusters is no
+       inference base at all;
+    4. **at least one value held by more than one unit** — otherwise the column is
+       effectively a second key.
+
+    Plus the exclusions `_accounted_attribute_names` collects. `statistics.report_by`
+    is deliberately **not** among them: a run that reports by `site` while `site`
+    really is a cluster wants both declarations, not silence.
+
+    Deliberately **not** built on `units.clusters_of`. That function answers "which
+    cluster is this unit in" for a declaration that exists — and raises when a unit
+    carries no value, which is clause 1's ordinary case here rather than a fault.
+    This is a scan for *candidates*, a different question, and reading it as a
+    second notion of membership is the misreading to avoid: nothing here decides
+    what any cluster contains.
+
+    Reported for the first candidate in sorted order rather than for each, as the
+    weight warning is and for the same reason: `cluster_by` takes one name and the
+    remedy is the same sentence whichever candidate a reader looks at.
+    """
+    if roster is None:
+        return
+    accounted = _accounted_attribute_names(doc, units)
+    for name in sorted({n for u in roster for n in u.attributes}):
+        if name in accounted:
+            continue
+        if any(name not in u.attributes for u in roster):
+            continue
+        values = [u.attributes[name] for u in roster]
+        # An empty cell is "carries no value", not "carries the empty label": a
+        # sparse column would otherwise satisfy clauses 2 and 4 together on its
+        # blanks alone, which is the commonest false positive this clause has.
+        if any(v is None or (isinstance(v, str) and not v.strip()) for v in values):
+            continue
+        if all(is_measurement_numeric(v) for v in values):
+            continue
+        # Stringified for the same reason `clusters_of` stringifies: a cluster id is
+        # a label, and a hand-built roster may carry something `set` cannot hold.
+        counts = Counter(str(v) for v in values)
+        if len(counts) <= 2:
+            continue
+        if max(counts.values()) < 2:
+            continue
+        c.warn(
+            "W-DATA-CLUSTER-UNDECLARED",
+            f"data.units.attributes.{name}",
+            f"{name!r} holds {len(counts)} repeated non-numeric labels across "
+            f"{len(roster)} units — too few to be a second key and too many to be a "
+            "level set, which is the shape of a cluster identifier — but "
+            "`data.units.cluster_by` is unset, so core treats every unit as an "
+            "independent draw. Intervals computed that way are too narrow, and a fold "
+            "may put one cluster on both sides of the split. Set "
+            "`data.units.cluster_by` if it is a cluster, and ignore this if the units "
+            "really are independent",
         )
         return
 

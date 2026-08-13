@@ -8,6 +8,8 @@ from publishable.units import (
     Unit,
     UnitList,
     apply_rule,
+    cluster_count,
+    clusters_of,
     collapse_measurements,
     partition_units,
     resolve_units,
@@ -652,3 +654,79 @@ def test_technical_n_is_absent_when_measurements_is_undeclared(input_dir: Path):
     roster, technical_n, _ = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
     assert len(roster) == 3
     assert technical_n is None
+
+
+# --- cluster membership, one authority --------------------------------------
+
+
+def test_clusters_group_units_by_their_declared_attribute():
+    """`reference.md` § Clustered units: `cluster_by` names a declared attribute,
+    and the mapping it produces is what the partition, the checks and the
+    cluster-robust intervals all read. Deliberately uneven — 3 clusters over 5
+    units — because equal cluster sizes make a per-unit mapping and a per-cluster
+    one indistinguishable."""
+    units = [
+        Unit(key=f"u{i}", paths=(), attributes={"site": s})
+        for i, s in enumerate(["S1", "S1", "S1", "S2", "S3"])
+    ]
+    roster = UnitList(units)
+    assert clusters_of(roster, "site") == {
+        "u0": "S1",
+        "u1": "S1",
+        "u2": "S1",
+        "u3": "S2",
+        "u4": "S3",
+    }
+    assert cluster_count(roster, "site") == 3
+
+
+def test_cluster_membership_is_in_roster_order():
+    """Insertion order is roster order, which is what lets a caller needing the
+    ordered cluster list derive it here rather than walking the roster again."""
+    roster = UnitList(
+        [
+            Unit(key="u0", paths=(), attributes={"site": "S2"}),
+            Unit(key="u1", paths=(), attributes={"site": "S1"}),
+            Unit(key="u2", paths=(), attributes={"site": "S2"}),
+        ]
+    )
+    assert list(clusters_of(roster, "site").values()) == ["S2", "S1", "S2"]
+
+
+def test_a_unit_carrying_no_cluster_value_is_refused():
+    """A singleton cluster invented for a unit with no value would make that unit
+    its own inferential draw. `reference.md` § Errors validate reports gives this
+    the same code `validate` reports for a `cluster_by` naming no attribute."""
+    roster = UnitList(
+        [
+            Unit(key="u0", paths=(), attributes={"site": "S1"}),
+            Unit(key="u1", paths=(), attributes={}),
+        ]
+    )
+    with pytest.raises(ContractError) as e:
+        clusters_of(roster, "site")
+    assert e.value.code == "E-DATA-CLUSTER-UNKNOWN"
+    assert "u1" in str(e.value)
+
+
+def test_cluster_count_reads_the_same_authority():
+    """The count is derived from the membership rather than counted separately:
+    a count above the number of groups the partitioner can produce is a `k` that
+    cannot be satisfied."""
+    roster = UnitList(
+        [Unit(key=f"u{i}", paths=(), attributes={"site": "S1"}) for i in range(4)]
+    )
+    assert cluster_count(roster, "site") == 1
+    with pytest.raises(ContractError):
+        cluster_count(UnitList([Unit(key="u0", paths=(), attributes={})]), "site")
+
+
+def test_cluster_ids_are_labels_whatever_the_source_supplied(input_dir: Path):
+    """A table yields `str` for every column, but a hand-built roster need not,
+    and a cluster id is a label rather than a quantity."""
+    roster, _, _ = resolve_units(
+        {"from": "index.csv", "key": "patient_id", "attributes": ["site"]}, input_dir
+    )
+    assert set(clusters_of(roster, "site").values()) == {"a", "b"}
+    numeric = UnitList([Unit(key="u0", paths=(), attributes={"site": 7})])
+    assert clusters_of(numeric, "site") == {"u0": "7"}

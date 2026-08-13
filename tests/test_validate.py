@@ -9,6 +9,7 @@ from publishable.diagnostics import Collector
 from publishable.sweep import expand
 from publishable.units import Unit, UnitList
 from publishable.validate import (
+    _check_cluster_by,
     _check_contrasts,
     _check_measurements,
     _check_weight_by,
@@ -5778,3 +5779,260 @@ def test_a_weighted_report_by_is_not_a_contrast(write_config, tmp_path):
         }
     )
     assert codes(path) == set()
+
+
+# --- a clustered design -----------------------------------------------------
+#
+# `E-DATA-CLUSTER-UNSUPPORTED` is still live: a truthy `data.units.cluster_by` is
+# refused by `_check_unimplemented` until the declaration changes the record. It
+# is collected rather than fatal, so a declaration check reports beside it — but
+# a test that only asserted "some finding fired" would pass off the refusal, so
+# every check below is also exercised by a direct call.
+
+
+def _clustered_table(tmp_path: Path, header: str, body: str) -> None:
+    """Write the roster these checks read, into the directory `write_config`
+    points `data.input_dir` at. `write_config` writes a `patient_id`-only
+    `index.csv`, so a test needing more columns overwrites it here — writing it
+    anywhere else is how a probe comes back empty for every input."""
+    (tmp_path / "input" / "index.csv").write_text(f"{header}\n{body}")
+
+
+_SITE_BODY = "".join(f"p{i},{s}\n" for i, s in enumerate("aaabbbcccddd"))
+
+
+def test_a_cluster_by_naming_no_attribute_is_reported(write_config, tmp_path):
+    """§ Validation, "Cluster attribute exists": `cluster_by` names `site`, which
+    is not a unit attribute. `data.units.attributes` is the reference set — a
+    cluster is read per unit when the split is drawn, so it has to survive
+    resolution — and that is the opposite side of the line from
+    `measurements.by`, which names a source column."""
+    _clustered_table(tmp_path, "patient_id,site", _SITE_BODY)
+    path = write_config(
+        {"data.units": {"from": "index.csv", "key": "patient_id", "cluster_by": "site"}}
+    )
+    assert "E-DATA-CLUSTER-UNKNOWN" in codes(path)
+
+
+def test_a_declared_cluster_attribute_is_not_reported_unknown(write_config, tmp_path):
+    """The other half of the same declaration: declaring the attribute is what
+    makes the name check pass, so it discriminates rather than reporting on every
+    `cluster_by` there is."""
+    _clustered_table(tmp_path, "patient_id,site", _SITE_BODY)
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["site"],
+                "cluster_by": "site",
+            }
+        }
+    )
+    assert "E-DATA-CLUSTER-UNKNOWN" not in codes(path)
+
+
+def test_an_empty_cluster_by_is_reported(write_config, tmp_path):
+    """An empty declaration changes no behavior, which is the failure a truthy
+    read of it would hide — and `_check_unimplemented`'s refusal, which is such a
+    read, stays silent on it, so this is the only finding it draws."""
+    _clustered_table(tmp_path, "patient_id,site", _SITE_BODY)
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["site"],
+                "cluster_by": "",
+            }
+        }
+    )
+    found = codes(path)
+    assert "E-DATA-CLUSTER-UNKNOWN" in found
+    assert "E-DATA-CLUSTER-UNSUPPORTED" not in found
+
+
+def test_a_cluster_by_under_a_glob_source_is_reported(write_config, tmp_path):
+    """The glob cross-check, and it costs nothing extra: a glob yields a key and
+    a path and nothing else, so `_from_glob` refuses every declared attribute and
+    a `cluster_by` there can never name one."""
+    (tmp_path / "input" / "a.dcm").write_bytes(b"\x00")
+    path = write_config(
+        {"data.units": {"from": {"glob": "*.dcm"}, "key": "path", "cluster_by": "site"}}
+    )
+    assert "E-DATA-CLUSTER-UNKNOWN" in codes(path)
+
+
+def test_the_cluster_name_check_reports_without_a_roster():
+    """Called directly, with no roster and no `validate_config` around it: the
+    name half is checked from the declaration alone, and this is what
+    distinguishes it from `E-DATA-CLUSTER-UNSUPPORTED`, which a direct call never
+    reaches."""
+    c = Collector()
+    _check_cluster_by({}, {"attributes": ["age"], "cluster_by": "site"}, None, c)
+    assert [f.code for f in c.findings] == ["E-DATA-CLUSTER-UNKNOWN"]
+
+
+def test_a_non_string_cluster_by_is_left_to_the_envelope():
+    """`E-CONFIG-TYPE` owns it, and describing `3` as "empty" would fit neither
+    the value nor the remedy."""
+    c = Collector()
+    _check_cluster_by({}, {"attributes": ["site"], "cluster_by": 3}, None, c)
+    assert not c.findings
+
+
+@pytest.mark.parametrize("unset", [{}, {"cluster_by": None}])
+def test_a_cluster_looking_column_warns_when_nothing_declares_it(write_config, tmp_path, unset):
+    """§ Validation, "Clustering looks undeclared". The positive direction comes
+    first: a warning that can never fire passes its own negative test trivially.
+
+    Both forms of "unset" are run — `init` materializes `cluster_by: null`, so a
+    check keyed on the key's absence would miss the shape a real config carries.
+    Four sites over twelve units: repeated, non-numeric, more than two, and every
+    unit carries one."""
+    _clustered_table(tmp_path, "patient_id,site", _SITE_BODY)
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["site"],
+                **unset,
+            }
+        }
+    )
+    found = messages_by_code(path)
+    assert "W-DATA-CLUSTER-UNDECLARED" in found
+    assert "site" in found["W-DATA-CLUSTER-UNDECLARED"]
+
+
+def test_the_worked_examples_own_attributes_do_not_warn(write_config, tmp_path):
+    """The control that decides whether the trigger is usable at all. `cohort-pilot`
+    declares `[label, age, sex]` and no `cluster_by`, and `sex` has two values over
+    many units — which "few distinct values, many units each" reads as a cluster.
+    A warning that fires on the project's own worked example is one every user
+    learns to ignore.
+
+    Each attribute is silenced by a different clause, which is what makes this a
+    test of the trigger rather than of one clause: `age` by the type clause, `label`
+    and `sex` by the "more than two distinct values" clause."""
+    _clustered_table(
+        tmp_path,
+        "patient_id,label,age,sex",
+        "".join(
+            f"p{i},{'case' if i % 2 else 'control'},{30 + (i % 4) * 5},{'f' if i % 3 else 'm'}\n"
+            for i in range(12)
+        ),
+    )
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["label", "age", "sex"],
+            }
+        }
+    )
+    assert "W-DATA-CLUSTER-UNDECLARED" not in codes(path)
+
+
+def test_no_cluster_warning_for_a_numeric_column(write_config, tmp_path):
+    """The type clause. `age`, `dose` and `latency` have repeated values too, and
+    a numeric column with repeated values is a measurement far more often than an
+    identifier — the cost being a missed integer-coded id, which is the right way
+    to be wrong here. Same fixture as the positive case but for the values."""
+    _clustered_table(
+        tmp_path,
+        "patient_id,site",
+        "".join(f"p{i},{s}\n" for i, s in enumerate("111222333444")),
+    )
+    path = write_config(
+        {"data.units": {"from": "index.csv", "key": "patient_id", "attributes": ["site"]}}
+    )
+    assert "W-DATA-CLUSTER-UNDECLARED" not in codes(path)
+
+
+def test_no_cluster_warning_for_a_column_that_is_a_second_key(write_config, tmp_path):
+    """The "held by more than one unit" clause: a column with one value per unit
+    is a second identity, not a grain units share."""
+    _clustered_table(
+        tmp_path,
+        "patient_id,site",
+        "".join(f"p{i},s{i}\n" for i in range(12)),
+    )
+    path = write_config(
+        {"data.units": {"from": "index.csv", "key": "patient_id", "attributes": ["site"]}}
+    )
+    assert "W-DATA-CLUSTER-UNDECLARED" not in codes(path)
+
+
+def test_no_cluster_warning_for_a_column_with_a_blank_cell(write_config, tmp_path):
+    """"Every unit carries a value for it" reads an empty cell as no value. A
+    sparse column would otherwise satisfy the type and repetition clauses on its
+    blanks alone."""
+    _clustered_table(
+        tmp_path,
+        "patient_id,site",
+        "".join(f"p{i},{s}\n" for i, s in enumerate(["a", "a", "b", "b", "c", ""])),
+    )
+    path = write_config(
+        {"data.units": {"from": "index.csv", "key": "patient_id", "attributes": ["site"]}}
+    )
+    assert "W-DATA-CLUSTER-UNDECLARED" not in codes(path)
+
+
+def test_no_cluster_warning_once_cluster_by_declares_the_column(write_config, tmp_path):
+    """The warning is about a cluster going *undeclared*, so declaring it is what
+    silences it — the one thing the message tells a reader to do."""
+    _clustered_table(tmp_path, "patient_id,site", _SITE_BODY)
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["site"],
+                "cluster_by": "site",
+            }
+        }
+    )
+    assert "W-DATA-CLUSTER-UNDECLARED" not in codes(path)
+
+
+def test_no_cluster_warning_for_an_attribute_null_test_shuffles(write_config, tmp_path):
+    """One of the exclusions: a cluster is what shuffling *respects*, not what it
+    names. Reported through `validate_config` even though `statistics.null_test`
+    is itself refused in this build — the refusal is a finding beside this one,
+    not a substitute for it."""
+    _clustered_table(tmp_path, "patient_id,site", _SITE_BODY)
+    path = write_config(
+        {
+            "data.units": {"from": "index.csv", "key": "patient_id", "attributes": ["site"]},
+            "statistics": {"null_test": {"method": "permutation", "n": 10, "shuffle": "site"}},
+        }
+    )
+    found = codes(path)
+    assert "W-DATA-CLUSTER-UNDECLARED" not in found
+    assert "E-STATS-NULLTEST-UNSUPPORTED" in found
+
+
+def test_no_cluster_warning_for_an_attribute_something_stratifies_on(write_config, tmp_path):
+    """`stratify_by` must be constant within a cluster, so it is coarser than one.
+    Collected by walking the document for the key, so a `stratify_by` on any block
+    accounts for its attribute — here a `fold` repeat level's."""
+    _clustered_table(tmp_path, "patient_id,site", _SITE_BODY)
+    path = write_config(
+        {
+            "data.units": {"from": "index.csv", "key": "patient_id", "attributes": ["site"]},
+            "replication.repeats": [{"kind": "fold", "k": 2, "stratify_by": "site"}],
+        }
+    )
+    assert "W-DATA-CLUSTER-UNDECLARED" not in codes(path)
+
+
+def test_the_cluster_warning_is_skipped_without_a_roster():
+    """The reachable half of the skip: with no roster there is no column to look
+    at. Called directly, so it is distinguishable from a run where every clause
+    simply failed."""
+    c = Collector()
+    _check_cluster_by({}, {"attributes": ["site"]}, None, c)
+    assert not c.findings

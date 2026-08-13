@@ -575,6 +575,70 @@ def collapse_measurements(
     return collapsed, counts
 
 
+def clusters_of(roster: UnitList, cluster_by: str) -> dict[str, str]:
+    """Which cluster each unit belongs to, keyed by unit key, in roster order.
+
+    **The single authority** for cluster membership, and it sits beside
+    `usable_weight` and `is_measurement_numeric` for the reason those two do: the
+    partition, the interval constructions and `validate` all have to ask the same
+    question of the same declaration, and a second notion of "which units form one
+    cluster" is the validate-clean-then-disagree gap in a new shape — here it would
+    mean a config `validate` approved whose folds split a cluster the checks were
+    told was whole.
+
+    `cluster_by` names a **declared attribute**, not a source column — the same
+    side of that line `weight_by` falls on and the opposite side from
+    `measurements.by`. `reference.md` § Validation's *Cluster attribute exists* row
+    says the name is one "which is not a unit attribute", and `design-principles.md`
+    § Core vs. plugin lists `cluster_by` among the declarations that "all name
+    attributes". That is what makes it readable here at all: `_from_table`
+    populates `Unit.attributes` from `data.units.attributes` and nothing else, so a
+    column outside that list has not survived resolution.
+
+    Insertion order **is** roster order, deliberately. A caller needing the ordered
+    list of clusters — the partitioner does — derives it from this mapping rather
+    than walking the roster a second time, which is how the two would come to
+    disagree about which cluster came first, and `units_hash` already pins that the
+    resolved order is the reproducible one.
+
+    Values are stringified so the mapping has one type whatever the source
+    supplied: a table yields `str` for every column, but a hand-built roster or a
+    future resolver need not, and a cluster id is a label rather than a quantity —
+    nothing downstream does arithmetic on it.
+
+    A unit carrying no value for the attribute raises rather than being placed in a
+    cluster of its own. `reference.md` § Errors validate reports states this under
+    `E-DATA-CLUSTER-UNKNOWN`, the same code `validate` reports for a `cluster_by`
+    naming no declared attribute: an invented singleton cluster would silently make
+    a unit its own inferential draw, widening nothing and narrowing every interval
+    that counts clusters.
+    """
+    membership: dict[str, str] = {}
+    for unit in roster:
+        if cluster_by not in unit.attributes:
+            raise ContractError(
+                f"`data.units.cluster_by` names {cluster_by!r}, which unit "
+                f"{unit.key!r} carries no value for — a cluster is what a unit is "
+                "not independent of, so a unit with no cluster has no place on "
+                "either side of a split. Declare it in `data.units.attributes` and "
+                "give every unit a value for it",
+                code="E-DATA-CLUSTER-UNKNOWN",
+            )
+        membership[unit.key] = str(unit.attributes[cluster_by])
+    return membership
+
+
+def cluster_count(roster: UnitList, cluster_by: str) -> int:
+    """How many distinct clusters the roster holds.
+
+    Derived from `clusters_of` rather than counted in its own walk: the count is
+    what bounds `k` and what a cluster-robust interval's df is computed from, and a
+    count that disagreed with the membership it is supposed to summarize would put
+    a `k` past the number of groups the partitioner can actually produce.
+    """
+    return len(set(clusters_of(roster, cluster_by).values()))
+
+
 def partition_units(roster: UnitList, k: int, digest: str) -> list[list[Unit]]:
     """Split the roster into `k` test partitions, each unit in exactly one.
 
