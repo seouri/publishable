@@ -5873,12 +5873,54 @@ def test_the_cluster_name_check_reports_without_a_roster():
     assert [f.code for f in c.findings] == ["E-DATA-CLUSTER-UNKNOWN"]
 
 
-def test_a_non_string_cluster_by_is_left_to_the_envelope():
+def test_a_non_string_cluster_by_is_left_to_the_envelope(write_config, tmp_path):
     """`E-CONFIG-TYPE` owns it, and describing `3` as "empty" would fit neither
-    the value nor the remedy."""
+    the value nor the remedy.
+
+    Both halves are asserted, and the second is why this is not a vacuous test:
+    silence here proves the check defers, and `E-CONFIG-TYPE` in `codes` proves
+    there is something to defer *to* — `envelope.py`'s `LEAF_TYPES` really does
+    type `data.units.cluster_by` a `str`. Without the second assertion this could
+    not tell "correctly deferred" from "silently dropped", and the difference
+    becomes visible the moment `E-DATA-CLUSTER-UNSUPPORTED` — which fires on a
+    truthy `3` today — is retired."""
     c = Collector()
     _check_cluster_by({}, {"attributes": ["site"], "cluster_by": 3}, None, c)
     assert not c.findings
+    _clustered_table(tmp_path, "patient_id,site", _SITE_BODY)
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["site"],
+                "cluster_by": 3,
+            }
+        }
+    )
+    assert "E-CONFIG-TYPE" in codes(path)
+
+
+def test_a_parameter_named_stratify_by_does_not_silence_the_cluster_warning(
+    write_config, tmp_path
+):
+    """The exclusion walk covers the four blocks that describe the design, not
+    `parameters` — a template may declare a parameter of any name, and one called
+    `stratify_by` silencing a real cluster column would be invisible to a reader."""
+    _clustered_table(tmp_path, "patient_id,site", _SITE_BODY)
+    path = write_config(
+        {
+            "data.units": {"from": "index.csv", "key": "patient_id", "attributes": ["site"]},
+            "parameters.analysis": {
+                "method": "pearson",
+                "min_samples": 30,
+                "confidence": 0.95,
+                "drop_missing": True,
+                "stratify_by": "site",
+            },
+        }
+    )
+    assert "W-DATA-CLUSTER-UNDECLARED" in codes(path)
 
 
 @pytest.mark.parametrize("unset", [{}, {"cluster_by": None}])

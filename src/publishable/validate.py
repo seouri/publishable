@@ -1153,11 +1153,16 @@ def _accounted_attribute_names(doc: dict[str, Any], units: dict[str, Any]) -> se
     `statistics.null_test`'s `shuffle`, which names the label a cluster is what
     shuffling *respects*.
 
-    `stratify_by` is collected by walking the document for the key rather than from
-    an enumerated list of the blocks that carry one (`assign.<axis>`, a `fold`
-    repeat level, `statistics.resample`). The row says *any* `stratify_by`, and an
+    `stratify_by` is collected by walking for the key rather than from an
+    enumerated list of the blocks that carry one (`assign.<axis>`, a `fold` repeat
+    level, `statistics.resample`). The row says *any* `stratify_by`, and an
     enumeration would quietly stop matching the row the first time a block gains
     one — which is a live prospect while three of those blocks are still unbuilt.
+
+    The walk is over the four blocks that describe the design, **not the whole
+    document**: `parameters` is the template's namespace, and a template free to
+    declare a parameter of any name is free to declare one called `stratify_by`,
+    which would silence a real cluster column for no reason a reader could see.
     """
     accounted: set[str] = set()
 
@@ -1174,7 +1179,8 @@ def _accounted_attribute_names(doc: dict[str, Any], units: dict[str, Any]) -> se
             for item in node:
                 walk(item)
 
-    walk(doc)
+    for block in ("data", "sweep", "replication", "statistics"):
+        walk(doc.get(block))
     groups = (doc.get("sweep") or {}).get("groups") or []
     if isinstance(groups, list):
         for axis in groups:
