@@ -617,6 +617,66 @@ def test_a_derived_metric_with_no_resample_callable_reports_no_interval():
     assert out["total"]["method"] is None
 
 
+def test_a_clustered_derived_metric_is_refused_at_this_surface():
+    """`E-DATA-CLUSTER-DERIVED`. The clustered draw for a *recomputed* metric —
+    each replicate drawing `G` clusters and pooling their units — does not exist,
+    and `percentile_of_derived` draws units, so the interval would be narrower than
+    the design supports beside recorded columns that are cluster-robust.
+
+    Raised here rather than reported by `validate` because whether a template's
+    `aggregate` returns anything is not knowable from a declaration: it is user code
+    core never inspects, and one that overrides `aggregate` may still return `{}`
+    for a given config. `tests/test_cli.py` owns the end-to-end containment; this
+    owns the guard's exact shape."""
+    collapsed = {f"u{i}": {"pred": float(i)} for i in range(20)}
+    clusters = {f"u{i}": f"s{i % 4}" for i in range(20)}
+    with pytest.raises(ContractError) as exc:
+        summarize_step(
+            collapsed,
+            {"completed": 20},
+            derived={"total": 190.0},
+            seed=7,
+            resample={"total": lambda units: sum(units.pred)},
+            clusters=clusters,
+        )
+    assert exc.value.code == "E-DATA-CLUSTER-DERIVED"
+    # Raised before a single derived key is written, so `cli` drops the whole
+    # mapping rather than leaving a record carrying part of it.
+    assert "total" in str(exc.value)
+
+
+@pytest.mark.parametrize(
+    "narrowed",
+    [
+        pytest.param({"seed": None}, id="no-seed"),
+        pytest.param({"resample": None}, id="no-resample-map"),
+        pytest.param({"resample": {"total": None}}, id="no-callable-for-this-key"),
+    ],
+)
+def test_a_clustered_derived_metric_that_would_not_be_drawn_is_not_refused(narrowed):
+    """The under-firing controls, and the reason the guard reads what would actually
+    be *drawn* rather than the `cluster_by` declaration. With no seed or no callable
+    no interval is built at all, so there is no too-narrow interval to prevent and
+    the point estimate publishes as it always did.
+
+    None of these three is reachable through `cli` today — it builds a callable for
+    every derived key and only when `derived` is truthy — so the narrowing is
+    defensive. Pinned here because a mutation removing it is otherwise invisible:
+    measured, not assumed.
+
+    The recorded column beside it stays cluster-robust throughout, which is what
+    says the clustering is still in force and the guard simply does not apply."""
+    collapsed = {f"u{i}": {"pred": float(i)} for i in range(20)}
+    clusters = {f"u{i}": f"s{i % 4}" for i in range(20)}
+    kwargs = {"seed": 7, "resample": {"total": lambda units: sum(units.pred)}, **narrowed}
+    out = summarize_step(
+        collapsed, {"completed": 20}, derived={"total": 190.0}, clusters=clusters, **kwargs
+    )
+    assert out["total"]["value"] == 190.0
+    assert out["total"]["ci95"] is None
+    assert out["pred"]["method"] == "t_over_units_clustered"
+
+
 def test_a_derived_key_colliding_with_a_recorded_column_is_refused():
     collapsed = {f"u{i}": {"r": float(i)} for i in range(5)}
     with pytest.raises(ContractError) as exc:
