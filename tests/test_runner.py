@@ -995,6 +995,36 @@ def test_units_failed_anywhere_does_not_blame_the_other_arm():
     assert _units_failed_anywhere(results, roster, None, arm_members) == {"u4"}
 
 
+def test_attrition_and_units_failed_anywhere_agree_on_which_unit_failed():
+    """Task 13's side-by-side check the addendum asked for and the report
+    initially left unbuilt: over the SAME 7/5 fixture and the SAME two
+    results `attrition`'s own reconciliation test uses (`c0` `io.skip`-ped in
+    `control`, `t0` unsettled in `treatment`), does `_units_failed_anywhere`
+    (task 12, run-level, cross-step union) name the same unit `attrition`
+    (per-condition, per-step intersection) calls `failed`?
+
+    Yes: `_units_failed_anywhere` given the correct `arm_members` returns
+    exactly `{"t0"}` — agreeing with `attrition`'s `treatment` block
+    (`failed: 1`) and its `control` block (`failed: 0`; `c0` is `ineligible`,
+    not failed, in both). Given `arm_members=None` instead — the arm-blind
+    reading task 12 fixed `_units_failed_anywhere` out of — it returns all
+    12 units: `control`'s execution, scoped to the whole roster, sees every
+    `treatment` unit as unsettled, and `treatment`'s execution symmetrically
+    blames every `control` unit, so the union covers the roster. That is the
+    number the addendum asked for, not the reasoning."""
+    roster = _arm_roster12()
+    arm_members = _arm_members12()
+    control_rows = {f"c{i}": {} for i in range(1, 7)}  # c0 skipped
+    treatment_rows = {f"t{i}": {} for i in range(1, 5)}  # t0 unsettled
+    results = [
+        _repeat_result("measure", "seed01", 0, control_rows, skipped=frozenset({"c0"})),
+        _repeat_result("measure", "seed01", 1, treatment_rows),
+    ]
+
+    assert _units_failed_anywhere(results, roster, None, arm_members) == {"t0"}
+    assert _units_failed_anywhere(results, roster, None, None) == {u.key for u in roster}
+
+
 def test_a_single_repeat_skip_is_still_ineligible(tmp_path: Path):
     """With one repeat, intersection over a single set is that set — unchanged behavior."""
     roster = UnitList([Unit(key="p0"), Unit(key="p1")])

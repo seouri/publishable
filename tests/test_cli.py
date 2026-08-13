@@ -13,6 +13,7 @@ from publishable import BaseStep
 from publishable.cli import (
     _apply_execution_order,
     _cond_roster,
+    _condition_counts,
     _resolved_group_axes,
     _wide_swept_paths,
     main,
@@ -536,16 +537,22 @@ def test_cond_roster_is_the_same_object_with_no_group_axis():
 
 
 def test_attrition_reconciles_per_arm_over_the_uneven_7_5_fixture():
-    """The counts task 13 exists to fix: `attrition` given the WHOLE roster for
-    an arm-narrowed condition reports `resolved: 12` and derives the other
-    arm's units as `failed` — this asserts the fixed shape, `attrition` given
-    `_cond_roster`'s own answer.
+    """`attrition` itself needs no change — it is roster-agnostic and always
+    was — so this pins the LOW-LEVEL claim: given `_cond_roster`'s own
+    per-arm answer, `attrition` reconciles to the exact per-arm counts.
+    `test_condition_counts_reconciles_per_arm_over_the_uneven_7_5_fixture`
+    below pins the composed call `command_run` actually makes; this one
+    isolates `attrition`'s own arithmetic from the narrowing that feeds it.
 
     One unit ineligible in `control` (`c0`, `io.skip`) and one failed in
     `treatment` (`t0`, recorded nowhere) — matching the addendum's "make at
     least one arm attrit": two clean arms would leave `ineligible`/`failed`
     zero everywhere and the reconciliation would hold trivially for reasons
-    that don't discriminate this fix from the bug it fixes."""
+    that don't discriminate this fix from the bug it fixes. `c0`'s absence
+    from BOTH `recorded` and `skipped` would make it `failed`; declaring it
+    `skipped` explicitly is what makes it `ineligible` instead — the
+    distinction `ineligible: 1` on `control` and `failed: 1` on `treatment`
+    each prove one arm's own kind of attrition, not the other's."""
     from tests.test_runner import _arm_members12, _arm_roster12
 
     roster = _arm_roster12()
@@ -581,11 +588,46 @@ def test_attrition_reconciles_per_arm_over_the_uneven_7_5_fixture():
     )
 
 
+def test_condition_counts_reconciles_per_arm_over_the_uneven_7_5_fixture():
+    """The composed call `command_run` actually makes for a condition's
+    counts — `_condition_counts(results, roster, step_name, cond_index,
+    arm_members_map, ...)` — given the WHOLE `roster` and this task's own
+    `arm_members_map`, with no separate narrowing step in this test at all.
+
+    This is what a review caught the previous per-arm tests missing: they
+    called `_cond_roster` and `attrition` separately, so a `command_run` that
+    computed a `cond_roster` and then quietly kept calling `attrition(...,
+    roster, ...)` a few lines later — the actual shape the original bug
+    took — would leave every one of those tests green. Calling the single
+    composed function `command_run` calls removes that seam: there is no
+    place left for a computed-but-unused narrowing to hide."""
+    from tests.test_runner import _arm_members12, _arm_roster12
+
+    roster = _arm_roster12()
+    arm_members_map = _arm_members12()
+    control_rows = {f"c{i}": {"r": 0.5} for i in range(1, 7)}  # c0 skipped
+    treatment_rows = {f"t{i}": {"r": 0.5} for i in range(1, 5)}  # t0 unsettled
+    results = [
+        _repeat_result("measure", "seed01", 0, control_rows, skipped=frozenset({"c0"})),
+        _repeat_result("measure", "seed01", 1, treatment_rows),
+    ]
+
+    control_counts = _condition_counts(results, roster, "measure", 0, arm_members_map)
+    treatment_counts = _condition_counts(results, roster, "measure", 1, arm_members_map)
+
+    assert control_counts == {"resolved": 7, "completed": 6, "ineligible": 1, "failed": 0}
+    assert treatment_counts == {"resolved": 5, "completed": 4, "ineligible": 0, "failed": 1}
+
+
 def _crossing_stratum_fixture():
     """A roster whose `site` attribute crosses both arms — `north` is 4 of 7
-    `control` units and 3 of 5 `treatment` units — so narrowing to one arm
-    actually removes units from a level, rather than a stratum confined to
-    one arm, which wouldn't discriminate the fix from the bug it fixes.
+    `control` units and 2 of 5 `treatment` units, 6 total — so narrowing to
+    one arm actually removes units from a level, rather than a stratum
+    confined to one arm, which wouldn't discriminate the fix from the bug it
+    fixes. `north`'s total (6) is deliberately neither arm's own size (7, 5),
+    so a later size-based assertion against this fixture can't coincidentally
+    pass by matching the wrong count — task 13's own review caught an earlier
+    3/2 split whose `north` (7) coincided with `control`'s `resolved`.
     Distinct from `_arm_roster12`: a second attribute on the same units, not
     a shared boundary with any cluster fixture."""
     from publishable.units import Unit, UnitList
@@ -597,7 +639,7 @@ def _crossing_stratum_fixture():
     treatment = [
         Unit(
             key=f"t{i}",
-            attributes={"arm": "treatment", "site": "north" if i < 3 else "south"},
+            attributes={"arm": "treatment", "site": "north" if i < 2 else "south"},
         )
         for i in range(5)
     ]
@@ -630,12 +672,33 @@ def test_report_by_levels_narrows_a_crossing_stratum_to_the_given_roster():
     control_roster = _cond_roster(roster, 0, arm_members_map)
 
     whole_keys, _whole_roster = _report_by_levels(roster, "site")["north"]
-    assert whole_keys == {"c0", "c1", "c2", "c3", "t0", "t1", "t2"}
+    assert whole_keys == {"c0", "c1", "c2", "c3", "t0", "t1"}
 
     arm_keys, arm_roster = _report_by_levels(control_roster, "site")["north"]
     assert arm_keys == {"c0", "c1", "c2", "c3"}
     assert {u.key for u in arm_roster} == arm_keys
     assert arm_keys < whole_keys  # the narrowing actually removes units
+
+
+def test_condition_report_by_levels_narrows_a_crossing_stratum_to_the_condition_arm():
+    """The composed call `command_run` actually makes for `report_by`'s
+    per-level table — `_condition_report_by_levels(roster, cond_index,
+    arm_members_map, attribute)` — given the WHOLE `roster`, with no separate
+    `_cond_roster` call in this test. Mirrors
+    `test_condition_counts_reconciles_per_arm_over_the_uneven_7_5_fixture`'s
+    reasoning: the primitive-level test above calls `_cond_roster` and
+    `_report_by_levels` separately and so cannot tell "wired into
+    `command_run`" apart from "unused"; this one calls what `command_run`
+    calls."""
+    from publishable.cli import _condition_report_by_levels
+
+    roster, arm_members_map = _crossing_stratum_fixture()
+
+    arm_keys, arm_roster = _condition_report_by_levels(
+        roster, 0, arm_members_map, "site"
+    )["north"]
+    assert arm_keys == {"c0", "c1", "c2", "c3"}
+    assert {u.key for u in arm_roster} == arm_keys
 
 
 def test_cond_beside_n_withholds_technical_n_under_an_arm_only():
@@ -658,6 +721,23 @@ def test_cond_beside_n_withholds_technical_n_under_an_arm_only():
     assert _cond_beside_n(beside_n, control_roster, roster) == {"weighted_by": "w"}
     # No group axis: `cond_roster is roster`, and nothing is withheld.
     assert _cond_beside_n(beside_n, roster, roster) == beside_n
+
+
+def test_condition_beside_n_withholds_technical_n_under_an_arm_only():
+    """The composed call `command_run` actually makes to decide whether
+    `technical_n` survives — `_condition_beside_n(beside_n, roster,
+    cond_index, arm_members_map)` — given the WHOLE `roster`, with no
+    separate `_cond_roster` call in this test."""
+    from tests.test_runner import _arm_members12, _arm_roster12
+
+    from publishable.cli import _condition_beside_n
+
+    roster = _arm_roster12()
+    arm_members_map = _arm_members12()
+    beside_n = {"technical_n": {"min": 1, "max": 3, "median": 2}, "weighted_by": "w"}
+
+    assert _condition_beside_n(beside_n, roster, 0, arm_members_map) == {"weighted_by": "w"}
+    assert _condition_beside_n(beside_n, roster, 0, None) == beside_n
 
 
 def test_the_recorded_order_is_the_order_that_ran(tmp_path: Path):

@@ -96,6 +96,7 @@ from publishable.validate import load_document, validate_config
 
 if TYPE_CHECKING:
     from publishable.contrasts import Comparison
+    from publishable.runner import ExecutionResult
     from publishable.sweep import Condition
 
 OPERATION_COMMANDS = {"validate", "run"}
@@ -429,6 +430,65 @@ def _report_by_levels(
     for level, keys in sorted(levels_for(roster, attribute).items()):
         out[level] = (keys, UnitList([u for u in roster if u.key in keys]))
     return out
+
+
+def _condition_counts(
+    results: "list[ExecutionResult]",
+    roster: "UnitList",
+    step_name: str,
+    cond_index: int,
+    arm_members_map: "dict[int, frozenset[str]] | None",
+    fold_members: dict[str, frozenset[str]] | None = None,
+    weights: dict[str, Any] | None = None,
+    clusters: dict[str, str] | None = None,
+) -> dict[str, float]:
+    """`attrition`'s counts for one condition, narrowed to that condition's own
+    arm first — the exact composition `command_run`'s per-condition loop
+    calls for a step's counts, and the ONLY thing it calls for them.
+
+    Extracted (after review) because `_cond_roster` and `attrition` tested
+    separately cannot tell "the fix is wired into `command_run`" apart from
+    "the fix exists and is unused" — which is precisely the shape the bug
+    this task fixes took: a narrowed roster computed and then not passed to
+    `attrition`. Collapsing narrowing-then-counting into one call removes
+    that seam at its root: there is no longer a place in `command_run` where
+    a computed `cond_roster` sits beside a stale `attrition(..., roster,
+    ...)` a few lines down.
+    """
+    return attrition(
+        results,
+        _cond_roster(roster, cond_index, arm_members_map),
+        step_name,
+        cond_index,
+        fold_members=fold_members,
+        weights=weights,
+        clusters=clusters,
+    )
+
+
+def _condition_report_by_levels(
+    roster: "UnitList",
+    cond_index: int,
+    arm_members_map: "dict[int, frozenset[str]] | None",
+    attribute: str,
+) -> dict[str, tuple[set[str], "UnitList"]]:
+    """`_report_by_levels`, narrowed to one condition's own arm first — the
+    exact composition `command_run`'s `report_by` block calls, for the same
+    reason `_condition_counts` exists beside `attrition`."""
+    return _report_by_levels(_cond_roster(roster, cond_index, arm_members_map), attribute)
+
+
+def _condition_beside_n(
+    beside_n: dict[str, Any],
+    roster: "UnitList",
+    cond_index: int,
+    arm_members_map: "dict[int, frozenset[str]] | None",
+) -> dict[str, Any]:
+    """`_cond_beside_n`, narrowed to one condition's own arm first — the exact
+    composition `command_run` calls to decide whether `technical_n` survives
+    for this condition, for the same reason `_condition_counts` exists beside
+    `attrition`."""
+    return _cond_beside_n(beside_n, _cond_roster(roster, cond_index, arm_members_map), roster)
 
 
 def _attributed(table: UnitTable, attributes: dict[str, dict[str, Any]]) -> UnitTable:
@@ -1339,24 +1399,25 @@ def command_run(config_path: Path) -> int:
                     and r.rows
                 }
                 aggregated[cond.index] = {}
-                # This condition's own arm — a subset view of `roster`, never a
-                # re-resolution — or `roster` itself, the same object, when no
-                # group axis selects one. `attrition` below (and `report_by`'s
-                # per-level table further down) must count what this
-                # condition's executions were actually handed: `_cond_roster`
-                # is the read side of the same narrowing `execute_plan` already
-                # applies to what those executions ran over.
-                cond_roster = _cond_roster(roster, cond.index, arm_members_map)
-                cond_beside_n = _cond_beside_n(beside_n, cond_roster, roster)
+                # `_condition_beside_n` narrows to this condition's own arm
+                # before deciding whether `technical_n` survives — the read
+                # side of the same narrowing `execute_plan` already applies to
+                # what this condition's executions were actually handed. Kept
+                # as ONE call, not a `cond_roster` computed here and consumed
+                # a few lines down: that two-step shape is exactly how the bug
+                # this task fixes happened — a narrowed roster computed and
+                # then not passed to `attrition`.
+                cond_beside_n = _condition_beside_n(beside_n, roster, cond.index, arm_members_map)
                 for step_name in sorted(recording_steps):
                     collapsed = collapse_repeats(
                         results, step_name, cond.index, fold_members=fold_members
                     )
-                    counts = attrition(
+                    counts = _condition_counts(
                         results,
-                        cond_roster,
+                        roster,
                         step_name,
                         cond.index,
+                        arm_members_map,
                         fold_members=fold_members,
                         weights=weights,
                         clusters=clusters,
@@ -1638,16 +1699,17 @@ def command_run(config_path: Path) -> int:
                         # repeat levels, which `repeat_spread` above reads on
                         # every later pass of this loop.
                         levels_block: dict[str, dict[str, Any]] = {}
-                        # `cond_roster`, not `roster`: under a group axis a
-                        # level's key set must not reach past this condition's
-                        # own arm into the other one — the same defect one
-                        # layer up `_cond_roster` exists to fix for `attrition`
-                        # above, one level in. `_report_by_levels(roster, ...)`
+                        # `_condition_report_by_levels`, not `_report_by_levels`
+                        # bare: under a group axis a level's key set must not
+                        # reach past this condition's own arm into the other
+                        # one — the same defect `_condition_counts` exists to
+                        # fix for `attrition` above, one level in. Passing
+                        # `roster` here directly (bypassing the arm narrowing)
                         # would let a level of `attribute` that happens to span
                         # both arms hand `attrition` units the other arm's
                         # executions never touched.
-                        for level, (keys, level_roster) in _report_by_levels(
-                            cond_roster, attribute
+                        for level, (keys, level_roster) in _condition_report_by_levels(
+                            roster, cond.index, arm_members_map, attribute
                         ).items():
                             # One key set decides BOTH the table and the counts.
                             # Taking the level's rows beside the condition's `n`
