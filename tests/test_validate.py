@@ -932,6 +932,55 @@ def test_the_budget_check_fires_for_leave_one_out_against_the_real_roster(write_
     assert "60 executions exceeds 10" in found_all["W-EXEC-BUDGET"]
 
 
+def test_the_budget_counts_the_conditions_a_group_axis_expands(write_config):
+    """`reference.md` § Validation, *Grid size sane*: conditions are counted over
+    every axis the sweep expands, "a group axis included, since a group level is a
+    condition that executes like any other". The budget is
+    `len(expand(doc)) × repeat_total`, so it inherits that from `expand` — which
+    now crosses a group axis into the product — and the number the warning names
+    must be the real one, not the parameter-only product it was before.
+
+    Reached the same way every other group check is: `groups` is still refused
+    wholesale in this build, and `validate` collects rather than stops, so the
+    warning is raised beside `E-SWEEP-GROUPS-UNSUPPORTED`. The exact error set is
+    asserted so no unrelated refusal can be the one carrying the config.
+
+    Two controls, and the second must report rather than be silent: the same
+    design without the group axis fits under the same budget (so the two levels
+    are what pushed it over), and at a budget of 10 it warns with *its* count
+    (so a silent control cannot be silence from a dead check)."""
+    grid = {"analysis.method": ["pearson", "spearman", "kendall"]}
+    repeats = {"repeats": [{"kind": "seed", "n": 5}]}
+    axis = [{"by": "arm", "levels": ["control", "treatment"]}]
+
+    over = write_config(
+        {
+            "sweep": {"groups": axis, "grid": grid},
+            "replication": repeats,
+            "limits": {"max_executions": 20},  # 2 arms × 3 methods × 5 seeds = 30 > 20
+        }
+    )
+    assert _error_codes(over) == {"E-SWEEP-GROUPS-UNSUPPORTED"}
+    assert (
+        messages_by_code(over)["W-EXEC-BUDGET"]
+        == "6 conditions × 5 repeats = 30 executions exceeds 20"
+    )
+
+    without = messages_by_code(
+        write_config(
+            {"sweep": {"grid": grid}, "replication": repeats, "limits": {"max_executions": 20}}
+        )
+    )
+    assert "W-EXEC-BUDGET" not in without  # 3 × 5 = 15 ≤ 20
+
+    without_tighter = messages_by_code(
+        write_config(
+            {"sweep": {"grid": grid}, "replication": repeats, "limits": {"max_executions": 10}}
+        )
+    )
+    assert without_tighter["W-EXEC-BUDGET"] == "3 conditions × 5 repeats = 15 executions exceeds 10"
+
+
 def test_the_floor_warning_also_resolves_k_all_against_the_roster():
     """`W-REPL-FLOOR` was suppressed by the same unresolved-fold flag, so a
     `k: all` over a small roster never warned below the convention floor. It is
