@@ -800,8 +800,56 @@ def stratum_varies_within_cluster(
     return None
 
 
+def _assign_whole_clusters(
+    units: list[Unit], k: int, rng: random.Random, clusters: dict[str, str] | None
+) -> list[list[Unit]]:
+    """One list of units into `k` folds, balanced by unit count, no cluster divided.
+
+    The single assignment rule, drawn from `rng` in the order it is called: the whole
+    roster reaches it once when nothing is stratified, and each stratum's units reach
+    it once when something is. A second rule for the stratified case would be a
+    second answer to "which units land together", which is the disagreement
+    `clusters_of` exists to prevent one level up.
+
+    **`clusters is None` is a cluster of one per unit, not another path.** That is an
+    identity rather than an approximation: `random.shuffle` permutes by index and
+    reads only the length, so shuffling the one-name-per-unit list draws the same
+    permutation as shuffling the units did; the descending-size sort is stable and
+    every size is 1, so it is the identity; and least-loaded assignment of size-1
+    items deals them out round-robin, which is `shuffled[i::k]` term for term. The
+    unclustered draw is therefore the same draw it was before clusters existed, and
+    `test_the_unclustered_draw_is_unmoved_by_the_clustered_rewrite` is its oracle.
+
+    Keying by `unit.key` is what that rests on, and unit keys are unique — a repeated
+    one is refused at resolution as `E-UNITS-KEY-DUPLICATE`, so no two units can
+    collapse into one accidental cluster here.
+    """
+    if clusters is None:
+        clusters = {unit.key: unit.key for unit in units}
+    # `clusters[...]`, not `.get`: `clusters_of` is total over the roster it was
+    # given and raises `E-DATA-CLUSTER-UNKNOWN` for a unit carrying no cluster, so
+    # a key missing here means the caller passed a mapping from a different roster
+    # — a core defect. A `.get` default would place that unit in an invented
+    # cluster of its own, which is the silent version of exactly the leak this
+    # function exists to prevent.
+    members: dict[str, list[Unit]] = {}
+    for unit in units:
+        members.setdefault(clusters[unit.key], []).append(unit)
+    order = list(members)
+    rng.shuffle(order)
+    order.sort(key=lambda name: -len(members[name]))
+    folds: list[list[Unit]] = [[] for _ in range(k)]
+    for name in order:
+        folds[min(range(k), key=lambda i: len(folds[i]))].extend(members[name])
+    return folds
+
+
 def partition_units(
-    roster: UnitList, k: int, digest: str, clusters: dict[str, str] | None = None
+    roster: UnitList,
+    k: int,
+    digest: str,
+    clusters: dict[str, str] | None = None,
+    strata: dict[str, str] | None = None,
 ) -> list[list[Unit]]:
     """Split the roster into `k` test partitions, each unit in exactly one.
 
@@ -837,29 +885,55 @@ def partition_units(
     than dividing a cluster to fill them — an empty fold is a visibly useless
     split, a divided one is a leaky split that looks fine. `validate` refuses that
     `k` against the cluster count; this stays total for the case where it did not.
+
+    `strata` is the same shape — unit key to stratum value — and is what makes a
+    `fold` level's `stratify_by` change the split rather than only being checked
+    (`reference.md` § Repeat kinds calls a fold "stratified" when it is declared).
+    Each stratum is partitioned **on its own**, by the rule above, and the per-stratum
+    folds are merged **index-wise**: fold `i` is every stratum's fold `i`. So each
+    fold holds close to the roster's mix of the stratum, which is the whole point of
+    declaring one, and no second balancer is introduced — one greedy objective (unit
+    count) still runs, just once per stratum.
+
+    **That composition is sound only while `stratum_varies_within_cluster` refuses
+    the pair it refuses.** Balancing unit count and balancing stratum proportions are
+    independent objectives, and two greedy passes over the same clusters would fight;
+    what dissolves the conflict is that a cluster carries exactly one stratum value,
+    so a cluster belongs to exactly one stratum and each per-stratum partition sees
+    whole clusters. A later change that let a cluster straddle two strata would have
+    to answer which stratum's partition owns it, and would silently divide it here.
+    `reference.md` § Validation's *Fold strata survive clustering* row is the check;
+    if it goes, this does.
+
+    **With `strata`, fold sizes can differ by more than one** — by up to the number
+    of strata. Every per-stratum fold list is non-increasing in size, so fold 0
+    collects each stratum's ceiling: three strata of three units at `k = 2` give 6
+    and 3, not 5 and 4. Balancing the count *across* strata is what would divide a
+    stratum's share unevenly, which is the thing being declared away, so this is the
+    prescribed rule's consequence rather than a defect — stated here because it
+    contradicts the at-most-one above, which holds for an unstratified split only.
+
+    The mapping must be **total over the roster**, like `clusters`: a unit missing
+    from it raises `KeyError` as a core defect rather than being given a stratum of
+    its own. A unit carrying no value for the stratum attribute is possible after
+    `validate` (a whole cluster carrying none agrees with itself), so how such a unit
+    is rendered — a stratum of its own, or a refusal — is the caller's decision, made
+    where the attribute is read.
     """
     units = list(roster)
     rng = random.Random(_seed_from(digest))
-    if clusters is None:
-        shuffled = list(units)
-        rng.shuffle(shuffled)
-        return [shuffled[i::k] for i in range(k)]
-    # `clusters[...]`, not `.get`: `clusters_of` is total over the roster it was
-    # given and raises `E-DATA-CLUSTER-UNKNOWN` for a unit carrying no cluster, so
-    # a key missing here means the caller passed a mapping from a different roster
-    # — a core defect. A `.get` default would place that unit in an invented
-    # cluster of its own, which is the silent version of exactly the leak this
-    # function exists to prevent.
-    members: dict[str, list[Unit]] = {}
+    if strata is None:
+        return _assign_whole_clusters(units, k, rng, clusters)
+    grouped: dict[str, list[Unit]] = {}
     for unit in units:
-        members.setdefault(clusters[unit.key], []).append(unit)
-    order = list(members)
-    rng.shuffle(order)
-    order.sort(key=lambda name: -len(members[name]))
-    folds: list[list[Unit]] = [[] for _ in range(k)]
-    for name in order:
-        folds[min(range(k), key=lambda i: len(folds[i]))].extend(members[name])
-    return folds
+        grouped.setdefault(strata[unit.key], []).append(unit)
+    per_stratum = [
+        _assign_whole_clusters(members, k, rng, clusters) for members in grouped.values()
+    ]
+    # Index-wise, not sorted by size: sorting would re-pair the strata's pieces
+    # against each other for no stated reason, and the fold a unit lands in is part
+    # of this function's contract.
+    return [[unit for folds in per_stratum for unit in folds[i]] for i in range(k)]
 
 
 def _seed_from(digest: str) -> int:

@@ -1,4 +1,5 @@
 # tests/test_units.py
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -334,6 +335,165 @@ def test_more_folds_than_clusters_leaves_folds_empty_rather_than_raising():
     roster, clusters = _clustered({"S1": 2, "S2": 2})
     folds = partition_units(roster, k=4, digest="sha256:abc", clusters=clusters)
     assert sorted(len(f) for f in folds) == [0, 0, 2, 2]
+
+
+def _by_stratum(sizes: dict[str, int]) -> tuple[UnitList, dict[str, str]]:
+    """One unit per member, `label` carrying the stratum and no clustering."""
+    units, strata = [], {}
+    for label, n in sizes.items():
+        for i in range(n):
+            key = f"{label}_{i}"
+            units.append(Unit(key=key, paths=(), attributes={"label": label}))
+            strata[key] = label
+    return UnitList(units), strata
+
+
+def _clustered_by_stratum(
+    spec: dict[str, list[int]],
+) -> tuple[UnitList, dict[str, str], dict[str, str]]:
+    """Clusters of the given sizes, every cluster wholly inside one stratum — which
+    is what `units.stratum_varies_within_cluster` guarantees a validated config is."""
+    units, clusters, strata = [], {}, {}
+    for label, sizes in spec.items():
+        for c, n in enumerate(sizes):
+            cluster = f"{label}c{c}"
+            for i in range(n):
+                key = f"{cluster}_{i}"
+                units.append(
+                    Unit(key=key, paths=(), attributes={"label": label, "site": cluster})
+                )
+                clusters[key], strata[key] = cluster, label
+    return UnitList(units), clusters, strata
+
+
+def test_each_fold_gets_a_proportional_share_of_each_stratum():
+    """12 units, 8 `label=0` and 4 `label=1`, at k=2, so each fold must hold 4 and 2.
+
+    Deliberately asymmetric, and deliberately under digest `sha256:0000`. An 8/4
+    roster is not enough on its own: under `sha256:abc` and under `"d"` the
+    *unstratified* draw already lands 4/2 in both folds, so this assertion would pass
+    against a partitioner that ignored `strata` entirely. Under `sha256:0000` it does
+    not — `test_an_unstratified_draw_of_the_same_stratum_fixture_is_lopsided` pins the
+    3/3 and 5/1 it gives instead, and is this test's control.
+    """
+    roster, strata = _by_stratum({"0": 8, "1": 4})
+    folds = partition_units(roster, k=2, digest="sha256:0000", strata=strata)
+    assert [len(f) for f in folds] == [6, 6]
+    for fold in folds:
+        counts = Counter(u.label for u in fold)
+        assert counts["0"] == 4
+        assert counts["1"] == 2
+
+
+def test_an_unstratified_draw_of_the_same_stratum_fixture_is_lopsided():
+    """The control that must report: the same roster and digest with no `strata`
+    splits the small stratum 3/1, not 2/2. Named with `stratum` so `pytest -k
+    stratum` runs it beside the probe rather than leaving the probe unaccompanied."""
+    roster, _ = _by_stratum({"0": 8, "1": 4})
+    folds = partition_units(roster, k=2, digest="sha256:0000")
+    assert [dict(Counter(u.label for u in f)) for f in folds] == [
+        {"0": 3, "1": 3},
+        {"0": 5, "1": 1},
+    ]
+
+
+def test_one_stratum_over_the_whole_roster_is_the_unstratified_draw():
+    """A single stratum has nothing to balance, so it must reproduce the draw exactly
+    — the same units in the same folds in the same order, not merely the same sizes.
+    This is what pins the stratified path onto the one assignment rule: a second rule
+    for the stratified case would be free to differ here."""
+    roster, strata = _by_stratum({"only": 50})
+    stratified = partition_units(roster, k=5, digest="d", strata=strata)
+    plain = partition_units(roster, k=5, digest="d")
+    assert [[u.key for u in f] for f in stratified] == [[u.key for u in f] for f in plain]
+
+
+def test_no_cluster_is_split_across_a_stratified_fold():
+    """Stratification must not reintroduce the leak. Clusters 7/3/3/1/1, each wholly
+    inside one stratum (`A` holds 7+3, `B` holds 3+1+1), at k=2.
+
+    Task 4's `test_no_cluster_is_split_across_folds` cannot see this: it passes no
+    `strata`, so a stratifier that partitioned units instead of clusters — or that
+    ignored `clusters` once `strata` arrived — would leave it green. The uneven sizes
+    are what make the leak visible; with singleton clusters every assignment keeps
+    them whole trivially.
+    """
+    roster, clusters, strata = _clustered_by_stratum({"A": [7, 3], "B": [3, 1, 1]})
+    folds = partition_units(
+        roster, k=2, digest="sha256:0000", clusters=clusters, strata=strata
+    )
+    seen: dict[str, int] = {}
+    for f, fold in enumerate(folds):
+        for u in fold:
+            assert seen.setdefault(clusters[u.key], f) == f, "a cluster spans two folds"
+    assert sum(len(f) for f in folds) == 15
+    assert len({u.key for f in folds for u in f}) == 15
+    assert [dict(Counter(u.label for u in f)) for f in folds] == [
+        {"A": 7, "B": 3},
+        {"A": 3, "B": 2},
+    ]
+
+
+def test_the_clustered_stratified_split_pins_which_fold_each_cluster_lands_in():
+    """Stratum `A` in clusters 3/2/2/2 and `B` in 5/1/1/1/1, at k=3 — the shape where
+    the per-stratum fold sizes are *not* in descending order (`A` gives 3/4/2), so
+    merging the strata index-wise and merging them sorted by size differ.
+
+    Pinned as membership because that difference is an arrangement, not an imbalance:
+    sorting cannot change any stratum's multiset of piece sizes, and on this very
+    fixture it lands marginally *closer* to the roster's 1:1 mix (4/9 and 3/5 against
+    3/8 and 4/6). There is therefore no proportional assertion that could justly
+    condemn it, and this test condemns it on the contract instead — which fold a unit
+    lands in is a function of the digest, and `partition_units` says so.
+    """
+    roster, clusters, strata = _clustered_by_stratum(
+        {"A": [3, 2, 2, 2], "B": [5, 1, 1, 1, 1]}
+    )
+    folds = partition_units(
+        roster, k=3, digest="sha256:0000", clusters=clusters, strata=strata
+    )
+    assert [sorted({u.site for u in f}) for f in folds] == [
+        ["Ac0", "Bc0"],
+        ["Ac1", "Ac2", "Bc1", "Bc3"],
+        ["Ac3", "Bc2", "Bc4"],
+    ]
+    assert [dict(Counter(u.label for u in f)) for f in folds] == [
+        {"A": 3, "B": 5},
+        {"A": 4, "B": 2},
+        {"A": 2, "B": 2},
+    ]
+
+
+def test_stratified_fold_sizes_can_differ_by_more_than_one():
+    """Three strata of three units at k=2 give 6 and 3, not 5 and 4: every stratum's
+    fold list is non-increasing, so fold 0 takes each stratum's ceiling. Pinned
+    because it contradicts `test_partition_sizes_differ_by_at_most_one`, which holds
+    for an unstratified split only — evening the totals out is what would divide a
+    stratum's share unevenly, and that is the thing being declared away."""
+    roster, strata = _by_stratum({"a": 3, "b": 3, "c": 3})
+    folds = partition_units(roster, k=2, digest="sha256:0000", strata=strata)
+    assert [len(f) for f in folds] == [6, 3]
+    assert [dict(Counter(u.label for u in f)) for f in folds] == [
+        {"a": 2, "b": 2, "c": 2},
+        {"a": 1, "b": 1, "c": 1},
+    ]
+
+
+def test_the_same_digest_reproduces_the_same_stratified_split():
+    roster, strata = _by_stratum({"0": 8, "1": 4})
+    a = partition_units(roster, k=2, digest="sha256:0000", strata=strata)
+    b = partition_units(roster, k=2, digest="sha256:0000", strata=strata)
+    assert [[u.key for u in f] for f in a] == [[u.key for u in f] for f in b]
+
+
+def test_a_unit_missing_from_the_stratum_mapping_is_a_core_defect():
+    """Total over the roster or not at all, the rule `clusters` already follows: a
+    `.get` default would give the unit a stratum of its own and balance the split
+    around a value nobody declared."""
+    roster, strata = _by_stratum({"0": 4, "1": 2})
+    del strata["1_0"]
+    with pytest.raises(KeyError):
+        partition_units(roster, k=2, digest="sha256:0000", strata=strata)
 
 
 def test_writing_a_unit_field_raises_the_documented_code() -> None:
