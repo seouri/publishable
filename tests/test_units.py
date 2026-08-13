@@ -9,6 +9,7 @@ from publishable.units import (
     Unit,
     UnitList,
     apply_rule,
+    arm_members,
     arms_of,
     cluster_count,
     clusters_of,
@@ -1085,6 +1086,85 @@ def test_arms_refuse_a_declared_level_with_no_unit():
         arms_of(roster, "arm", ["control", "treatment"])
     assert e.value.code == "E-DATA-ASSIGN-LEVELS"
     assert "treatment" in str(e.value)
+
+
+def test_arm_members_reduces_arms_of_across_the_resolved_conditions():
+    """`units.arm_members` is the reduction the runner's subset view is built
+    from: one call into `arms_of` per declared axis, then a per-condition lookup
+    against `.selectors`/`.values` — never a second derivation of membership.
+    7 control, 5 treatment, deliberately uneven per the H3c fixture rule, plus a
+    third condition selecting no axis at all, which must be absent from the
+    result entirely rather than mapped to the whole roster."""
+    from publishable.sweep import Condition
+
+    roster = UnitList(
+        [Unit(key=f"c{i}", attributes={"arm": "control"}) for i in range(7)]
+        + [Unit(key=f"t{i}", attributes={"arm": "treatment"}) for i in range(5)]
+    )
+    selectors = frozenset({"arm"})
+    conditions = [
+        Condition(index=0, label="control", values={"arm": "control"}, selectors=selectors),
+        Condition(index=1, label="treatment", values={"arm": "treatment"}, selectors=selectors),
+        Condition(index=2, label="plain", values={}, selectors=frozenset()),
+    ]
+    result = arm_members(roster, {"arm": ("arm", ["control", "treatment"])}, conditions)
+    assert result[0] == frozenset(f"c{i}" for i in range(7))
+    assert result[1] == frozenset(f"t{i}" for i in range(5))
+    assert 2 not in result
+    assert len(result[0]) + len(result[1]) == len(roster)
+
+
+def test_arm_members_calls_arms_of_once_per_axis_not_per_condition():
+    """The reduction, not a second partition: with three conditions selecting the
+    same single axis, `arms_of` must run exactly once for it, verified by
+    counting calls rather than by inspecting the result — the discriminator a
+    per-condition re-derivation would still pass on output alone."""
+    from unittest.mock import patch
+
+    from publishable.sweep import Condition
+
+    roster = UnitList(
+        [
+            Unit(key="c0", attributes={"arm": "control"}),
+            Unit(key="t0", attributes={"arm": "treatment"}),
+        ]
+    )
+    selectors = frozenset({"arm"})
+    conditions = [
+        Condition(index=0, label="control", values={"arm": "control"}, selectors=selectors),
+        Condition(index=1, label="treatment", values={"arm": "treatment"}, selectors=selectors),
+    ]
+    with patch("publishable.units.arms_of", wraps=arms_of) as spy:
+        arm_members(roster, {"arm": ("arm", ["control", "treatment"])}, conditions)
+        assert spy.call_count == 1
+
+
+def test_arm_members_intersects_when_a_condition_selects_two_axes():
+    """§ Validation's `sex × arm` cell: a condition selecting more than one axis
+    gets the intersection of each axis's arm, not either one alone."""
+    from publishable.sweep import Condition
+
+    roster = UnitList(
+        [
+            Unit(key="u0", attributes={"arm": "control", "sex": "f"}),
+            Unit(key="u1", attributes={"arm": "control", "sex": "m"}),
+            Unit(key="u2", attributes={"arm": "treatment", "sex": "f"}),
+        ]
+    )
+    conditions = [
+        Condition(
+            index=0,
+            label="cell",
+            values={"arm": "control", "sex": "f"},
+            selectors=frozenset({"arm", "sex"}),
+        ),
+    ]
+    result = arm_members(
+        roster,
+        {"arm": ("arm", ["control", "treatment"]), "sex": ("sex", ["f", "m"])},
+        conditions,
+    )
+    assert result[0] == frozenset({"u0"})
 
 
 def test_the_fold_basis_is_the_cluster_count_when_the_units_are_clustered():

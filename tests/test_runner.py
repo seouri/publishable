@@ -22,7 +22,7 @@ from publishable.runner import (
 )
 from publishable.scope import Execution, build_plan
 from publishable.sweep import Condition, expand
-from publishable.units import Unit, UnitList
+from publishable.units import Unit, UnitList, units_hash
 
 
 class Load(BaseStep):
@@ -106,6 +106,7 @@ def harness(
     max_failed_fraction=None,
     conditions=None,
     fold_members=None,
+    arm_members=None,
     measurements=None,
 ):
     class P(BaseExperiment):
@@ -120,16 +121,22 @@ def harness(
     run_dir = tmp_path / "run"
     run_dir.mkdir(parents=True, exist_ok=True)
     (tmp_path / "input").mkdir(parents=True, exist_ok=True)
+    # One `Config` per condition index the caller declared, plus the `-1` wide
+    # slot every run resolves regardless — a fixed `{0: ..., -1: ...}` left every
+    # multi-condition (arm) test with no `cfg` for condition 1 and `E-RUN-CFG-MISSING`.
+    cfgs = {index: Config({"parameters": {}}) for index, _label in conditions}
+    cfgs[-1] = Config({"parameters": {}})
     results = execute_plan(
         plan=plan,
         run_dir=run_dir,
         input_dir=tmp_path / "input",
-        cfgs={0: Config({"parameters": {}}), -1: Config({"parameters": {}})},
+        cfgs=cfgs,
         repeats=repeats,
         digest="sha256:abc",
         units=units,
         max_failed_fraction=max_failed_fraction,
         fold_members=fold_members,
+        arm_members=arm_members,
         measurements=measurements,
     )
     return run_dir, results, repeats
@@ -790,6 +797,198 @@ def test_a_summary_step_under_a_fold_still_gets_the_full_roster(tmp_path: Path):
     )
     assert results[0].status == "completed"
     assert results[0].returned == {"keys": "u1,u2,u3,u4"}
+
+
+def _arm_roster12():
+    """12 units, 7 `control` and 5 `treatment` — deliberately uneven, and neither
+    half is 6, so an arm can't be confused with the other arm, with half the
+    roster, or with the whole roster by size alone. No `cluster_by` is declared
+    and the fixture carries no attribute a cluster test would key on, so this
+    can't double as a cluster fixture — arm-aware and cluster-aware behaviour
+    would be indistinguishable if it did."""
+    control = [Unit(key=f"c{i}", attributes={"arm": "control"}) for i in range(7)]
+    treatment = [Unit(key=f"t{i}", attributes={"arm": "treatment"}) for i in range(5)]
+    return UnitList(control + treatment)
+
+
+def _arm_members12():
+    roster = _arm_roster12()
+    return {
+        0: frozenset(u.key for u in roster if u.attributes["arm"] == "control"),
+        1: frozenset(u.key for u in roster if u.attributes["arm"] == "treatment"),
+    }
+
+
+def test_two_arms_get_different_rosters_and_neither_is_the_whole_roster(tmp_path: Path):
+    """The bar H2 set: 'a groups axis that expanded conditions while handing each
+    the same roster would report two identical measurements as two arms'. 12
+    units, 7 control and 5 treatment — deliberately uneven, so the two arms
+    cannot be confused with each other or with the roster by size alone.
+
+    `units_hash` over the FULL roster is unaffected by narrowing (asserted
+    below), because narrowing filters a view rather than re-resolving — but that
+    assertion alone does not discriminate re-resolution from the real thing,
+    since a re-resolution producing the same keys and attributes hashes
+    identically. `same_objects` is what actually discriminates: an arm is a
+    subset view, so every unit a condition-scoped step sees must be the exact
+    same `Unit` object the roster holds, not a freshly built one with an equal
+    key."""
+    roster = _arm_roster12()
+    before = units_hash(roster)
+    arm_members = _arm_members12()
+
+    class SeeYourArm(BaseStep):
+        scope = "condition"
+
+        def run(self, cfg, io):
+            return {
+                "n": len(io.units),
+                "same_objects": all(any(u is r for r in roster) for u in io.units),
+            }
+
+    _, results, _ = harness(
+        tmp_path,
+        [SeeYourArm],
+        units=roster,
+        conditions=[(0, "control"), (1, "treatment")],
+        arm_members=arm_members,
+    )
+    by_index = {r.execution.condition_index: r for r in results}
+    sizes = {by_index[0].returned["n"], by_index[1].returned["n"]}
+    assert sizes == {7, 5}
+    assert 12 not in sizes
+    assert by_index[0].returned["same_objects"] is True
+    assert by_index[1].returned["same_objects"] is True
+    assert units_hash(roster) == before
+
+
+def test_run_and_summary_scope_keep_the_whole_roster_under_arms(tmp_path: Path):
+    """A `run`-scope step runs once for the whole run and a `summary`-scope step
+    runs once after every condition — neither belongs to an arm, so both must
+    see all 12 units. This is the pair that discriminates a correct
+    `execution.condition_index is not None` predicate from an implementation
+    that narrows at all four scopes, which would still pass the size assertion
+    above."""
+    roster = _arm_roster12()
+    arm_members = _arm_members12()
+
+    class TouchesAtRun(BaseStep):
+        scope = "run"
+
+        def run(self, cfg, io):
+            return {"n": len(io.units)}
+
+    class TouchesAtSummary(BaseStep):
+        scope = "summary"
+
+        def run(self, cfg, io):
+            return {"n": len(io.units)}
+
+    _, results, _ = harness(
+        tmp_path,
+        [TouchesAtRun, TouchesAtSummary],
+        units=roster,
+        conditions=[(0, "control"), (1, "treatment")],
+        arm_members=arm_members,
+    )
+    by_step = {r.execution.step_name: r for r in results}
+    assert by_step["touches_at_run"].returned == {"n": 12}
+    assert by_step["touches_at_summary"].returned == {"n": 12}
+
+
+def test_a_fold_repeat_composes_with_arms_without_leaking_the_other_arm(tmp_path: Path):
+    """`groups` + `fold` is not refused: each unit is still in exactly one fold,
+    and cross-validation happens within the arm. `fold01`/`fold02` are drawn
+    across the WHOLE 12-unit roster, spanning both arms — the realistic shape,
+    since `partition_units` in `cli.py` partitions the roster before arms narrow
+    anything. Narrowing to the arm before the fold branch reads `units` is what
+    keeps `.train` from holding units of the OTHER arm: if the arm narrowing ran
+    after the fold branch instead, `train` would be computed as the complement
+    over the whole roster and leak the other arm in, the same class of fault
+    `partition_units` exists to prevent for a cluster."""
+    roster = _arm_roster12()
+    arm_members = _arm_members12()
+    fold_members = {
+        "fold01": frozenset({"c0", "c1", "c2", "c3", "t0", "t1"}),
+        "fold02": frozenset({"c4", "c5", "c6", "t2", "t3", "t4"}),
+    }
+    control_keys = arm_members[0]
+    treatment_keys = arm_members[1]
+
+    class SeeFoldWithinArm(BaseStep):
+        scope = "repeat"
+
+        def run(self, cfg, io):
+            return {
+                "test_keys": ",".join(sorted(u.key for u in io.units)),
+                "train_keys": ",".join(sorted(u.key for u in io.units.train)),
+            }
+
+    _, results, _ = harness(
+        tmp_path,
+        [SeeFoldWithinArm],
+        units=roster,
+        conditions=[(0, "control"), (1, "treatment")],
+        repeats=[Repeat("fold", "fold01", 0), Repeat("fold", "fold02", 0)],
+        fold_members=fold_members,
+        arm_members=arm_members,
+    )
+    for r in results:
+        arm_keys = control_keys if r.execution.condition_index == 0 else treatment_keys
+        test_str, train_str = r.returned["test_keys"], r.returned["train_keys"]
+        test_keys = frozenset(test_str.split(",")) if test_str else frozenset()
+        train_keys = frozenset(train_str.split(",")) if train_str else frozenset()
+        # Every unit this execution sees, and every unit in its complement,
+        # belongs to this condition's own arm — never the other one.
+        assert test_keys <= arm_keys
+        assert train_keys <= arm_keys
+        assert test_keys | train_keys == arm_keys
+    by_pair = {(r.execution.condition_index, r.execution.repeat_label): r for r in results}
+    assert by_pair[(0, "fold01")].returned["test_keys"] == "c0,c1,c2,c3"
+    assert by_pair[(1, "fold01")].returned["test_keys"] == "t0,t1"
+
+
+def test_a_missing_arm_entry_is_a_core_defect_not_a_whole_roster_fallback(tmp_path: Path):
+    """Indexed, not `.get`-ed: a condition index absent from `arm_members` means
+    the plan and the resolved arms disagree, which is a core bug — handing that
+    condition the whole roster instead (a `.get` default) is exactly the outcome
+    two declared arms exist to make impossible, so this raises loud, outside the
+    per-execution `try`, the same treatment `E-RUN-CFG-MISSING` gets for the
+    analogous plan/cfgs disagreement — rather than being absorbed as one
+    execution's own failure."""
+    roster = _arm_roster12()
+
+    class SeeYourArm(BaseStep):
+        scope = "condition"
+
+        def run(self, cfg, io):
+            return {"n": len(io.units)}
+
+    with pytest.raises(ContractError) as excinfo:
+        harness(
+            tmp_path,
+            [SeeYourArm],
+            units=roster,
+            conditions=[(0, "control"), (1, "treatment")],
+            arm_members={0: frozenset({"c0"})},  # condition 1 missing on purpose
+        )
+    assert excinfo.value.code == "E-RUN-ARM-UNRESOLVED"
+
+
+def test_units_failed_anywhere_does_not_blame_the_other_arm(tmp_path: Path):
+    """A unit that never belonged to this condition's arm was never handed to
+    its executions, so its absence from `recorded`/`skipped` must not count as
+    a failure — the arm counterpart of `test_without_folds_the_union_is_unchanged`
+    for the analogous fold guarantee. 4 units split 2/2 into two arms, so any
+    cross-arm leak into `_units_failed_anywhere` shows up as a spurious member
+    of the returned set."""
+    roster = _roster4()
+    arm_members = {0: frozenset({"u1", "u2"}), 1: frozenset({"u3", "u4"})}
+    results = [
+        _repeat_result("analyze", "seed01", 0, {"u1": {}, "u2": {}}),
+        _repeat_result("analyze", "seed01", 1, {"u3": {}}),  # u4 never settled
+    ]
+    assert _units_failed_anywhere(results, roster, None, arm_members) == {"u4"}
 
 
 def test_a_single_repeat_skip_is_still_ineligible(tmp_path: Path):

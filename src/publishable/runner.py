@@ -241,6 +241,34 @@ def attrition(
     )
 
 
+def _arm_keys(
+    condition_index: int,
+    keys: set[str],
+    arm_members: "dict[int, frozenset[str]] | None",
+) -> set[str]:
+    """The units a condition's execution was actually given, when the design
+    declares group axes — the arm counterpart to `_handed_keys`'s fold narrowing,
+    and the piece that makes the subset view real rather than merely avoided.
+
+    Indexed, not `.get`-ed: `arm_members` is built once, from the same resolved
+    conditions the plan itself was built from (`cli.command_run`), so a
+    condition index missing from it is the plan and the resolved arms
+    disagreeing — a core defect, not a condition with no arm. A `.get` default
+    would silently hand that condition the whole roster, which is exactly the
+    outcome two arms are declared to prevent, and is why this raises rather than
+    falling back the way `_handed_keys` does for the fold case it mirrors.
+    """
+    if arm_members is None:
+        return keys
+    if condition_index not in arm_members:
+        raise ContractError(
+            f"condition {condition_index} has no arm among arm_members "
+            f"({sorted(arm_members)!r}); the plan and the resolved arms disagree",
+            code="E-RUN-ARM-UNRESOLVED",
+        )
+    return set(arm_members[condition_index]) & keys
+
+
 def _handed_keys(
     repeat_label: str, keys: set[str], fold_members: dict[str, frozenset[str]] | None
 ) -> set[str]:
@@ -278,6 +306,7 @@ def _units_failed_anywhere(
     results: list[ExecutionResult],
     roster: "UnitList",
     fold_members: dict[str, frozenset[str]] | None = None,
+    arm_members: "dict[int, frozenset[str]] | None" = None,
 ) -> set[str]:
     """Units with no settled answer — neither recorded nor skipped — in at least
     one execution of a step that records units, across the whole run.
@@ -305,6 +334,12 @@ def _units_failed_anywhere(
     skipped units are checked against: `_handed_keys` scopes it to the partition
     that execution was actually given, not the entire resolved roster — the other
     k−1 partitions were never handed to it and so cannot count as failures of it.
+    `arm_members`, when a group axis is declared, narrows the same way for the
+    same reason — a unit of the other arm was never handed to this condition's
+    execution either, and counting it as failed would trip `max_failed_fraction`
+    on an arm this run never touched. `_arm_keys` applies before `_handed_keys`,
+    the same order `execute_plan`'s own narrowing uses, so a fold's complement is
+    computed within the arm rather than across it.
     """
     keys = {u.key for u in roster}
     recording_steps = {
@@ -314,7 +349,10 @@ def _units_failed_anywhere(
     for r in results:
         if r.execution.scope != "repeat" or r.execution.step_name not in recording_steps:
             continue
-        handed = _handed_keys(r.execution.repeat_label or "", keys, fold_members)
+        scoped = keys
+        if r.execution.condition_index is not None:
+            scoped = _arm_keys(r.execution.condition_index, keys, arm_members)
+        handed = _handed_keys(r.execution.repeat_label or "", scoped, fold_members)
         failed |= handed - (r.recorded | r.skipped)
     return failed
 
@@ -409,6 +447,7 @@ def execute_plan(
     units: UnitList | None = None,
     max_failed_fraction: float | None = None,
     fold_members: dict[str, frozenset[str]] | None = None,
+    arm_members: "dict[int, frozenset[str]] | None" = None,
     measurements: dict[str, Any] | None = None,
 ) -> list[ExecutionResult]:
     """Run every execution in the plan, in order, one at a time.
@@ -420,6 +459,22 @@ def execute_plan(
     the roster that has failed in at least one execution crosses the threshold, no
     later execution can bring it back, and spending the remaining compute to
     confirm that is waste.
+
+    `arm_members` is `units.arm_members`'s answer, one frozenset of keys per
+    resolved condition that selects a group axis — `None` for a design that
+    declares none. An arm is a **subset view of the one roster resolved for the
+    whole run, never a re-resolution**: `Unit` is frozen and hashable by key
+    exactly because one roster is shared across every condition, and narrowing to
+    an arm here filters that same roster rather than reading the units a second
+    time. Narrowed exactly when `execution.condition_index is not None` — a `run`-
+    or `summary`-scoped execution belongs to no condition and so to no arm, and
+    keeps the whole roster unconditionally, the same way a `fold` repeat already
+    leaves those two scopes alone. The narrowing happens **before** the fold
+    branch below reads `units`, not after: a `fold` repeat's `train` is built as
+    "the roster minus what this execution was handed", and computing that
+    complement across the *whole* roster rather than within the arm would leak
+    the other arm's units into `.train` — the same class of leak
+    `units.partition_units` exists to prevent for a cluster, one level up.
     """
     collapse = len(repeats) <= 1
     seeds = {r.label: r.seed for r in repeats}
@@ -475,28 +530,38 @@ def execute_plan(
             digest=digest,
             seed=seed,
         )
+        # Arm narrowing first, before the fold branch below reads the roster: a
+        # `run`- or `summary`-scoped execution has no condition and so no arm
+        # (`execution.condition_index is None`) and keeps the whole roster,
+        # exactly the units the outer `units` variable still names — narrowing
+        # is a plain reassignment of the *local* `scoped_units`, so `units`
+        # itself stays untouched for `attrition`/`_units_failed_anywhere` below,
+        # the same reason the fold narrowing already left it alone.
+        scoped_units = units
+        if arm_members is not None and units is not None and execution.condition_index is not None:
+            arm_keys = _arm_keys(execution.condition_index, {u.key for u in units}, arm_members)
+            scoped_units = UnitList([u for u in units if u.key in arm_keys])
         # A fold repeat puts the units out of reach of the wider scopes: there is
         # no fold at "run" or "condition" scope, since folds are repeats and
         # repeats haven't happened yet, so a step fitting there would fit on units
         # later folds test on. By "summary" scope every fold has already run, so
         # there is nothing left to leak, and it keeps the whole roster like the
-        # no-fold case. `units` (the full roster, from the outer scope) stays
-        # untouched for `attrition`/`_units_failed_anywhere` below — only this
-        # execution's own `step_units` narrows.
-        if fold_members is None or units is None:
-            step_units = units
+        # no-fold case — the arm-narrowed roster, when a group axis is declared,
+        # since arm narrowing already ran above.
+        if fold_members is None or scoped_units is None:
+            step_units = scoped_units
         elif execution.scope in ("run", "condition"):
             step_units = None  # no fold exists yet at these scopes
         elif execution.scope == "repeat":
             handed = _handed_keys(
-                execution.repeat_label or "", {u.key for u in units}, fold_members
+                execution.repeat_label or "", {u.key for u in scoped_units}, fold_members
             )
             step_units = UnitList(
-                [u for u in units if u.key in handed],
-                train=UnitList([u for u in units if u.key not in handed]),
+                [u for u in scoped_units if u.key in handed],
+                train=UnitList([u for u in scoped_units if u.key not in handed]),
             )
         else:
-            step_units = units  # "summary": every fold has already run
+            step_units = scoped_units  # "summary": every fold has already run
         io = StepIO(
             step_dir=step_dir_for(run_dir, execution, collapse),
             input_dir=input_dir,
@@ -587,7 +652,7 @@ def execute_plan(
 
         if max_failed_fraction is not None and units is not None:
             resolved = len(units)
-            failed = _units_failed_anywhere(results, units, fold_members)
+            failed = _units_failed_anywhere(results, units, fold_members, arm_members)
             if resolved and len(failed) / resolved > max_failed_fraction:
                 break
     return results

@@ -960,6 +960,60 @@ def arms_of(roster: UnitList, column: str, levels: Sequence[str]) -> dict[str, l
     return partition
 
 
+def arm_members(
+    roster: UnitList,
+    axes: Mapping[str, tuple[str, Sequence[str]]],
+    conditions: "Sequence[Any]",
+) -> dict[int, frozenset[str]]:
+    """Which units each resolved condition's own arm holds, one call into
+    `arms_of` per declared group axis rather than one per condition — the
+    reduction the runner's subset view is built from, so a condition on a group
+    axis is handed a real subset of the shared roster and not a second
+    resolution of it.
+
+    `axes` maps a group axis name to `(the resolved `assign.<axis>.from`
+    attribute, that axis's declared `sweep.groups` levels)` — the caller's own
+    resolution of the declaration, mirroring `validate._check_assign`'s. This
+    function's job is narrower than that resolution: it calls `arms_of` — **the
+    single authority** for a single axis's partition — exactly once per axis in
+    `axes`, and then reduces that partition across every axis a condition
+    selects, never deriving membership from the roster a second time by any
+    other route.
+
+    `conditions` is an iterable of objects carrying `.index`, `.values` and
+    `.selectors` — `sweep.Condition`'s own shape, read structurally rather than
+    imported, since `sweep.py` and `units.py` share no dependency edge today and
+    a caller building a lightweight stand-in for a test loses nothing by it.
+    `.selectors` names which of `.values`' paths are group cells; a condition
+    selecting more than one axis gets the *intersection* of each axis's arm —
+    § Validation's `sex × arm` cell — and a condition selecting none is absent
+    from the returned mapping entirely, rather than mapped to the whole roster,
+    since "no arm" and "every unit" are different claims and only `arms_of`
+    itself is the authority for which units a real arm holds.
+
+    A caller passing a condition whose selected axis or level is not in `axes`
+    — an inconsistency between the two arguments — raises a bare `KeyError`
+    rather than falling back to the whole roster: `axes` is meant to cover
+    every axis every condition selects, built from the same declarations that
+    built the conditions, so a gap here is the caller's own bug to see rather
+    than one this function should absorb by handing back units nothing
+    verified.
+    """
+    partitions = {axis: arms_of(roster, column, levels) for axis, (column, levels) in axes.items()}
+    result: dict[int, frozenset[str]] = {}
+    for condition in conditions:
+        selected = [axis for axis in condition.selectors if axis in partitions]
+        if not selected:
+            continue
+        members: set[str] | None = None
+        for axis in selected:
+            level = condition.values[axis]
+            keys = {u.key for u in partitions[axis][level]}
+            members = keys if members is None else members & keys
+        result[condition.index] = frozenset(members or set())
+    return result
+
+
 def cluster_count_of(membership: Mapping[str, str], keys: Iterable[str]) -> int:
     """How many distinct clusters a given set of unit keys falls in.
 

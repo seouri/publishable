@@ -9,7 +9,12 @@ import pytest
 import yaml
 
 from publishable import BaseStep
-from publishable.cli import _apply_execution_order, _wide_swept_paths, main
+from publishable.cli import (
+    _apply_execution_order,
+    _resolved_group_axes,
+    _wide_swept_paths,
+    main,
+)
 from publishable.diagnostics import EXIT_INVOCATION, EXIT_OK, EXIT_PARTIAL, EXIT_WRONG
 from publishable.errors import ContractError
 from publishable.generators.experiment import generate_experiment
@@ -389,6 +394,50 @@ def test_a_group_path_gets_no_swept_away_marker():
     # And with no `groups` declared, a baseline path named `arm` is an ordinary
     # parameter the wide config must still mark.
     assert _wide_swept_paths({"baseline": {"arm": "control"}}) == {"arm"}
+
+
+def test_resolved_group_axes_defaults_from_and_skips_unresolvable_levels():
+    """`_resolved_group_axes` is `command_run`'s own resolution of `assign.<axis>.from`
+    against its default — the axis name — mirroring `validate._check_assign`'s
+    `by_attribute` branch, and `units.arm_members`'s own input shape.
+
+    Tested here rather than end to end for the reason `test_a_group_path_gets_no_swept_away_marker`
+    above states: `validate` refuses `groups` outright in this build
+    (`E-SWEEP-GROUPS-UNSUPPORTED`), so no `run` reaches this code with a group
+    axis declared."""
+    sweep_block = {
+        "groups": [
+            {"by": "arm", "levels": ["control", "treatment"]},
+            {"by": "cohort", "levels": ["derivation", "validation"]},
+            {"by": "unresolvable"},  # no `levels` at all — skipped, not defaulted
+        ],
+    }
+    units_decl = {
+        "assign": {
+            "arm": {"method": "by_attribute", "from": "arm_column"},
+            # `cohort` has no block at all: defaults to the axis name.
+        },
+    }
+    assert _resolved_group_axes(units_decl, sweep_block) == {
+        "arm": ("arm_column", ["control", "treatment"]),
+        "cohort": ("cohort", ["derivation", "validation"]),
+    }
+
+
+def test_resolved_group_axes_is_empty_with_no_groups_declared():
+    assert _resolved_group_axes({"assign": {"arm": {"from": "x"}}}, {}) == {}
+
+
+def test_resolved_group_axes_ignores_from_under_a_non_by_attribute_method():
+    """`from` "means nothing" under `random`/`blocked` — the same gate
+    `units._assign_constant_columns` applies and for the same reason: neither
+    method is executable (`E-DATA-ASSIGN-DRAWN`), so reading `from` under one
+    would resolve a column no method here actually consults."""
+    sweep_block = {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}
+    units_decl = {"assign": {"arm": {"method": "random", "from": "arm_column"}}}
+    assert _resolved_group_axes(units_decl, sweep_block) == {
+        "arm": ("arm", ["control", "treatment"])
+    }
 
 
 def test_the_recorded_order_is_the_order_that_ran(tmp_path: Path):

@@ -78,6 +78,7 @@ from publishable.templates.registry import get_template
 from publishable.units import (
     Unit,
     UnitList,
+    arm_members,
     clusters_of,
     fold_basis,
     partition_units,
@@ -271,6 +272,60 @@ def _wide_swept_paths(sweep_block: dict[str, Any]) -> set[str]:
         | set(ablated_paths(sweep_block))
         | set(sweep_block.get("baseline") or {})
     ) - selectors
+
+
+def _resolved_group_axes(
+    units_decl: dict[str, Any] | None, sweep_block: dict[str, Any]
+) -> dict[str, tuple[str, list[str]]]:
+    """Every `sweep.groups` axis resolved to `(assign.<axis>.from, declared levels)`
+    — `units.arm_members`'s own input shape — read the same way
+    `validate._check_assign`'s `by_attribute` branch resolves the pair: the
+    declared `from` if it is a non-empty string, else the axis name itself.
+
+    Skips an axis whose `levels` does not resolve to a non-empty list of
+    strings, matching `_check_assign`'s own skip for that shape — `sweep.groups`'s
+    own shape check is `validate`'s to report, or not report at all in this
+    build, and inventing a second notion of "resolved" here would not change
+    that. A malformed `assign` block (absent, non-mapping, or naming a method
+    other than `by_attribute`) resolves the axis to its own name, the same
+    default `_check_assign` falls back to before its own checks on the block
+    would have already reported the malformation as a finding.
+
+    Unreachable from `command_run` today: a declared `sweep.groups` axis draws
+    `E-SWEEP-GROUPS-UNSUPPORTED` from `validate`, an error that stops `run`
+    (`command_run`'s `if doc is None or c.has_errors: return EXIT_WRONG`) before
+    this line is ever reached, until the slice that retires it (task 17) lands
+    — the same "unreachable in this build" `_wide_swept_paths` above notes for
+    the selector-path subtraction it depends on.
+    """
+    assign = (units_decl or {}).get("assign")
+    blocks = assign if isinstance(assign, dict) else {}
+    axes: dict[str, tuple[str, list[str]]] = {}
+    for entry in sweep_block.get("groups") or []:
+        if not isinstance(entry, dict):
+            continue
+        axis = entry.get("by")
+        if not isinstance(axis, str) or not axis:
+            continue
+        levels = entry.get("levels")
+        if not (
+            isinstance(levels, list) and levels and all(isinstance(v, str) for v in levels)
+        ):
+            continue
+        block = blocks.get(axis)
+        # Gated on `method == "by_attribute"`, matching `_check_assign`'s own
+        # elif chain and `units._assign_constant_columns`'s own gate for the
+        # same reason: `from` "means nothing" under `random`/`blocked` or an
+        # absent/out-of-enum method, each already refused at `validate` before
+        # this line is ever reached (`E-DATA-ASSIGN-DRAWN`/`E-DATA-ASSIGN-METHOD`).
+        declared_from = (
+            block.get("from")
+            if isinstance(block, dict) and block.get("method") == "by_attribute"
+            else None
+        )
+        column = declared_from if isinstance(declared_from, str) and declared_from else axis
+        axes[axis] = (column, levels)
+    return axes
 
 
 def _attributed(table: UnitTable, attributes: dict[str, dict[str, Any]]) -> UnitTable:
@@ -935,6 +990,19 @@ def command_run(config_path: Path) -> int:
     conditions = expand(doc)
     sweep_block = doc.get("sweep") or {}
     swept_paths = _wide_swept_paths(sweep_block)
+    # One frozenset of unit keys per condition that selects a group axis — `None`
+    # for a design declaring none. Unreachable today (see `_resolved_group_axes`):
+    # a declared `sweep.groups` axis returns `E-SWEEP-GROUPS-UNSUPPORTED`, which
+    # stops `run` above before this line. Built anyway, rather than left for the
+    # slice that retires that refusal, because `execute_plan`'s subset view is the
+    # rest of this feature and a config that never reaches it is not evidence the
+    # wiring is wrong — only that nothing yet asks for it end to end.
+    group_axes = _resolved_group_axes(units_decl, sweep_block)
+    arm_members_map = (
+        arm_members(roster, group_axes, conditions)
+        if group_axes and roster is not None
+        else None
+    )
     plan = build_plan(  # phase 4
         experiment,
         conditions=[(c.index, c.label) for c in conditions],
@@ -1033,6 +1101,7 @@ def command_run(config_path: Path) -> int:
             units=roster,
             max_failed_fraction=(doc.get("limits") or {}).get("max_failed_fraction"),
             fold_members=fold_members,
+            arm_members=arm_members_map,
             measurements=(units_decl or {}).get("measurements"),
         )
 

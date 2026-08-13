@@ -943,8 +943,10 @@ def test_the_budget_counts_the_conditions_a_group_axis_expands(write_config):
 
     Reached the same way every other group check is: `groups` is still refused
     wholesale in this build, and `validate` collects rather than stops, so the
-    warning is raised beside `E-SWEEP-GROUPS-UNSUPPORTED`. The exact error set is
-    asserted so no unrelated refusal can be the one carrying the config.
+    warning is raised beside `E-SWEEP-GROUPS-UNSUPPORTED` — and, since this
+    config declares no `allocation` at all (defaulting to `within`) beside a
+    declared group axis, `E-DATA-ALLOCATION-WITHIN-ARMS` too. The exact error
+    set is asserted so no unrelated refusal can be the one carrying the config.
 
     Two controls, and the second must report rather than be silent: the same
     design without the group axis fits under the same budget (so the two levels
@@ -961,7 +963,7 @@ def test_the_budget_counts_the_conditions_a_group_axis_expands(write_config):
             "limits": {"max_executions": 20},  # 2 arms × 3 methods × 5 seeds = 30 > 20
         }
     )
-    assert _error_codes(over) == {"E-SWEEP-GROUPS-UNSUPPORTED"}
+    assert _error_codes(over) == {"E-SWEEP-GROUPS-UNSUPPORTED", "E-DATA-ALLOCATION-WITHIN-ARMS"}
     assert (
         messages_by_code(over)["W-EXEC-BUDGET"]
         == "6 conditions × 5 repeats = 30 executions exceeds 20"
@@ -1470,8 +1472,9 @@ def test_ablate_composes_with_a_group_axis(write_config):
     `groups` into `PARAMETER_AXIS_MODES` — the set `E-SWEEP-ABLATE-CROSSED`
     reads — passes every other test: this is the one assertion that tells the
     product predicate and the parameter-axis predicate apart. `groups` is
-    refused on its own identifier in this build, and that is the *only* error
-    this config may carry."""
+    refused on its own identifier in this build, and — since no `allocation` is
+    declared beside it, defaulting to `within` — *Arms need allocation* fires
+    too; between them those are the only errors this config may carry."""
     found = _error_codes(
         write_config(
             {
@@ -1483,7 +1486,7 @@ def test_ablate_composes_with_a_group_axis(write_config):
             }
         )
     )
-    assert found == {"E-SWEEP-GROUPS-UNSUPPORTED"}
+    assert found == {"E-SWEEP-GROUPS-UNSUPPORTED", "E-DATA-ALLOCATION-WITHIN-ARMS"}
 
 
 def test_a_plain_ablation_validates_clean(write_config):
@@ -7049,11 +7052,13 @@ def test_a_baseline_may_fix_a_group_level(write_config):
 
     `groups` itself is still refused in this build, so that code is expected
     beside the ones under test rather than filtered away: `validate` collects
-    rather than stops, which is what makes the exemption testable today."""
+    rather than stops, which is what makes the exemption testable today. So is
+    `E-DATA-ALLOCATION-WITHIN-ARMS`: none of these three configs declares
+    `allocation`, which defaults to `within`, beside the declared `arm` axis."""
     axis = [{"by": "arm", "levels": ["control", "treatment"]}]
     assert _error_codes(
         write_config({"sweep": {"groups": axis, "baseline": {"arm": "control"}}})
-    ) == {"E-SWEEP-GROUPS-UNSUPPORTED"}
+    ) == {"E-SWEEP-GROUPS-UNSUPPORTED", "E-DATA-ALLOCATION-WITHIN-ARMS"}
 
     assert _error_codes(write_config({"sweep": {"baseline": {"arm": "control"}}})) == {
         "E-SWEEP-PATH-UNKNOWN"
@@ -7068,7 +7073,7 @@ def test_a_baseline_may_fix_a_group_level(write_config):
                 }
             }
         )
-    ) == {"E-SWEEP-GROUPS-UNSUPPORTED", "E-SWEEP-PATH-UNKNOWN"}
+    ) == {"E-SWEEP-GROUPS-UNSUPPORTED", "E-SWEEP-PATH-UNKNOWN", "E-DATA-ALLOCATION-WITHIN-ARMS"}
 
 
 def test_a_group_axis_may_not_name_a_path_a_parameter_axis_writes(write_config):
@@ -7082,7 +7087,9 @@ def test_a_group_axis_may_not_name_a_path_a_parameter_axis_writes(write_config):
     covers: the duplicate check reads `grid`/`paired`/`sample` only.
 
     The control must report: a group axis whose name no parameter axis writes is
-    the ordinary composed design, and carries the unsupported code alone."""
+    the ordinary composed design, and carries the unsupported code and *Arms
+    need allocation* alone — neither config below declares `allocation`, which
+    defaults to `within`, beside the declared `arm` axis."""
     assert _error_codes(
         write_config(
             {
@@ -7092,7 +7099,12 @@ def test_a_group_axis_may_not_name_a_path_a_parameter_axis_writes(write_config):
                 }
             }
         )
-    ) == {"E-SWEEP-GROUPS-UNSUPPORTED", "E-SWEEP-PATH-DUPLICATE", "E-SWEEP-PATH-UNKNOWN"}
+    ) == {
+        "E-SWEEP-GROUPS-UNSUPPORTED",
+        "E-SWEEP-PATH-DUPLICATE",
+        "E-SWEEP-PATH-UNKNOWN",
+        "E-DATA-ALLOCATION-WITHIN-ARMS",
+    }
 
     assert _error_codes(
         write_config(
@@ -7103,7 +7115,7 @@ def test_a_group_axis_may_not_name_a_path_a_parameter_axis_writes(write_config):
                 }
             }
         )
-    ) == {"E-SWEEP-GROUPS-UNSUPPORTED"}
+    ) == {"E-SWEEP-GROUPS-UNSUPPORTED", "E-DATA-ALLOCATION-WITHIN-ARMS"}
 
 
 def test_a_group_level_must_render_into_a_condition_label(write_config):
@@ -7113,23 +7125,32 @@ def test_a_group_level_must_render_into_a_condition_label(write_config):
     it is refused exactly as a `grid` value is — the exemption `sweep.baseline`
     values get never applied to a value `label_for` renders.
 
-    The control must report: well-formed levels carry the unsupported code
-    alone."""
+    The control must report: well-formed levels carry the unsupported code and
+    *Arms need allocation* alone — none of these three configs declares
+    `allocation`, which defaults to `within`, beside the declared `arm` axis."""
     assert _error_codes(
         write_config(
             {"sweep": {"groups": [{"by": "arm", "levels": ["control", "treat__ment"]}]}}
         )
-    ) == {"E-SWEEP-GROUPS-UNSUPPORTED", "E-SWEEP-VALUE-UNNAMEABLE"}
+    ) == {
+        "E-SWEEP-GROUPS-UNSUPPORTED",
+        "E-SWEEP-VALUE-UNNAMEABLE",
+        "E-DATA-ALLOCATION-WITHIN-ARMS",
+    }
 
     assert _error_codes(
         write_config({"sweep": {"groups": [{"by": "arm", "levels": ["control", "a/b"]}]}})
-    ) == {"E-SWEEP-GROUPS-UNSUPPORTED", "E-SWEEP-VALUE-UNNAMEABLE"}
+    ) == {
+        "E-SWEEP-GROUPS-UNSUPPORTED",
+        "E-SWEEP-VALUE-UNNAMEABLE",
+        "E-DATA-ALLOCATION-WITHIN-ARMS",
+    }
 
     assert _error_codes(
         write_config(
             {"sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}}
         )
-    ) == {"E-SWEEP-GROUPS-UNSUPPORTED"}
+    ) == {"E-SWEEP-GROUPS-UNSUPPORTED", "E-DATA-ALLOCATION-WITHIN-ARMS"}
 
 
 def test_a_baseline_may_not_fix_a_group_level_while_ablate_is_declared(write_config):
@@ -7152,7 +7173,9 @@ def test_a_baseline_may_not_fix_a_group_level_while_ablate_is_declared(write_con
     the unsupported code alone (it is also
     `test_ablate_composes_with_a_group_axis`, untouched), and the same baseline
     without `ablate` is the ordinary per-cell design § Expansion modes' second
-    table row describes."""
+    table row describes. None of the three declares `allocation`, which
+    defaults to `within`, beside the declared `cohort` axis, so
+    `E-DATA-ALLOCATION-WITHIN-ARMS` fires alongside every one of them."""
     axis = [{"by": "cohort", "levels": ["derivation", "validation"]}]
     assert _error_codes(
         write_config(
@@ -7164,7 +7187,11 @@ def test_a_baseline_may_not_fix_a_group_level_while_ablate_is_declared(write_con
                 }
             }
         )
-    ) == {"E-SWEEP-GROUPS-UNSUPPORTED", "E-SWEEP-ABLATE-BASELINE-GROUP"}
+    ) == {
+        "E-SWEEP-GROUPS-UNSUPPORTED",
+        "E-SWEEP-ABLATE-BASELINE-GROUP",
+        "E-DATA-ALLOCATION-WITHIN-ARMS",
+    }
 
     assert _error_codes(
         write_config(
@@ -7176,7 +7203,7 @@ def test_a_baseline_may_not_fix_a_group_level_while_ablate_is_declared(write_con
                 }
             }
         )
-    ) == {"E-SWEEP-GROUPS-UNSUPPORTED"}
+    ) == {"E-SWEEP-GROUPS-UNSUPPORTED", "E-DATA-ALLOCATION-WITHIN-ARMS"}
 
     assert _error_codes(
         write_config(
@@ -7188,7 +7215,7 @@ def test_a_baseline_may_not_fix_a_group_level_while_ablate_is_declared(write_con
                 }
             }
         )
-    ) == {"E-SWEEP-GROUPS-UNSUPPORTED"}
+    ) == {"E-SWEEP-GROUPS-UNSUPPORTED", "E-DATA-ALLOCATION-WITHIN-ARMS"}
 
 
 # `data.units.allocation`, `data.units.assign`, and `sweep.groups` against each
@@ -7283,13 +7310,54 @@ def test_each_unassigned_axis_is_reported_on_its_own():
     assert "`arm`" in missing[0].message and "`sex`" not in missing[0].message
 
 
-def test_allocation_within_leaves_both_cross_field_rows_silent():
-    """Neither row is gated on `groups` alone. A group axis under the default
-    `within` is *Arms need allocation*, a row this build reports by nothing —
-    reporting a missing `assign` there would name the wrong fault."""
+def test_within_allocation_with_a_group_axis_is_arms_need_allocation():
+    """The mirror of `test_between_allocation_with_no_group_axis_has_no_arms`
+    below: a group axis under the default `within` is *Arms need allocation*,
+    `E-DATA-ALLOCATION-WITHIN-ARMS` — reporting a missing `assign` here instead
+    would name the wrong fault, since `assign` means nothing under `within` at
+    all. Read from the declarations alone, so it reports with no roster."""
     c = Collector()
     _check_assign({"sweep": {"groups": _ARM_AXIS}}, {"from": "index.csv"}, None, c)
-    assert [f.code for f in c.findings] == []
+    assert [f.code for f in c.findings] == ["E-DATA-ALLOCATION-WITHIN-ARMS"]
+
+    # An explicit `allocation: within` is the same fault as the absent key that
+    # defaults to it — the row is stated in terms of the *value*, not the key's
+    # presence.
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": _ARM_AXIS}},
+        {"from": "index.csv", "allocation": "within"},
+        None,
+        c,
+    )
+    assert [f.code for f in c.findings] == ["E-DATA-ALLOCATION-WITHIN-ARMS"]
+
+
+def test_between_allocation_with_a_group_axis_draws_neither_arms_row(write_config):
+    """The control the pair demands: `allocation: between` beside a well-formed
+    group axis is the legal composition, so it must draw NEITHER
+    `E-DATA-ALLOCATION-NO-ARMS` nor its mirror `E-DATA-ALLOCATION-WITHIN-ARMS` —
+    only the still-live blanket refusals this build has not yet retired."""
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": _ARM_AXIS}},
+        {
+            "from": "index.csv",
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+        },
+        None,
+        c,
+    )
+    codes = [f.code for f in c.findings]
+    assert "E-DATA-ALLOCATION-NO-ARMS" not in codes
+    assert "E-DATA-ALLOCATION-WITHIN-ARMS" not in codes
+
+    found = _error_codes(
+        write_config(_between({"arm": {"method": "by_attribute"}}))
+    )
+    assert "E-DATA-ALLOCATION-NO-ARMS" not in found
+    assert "E-DATA-ALLOCATION-WITHIN-ARMS" not in found
 
 
 def test_by_attribute_assignment_is_accepted(write_config, tmp_path):
@@ -7455,6 +7523,7 @@ def test_assign_levels_resolve_when_every_unit_names_a_declared_level():
         {"sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}},
         {
             "attributes": ["arm"],
+            "allocation": "between",
             "assign": {"arm": {"method": "by_attribute"}},
         },
         _arm_roster(["control", "control", "treatment"]),
@@ -7473,6 +7542,7 @@ def test_assign_levels_refused_when_a_value_names_no_declared_level():
         {"sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}},
         {
             "attributes": ["arm"],
+            "allocation": "between",
             "assign": {"arm": {"method": "by_attribute"}},
         },
         _arm_roster(["control", "treatment", "unknown_arm"]),
@@ -7492,6 +7562,7 @@ def test_assign_levels_refused_when_a_unit_carries_no_value_at_all():
         {"sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}},
         {
             "attributes": ["arm"],
+            "allocation": "between",
             "assign": {"arm": {"method": "by_attribute"}},
         },
         _arm_roster(["control", "treatment", None]),
@@ -7510,6 +7581,7 @@ def test_assign_levels_refused_when_a_declared_level_holds_no_unit():
         {"sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}},
         {
             "attributes": ["arm"],
+            "allocation": "between",
             "assign": {"arm": {"method": "by_attribute"}},
         },
         _arm_roster(["control", "control", "control"]),

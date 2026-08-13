@@ -1222,7 +1222,7 @@ def _check_assign(
     doc: dict[str, Any], units: dict[str, Any], roster: UnitList | None, c: Collector
 ) -> None:
     """`data.units.allocation` and `data.units.assign` against each other and against
-    `sweep.groups` — six § Validation rows, most read from declarations alone, so
+    `sweep.groups` — seven § Validation rows, most read from declarations alone, so
     each reports whether or not a roster resolved; the last two need the roster.
 
     *Allocation needs arms* — `allocation: between` with no group axis. § Allocation
@@ -1237,9 +1237,17 @@ def _check_assign(
     config file's "`assign` is REQUIRED when `allocation` is `between`": an absent
     `assign` and an empty `assign: {}` both leave every declared axis unassigned, and
     `between` with no axes at all is what *Allocation needs arms* reports. Neither
-    fires under `allocation: within`, whose
-    own row (*Arms need allocation*) states the fault differently — a unit cannot be
-    in one arm and in all of them — and is reported by nothing in this build.
+    fires under `allocation: within` — that value takes the sibling branch below.
+
+    *Arms need allocation* — the mirror of *Allocation needs arms*: a declared
+    group axis with `allocation` absent or `within`, rather than `between` with no
+    group axis. `within` says every unit appears in every condition, so a unit
+    cannot be in one arm and in all of them — the design the pair below exists to
+    make structurally impossible: handing every condition on a group axis the
+    same, whole roster is exactly two identical measurements reported as two arms.
+    `E-DATA-ALLOCATION-WITHIN-ARMS`, read from the declarations alone like its
+    mirror, and mutually exclusive with it by construction — one `if`/`elif` over
+    the same `allocation` value.
 
     *Assignment names a method*, which is **not** gated on `allocation`: it is a
     check on the block, not on the pair, and an `assign` block naming no method
@@ -1344,6 +1352,21 @@ def _check_assign(
                         f"what says how each unit reaches its arm, and an axis without one "
                         f"names arms nothing puts a unit in",
                     )
+    elif units.get("allocation") in (None, "within") and axes:
+        # *Arms need allocation* — the mirror of *Allocation needs arms* above:
+        # `sweep.groups` names an axis but `allocation` is `within`, or absent
+        # (which defaults to it). Gated on `(None, "within")` explicitly, rather
+        # than a bare `elif axes:`, so a stray out-of-enum `allocation` value —
+        # left to `E-DATA-ALLOCATION-UNSUPPORTED`'s blanket refusal to catch —
+        # is not misreported here as `within`.
+        c.error(
+            "E-DATA-ALLOCATION-WITHIN-ARMS",
+            "data.units.allocation",
+            f"is `within` (the default when the key is absent), but `sweep.groups` "
+            f"declares {', '.join(axes)} — `within` says every unit appears in every "
+            f"condition, so a unit can't be in one arm and in all of them. Declare "
+            f"`allocation: between`, or drop the group axis",
+        )
 
     for axis, block in blocks.items():
         if block is None:
