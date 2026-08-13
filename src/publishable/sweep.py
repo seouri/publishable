@@ -62,8 +62,8 @@ class Condition:
     `expand`, which is the only place that knows which mode produced a cell:
     every consumer of `values` needs the same answer, and seven independent
     "is this a group path?" derivations is how six agree and one does not.
-    **The readers still ignore it in this build** — teaching them is the next
-    task's, and until then the field is a marking with no consequence.
+    `runner.resolve_condition_cfg` is the reader it exists for: it skips these
+    paths rather than planting them under `parameters`.
     """
 
     def __post_init__(self) -> None:
@@ -116,22 +116,25 @@ def check_swept_value(value: Any) -> str | None:
     `_` alone stays legal.
 
     `validate._check_sweep` calls this per value of every mode `label_for`
-    renders — `grid`, `paired` and `ablate.override` — and reports
-    `E-SWEEP-VALUE-UNNAMEABLE`; a `baseline` entry is exempt, because
-    `label_for` never joins a baseline's *fixed* values into a label — a
-    baseline that fixes every axis renders as the literal `baseline`, and a
-    per-cell baseline renders its cell of the axes it left *free* and then the
-    literal `baseline`.
+    renders — `grid`, `paired`, `ablate.override` and a `groups` axis's
+    `levels` — and reports `E-SWEEP-VALUE-UNNAMEABLE`; a `baseline` entry is
+    exempt, because `label_for` never joins a baseline's *fixed* values into a
+    label — a baseline that fixes every axis renders as the literal `baseline`,
+    and a per-cell baseline renders its cell of the axes it left *free* and then
+    the literal `baseline`.
 
     Every value in that cell is an axis value that has been checked here
     already as the axis's own, so the exemption costs nothing. That holds
-    because the only axes a baseline can leave free are `grid` and `paired`,
-    both of which `_check_sweep` now checks: `sample` cannot be declared beside
-    a baseline at all (`E-SWEEP-SAMPLE-BASELINE`), and `ablate` is not an axis
-    and composes with none (`E-SWEEP-ABLATE-CROSSED`). It did *not* hold while
-    `paired` went unchecked — a free `paired` axis put unchecked values into a
-    baseline's rendered cell — which is the half of this claim commit 884959a
-    made true rather than the half it deleted.
+    because the only axes a baseline can leave free are `grid`, `paired` and
+    `groups`, all three of which `_check_sweep` now checks: `sample` cannot be
+    declared beside a baseline at all (`E-SWEEP-SAMPLE-BASELINE`), and `ablate`
+    is not an axis and composes with no parameter one
+    (`E-SWEEP-ABLATE-CROSSED`). `groups` joined that list the moment a group
+    cell began rendering into a label, which is the same half of the claim — a
+    level like `a__b` passes the pattern and destroys the separator. It did
+    *not* hold while `paired` went unchecked — a free `paired` axis put
+    unchecked values into a baseline's rendered cell — which is the half of this
+    claim commit 884959a made true rather than the half it deleted.
     """
     rendered = render_value(value)
     if not re.match(SWEPT_VALUE_PATTERN, rendered):
@@ -403,12 +406,12 @@ A mode is here when the condition set is a product *across* it rather than a
 list appended after it: `grid`, `paired` and `sample` each contribute an axis
 of parameter cells, and `groups` contributes an axis of unit arms.
 
-**`groups` produces no conditions in this build.** It is classified here
-because that is what it is — § Expansion modes crosses group arms with the
-parameter axes — but `_axes` does not read it yet, so a `sweep` declaring
-`groups` alone expands to nothing and `validate` refuses it outright
-(`E-SWEEP-GROUPS-UNSUPPORTED`). Membership in this tuple is a statement about
-the vocabulary, not a claim about what executes today.
+`_axes` builds a group axis's cells like any other's, and heads the list with
+them — § How artifacts are organized orders "`groups` axes in declaration
+order, then parameter axes in declaration order". A config declaring `groups`
+is still refused at `validate` (`E-SWEEP-GROUPS-UNSUPPORTED`) until the rest of
+the arm machinery lands; that refusal is about `data.units.assign`, not about
+expansion.
 
 This tuple is not what `ablate` may not cross — that is
 `PARAMETER_AXIS_MODES`, a strict subset. The two questions were one tuple
@@ -691,6 +694,29 @@ def _axes(sweep: dict[str, Any], sample_seed: int | None = None) -> list[list[di
     structure rather than a sentence someone has to remember.
     """
     axes: list[list[dict[str, Any]]] = []
+    # Group axes first, and the ordering is a rule rather than an implementation
+    # accident: § How artifacts are organized fixes a label's axis order as
+    # "`groups` axes in declaration order, then parameter axes in declaration
+    # order", and a row's label is rendered from its `values` in insertion
+    # order — so heading the list is what puts `arm=control` before
+    # `method=pearson`. It also makes the last *parameter* axis the one that
+    # varies fastest, which is the same Index row's other rule.
+    #
+    # The entry shape is `selector_paths`' — § Expansion modes fixes it as
+    # `{by: <axis>, levels: [...]}` in a list — and it is read defensively for
+    # the same reason: `validate` expands inside a `try`, so a shape this
+    # crashed on would be a config that validates clean and crashes `run`. A
+    # non-list `levels` is skipped rather than iterated, because a bare string
+    # is iterable and would expand into one condition per character — the trap
+    # `_check_shape`'s per-axis `list` guard closes for `grid`.
+    for entry in sweep.get("groups") or []:
+        if not isinstance(entry, dict):
+            continue
+        by = entry.get("by")
+        if not isinstance(by, str):
+            continue
+        levels = entry.get("levels")
+        axes.append([{by: level} for level in levels] if isinstance(levels, list) else [])
     for path, values in (sweep.get("grid") or {}).items():
         axes.append([{path: value} for value in values])
     paired = sweep.get("paired") or []
@@ -782,11 +808,17 @@ def expand(config: dict[str, Any]) -> list[Condition]:
     as a block rather than being interleaved into their cells, because the
     product's own numbering is declared-order nested loops (the last axis
     varying fastest) and reordering it to make each cell contiguous would
-    renumber every condition in every existing design. § Expansion modes' one
-    interleaved example is `ablate × groups`, which no config can reach here:
-    `ablate` composes with no axis (`E-SWEEP-ABLATE-CROSSED`) and `groups` is
-    not expanded in this build, so an `ablate` sweep has no axes and therefore
-    exactly one baseline.
+    renumber every condition in every existing design.
+
+    **That block is a known divergence from § How artifacts are organized's
+    Index row**, whose `ablate × groups` example numbers
+    `00_cohort=derivation__baseline` and `03_cohort=validation__baseline` rather
+    than putting both baselines first — and which this mode makes reachable
+    rather than theoretical. It is recorded in `docs/superpowers/spec-defects.md`
+    § Per-cell baseline numbering, with the argument that "the head of each cell"
+    is undefined once a second axis makes a cell's rows non-contiguous. The
+    deliverable there is a document decision, so the numbering is left as it is
+    rather than changed on the way past.
 
     With no `sweep` block, one condition whose label is None — which is what
     keeps the `conditions/` level out of the artifact tree.
@@ -800,10 +832,15 @@ def expand(config: dict[str, Any]) -> list[Condition]:
     ablate row starts from a *copy* of the same values.
 
     A row therefore carries a third thing: the values its label is rendered from.
-    For a product row that is the whole cell; for an ablate row it is the one
-    change alone, which is what makes `01_labs=false` — the label § Expansion
-    modes shows — rather than a label restating every baseline value the
-    condition inherited but did not vary.
+    For a product row that is the whole cell; for an ablate row it is its cell
+    and the one change, which is what makes `01_cohort=derivation__labs=false` —
+    the label § Expansion modes shows — rather than a label restating every
+    baseline value the condition inherited but did not vary.
+
+    The one composition that is neither phase alone is `ablate × groups`, the
+    only one § Expansion modes permits and the only one it gives a count for:
+    each ablation is repeated over each cell and the bare product rows are not
+    emitted, giving "(1 + n) conditions per level". See `crossed` below.
     """
     sweep = config.get("sweep") or {}
     if not sweep:
@@ -812,14 +849,31 @@ def expand(config: dict[str, Any]) -> list[Condition]:
     rows: list[tuple[dict[str, Any], dict[str, Any], bool]] = []
     baseline = sweep.get("baseline")
     axes = _axes(sweep, sample_seed_for(config))
+    changes = ablation_changes(sweep)
+    # `dict(baseline)` before anything reads it, so a non-mapping `baseline`
+    # raises here as it always has rather than half-expanding: `path in
+    # baseline` would happily answer for a string. `_check_shape` refuses that
+    # shape fatally, and this is the guard for reaching `expand` without it.
+    fixed = dict(baseline) if baseline else {}
+    # Whether the ablation crosses the axes, which is the one composition
+    # § Expansion modes defines a count for: "`ablate × groups` is permitted, and
+    # gives `(1 + n)` conditions per level". `ablate` beside a *parameter* axis
+    # is refused (`E-SWEEP-ABLATE-CROSSED`) and the document gives it no reading
+    # at all, so that shape expands exactly as it did before this mode landed —
+    # inventing one here would be a design decision taken where the specification
+    # deliberately declines to make one, and `contrasts` already pins what the
+    # uncrossed shape does.
+    group_paths = set(selector_paths(sweep))
+    crossed = bool(changes) and bool(axes) and all(
+        path in group_paths for axis in axes for cell in axis for path in cell
+    )
+    # One cell list, read twice: the baseline's rows and — under `ablate × groups`
+    # — the cells each ablation is repeated over. Computing it once is what makes
+    # "each condition is one change away from *its own cell's* baseline" true by
+    # construction rather than by two agreeing derivations.
+    cells = _baseline_cells(axes, fixed) if (baseline or crossed) else []
     if baseline:
-        # `dict(baseline)` before anything reads it, so a non-mapping `baseline`
-        # raises here as it always has rather than half-expanding: `path in
-        # baseline` would happily answer for a string. `_check_shape` refuses
-        # that shape fatally, and this is the guard for reaching `expand`
-        # without it.
-        fixed = dict(baseline)
-        for cell in _baseline_cells(axes, fixed):
+        for cell in cells:
             # The cell first, then the fixed values over it — the fixed values
             # are what the baseline *declares*, so they win any collision, and
             # a cell path can only collide when the baseline half-fixed a
@@ -831,7 +885,7 @@ def expand(config: dict[str, Any]) -> list[Condition]:
             row_values.update(fixed)
             rows.append((row_values, cell, True))
 
-    if axes:
+    if axes and not crossed:
         # `itertools.product` varies its LAST argument fastest, which is the
         # declared-order nesting the specification asks for. Preserved from the
         # grid-only implementation this replaces.
@@ -841,28 +895,52 @@ def expand(config: dict[str, Any]) -> list[Condition]:
                 values.update(cell)
             rows.append((values, values, False))
 
-    for change in ablation_changes(sweep):
-        # `dict(baseline or {})` first, then the change: an ablation is the
-        # baseline with one thing different, so it has to carry the baseline's
-        # other values — a row holding the change alone would leave every other
-        # parameter at the base config's value and measure two differences at
-        # once. `validate` refuses `ablate` without a `baseline`; expanding one
-        # anyway (as the change alone) keeps this function total.
-        ablated = dict(baseline or {})
-        ablated.update(change)
-        rows.append((ablated, dict(change), False))
+    # **Under `ablate × groups` the product rows are suppressed above and the
+    # cells are carried by these rows instead.** § Expansion modes fixes the
+    # composed count at "(1 + n) conditions per level", which its example
+    # enumerates as 2 levels × (1 baseline + 2 ablations) = 6: a bare cell
+    # carrying the *base config's* parameters is neither that arm's baseline nor
+    # an ablation of it, and emitting one would execute a design nobody declared,
+    # bill it against `limits.max_executions`, and join it to the correction
+    # family. Uncrossed, `cells` is empty and the one empty cell below reproduces
+    # the plain `1 + n` ablation exactly.
+    for cell in cells if crossed else [{}]:
+        for change in changes:
+            # The cell, then the baseline, then the change: an ablation is the
+            # baseline with one thing different, so it has to carry the
+            # baseline's other values — a row holding the change alone would
+            # leave every other parameter at the base config's value and measure
+            # two differences at once — and it has to carry its cell, or "which
+            # units it was measured on" is lost and every level runs the same
+            # ablation twice. `validate` refuses `ablate` without a `baseline`;
+            # expanding one anyway (as the change alone, over the one empty
+            # cell) keeps this function total.
+            ablated = dict(cell)
+            ablated.update(fixed)
+            ablated.update(change)
+            # Labelled by its cell and its one change — `cohort=derivation__labs=false`,
+            # the label § Expansion modes shows — never by the baseline values it
+            # inherited but did not vary.
+            labelled = dict(cell)
+            labelled.update(change)
+            rows.append((ablated, labelled, False))
 
     # The union, not `_swept_paths` alone: `_keys_for` shortens each path to a
     # suffix unique among the ones it is *shown*, so an ablated path missing here
     # falls back to `label_for`'s last-segment rule and two paths ending in the
     # same segment produce one label for two conditions. See `ablated_paths` for
     # why the union is taken here rather than inside `_swept_paths`.
-    swept = _swept_paths(sweep)
-    swept += [path for path in ablated_paths(sweep) if path not in swept]
-    # Not unioned into `swept`: a group path is not a swept parameter path, and
-    # `_keys_for` shortening one more path would move labels task 5 owns
-    # (§ How artifacts are organized orders group axes before parameter ones).
+    # Group paths lead the set, matching `_axes`' order and § How artifacts are
+    # organized's "groups axes in declaration order, then parameter axes". They
+    # belong in it for `ablated_paths`' reason one mode over: a group axis
+    # `arm` beside a `grid` axis `data.arm` renders `arm=` for both without it,
+    # and two conditions sharing a label share a directory and a selector.
+    # `_keys_for` only ever *lengthens* a key when shown another path, so no
+    # design without a group axis moves.
     selectors = selector_paths(sweep)
+    swept = list(selectors)
+    swept += [path for path in _swept_paths(sweep) if path not in swept]
+    swept += [path for path in ablated_paths(sweep) if path not in swept]
     return [
         Condition(index=i, label=label_for(labelled, swept, is_baseline),
                   values=values, is_baseline=is_baseline,

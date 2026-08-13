@@ -27,6 +27,7 @@ from publishable.sweep import (
     removal_value,
     render_value,
     sample_fault,
+    selector_paths,
 )
 from publishable.templates.base import BaseTemplate
 from publishable.templates.registry import get_template, template_names
@@ -1711,10 +1712,10 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
             c.error(
                 code,
                 f"sweep.{mode}",
-                f"{why}, and is specified but not implemented in this build — this build "
-                "expands `baseline`, `grid`, `paired`, `sample` and `ablate` only; `groups` "
-                "will be "
-                "honored in a later slice",
+                f"{why}, and is specified but not implemented in this build — `expand` "
+                "crosses a group axis into the condition product, but nothing yet resolves "
+                "a level into the units it names; `groups` will be honored in a later "
+                "slice",
             )
 
     # A `baseline` declared beside a `sample` axis. `reference.md` § Sweeps and
@@ -2147,6 +2148,11 @@ def _check_sweep(
     # drawn value is recorded in `sweep.yaml` as the condition's while the run
     # used another. The report names the *later* mode, which is the one whose
     # value wins, in `_axes` order (grid, then paired, then sample).
+    # `groups` is deliberately not one of the modes walked into `named_by`: a
+    # group axis writes no parameter at all, so two of them naming one path is a
+    # different fault (§ Validation, "Axis names are distinct") and a group axis
+    # sharing a path with a parameter axis is the *worse* one checked separately
+    # below, under the same code.
     named_by: dict[str, list[tuple[str, str]]] = {}
 
     def _names(mode: str, path: Any, where: str) -> None:
@@ -2181,14 +2187,70 @@ def _check_sweep(
             "duplicates the run would silently execute twice",
         )
 
+    # A group axis's `by` sharing a path with a parameter axis, under the same
+    # code and for a sharper harm than the overwrite above. `expand` marks the
+    # path a *selector* on every row it reaches, so `runner.resolve_condition_cfg`
+    # plants nothing at it and `cli`'s wide config subtracts it: the parameter
+    # axis claims to sweep `parameters.arm` while every condition runs the base
+    # value at every scope, which is § Mistakes core prevents' "a typo'd
+    # parameter silently using a default" by a route nothing else covers. Read
+    # through `selector_paths`, the same function `expand` marks with, so the
+    # check cannot disagree with the marking it is about.
+    group_axes = selector_paths(sweep)
+    for path in group_axes:
+        if path not in named_by:
+            continue
+        where = ", ".join(f"`{w}`" for _, w in named_by[path])
+        c.error(
+            "E-SWEEP-PATH-DUPLICATE",
+            f"sweep.groups.{path}",
+            f"names a path {where} also writes — but a group axis varies *units* "
+            "rather than a parameter, so every condition marks that path a selector "
+            "and no scope plants the parameter: the parameter axis would claim to "
+            f"sweep `parameters.{path}` while every condition ran its base value. "
+            "Rename one of the two — a group axis's name is the label's key and "
+            "need not be a parameter path at all",
+        )
+
+    # Every level of every group axis, through the label check alone. A group
+    # cell renders into a condition label now that the axis expands
+    # (`00_arm=control`), and a label is also a directory segment and a
+    # selector — so a level carrying `/` or the axis separator is refused
+    # exactly as a `grid` value is. Not `_value_checks`: a level names a set of
+    # units rather than a parameter, so there is no `Param` to satisfy and
+    # `spec[path]` would raise.
+    for i, entry in enumerate(sweep.get("groups") or []):
+        if not isinstance(entry, dict) or not isinstance(entry.get("levels"), list):
+            continue
+        for j, level in enumerate(entry["levels"]):
+            unnameable = check_swept_value(level)
+            if unnameable:
+                c.error(
+                    "E-SWEEP-VALUE-UNNAMEABLE",
+                    f"sweep.groups[{i}].levels[{j}]",
+                    unnameable,
+                )
+
     # `sweep.baseline` gets the same per-entry checks — one value, not a list.
     # `reference.md`:218 names this by example ("Baseline is a valid condition |
     # `sweep.baseline` sets `analysis.method: pearsonn`"). Unchecked, a misspelled
     # path was planted verbatim into condition `00`'s config by
     # `resolve_condition_cfg`'s `setdefault` walk, so `00_baseline` ran the base
     # config under a label claiming otherwise and the run reported success.
+    #
+    # **A group level is the one baseline key that is not a parameter path**, and
+    # it is skipped before `_path_resolves` rather than after: § Expansion modes
+    # says a baseline "accepts group levels as well as parameter paths, so
+    # `{arm: control}` designates the control arm", and `_value_checks` indexes
+    # `spec[path]` unguarded, so suppressing only the error would move the
+    # `KeyError` one line down inside a function contracted never to raise. The
+    # gate is the declared axis names, never the presence of a `groups` block: a
+    # baseline fixing a group path no axis declares is an unknown path, and stays
+    # `E-SWEEP-PATH-UNKNOWN`.
     baseline = sweep.get("baseline") or {}
     for path, value in baseline.items():
+        if path in group_axes:
+            continue
         if _path_resolves(path, f"sweep.baseline.{path}"):
             _value_checks(path, value, f"sweep.baseline.{path}", nameable=False)
 

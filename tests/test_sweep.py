@@ -888,13 +888,19 @@ def test_the_mode_vocabulary_is_partitioned_and_parameter_axes_are_a_subset() ->
         assert parameter_axis_modes_present({mode: {"analysis.method": "pearson"}}) == []
 
     # `groups` is the mode the two predicates disagree about, so it is asserted
-    # on its own rather than falling out of either loop: it is a product mode
-    # and not a parameter axis, and — the task-5 boundary — it still expands to
-    # nothing in this build, which is why the loop above no longer covers it.
+    # on its own rather than falling out of either loop: it contributes an axis
+    # of *unit* cells rather than parameter cells, so `_axes` builds one and
+    # `parameter_axis_modes_present` — the list `E-SWEEP-ABLATE-CROSSED` reads —
+    # must still not name it.
     groups = [{"by": "cohort", "levels": ["derivation", "validation"]}]
     assert parameter_axis_modes_present({"groups": groups}) == []
-    assert not _axes({"groups": groups}, sample_seed=7)
-    assert expand({"sweep": {"groups": groups}}) == []
+    assert _axes({"groups": groups}, sample_seed=7) == [
+        [{"cohort": "derivation"}, {"cohort": "validation"}]
+    ]
+    assert [c.label for c in expand({"sweep": {"groups": groups}})] == [
+        "cohort=derivation",
+        "cohort=validation",
+    ]
 
 
 def test_a_group_path_is_marked_a_selector_and_a_parameter_path_is_not() -> None:
@@ -909,12 +915,13 @@ def test_a_group_path_is_marked_a_selector_and_a_parameter_path_is_not() -> None
     "`groups` is a list, always … there is no mapping shorthand". The axis name
     is the entry's `by`, and that is the path a group cell sets.
 
-    The baseline is the route this build can reach: `groups` itself expands to
-    no cells until the slice that builds it, but a baseline fixing a group level
-    puts `arm` into a row's values today. That makes one `expand` call carry
-    both halves — the two baseline rows, which fix `arm` and must mark it, and
-    the two product rows, which are parameter cells alone and must mark
-    nothing."""
+    One `expand` call carries both halves: the two baseline rows, which fix
+    `arm` because the baseline names it, and the four product rows, which carry
+    the group axis's own cells. **The probe is not the row count but the
+    marking** — every row here holds `arm`, and each must mark it a selector
+    while marking `analysis.method` nothing. The control is the grid-only sweep
+    below, whose axis is *named* `arm` and marks nothing, so the discriminator
+    is the mode rather than the name."""
     conditions = expand(
         {
             "sweep": {
@@ -928,23 +935,15 @@ def test_a_group_path_is_marked_a_selector_and_a_parameter_path_is_not() -> None
     assert [dict(c.values) for c in conditions] == [
         {"analysis.method": "pearson", "arm": "control"},
         {"analysis.method": "spearman", "arm": "control"},
-        {"analysis.method": "pearson"},
-        {"analysis.method": "spearman"},
+        {"arm": "control", "analysis.method": "pearson"},
+        {"arm": "control", "analysis.method": "spearman"},
+        {"arm": "treatment", "analysis.method": "pearson"},
+        {"arm": "treatment", "analysis.method": "spearman"},
     ]
-    assert [c.selectors for c in conditions] == [
-        frozenset({"arm"}),
-        frozenset({"arm"}),
-        frozenset(),
-        frozenset(),
-    ]
+    assert [c.selectors for c in conditions] == [frozenset({"arm"})] * 6
     # The complement is the half `resolve_condition_cfg` may keep reading as a
     # parameter path — stated as the subtraction the readers will perform.
-    assert [set(c.values) - c.selectors for c in conditions] == [
-        {"analysis.method"},
-        {"analysis.method"},
-        {"analysis.method"},
-        {"analysis.method"},
-    ]
+    assert [set(c.values) - c.selectors for c in conditions] == [{"analysis.method"}] * 6
 
     # A grid-only sweep is the control for the marking itself: no `groups`
     # declared, so nothing in the run selects units, whatever its paths are
@@ -1195,3 +1194,251 @@ def test_a_sampled_condition_is_labelled_sample_not_by_its_drawn_value() -> None
         }
     )
     assert [c.label for c in conditions] == ["sample", "sample"]
+
+
+def test_a_group_axis_gives_one_condition_per_level() -> None:
+    """§ Expansion modes' own example: `groups: [{by: arm, levels: [control,
+    treatment]}]` gives "2 conditions: 00_arm=control, 01_arm=treatment".
+
+    A group cell sets the axis name as a path — `{arm: control}` is what
+    § Expansion modes says lands in `results.conditions[i].values` — and every
+    one of them is a selector, since "a group level is a *set of units*".
+
+    The control is the same call with `groups` removed: an empty `sweep` is one
+    unlabelled condition, so the two conditions here are the group axis's and
+    nothing else's."""
+    conditions = expand(
+        {"sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}}
+    )
+
+    assert [c.label for c in conditions] == ["arm=control", "arm=treatment"]
+    assert [dict(c.values) for c in conditions] == [{"arm": "control"}, {"arm": "treatment"}]
+    assert [c.selectors for c in conditions] == [frozenset({"arm"}), frozenset({"arm"})]
+    assert [c.index for c in conditions] == [0, 1]
+    assert [c.is_baseline for c in conditions] == [False, False]
+
+    assert expand({"sweep": {}}) == [
+        Condition(index=0, label=None, values={}, is_baseline=False)
+    ]
+
+
+def test_a_group_axis_crosses_a_parameter_axis_with_the_group_axis_outermost() -> None:
+    """§ Expansion modes: "`groups × grid = 2 × 2 = 4 conditions`", and § How
+    artifacts are organized fixes the label's axis order — "`groups` axes in
+    declaration order, then parameter axes in declaration order" — which is why
+    a group axis heads `_axes` rather than being appended after `grid`. Heading
+    it also makes the last *parameter* axis the one that varies fastest, the
+    same Index row's other rule.
+
+    The grid-only control must report the two conditions the parameter axis
+    contributes on its own, so the four here are a product and not a list."""
+    conditions = expand(
+        {
+            "sweep": {
+                "groups": [{"by": "arm", "levels": ["control", "treatment"]}],
+                "grid": {"analysis.method": ["pearson", "spearman"]},
+            }
+        }
+    )
+
+    assert [c.label for c in conditions] == [
+        "arm=control__method=pearson",
+        "arm=control__method=spearman",
+        "arm=treatment__method=pearson",
+        "arm=treatment__method=spearman",
+    ]
+    assert [dict(c.values) for c in conditions] == [
+        {"arm": "control", "analysis.method": "pearson"},
+        {"arm": "control", "analysis.method": "spearman"},
+        {"arm": "treatment", "analysis.method": "pearson"},
+        {"arm": "treatment", "analysis.method": "spearman"},
+    ]
+    assert [c.selectors for c in conditions] == [frozenset({"arm"})] * 4
+
+    plain = expand({"sweep": {"grid": {"analysis.method": ["pearson", "spearman"]}}})
+    assert [c.label for c in plain] == ["method=pearson", "method=spearman"]
+    assert [c.selectors for c in plain] == [frozenset(), frozenset()]
+
+
+def test_two_group_axes_cross_each_other() -> None:
+    """§ Expansion modes: "**Group axes also cross each other**, on the same rule
+    and for the same reason parameter axes do … 2 × 2 = 4 cells: 00_sex=f__arm=control,
+    01_sex=f__arm=treatment, …". Declaration order, last axis fastest.
+
+    The one-axis control must report two conditions, so the four here come from
+    the second axis rather than from the levels of the first."""
+    conditions = expand(
+        {
+            "sweep": {
+                "groups": [
+                    {"by": "sex", "levels": ["f", "m"]},
+                    {"by": "arm", "levels": ["control", "treatment"]},
+                ]
+            }
+        }
+    )
+
+    assert [c.label for c in conditions] == [
+        "sex=f__arm=control",
+        "sex=f__arm=treatment",
+        "sex=m__arm=control",
+        "sex=m__arm=treatment",
+    ]
+    assert [c.selectors for c in conditions] == [frozenset({"sex", "arm"})] * 4
+
+    one_axis = expand({"sweep": {"groups": [{"by": "sex", "levels": ["f", "m"]}]}})
+    assert [c.label for c in one_axis] == ["sex=f", "sex=m"]
+
+
+def test_a_baseline_expands_over_a_free_group_axis_and_is_fixed_by_one_it_names() -> None:
+    """§ Expansion modes: "the baseline expands over whichever axes it doesn't fix
+    — group axes and parameter axes alike", and it "accepts group levels as well
+    as parameter paths, so `{arm: control}` designates the control arm". The two
+    rows of that table, over one design, in one direction each:
+
+    a baseline fixing the *parameter* leaves the group axis free, giving one
+    reference per arm; a baseline fixing the *group level* leaves the parameter
+    axis free, giving one reference per method. Each is the other's control —
+    the same six conditions under a rule that read only one kind of axis would
+    produce one of these shapes for both configs."""
+    free_group = expand(
+        {
+            "sweep": {
+                "groups": [{"by": "arm", "levels": ["control", "treatment"]}],
+                "grid": {"analysis.method": ["pearson", "spearman"]},
+                "baseline": {"analysis.method": "pearson"},
+            }
+        }
+    )
+    assert [c.label for c in free_group] == [
+        "arm=control__baseline",
+        "arm=treatment__baseline",
+        "arm=control__method=pearson",
+        "arm=control__method=spearman",
+        "arm=treatment__method=pearson",
+        "arm=treatment__method=spearman",
+    ]
+    assert [c.is_baseline for c in free_group] == [True, True, False, False, False, False]
+    assert dict(free_group[0].values) == {"arm": "control", "analysis.method": "pearson"}
+    assert free_group[0].selectors == frozenset({"arm"})
+
+    fixed_group = expand(
+        {
+            "sweep": {
+                "groups": [{"by": "arm", "levels": ["control", "treatment"]}],
+                "grid": {"analysis.method": ["pearson", "spearman"]},
+                "baseline": {"arm": "control"},
+            }
+        }
+    )
+    assert [c.label for c in fixed_group] == [
+        "method=pearson__baseline",
+        "method=spearman__baseline",
+        "arm=control__method=pearson",
+        "arm=control__method=spearman",
+        "arm=treatment__method=pearson",
+        "arm=treatment__method=spearman",
+    ]
+    assert [c.is_baseline for c in fixed_group] == [True, True, False, False, False, False]
+    assert dict(fixed_group[0].values) == {"analysis.method": "pearson", "arm": "control"}
+
+
+def test_a_group_key_is_disambiguated_against_a_parameter_path_ending_in_it() -> None:
+    """A group path joins the set `_keys_for` shortens against, which task 3 left
+    to this task. Without the union both axes render `arm=` and two conditions
+    share one label — which is a directory name and a selector.
+
+    The control must report the *unambiguous* spelling: with no group axis
+    competing, `data.arm` still shortens to its leaf."""
+    conditions = expand(
+        {
+            "sweep": {
+                "groups": [{"by": "arm", "levels": ["control"]}],
+                "grid": {"data.arm": ["left", "right"]},
+            }
+        }
+    )
+    assert [c.label for c in conditions] == ["arm=control__data.arm=left",
+                                             "arm=control__data.arm=right"]
+
+    plain = expand({"sweep": {"grid": {"data.arm": ["left", "right"]}}})
+    assert [c.label for c in plain] == ["arm=left", "arm=right"]
+
+
+def test_ablate_crosses_a_group_axis_into_one_baseline_and_n_ablations_per_level() -> None:
+    """§ Expansion modes: "`ablate × groups` is permitted, and gives `(1 + n)`
+    conditions per level" — its example is 2 levels × (1 baseline + 2 ablations)
+    = 6. So each ablation is crossed with each cell, and the bare product rows
+    are not emitted: a cell with the base config's parameters is neither that
+    arm's baseline nor an ablation of it, and the count would be 8.
+
+    **The numbering is the leading block, not the interleaving § How artifacts
+    are organized's Index row shows** (`00_cohort=derivation__baseline`,
+    `03_cohort=validation__baseline`). That divergence predates this task and is
+    recorded in `docs/superpowers/spec-defects.md` § Per-cell baseline numbering,
+    whose stated deliverable is a document decision rather than a code change
+    taken on the way past. Pinned here as what `expand` does.
+
+    The no-`groups` control must report the plain `1 + n`, so the crossing is the
+    group axis's doing and the ordinary ablation is untouched."""
+    conditions = expand(
+        {
+            "sweep": {
+                "groups": [{"by": "cohort", "levels": ["derivation", "validation"]}],
+                "baseline": {"features.labs": True, "features.notes": True},
+                "ablate": {"from": "baseline", "remove": ["features.labs", "features.notes"]},
+            }
+        }
+    )
+
+    assert [c.label for c in conditions] == [
+        "cohort=derivation__baseline",
+        "cohort=validation__baseline",
+        "cohort=derivation__labs=false",
+        "cohort=derivation__notes=false",
+        "cohort=validation__labs=false",
+        "cohort=validation__notes=false",
+    ]
+    assert [c.is_baseline for c in conditions] == [True, True, False, False, False, False]
+    # An ablation runs its own arm's baseline with one thing different, so it
+    # carries the cell, the baseline's other values, and its own change.
+    assert dict(conditions[4].values) == {
+        "cohort": "validation",
+        "features.labs": False,
+        "features.notes": True,
+    }
+    assert conditions[4].selectors == frozenset({"cohort"})
+
+    plain = expand(
+        {
+            "sweep": {
+                "baseline": {"features.labs": True, "features.notes": True},
+                "ablate": {"from": "baseline", "remove": ["features.labs", "features.notes"]},
+            }
+        }
+    )
+    assert [c.label for c in plain] == ["baseline", "labs=false", "notes=false"]
+
+
+def test_a_group_axis_is_total_over_a_malformed_groups_block() -> None:
+    """The same premise `selector_paths` is total on: `validate` expands inside a
+    `try`, so a shape `_axes` crashed on would be a config that validates clean
+    and crashes `run`. A mapping-form `groups`, a bare string entry, an entry with
+    no `by`, and a string `levels` each contribute no axis rather than an
+    exception — the last of them because a string is iterable, and expanding one
+    character by character is the trap `sweep.grid`'s own shape guard closes.
+
+    The well-formed control must report its two cells, so a reader that skipped
+    everything would fail here."""
+    assert _axes({"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}) == [
+        [{"arm": "control"}, {"arm": "treatment"}]
+    ]
+    assert _axes({"groups": {"arm": ["control"]}}) == []
+    assert _axes({"groups": ["arm"]}) == []
+    assert _axes({"groups": [{"levels": ["control"]}]}) == []
+    assert _axes({"groups": [{"by": "arm", "levels": "control"}]}) == [[]]
+    # An axis with no levels is an axis with no cells, so the product is empty
+    # and `E-SWEEP-EXPANDS-EMPTY` is the backstop that refuses it — the same
+    # answer an empty `grid` axis gets from `expand`.
+    assert _axes({"groups": [{"by": "arm", "levels": []}]}) == [[]]
+    assert expand({"sweep": {"groups": [{"by": "arm", "levels": []}]}}) == []

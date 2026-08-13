@@ -6920,3 +6920,103 @@ def test_a_fold_stratify_by_reports_before_an_oversized_k(write_config, tmp_path
         )
     )
     assert found == {"E-REPL-FOLD-K-TOO-LARGE", "W-DATA-CLUSTER-UNDECLARED"}
+
+
+def test_a_baseline_may_fix_a_group_level(write_config):
+    """§ Expansion modes: `sweep.baseline` "accepts group levels as well as
+    parameter paths, so `{arm: control}` designates the control arm". A group
+    level is not a parameter path, so `_path_resolves` must not ask
+    `parameter_spec` about it — the shared check `grid` and `baseline` use is
+    right for every other key and wrong for this one.
+
+    Two controls, both of which must report, and each closes one direction:
+    with no `groups` axis declaring `arm`, the same baseline key *is* an unknown
+    parameter path and stays `E-SWEEP-PATH-UNKNOWN` (which is also the answer to
+    task 3's open question — nothing else refuses a baseline fixing a group path
+    no axis declares); and a misspelled parameter path alongside a real group
+    axis is still reported, so the exemption is the declared axis name and not
+    the `groups` block's presence.
+
+    `groups` itself is still refused in this build, so that code is expected
+    beside the ones under test rather than filtered away: `validate` collects
+    rather than stops, which is what makes the exemption testable today."""
+    axis = [{"by": "arm", "levels": ["control", "treatment"]}]
+    assert _error_codes(
+        write_config({"sweep": {"groups": axis, "baseline": {"arm": "control"}}})
+    ) == {"E-SWEEP-GROUPS-UNSUPPORTED"}
+
+    assert _error_codes(write_config({"sweep": {"baseline": {"arm": "control"}}})) == {
+        "E-SWEEP-PATH-UNKNOWN"
+    }
+
+    assert _error_codes(
+        write_config(
+            {
+                "sweep": {
+                    "groups": axis,
+                    "baseline": {"arm": "control", "analysis.methdo": "pearson"},
+                }
+            }
+        )
+    ) == {"E-SWEEP-GROUPS-UNSUPPORTED", "E-SWEEP-PATH-UNKNOWN"}
+
+
+def test_a_group_axis_may_not_name_a_path_a_parameter_axis_writes(write_config):
+    """`groups: [{by: arm}]` beside `grid: {arm: [...]}` is worse than the
+    overwrite `E-SWEEP-PATH-DUPLICATE` already refuses between two parameter
+    axes: `expand` marks the path a *selector* on every row, so
+    `resolve_condition_cfg` plants nothing and `cli`'s wide config subtracts it —
+    the grid axis claims to sweep `parameters.arm` while every condition runs the
+    base value at every scope. That is § Mistakes core prevents' "a typo'd
+    parameter silently using a default", reached by a route no other check
+    covers: the duplicate check reads `grid`/`paired`/`sample` only.
+
+    The control must report: a group axis whose name no parameter axis writes is
+    the ordinary composed design, and carries the unsupported code alone."""
+    assert _error_codes(
+        write_config(
+            {
+                "sweep": {
+                    "groups": [{"by": "arm", "levels": ["control", "treatment"]}],
+                    "grid": {"arm": ["control", "treatment"]},
+                }
+            }
+        )
+    ) == {"E-SWEEP-GROUPS-UNSUPPORTED", "E-SWEEP-PATH-DUPLICATE", "E-SWEEP-PATH-UNKNOWN"}
+
+    assert _error_codes(
+        write_config(
+            {
+                "sweep": {
+                    "groups": [{"by": "arm", "levels": ["control", "treatment"]}],
+                    "grid": {"analysis.method": ["pearson", "spearman"]},
+                }
+            }
+        )
+    ) == {"E-SWEEP-GROUPS-UNSUPPORTED"}
+
+
+def test_a_group_level_must_render_into_a_condition_label(write_config):
+    """A group cell renders into a label now that the axis expands
+    (`00_arm=control`), and a label is also a directory segment and a selector.
+    `control__b` passes `SWEEP_VALUE_PATTERN` and destroys the axis separator, so
+    it is refused exactly as a `grid` value is — the exemption `sweep.baseline`
+    values get never applied to a value `label_for` renders.
+
+    The control must report: well-formed levels carry the unsupported code
+    alone."""
+    assert _error_codes(
+        write_config(
+            {"sweep": {"groups": [{"by": "arm", "levels": ["control", "treat__ment"]}]}}
+        )
+    ) == {"E-SWEEP-GROUPS-UNSUPPORTED", "E-SWEEP-VALUE-UNNAMEABLE"}
+
+    assert _error_codes(
+        write_config({"sweep": {"groups": [{"by": "arm", "levels": ["control", "a/b"]}]}})
+    ) == {"E-SWEEP-GROUPS-UNSUPPORTED", "E-SWEEP-VALUE-UNNAMEABLE"}
+
+    assert _error_codes(
+        write_config(
+            {"sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}}
+        )
+    ) == {"E-SWEEP-GROUPS-UNSUPPORTED"}

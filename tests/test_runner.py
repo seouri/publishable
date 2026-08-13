@@ -1211,11 +1211,10 @@ def test_a_group_cell_adds_no_parameter() -> None:
     invents an `arm` no `parameter_spec` declares, which a `condition`-scoped
     step then reads as `cfg.parameters.arm`.
 
-    Built through `expand` rather than by hand: `groups` expands to no cells of
-    its own in this build, but a baseline may fix a group level today
-    (§ Expansion modes — a baseline "accepts group levels as well as parameter
-    paths"), so this one call yields both the probe (rows 0 and 1, which fix
-    `arm`) and the control (rows 2 and 3, parameter cells alone).
+    Built through `expand` rather than by hand, over the design § Expansion modes
+    makes that claim about: a baseline fixing the group level (rows 0 and 1) and
+    the arm axis crossed with the parameter axis (rows 2 to 5). Rows 2 and 4 are
+    the two arms of one design, so the claim is asserted between them directly.
     """
     conditions = expand(
         {
@@ -1231,8 +1230,10 @@ def test_a_group_cell_adds_no_parameter() -> None:
     assert [dict(c.values) for c in conditions] == [
         {"analysis.method": "pearson", "arm": "control"},
         {"analysis.method": "spearman", "arm": "control"},
-        {"analysis.method": "pearson"},
-        {"analysis.method": "spearman"},
+        {"arm": "control", "analysis.method": "pearson"},
+        {"arm": "control", "analysis.method": "spearman"},
+        {"arm": "treatment", "analysis.method": "pearson"},
+        {"arm": "treatment", "analysis.method": "spearman"},
     ]
     resolved = [resolve_condition_cfg(BASE_PARAMS, c) for c in conditions]
 
@@ -1249,6 +1250,11 @@ def test_a_group_cell_adds_no_parameter() -> None:
     assert resolved[0].raw == resolved[2].raw
     assert parameters_hash(resolved[0].raw) == parameters_hash(resolved[2].raw)
     assert parameters_hash(resolved[1].raw) == parameters_hash(resolved[3].raw)
+    # § Expansion modes' sentence itself, now that the axis expands: the control
+    # arm and the treatment arm at one method are "same code, same parameters,
+    # different units".
+    assert resolved[2].raw == resolved[4].raw
+    assert parameters_hash(resolved[2].raw) == parameters_hash(resolved[4].raw)
     # And a group axis is not a way to make two arms look alike: the two
     # *methods* still resolve to different parameters.
     assert parameters_hash(resolved[0].raw) != parameters_hash(resolved[1].raw)
