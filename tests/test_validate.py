@@ -1813,7 +1813,9 @@ def test_a_plain_units_block_is_now_accepted(write_config):
         ("allocation", "between", "E-DATA-ALLOCATION-UNSUPPORTED"),
         ("assign", {"arm": {"method": "random"}}, "E-DATA-ASSIGN-UNSUPPORTED"),
         ("cluster_by", "site", "E-DATA-CLUSTER-UNSUPPORTED"),
-        ("weight_by", "sampling_weight", "E-DATA-WEIGHT-UNSUPPORTED"),
+        # `weight_by` was a row here until it became a declaration core honors;
+        # what it may not yet be combined with is checked by
+        # `test_a_weighted_generated_comparison_is_refused` below.
         ("holdout", {"method": "random", "frac": 0.2}, "E-DATA-HOLDOUT-UNSUPPORTED"),
     ],
 )
@@ -1839,7 +1841,6 @@ def test_a_resolver_source_is_refused_until_plugins_exist(write_config):
         {"from": "index.csv", "key": "patient_id", "allocation": "between"},
         {"from": "index.csv", "key": "patient_id", "assign": {"arm": {"method": "random"}}},
         {"from": "index.csv", "key": "patient_id", "cluster_by": "site"},
-        {"from": "index.csv", "key": "patient_id", "weight_by": "sampling_weight"},
         {"from": "index.csv", "key": "patient_id", "holdout": {"method": "random", "frac": 0.2}},
     ],
 )
@@ -5371,9 +5372,10 @@ def test_a_baseline_beside_a_grid_is_untouched_by_the_sample_refusal(write_confi
 
 # --- `data.units.weight_by` ------------------------------------------------
 #
-# `E-DATA-WEIGHT-UNSUPPORTED` is still live (it is retired in a later task), so
-# every one of these asserts its OWN identifier: a test that merely asserted
-# "some finding" would pass off the refusal and say nothing about these checks.
+# Every one of these asserts its OWN identifier rather than "some finding":
+# these checks ran beside a blanket refusal of the whole declaration for most of
+# their life, and a test asserting only that something was reported would have
+# passed off that refusal and said nothing about the check under it.
 
 
 def _weighted_table(tmp_path: Path, body: str, column: str = "sampling_weight") -> None:
@@ -5631,3 +5633,138 @@ def test_no_weight_warning_for_a_zero_valued_weight_looking_column(write_config,
     found = codes(path)
     assert "W-DATA-WEIGHT-UNDECLARED" not in found
     assert "E-DATA-WEIGHT-INVALID" not in found
+
+
+# --- a weighted design beside a contrast ------------------------------------
+#
+# `E-DATA-WEIGHT-UNSUPPORTED` is retired: `weight_by` is a declaration core
+# honors, for a single condition's value, interval and `n.effective`. No
+# *contrast* construction weights — `paired_t_over_units` takes differences and
+# nothing else — so the one combination that would publish a wrong delta is
+# refused under its own code until the paired estimators weight.
+
+
+def _weighted_units(**extra) -> dict:
+    """The `data.units` block these checks share: a declared weight that resolves
+    and passes every value check, so the only finding left is the one under test."""
+    return {
+        "from": "index.csv",
+        "key": "patient_id",
+        "attributes": ["sampling_weight"],
+        "weight_by": "sampling_weight",
+        **extra,
+    }
+
+
+def test_a_declared_weight_by_is_no_longer_refused(write_config, tmp_path):
+    """The retirement itself. A weighted roster with no contrast in it validates
+    clean — not merely free of the old code, but free of every finding, which is
+    what says the design is one core runs today."""
+    _weighted_table(tmp_path, "p1,2.0\np2,3.0\n")
+    path = write_config({"data.units": _weighted_units()})
+    assert codes(path) == set()
+
+
+def test_a_weighted_generated_comparison_is_refused(write_config, tmp_path):
+    """A baseline over an enumerated axis generates two `vs_baseline` deltas, and
+    `paired_t_over_units` weights neither side. The delta and its interval would
+    be unweighted numbers reported beside weighted per-condition values — two
+    answers to different questions in one block."""
+    _weighted_table(tmp_path, "p1,2.0\np2,3.0\n")
+    path = write_config(
+        {
+            "data.units": _weighted_units(),
+            "sweep": {
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {"analysis.method": ["spearman", "kendall"]},
+            },
+        }
+    )
+    assert codes(path) == {"E-DATA-WEIGHT-CONTRAST"}
+    assert "2 comparisons" in messages_by_code(path)["E-DATA-WEIGHT-CONTRAST"]
+
+
+def test_a_weighted_declared_contrast_is_refused(write_config, tmp_path):
+    """The other source of a comparison. A `statistics.contrasts` entry is named
+    rather than generated, so no baseline is involved at all — and it reaches the
+    same unweighted `paired_t_over_units`, which is why the guard reads the
+    resolved family rather than `sweep.baseline`."""
+    _weighted_table(tmp_path, "p1,2.0\np2,3.0\n")
+    path = write_config(
+        {
+            "data.units": _weighted_units(),
+            "sweep": {"grid": {"analysis.method": ["pearson", "spearman"]}},
+            "statistics": {
+                "contrasts": [
+                    {
+                        "id": "spearman_vs_pearson",
+                        "of": "method=spearman",
+                        "against": "method=pearson",
+                    }
+                ]
+            },
+        }
+    )
+    assert codes(path) == {"E-DATA-WEIGHT-CONTRAST"}
+    assert "1 comparison" in messages_by_code(path)["E-DATA-WEIGHT-CONTRAST"]
+
+
+def test_a_weighted_baseline_that_generates_no_comparison_stays_legal(write_config, tmp_path):
+    """The edge that makes the guard narrower than `sweep.baseline` being
+    declared. A baseline with no axis beside it expands to one condition, which
+    `resolve_contrasts` skips as an `of` — the run publishes no delta at all, so
+    there is no unweighted number for the refusal to prevent. Refusing it would
+    strand a design core computes correctly."""
+    _weighted_table(tmp_path, "p1,2.0\np2,3.0\n")
+    overrides = {
+        "data.units": _weighted_units(),
+        "sweep": {"baseline": {"analysis.method": "pearson"}},
+    }
+    assert codes(write_config(overrides)) == set()
+    # The control that must report: the same weighted config with one axis added
+    # generates a comparison and is refused, so the silence above is this
+    # baseline's shape rather than a guard that never fires.
+    crossed = dict(overrides)
+    crossed["sweep"] = {
+        "baseline": {"analysis.method": "pearson"},
+        "grid": {"analysis.method": ["spearman"]},
+    }
+    assert codes(write_config(crossed)) == {"E-DATA-WEIGHT-CONTRAST"}
+
+
+def test_an_unweighted_comparison_is_untouched(write_config, tmp_path):
+    """The neighbouring shape: the same sweep with no `weight_by` is the ordinary
+    design, and nothing about it moved."""
+    _weighted_table(tmp_path, "p1,2.0\np2,3.0\n")
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["sampling_weight"],
+            },
+            "sweep": {
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {"analysis.method": ["spearman", "kendall"]},
+            },
+        }
+    )
+    assert "E-DATA-WEIGHT-CONTRAST" not in codes(path)
+
+
+def test_a_weighted_report_by_is_not_a_contrast(write_config, tmp_path):
+    """`statistics.report_by` repeats a metric over strata "without adding
+    executions or joining the correction family" — it publishes no delta, so it
+    is not a contrast and the refusal must not reach it. A subgroup someone wants
+    to *test* is a `within` contrast, which does join the family and is refused
+    above."""
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id,sampling_weight,cohort\np1,2.0,a\np2,3.0,b\n"
+    )
+    path = write_config(
+        {
+            "data.units": _weighted_units(attributes=["sampling_weight", "cohort"]),
+            "statistics": {"report_by": ["cohort"]},
+        }
+    )
+    assert codes(path) == set()

@@ -4216,15 +4216,6 @@ def test_an_unweighted_run_grows_no_effective_and_no_weighted_by(tmp_path: Path)
     assert aggregated["total"]["value"] is not None
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason="`E-DATA-WEIGHT-UNSUPPORTED` refuses every config declaring `weight_by` and "
-    "`command_run` returns before executing, so no end-to-end run can reach the wiring "
-    "this pins — task 11 retires that refusal. Strict, so it XPASSes and fails the suite "
-    "the moment it does, which is the handoff: the wiring is unit-tested in "
-    "tests/test_runner.py (`attrition`) and tests/test_stats.py (`summarize_step`), and "
-    "this is the only assertion that can see the two meeting in `run.yaml`",
-)
 def test_n_gains_effective_under_a_weighted_design(tmp_path: Path):
     """§ Weighted samples prints exactly this shape: `weighted_by` beside the
     value, `effective` inside `n` beside `completed`.
@@ -4306,3 +4297,83 @@ def test_the_weight_column_reaches_aggregate_so_a_derived_metric_can_weight_itse
     # the unweighted 1.5, since this config declares no `weight_by` — so the 2.0
     # above is the template's arithmetic over a column it really received.
     assert aggregated["pred"]["value"] == pytest.approx(1.5)
+
+
+def test_the_collision_retry_keeps_the_weights_it_was_given(tmp_path, monkeypatch, capsys):
+    """A derived key colliding with a recorded column costs the `derived` mapping
+    and nothing else: `cli` retries `summarize_step` without it, and that retry
+    passes the same `weights`. Silently downgrading the recorded columns to
+    unweighted numbers over a badly chosen name would be this feature's own
+    failure class reached through the containment path — and nothing else in the
+    suite can see it, the retry being reachable only from a run.
+
+    Weights 1/1/1/3 over `pred` 0/1/2/3: the weighted mean is 2.0 and the
+    unweighted one 1.5, so the assertion discriminates rather than checking a
+    shape that survives either way."""
+    import publishable.generators.experiment as experiment_gen
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    monkeypatch.setattr(GenericTemplate, "aggregate", lambda self, units, cfg: {"pred": 1.0})
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        roster_csv="patient_id,sampling_weight\np1,1\np2,1\np3,1\np4,3\n",
+        units_overrides={
+            "attributes": ["sampling_weight"],
+            "weight_by": "sampling_weight",
+        },
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert aggregated["pred"]["value"] == pytest.approx(2.0)
+    assert aggregated["pred"]["n"]["effective"] == pytest.approx(3.0)
+    assert aggregated["pred"]["weighted_by"] == "sampling_weight"
+    # The control that must report: the retry really did happen, so the value
+    # above came from the second call rather than from a run where nothing
+    # collided.
+    assert "W-STATS-AGGREGATE-FAILED" in doc["stdout"]
+    assert "E-STEP-KEY-COLLISION" in doc["stdout"]
+    assert set(aggregated) == {"pred"}
+
+
+def test_a_reporting_stratum_is_weighted_by_its_own_units(tmp_path, monkeypatch, capsys):
+    """§ Reporting strata: a level block is the aggregation repeated over the
+    subset. Under a weight that means the subset's *own* weighted mean and its
+    own Kish size — the roster-wide mapping filtered by the level's table, the
+    same way a ragged column's is — not the parent's figures re-shown.
+
+    Cohort `a` is `pred` 0 and 1 under weights 1 and 3, so its weighted mean is
+    0.75 against an unweighted 0.5, and its effective size is 4² / (1 + 9) = 1.6
+    against a `completed` of 2. Cohort `b` is 2 and 3 under equal weights, where
+    weighting changes nothing — which is what makes the pair a check on the
+    filtering rather than on the weighting alone."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        roster_csv="patient_id,sampling_weight,cohort\np1,1,a\np2,3,a\np3,1,b\np4,1,b\n",
+        units_overrides={
+            "attributes": ["sampling_weight", "cohort"],
+            "weight_by": "sampling_weight",
+        },
+        statistics={"report_by": ["cohort"]},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    step_block = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    by = step_block["by"]["cohort"]
+    assert by["a"]["pred"]["value"] == pytest.approx(0.75)
+    assert by["a"]["pred"]["n"]["effective"] == pytest.approx(1.6)
+    assert by["a"]["pred"]["n"]["completed"] == 2
+    assert by["a"]["pred"]["weighted_by"] == "sampling_weight"
+    assert by["b"]["pred"]["value"] == pytest.approx(2.5)
+    assert by["b"]["pred"]["n"]["effective"] == pytest.approx(2.0)
+    # The control that must report: the whole-table block is the weighted mean
+    # over all four units, (0·1 + 1·3 + 2·1 + 3·1)/6 = 8/6, which is neither
+    # stratum's answer — so the two levels above are their own tables rather than
+    # the parent's numbers copied down.
+    assert step_block["pred"]["value"] == pytest.approx(8 / 6)

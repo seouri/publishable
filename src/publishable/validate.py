@@ -1394,7 +1394,14 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     for field, code in (
         ("assign", "E-DATA-ASSIGN-UNSUPPORTED"),
         ("cluster_by", "E-DATA-CLUSTER-UNSUPPORTED"),
-        ("weight_by", "E-DATA-WEIGHT-UNSUPPORTED"),
+        # `weight_by` was here. `_check_weight_by` checks the declaration for
+        # real, `attrition` computes Kish's effective size from it, and
+        # `summarize_step` weights every `basis: units` column's value and
+        # interval — so the declaration changes the record, which is the test
+        # this family applies. What a weighted run may *not* yet do is publish a
+        # contrast: `_check_sweep` refuses that combination under
+        # `E-DATA-WEIGHT-CONTRAST`, which is a refusal of a combination rather
+        # than of a declaration and so belongs there rather than in this loop.
         # `measurements` was here. `_check_measurements` now checks the block for
         # real, `resolve_units` collapses the input path, `finalize` collapses the
         # step path, and `technical_n` reaches every metric block — so the
@@ -2095,6 +2102,59 @@ def _check_sweep(
         comparisons = len(resolve_contrasts(doc, conditions))
     except (TypeError, KeyError, AttributeError, ValueError):
         comparisons = 0
+    # A weighted design that publishes a contrast. `reference.md` § Weighted
+    # samples: core computes weighted means for `basis: units` metrics and a
+    # weighted `t_over_units` interval whose df comes from Kish's effective size,
+    # and "a contrast between two weighted conditions uses the same weights on
+    # both sides". Nothing in this build weights a contrast at all:
+    # `stats.paired_t_over_units` takes a list of per-unit differences and
+    # nothing else, and `paired_delta_of_derived` / `paired_percentile_of_derived`
+    # likewise take no weights — so a weighted run's `vs_baseline` delta and its
+    # interval would be unweighted numbers sitting beside weighted per-condition
+    # values, each side answering a different question with nothing in the record
+    # distinguishing them. That is the same defect the per-condition wiring was
+    # widened to prevent one level up, one level down.
+    #
+    # **The guard reads the resolved family, not the declaration.** It fires on
+    # what `resolve_contrasts` will actually build — the same count
+    # `W-STATS-FAMILY` below reports — because `sweep.baseline` does not imply a
+    # comparison: a baseline with no axis beside it expands to a single
+    # `is_baseline` row, which the generated loop skips as an `of`, so the run
+    # publishes no delta and there is no wrong number to prevent. Refusing every
+    # declared `baseline` would strand that design, which is the
+    # wider-than-the-harm failure `E-SWEEP-SAMPLE-BASELINE` checked for
+    # explicitly. Reading the family also picks up the other source of a delta —
+    # a declared `statistics.contrasts` entry over a sweep with no baseline at
+    # all — which a declaration-shaped guard would have missed in the other
+    # direction. `statistics.report_by` is deliberately outside it: a stratum
+    # repeats a metric without publishing a delta or joining the family, and its
+    # weighted values are the same construction the whole-table block gets.
+    #
+    # Temporary, and narrowly so: H4 Statistics owns the paired estimator family
+    # and lifts this the moment those three constructions take weights. It is a
+    # refusal of a *combination* rather than of a declaration, so it carries a
+    # row in § Validation's registry and is not one of the `NOT BUILT`
+    # declarations § The one config file counts — the same placement
+    # `E-SWEEP-SAMPLE-BASELINE` and `E-SWEEP-ABLATE-CROSSED` have.
+    weight_by = (_units_declaration(doc.get("data") or {}, c) or {}).get("weight_by")
+    if comparisons > 0 and isinstance(weight_by, str) and weight_by:
+        plural = "" if comparisons == 1 else "s"
+        c.error(
+            "E-DATA-WEIGHT-CONTRAST",
+            "data.units.weight_by",
+            f"weights each condition's own value and interval, and this design also "
+            f"publishes {comparisons} comparison{plural}, which no construction in this "
+            "build weights: a `vs_baseline` delta and a declared `statistics.contrasts` "
+            "entry are both computed over unweighted per-unit differences, so the delta "
+            "would answer a different question than the two weighted values it sits "
+            "beside, with nothing in the record saying so. Declare one or the other "
+            "here: drop `weight_by` and report the contrast over the sample as it was "
+            "drawn, or keep the weighting and express the difference as an `Estimate` "
+            "returned by a `summary` step, which core records as reported rather than "
+            "recomputing. The combination will be honored once the paired estimators "
+            "take weights",
+        )
+
     if comparisons > 0 and (correction or "holm") == "none":
         c.warn(
             "W-STATS-FAMILY",
