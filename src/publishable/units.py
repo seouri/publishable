@@ -731,19 +731,66 @@ def cluster_count(roster: UnitList, cluster_by: str) -> int:
     return len(set(clusters_of(roster, cluster_by).values()))
 
 
-def partition_units(roster: UnitList, k: int, digest: str) -> list[list[Unit]]:
+def partition_units(
+    roster: UnitList, k: int, digest: str, clusters: dict[str, str] | None = None
+) -> list[list[Unit]]:
     """Split the roster into `k` test partitions, each unit in exactly one.
 
     Drawn from the design digest rather than `parameters_hash`: editing an
     unrelated parameter must not redraw every fold boundary (reference.md
-    § What auto-derives from). Sizes differ by at most one, so no fold is
-    systematically smaller than its neighbours.
+    § What auto-derives from).
+
+    `clusters` is `clusters_of`'s mapping — **the single authority** on which units
+    form one cluster, never a second notion derived here. With it, whole clusters
+    go to one side of a split and a cluster is never divided between train and
+    test. `reference.md` § Clustered units says why that is correctness rather than
+    refinement: 300 cells from 10 animals split without regard to `animal_id` train
+    on other cells of the animal they test on, and the metric is inflated *before*
+    any interval is computed — a cluster-robust standard error cannot repair a
+    number that was already leaked into.
+
+    Sizes differ by at most one when `clusters` is `None`. When it is not, they are
+    **as even as indivisible clusters allow** — the unit count is what balances,
+    but a cluster is the smallest thing that can move, so one large cluster sets a
+    floor no assignment can get under. Saying the stronger thing here would be
+    claiming a guarantee the code does not provide.
+
+    The order is part of the contract. The clusters are shuffled with the
+    digest-seeded RNG and then sorted **largest first**, each going to the
+    currently-smallest fold. Both halves are load-bearing: the shuffle is what
+    keeps the draw a function of the design digest and what breaks ties among
+    equal-sized clusters (the only place it can still matter once the sort is
+    stable), while smallest-first assignment over the same clusters strands the
+    large ones and gives a visibly worse split. `list.sort` is stable, so the
+    shuffle survives inside each size.
+
+    A `k` past the number of clusters leaves the surplus folds **empty** rather
+    than dividing a cluster to fill them — an empty fold is a visibly useless
+    split, a divided one is a leaky split that looks fine. `validate` refuses that
+    `k` against the cluster count; this stays total for the case where it did not.
     """
     units = list(roster)
     rng = random.Random(_seed_from(digest))
-    shuffled = list(units)
-    rng.shuffle(shuffled)
-    return [shuffled[i::k] for i in range(k)]
+    if clusters is None:
+        shuffled = list(units)
+        rng.shuffle(shuffled)
+        return [shuffled[i::k] for i in range(k)]
+    # `clusters[...]`, not `.get`: `clusters_of` is total over the roster it was
+    # given and raises `E-DATA-CLUSTER-UNKNOWN` for a unit carrying no cluster, so
+    # a key missing here means the caller passed a mapping from a different roster
+    # — a core defect. A `.get` default would place that unit in an invented
+    # cluster of its own, which is the silent version of exactly the leak this
+    # function exists to prevent.
+    members: dict[str, list[Unit]] = {}
+    for unit in units:
+        members.setdefault(clusters[unit.key], []).append(unit)
+    order = list(members)
+    rng.shuffle(order)
+    order.sort(key=lambda name: -len(members[name]))
+    folds: list[list[Unit]] = [[] for _ in range(k)]
+    for name in order:
+        folds[min(range(k), key=lambda i: len(folds[i]))].extend(members[name])
+    return folds
 
 
 def _seed_from(digest: str) -> int:

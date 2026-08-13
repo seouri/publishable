@@ -246,6 +246,93 @@ def test_a_different_digest_gives_a_different_split():
     assert [[u.key for u in p] for p in a] != [[u.key for u in p] for p in b]
 
 
+def test_the_unclustered_draw_is_unmoved_by_the_clustered_rewrite():
+    """The literal split HEAD produced before `clusters` existed, pinned as bytes.
+
+    The other unclustered tests pin reproducibility and shape — the same digest
+    twice, sizes within one — which a rewritten unclustered path would still
+    satisfy while allocating different units to different folds. `cohort-pilot`
+    and every other unclustered design rests on this draw being the same one.
+    """
+    parts = partition_units(_roster(50), 5, "d")
+    assert [[u.key for u in p] for p in parts] == [
+        ["u018", "u019", "u034", "u029", "u025", "u023", "u007", "u016", "u013", "u035"],
+        ["u036", "u000", "u043", "u040", "u026", "u032", "u003", "u031", "u022", "u041"],
+        ["u020", "u046", "u004", "u001", "u038", "u049", "u017", "u030", "u012", "u033"],
+        ["u039", "u021", "u028", "u010", "u045", "u048", "u009", "u024", "u014", "u042"],
+        ["u011", "u006", "u002", "u005", "u015", "u037", "u027", "u008", "u047", "u044"],
+    ]
+
+
+def _clustered(sizes: dict[str, int]) -> tuple[UnitList, dict[str, str]]:
+    units, clusters = [], {}
+    for site, n in sizes.items():
+        for i in range(n):
+            key = f"{site}_{i}"
+            units.append(Unit(key=key, paths=(), attributes={"site": site}))
+            clusters[key] = site
+    return UnitList(units), clusters
+
+
+def test_no_cluster_is_split_across_folds():
+    """Cluster sizes 7/3/3/1/1 over k=2. Deliberately uneven: with equal-sized or
+    singleton clusters the clustered and unclustered partitioners agree, so a test
+    over those could not see this rewrite at all.
+
+    The `{8, 7}` assertion discriminates twice over. Assigning units rather than
+    whole clusters splits a cluster and trips the `seen` check; balancing cluster
+    count rather than unit count puts 7+3 against 3+1+1 and gives `{10, 5}`; and
+    under this digest the shuffle draws the size-7 cluster **last**, so dropping
+    the largest-first sort also gives `{10, 5}` rather than coinciding with the
+    sorted answer as it does for shuffles that draw it early.
+    """
+    roster, clusters = _clustered({"S1": 7, "S2": 3, "S3": 3, "S4": 1, "S5": 1})
+    folds = partition_units(roster, k=2, digest="sha256:abc", clusters=clusters)
+    seen: dict[str, int] = {}
+    for f, fold in enumerate(folds):
+        for u in fold:
+            assert seen.setdefault(clusters[u.key], f) == f, "a cluster spans two folds"
+    assert sum(len(f) for f in folds) == 15  # every unit lands
+    assert len({u.key for f in folds for u in f}) == 15  # and lands exactly once
+    assert {len(f) for f in folds} == {8, 7}  # balanced by UNIT count
+
+
+def test_the_clustered_draw_follows_the_digest():
+    """Six clusters of 3 over k=3, where the largest-first sort is a no-op and the
+    shuffle is the only thing deciding which cluster lands where.
+
+    Membership, not sizes: with equal clusters every fold holds 6 units whatever
+    the order, so a size assertion here is a check that could not fail. Dropping
+    the shuffle makes the assignment a function of the sizes alone and this test
+    is what reports it.
+    """
+    roster, clusters = _clustered({f"C{i}": 3 for i in range(6)})
+    a = partition_units(roster, k=3, digest="sha256:0000", clusters=clusters)
+    b = partition_units(roster, k=3, digest="sha256:0001", clusters=clusters)
+    as_sites = [sorted({clusters[u.key] for u in fold}) for fold in a]
+    bs_sites = [sorted({clusters[u.key] for u in fold}) for fold in b]
+    assert as_sites != bs_sites, "the clustered draw must be a function of the digest"
+    assert [len(f) for f in a] == [6, 6, 6]
+    assert [len(f) for f in b] == [6, 6, 6]
+
+
+def test_the_same_digest_reproduces_the_same_clustered_split():
+    roster, clusters = _clustered({"S1": 7, "S2": 3, "S3": 3, "S4": 1, "S5": 1})
+    a = partition_units(roster, k=2, digest="sha256:abc", clusters=clusters)
+    b = partition_units(roster, k=2, digest="sha256:abc", clusters=clusters)
+    assert [[u.key for u in p] for p in a] == [[u.key for u in p] for p in b]
+
+
+def test_more_folds_than_clusters_leaves_folds_empty_rather_than_raising():
+    """`k` past the cluster count is refused at `validate` (task 5 owns that check).
+    Until it is, the partitioner stays total and empty-handed rather than dividing
+    a cluster to fill a fold — an empty fold is a visibly useless split, a divided
+    cluster is a leaky one that looks fine."""
+    roster, clusters = _clustered({"S1": 2, "S2": 2})
+    folds = partition_units(roster, k=4, digest="sha256:abc", clusters=clusters)
+    assert sorted(len(f) for f in folds) == [0, 0, 2, 2]
+
+
 def test_writing_a_unit_field_raises_the_documented_code() -> None:
     unit = Unit(key="u1")
 
