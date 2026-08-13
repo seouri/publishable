@@ -4388,29 +4388,6 @@ _UNEVEN_CLUSTERS = "patient_id,site\n" + "".join(
 )
 
 
-def _without_the_cluster_refusal(monkeypatch):
-    """Let a `cluster_by` config through `run`'s own `validate` pass.
-
-    `E-DATA-CLUSTER-UNSUPPORTED` is still live — a later slice retires it — so no
-    clustered config reaches `command_run` at all today, and a test that waited for
-    that would leave this arrival path unpinned until then. Only that one finding
-    is dropped; every other error still refuses the run, so this cannot turn a
-    genuinely invalid config into a green one.
-    """
-    import publishable.cli as cli_module
-    from publishable.diagnostics import Collector
-
-    real = cli_module.validate_config
-
-    def _filtered(config_path, c, experiment=None):
-        inner = Collector()
-        doc = real(config_path, inner, experiment=experiment)
-        c.findings.extend(f for f in inner.findings if f.code != "E-DATA-CLUSTER-UNSUPPORTED")
-        return doc
-
-    monkeypatch.setattr(cli_module, "validate_config", _filtered)
-
-
 def test_leave_one_out_draws_one_fold_per_cluster(tmp_path, monkeypatch):
     """`reference.md` § Validation, *Leave-one-out is affordable*: under
     `cluster_by`, `k: all` is leave-one-*cluster*-out. 5 folds over this 15-unit
@@ -4423,7 +4400,6 @@ def test_leave_one_out_draws_one_fold_per_cluster(tmp_path, monkeypatch):
     `units.fold_basis` and the membership from `units.partition_units` — and each
     was wired by its own task.
     """
-    _without_the_cluster_refusal(monkeypatch)
     doc = run_a_project(
         tmp_path,
         replication={"repeats": [{"kind": "fold", "k": "all"}]},
@@ -4489,8 +4465,15 @@ def test_n_gains_clusters_under_a_clustered_design(tmp_path, monkeypatch):
 
     5 clusters over 15 units, every one completing: the cluster count and the unit
     count are different numbers, which is the only way a reader — or this test —
-    can tell which of the two is being reported."""
-    _without_the_cluster_refusal(monkeypatch)
+    can tell which of the two is being reported.
+
+    **The derived half of this test was retired with H3b task 12's second refusal**
+    and moved to `test_a_clustered_derived_metric_is_refused_rather_than_drawn`
+    below: a derived metric under `cluster_by` no longer reaches the record at all,
+    so there is no `n` of its own to carry a cluster count. This one now asserts
+    the recorded column, which is where the count belongs and always did. The
+    project still derives `total` — the recorded column has to come from
+    somewhere — and the refusal drops it, which the test below is what pins."""
     doc = run_a_project(
         tmp_path,
         replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
@@ -4501,14 +4484,13 @@ def test_n_gains_clusters_under_a_clustered_design(tmp_path, monkeypatch):
     text = (doc["run_dir"] / "run.yaml").read_text()
     run = yaml.safe_load(text)
     aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
-    for name in ("pred", "total"):
-        assert aggregated[name]["n"] == {
-            "resolved": 15,
-            "completed": 15,
-            "ineligible": 0,
-            "failed": 0,
-            "clusters": 5,
-        }
+    assert aggregated["pred"]["n"] == {
+        "resolved": 15,
+        "completed": 15,
+        "ineligible": 0,
+        "failed": 0,
+        "clusters": 5,
+    }
     # Every part renders as an integer in the file. `counts` is annotated
     # `dict[str, float]` for Kish's sake, and a `resolved: 15.0` in the record
     # would be a visible regression no `isinstance` check can see (`15 == 15.0`),
@@ -4521,35 +4503,82 @@ def test_n_gains_clusters_under_a_clustered_design(tmp_path, monkeypatch):
         assert re.search(r"\d+\.\d+", block) is None, block
 
 
+# --- H3b task 12: the clustered derived draw, refused rather than drawn --------
+
+
+def test_a_clustered_derived_metric_is_refused_rather_than_drawn(tmp_path, capsys):
+    """§ Statistical reporting gives a derived metric "a percentile `ci95` from
+    resampling units — or clusters, when `cluster_by` is declared". The clustered
+    form of that draw does not exist, and `percentile_of_derived` draws units
+    unconditionally, so the combination is refused at run time under
+    `E-DATA-CLUSTER-DERIVED` — not at `validate`, because whether a template's
+    `aggregate` returns anything is not knowable from a declaration.
+
+    Three things at once, all of them exact: the derived metric is **absent** from
+    the record rather than present with a null interval, the identifier is
+    disclosed, and the recorded column beside it keeps its cluster-robust interval
+    — the refusal costs the derived mapping and nothing else."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        aggregate_returns="total",
+        roster_csv=_UNEVEN_CLUSTERS,
+        units_overrides={"attributes": ["site"], "cluster_by": "site"},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert "total" not in aggregated
+    # Dropped, not published with `ci95: null` — that state already means "no
+    # resample callable, or no seed", and the record must not hold two meanings
+    # for it.
+    assert set(aggregated) == {"pred"}
+    assert aggregated["pred"]["method"] == "t_over_units_clustered"
+    assert aggregated["pred"]["n"]["clusters"] == 5
+    # The identifier reaches a reader, through the containment `cli` already had
+    # for a derived key collision.
+    out = doc["stdout"]
+    assert "E-DATA-CLUSTER-DERIVED" in out
+    assert "W-STATS-AGGREGATE-FAILED" in out
+    # And the run kept its record: a refusal after every execution is paid for
+    # must not cost the run its `run.yaml`.
+    assert run["status"] == "completed"
+
+
+def test_the_same_derived_metric_unclustered_is_drawn_as_it_always_was(tmp_path, capsys):
+    """The control that must report: the identical project without `cluster_by`
+    publishes `total` with a percentile interval over 2000 draws. The refusal is a
+    property of the combination, not of deriving a metric."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        aggregate_returns="total",
+        roster_csv=_UNEVEN_CLUSTERS,
+        units_overrides={"attributes": ["site"]},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert aggregated["total"]["value"] == 7.0
+    assert aggregated["total"]["method"] == "percentile_over_units"
+    assert aggregated["total"]["resample_draws"] == 2000
+    assert "E-DATA-CLUSTER-DERIVED" not in doc["stdout"]
+
+
+def test_the_shipped_template_derives_nothing_so_no_generated_project_is_reached():
+    """The blast radius of the refusal above, measured rather than asserted: core
+    ships exactly one template, and `generic` does not override `aggregate` at all
+    — `publishable init` therefore generates no project that can reach
+    `E-DATA-CLUSTER-DERIVED`. Only a user-written template that derives a metric
+    does, which is why the refusal is narrow enough to carry until H4 builds the
+    construction."""
+    from publishable.templates.base import BaseTemplate
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    assert GenericTemplate.aggregate is BaseTemplate.aggregate
+
+
 # --- H3b task 11: the partition and the intervals, reached by a real run -------
-
-
-def _without_the_stratify_refusal(monkeypatch):
-    """Let a `fold.stratify_by` config through `resolve_repeats`.
-
-    The **second** bypass this module carries, for a second refusal by a second
-    mechanism: `E-REPL-FOLD-STRATIFY-UNSUPPORTED` is a `raise` inside
-    `replication._fold_k`, not a `validate` finding, so
-    `_without_the_cluster_refusal` cannot reach it and filtering findings cannot
-    either. Both retire in the same later slice — two bypasses, not one, and
-    neither is a duplicate of the other.
-
-    Only the `stratify_by` key is dropped, so every other refusal `_fold_k` makes
-    (`E-REPL-FOLD-K`, `E-REPL-FOLD-K-TOO-LARGE`) still fires, and the declaration
-    still reaches `validate`'s own checks of it and the level that carries it.
-    """
-    import publishable.replication as repl
-
-    real = repl._fold_k
-
-    def _permitted(
-        level: dict[str, Any], fold_basis: int | None, cluster_by: str | None = None
-    ) -> int:
-        return real(
-            {k: v for k, v in level.items() if k != "stratify_by"}, fold_basis, cluster_by
-        )
-
-    monkeypatch.setattr(repl, "_fold_k", _permitted)
 
 
 def _fold_membership(run_dir: Path) -> dict[str, list[str]]:
@@ -4587,7 +4616,6 @@ def test_a_clustered_fold_puts_no_cluster_in_two_folds(tmp_path, monkeypatch):
     clusters allow" — shows in the 7/4/4 that follows from cluster `a` being
     indivisible.
     """
-    _without_the_cluster_refusal(monkeypatch)
     doc = run_a_project(
         tmp_path,
         replication={"repeats": [{"kind": "fold", "k": 3}], "order": "as_declared"},
@@ -4633,7 +4661,6 @@ def test_a_clustered_folds_units_reconcile_in_the_record(tmp_path, monkeypatch):
     import publishable.generators.experiment as experiment_gen
 
     monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
-    _without_the_cluster_refusal(monkeypatch)
     doc = run_a_project(
         tmp_path,
         replication={"repeats": [{"kind": "fold", "k": 3}], "order": "as_declared"},
@@ -4710,7 +4737,6 @@ def test_a_stratified_fold_balances_the_declared_stratum(tmp_path, monkeypatch):
 
     The exact membership is pinned as well as the composition: the composition
     alone cannot see a merge that pairs the wrong strata's folds together."""
-    _without_the_stratify_refusal(monkeypatch)
     doc = run_a_project(
         tmp_path,
         replication={
@@ -4773,7 +4799,6 @@ def test_a_clustered_run_reports_the_cluster_robust_interval(tmp_path, monkeypat
     import publishable.generators.experiment as experiment_gen
 
     monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
-    _without_the_cluster_refusal(monkeypatch)
     doc = run_a_project(
         tmp_path,
         replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
@@ -4835,7 +4860,6 @@ def test_a_weighted_clustered_run_reports_the_weighted_sandwich(tmp_path, monkey
     import publishable.generators.experiment as experiment_gen
 
     monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
-    _without_the_cluster_refusal(monkeypatch)
     doc = run_a_project(
         tmp_path,
         replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
@@ -4870,7 +4894,6 @@ def test_a_reporting_stratum_inside_one_cluster_reports_no_interval(tmp_path, mo
     import publishable.generators.experiment as experiment_gen
 
     monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
-    _without_the_cluster_refusal(monkeypatch)
     doc = run_a_project(
         tmp_path,
         replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},

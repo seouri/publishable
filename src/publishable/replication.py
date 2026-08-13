@@ -103,13 +103,16 @@ def _fold_k(level: dict[str, Any], fold_basis: int | None, cluster_by: str | Non
     counted. It comes from the same `config` the levels do, so it cannot introduce
     a second count; nothing here reads a value from it.
     """
-    if level.get("stratify_by") is not None:
-        raise ContractError(
-            "`fold.stratify_by` is specified but not implemented in this build; "
-            "stratified partitioning is a second partitioning rule with its own "
-            "cross-field checks, and will be honored in a later slice",
-            code="E-REPL-FOLD-STRATIFY-UNSUPPORTED",
-        )
+    # `stratify_by` was refused here, above every check below it, until
+    # `partition_units` learned to balance a stratum across the folds. Its
+    # removal reorders what a config declaring both faults is told: a
+    # `{kind: fold, k: 1, stratify_by: x}` now reports `E-REPL-FOLD-K`, and a
+    # `k` past the basis reports `E-REPL-FOLD-K-TOO-LARGE`, each being the fault
+    # that was always there behind the refusal. Nothing about `stratify_by` is
+    # checked in this function: its name is checked against the declared
+    # attributes by `validate`, and its constancy within a cluster by
+    # `units.stratum_varies_within_cluster`. `resolve_repeats` carries the value
+    # onto the level instead, which is what `cli` reads to build the strata.
     k = level.get("k")
     if k == "all":
         if fold_basis is None:

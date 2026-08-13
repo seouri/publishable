@@ -1424,7 +1424,6 @@ def _warn_undeclared_cluster(
 # `test_an_unresolved_repl_code_is_not_swallowed` pins that escape path.
 REPL_DECLARATION_CODES = frozenset(
     {
-        "E-REPL-FOLD-STRATIFY-UNSUPPORTED",
         "E-REPL-FOLD-K",
         "E-REPL-FOLD-K-TOO-LARGE",
         "E-REPL-LEVEL-DUPLICATE",
@@ -1621,16 +1620,17 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     "Ablation baseline isn't a group level", which needs a group axis to have a
     level for a baseline to fix. `.groups` is read by nothing yet. It resolves a unit roster, but
     several `data.units` sub-fields — allocation other than
-    `within`, `assign`, `cluster_by`, `holdout`, `weight_by`,
+    `within`, `assign`, `holdout`,
     and a `resolver` source — are read by nothing yet either.
     `data.units.measurements` is no longer among them: `resolve_units` collapses
     the rows an input table carries, `StepIO.finalize` collapses the ones a step
     records under `measurement=`, and `technical_n` reaches every metric block,
-    so the declaration changes the record. Each of these
+    so the declaration changes the record. Neither are `weight_by` and
+    `cluster_by`: each decides an interval's construction, and a `cluster_by`
+    decides a `fold`'s partition as well. Each of these
     would otherwise validate clean and then run something other than what the
     config describes — the same class of failure `resolve_repeats` already
-    refuses for repeat levels: `E-REPL-FOLD-STRATIFY-UNSUPPORTED` for
-    `fold.stratify_by`, `E-REPL-LEVEL-DUPLICATE` for two levels of the same
+    refuses for repeat levels: `E-REPL-LEVEL-DUPLICATE` for two levels of the same
     kind, and `E-REPL-LEVEL-DEPTH` past two levels, and
     `E-REPL-LEVEL-BATCH-INNER` for a `batch` that is not the outermost level.
     `batch` and `fold` themselves are no longer refused — both are supported
@@ -1741,7 +1741,17 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
         )
     for field, code in (
         ("assign", "E-DATA-ASSIGN-UNSUPPORTED"),
-        ("cluster_by", "E-DATA-CLUSTER-UNSUPPORTED"),
+        # `cluster_by` was here. `_check_cluster_by` checks the declaration for
+        # real, `attrition` counts the clusters, `partition_units` keeps one out
+        # of two folds, and `summarize_step` gives every `basis: units` column a
+        # cluster-robust interval — so the declaration changes the record, which
+        # is the test this family applies. What a clustered run may *not* yet do
+        # is publish a contrast (`_check_sweep` refuses that combination
+        # under `E-DATA-CLUSTER-CONTRAST`) or resample a derived metric
+        # (`stats.summarize_step` raises `E-DATA-CLUSTER-DERIVED` at run time,
+        # that one not being knowable from a declaration at all). Both refuse a
+        # combination rather than a declaration, which is why neither is in this
+        # loop.
         # `weight_by` was here. `_check_weight_by` checks the declaration for
         # real, `attrition` computes Kish's effective size from it, and
         # `summarize_step` weights every `basis: units` column's value and
@@ -2485,7 +2495,11 @@ def _check_sweep(
     # row in § Validation's registry and is not one of the `NOT BUILT`
     # declarations § The one config file counts — the same placement
     # `E-SWEEP-SAMPLE-BASELINE` and `E-SWEEP-ABLATE-CROSSED` have.
-    weight_by = (_units_declaration(doc.get("data") or {}, c) or {}).get("weight_by")
+    # One call, read twice. `_units_declaration` takes the collector and reports
+    # a malformed `data.units` under its own code, so a second call in the same
+    # pass would report the same fault twice.
+    units_here = _units_declaration(doc.get("data") or {}, c) or {}
+    weight_by = units_here.get("weight_by")
     if comparisons > 0 and isinstance(weight_by, str) and weight_by:
         plural = "" if comparisons == 1 else "s"
         c.error(
@@ -2502,6 +2516,58 @@ def _check_sweep(
             "returned by a `summary` step, which core records as reported rather than "
             "recomputing. The combination will be honored once the paired estimators "
             "take weights",
+        )
+
+    # A clustered design that publishes a contrast. `reference.md` § Statistical
+    # reporting: when `cluster_by` is declared each contrast construction "takes a
+    # `_clustered` suffix and reads the cluster as the draw" — the *t* forms
+    # cluster-robust with df = clusters − 1 "over the differenced values when
+    # paired and over the arm-level ones when not", and the percentile forms
+    # resampling whole clusters, "jointly across both sides when paired". **None
+    # of those five constructions exists in this build.** `stats.paired_t_over_units`
+    # takes a list of per-unit differences and nothing else;
+    # `paired_delta_of_derived` and `paired_percentile_of_derived` take rows and a
+    # seed and know nothing about membership; there is no unpaired form at all.
+    # So a clustered run's `vs_baseline` delta and its interval would be drawn as
+    # if every unit were an independent observation — which is the one thing the
+    # declaration says they are not — sitting beside per-condition intervals that
+    # *are* cluster-robust (`summarize_step` wires those), with nothing in the
+    # record distinguishing the two. § Clustered units calls exactly that interval
+    # "too narrow", and the delta is the number a reader acts on.
+    #
+    # **The guard reads the resolved family, not the declaration**, for the
+    # reasons the weighted one above states in full: a `sweep.baseline` with no
+    # axis beside it expands to a single `is_baseline` row that is never a
+    # comparison's subject, so such a run publishes no delta and stays legal,
+    # while a declared `statistics.contrasts` entry over a sweep with no baseline
+    # publishes one and is caught. `statistics.report_by` is outside it on the
+    # same argument — a stratum repeats the per-condition aggregation, whose
+    # interval *is* clustered, and publishes no delta.
+    #
+    # Temporary, and narrowly so: H4 Statistics owns the `_clustered` contrast
+    # family and lifts this the moment those constructions exist. Like
+    # `E-DATA-WEIGHT-CONTRAST` it refuses a *combination* rather than a
+    # declaration, so it carries a row in § Validation's registry and is not one
+    # of the `NOT BUILT` declarations § The one config file counts —
+    # `data.units.cluster_by` itself is built, and a clustered run publishing no
+    # contrast gets cluster-robust intervals on every `basis: units` column.
+    cluster_by = units_here.get("cluster_by")
+    if comparisons > 0 and isinstance(cluster_by, str) and cluster_by:
+        plural = "" if comparisons == 1 else "s"
+        c.error(
+            "E-DATA-CLUSTER-CONTRAST",
+            "data.units.cluster_by",
+            f"makes the cluster the inferential draw for each condition's own interval, and "
+            f"this design also publishes {comparisons} comparison{plural}, which no "
+            "construction in this build clusters: a `vs_baseline` delta and a declared "
+            "`statistics.contrasts` entry are both computed over per-unit differences as "
+            "though the units were independent, so the delta's interval would be narrower "
+            "than the design supports while the values beside it are cluster-robust, with "
+            "nothing in the record saying so. Declare one or the other here: drop "
+            "`cluster_by` only if the units really are independent, or keep it and express "
+            "the difference as an `Estimate` returned by a `summary` step, which core "
+            "records as reported rather than recomputing. The combination will be honored "
+            "once the paired and unpaired estimators take clusters",
         )
 
     if comparisons > 0 and (correction or "holm") == "none":

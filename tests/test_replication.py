@@ -224,12 +224,17 @@ def test_k_all_without_a_roster_is_refused():
     assert exc.value.code == "E-REPL-FOLD-K"
 
 
-def test_stratify_by_is_refused():
-    with pytest.raises(ContractError) as exc:
-        resolve_repeats(
-            cfg([{"kind": "fold", "k": 5, "stratify_by": "site"}]), "d", fold_basis=240
-        )
-    assert exc.value.code == "E-REPL-FOLD-STRATIFY-UNSUPPORTED"
+def test_stratify_by_resolves_and_rides_the_level():
+    """`E-REPL-FOLD-STRATIFY-UNSUPPORTED` was raised here, above every `k` check,
+    until `partition_units` learned to balance a stratum. It is retired: the
+    declaration resolves, and the name rides the level so `cli` has one reader of
+    which level is the fold and what it stratifies on."""
+    levels = resolve_repeats(
+        cfg([{"kind": "fold", "k": 5, "stratify_by": "site"}]), "d", fold_basis=240
+    )
+    assert len(levels) == 1
+    assert levels[0].n == 5
+    assert levels[0].stratify_by == "site"
 
 
 def test_fold_outside_seed_composes_labels_outer_to_inner():
@@ -455,8 +460,8 @@ def test_a_batch_declaring_k_still_reports_the_count_field_message():
 def test_the_key_closure_does_not_reach_a_seed_level():
     """The closure is `batch`-only. `seeds: [17, 42, …]` is a documented `seed`
     field (`reference.md` § Repeat kinds), so refusing it here would reject a
-    declaration the document allows; a `fold` level's `stratify_by` reaches its
-    own refusal (`E-REPL-FOLD-STRATIFY-UNSUPPORTED`) rather than this one."""
+    declaration the document allows; a `fold` level's `stratify_by` is a documented
+    `fold` field and resolves rather than reaching this refusal."""
     try:
         resolve_repeats(cfg([{"kind": "seed", "n": 2, "seeds": [17, 42]}]), "d")
     except ContractError as exc:  # pragma: no cover — nothing raises here today
@@ -465,6 +470,14 @@ def test_the_key_closure_does_not_reach_a_seed_level():
         # a code of its own. What this test owns is only that the refusal is not
         # this one.
         assert exc.code != "E-REPL-LEVEL-FIELD"
+    # The control that must report: the same closure over a `fold` field it does
+    # not know still refuses, so this is not a test of a closure that gave up.
+    assert (
+        resolve_repeats(
+            cfg([{"kind": "fold", "k": 2, "stratify_by": "label"}]), "d", fold_basis=4
+        )[0].stratify_by
+        == "label"
+    )
     with pytest.raises(ContractError) as e:
-        resolve_repeats(cfg([{"kind": "fold", "k": 2, "stratify_by": "label"}]), "d", fold_basis=4)
-    assert e.value.code == "E-REPL-FOLD-STRATIFY-UNSUPPORTED"
+        resolve_repeats(cfg([{"kind": "batch", "n": 2, "stratify_by": "label"}]), "d")
+    assert e.value.code == "E-REPL-LEVEL-FIELD"

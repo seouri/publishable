@@ -511,12 +511,18 @@ def test_a_fold_level_with_no_units_declared_is_refused(write_config):
     assert "E-REPL-FOLD-NO-UNITS" in found
 
 
-def test_fold_stratify_by_is_refused_through_validate(write_config):
-    assert "E-REPL-FOLD-STRATIFY-UNSUPPORTED" in codes(
+def test_fold_stratify_by_is_no_longer_refused_as_unbuilt(write_config):
+    """`E-REPL-FOLD-STRATIFY-UNSUPPORTED` is retired: `partition_units` balances
+    the declared stratum across the folds, so the declaration changes the split.
+    What survives is the checking of the *name* — this config declares no
+    `data.units` at all, so it draws the roster refusal and the unknown-attribute
+    one, which is the control that must report."""
+    found = codes(
         write_config(
             {"replication": {"repeats": [{"kind": "fold", "k": 5, "stratify_by": "site"}]}}
         )
     )
+    assert found == {"E-REPL-FOLD-NO-UNITS", "E-REPL-FOLD-STRATIFY-UNKNOWN"}
 
 
 def test_fold_k_below_two_is_refused_through_validate(write_config):
@@ -1814,7 +1820,11 @@ def test_a_plain_units_block_is_now_accepted(write_config):
     [
         ("allocation", "between", "E-DATA-ALLOCATION-UNSUPPORTED"),
         ("assign", {"arm": {"method": "random"}}, "E-DATA-ASSIGN-UNSUPPORTED"),
-        ("cluster_by", "site", "E-DATA-CLUSTER-UNSUPPORTED"),
+        # `cluster_by` was a row here until it became a declaration core honors —
+        # it counts the clusters, keeps one out of two folds, and makes every
+        # `basis: units` interval cluster-robust. What it may not yet be combined
+        # with is checked by `test_a_clustered_generated_comparison_is_refused`
+        # below and, at run time, by `test_cli.py`'s `E-DATA-CLUSTER-DERIVED`.
         # `weight_by` was a row here until it became a declaration core honors;
         # what it may not yet be combined with is checked by
         # `test_a_weighted_generated_comparison_is_refused` below.
@@ -1842,7 +1852,6 @@ def test_a_resolver_source_is_refused_until_plugins_exist(write_config):
         {"from": {"resolver": "plate_wells"}, "key": "well"},
         {"from": "index.csv", "key": "patient_id", "allocation": "between"},
         {"from": "index.csv", "key": "patient_id", "assign": {"arm": {"method": "random"}}},
-        {"from": "index.csv", "key": "patient_id", "cluster_by": "site"},
         {"from": "index.csv", "key": "patient_id", "holdout": {"method": "random", "frac": 0.2}},
     ],
 )
@@ -5784,11 +5793,13 @@ def test_a_weighted_report_by_is_not_a_contrast(write_config, tmp_path):
 
 # --- a clustered design -----------------------------------------------------
 #
-# `E-DATA-CLUSTER-UNSUPPORTED` is still live: a truthy `data.units.cluster_by` is
-# refused by `_check_unimplemented` until the declaration changes the record. It
-# is collected rather than fatal, so a declaration check reports beside it — but
-# a test that only asserted "some finding fired" would pass off the refusal, so
-# every check below is also exercised by a direct call.
+# `_check_unimplemented` refused a truthy `data.units.cluster_by` outright when
+# these were written, so a declaration check reported beside that refusal and a
+# test asserting only "some finding fired" would have passed off the refusal
+# instead. H3b task 12 retired it, the declaration now changing the record. What
+# survives from that arrangement is worth keeping on its own terms: every check
+# below is also exercised by a direct call, where no config-level finding can
+# stand in for the one under test.
 
 
 def _clustered_table(tmp_path: Path, header: str, body: str) -> None:
@@ -5848,9 +5859,10 @@ def test_an_empty_cluster_by_is_reported(write_config, tmp_path):
             }
         }
     )
-    found = codes(path)
-    assert "E-DATA-CLUSTER-UNKNOWN" in found
-    assert "E-DATA-CLUSTER-UNSUPPORTED" not in found
+    # The whole finding set: an empty `cluster_by` draws the name check and nothing
+    # else. Asserted exactly since task 12 retired the unbuilt-declaration refusal
+    # that used to be the reason for naming a second code here.
+    assert codes(path) == {"E-DATA-CLUSTER-UNKNOWN"}
 
 
 def test_a_cluster_by_under_a_glob_source_is_reported(write_config, tmp_path):
@@ -5865,10 +5877,10 @@ def test_a_cluster_by_under_a_glob_source_is_reported(write_config, tmp_path):
 
 
 def test_the_cluster_name_check_reports_without_a_roster():
-    """Called directly, with no roster and no `validate_config` around it: the
-    name half is checked from the declaration alone, and this is what
-    distinguishes it from `E-DATA-CLUSTER-UNSUPPORTED`, which a direct call never
-    reaches."""
+    """Called directly, with no roster and no `validate_config` around it: the name
+    half is checked from the declaration alone, so it reports whether or not a
+    roster resolved — which is the property this pins, and the reason it survived
+    the retirement of the refusal it used to be contrasted against."""
     c = Collector()
     _check_cluster_by({}, {"attributes": ["age"], "cluster_by": "site"}, None, c)
     assert [f.code for f in c.findings] == ["E-DATA-CLUSTER-UNKNOWN"]
@@ -5882,9 +5894,9 @@ def test_a_non_string_cluster_by_is_left_to_the_envelope(write_config, tmp_path)
     silence here proves the check defers, and `E-CONFIG-TYPE` in `codes` proves
     there is something to defer *to* — `envelope.py`'s `LEAF_TYPES` really does
     type `data.units.cluster_by` a `str`. Without the second assertion this could
-    not tell "correctly deferred" from "silently dropped", and the difference
-    becomes visible the moment `E-DATA-CLUSTER-UNSUPPORTED` — which fires on a
-    truthy `3` today — is retired."""
+    not tell "correctly deferred" from "silently dropped" — a distinction that used
+    to be masked by the unbuilt-declaration refusal firing on a truthy `3`, and
+    which task 12's retirement of that refusal is what makes load-bearing."""
     c = Collector()
     _check_cluster_by({}, {"attributes": ["site"], "cluster_by": 3}, None, c)
     assert not c.findings
@@ -5900,6 +5912,161 @@ def test_a_non_string_cluster_by_is_left_to_the_envelope(write_config, tmp_path)
         }
     )
     assert "E-CONFIG-TYPE" in codes(path)
+
+
+# --- the clustered contrast family, which does not exist ----------------------
+#
+# H3b task 12 minted `E-DATA-CLUSTER-CONTRAST` in the place H3a's
+# `E-DATA-WEIGHT-CONTRAST` and H2's `E-SWEEP-SAMPLE-BASELINE` occupy: a narrow
+# refusal of a *combination* that retiring a broad declaration refusal had just
+# made reachable. § Statistical reporting gives each contrast construction a
+# `_clustered` suffix under `cluster_by` — cluster-robust *t* forms and percentile
+# forms resampling whole clusters "jointly across both sides when paired" — and
+# none of those five exists. The probes below mirror the weighted set above one for
+# one, because the guard is deliberately the same shape: it reads the *resolved*
+# comparison family, not the declaration.
+
+
+def _clustered_units(**extra) -> dict:
+    """The `data.units` block these checks share, the shape `_weighted_units` above
+    has: a declared cluster that resolves and passes every value check, so the only
+    finding left is the one under test."""
+    return {
+        "from": "index.csv",
+        "key": "patient_id",
+        "attributes": ["site"],
+        "cluster_by": "site",
+        **extra,
+    }
+
+
+def test_a_declared_cluster_by_is_no_longer_refused(write_config, tmp_path):
+    """The retirement itself. A clustered roster with no contrast in it validates
+    clean — not merely free of the old code, but free of every finding, which is
+    what says the design is one core runs today."""
+    _clustered_table(tmp_path, "patient_id,site", _SITE_BODY)
+    assert codes(write_config({"data.units": _clustered_units()})) == set()
+
+
+def test_a_clustered_generated_comparison_is_refused(write_config, tmp_path):
+    """A baseline over an enumerated axis generates two `vs_baseline` deltas, and
+    `paired_t_over_units` takes a list of per-unit differences and nothing else —
+    no membership, so no cluster. The delta and its interval would be drawn as if
+    every unit were independent, beside per-condition intervals that are
+    cluster-robust, with nothing in the record saying which is which."""
+    _clustered_table(tmp_path, "patient_id,site", _SITE_BODY)
+    path = write_config(
+        {
+            "data.units": _clustered_units(),
+            "sweep": {
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {"analysis.method": ["spearman", "kendall"]},
+            },
+        }
+    )
+    assert codes(path) == {"E-DATA-CLUSTER-CONTRAST"}
+    assert "publishes 2 comparisons," in messages_by_code(path)["E-DATA-CLUSTER-CONTRAST"]
+
+
+def test_a_clustered_declared_contrast_is_refused(write_config, tmp_path):
+    """The other source of a comparison. A `statistics.contrasts` entry is named
+    rather than generated, so no baseline is involved at all — and it reaches the
+    same unclustered estimator, which is why the guard reads the resolved family
+    rather than `sweep.baseline`."""
+    _clustered_table(tmp_path, "patient_id,site", _SITE_BODY)
+    path = write_config(
+        {
+            "data.units": _clustered_units(),
+            "sweep": {"grid": {"analysis.method": ["pearson", "spearman"]}},
+            "statistics": {
+                "contrasts": [
+                    {
+                        "id": "spearman_vs_pearson",
+                        "of": "method=spearman",
+                        "against": "method=pearson",
+                    }
+                ]
+            },
+        }
+    )
+    assert codes(path) == {"E-DATA-CLUSTER-CONTRAST"}
+    # The singular, pinned as a whole word: `"1 comparison" in ...` would pass
+    # against `1 comparisons` too.
+    assert "publishes 1 comparison," in messages_by_code(path)["E-DATA-CLUSTER-CONTRAST"]
+
+
+def test_a_clustered_baseline_that_generates_no_comparison_stays_legal(write_config, tmp_path):
+    """The edge that makes the guard narrower than `sweep.baseline` being declared,
+    and the one H3a's implementer found. A baseline with no axis beside it expands
+    to one condition, which `resolve_contrasts` skips as an `of` — the run publishes
+    no delta, so there is no too-narrow interval for the refusal to prevent."""
+    _clustered_table(tmp_path, "patient_id,site", _SITE_BODY)
+    overrides = {
+        "data.units": _clustered_units(),
+        "sweep": {"baseline": {"analysis.method": "pearson"}},
+    }
+    assert codes(write_config(overrides)) == set()
+    # The control that must report: the same clustered config with one axis added
+    # generates a comparison and is refused, so the silence above is this
+    # baseline's shape rather than a guard that never fires.
+    crossed = dict(overrides)
+    crossed["sweep"] = {
+        "baseline": {"analysis.method": "pearson"},
+        "grid": {"analysis.method": ["spearman"]},
+    }
+    assert codes(write_config(crossed)) == {"E-DATA-CLUSTER-CONTRAST"}
+
+
+def test_an_unclustered_comparison_is_untouched(write_config, tmp_path):
+    """The neighbouring shape: the same sweep with no `cluster_by` is the ordinary
+    design, and nothing about it moved."""
+    _clustered_table(tmp_path, "patient_id,site", _SITE_BODY)
+    path = write_config(
+        {
+            "data.units": {"from": "index.csv", "key": "patient_id", "attributes": ["site"]},
+            "sweep": {
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {"analysis.method": ["spearman", "kendall"]},
+            },
+        }
+    )
+    assert "E-DATA-CLUSTER-CONTRAST" not in codes(path)
+
+
+def test_a_clustered_report_by_is_not_a_contrast(write_config, tmp_path):
+    """`statistics.report_by` repeats a metric over strata "without adding
+    executions or joining the correction family" — it publishes no delta, and the
+    per-condition aggregation it repeats *is* clustered, so the refusal must not
+    reach it. A subgroup someone wants to *test* is a `within` contrast, which does
+    join the family and is refused above."""
+    body = "".join(f"p{i},s{i % 4},a\n" for i in range(12))
+    _clustered_table(tmp_path, "patient_id,site,cohort", body)
+    path = write_config(
+        {
+            "data.units": _clustered_units(attributes=["site", "cohort"]),
+            "statistics": {"report_by": ["cohort"]},
+        }
+    )
+    assert codes(path) == set()
+
+
+def test_an_empty_cluster_by_beside_a_comparison_is_not_the_contrast_refusal(
+    write_config, tmp_path
+):
+    """The under-firing control on the other side: an empty `cluster_by` declares
+    no clustering, so nothing about the delta is wrong and only the name check
+    reports. A truthy read is what keeps the two apart."""
+    _clustered_table(tmp_path, "patient_id,site", _SITE_BODY)
+    path = write_config(
+        {
+            "data.units": _clustered_units(cluster_by=""),
+            "sweep": {
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {"analysis.method": ["spearman"]},
+            },
+        }
+    )
+    assert codes(path) == {"E-DATA-CLUSTER-UNKNOWN"}
 
 
 def test_a_parameter_named_stratify_by_does_not_silence_the_cluster_warning(
@@ -6190,10 +6357,12 @@ def test_validate_reports_rather_than_raising_on_a_varying_cluster(write_config,
 # --- `k` and `k: all` are bounded by clusters -------------------------------
 #
 # `reference.md` § Validation, *Folds fit inside the clusters* and
-# *Leave-one-out is affordable*. `E-DATA-CLUSTER-UNSUPPORTED` is still live, so
-# every check below either asserts that refusal is reported BESIDE the fold
-# finding — which is what proves the check was reached rather than shadowed — or
-# calls `_check_replication` directly, which never sees the refusal at all.
+# *Leave-one-out is affordable*. `E-DATA-CLUSTER-UNSUPPORTED` was live when these
+# were written, so each asserted that refusal BESIDE the fold finding to prove the
+# check was reached rather than shadowed. It is retired, so each now asserts the
+# **exact** finding set instead — an empty one where the design is legal — which
+# proves the same thing more strongly: a clustered config that validates clean is
+# a clean config, not one whose findings were filtered.
 #
 # The roster is 7/3/3/1/1 over 15 units: 5 clusters, 15 units, two numbers that
 # cannot be mistaken for each other. One unit per cluster would make the two
@@ -6212,10 +6381,10 @@ _UNCLUSTERED_UNITS = {"from": "index.csv", "key": "patient_id", "attributes": ["
 def test_k_above_the_cluster_count_is_refused_through_validate(write_config, tmp_path):
     """§ Validation, *Folds fit inside the clusters*: `k: 10` over 5 clusters.
 
-    `E-DATA-CLUSTER-UNSUPPORTED` is asserted alongside deliberately — it fires on
-    the same config, and without it this test could not tell "the fold check ran"
-    from "some finding fired", which is exactly how a check sitting behind a live
-    refusal comes to look implemented while being dead.
+    The finding set is asserted exactly: `E-REPL-FOLD-K-TOO-LARGE` and nothing
+    else, so a clustered declaration no longer drags a refusal along with it, and
+    the sibling below is the control — the same roster and the same `k` with
+    `cluster_by` gone reports nothing at all.
     """
     _clustered_table(tmp_path, "patient_id,site", _UNEVEN_SITES)
     found = codes(
@@ -6226,8 +6395,7 @@ def test_k_above_the_cluster_count_is_refused_through_validate(write_config, tmp
             }
         )
     )
-    assert "E-REPL-FOLD-K-TOO-LARGE" in found
-    assert "E-DATA-CLUSTER-UNSUPPORTED" in found
+    assert found == {"E-REPL-FOLD-K-TOO-LARGE"}
 
 
 def test_the_same_k_is_accepted_over_the_same_units_undeclared(write_config, tmp_path):
@@ -6244,8 +6412,10 @@ def test_the_same_k_is_accepted_over_the_same_units_undeclared(write_config, tmp
             }
         )
     )
-    assert "E-REPL-FOLD-K-TOO-LARGE" not in found
-    assert "E-DATA-CLUSTER-UNSUPPORTED" not in found
+    # `site` undeclared over this roster is exactly what
+    # `W-DATA-CLUSTER-UNDECLARED` looks for, and it is the whole finding set: the
+    # fold check is silent, which is the point.
+    assert found == {"W-DATA-CLUSTER-UNDECLARED"}
 
 
 def test_leave_one_cluster_out_is_costed_in_clusters(write_config, tmp_path):
@@ -6263,9 +6433,7 @@ def test_leave_one_cluster_out_is_costed_in_clusters(write_config, tmp_path):
             }
         )
     )
-    assert "W-EXEC-BUDGET" not in found
-    assert "E-REPL-FOLD-K-TOO-LARGE" not in found
-    assert "E-DATA-CLUSTER-UNSUPPORTED" in found
+    assert found == set()
 
 
 def test_leave_one_out_is_costed_in_units_when_nothing_is_clustered(
@@ -6290,10 +6458,9 @@ def test_leave_one_out_is_costed_in_units_when_nothing_is_clustered(
 
 
 def test_the_cluster_bound_is_reported_by_a_direct_call_too(write_config, tmp_path):
-    """Called directly, where `E-DATA-CLUSTER-UNSUPPORTED` cannot reach: the basis
-    is the one number `validate_config` resolves through `units.fold_basis`, and
-    the refusal names the clusters it counted rather than a unit count nobody
-    supplied."""
+    """Called directly, with no config file around it: the basis is the one number
+    `validate_config` resolves through `units.fold_basis`, and the refusal names the
+    clusters it counted rather than a unit count nobody supplied."""
     from publishable.templates.builtin.generic import GenericTemplate
     from publishable.validate import _check_replication
 
@@ -6373,12 +6540,12 @@ def test_an_unreadable_cluster_leaves_k_all_unresolved_rather_than_raising(
 
 # --- a fold's `stratify_by` ---------------------------------------------------
 #
-# `E-REPL-FOLD-STRATIFY-UNSUPPORTED` is still live: `resolve_repeats` refuses any
-# fold `stratify_by` before it reads `k` at all. It is collected rather than fatal,
-# so a declaration check reports beside it — and every probe below asserts the
-# refusal appears *with* the finding, which is the proof the check was reached
-# rather than shadowed. Each check is also exercised by a direct call, where the
-# refusal cannot reach it.
+# `E-REPL-FOLD-STRATIFY-UNSUPPORTED` was live when these were written —
+# `resolve_repeats` refused any fold `stratify_by` before it read `k` at all — so
+# every probe asserted the refusal appeared *with* the finding, as the proof the
+# check was reached rather than shadowed. It is retired, so each probe asserts the
+# **exact** finding set instead, which proves the same thing without leaning on a
+# code that no longer exists. Each check is also exercised by a direct call.
 #
 # Only a `fold` level's `stratify_by` is checked here. § Validation's
 # "Stratification attribute exists" row names no particular one, and its
@@ -6434,8 +6601,10 @@ def test_a_fold_stratify_by_naming_no_attribute_is_reported(write_config, tmp_pa
     `stratify_by: label` is not in `data.units.attributes`, so the partitioner has
     nothing to balance the folds on."""
     found = codes(_animal_config(write_config, tmp_path, varying=False, attributes=["animal_id"]))
-    assert "E-REPL-FOLD-STRATIFY-UNKNOWN" in found
-    assert "E-REPL-FOLD-STRATIFY-UNSUPPORTED" in found  # the check was reached, not shadowed
+    # `W-DATA-CLUSTER-UNDECLARED` rides along: `animal_id` is a column of repeated
+    # non-numeric labels and nothing declares it a cluster, which is exactly that
+    # warning's trigger. Asserted as part of the exact set rather than filtered out.
+    assert found == {"E-REPL-FOLD-STRATIFY-UNKNOWN", "W-DATA-CLUSTER-UNDECLARED"}
 
 
 def test_a_declared_fold_stratum_is_not_reported_unknown(write_config, tmp_path):
@@ -6444,12 +6613,11 @@ def test_a_declared_fold_stratum_is_not_reported_unknown(write_config, tmp_path)
     found = codes(
         _animal_config(write_config, tmp_path, varying=False, attributes=["animal_id", "label"])
     )
-    assert "E-REPL-FOLD-STRATIFY-UNKNOWN" not in found
-    assert "E-REPL-FOLD-STRATIFY-UNSUPPORTED" in found
+    assert found == {"W-DATA-CLUSTER-UNDECLARED"}
 
 
 def test_the_fold_stratum_name_check_reports_without_a_roster():
-    """Direct, where the live refusal cannot shadow it, and with no roster at all:
+    """Direct, and with no roster at all:
     the name is read from the declaration, `_check_cluster_by`'s construction."""
     c = Collector()
     _check_fold_stratify_by(
@@ -6519,9 +6687,7 @@ def test_a_fold_stratum_varying_within_a_cluster_is_reported(write_config, tmp_p
             cluster_by="animal_id",
         )
     )
-    assert "E-REPL-FOLD-STRATIFY-VARIES" in found
-    assert "E-REPL-FOLD-STRATIFY-UNSUPPORTED" in found  # the check was reached
-    assert "E-DATA-CLUSTER-UNSUPPORTED" in found  # so was the clustering refusal
+    assert found == {"E-REPL-FOLD-STRATIFY-VARIES"}
 
 
 def test_a_fold_stratum_constant_within_every_cluster_is_accepted(write_config, tmp_path):
@@ -6538,14 +6704,12 @@ def test_a_fold_stratum_constant_within_every_cluster_is_accepted(write_config, 
             cluster_by="animal_id",
         )
     )
-    assert "E-REPL-FOLD-STRATIFY-VARIES" not in found
-    assert "E-DATA-CLUSTER-UNSUPPORTED" in found
+    assert found == set()
 
 
 def test_the_fold_stratum_clustering_check_runs_on_a_direct_call():
-    """Direct, where neither live refusal reaches it — the difference between a
-    passing test and a dead one while `E-DATA-CLUSTER-UNSUPPORTED` still refuses
-    every clustered config."""
+    """Direct, over a hand-built roster: the same check without a config file, so
+    a fixture that stopped resolving could not make this pass by silence."""
     doc = {"replication": {"repeats": [{"kind": "fold", "k": 2, "stratify_by": "label"}]}}
     decl = {"attributes": ["animal_id", "label"], "cluster_by": "animal_id"}
     varying = UnitList(
@@ -6630,17 +6794,27 @@ def test_an_unreadable_cluster_leaves_the_stratum_check_silent_rather_than_raisi
     assert not c.findings
 
 
-# --- what `_fold_k` reports while its stratify refusal still comes first -------
+# --- what `_fold_k` reports now that its stratify refusal is gone --------------
 #
-# Pinned for the slice that retires `E-REPL-FOLD-STRATIFY-UNSUPPORTED`. That raise
-# sits ahead of every read of `k`, so retiring it changes which code these two
-# configs report; asserting the flip code is ABSENT today is what makes the change
-# show up in that slice's diff rather than being discovered afterwards.
+# Task 6 pinned these two as the *pre*-flip expectations, asserting the flip code
+# was ABSENT, precisely so that retiring `E-REPL-FOLD-STRATIFY-UNSUPPORTED` — a
+# raise that sat ahead of every read of `k` — turned them over visibly in the diff
+# rather than being discovered afterwards. H3b task 12 retired it, and these are
+# the post-flip expectations. **Kept as pins rather than deleted**: what they
+# record is that this reordering happened, and that each config's surviving fault
+# is the one that was always there behind the refusal.
+#
+# `W-DATA-CLUSTER-UNDECLARED` rides along in both: `animal_id` is a column of
+# repeated non-numeric labels that nothing declares a cluster. Asserted as part of
+# the exact set rather than filtered out, so the flip is pinned against the whole
+# finding set and not against one member of it.
 
 
 def test_a_fold_stratify_by_reports_before_an_illegal_k(write_config, tmp_path):
-    """`{k: 1, stratify_by: label}` reports the stratify refusal and *not*
-    `E-REPL-FOLD-K`, which it will report once the refusal is retired."""
+    """`{k: 1, stratify_by: label}` reported the stratify refusal and *not*
+    `E-REPL-FOLD-K` until task 12 retired that refusal. It now reports
+    `E-REPL-FOLD-K`: `k: 1` is not a partition into folds, and that was true all
+    along behind a refusal that returned before `k` was read."""
     _clustered_table(tmp_path, _ANIMAL_HEADER, _animal_body(varying=False))
     found = codes(
         write_config(
@@ -6654,15 +6828,14 @@ def test_a_fold_stratify_by_reports_before_an_illegal_k(write_config, tmp_path):
             }
         )
     )
-    assert "E-REPL-FOLD-STRATIFY-UNSUPPORTED" in found
-    assert "E-REPL-FOLD-K" not in found
+    assert found == {"E-REPL-FOLD-K", "W-DATA-CLUSTER-UNDECLARED"}
 
 
 def test_a_fold_stratify_by_reports_before_an_oversized_k(write_config, tmp_path):
-    """`{k: 99, stratify_by: label}` over a 15-unit roster reports the stratify
-    refusal and *not* `E-REPL-FOLD-K-TOO-LARGE`, which it will report once the
-    refusal is retired. The roster is well under 99, so the flip being pinned is
-    genuinely reachable."""
+    """`{k: 99, stratify_by: label}` over a 15-unit roster reported the stratify
+    refusal and *not* `E-REPL-FOLD-K-TOO-LARGE` until task 12 retired that refusal.
+    It now reports `E-REPL-FOLD-K-TOO-LARGE`. The roster is well under 99, so the
+    flip this pinned was genuinely reachable rather than a hypothetical."""
     _clustered_table(tmp_path, _ANIMAL_HEADER, _animal_body(varying=False))
     found = codes(
         write_config(
@@ -6676,5 +6849,4 @@ def test_a_fold_stratify_by_reports_before_an_oversized_k(write_config, tmp_path
             }
         )
     )
-    assert "E-REPL-FOLD-STRATIFY-UNSUPPORTED" in found
-    assert "E-REPL-FOLD-K-TOO-LARGE" not in found
+    assert found == {"E-REPL-FOLD-K-TOO-LARGE", "W-DATA-CLUSTER-UNDECLARED"}

@@ -1298,16 +1298,31 @@ def summarize_step(
     same pass as its values, for the reason the weights are: a differently filtered
     vector groups the wrong unit, and the result is a number rather than an error.
 
-    A DERIVED metric's interval is **not** clustered here, and this is a real gap
-    rather than a decision: the clustered draw for a recomputed metric is a
-    different construction from `percentile_over_units_clustered` — each replicate
-    drawing `G` clusters and building a `UnitTable` from their pooled units — and it
-    does not exist. Every clustered design is refused at validate time today
-    (`E-DATA-CLUSTER-UNSUPPORTED`), and the slice retiring that code owes a refusal
-    of *this combination* in its place: without one, every derived interval in a
-    clustered run is drawn as if the units were independent, which is the one thing
-    a clustered design declares they are not
-    (`docs/superpowers/spec-defects.md` records both halves).
+    A DERIVED metric's interval **cannot be clustered here, so the combination is
+    refused** — `E-DATA-CLUSTER-DERIVED`, raised below. The clustered draw for a
+    recomputed metric is a different construction from
+    `percentile_over_units_clustered` — each replicate drawing `G` clusters with
+    replacement and building a `UnitTable` from their pooled units, whose row count
+    varies per draw — and it does not exist. `percentile_of_derived` draws units,
+    so left to run it would report an interval "too narrow" in exactly the sense
+    § Clustered units names, beside recorded columns whose intervals *are*
+    cluster-robust and with nothing in the record saying which is which.
+
+    **Why the refusal is here rather than in `validate`.** Whether a template
+    derives a metric is not knowable before the run: `aggregate` is user code, core
+    never inspects the body of user Python, and a template that overrides
+    `aggregate` may still return `{}` for a given config — so "returns derived
+    metrics" has no validate-time meaning. This is the first point at which core
+    holds the answer, and it holds it as a fact rather than a guess. `cli.py`
+    contains the raise the same way it contains a derived key collision: the whole
+    `derived` mapping is dropped and re-summarized without it, the code is
+    disclosed through `W-STATS-AGGREGATE-FAILED`, and the run keeps its record and
+    its recorded columns. **Dropped, not published with `ci95: null`** — that state
+    already means "no resample callable, or no seed", and reusing it would
+    reintroduce the ambiguity `resample_draws`' `0`-versus-`null` distinction
+    exists to remove. H4 Statistics lifts this with the clustered contrast family
+    (`E-DATA-CLUSTER-CONTRAST`), which is the same missing construction one level
+    over.
 
     **`clusters` is recomputed per column**, for exactly the reasons `completed`
     and `effective` already are: § Clustered units reports the cluster count "as
@@ -1400,6 +1415,31 @@ def summarize_step(
                 "derived key may not shadow a recorded column",
                 code="E-STEP-KEY-COLLISION",
             )
+        # The clustered derived draw, refused rather than drawn as if independent
+        # (the docstring says why it lives here and not in `validate`). Gated on
+        # what would actually be *drawn*, not on the declaration: with no callable
+        # or no seed no interval is built at all, so a clustered run whose derived
+        # metric was never going to be resampled publishes its point estimate as
+        # it always did and there is no too-narrow interval to prevent. Raised
+        # before a single derived key is written, so the caller drops the whole
+        # mapping rather than a record carrying some of it.
+        if clusters is not None and seed is not None:
+            drawable = sorted(k for k in derived if (resample or {}).get(k) is not None)
+            if drawable:
+                raise ContractError(
+                    f"{drawable[0]!r} is derived by the template's `aggregate`, and its "
+                    "interval is a percentile over resampled units while "
+                    "`data.units.cluster_by` declares that units are not independent. "
+                    "Resampling whole clusters for a recomputed metric is a construction "
+                    "this build does not have, and drawing units instead would report an "
+                    "interval narrower than the design supports beside recorded columns "
+                    "that are cluster-robust. The derived metrics are dropped for this "
+                    "step; the recorded columns keep their clustered intervals. Report "
+                    "the derived value as an `Estimate` from a `summary` step, which core "
+                    "records as reported rather than recomputing, or drop `cluster_by` if "
+                    "the units really are independent",
+                    code="E-DATA-CLUSTER-DERIVED",
+                )
         for key, value in derived.items():
             compute = (resample or {}).get(key)
             # `draws_used` is `None` only when resampling was never attempted

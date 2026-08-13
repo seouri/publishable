@@ -855,11 +855,11 @@ def command_run(config_path: Path) -> int:
         # One path rebuilds `Unit.attributes` after resolution and is the exception:
         # `units.collapse_measurements` drops the name equal to
         # `data.units.measurements.by`, and nothing refuses an `attributes` entry of
-        # that name, so a config stratifying on the measurement axis itself would
-        # reach a bare `KeyError` here rather than a diagnostic. Unreachable today —
-        # `E-REPL-FOLD-STRATIFY-UNSUPPORTED` refuses every `stratify_by` — and named
-        # rather than guarded, because a coded refusal is a `validate` row and an
-        # § Errors entry, which belong to the slice that retires that code.
+        # that name, so a config stratifying on the measurement axis itself reaches a
+        # bare `KeyError` here rather than a diagnostic. Task 11 called this
+        # unreachable because `E-REPL-FOLD-STRATIFY-UNSUPPORTED` refused every
+        # `stratify_by`; retiring that code above makes it reachable, and the next
+        # commit closes it.
         #
         # Stringified for the reason `clusters_of` stringifies: a stratum is a label,
         # nothing downstream does arithmetic on it, and one type keeps a hand-built
