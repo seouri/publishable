@@ -6410,7 +6410,15 @@ def _animal_body(varying: bool) -> str:
     return "".join(f"{r}\n" for r in rows)
 
 
-def _animal_config(write_config, *, varying: bool, attributes: list[str], **units):
+def _animal_config(write_config, tmp_path, *, varying: bool, attributes: list[str], **units):
+    """The roster and the config together, so **one argument decides both**.
+
+    `varying` writes the table as well as being the probe/control switch. Writing
+    the table beside the config from each test would let a `varying=True` probe be
+    paired with a `varying=False` roster — in a fixture whose whole discriminating
+    power is one cell's label, that is a probe silently testing the control.
+    """
+    _clustered_table(tmp_path, _ANIMAL_HEADER, _animal_body(varying=varying))
     decl = {"from": "index.csv", "key": "cell_id", "attributes": attributes}
     decl.update(units)
     return write_config(
@@ -6425,8 +6433,7 @@ def test_a_fold_stratify_by_naming_no_attribute_is_reported(write_config, tmp_pa
     """§ Validation, "Stratification attribute exists", at a `fold` level:
     `stratify_by: label` is not in `data.units.attributes`, so the partitioner has
     nothing to balance the folds on."""
-    _clustered_table(tmp_path, _ANIMAL_HEADER, _animal_body(varying=False))
-    found = codes(_animal_config(write_config, varying=False, attributes=["animal_id"]))
+    found = codes(_animal_config(write_config, tmp_path, varying=False, attributes=["animal_id"]))
     assert "E-REPL-FOLD-STRATIFY-UNKNOWN" in found
     assert "E-REPL-FOLD-STRATIFY-UNSUPPORTED" in found  # the check was reached, not shadowed
 
@@ -6434,8 +6441,9 @@ def test_a_fold_stratify_by_naming_no_attribute_is_reported(write_config, tmp_pa
 def test_a_declared_fold_stratum_is_not_reported_unknown(write_config, tmp_path):
     """The control that must report: the same roster and the same level, with
     `label` declared — the one difference the check is allowed to read."""
-    _clustered_table(tmp_path, _ANIMAL_HEADER, _animal_body(varying=False))
-    found = codes(_animal_config(write_config, varying=False, attributes=["animal_id", "label"]))
+    found = codes(
+        _animal_config(write_config, tmp_path, varying=False, attributes=["animal_id", "label"])
+    )
     assert "E-REPL-FOLD-STRATIFY-UNKNOWN" not in found
     assert "E-REPL-FOLD-STRATIFY-UNSUPPORTED" in found
 
@@ -6502,10 +6510,10 @@ def test_a_fold_stratum_varying_within_a_cluster_is_reported(write_config, tmp_p
     label}` with `cluster_by: animal_id`, and `label` varies within animal `A3` — a
     stratum can't be balanced across a split that can't divide the cluster carrying
     both values."""
-    _clustered_table(tmp_path, _ANIMAL_HEADER, _animal_body(varying=True))
     found = codes(
         _animal_config(
             write_config,
+            tmp_path,
             varying=True,
             attributes=["animal_id", "label"],
             cluster_by="animal_id",
@@ -6521,10 +6529,10 @@ def test_a_fold_stratum_constant_within_every_cluster_is_accepted(write_config, 
     `label` constant within each — one cell's label apart from the probe. A stratum
     that agrees inside every indivisible cluster is exactly what a cluster-respecting
     stratified fold can satisfy, so it is not refused."""
-    _clustered_table(tmp_path, _ANIMAL_HEADER, _animal_body(varying=False))
     found = codes(
         _animal_config(
             write_config,
+            tmp_path,
             varying=False,
             attributes=["animal_id", "label"],
             cluster_by="animal_id",
