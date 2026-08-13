@@ -70,6 +70,7 @@ from publishable.sweep import (
     condition_dir_name,
     expand,
     sample_seed_for,
+    selector_paths,
     sweep_document,
 )
 from publishable.templates.base import BaseTemplate
@@ -223,6 +224,53 @@ def _differing_axes(of: "Condition", against: "Condition") -> list[str]:
     return [
         k for k in ordered_keys if of.values.get(k, _MISSING) != against.values.get(k, _MISSING)
     ]
+
+
+def _wide_swept_paths(sweep_block: dict[str, Any]) -> set[str]:
+    """Every `parameters` path a condition fixes, for `resolve_wide_cfg` to mark unreadable.
+
+    Every path any condition fixes, not just the grid's axes. A path
+    `sweep.baseline` fixes varies across conditions by definition — condition
+    `00` uses the baseline's value and every other condition uses the base
+    config's — so it is exactly as unreadable at `run`/`summary` scope as a
+    grid axis is. Reading the grid alone left a baseline-only path resolving
+    to the base value, which is a value no condition in the run used.
+
+    `_swept_paths` rather than `grid` alone: every axis-shaped mode's paths vary
+    across conditions, and `paired`'s and `sample`'s did not reach here when each
+    became a real axis — a sampled path stayed readable at `run`/`summary` scope
+    and resolved to the base config's value, which is exactly the "a value no
+    condition in the run used" failure the baseline half of this union exists to
+    prevent, reached through a mode added after it was written.
+    `ablated_paths` is unioned in for the same reason and by the same rule,
+    from the other side of the axis/non-axis split: an ablated path varies
+    across conditions too. Most are already covered by the `baseline` term —
+    a removed path is one the baseline fixes — but an `override` path the
+    baseline leaves alone is not, and it is exactly the residue this union has
+    now been widened for three times.
+
+    **`selector_paths` is subtracted**, and it is the one term that narrows
+    rather than widens. A `baseline` may fix a group level (§ Expansion modes:
+    it "accepts group levels as well as parameter paths"), so `{arm: control}`
+    reaches the `baseline` term above — but a group path names no parameter,
+    so planting a `SweptAway` marker at `parameters.arm` would invent the same
+    phantom parameter `resolve_condition_cfg` now refuses to invent, one scope
+    over: a `run`- or `summary`-scoped step reading `cfg.parameters.arm` would
+    get `E-STEP-SWEPT-PARAM` — "this is swept, you cannot read it here" — for a
+    parameter that does not exist in any scope. Subtracting leaves the honest
+    refusal, `E-STEP-PARAM-UNKNOWN` from `Node.__getattr__`.
+
+    A function rather than the inline union it was, so the subtraction is
+    testable: `groups` is refused by `validate` in this build
+    (`E-SWEEP-GROUPS-UNSUPPORTED`), so no `run` can reach this line with a group
+    axis declared, and an end-to-end test of it cannot exist yet.
+    """
+    selectors = set(selector_paths(sweep_block))
+    return (
+        set(_swept_paths(sweep_block))
+        | set(ablated_paths(sweep_block))
+        | set(sweep_block.get("baseline") or {})
+    ) - selectors
 
 
 def _attributed(table: UnitTable, attributes: dict[str, dict[str, Any]]) -> UnitTable:
@@ -885,37 +933,19 @@ def command_run(config_path: Path) -> int:
     fold_members = fold_members_for(levels, partitions) if partitions is not None else None
 
     conditions = expand(doc)
-    # Every path any condition fixes, not just the grid's axes. A path
-    # `sweep.baseline` fixes varies across conditions by definition — condition
-    # `00` uses the baseline's value and every other condition uses the base
-    # config's — so it is exactly as unreadable at `run`/`summary` scope as a
-    # grid axis is. Reading the grid alone left a baseline-only path resolving
-    # to the base value, which is a value no condition in the run used.
     sweep_block = doc.get("sweep") or {}
-    # `_swept_paths` rather than `grid` alone: every axis-shaped mode's paths vary
-    # across conditions, and `paired`'s and `sample`'s did not reach here when each
-    # became a real axis — a sampled path stayed readable at `run`/`summary` scope
-    # and resolved to the base config's value, which is exactly the "a value no
-    # condition in the run used" failure the baseline half of this line exists to
-    # prevent, reached through a mode added after it was written.
-    # `ablated_paths` is unioned in for the same reason and by the same rule,
-    # from the other side of the axis/non-axis split: an ablated path varies
-    # across conditions too. Most are already covered by the `baseline` term —
-    # a removed path is one the baseline fixes — but an `override` path the
-    # baseline leaves alone is not, and it is exactly the residue this line has
-    # now been widened for three times.
-    swept_paths = (
-        set(_swept_paths(sweep_block))
-        | set(ablated_paths(sweep_block))
-        | set(sweep_block.get("baseline") or {})
-    )
+    swept_paths = _wide_swept_paths(sweep_block)
     plan = build_plan(  # phase 4
         experiment,
         conditions=[(c.index, c.label) for c in conditions],
         repeat_labels=labels,
     )
     cfgs: dict[int, Config] = {
-        c.index: resolve_condition_cfg(doc, dict(c.values)) for c in conditions
+        # The whole `Condition`, not `dict(c.values)`: a group cell's path names
+        # units rather than a parameter, and `c.selectors` is which — the answer
+        # `expand` computed once, travelling with the values it qualifies.
+        c.index: resolve_condition_cfg(doc, c)
+        for c in conditions
     }
     cfgs[-1] = resolve_wide_cfg(doc, swept_paths)
 

@@ -9,7 +9,7 @@ import pytest
 import yaml
 
 from publishable import BaseStep
-from publishable.cli import _apply_execution_order, main
+from publishable.cli import _apply_execution_order, _wide_swept_paths, main
 from publishable.diagnostics import EXIT_INVOCATION, EXIT_OK, EXIT_PARTIAL, EXIT_WRONG
 from publishable.errors import ContractError
 from publishable.generators.experiment import generate_experiment
@@ -362,6 +362,33 @@ def test_a_plan_pair_missing_from_execution_order_is_a_core_bug():
     with pytest.raises(ContractError) as excinfo:
         _apply_execution_order(plan, [(0, "seedA")])  # "seedB" has no home
     assert excinfo.value.code == "E-RUN-ORDER-MISMATCH"
+
+
+def test_a_group_path_gets_no_swept_away_marker():
+    """`_wide_swept_paths` marks parameters, and a group cell is not one.
+
+    A `baseline` may fix a group level (§ Expansion modes), so `{arm: control}`
+    reaches the `baseline` term of the union — and a `SweptAway` marker at
+    `parameters.arm` would be the same phantom parameter `resolve_condition_cfg`
+    refuses, one scope over: a `run`-scoped step reading `cfg.parameters.arm`
+    would get "this is varied by `sweep`" for a parameter no template declares.
+
+    Tested here rather than end to end because `validate` refuses `groups`
+    outright in this build (`E-SWEEP-GROUPS-UNSUPPORTED`), so no `run` reaches
+    this code with a group axis declared.
+    """
+    block = {
+        "groups": [{"by": "arm", "levels": ["control", "treatment"]}],
+        "grid": {"analysis.method": ["pearson", "spearman"]},
+        "baseline": {"arm": "control", "analysis.min_samples": 30},
+    }
+    # `analysis.min_samples` is the control that must report: a baseline-only
+    # parameter path, on the same term of the union the group path arrives by,
+    # so a subtraction that took the whole `baseline` would fail here.
+    assert _wide_swept_paths(block) == {"analysis.method", "analysis.min_samples"}
+    # And with no `groups` declared, a baseline path named `arm` is an ordinary
+    # parameter the wide config must still mark.
+    assert _wide_swept_paths({"baseline": {"arm": "control"}}) == {"arm"}
 
 
 def test_the_recorded_order_is_the_order_that_ran(tmp_path: Path):

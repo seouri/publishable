@@ -8,6 +8,7 @@ from tests.test_stats import _repeat_result
 from publishable import BaseExperiment, BaseStep
 from publishable.config import Config
 from publishable.errors import ContractError
+from publishable.hashes import parameters_hash
 from publishable.replication import Repeat
 from publishable.run_record import assemble_run_yaml, run_status
 from publishable.runner import (
@@ -20,6 +21,7 @@ from publishable.runner import (
     step_dir_for,
 )
 from publishable.scope import Execution, build_plan
+from publishable.sweep import Condition, expand
 from publishable.units import Unit, UnitList
 
 
@@ -1074,6 +1076,17 @@ def test_attrition_requires_condition_index():
 BASE_PARAMS = {"parameters": {"analysis": {"method": "pearson", "min_samples": 30}}}
 
 
+def _condition(
+    index: int, values: dict[str, object], selectors: frozenset[str] = frozenset()
+) -> Condition:
+    """A `Condition` carrying just what `resolve_condition_cfg` reads.
+
+    It takes the condition rather than a bare `values` mapping, so a group
+    cell's path arrives already marked as selecting units. Everything else on
+    the dataclass is irrelevant here and left at its default."""
+    return Condition(index=index, label=None, values=values, selectors=selectors)
+
+
 def run_two_conditions(tmp_path: Path, step_cls):
     """Two conditions sweeping `analysis.method` over pearson/spearman, each with
     its own `Config` built by `resolve_condition_cfg`, plus the wide `Config`
@@ -1090,8 +1103,8 @@ def run_two_conditions(tmp_path: Path, step_cls):
     run_dir.mkdir(parents=True, exist_ok=True)
     (tmp_path / "input").mkdir(parents=True, exist_ok=True)
     cfgs = {
-        0: resolve_condition_cfg(BASE_PARAMS, {"analysis.method": "pearson"}),
-        1: resolve_condition_cfg(BASE_PARAMS, {"analysis.method": "spearman"}),
+        0: resolve_condition_cfg(BASE_PARAMS, _condition(0, {"analysis.method": "pearson"})),
+        1: resolve_condition_cfg(BASE_PARAMS, _condition(1, {"analysis.method": "spearman"})),
         -1: resolve_wide_cfg(BASE_PARAMS, {"analysis.method"}),
     }
     return execute_plan(
@@ -1178,13 +1191,87 @@ def test_per_condition_cfgs_are_not_the_same_object(tmp_path: Path):
     in this project first showed itself. Assert the deep-copy actually happened,
     and that the shared `BASE_PARAMS` fixture survives both calls untouched."""
     before = copy.deepcopy(BASE_PARAMS)
-    cfg0 = resolve_condition_cfg(BASE_PARAMS, {"analysis.method": "pearson"})
-    cfg1 = resolve_condition_cfg(BASE_PARAMS, {"analysis.method": "spearman"})
+    cfg0 = resolve_condition_cfg(BASE_PARAMS, _condition(0, {"analysis.method": "pearson"}))
+    cfg1 = resolve_condition_cfg(BASE_PARAMS, _condition(1, {"analysis.method": "spearman"}))
     assert cfg0 is not cfg1
     assert cfg0.raw["parameters"]["analysis"] is not cfg1.raw["parameters"]["analysis"]
     assert cfg0.parameters.analysis.method == "pearson"
     assert cfg1.parameters.analysis.method == "spearman"
     assert BASE_PARAMS == before
+
+
+def test_a_group_cell_adds_no_parameter() -> None:
+    """`parameters` gains no `arm` key, and the resolved config's
+    `parameters_hash` matches the same design without the group axis.
+
+    Every other test in this slice passes whether or not the phantom parameter
+    appears, which is why this one is first. § Expansion modes: "two conditions
+    on a group axis can share a `parameters_hash` — and that's correct … same
+    code, same parameters, different units". A group cell laid over `parameters`
+    invents an `arm` no `parameter_spec` declares, which a `condition`-scoped
+    step then reads as `cfg.parameters.arm`.
+
+    Built through `expand` rather than by hand: `groups` expands to no cells of
+    its own in this build, but a baseline may fix a group level today
+    (§ Expansion modes — a baseline "accepts group levels as well as parameter
+    paths"), so this one call yields both the probe (rows 0 and 1, which fix
+    `arm`) and the control (rows 2 and 3, parameter cells alone).
+    """
+    conditions = expand(
+        {
+            "sweep": {
+                "groups": [{"by": "arm", "levels": ["control", "treatment"]}],
+                "grid": {"analysis.method": ["pearson", "spearman"]},
+                "baseline": {"arm": "control"},
+            }
+        }
+    )
+    # Pinned, so this test reports a design change in `expand` rather than
+    # silently probing rows that are no longer the ones described above.
+    assert [dict(c.values) for c in conditions] == [
+        {"analysis.method": "pearson", "arm": "control"},
+        {"analysis.method": "spearman", "arm": "control"},
+        {"analysis.method": "pearson"},
+        {"analysis.method": "spearman"},
+    ]
+    resolved = [resolve_condition_cfg(BASE_PARAMS, c) for c in conditions]
+
+    assert all("arm" not in cfg.raw["parameters"] for cfg in resolved)
+    for cfg in resolved:
+        with pytest.raises(ContractError) as excinfo:
+            _ = cfg.parameters.arm
+        assert excinfo.value.code == "E-STEP-PARAM-UNKNOWN"
+
+    # The claim itself: the arm-fixing row and the arm-free row at the same
+    # method are the same parameters, byte for byte and by hash. Asserted
+    # directly rather than by inspecting the mapping — a phantom key nested one
+    # level down would pass the `not in` above and fail here.
+    assert resolved[0].raw == resolved[2].raw
+    assert parameters_hash(resolved[0].raw) == parameters_hash(resolved[2].raw)
+    assert parameters_hash(resolved[1].raw) == parameters_hash(resolved[3].raw)
+    # And a group axis is not a way to make two arms look alike: the two
+    # *methods* still resolve to different parameters.
+    assert parameters_hash(resolved[0].raw) != parameters_hash(resolved[1].raw)
+
+    # The control for the whole distinction: with no `groups` declared, a swept
+    # path named `arm` is an ordinary parameter and must still be planted.
+    plain = expand({"sweep": {"grid": {"arm": ["control", "treatment"]}}})
+    plain_cfg = resolve_condition_cfg(BASE_PARAMS, plain[0])
+    assert plain_cfg.raw["parameters"]["arm"] == "control"
+
+
+def test_an_existing_condition_resolves_byte_identically() -> None:
+    """The worked example declares no `groups`, and nothing about it may move.
+
+    A condition whose `selectors` is empty resolves to exactly the document it
+    resolved to before selectors existed — pinned as a literal rather than
+    compared against a second call, which would agree with itself whatever both
+    calls did."""
+    condition = expand({"sweep": {"grid": {"analysis.method": ["pearson", "spearman"]}}})[1]
+    assert condition.selectors == frozenset()
+    assert resolve_condition_cfg(BASE_PARAMS, condition).raw == {
+        "parameters": {"analysis": {"method": "spearman", "min_samples": 30}}
+    }
 
 
 def test_resolve_wide_cfg_plants_the_marker_even_when_the_parent_is_absent(tmp_path: Path):

@@ -15,7 +15,7 @@ from publishable.errors import ContractError
 from publishable.replication import LABEL_JOIN, Repeat
 from publishable.scope import Execution
 from publishable.stats import handed_to, kish_effective_n
-from publishable.sweep import condition_dir_name
+from publishable.sweep import Condition, condition_dir_name
 from publishable.units import UnitList, cluster_count_of
 
 
@@ -335,16 +335,32 @@ def step_dir_for(run_dir: Path, execution: Execution, collapse_repeats: bool) ->
     return base / execution.step_name
 
 
-def resolve_condition_cfg(base: dict[str, Any], values: dict[str, Any]) -> Config:
-    """Overlay this condition's swept values onto the base config.
+def resolve_condition_cfg(base: dict[str, Any], condition: Condition) -> Config:
+    """Overlay this condition's swept *parameter* values onto the base config.
 
-    Each dotted path in `values` names a leaf under `parameters`; the overlay
-    walks (creating intermediate mappings as needed) to that leaf and sets it,
-    so a `condition`- or `repeat`-scoped step reads exactly this condition's
-    value without ever mentioning the sweep that produced it.
+    A condition's `values` holds two kinds of dotted path, and only one of them
+    names a leaf under `parameters`. A parameter path — from `grid`, `paired`,
+    `sample`, `ablate`, or a parameter `baseline` — is overlaid: the walk creates
+    intermediate mappings as needed and sets the leaf, so a `condition`- or
+    `repeat`-scoped step reads exactly this condition's value without ever
+    mentioning the sweep that produced it. A **selector** path — a group cell —
+    is skipped, because `reference.md` § Expansion modes says "a group level is a
+    *set of units*": `{arm: control}` names no parameter at all, and laying it
+    over `parameters` would invent an `arm` no template's `parameter_spec`
+    declares, which a step could then read as `cfg.parameters.arm`. That is the
+    opposite of what a group axis claims — "same code, same parameters,
+    different units" — and two conditions on a group axis are supposed to
+    resolve to the *same* parameters.
+
+    Takes the `Condition` rather than its `values` mapping so the two fields
+    cannot arrive out of step: `expand` is the only place that knows which mode
+    produced a cell, and a `values`-plus-`selectors` pair is something a caller
+    can mismatch or forget. `Condition.selectors` is the answer, computed once.
     """
     doc = copy.deepcopy(base)
-    for path, value in values.items():
+    for path, value in condition.values.items():
+        if path in condition.selectors:
+            continue
         node = doc.setdefault("parameters", {})
         *heads, leaf = path.split(".")
         for head in heads:
