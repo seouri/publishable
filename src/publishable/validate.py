@@ -1203,13 +1203,23 @@ absent or misspelled describes no assignment at all, which is what
 That split is deliberate and stays: a value outside the enum is a malformed
 declaration, and `random`/`blocked` are well-formed declarations of an
 unimplemented draw, which is a refusal of a different kind reported under its own
-code.
+code, `E-DATA-ASSIGN-DRAWN`.
+"""
+
+DRAWN_ASSIGN_METHODS = ("random", "blocked")
+"""The two `ASSIGN_METHODS` values that draw an arm rather than read one already
+assigned. Both are well-formed and in the enum; neither executes in this build,
+which is what `E-DATA-ASSIGN-DRAWN` refuses — a refusal of a *value*, distinct
+from `E-DATA-ASSIGN-METHOD`'s refusal of an absent or out-of-enum one. The two
+checks read the same `method` value in an `elif` chain in `_check_assign`, so
+that mutual exclusion is a property of the code: a value this tuple names is by
+construction inside `ASSIGN_METHODS`, so it can never also be out-of-enum.
 """
 
 
 def _check_assign(doc: dict[str, Any], units: dict[str, Any], c: Collector) -> None:
     """`data.units.allocation` and `data.units.assign` against each other and against
-    `sweep.groups` — three § Validation rows, all read from declarations alone, so
+    `sweep.groups` — four § Validation rows, all read from declarations alone, so
     each reports whether or not a roster resolved.
 
     *Allocation needs arms* — `allocation: between` with no group axis. § Allocation
@@ -1230,6 +1240,11 @@ def _check_assign(doc: dict[str, Any], units: dict[str, Any], c: Collector) -> N
     *Assignment names a method*, which is **not** gated on `allocation`: it is a
     check on the block, not on the pair, and an `assign` block naming no method
     describes no assignment wherever it was declared.
+
+    *Assignment method isn't drawn* — a `method` in the enum but not yet
+    executable (`random`, `blocked`), refused as `E-DATA-ASSIGN-DRAWN` rather than
+    `E-DATA-ASSIGN-METHOD`. Read from the same `elif` chain as the row above, so
+    the two are mutually exclusive by construction rather than by convention.
 
     Group axis names come from `sweep.selector_paths`, which is total over a
     malformed `sweep.groups` and dedupes. One consequence, stated rather than left
@@ -1304,6 +1319,16 @@ def _check_assign(doc: dict[str, Any], units: dict[str, Any], c: Collector) -> N
                 where,
                 f"is {method!r}, which is not an assignment method; expected one of "
                 f"{', '.join(ASSIGN_METHODS)}",
+            )
+        elif method in DRAWN_ASSIGN_METHODS:
+            c.error(
+                "E-DATA-ASSIGN-DRAWN",
+                where,
+                f"is {method!r}, which draws an arm rather than reading one already "
+                f"assigned; drawing is specified but not implemented in this build. "
+                f"`by_attribute` is the supported method — it reads an arm a trial "
+                f"system or the data already assigned, which is what a real trial does "
+                f"regardless. This value will be honored once drawing is built",
             )
 
 

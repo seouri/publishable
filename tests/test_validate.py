@@ -9,7 +9,6 @@ from publishable.diagnostics import Collector
 from publishable.sweep import expand
 from publishable.units import Unit, UnitList
 from publishable.validate import (
-    ASSIGN_METHODS,
     _check_assign,
     _check_cluster_by,
     _check_contrasts,
@@ -7228,16 +7227,52 @@ def test_allocation_within_leaves_both_cross_field_rows_silent():
     assert [f.code for f in c.findings] == []
 
 
-@pytest.mark.parametrize("method", list(ASSIGN_METHODS))
-def test_every_declared_assignment_method_is_accepted(write_config, method):
-    """The control for both method branches, and it must report: all three
-    methods are in the enum, and that `random` and `blocked` are not executable
-    in this build is a refusal of a different kind under its own code."""
-    assert _error_codes(write_config(_between({"arm": {"method": method}}))) == {
+def test_by_attribute_assignment_is_accepted(write_config):
+    """`by_attribute` is the one method that executes in this build, so it earns
+    neither `E-DATA-ASSIGN-METHOD` (absent or out-of-enum) nor
+    `E-DATA-ASSIGN-DRAWN` (in-enum but drawn) — the control for both, and it must
+    still report: the two live `-UNSUPPORTED` refusals below discriminate "the
+    config loaded and only the method-value checks are silent" from "nothing
+    ran". The exact set is the number that matters — three codes, none of them
+    `E-DATA-ASSIGN-METHOD` or `E-DATA-ASSIGN-DRAWN`."""
+    found = _error_codes(write_config(_between({"arm": {"method": "by_attribute"}})))
+    assert found == {
         "E-DATA-ALLOCATION-UNSUPPORTED",
         "E-DATA-ASSIGN-UNSUPPORTED",
         "E-SWEEP-GROUPS-UNSUPPORTED",
     }
+    assert "E-DATA-ASSIGN-DRAWN" not in found
+    assert "E-DATA-ASSIGN-METHOD" not in found
+
+
+@pytest.mark.parametrize("method", ["random", "blocked"])
+def test_a_drawn_assignment_method_is_refused(write_config, method):
+    """`random` and `blocked` are both in `ASSIGN_METHODS`, so neither earns
+    `E-DATA-ASSIGN-METHOD`; both draw an arm rather than reading one already
+    assigned, which is what `E-DATA-ASSIGN-DRAWN` refuses. Parametrized rather
+    than one test for both values, per the mutation requirement: narrowing the
+    refused set to just one of them must fail exactly one of these two runs."""
+    found = _error_codes(write_config(_between({"arm": {"method": method}})))
+    assert found == {
+        "E-DATA-ALLOCATION-UNSUPPORTED",
+        "E-DATA-ASSIGN-UNSUPPORTED",
+        "E-SWEEP-GROUPS-UNSUPPORTED",
+        "E-DATA-ASSIGN-DRAWN",
+    }
+    assert "E-DATA-ASSIGN-METHOD" not in found
+
+    c = Collector()
+    _check_assign({}, {"assign": {"arm": {"method": method}}}, c)
+    assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-DRAWN"]
+    assert c.findings[0].path == "data.units.assign.arm.method"
+    # The wording, not just the code: `E-DATA-ASSIGN-METHOD`'s out-of-enum branch
+    # also formats `is {method!r}, which is not...`, so a test asserting the code
+    # alone would pass with the `elif method in DRAWN_ASSIGN_METHODS` branch
+    # deleted and the out-of-enum branch mutated to swallow it. `by_attribute`,
+    # the supported alternative, is what discriminates this message from that
+    # one.
+    assert "by_attribute" in c.findings[0].message
+    assert method in c.findings[0].message
 
 
 def test_an_assignment_declaring_no_method_is_refused(write_config):

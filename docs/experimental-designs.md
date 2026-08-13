@@ -74,6 +74,8 @@ data:
         seed: auto
 ```
 
+**`method: random` is refused in this build**, as `E-DATA-ASSIGN-DRAWN` — drawing an arm is specified but not implemented yet; `method: by_attribute` is what runs today, and it's what a real trial does regardless, since the arm was already decided somewhere. This design is shown with `random` because that's the shape a prospective allocation takes; the refusal lifts once drawing is built. See [reference.md § Allocation](reference.md#allocation-within-subjects-or-between-subjects).
+
 The realized allocation lands in `allocation.json`, hashed. The arm-to-arm comparison is unpaired, derived from the fact that the two conditions differ on the `groups` axis rather than declared separately — and if you compose a parameter axis on top, contrasts *within* an arm stay paired, because they're the same patients analyzed two ways. The two conditions share a `parameters_hash`, which is the point: same code, same parameters, different units. `statistics.null_test` with `shuffle: arm` tests that contrast directly: permuting the attribute that *defines* the arms is a test of the difference between them, not of either arm's own estimate, and core attaches the p-value to the contrast for that reason — see [reference.md § What isn't a repeat](reference.md#what-isnt-a-repeat).
 
 `seed: auto` derives from a design digest over `data.units` and `sweep.groups`, not from `parameters_hash`, so arm membership doesn't move when you edit an analysis parameter. It does move if the roster does — core draws over the units resolved at run start and carries nothing forward from a previous run — so for a design you intend to cite, pin the seed to an integer and keep the `allocation.json` it produced. Prospective enrollment isn't something any `assign.method` supports; see [reference.md § What `auto` derives from](reference.md#what-auto-derives-from).
@@ -115,6 +117,8 @@ data:
         ratio: {control: 1, treatment: 1}
         seed: auto
 ```
+
+The `arm` axis's `method: random` carries the same refusal named above — `sex`'s `by_attribute` is unaffected, since it reads a column rather than drawing.
 
 Axes resolve in declaration order and `stratify_by` may name an earlier axis, which is what lets one declaration cover every crossed case: two `by_attribute` axes when both factors already exist, an observed axis followed by a randomized one stratified on it, or two randomized axes for a true factorial randomization. `ratio` always names its own axis's levels, so no cell tuple appears in the config.
 
