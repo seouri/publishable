@@ -1381,8 +1381,12 @@ def test_ablate_crossed_with_a_parameter_axis_is_refused(write_config):
 @pytest.mark.parametrize("mode", ["grid", "paired", "sample"])
 def test_ablate_is_refused_against_every_axis_shaped_mode(write_config, mode):
     """The rule names no mode — "a second parameter axis" — so the check reads
-    `sweep.AXIS_MODES` and every member of it is pinned here rather than the one
-    § Validation's row happens to illustrate."""
+    `sweep.PARAMETER_AXIS_MODES` and every member of it is pinned here rather
+    than the one § Validation's row happens to illustrate.
+
+    This half cannot discriminate the two predicates on its own: each of these
+    is both a product mode and a parameter axis, so the refusal holds either
+    way. `test_ablate_composes_with_a_group_axis` below is the discriminator."""
     axis = {
         "grid": {"analysis.method": ["pearson", "spearman"]},
         "paired": [{"analysis.method": "pearson"}, {"analysis.method": "spearman"}],
@@ -1412,8 +1416,10 @@ def test_ablate_is_refused_against_every_axis_shaped_mode(write_config, mode):
 
 def test_ablate_composes_with_a_group_axis(write_config):
     """§ Validation, "Ablation doesn't compose with a parameter axis": "`groups`
-    is permitted — it varies no parameter". Without this, a mutation adding
-    `groups` to `AXIS_MODES`'s crossed set passes every other test. `groups` is
+    is permitted — it varies no parameter". Without this, a mutation putting
+    `groups` into `PARAMETER_AXIS_MODES` — the set `E-SWEEP-ABLATE-CROSSED`
+    reads — passes every other test: this is the one assertion that tells the
+    product predicate and the parameter-axis predicate apart. `groups` is
     refused on its own identifier in this build, and that is the *only* error
     this config may carry."""
     found = _error_codes(

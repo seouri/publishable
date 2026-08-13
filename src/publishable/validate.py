@@ -21,9 +21,9 @@ from publishable.scope import step_name as _step_name
 from publishable.strata import levels_for
 from publishable.sweep import (
     SWEEP_MODES,
-    axis_modes_present,
     check_swept_value,
     expand,
+    parameter_axis_modes_present,
     removal_value,
     render_value,
     sample_fault,
@@ -1984,13 +1984,16 @@ def _check_sweep(
     import difflib
 
     sweep = doc.get("sweep") or {}
-    # Not a literal set: `sweep.SWEEP_MODES` is `AXIS_MODES + NON_AXIS_MODES`,
-    # and this check is the vocabulary's choke point — a mode absent from it is
-    # refused here, so no config can use one. Reading the derived tuple is what
-    # makes `E-SWEEP-ABLATE-CROSSED`'s "any axis-shaped mode" true of a mode
-    # added later: it cannot become usable without being classified as an axis
-    # or not. A literal here would let the two drift, with this check accepting
-    # a mode `axis_modes_present` has never heard of.
+    # Not a literal set: `sweep.SWEEP_MODES` is `PRODUCT_MODES +
+    # NON_PRODUCT_MODES`, and this check is the vocabulary's choke point — a
+    # mode absent from it is refused here, so no config can use one. Reading the
+    # derived tuple is what makes `E-SWEEP-ABLATE-CROSSED`'s "a second parameter
+    # axis" true of a mode added later: it cannot become usable without being
+    # classified as a product mode or not. A literal here would let the two
+    # drift, with this check accepting a mode `parameter_axis_modes_present` has
+    # never heard of. Classification is two questions since the split, and only
+    # the product one closes the vocabulary; that a product mode must also be
+    # placed in or out of `PARAMETER_AXIS_MODES` is pinned in `tests/test_sweep.py`.
     for key in sweep:
         if key not in SWEEP_MODES:
             near = difflib.get_close_matches(key, sorted(SWEEP_MODES), n=1)
@@ -2231,18 +2234,21 @@ def _check_sweep(
     # § Expansion modes: "the product of 'vary one thing at a time' with a
     # second parameter axis is no longer one thing at a time, and there is no
     # defensible reading of what it would mean". The modes come from
-    # `sweep.AXIS_MODES` rather than a tuple written here — the rule names no
-    # mode ("a second parameter axis"), and neither should its enforcement. A
-    # mode added to `_axes` alone would still slip past this, which is why
-    # `AXIS_MODES` is not the pin: `known` above reads `SWEEP_MODES`, derived
-    # from `AXIS_MODES + NON_AXIS_MODES`, so a seventh mode is refused outright
-    # (`E-SWEEP-KEY-UNKNOWN`) until someone classifies it — and classifying it
-    # as an axis is what puts it here.
-    # `groups` is deliberately absent from that set and is the row's stated
-    # exception: it varies units rather than parameters, so every condition is
-    # still exactly one parameter change from its own arm's baseline. (`groups`
-    # is refused for its own reason today, `E-SWEEP-GROUPS-UNSUPPORTED`.)
-    crossed_modes = axis_modes_present(sweep) if ablate else []
+    # `sweep.PARAMETER_AXIS_MODES` rather than a tuple written here — the rule
+    # names no mode ("a second parameter axis"), and neither should its
+    # enforcement. A mode added to `_axes` alone would still slip past this,
+    # which is why `PARAMETER_AXIS_MODES` is not the pin: `known` above reads
+    # `SWEEP_MODES`, derived from `PRODUCT_MODES + NON_PRODUCT_MODES`, so a
+    # seventh mode is refused outright (`E-SWEEP-KEY-UNKNOWN`) until someone
+    # classifies it — and classifying it as a parameter axis is what puts it
+    # here. That second classification is a separate act since the split, and
+    # `tests/test_sweep.py` pins the residual so it cannot be skipped.
+    # `groups` is a product mode and deliberately not a parameter axis, which is
+    # the row's stated exception: it varies units rather than parameters, so
+    # every condition is still exactly one parameter change from its own arm's
+    # baseline. (`groups` is refused for its own reason today,
+    # `E-SWEEP-GROUPS-UNSUPPORTED`.)
+    crossed_modes = parameter_axis_modes_present(sweep) if ablate else []
     if crossed_modes:
         c.error(
             "E-SWEEP-ABLATE-CROSSED",

@@ -371,64 +371,94 @@ def _sample_cells(sample: Any, seed: int) -> list[dict[str, Any]]:
     return cells
 
 
-AXIS_MODES = ("grid", "paired", "sample")
-"""The modes that are *axes*: each contributes to `_axes`'s product, and each
-varies a parameter.
+PRODUCT_MODES = ("grid", "paired", "sample", "groups")
+"""The modes the condition product is defined over — one half of the partition.
 
-Named once rather than spelled out at each site, because three places ask the
-same question of a `sweep` block — `_axes` builds the product from exactly
-these, `_swept_paths` collects their paths, and `validate`'s
-`E-SWEEP-ABLATE-CROSSED` refuses `ablate` composed with any of them. The rule
-§ Expansion modes states names no mode ("a second parameter axis"), so its
-enforcement should not either.
+A mode is here when the condition set is a product *across* it rather than a
+list appended after it: `grid`, `paired` and `sample` each contribute an axis
+of parameter cells, and `groups` contributes an axis of unit arms.
 
-**What makes that real is `SWEEP_MODES` below, not this tuple.** A mode added
-to `_axes` and not here would silently become one `ablate` composes with —
-`_axes` is not a choke point, since nothing forces a new mode through it. The
-mode *vocabulary* is one: `validate` refuses any `sweep` key outside
-`SWEEP_MODES` (`E-SWEEP-KEY-UNKNOWN`), so a seventh mode is unusable until it
-is added there, and `SWEEP_MODES` is derived from this tuple and
-`NON_AXIS_MODES` — which makes classifying it the only way to add it.
+**`groups` produces no conditions in this build.** It is classified here
+because that is what it is — § Expansion modes crosses group arms with the
+parameter axes — but `_axes` does not read it yet, so a `sweep` declaring
+`groups` alone expands to nothing and `validate` refuses it outright
+(`E-SWEEP-GROUPS-UNSUPPORTED`). Membership in this tuple is a statement about
+the vocabulary, not a claim about what executes today.
+
+This tuple is not what `ablate` may not cross — that is
+`PARAMETER_AXIS_MODES`, a strict subset. The two questions were one tuple
+until this split, and `groups` is precisely the mode that answers them
+differently.
 """
 
-NON_AXIS_MODES = ("baseline", "ablate", "groups")
-"""The modes that are not axes, each for its own reason.
+NON_PRODUCT_MODES = ("baseline", "ablate")
+"""The modes the product is not taken over — the other half of the partition.
 
-`baseline` fixes values rather than varying them; `ablate` applies after the
-product rather than joining it; `groups` varies units rather than parameters —
-which is exactly why § Expansion modes permits `ablate × groups` and why
-`E-SWEEP-ABLATE-CROSSED` must not fire on it.
+`baseline` fixes values rather than varying them, and `ablate` applies after
+the product rather than joining it: § Expansion modes says it "emits `n`
+conditions, each one change away from the baseline". Neither multiplies the
+condition count by a number of cells.
 """
 
-SWEEP_MODES = AXIS_MODES + NON_AXIS_MODES
+PARAMETER_AXIS_MODES = ("grid", "paired", "sample")
+"""The modes that sweep a *parameter path* — a subset of `PRODUCT_MODES`.
+
+Three places ask this question of a `sweep` block: `_axes` builds the
+parameter cells from exactly these, `_swept_paths` collects their paths, and
+`validate`'s `E-SWEEP-ABLATE-CROSSED` refuses `ablate` composed with any of
+them. The rule § Expansion modes states names no mode ("a second parameter
+axis"), so its enforcement should not either.
+
+`groups` is in `PRODUCT_MODES` and deliberately not here: it varies units, not
+parameters, which is exactly why § Expansion modes permits `ablate × groups`
+and why `E-SWEEP-ABLATE-CROSSED` must not fire on it.
+
+**This tuple is a predicate, not a partition half, so it is not what makes the
+vocabulary closed** — `SWEEP_MODES` below is. A mode added to `PRODUCT_MODES`
+and forgotten here silently becomes one `ablate` may cross, which is why the
+residual `PRODUCT_MODES - PARAMETER_AXIS_MODES` is pinned as a literal in
+`tests/test_sweep.py` rather than only its containment.
+"""
+
+SWEEP_MODES = PRODUCT_MODES + NON_PRODUCT_MODES
 """The six modes `sweep` may declare, per § Expansion modes.
 
 Derived rather than written out, and this is the load-bearing part: `validate`
 reads this set to refuse an unrecognised `sweep` key, so a seventh mode cannot
 be used at all until it appears here — and it can only appear here by being
-put in `AXIS_MODES` or `NON_AXIS_MODES`. Whoever adds one therefore has to say
-which it is, and `E-SWEEP-ABLATE-CROSSED` gets the right answer either way.
-The alternative — a literal set in `validate` beside a hand-maintained tuple
-here — leaves the two free to disagree, with the composition refusal
-under-firing silently while every config still validates.
+put in `PRODUCT_MODES` or `NON_PRODUCT_MODES`. Whoever adds one therefore has
+to say which it is. The alternative — a literal set in `validate` beside a
+hand-maintained tuple here — leaves the two free to disagree, with the
+composition refusal under-firing silently while every config still validates.
+
+The partition is over the *product* predicate rather than the parameter-axis
+one because only the product predicate partitions: `PARAMETER_AXIS_MODES` is a
+subset of `PRODUCT_MODES`, so the two together would double-count `grid`,
+`paired` and `sample` and could never be a partition of the six.
 """
 
 
-def axis_modes_present(sweep: dict[str, Any]) -> list[str]:
-    """Which of `AXIS_MODES` this `sweep` actually declares, in `AXIS_MODES` order.
+def parameter_axis_modes_present(sweep: dict[str, Any]) -> list[str]:
+    """Which of `PARAMETER_AXIS_MODES` this `sweep` declares, in that tuple's order.
 
     Truthiness, not presence: `init` and a hand-written config alike leave a
     mode as `null` or `{}`, and an empty axis-shaped mode contributes no axis to
     `_axes`, so it is not a second axis for anything to be composed with. An
     empty `grid` has its own refusal (`E-SWEEP-AXIS-EMPTY`) and must not also be
     reported as a composition fault.
+
+    Reads `PARAMETER_AXIS_MODES`, not `PRODUCT_MODES`: its one caller is
+    `E-SWEEP-ABLATE-CROSSED`, and the rule it enforces is about a second
+    *parameter* axis. A group axis composes with `ablate`.
     """
-    return [mode for mode in AXIS_MODES if sweep.get(mode)]
+    return [mode for mode in PARAMETER_AXIS_MODES if sweep.get(mode)]
 
 
 def _swept_paths(sweep: dict[str, Any]) -> list[str]:
-    """Every path any axis-shaped mode sweeps, in declared order — `AXIS_MODES`,
-    read one mode at a time because each has its own shape.
+    """Every path any axis-shaped mode sweeps, in declared order —
+    `PARAMETER_AXIS_MODES`, read one mode at a time because each has its own
+    shape. `groups` is a product mode but not a parameter axis: it sweeps no
+    parameter path, so it contributes nothing here.
 
     `label_for` shortens these to unique suffixes, so it needs the whole set:
     a key is only unambiguous against every other swept path, not against one

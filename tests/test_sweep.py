@@ -1,13 +1,14 @@
 import pytest
 
 from publishable.sweep import (
-    AXIS_MODES,
-    NON_AXIS_MODES,
+    NON_PRODUCT_MODES,
+    PARAMETER_AXIS_MODES,
+    PRODUCT_MODES,
     SWEEP_MODES,
     Condition,
     _axes,
-    axis_modes_present,
     expand,
+    parameter_axis_modes_present,
 )
 
 
@@ -832,17 +833,27 @@ def test_ablate_declares_its_conditions_in_the_order_it_writes_them() -> None:
     assert [c.label for c in conditions] == ["baseline", "method=spearman", "labs=false"]
 
 
-def test_the_mode_vocabulary_is_partitioned_into_axis_and_non_axis() -> None:
+def test_the_mode_vocabulary_is_partitioned_and_parameter_axes_are_a_subset() -> None:
     """`SWEEP_MODES` is what `validate` refuses an unrecognised `sweep` key
     against, which makes it the vocabulary's choke point: a seventh mode is
     unusable until it appears there. It appears there only by being classified —
-    `SWEEP_MODES` *is* `AXIS_MODES + NON_AXIS_MODES` — so `E-SWEEP-ABLATE-CROSSED`
-    cannot be left behind by a mode someone added to `_axes` alone.
+    `SWEEP_MODES` *is* `PRODUCT_MODES + NON_PRODUCT_MODES` — so nothing reading
+    the vocabulary can be left behind by a mode someone added to `_axes` alone.
 
-    Pinned here against § Expansion modes' literal six, because the derivation
+    Two predicates, not one, since `groups` answers them differently: it is a
+    product mode and not a parameter axis. So `PARAMETER_AXIS_MODES` is a
+    *subset* of `PRODUCT_MODES`, never a partition half, and the residual is
+    pinned as a literal rather than as containment alone — a seventh product
+    mode forgotten in `PARAMETER_AXIS_MODES` would silently become one `ablate`
+    may cross, which is the under-firing the derivation exists to prevent.
+
+    The refusal half of that (`ablate × grid` refused, `ablate × groups` not) is
+    `test_validate.py`'s, since it is `E-SWEEP-ABLATE-CROSSED` that reads these.
+
+    The literal six are pinned against § Expansion modes, because the derivation
     guarantees the partition and only a document can say which six they are."""
-    assert set(AXIS_MODES) | set(NON_AXIS_MODES) == set(SWEEP_MODES)
-    assert set(AXIS_MODES).isdisjoint(NON_AXIS_MODES)
+    assert set(PRODUCT_MODES) | set(NON_PRODUCT_MODES) == set(SWEEP_MODES)
+    assert set(PRODUCT_MODES).isdisjoint(NON_PRODUCT_MODES)
     assert set(SWEEP_MODES) == {
         "baseline",
         "grid",
@@ -851,6 +862,9 @@ def test_the_mode_vocabulary_is_partitioned_into_axis_and_non_axis() -> None:
         "sample",
         "groups",
     }
+    assert set(PARAMETER_AXIS_MODES) <= set(PRODUCT_MODES)
+    assert set(PRODUCT_MODES) - set(PARAMETER_AXIS_MODES) == {"groups"}
+
     declarations = {
         "grid": {"analysis.method": ["pearson", "spearman"]},
         "paired": [{"analysis.method": "pearson"}, {"analysis.method": "spearman"}],
@@ -860,16 +874,25 @@ def test_the_mode_vocabulary_is_partitioned_into_axis_and_non_axis() -> None:
             "ranges": {"analysis.confidence": {"uniform": [0.9, 0.99]}},
         },
     }
-    # And the classification is the true one: every axis mode really does
-    # contribute an axis to the product, and no non-axis mode does.
-    assert set(AXIS_MODES) == set(declarations)
+    # And the classification is the true one: every parameter axis really does
+    # contribute an axis of parameter cells, and no other mode does.
+    assert set(PARAMETER_AXIS_MODES) == set(declarations)
     for mode, declaration in declarations.items():
         sweep = {mode: declaration}
         assert _axes(sweep, sample_seed=7), mode
-        assert axis_modes_present(sweep) == [mode]
-    for mode in NON_AXIS_MODES:
+        assert parameter_axis_modes_present(sweep) == [mode]
+    for mode in NON_PRODUCT_MODES:
         assert not _axes({mode: {"analysis.method": "pearson"}}, sample_seed=7)
-        assert axis_modes_present({mode: {"analysis.method": "pearson"}}) == []
+        assert parameter_axis_modes_present({mode: {"analysis.method": "pearson"}}) == []
+
+    # `groups` is the mode the two predicates disagree about, so it is asserted
+    # on its own rather than falling out of either loop: it is a product mode
+    # and not a parameter axis, and — the task-5 boundary — it still expands to
+    # nothing in this build, which is why the loop above no longer covers it.
+    groups = [{"by": "cohort", "levels": ["derivation", "validation"]}]
+    assert parameter_axis_modes_present({"groups": groups}) == []
+    assert not _axes({"groups": groups}, sample_seed=7)
+    assert expand({"sweep": {"groups": groups}}) == []
 
 
 def test_a_baseline_fixing_some_axes_expands_over_the_rest() -> None:
