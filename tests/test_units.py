@@ -14,6 +14,7 @@ from publishable.units import (
     fold_basis,
     partition_units,
     resolve_units,
+    stratum_varies_within_cluster,
     units_hash,
 )
 
@@ -1076,4 +1077,103 @@ def test_a_column_no_row_carries_is_not_a_disagreement_either(input_dir: Path):
     roster, _, _ = resolve_units(decl, input_dir)
     with pytest.raises(ContractError) as e:
         clusters_of(roster, "site")
+    assert e.value.code == "E-DATA-CLUSTER-UNKNOWN"
+
+
+# --- a stratum must be constant within a cluster ------------------------------
+
+
+def _strata(rows: list[tuple[str, str, str]]) -> UnitList:
+    """`(key, animal, label)` rows, as a roster carrying both attributes."""
+    return UnitList(
+        [
+            Unit(key=key, paths=(), attributes={"animal_id": animal, "label": label})
+            for key, animal, label in rows
+        ]
+    )
+
+
+_ANIMALS = {"A1": 7, "A2": 3, "A3": 3, "A4": 1, "A5": 1}
+_ANIMAL_LABELS = {"A1": "tumor", "A2": "normal", "A3": "tumor", "A4": "normal", "A5": "tumor"}
+
+
+def _animal_rows(varying: bool) -> list[tuple[str, str, str]]:
+    """The fixture both halves share: 15 cells over 5 animals, sized 7/3/3/1/1.
+
+    It discriminates because neither coincidence holds. Animals `A1`, `A2` and
+    `A3` hold several cells each, so a stratum is not constant within a cluster
+    merely for the cluster being a singleton; and `label` takes both values across
+    the roster, so it is not constant globally either. `varying` flips exactly one
+    cell of `A3` — a three-cell animal, so the flipped cell has siblings to
+    disagree with — which is the whole difference between the probe and its
+    control.
+    """
+    rows = []
+    for animal, n in _ANIMALS.items():
+        for i in range(n):
+            label = _ANIMAL_LABELS[animal]
+            if varying and animal == "A3" and i == 0:
+                label = "normal"
+            rows.append((f"{animal}_{i}", animal, label))
+    return rows
+
+
+def test_a_stratum_varying_inside_a_cluster_is_found():
+    """`reference.md` § Clustered units: stratifying folds on an attribute that
+    varies inside a cluster is unsatisfiable once the cluster is indivisible. The
+    offender is named with the values it carries, so the reader knows which animal
+    to look at."""
+    roster = _strata(_animal_rows(varying=True))
+    found = stratum_varies_within_cluster(roster, "animal_id", "label")
+    assert found is not None
+    cluster, values = found
+    assert cluster == "A3"
+    assert values == ["normal", "tumor"]
+
+
+def test_a_stratum_constant_within_every_cluster_is_not_found():
+    """The control that must report: the same 15 cells over the same 5 animals,
+    with `label` constant within each animal and differing *across* them — a
+    stratum a cluster-respecting split can balance, differing from the probe by one
+    cell's label."""
+    roster = _strata(_animal_rows(varying=False))
+    assert stratum_varies_within_cluster(roster, "animal_id", "label") is None
+
+
+def test_a_cell_carrying_no_stratum_value_varies_from_its_siblings():
+    """Totality: a cell with no value for the stratum has nothing to be balanced
+    on, so within a cluster whose other cells declare one it is a variation like any
+    other. Two cells both carrying none agree, and a stratum no unit carries at all
+    is the `-UNKNOWN` half's finding rather than this one's."""
+    roster = _strata([("c0", "A1", "tumor")])
+    roster = UnitList(
+        [
+            roster[0],
+            Unit(key="c1", paths=(), attributes={"animal_id": "A1"}),
+        ]
+    )
+    found = stratum_varies_within_cluster(roster, "animal_id", "label")
+    assert found == ("A1", ["no value", "tumor"])
+    both_missing = UnitList(
+        [
+            Unit(key="c0", paths=(), attributes={"animal_id": "A1"}),
+            Unit(key="c1", paths=(), attributes={"animal_id": "A1"}),
+        ]
+    )
+    assert stratum_varies_within_cluster(both_missing, "animal_id", "label") is None
+
+
+def test_the_stratum_check_reads_cluster_membership_from_the_one_authority():
+    """`clusters_of` is the single authority, so a unit carrying no cluster value
+    raises `E-DATA-CLUSTER-UNKNOWN` from there rather than being grouped into a
+    cluster of its own — which would make its stratum trivially constant and hide a
+    real variation."""
+    roster = UnitList(
+        [
+            Unit(key="c0", paths=(), attributes={"animal_id": "A1", "label": "tumor"}),
+            Unit(key="c1", paths=(), attributes={"label": "normal"}),
+        ]
+    )
+    with pytest.raises(ContractError) as e:
+        stratum_varies_within_cluster(roster, "animal_id", "label")
     assert e.value.code == "E-DATA-CLUSTER-UNKNOWN"

@@ -11,6 +11,7 @@ from publishable.units import Unit, UnitList
 from publishable.validate import (
     _check_cluster_by,
     _check_contrasts,
+    _check_fold_stratify_by,
     _check_measurements,
     _check_weight_by,
     validate_config,
@@ -6368,3 +6369,304 @@ def test_an_unreadable_cluster_leaves_k_all_unresolved_rather_than_raising(
     found = {f.code for f in c.findings}
     assert "E-DATA-CLUSTER-UNKNOWN" in found
     assert "E-REPL-FOLD-K" in found
+
+
+# --- a fold's `stratify_by` ---------------------------------------------------
+#
+# `E-REPL-FOLD-STRATIFY-UNSUPPORTED` is still live: `resolve_repeats` refuses any
+# fold `stratify_by` before it reads `k` at all. It is collected rather than fatal,
+# so a declaration check reports beside it — and every probe below asserts the
+# refusal appears *with* the finding, which is the proof the check was reached
+# rather than shadowed. Each check is also exercised by a direct call, where the
+# refusal cannot reach it.
+#
+# Only a `fold` level's `stratify_by` is checked here. § Validation's
+# "Stratification attribute exists" row names no particular one, and its
+# `data.units.assign.*.stratify_by` and `data.units.holdout.stratify_by` halves
+# belong to the slices that build those blocks.
+
+_ANIMAL_HEADER = "cell_id,animal_id,label"
+_ANIMAL_SIZES = {"A1": 7, "A2": 3, "A3": 3, "A4": 1, "A5": 1}
+_ANIMAL_LABELS = {"A1": "tumor", "A2": "normal", "A3": "tumor", "A4": "normal", "A5": "tumor"}
+
+
+def _animal_body(varying: bool) -> str:
+    """15 cells over 5 animals, sized 7/3/3/1/1, with `label` per animal.
+
+    Neither coincidence that would make the clustering check unfireable holds:
+    three of the animals hold several cells, so a stratum is not constant within a
+    cluster merely for the cluster being a singleton, and `label` takes both values
+    across the roster, so it is not constant globally either. `varying` flips one
+    cell of the three-cell animal `A3` — one character between the probe and its
+    control.
+    """
+    rows = []
+    for animal, n in _ANIMAL_SIZES.items():
+        for i in range(n):
+            label = _ANIMAL_LABELS[animal]
+            if varying and animal == "A3" and i == 0:
+                label = "normal"
+            rows.append(f"{animal}_{i},{animal},{label}")
+    return "".join(f"{r}\n" for r in rows)
+
+
+def _animal_config(write_config, *, varying: bool, attributes: list[str], **units):
+    decl = {"from": "index.csv", "key": "cell_id", "attributes": attributes}
+    decl.update(units)
+    return write_config(
+        {
+            "data.units": decl,
+            "replication": {"repeats": [{"kind": "fold", "k": 2, "stratify_by": "label"}]},
+        }
+    )
+
+
+def test_a_fold_stratify_by_naming_no_attribute_is_reported(write_config, tmp_path):
+    """§ Validation, "Stratification attribute exists", at a `fold` level:
+    `stratify_by: label` is not in `data.units.attributes`, so the partitioner has
+    nothing to balance the folds on."""
+    _clustered_table(tmp_path, _ANIMAL_HEADER, _animal_body(varying=False))
+    found = codes(_animal_config(write_config, varying=False, attributes=["animal_id"]))
+    assert "E-REPL-FOLD-STRATIFY-UNKNOWN" in found
+    assert "E-REPL-FOLD-STRATIFY-UNSUPPORTED" in found  # the check was reached, not shadowed
+
+
+def test_a_declared_fold_stratum_is_not_reported_unknown(write_config, tmp_path):
+    """The control that must report: the same roster and the same level, with
+    `label` declared — the one difference the check is allowed to read."""
+    _clustered_table(tmp_path, _ANIMAL_HEADER, _animal_body(varying=False))
+    found = codes(_animal_config(write_config, varying=False, attributes=["animal_id", "label"]))
+    assert "E-REPL-FOLD-STRATIFY-UNKNOWN" not in found
+    assert "E-REPL-FOLD-STRATIFY-UNSUPPORTED" in found
+
+
+def test_the_fold_stratum_name_check_reports_without_a_roster():
+    """Direct, where the live refusal cannot shadow it, and with no roster at all:
+    the name is read from the declaration, `_check_cluster_by`'s construction."""
+    c = Collector()
+    _check_fold_stratify_by(
+        {"replication": {"repeats": [{"kind": "fold", "k": 2, "stratify_by": "label"}]}},
+        {"attributes": ["age"]},
+        None,
+        None,
+        c,
+    )
+    assert [f.code for f in c.findings] == ["E-REPL-FOLD-STRATIFY-UNKNOWN"]
+    clean = Collector()
+    _check_fold_stratify_by(
+        {"replication": {"repeats": [{"kind": "fold", "k": 2, "stratify_by": "label"}]}},
+        {"attributes": ["label"]},
+        None,
+        None,
+        clean,
+    )
+    assert not clean.findings
+
+
+@pytest.mark.parametrize("declared", ["", [], ["label"], 3])
+def test_a_fold_stratify_by_that_is_no_attribute_name_is_reported(declared):
+    """Totality. `envelope.LEAF_TYPES` types `replication.repeats` a `list` and
+    nothing inside a level, so unlike `data.units.cluster_by` there is no
+    `E-CONFIG-TYPE` backstop for a non-string here: a fold stratifies on one
+    attribute named as a string, and the list form the `holdout`, `assign` and
+    `resample` blocks take is reported rather than silently accepted. An empty
+    declaration names nothing and changes no behavior, the fault an empty
+    `cluster_by` is reported for."""
+    c = Collector()
+    _check_fold_stratify_by(
+        {"replication": {"repeats": [{"kind": "fold", "k": 2, "stratify_by": declared}]}},
+        {"attributes": ["label"]},
+        None,
+        None,
+        c,
+    )
+    assert [f.code for f in c.findings] == ["E-REPL-FOLD-STRATIFY-UNKNOWN"]
+
+
+def test_a_level_with_no_stratify_by_is_not_reported():
+    """The `None` control: `init` writes no `stratify_by`, and the worked example
+    declares none, so an absent key must reach neither check."""
+    c = Collector()
+    _check_fold_stratify_by(
+        {"replication": {"repeats": [{"kind": "fold", "k": 2}, {"kind": "seed", "n": 5}]}},
+        {"attributes": ["label"]},
+        None,
+        None,
+        c,
+    )
+    assert not c.findings
+
+
+def test_a_fold_stratum_varying_within_a_cluster_is_reported(write_config, tmp_path):
+    """§ Validation, "Fold strata survive clustering": `{kind: fold, stratify_by:
+    label}` with `cluster_by: animal_id`, and `label` varies within animal `A3` — a
+    stratum can't be balanced across a split that can't divide the cluster carrying
+    both values."""
+    _clustered_table(tmp_path, _ANIMAL_HEADER, _animal_body(varying=True))
+    found = codes(
+        _animal_config(
+            write_config,
+            varying=True,
+            attributes=["animal_id", "label"],
+            cluster_by="animal_id",
+        )
+    )
+    assert "E-REPL-FOLD-STRATIFY-VARIES" in found
+    assert "E-REPL-FOLD-STRATIFY-UNSUPPORTED" in found  # the check was reached
+    assert "E-DATA-CLUSTER-UNSUPPORTED" in found  # so was the clustering refusal
+
+
+def test_a_fold_stratum_constant_within_every_cluster_is_accepted(write_config, tmp_path):
+    """The control that must report: the same design over the same animals with
+    `label` constant within each — one cell's label apart from the probe. A stratum
+    that agrees inside every indivisible cluster is exactly what a cluster-respecting
+    stratified fold can satisfy, so it is not refused."""
+    _clustered_table(tmp_path, _ANIMAL_HEADER, _animal_body(varying=False))
+    found = codes(
+        _animal_config(
+            write_config,
+            varying=False,
+            attributes=["animal_id", "label"],
+            cluster_by="animal_id",
+        )
+    )
+    assert "E-REPL-FOLD-STRATIFY-VARIES" not in found
+    assert "E-DATA-CLUSTER-UNSUPPORTED" in found
+
+
+def test_the_fold_stratum_clustering_check_runs_on_a_direct_call():
+    """Direct, where neither live refusal reaches it — the difference between a
+    passing test and a dead one while `E-DATA-CLUSTER-UNSUPPORTED` still refuses
+    every clustered config."""
+    doc = {"replication": {"repeats": [{"kind": "fold", "k": 2, "stratify_by": "label"}]}}
+    decl = {"attributes": ["animal_id", "label"], "cluster_by": "animal_id"}
+    varying = UnitList(
+        [
+            Unit(key="c0", paths=(), attributes={"animal_id": "A3", "label": "tumor"}),
+            Unit(key="c1", paths=(), attributes={"animal_id": "A3", "label": "normal"}),
+        ]
+    )
+    c = Collector()
+    _check_fold_stratify_by(doc, decl, varying, "animal_id", c)
+    assert [f.code for f in c.findings] == ["E-REPL-FOLD-STRATIFY-VARIES"]
+    assert "A3" in c.findings[0].message
+    constant = UnitList(
+        [
+            Unit(key="c0", paths=(), attributes={"animal_id": "A3", "label": "tumor"}),
+            Unit(key="c1", paths=(), attributes={"animal_id": "A3", "label": "tumor"}),
+        ]
+    )
+    clean = Collector()
+    _check_fold_stratify_by(doc, decl, constant, "animal_id", clean)
+    assert not clean.findings
+
+
+def test_a_varying_stratum_is_not_reported_without_a_cluster_by():
+    """Nothing is indivisible without `cluster_by`, so the same varying `label` is
+    a perfectly satisfiable stratification — the row is about the interaction, not
+    about the attribute."""
+    c = Collector()
+    _check_fold_stratify_by(
+        {"replication": {"repeats": [{"kind": "fold", "k": 2, "stratify_by": "label"}]}},
+        {"attributes": ["animal_id", "label"]},
+        UnitList(
+            [
+                Unit(key="c0", paths=(), attributes={"animal_id": "A3", "label": "tumor"}),
+                Unit(key="c1", paths=(), attributes={"animal_id": "A3", "label": "normal"}),
+            ]
+        ),
+        None,
+        c,
+    )
+    assert not c.findings
+
+
+def test_an_undeclared_fold_stratum_is_not_also_reported_as_varying():
+    """One finding, not two: the reader has to declare the attribute either way, and
+    a derived second fault on top of it is what `_check_cluster_by`'s own comment
+    argues against."""
+    c = Collector()
+    _check_fold_stratify_by(
+        {"replication": {"repeats": [{"kind": "fold", "k": 2, "stratify_by": "label"}]}},
+        {"attributes": ["animal_id"], "cluster_by": "animal_id"},
+        UnitList(
+            [
+                Unit(key="c0", paths=(), attributes={"animal_id": "A3", "label": "tumor"}),
+                Unit(key="c1", paths=(), attributes={"animal_id": "A3", "label": "normal"}),
+            ]
+        ),
+        "animal_id",
+        c,
+    )
+    assert [f.code for f in c.findings] == ["E-REPL-FOLD-STRATIFY-UNKNOWN"]
+
+
+def test_an_unreadable_cluster_leaves_the_stratum_check_silent_rather_than_raising():
+    """`validate` collects and never raises. `clusters_of` raises
+    `E-DATA-CLUSTER-UNKNOWN` for a unit carrying no cluster value, and that finding
+    is already reported beside this check, so an unreadable grouping is silence here
+    rather than a traceback."""
+    c = Collector()
+    _check_fold_stratify_by(
+        {"replication": {"repeats": [{"kind": "fold", "k": 2, "stratify_by": "label"}]}},
+        {"attributes": ["animal_id", "label"], "cluster_by": "animal_id"},
+        UnitList(
+            [
+                Unit(key="c0", paths=(), attributes={"animal_id": "A3", "label": "tumor"}),
+                Unit(key="c1", paths=(), attributes={"label": "normal"}),
+            ]
+        ),
+        "animal_id",
+        c,
+    )
+    assert not c.findings
+
+
+# --- what `_fold_k` reports while its stratify refusal still comes first -------
+#
+# Pinned for the slice that retires `E-REPL-FOLD-STRATIFY-UNSUPPORTED`. That raise
+# sits ahead of every read of `k`, so retiring it changes which code these two
+# configs report; asserting the flip code is ABSENT today is what makes the change
+# show up in that slice's diff rather than being discovered afterwards.
+
+
+def test_a_fold_stratify_by_reports_before_an_illegal_k(write_config, tmp_path):
+    """`{k: 1, stratify_by: label}` reports the stratify refusal and *not*
+    `E-REPL-FOLD-K`, which it will report once the refusal is retired."""
+    _clustered_table(tmp_path, _ANIMAL_HEADER, _animal_body(varying=False))
+    found = codes(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv",
+                    "key": "cell_id",
+                    "attributes": ["animal_id", "label"],
+                },
+                "replication": {"repeats": [{"kind": "fold", "k": 1, "stratify_by": "label"}]},
+            }
+        )
+    )
+    assert "E-REPL-FOLD-STRATIFY-UNSUPPORTED" in found
+    assert "E-REPL-FOLD-K" not in found
+
+
+def test_a_fold_stratify_by_reports_before_an_oversized_k(write_config, tmp_path):
+    """`{k: 99, stratify_by: label}` over a 15-unit roster reports the stratify
+    refusal and *not* `E-REPL-FOLD-K-TOO-LARGE`, which it will report once the
+    refusal is retired. The roster is well under 99, so the flip being pinned is
+    genuinely reachable."""
+    _clustered_table(tmp_path, _ANIMAL_HEADER, _animal_body(varying=False))
+    found = codes(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv",
+                    "key": "cell_id",
+                    "attributes": ["animal_id", "label"],
+                },
+                "replication": {"repeats": [{"kind": "fold", "k": 99, "stratify_by": "label"}]},
+            }
+        )
+    )
+    assert "E-REPL-FOLD-STRATIFY-UNSUPPORTED" in found
+    assert "E-REPL-FOLD-K-TOO-LARGE" not in found

@@ -38,6 +38,7 @@ from publishable.units import (
     is_measurement_numeric,
     resolve_units,
     rule_for,
+    stratum_varies_within_cluster,
     usable_weight,
 )
 
@@ -472,6 +473,12 @@ def validate_config(
             basis = fold_basis(roster, usable_cluster)
         except ContractError:
             basis = None
+    # A `fold` level's `stratify_by`, from the same usable-cluster local the basis
+    # was resolved from: the name it declares, and — when a cluster is declared —
+    # whether the stratum survives a split that cannot divide one. Not in
+    # `replication._fold_k`, which sees the declaration and a count and never a
+    # roster.
+    _check_fold_stratify_by(doc, units_decl, roster, usable_cluster, c)
     _check_replication(
         doc,
         template,
@@ -1169,6 +1176,108 @@ def _check_cluster_by(
             f"unit when the split is drawn, so it has to be one. `data.units.attributes` "
             f"declares {', '.join(names) or 'none'}",
         )
+
+
+def _check_fold_stratify_by(
+    doc: dict[str, Any],
+    units: dict[str, Any],
+    roster: UnitList | None,
+    cluster_by: str | None,
+    c: Collector,
+) -> None:
+    """A `fold` level's `stratify_by` — the attribute exists, and it survives the
+    clustering that decides what a split cannot divide.
+
+    `reference.md` § Validation, rows "Stratification attribute exists" and "Fold
+    strata survive clustering". **Only the `fold` level's**: the first row names no
+    particular `stratify_by`, and its `data.units.assign.<axis>.stratify_by` and
+    `data.units.holdout.stratify_by` halves belong to the slices that build those
+    blocks, so neither is discharged by this.
+
+    **`data.units.attributes` is the reference set for the name**, the side of the
+    line `_check_cluster_by` and `_check_weight_by` read, and for the same reason: a
+    stratum is read per unit when the partition is drawn, so it has to survive
+    resolution as an attribute rather than merely be a column of the source. Read
+    from the declaration, so the name check runs with no roster at all.
+
+    Unlike `data.units.cluster_by` there is **no `E-CONFIG-TYPE` backstop** for a
+    value of the wrong type: `envelope.LEAF_TYPES` types `replication.repeats` a
+    `list` and nothing inside a level, so a `stratify_by: [label]` — the list form
+    `holdout`, `assign` and `statistics.resample` each take — would otherwise be
+    reported by no check at all. A fold stratifies on one attribute named as a
+    string, and anything else, an empty string or empty list included, names none.
+
+    The clustering half needs the cluster membership and the stratum values
+    together, which is why it lives here rather than in `replication._fold_k`: that
+    function sees the declaration and a count, and never a roster. `cluster_by` is
+    handed in — `validate_config`'s one usable-cluster local, the same value
+    `units.fold_basis` was resolved from — so nothing here decides for itself what a
+    usable cluster declaration is.
+
+    When the attribute is not declared at all, the clustering check is skipped: the
+    reader has to declare it either way, and a second finding derived from the first
+    is the noise `_check_cluster_by` argues against.
+    """
+    levels = ((doc.get("replication") or {}).get("repeats")) or []
+    if not isinstance(levels, list):
+        return  # `check_envelope` types `replication.repeats`; `_check_shape` too
+    attrs = units.get("attributes") or []
+    names = sorted({a for a in attrs if isinstance(a, str)}) if isinstance(attrs, list) else []
+    for level in levels:
+        if not isinstance(level, dict) or level.get("kind") != "fold":
+            continue
+        declared = level.get("stratify_by")
+        if declared is None:
+            continue
+        if not isinstance(declared, str) or not declared:
+            empty = declared == "" or declared == []
+            c.error(
+                "E-REPL-FOLD-STRATIFY-UNKNOWN",
+                "replication.repeats",
+                (
+                    "declares an empty `fold.stratify_by`, which names no attribute to "
+                    "balance the folds on and changes no behavior — which is the failure "
+                    "a truthy read of it would hide. Name the attribute, or remove the key"
+                )
+                if empty
+                else (
+                    f"declares `fold.stratify_by: {declared!r}`, which is not the name of a "
+                    "unit attribute; a fold balances its folds on one declared attribute, "
+                    "named as a string"
+                ),
+            )
+            continue
+        if declared not in names:
+            c.error(
+                "E-REPL-FOLD-STRATIFY-UNKNOWN",
+                "replication.repeats",
+                f"declares `fold.stratify_by: {declared}`, which is not a unit attribute — "
+                "a stratum is read per unit when the partition is drawn, so it has to be "
+                f"one. `data.units.attributes` declares {', '.join(names) or 'none'}",
+            )
+            continue
+        if roster is None or not cluster_by:
+            continue
+        try:
+            offender = stratum_varies_within_cluster(roster, cluster_by, declared)
+        except ContractError:
+            # `clusters_of` refuses a unit carrying no cluster value
+            # (`E-DATA-CLUSTER-UNKNOWN`), which is already reported beside this by
+            # `_check_cluster_by` or by the resolution `_check_units` performed.
+            # This module collects rather than raises, so an unreadable grouping is
+            # silence here rather than a traceback.
+            return
+        if offender is not None:
+            cluster, values = offender
+            c.error(
+                "E-REPL-FOLD-STRATIFY-VARIES",
+                "replication.repeats",
+                f"declares `fold.stratify_by: {declared}`, which varies within "
+                f"`{cluster_by}` {cluster} — it carries {', '.join(values)}. A cluster is "
+                "indivisible, so a stratum cannot be balanced across a split that cannot "
+                "divide the cluster carrying both values; stratify on an attribute that is "
+                "constant within a cluster, or drop the stratification",
+            )
 
 
 def _accounted_attribute_names(doc: dict[str, Any], units: dict[str, Any]) -> set[str]:

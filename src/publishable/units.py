@@ -755,6 +755,51 @@ def fold_basis(roster: UnitList, cluster_by: str | None) -> int:
     return cluster_count(roster, cluster_by) if cluster_by else len(roster)
 
 
+def stratum_varies_within_cluster(
+    roster: UnitList, cluster_by: str, stratify_by: str
+) -> tuple[str, list[str]] | None:
+    """The first cluster whose units disagree about the stratum attribute, with the
+    values it carries — or `None` when every cluster agrees.
+
+    **A stratum must be constant within a cluster** (`reference.md` § Clustered
+    units): balancing a stratum across a split means dealing its values out to
+    different sides, and a cluster that carries two of them cannot be dealt out at
+    all, being indivisible. Rather than silently prioritizing one of the two
+    constraints, core refuses the pair — so this reports the pair, and the caller
+    decides which declaration to name (`reference.md` § Validation, rows *Fold
+    strata survive clustering* and *Holdout strata survive clustering*, which is why
+    this returns a fault rather than raising one code).
+
+    Membership comes from `clusters_of`, the single authority, so a unit carrying no
+    cluster value raises `E-DATA-CLUSTER-UNKNOWN` from there rather than being
+    grouped into a cluster of its own — which would make its stratum trivially
+    constant and hide exactly the variation this looks for.
+
+    A unit carrying no value for the *stratum* is one the partitioner has nothing to
+    balance on, so within a cluster whose other units declare one it counts as a
+    variation like any other, rendered `no value` among the values reported. Units
+    that all carry none agree, and a stratum no unit carries at all is the caller's
+    own name check to report — an attribute the design never declared.
+
+    The first offender is in roster order, one finding being enough to fix and the
+    order already being part of the roster's identity.
+    """
+    membership = clusters_of(roster, cluster_by)
+    seen: dict[str, set[str]] = {}
+    order: list[str] = []
+    for unit in roster:
+        cluster = membership[unit.key]
+        if cluster not in seen:
+            seen[cluster] = set()
+            order.append(cluster)
+        value = unit.attributes.get(stratify_by)
+        seen[cluster].add("no value" if value is None else str(value))
+    for cluster in order:
+        if len(seen[cluster]) > 1:
+            return cluster, sorted(seen[cluster])
+    return None
+
+
 def partition_units(
     roster: UnitList, k: int, digest: str, clusters: dict[str, str] | None = None
 ) -> list[list[Unit]]:
