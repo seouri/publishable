@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from publishable import ArtifactError, ArtifactExistsError, ContractError
-from publishable.artifacts import StepIO, write_atomic
+from publishable.artifacts import StepIO, allocation_hash, build_allocation_document, write_atomic
 from publishable.units import Unit, UnitList
 
 
@@ -1237,3 +1237,71 @@ def test_read_condition_collapses_the_repeat_directory_when_the_run_has_only_one
     target.mkdir(parents=True)
     (target / "scores.json").write_text('{"s": 1}\n')
     assert io.read_condition(0, "analyze", "scores.json", repeat="seed1") == {"s": 1}
+
+
+def _mixed_arm_roster():
+    """4 `control` and 9 `treatment`, 13 total — every number in play (4, 9, 13)
+    is distinct from the others and from every arm fixture already in the
+    suite (`_arm_roster12`'s 7/5/12, `test_cli.py`'s 8/3/11), and no
+    `cluster_by` attribute is declared, so this can't double as a cluster
+    fixture. Keys are deliberately **not** in alphabetical or roster-grouped
+    order within either arm — `c3, c0, c2, c1` and a shuffled 9-key
+    treatment list — so a test reading `arms_of`'s output back can tell
+    "the order `arms_of` resolved units in" from "sorted," which a
+    same-length, same-membership check could not."""
+    control_keys = ["c3", "c0", "c2", "c1"]
+    treatment_keys = ["t5", "t1", "t8", "t0", "t3", "t7", "t2", "t6", "t4"]
+    units = [Unit(key=k, attributes={"arm": "control"}) for k in control_keys]
+    units += [Unit(key=k, attributes={"arm": "treatment"}) for k in treatment_keys]
+    return UnitList(units), control_keys, treatment_keys
+
+
+def test_build_allocation_document_returns_none_with_no_group_axes():
+    """`group_axes` empty — no arm assignment resolved for this run — is the
+    absent half of 'present when either is declared', and `command_run` reads
+    `None` here as "write nothing.\""""
+    roster, _, _ = _mixed_arm_roster()
+    assert build_allocation_document(roster, {}) is None
+
+
+def test_build_allocation_document_maps_axis_to_level_to_unit_keys_in_roster_order():
+    """The mutation the brief names: writing row indices rather than keys must
+    fail THIS assertion, not merely a length check — `["c3", "c0", "c2",
+    "c1"]` and `[0, 1, 2, 3]` are both length 4, so only the exact key
+    strings, in `arms_of`'s own resolved order, discriminate. `seed` and
+    `strata` are asserted `{}` — the addendum's finding that a writer
+    emitting a seed under `by_attribute` (nothing was drawn) looks correct
+    against a fixture nobody checked the seed of — and `holdout` is asserted
+    absent, since this build never declares one."""
+    roster, control_keys, treatment_keys = _mixed_arm_roster()
+    group_axes = {"arm": ("arm", ["control", "treatment"])}
+
+    doc = build_allocation_document(roster, group_axes)
+
+    assert doc is not None
+    assert set(doc.keys()) == {"seed", "arms", "strata"}
+    assert doc["arms"] == {"arm": {"control": control_keys, "treatment": treatment_keys}}
+    assert doc["seed"] == {}
+    assert "arm" not in doc["seed"]
+    assert doc["strata"] == {}
+    assert "arm" not in doc["strata"]
+    assert "holdout" not in doc
+
+
+def test_allocation_hash_is_deterministic_and_content_sensitive():
+    """Mirrors `manifest.manifest_hash`'s own contract: same document, same
+    hash; a document that differs by one unit key hashes differently — the
+    property `provenance.allocation_hash` rests on to say a copy edited
+    after the run no longer matches what that run reported."""
+    roster, _, _ = _mixed_arm_roster()
+    group_axes = {"arm": ("arm", ["control", "treatment"])}
+    doc = build_allocation_document(roster, group_axes)
+
+    h1 = allocation_hash(doc)
+    h2 = allocation_hash(build_allocation_document(roster, group_axes))
+    assert h1 == h2
+    assert h1.startswith("sha256:")
+
+    mutated = json.loads(json.dumps(doc))
+    mutated["arms"]["arm"]["control"][0] = "c9"
+    assert allocation_hash(mutated) != h1

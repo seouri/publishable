@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
+from publishable.artifacts import allocation_hash, build_allocation_document
 from publishable.base_experiment import BaseExperiment, load_experiment
 from publishable.coercion import coerce_scalars
 from publishable.config import Config
@@ -1271,6 +1272,19 @@ def command_run(config_path: Path) -> int:
             )
         )
 
+        # `allocation.json` — settled beside `sweep.yaml`, before the first
+        # execution and never touched again, per § The other files a run
+        # writes: both are partitions of one roster drawn once. `None` when
+        # `group_axes` is empty — no arm assignment resolved for this run —
+        # matching "present when either [an arm assignment or a holdout] is
+        # declared"; `holdout` is never in this build's document at all
+        # (`E-DATA-HOLDOUT-UNSUPPORTED` refuses every declaration of it).
+        alloc_doc = build_allocation_document(roster, group_axes) if roster is not None else None
+        alloc_hash: str | None = None
+        if alloc_doc is not None:
+            (run_dir / "allocation.json").write_text(json.dumps(alloc_doc, indent=2))
+            alloc_hash = allocation_hash(alloc_doc)
+
         results = execute_plan(  # phase 7
             plan=plan,
             run_dir=run_dir,
@@ -2053,6 +2067,12 @@ def command_run(config_path: Path) -> int:
                 else None
             ),
             "units_hash": units_hash(roster) if roster is not None else None,
+            # "allocation.json" and its hash, when an arm assignment or a
+            # holdout is declared — `None`/`None` together exactly when
+            # `alloc_doc` was never written, the same pairing `units`/
+            # `units_hash` already use above.
+            "allocation": "allocation.json" if alloc_doc is not None else None,
+            "allocation_hash": alloc_hash,
         }
         doc_out = assemble_run_yaml(  # phase 9: assemble and write
             run_id=run_dir.name,

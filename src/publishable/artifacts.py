@@ -2,10 +2,12 @@
 """Scope-aware, atomic, append-only artifacts. docs/reference.md § Steps and artifacts."""
 
 import csv
+import hashlib
 import io as _io
 import json
 import os
 import tempfile
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -14,6 +16,7 @@ import yaml
 from publishable.coercion import coerce_scalars
 from publishable.errors import ArtifactError, ArtifactExistsError, ContractError
 from publishable.sweep import condition_dir_name
+from publishable.units import arms_of
 
 if TYPE_CHECKING:
     from publishable.units import UnitList
@@ -165,6 +168,71 @@ def _suffix_for(name: str) -> str | None:
         if last.endswith(suffix) and (best is None or len(suffix) > len(best)):
             best = suffix
     return best
+
+
+def build_allocation_document(
+    roster: "UnitList", group_axes: Mapping[str, tuple[str, Sequence[str]]]
+) -> dict[str, Any] | None:
+    """`allocation.json`'s payload — `reference.md` § `allocation.json` — who
+    went where prints it in full: four top-level keys, `arms`/`seed`/`strata`
+    keyed by axis name, `holdout` sharing the file because both are
+    partitions of one roster drawn once.
+
+    Returns `None` when `group_axes` is empty — no arm assignment resolved,
+    matching § The other files a run writes' "present when either is
+    declared": the caller writes nothing in that case rather than an empty
+    file.
+
+    **`arms`** maps each axis to `units.arms_of`'s own partition, restated as
+    unit keys in roster order — `arms_of` is the single authority task 10
+    built for arm membership, read here directly rather than reduced through
+    `units.arm_members` (built for a *condition's* intersection across axes,
+    the wrong shape for "every level of every axis"), and rather than a
+    third derivation of membership from the roster. Unit keys, never row
+    numbers, because a roster that gains a unit renumbers rows and would
+    silently repoint every membership claim; roster order because `arms_of`
+    already promises it and re-sorting here would silently contradict a
+    `blocked` design that reads that order as data (once `blocked` itself is
+    built).
+
+    **`seed` and `strata` are always empty in this build.** This build's
+    only reachable `assign.method` is `by_attribute` (`E-DATA-ASSIGN-DRAWN`
+    refuses `random` and `blocked`, the two methods that draw), and
+    `by_attribute` reads an arm a trial system already assigned rather than
+    drawing one — recording a `seed` would be a false record of a draw that
+    never happened, the same fault § Allocation names for a non-empty
+    `ratio` under `by_attribute`. `assign.stratify_by` names how a draw was
+    *balanced*; with no draw there is nothing it describes, so the axis is
+    left out of `strata` for the same reason. Both keys stay present as
+    empty mappings — `seed`/`strata` are `{}`, not omitted — because the
+    shape is "keyed by axis name" whether or not any axis qualifies, and an
+    omitted key would read as "this build never has a seed or strata block
+    at all" rather than "no axis drew or stratified this run."
+
+    **`holdout` is never written here.** `E-DATA-HOLDOUT-UNSUPPORTED`
+    refuses every `data.units.holdout` declaration in this build, so there
+    is never a holdout partition to record; the key is omitted entirely
+    rather than written `null`, matching `manifest/input.json`'s own
+    "absent rather than null, so 'not hashed' can't be misread as 'hashed
+    to nothing'" — here, "no holdout key" rather than "a holdout of
+    nothing." H3d adds the key once that refusal lifts.
+    """
+    if not group_axes:
+        return None
+    arms: dict[str, dict[str, list[str]]] = {}
+    for axis, (column, levels) in group_axes.items():
+        partition = arms_of(roster, column, levels)
+        arms[axis] = {level: [u.key for u in units] for level, units in partition.items()}
+    return {"seed": {}, "arms": arms, "strata": {}}
+
+
+def allocation_hash(document: dict[str, Any]) -> str:
+    """Covers `allocation.json`'s payload the same way `manifest.manifest_hash`
+    covers the input manifest's — canonical JSON, sha256 — so `provenance.
+    allocation_hash` is derived from exactly the bytes written, never from a
+    document that could drift from the file on disk."""
+    payload = json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
 class StepIO:

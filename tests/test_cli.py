@@ -571,6 +571,91 @@ def test_a_group_axis_actually_narrows_end_to_end(tmp_path: Path, monkeypatch):
     assert treatment_n == {"resolved": 3, "completed": 2, "ineligible": 0, "failed": 1}
 
 
+def test_allocation_json_is_written_with_exact_arm_keys_when_declared(tmp_path: Path, monkeypatch):
+    """Task 14: a real `sweep.groups` + `allocation: between` + `assign` config,
+    run all the way to a real `allocation.json` — the same `_check_unimplemented`
+    patch and discipline as `test_a_group_axis_actually_narrows_end_to_end`, and
+    no other route in.
+
+    **Fixture numbers, chosen to discriminate.** 4 `control` and 9 `treatment`,
+    13 total: 4, 9, and 13 are each distinct from one another, from this
+    module's own 8/3/11 fixture above, and from `test_runner.py`'s 7/5/12 arm
+    fixture — no arm fixture shares a boundary with another. The keys within
+    each arm are listed out of both alphabetical and roster order (`c3, c0,
+    c2, c1`; a shuffled 9-key treatment list) so the assertion below can tell
+    "the roster's own resolved order" from "sorted" — the mutation the brief
+    names (row indices instead of keys) fails on the exact key strings *and*
+    on their order, not merely on length or set membership.
+    """
+    import publishable.validate as validate_mod
+
+    monkeypatch.setattr(validate_mod, "_check_unimplemented", lambda doc, c: None)
+
+    control_keys = ["c3", "c0", "c2", "c1"]
+    treatment_keys = ["t5", "t1", "t8", "t0", "t3", "t7", "t2", "t6", "t4"]
+    control_rows = "\n".join(f"{k},control" for k in control_keys)
+    treatment_rows = "\n".join(f"{k},treatment" for k in treatment_keys)
+    roster_csv = f"patient_id,arm\n{control_rows}\n{treatment_rows}\n"
+
+    doc = run_a_project(
+        tmp_path,
+        roster_csv=roster_csv,
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+            "attributes": ["arm"],
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+    )
+
+    run_yaml = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    # The positive control the addendum asks for, paired with the file's own
+    # existence below: a run directory that died before writing anything
+    # would have no `run.yaml` at all, so this discriminates "the run
+    # completed and wrote allocation.json" from "nothing ran."
+    assert run_yaml["status"] == "completed"
+
+    alloc_path = doc["run_dir"] / "allocation.json"
+    assert alloc_path.exists()
+    alloc = json.loads(alloc_path.read_text())
+
+    assert set(alloc.keys()) == {"arms", "seed", "strata"}
+    assert alloc["arms"] == {
+        "arm": {"control": control_keys, "treatment": treatment_keys}
+    }
+    # `by_attribute` draws nothing and stratifies nothing — the addendum's own
+    # finding that a writer emitting a seed anyway looks correct against a
+    # fixture nobody checked the seed of.
+    assert alloc["seed"] == {}
+    assert "arm" not in alloc["seed"]
+    assert alloc["strata"] == {}
+    assert "arm" not in alloc["strata"]
+    assert "holdout" not in alloc
+
+    from publishable.artifacts import allocation_hash
+
+    assert run_yaml["provenance"]["allocation"] == "allocation.json"
+    assert run_yaml["provenance"]["allocation_hash"] == allocation_hash(alloc)
+
+
+def test_allocation_json_is_absent_without_a_declared_arm(tmp_path: Path):
+    """The absent half of 'present when either is declared' — and the addendum's
+    warning that this half is the one that passes vacuously. Paired with a
+    positive assertion on the very same run (`run.yaml` exists and completed),
+    so this cannot pass for a run that failed before writing anything, a wrong
+    `run_dir`, or a typo in the filename — the four verification probes this
+    project has already caught reporting nothing for every input."""
+    doc = run_a_project(tmp_path)
+
+    run_yaml = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run_yaml["status"] == "completed"
+    assert (doc["run_dir"] / "sweep.yaml").exists()
+
+    assert not (doc["run_dir"] / "allocation.json").exists()
+    assert run_yaml["provenance"]["allocation"] is None
+    assert run_yaml["provenance"]["allocation_hash"] is None
+
+
 def test_cond_roster_narrows_each_condition_to_its_own_arm_size():
     """`_cond_roster` is the read side of the narrowing `execute_plan` already
     applies to what a condition's own executions run over — task 12's 7/5
