@@ -217,6 +217,21 @@ def build_allocation_document(
     to nothing'" — here, "no holdout key" rather than "a holdout of
     nothing." H3d adds the key once that refusal lifts.
     """
+    # Gated on `group_axes` truthiness, which `cli._resolved_group_axes`'s own
+    # docstring warns a caller against in general: an axis whose declared
+    # `levels` aren't all `str` is silently dropped from `group_axes`, so
+    # `bool(group_axes)` alone cannot tell "no axis was declared" from "an
+    # axis was declared but shaped wrong." That silent-skip case cannot reach
+    # here, though — not because of anything local to this function, but
+    # because `cli.command_run` calls `units.arm_members` on the very same
+    # `group_axes` earlier, before any run directory exists, and
+    # `arm_members` raises `KeyError` the moment a condition selects an axis
+    # or level missing from it (`units.arm_members`'s own docstring: "a
+    # caller passing a condition whose selected axis or level is not in
+    # `axes` ... raises a bare `KeyError`"). So a malformed axis never
+    # reaches this call at all; this gate would need reconsidering only if a
+    # future caller ever invoked `build_allocation_document` without that
+    # upstream call already having succeeded.
     if not group_axes:
         return None
     arms: dict[str, dict[str, list[str]]] = {}
@@ -227,10 +242,16 @@ def build_allocation_document(
 
 
 def allocation_hash(document: dict[str, Any]) -> str:
-    """Covers `allocation.json`'s payload the same way `manifest.manifest_hash`
-    covers the input manifest's — canonical JSON, sha256 — so `provenance.
-    allocation_hash` is derived from exactly the bytes written, never from a
-    document that could drift from the file on disk."""
+    """`provenance.allocation_hash` — a hash of the *document*, not of the file's
+    bytes on disk, the same split `manifest.manifest_hash` makes for the input
+    manifest: canonical JSON (`sort_keys=True`, compact separators) over the
+    same dict `build_allocation_document` returned, which is **not** what
+    `allocation.json` is written as (that call uses `indent=2` and insertion
+    order — `seed`, `arms`, `strata` — for a human reader). The two encodings
+    hash to different digests for the same document. A reader reproducing
+    this by hand must re-canonicalize `allocation.json`'s parsed content
+    (`json.dumps(json.load(...), sort_keys=True, separators=(",", ":"))`)
+    rather than hash the file's bytes directly."""
     payload = json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
     return "sha256:" + hashlib.sha256(payload).hexdigest()
 

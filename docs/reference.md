@@ -787,6 +787,8 @@ Present only when an [arm assignment](#allocation-within-subjects-or-between-sub
 
 Unit keys, never row numbers — a roster that gains a unit renumbers rows and would silently repoint every membership claim. This is the file that answers "which patients were in the treatment arm" from the record alone, which is why it is [read rather than re-drawn](#resuming) on resume and why a copy edited afterwards no longer matches its hash.
 
+An axis assigned under [`method: by_attribute`](#allocation-within-subjects-or-between-subjects) is left out of both `seed` and `strata` rather than recording a value for either: `by_attribute` reads an arm a trial system or the data already assigned, so a `seed` would record a draw that never happened and a `stratify_by` would describe how a draw was balanced when none was — the same fault § Allocation names when it says a `ratio` under `by_attribute` "describes a draw that didn't happen."
+
 ### `manifest/input.json` — what was read
 
 Written at run start, re-verified after the run, and carried into a [reproduction](#reproducing-on-another-device) as the manifest its own `run` is checked against. [`dry-run`](#before-you-spend-it) *builds* the same manifest without writing it, which is how it can tell you the input is unreadable while still creating nothing. Its shape follows [`input_manifest_policy`](#three-hashes), and it records which policy produced it so a reader isn't left inferring the strength of the claim:
