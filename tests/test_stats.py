@@ -1183,9 +1183,11 @@ def test_the_clustered_interval_takes_its_df_from_the_cluster_count():
     by construction and which the balanced sandwich provably reduces to (see the
     comment above this group) — so it does not come from the code under test.
 
-    The second assertion names the mutation directly: the same standard error at
-    t(29) rather than t(9) gives a half-width of 1.9949 against 2.2065, which
-    `approx` separates comfortably.
+    The last assertion names the mutation directly, against a standard error
+    built from the ten means rather than read back off `got` — one divided out of
+    `got` would make the line `H != approx(H·t(29)/t(9))`, true under every
+    implementation. At the real standard error of 0.97539 the two critical values
+    give half-widths of 2.2065 and 1.9949, which `approx` separates comfortably.
     """
     got = t_over_units_clustered(_BALANCED_VALUES, _BALANCED_KEYS, _BALANCED_MEMBERSHIP)
     expected = t_over_units(_CLUSTER_MEANS)
@@ -1193,8 +1195,12 @@ def test_the_clustered_interval_takes_its_df_from_the_cluster_count():
     assert got.method == "t_over_units_clustered"
     assert got.low == pytest.approx(expected.low)
     assert got.high == pytest.approx(expected.high)
-    standard_error = (got.high - got.low) / 2 / _t_critical(9, 0.95)
-    assert (got.high - got.low) / 2 != pytest.approx(_t_critical(29, 0.95) * standard_error)
+    mean = sum(_CLUSTER_MEANS) / 10
+    squares = sum((m - mean) ** 2 for m in _CLUSTER_MEANS)
+    standard_error = math.sqrt(squares / 9) / math.sqrt(10)
+    half = (got.high - got.low) / 2
+    assert half == pytest.approx(_t_critical(9, 0.95) * standard_error)
+    assert half != pytest.approx(_t_critical(29, 0.95) * standard_error)
 
 
 def test_the_clustered_interval_is_the_cr1_sandwich_over_unbalanced_clusters():
