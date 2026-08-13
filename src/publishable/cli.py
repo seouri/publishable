@@ -852,6 +852,15 @@ def command_run(config_path: Path) -> int:
         # what the source says it is; a sentinel string would instead merge those
         # units into whatever real stratum happened to be spelled the same way.
         #
+        # One path rebuilds `Unit.attributes` after resolution and is the exception:
+        # `units.collapse_measurements` drops the name equal to
+        # `data.units.measurements.by`, and nothing refuses an `attributes` entry of
+        # that name, so a config stratifying on the measurement axis itself would
+        # reach a bare `KeyError` here rather than a diagnostic. Unreachable today —
+        # `E-REPL-FOLD-STRATIFY-UNSUPPORTED` refuses every `stratify_by` — and named
+        # rather than guarded, because a coded refusal is a `validate` row and an
+        # § Errors entry, which belong to the slice that retires that code.
+        #
         # Stringified for the reason `clusters_of` stringifies: a stratum is a label,
         # nothing downstream does arithmetic on it, and one type keeps a hand-built
         # roster and a table-sourced one giving the same split.

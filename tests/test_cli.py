@@ -4618,6 +4618,42 @@ def test_a_clustered_fold_puts_no_cluster_in_two_folds(tmp_path, monkeypatch):
     assert sorted(k for keys in folds.values() for k in keys) == sorted(sites)
 
 
+def test_a_clustered_folds_units_reconcile_in_the_record(tmp_path, monkeypatch):
+    """The partition changed shape, so the accounting that reads it is checked at
+    the record and not only at the artifacts. Every fold partition before this one
+    was within one of equal; a clustered one is 7/4/4 here because a cluster is
+    indivisible, and `attrition` and `_units_failed_anywhere` reach the counts
+    through `fold_members`.
+
+    `completed == 15` is the load-bearing half: every unit reached exactly one fold
+    and every fold's rows collapsed into the one table, so an uneven partition still
+    covers the roster exactly once. The reconciliation
+    `resolved == completed + ineligible + failed` is what would break if a fold's
+    units were counted twice or dropped."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    _without_the_cluster_refusal(monkeypatch)
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "fold", "k": 3}], "order": "as_declared"},
+        roster_csv=_UNEVEN_CLUSTERS,
+        units_overrides={"attributes": ["site"], "cluster_by": "site"},
+    )
+    n = _pred(doc["run_dir"])["n"]
+    assert n["resolved"] == n["completed"] + n["ineligible"] + n["failed"]
+    assert n == {
+        "resolved": 15,
+        "completed": 15,
+        "ineligible": 0,
+        "failed": 0,
+        "clusters": 5,
+    }
+    # The control that must report: the folds really were uneven, so the counts
+    # above are over the clustered partition and not an equal-sized one.
+    assert [len(keys) for keys in _fold_membership(doc["run_dir"]).values()] == [7, 4, 4]
+
+
 def test_an_unclustered_fold_of_the_same_roster_splits_a_cluster(tmp_path):
     """The control that must report, and the half that would keep passing if the
     clustered argument were never wired: the same 15-unit roster with `site`
