@@ -1446,13 +1446,17 @@ def test_the_three_codes_are_not_one_code_and_none_excludes_another():
 
 def test_one_column_named_by_both_cluster_and_arm_reports_exactly_one_code(input_dir: Path):
     """A brief claim checked by observation rather than trusted: a column named
-    as both `cluster_by` and an axis's `assign.<axis>.from` does **not** raise
-    both codes from one `resolve_units` call — `collapse_measurements` raises
-    the first `ContractError` it finds over `constant` and stops, so exactly
-    one code comes back, `E-DATA-CLUSTER-VARIES`, because the flat declarations
-    are gathered into `constant` before `_assign_constant_columns`'s axis
-    entries are added. What survives from the claim is the weaker, true half —
-    each declaration considered on its own still raises: see
+    as both `cluster_by` and an axis's `assign.<axis>.from`, on a unit that
+    violates both at once, does **not** raise both codes from one
+    `resolve_units` call — `collapse_measurements` raises the first
+    `ContractError` its per-unit loop finds and stops, so exactly one code
+    comes back. It is `E-DATA-ASSIGN-VARIES`, not `E-DATA-CLUSTER-VARIES`:
+    `_assign_constant_columns`'s entries are built into `constant` *before*
+    the flat pair's, deliberately, so the severity order § Allocation states
+    (arm worse than cluster worse than weight) is also the order
+    `collapse_measurements` checks in for a unit that violates more than one.
+    What survives from the brief's claim is the weaker, true half — each
+    declaration considered on its own still raises: see
     `test_the_three_codes_are_not_one_code_and_none_excludes_another` above,
     which checks each declaration in a separate call rather than one config
     naming a column under two of them at once."""
@@ -1470,7 +1474,37 @@ def test_one_column_named_by_both_cluster_and_arm_reports_exactly_one_code(input
     }
     with pytest.raises(ContractError) as e:
         resolve_units(decl, input_dir)
+    assert e.value.code == "E-DATA-ASSIGN-VARIES"
+
+
+def test_roster_order_not_severity_decides_when_different_units_violate_different_declarations(
+    input_dir: Path,
+):
+    """The qualifier the "assign checked first" claim needs: that ordering only
+    ever gets tested on a unit that violates *both* declarations at once. Here
+    p1 varies only in `site` (its `arm` agrees) and p2 varies only in `arm`
+    (its `site` agrees) — `collapse_measurements`'s outer loop is per unit, in
+    roster order, and stops at its first raise, so p1's own single violation
+    (`E-DATA-CLUSTER-VARIES`) is reported before p2's is ever reached, even
+    though `assign` is checked first *within* whichever unit's turn it is."""
+    _write_reads(
+        input_dir,
+        "patient_id,read_id,site,arm\n"
+        "p1,r1,S1,control\np1,r2,S2,control\n"
+        "p2,r3,S3,control\np2,r4,S3,treatment\n",
+    )
+    decl = {
+        "from": "reads.csv",
+        "key": "patient_id",
+        "attributes": ["site", "arm", "read_id"],
+        "cluster_by": "site",
+        "assign": {"arm": {"method": "by_attribute"}},
+        "measurements": {"by": "read_id", "collapse": "first"},
+    }
+    with pytest.raises(ContractError) as e:
+        resolve_units(decl, input_dir)
     assert e.value.code == "E-DATA-CLUSTER-VARIES"
+    assert "p1" in str(e.value)
 
 
 def test_a_non_string_declaration_is_left_to_the_envelope(input_dir: Path):

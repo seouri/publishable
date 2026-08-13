@@ -319,12 +319,27 @@ def resolve_units(
         # assumed: adding `"assign"` to `CONSTANT_COLUMN_RULES` alone changed
         # nothing, because this comprehension's `isinstance(..., str)` filter
         # drops a mapping before the registry is even consulted.
-        constant = {
-            declaration: units_decl[declaration]
-            for declaration in CONSTANT_COLUMN_RULES
-            if isinstance(units_decl.get(declaration), str) and units_decl[declaration]
-        }
-        constant.update(_assign_constant_columns(units_decl.get("assign")))
+        #
+        # **`assign`'s entries are built first, deliberately** — `constant`'s
+        # iteration order is the order `collapse_measurements` checks
+        # declarations in, and it stops at the first that raises, so whichever
+        # comes first in this dict wins a unit that violates more than one at
+        # once. `assign` is documented as the worst of the three (§ Allocation:
+        # a mis-collapsed arm decides which condition a unit is measured in,
+        # where cluster/weight only decide which side of a split it lands on
+        # or what it stands for), so it has to be checked before the flat pair
+        # or that severity ordering would be undermined by an accident of
+        # dict-building order — the "precedence rule nothing in the documents
+        # states" `CONSTANT_COLUMN_RULES` warns against, now stated in both
+        # places rather than left implicit.
+        constant = _assign_constant_columns(units_decl.get("assign"))
+        constant.update(
+            {
+                declaration: units_decl[declaration]
+                for declaration in CONSTANT_COLUMN_RULES
+                if isinstance(units_decl.get(declaration), str) and units_decl[declaration]
+            }
+        )
         units, counts = collapse_measurements(
             units, by, measurements.get("collapse", "first"), constant
         )
@@ -660,20 +675,31 @@ describe the damage.
 
 Keyed by the *declaration* rather than by the column, so a config naming one
 column under two declarations is checked once for each **declaration considered
-on its own** — a config declaring only `cluster_by: arm` over rows where `arm`
-varies raises `E-DATA-CLUSTER-VARIES`, and the same rows under only
+on its own**: each is checked on its own and still raises its own code when it
+is the only one declared — a config declaring only `cluster_by: arm` over rows
+where `arm` varies raises `E-DATA-CLUSTER-VARIES`, and the same rows under only
 `assign: {arm: {method: by_attribute}}` raise `E-DATA-ASSIGN-VARIES` — rather
 than silently dropping one under a precedence rule nothing in the documents
 states. **This is not a claim that one `resolve_units` call reports both at
-once**: `collapse_measurements` raises the first `ContractError` it finds and
-stops, so a single config naming the same varying column under both `cluster_by`
-and an axis's `assign.<axis>.from` gets exactly one code — whichever
-declaration's entry `constant` visits first, `cluster_by` today, since the flat
-declarations are gathered before `_assign_constant_columns` runs. What
-"deliberately, nothing here builds mutual exclusion" means is narrower and still
-true: neither check is skipped *because* the other declaration also names the
-column — fix the winning declaration and the config still raises the other's
-code on a second pass, which a real precedence rule would not do.
+once, and it is only ever tested one unit at a time**: `collapse_measurements`
+raises the first `ContractError` its per-unit loop finds and stops, so a single
+config naming the same varying column under both `cluster_by` and an axis's
+`assign.<axis>.from` gets exactly one code from one call — and only a unit that
+violates *both* declarations at once puts that choice to the test at all; a
+roster where one unit varies only in `cluster_by`'s column and a different unit
+varies only in `assign`'s still raises `E-DATA-CLUSTER-VARIES`, because that
+unit is first in roster order and its own single violation is all `resolve_units`
+ever sees before raising. For a unit that violates both, `constant`'s iteration
+order decides: `assign`'s entries are built before the flat pair's (see
+`resolve_units`), so `E-DATA-ASSIGN-VARIES` wins today, matching the severity
+order this docstring states — the once-unstated "precedence rule" is now this
+one, spelled out rather than left to whichever order a dict comprehension
+happened to build. What "deliberately, nothing here builds mutual exclusion"
+means is narrower than "reports both" and still true: neither check is skipped
+*because* the other declaration also names the column — remove the
+higher-priority declaration and the same config still raises the other's code,
+which a real precedence *rule* (a check disabled outright by a sibling's
+presence) would not do.
 
 **`assign` is keyed by the bare declaration name, not by `assign.<axis>.from`**,
 which is the design choice this registry had to make and the one the alternative
@@ -694,6 +720,14 @@ before the first `.`, which is a no-op for `cluster_by`/`weight_by` and finds
 registry today** — it is a single key under a fixed mapping, not one per
 declared axis, so it needs its own accessor the same shape `_assign_constant_columns`
 is for `assign`, and nothing in this task builds one.
+
+**Every key in this dict must itself contain no `.`.** `collapse_measurements`'s
+lookup strips a `constant` key back to the segment before its first `.` before
+indexing this registry with it, so a future bare key spelled with a dot would
+be unreachable by exactly the same stripping that makes `assign.<axis>.from`
+reachable, and a `constant` key whose prefix names no registry entry raises a
+bare `KeyError` — which, unlike a `ContractError`, is not caught by `validate`'s
+`except ContractError` around `resolve_units` and would escape it.
 """
 
 
