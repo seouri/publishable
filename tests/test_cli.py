@@ -440,6 +440,48 @@ def test_resolved_group_axes_ignores_from_under_a_non_by_attribute_method():
     }
 
 
+def test_non_string_levels_make_arm_members_raise_rather_than_skip_narrowing():
+    """`sweep.selector_paths` — the same function `expand` uses to decide which
+    paths are group cells — accepts a `levels` list of any element type, but
+    `_resolved_group_axes` requires every level to be a `str`, matching
+    `validate._check_assign`'s own stricter skip. `groups: [{by: arm, levels:
+    [1, 2]}]` is exactly this disagreement: `expand` treats `arm` as a real
+    selector axis (every condition's `.selectors == {"arm"}`), while
+    `_resolved_group_axes` drops it entirely (`{}`).
+
+    Gating the `arm_members` call on `group_axes` itself (its own truthiness)
+    would silently skip narrowing altogether here — every condition getting the
+    whole roster, the exact "two identical measurements reported as two arms"
+    outcome arms exist to make impossible. Gating on `selector_paths` instead
+    (what `command_run` does) means `arm_members` is still called, and it must
+    raise — a caller-disagreement bug to see — rather than silently return
+    `{}` or drop the mismatched condition."""
+    from publishable.sweep import expand, selector_paths
+    from publishable.units import Unit, UnitList, arm_members
+
+    doc = {
+        "sweep": {
+            "groups": [{"by": "arm", "levels": [1, 2]}],
+            "baseline": {},
+        }
+    }
+    sweep_block = doc["sweep"]
+    conditions = expand(doc)
+    assert all(c.selectors == frozenset({"arm"}) for c in conditions)
+
+    group_axes = _resolved_group_axes({}, sweep_block)
+    assert group_axes == {}  # the shape fault `_resolved_group_axes` skips
+
+    # The gate `command_run` uses: `selector_paths`, not `group_axes`.
+    assert selector_paths(sweep_block)  # still true — `expand` agrees
+
+    roster = UnitList(
+        [Unit(key="u0", attributes={"arm": "1"}), Unit(key="u1", attributes={"arm": "2"})]
+    )
+    with pytest.raises(KeyError):
+        arm_members(roster, group_axes, conditions)
+
+
 def test_the_recorded_order_is_the_order_that_ran(tmp_path: Path):
     """The realized order is a fact about the run, not a rule to re-derive.
 

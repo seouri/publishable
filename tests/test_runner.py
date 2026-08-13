@@ -975,13 +975,17 @@ def test_a_missing_arm_entry_is_a_core_defect_not_a_whole_roster_fallback(tmp_pa
     assert excinfo.value.code == "E-RUN-ARM-UNRESOLVED"
 
 
-def test_units_failed_anywhere_does_not_blame_the_other_arm(tmp_path: Path):
+def test_units_failed_anywhere_does_not_blame_the_other_arm():
     """A unit that never belonged to this condition's arm was never handed to
     its executions, so its absence from `recorded`/`skipped` must not count as
     a failure — the arm counterpart of `test_without_folds_the_union_is_unchanged`
-    for the analogous fold guarantee. 4 units split 2/2 into two arms, so any
-    cross-arm leak into `_units_failed_anywhere` shows up as a spurious member
-    of the returned set."""
+    for the analogous fold guarantee. 4 units split 2/2 into two arms, the same
+    partition `test_a_fold_reports_its_partition_as_resolved_not_the_cohort`
+    (above) uses for two *folds* — harmless here rather than a shared-boundary
+    violation, since `fold_members=None` in every assertion below, so no path
+    through this test ever reads that partition as a fold's. Any cross-arm leak
+    into `_units_failed_anywhere` shows up as a spurious member of the returned
+    set."""
     roster = _roster4()
     arm_members = {0: frozenset({"u1", "u2"}), 1: frozenset({"u3", "u4"})}
     results = [

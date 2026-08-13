@@ -7333,31 +7333,55 @@ def test_within_allocation_with_a_group_axis_is_arms_need_allocation():
     assert [f.code for f in c.findings] == ["E-DATA-ALLOCATION-WITHIN-ARMS"]
 
 
-def test_between_allocation_with_a_group_axis_draws_neither_arms_row(write_config):
+def test_between_allocation_with_a_group_axis_draws_neither_arms_row(write_config, tmp_path):
     """The control the pair demands: `allocation: between` beside a well-formed
     group axis is the legal composition, so it must draw NEITHER
-    `E-DATA-ALLOCATION-NO-ARMS` nor its mirror `E-DATA-ALLOCATION-WITHIN-ARMS` —
-    only the still-live blanket refusals this build has not yet retired."""
+    `E-DATA-ALLOCATION-NO-ARMS` nor its mirror `E-DATA-ALLOCATION-WITHIN-ARMS`.
+
+    Both halves assert the EXACT set, per this block's own stated convention
+    three tests above ("Every config below still carries a live refusal, and
+    that is why each assertion is an exact set rather than a membership test")
+    — a membership-only assertion cannot tell "correctly silent" from "nothing
+    ran": inserting a `return` at the top of `_check_assign` still passes one.
+    `attributes: ["arm"]` (and, for `write_config`, an `arm` column in
+    `index.csv`) is declared in both halves so the config is genuinely
+    well-formed and carries no *other* live code either (`E-DATA-ASSIGN-UNKNOWN`
+    would fire on an undeclared `arm` attribute regardless of roster,
+    `_check_assign`'s own "read from the declaration" row)."""
     c = Collector()
     _check_assign(
         {"sweep": {"groups": _ARM_AXIS}},
         {
             "from": "index.csv",
             "allocation": "between",
+            "attributes": ["arm"],
             "assign": {"arm": {"method": "by_attribute"}},
         },
         None,
         c,
     )
-    codes = [f.code for f in c.findings]
-    assert "E-DATA-ALLOCATION-NO-ARMS" not in codes
-    assert "E-DATA-ALLOCATION-WITHIN-ARMS" not in codes
-
-    found = _error_codes(
-        write_config(_between({"arm": {"method": "by_attribute"}}))
+    assert [f.code for f in c.findings] == []
+    # The positive sibling probe: the same declaration pair, under `within`
+    # instead, must still report — proving the assertion above is not merely
+    # "nothing ran" for this fixture shape.
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": _ARM_AXIS}},
+        {"from": "index.csv", "attributes": ["arm"], "assign": {"arm": {"method": "by_attribute"}}},
+        None,
+        c,
     )
-    assert "E-DATA-ALLOCATION-NO-ARMS" not in found
-    assert "E-DATA-ALLOCATION-WITHIN-ARMS" not in found
+    assert [f.code for f in c.findings] == ["E-DATA-ALLOCATION-WITHIN-ARMS"]
+
+    (tmp_path / "input" / "index.csv").write_text("patient_id,arm\np1,control\np2,treatment\n")
+    found = _error_codes(
+        write_config(_between({"arm": {"method": "by_attribute"}}, attributes=["arm"]))
+    )
+    assert found == {
+        "E-SWEEP-GROUPS-UNSUPPORTED",
+        "E-DATA-ALLOCATION-UNSUPPORTED",
+        "E-DATA-ASSIGN-UNSUPPORTED",
+    }
 
 
 def test_by_attribute_assignment_is_accepted(write_config, tmp_path):

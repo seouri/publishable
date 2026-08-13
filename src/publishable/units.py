@@ -1002,11 +1002,17 @@ def arm_members(
     partitions = {axis: arms_of(roster, column, levels) for axis, (column, levels) in axes.items()}
     result: dict[int, frozenset[str]] = {}
     for condition in conditions:
-        selected = [axis for axis in condition.selectors if axis in partitions]
-        if not selected:
+        if not condition.selectors:
             continue
         members: set[str] | None = None
-        for axis in selected:
+        # `partitions[axis]`, not `.get`, and `[level]`, not `.get`: `axes` is
+        # meant to cover every axis every condition selects, so a selected axis
+        # missing from it — or a level `arms_of` didn't partition — is the two
+        # arguments disagreeing, a caller bug this function must not paper over
+        # by silently dropping the axis from the intersection (which would hand
+        # back a *larger*, wrong arm) or the condition from the result (which
+        # would hand its execution the whole roster, one level up).
+        for axis in condition.selectors:
             level = condition.values[axis]
             keys = {u.key for u in partitions[axis][level]}
             members = keys if members is None else members & keys

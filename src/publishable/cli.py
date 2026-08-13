@@ -291,6 +291,19 @@ def _resolved_group_axes(
     default `_check_assign` falls back to before its own checks on the block
     would have already reported the malformation as a finding.
 
+    **That skip is narrower than `sweep.selector_paths`'s own idea of "a group
+    axis exists"**, and the caller must not gate on this function's own
+    truthiness for that reason: `selector_paths` — the same function `expand`
+    uses to decide which paths are group cells — accepts a `levels` list of any
+    element type, so a config with e.g. `levels: [1, 2]` still expands into
+    conditions carrying `Condition.selectors == {"that axis"}`, while this
+    function silently omits the axis from its result. `command_run` gates
+    calling `units.arm_members` on `selector_paths(sweep_block)`, not on this
+    function's result, exactly so that disagreement surfaces as `arm_members`'s
+    own `KeyError` — a caller bug to see — rather than as a silently
+    empty `group_axes` that skips arm narrowing for every condition on that
+    axis.
+
     Unreachable from `command_run` today: a declared `sweep.groups` axis draws
     `E-SWEEP-GROUPS-UNSUPPORTED` from `validate`, an error that stops `run`
     (`command_run`'s `if doc is None or c.has_errors: return EXIT_WRONG`) before
@@ -997,10 +1010,27 @@ def command_run(config_path: Path) -> int:
     # slice that retires that refusal, because `execute_plan`'s subset view is the
     # rest of this feature and a config that never reaches it is not evidence the
     # wiring is wrong — only that nothing yet asks for it end to end.
+    #
+    # Gated on `selector_paths(sweep_block)`, not on `group_axes` itself: `expand`
+    # already used `selector_paths` to decide which paths are group cells, so
+    # `conditions` below carries `Condition.selectors` naming every axis
+    # `selector_paths` names — regardless of whether that axis's `levels` also
+    # satisfy `_resolved_group_axes`'s stricter all-`str` requirement, the same
+    # requirement `validate._check_assign`'s own `by_attribute` branch applies
+    # before it ever calls `arms_of`. Gating on `group_axes` instead would let a
+    # `sweep.groups` shape fault — no check for it exists yet, see
+    # `_resolved_group_axes` — silently skip arm narrowing entirely: every
+    # condition on the malformed axis would get the whole roster, which is
+    # exactly the outcome two declared arms exist to make impossible. Gating on
+    # `selector_paths` instead means `arm_members` is still called whenever
+    # `expand` treated the config as having a group axis, so a resolution gap
+    # surfaces as `arm_members`'s own `KeyError` — a caller-disagreement bug to
+    # see, not a config to silently accept — rather than as a silently
+    # unnarrowed run.
     group_axes = _resolved_group_axes(units_decl, sweep_block)
     arm_members_map = (
         arm_members(roster, group_axes, conditions)
-        if group_axes and roster is not None
+        if selector_paths(sweep_block) and roster is not None
         else None
     )
     plan = build_plan(  # phase 4
