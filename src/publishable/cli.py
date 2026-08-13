@@ -19,7 +19,7 @@ from publishable.artifacts import allocation_hash, build_allocation_document
 from publishable.base_experiment import BaseExperiment, load_experiment
 from publishable.coercion import coerce_scalars
 from publishable.config import Config
-from publishable.contrasts import resolve_contrasts, units_matching
+from publishable.contrasts import differing_axes, resolve_contrasts, units_matching
 from publishable.correction import Member, corrected_fields
 from publishable.diagnostics import (
     EXIT_FAILED,
@@ -205,34 +205,6 @@ def _declared_comparisons(doc: dict[str, Any], conditions: "list[Condition]") ->
     correctly.
     """
     return [comp for comp in resolve_contrasts(doc, conditions) if comp.declared]
-
-
-_MISSING = object()
-
-
-def _differing_axes(of: "Condition", against: "Condition") -> list[str]:
-    """The axes two conditions disagree on, in the order the sweep declares them.
-
-    `Condition.values` is built by `sweep.expand` from `grid.items()`, so
-    iterating `of.values` first gives declaration order — which is what
-    makes `differs_on` stable across runs rather than set-ordered. But the
-    two sides' key sets are not guaranteed equal, and since
-    `E-SWEEP-BASELINE-PARTIAL` was retired they can differ in *both*
-    directions: a baseline may fix an axis the grid never sweeps (present in
-    the baseline condition's `values`, absent from every grid condition's),
-    and a grid axis need no longer be fixed in the baseline at all, which is
-    what per-cell expansion made legal. Iterating only `of.values` would
-    silently skip an axis of the first kind whenever it differs from that
-    axis's own parameter default, so this walks the union of both sides' keys
-    — required rather than merely defensive — comparing with `.get` against
-    a sentinel (not `None`, which a real swept value could legitimately be)
-    so a key present on one side and absent on the other always counts as
-    differing rather than being skipped.
-    """
-    ordered_keys = list(of.values) + [k for k in against.values if k not in of.values]
-    return [
-        k for k in ordered_keys if of.values.get(k, _MISSING) != against.values.get(k, _MISSING)
-    ]
 
 
 def _wide_swept_paths(sweep_block: dict[str, Any]) -> set[str]:
@@ -624,15 +596,21 @@ def _comparison_step_blocks(
     here: the crossed-*group*-axis case `reference.md` shows with
     `paired: false` and `unpaired_*` is the one `validate` refuses at
     config time — `E-DATA-ALLOCATION-CONTRAST` reads the resolved comparison
-    family and rejects any comparison whose two sides differ on a
-    `sweep.groups` axis, since `allocation: between` makes those two sides
-    disjoint sets of units and no construction here computes an unpaired
-    interval. `cli` always validates before running, so every comparison
-    that reaches this function is genuinely paired rather than merely one
-    this build happens not to construct — `True` is a true claim about what
-    survived validation, not a placeholder for a case nothing can reach.
+    family and rejects any comparison whose two sides differ on a declared
+    `sweep.groups` axis, which is what makes the two sides disjoint sets of
+    units regardless of what `allocation` itself is declared as, and no
+    construction here computes an unpaired interval. `cli` always validates
+    before running, so every comparison that reaches this function is
+    genuinely paired rather than merely one this build happens not to
+    construct — `True` is a true claim about what survived validation, not a
+    placeholder for a case nothing can reach. **That claim expires with
+    `E-DATA-ALLOCATION-CONTRAST`**: the slice that builds the unpaired
+    estimator family and lifts the refusal must also make `paired` here a
+    derived value — `contrasts.differing_axes(...) ∩ (of.selectors | against.selectors)`
+    non-empty, the same test the refusal runs today — rather than leaving
+    `True` hard-coded against a comparison validation no longer rejects.
     """
-    differs_on = _differing_axes(
+    differs_on = differing_axes(
         conditions_by_index[comp.of], conditions_by_index[comp.against]
     )
     confounded = len(differs_on) > 1

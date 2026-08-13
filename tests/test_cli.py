@@ -1641,8 +1641,8 @@ def test_a_baseline_only_axis_still_counts_toward_confounded(tmp_path, capsys, m
     genuinely differ on two axes — one swept (`analysis.method`), one fixed only
     in `sweep.baseline` (`analysis.confidence`, default `0.95`, pinned here to
     `0.99`) — even though the grid condition's own `Condition.values` never
-    mentions the second axis at all. `_differing_axes` has to walk the union of
-    both sides' keys to see it; a one-directional walk over the grid
+    mentions the second axis at all. `contrasts.differing_axes` has to walk the
+    union of both sides' keys to see it; a one-directional walk over the grid
     condition's keys alone would silently drop it, since that axis is absent
     from `values` on that side, not merely equal.
     """

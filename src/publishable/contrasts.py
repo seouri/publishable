@@ -85,6 +85,40 @@ def _free_axis_paths(baselines: list["Condition"]) -> list[str]:
     ]
 
 
+def differing_axes(of: "Condition", against: "Condition") -> list[str]:
+    """The axes two conditions disagree on, in the order the sweep declares them.
+
+    `Condition.values` is built by `sweep.expand` from `grid.items()`, so
+    iterating `of.values` first gives declaration order — which is what
+    makes `differs_on` stable across runs rather than set-ordered. But the
+    two sides' key sets are not guaranteed equal, and since
+    `E-SWEEP-BASELINE-PARTIAL` was retired they can differ in *both*
+    directions: a baseline may fix an axis the grid never sweeps (present in
+    the baseline condition's `values`, absent from every grid condition's),
+    and a grid axis need no longer be fixed in the baseline at all, which is
+    what per-cell expansion made legal. Iterating only `of.values` would
+    silently skip an axis of the first kind whenever it differs from that
+    axis's own parameter default, so this walks the union of both sides' keys
+    — required rather than merely defensive — comparing with `.get` against
+    a sentinel (not `None`, which a real swept value could legitimately be)
+    so a key present on one side and absent on the other always counts as
+    differing rather than being skipped.
+
+    Lives here, not in `cli.py` or `validate.py`, because both call it: `cli`
+    for `confounded`/`differs_on` and the (temporarily) hard-coded `paired`
+    `_comparison_step_blocks` records, `validate` for
+    `E-DATA-ALLOCATION-CONTRAST`'s per-comparison guard in `_check_sweep`. A
+    module either of them already imports is what removes the cross-module
+    private access and the local import either alternative would need — `cli`
+    imports `publishable.validate` at module scope, so `validate` importing
+    `cli` back is a true cycle, and `contrasts` sits below both.
+    """
+    ordered_keys = list(of.values) + [k for k in against.values if k not in of.values]
+    return [
+        k for k in ordered_keys if of.values.get(k, _MISSING) != against.values.get(k, _MISSING)
+    ]
+
+
 def baseline_for(
     condition: "Condition", baselines: list["Condition"], free: list[str]
 ) -> "Condition | None":

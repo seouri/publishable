@@ -1,7 +1,6 @@
 import pytest
 
-from publishable.cli import _differing_axes
-from publishable.contrasts import resolve_contrasts, units_matching
+from publishable.contrasts import differing_axes, resolve_contrasts, units_matching
 from publishable.sweep import Condition, expand
 from publishable.units import Unit, UnitList
 
@@ -188,7 +187,7 @@ def test_each_per_cell_comparison_differs_on_at_most_the_swept_axis():
     )
     by_index = {c.index: c for c in conditions}
     differing = [
-        _differing_axes(by_index[c.of], by_index[c.against])
+        differing_axes(by_index[c.of], by_index[c.against])
         for c in resolve_contrasts({}, conditions)
     ]
     assert differing == [[], [], ["analysis.method"], ["analysis.method"]]

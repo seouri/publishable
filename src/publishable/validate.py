@@ -8,7 +8,7 @@ from typing import Any
 import yaml
 
 from publishable.base_experiment import load_experiment
-from publishable.contrasts import resolve_contrasts, units_matching
+from publishable.contrasts import differing_axes, resolve_contrasts, units_matching
 from publishable.diagnostics import Collector
 from publishable.envelope import check_envelope
 from publishable.errors import ContractError
@@ -2793,13 +2793,13 @@ def _check_sweep(
     # state. It is true now — for a `grid` axis, which is the only kind this
     # message is ever emitted beside, since the guard reads no other mode.
     #
-    # `cli._differing_axes` instead walks the *union* of both sides' keys against
-    # a sentinel, so a baseline fixing an
+    # `contrasts.differing_axes` instead walks the *union* of both sides' keys
+    # against a sentinel, so a baseline fixing an
     # axis the grid never sweeps adds a differing axis to every comparison and
     # can mark `confounded` where this warning stays silent. That direction is
     # the safe one — this never fires where a run would not mark the comparison
-    # — and it is why the three lines below are not `cli._differing_axes` reused:
-    # sharing the helper would import the wider semantics along with it.
+    # — and it is why the three lines below are not `contrasts.differing_axes`
+    # reused: sharing the helper would import the wider semantics along with it.
     #
     # One finding, not one per condition: the fault is a single declaration, and
     # `sweep.baseline` is the line the reader edits.
@@ -3028,25 +3028,28 @@ def _check_sweep(
     # is not. Firing on the resolved family's size alone would refuse the first
     # comparison along with the second and make "each arm analyzed several
     # ways" unexpressible. So this reads each resolved comparison individually:
-    # `cli._differing_axes` gives the axes two conditions disagree on, and
+    # `contrasts.differing_axes` gives the axes two conditions disagree on, and
     # intersecting that with either side's `selectors` — the group axes a
     # condition actually carries a value for — is what tells a cross-arm
-    # comparison from a within-arm one.
+    # comparison from a within-arm one. Imported at module scope, the same as
+    # its two siblings' helpers, rather than gated on `allocation`: the axis
+    # being a declared `groups` axis is what makes the two sides disjoint,
+    # whatever `allocation` itself is declared as (or left undeclared, the
+    # `within` default) — a config missing that declaration entirely still
+    # co-reports `E-DATA-ALLOCATION-WITHIN-ARMS`.
     #
     # Temporary, and narrowly so: H4 Statistics owns the unpaired estimator
     # family and lifts this the moment it exists. Like its two siblings it
     # refuses a *combination* rather than a declaration, so it carries a row in
     # § Validation's registry and is not one of the `NOT BUILT` declarations §
     # The one config file counts.
-    from publishable.cli import _differing_axes
-
     conditions_by_index = {cond.index: cond for cond in conditions}
     for comp in resolved_contrasts:
         of_cond = conditions_by_index.get(comp.of)
         against_cond = conditions_by_index.get(comp.against)
         if of_cond is None or against_cond is None:
             continue
-        differing = _differing_axes(of_cond, against_cond)
+        differing = differing_axes(of_cond, against_cond)
         group_selectors = of_cond.selectors | against_cond.selectors
         group_axes = [axis for axis in differing if axis in group_selectors]
         if not group_axes:
@@ -3057,10 +3060,10 @@ def _check_sweep(
             "sweep.groups",
             f"condition {comp.of} ({of_cond.label!r}) and condition {comp.against} "
             f"({against_cond.label!r}) differ on group axis{plural} "
-            f"{', '.join(group_axes)} — `allocation: between` means the two conditions "
-            "hold disjoint sets of units, and no construction in this build computes an "
-            "unpaired interval: `paired_t_over_units` takes per-unit differences and "
-            "nothing else, and there is no `welch_t_over_units` or "
+            f"{', '.join(group_axes)} — a declared `groups` axis means the two "
+            "conditions hold disjoint sets of units, and no construction in this build "
+            "computes an unpaired interval: `paired_t_over_units` takes per-unit "
+            "differences and nothing else, and there is no `welch_t_over_units` or "
             "`unpaired_percentile_over_units` to call. The delta would be computed over "
             "an empty pairing and published as `null` beside a `paired: true` that is "
             "false. Express the difference as an `Estimate` returned by a `summary` "

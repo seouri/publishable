@@ -4955,8 +4955,7 @@ def test_a_partly_fixed_baseline_is_silent_while_its_run_marks_confounded(write_
     )
     assert "W-SWEEP-BASELINE-CONFOUNDED" not in codes(path)
 
-    from publishable.cli import _differing_axes
-    from publishable.contrasts import resolve_contrasts
+    from publishable.contrasts import differing_axes, resolve_contrasts
     from publishable.sweep import expand
 
     conditions = expand(
@@ -4973,7 +4972,7 @@ def test_a_partly_fixed_baseline_is_silent_while_its_run_marks_confounded(write_
     )
     by_index = {c.index: c for c in conditions}
     differing = [
-        _differing_axes(by_index[m.of], by_index[m.against])
+        differing_axes(by_index[m.of], by_index[m.against])
         for m in resolve_contrasts({}, conditions)
     ]
     assert all("analysis.confidence" not in axes for axes in differing)
@@ -5006,15 +5005,14 @@ def test_a_half_fixed_paired_axis_is_silent_with_nothing_expanded_and_a_confound
     }
     assert "W-SWEEP-BASELINE-CONFOUNDED" not in codes(write_config({"sweep": sweep}))
 
-    from publishable.cli import _differing_axes
-    from publishable.contrasts import resolve_contrasts
+    from publishable.contrasts import differing_axes, resolve_contrasts
 
     conditions = expand({"sweep": sweep})
     assert [c.index for c in conditions if c.is_baseline] == [0]  # nothing expanded
 
     by_index = {c.index: c for c in conditions}
     differing = [
-        _differing_axes(by_index[m.of], by_index[m.against])
+        differing_axes(by_index[m.of], by_index[m.against])
         for m in resolve_contrasts({}, conditions)
     ]
     assert differing == [
