@@ -1227,9 +1227,16 @@ def test_effective_is_recomputed_over_the_units_the_column_actually_has():
     interval used.
 
     `pred`'s three carriers weigh 1/1/3 → 25/11 = 2.2727; the condition's four
-    completed units weigh 1/1/1/3 → 36/12 = 3.0, which is what `counts` carries
-    and what the full column `other` must still report."""
-    counts = dict(_WEIGHTED_COUNTS, effective=3.0)
+    completed units weigh 1/1/1/3 → 36/12 = 3.0, which is what the full column
+    `other` must still report.
+
+    **`counts` carries a deliberately impossible 99.0** rather than the 3.0
+    `runner.attrition` would really pass. With the true value there, `other`'s
+    recomputed size is *also* 3.0, so both of its assertions pass unchanged
+    against an implementation that inherits `effective` from `counts` instead of
+    setting it — leaving `pred` to carry the whole test alone. 99.0 is what makes
+    `other` discriminate: it can only read 3.0 if this column computed it."""
+    counts = dict(_WEIGHTED_COUNTS, effective=99.0)
     out = summarize_step(_WEIGHTED_COLLAPSED, counts, weights=_WEIGHTS)
     assert out["pred"]["n"]["completed"] == 3
     assert out["pred"]["n"]["effective"] == pytest.approx(25 / 11)
