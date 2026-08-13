@@ -5681,7 +5681,8 @@ def test_a_weighted_generated_comparison_is_refused(write_config, tmp_path):
         }
     )
     assert codes(path) == {"E-DATA-WEIGHT-CONTRAST"}
-    assert "2 comparisons" in messages_by_code(path)["E-DATA-WEIGHT-CONTRAST"]
+    message = messages_by_code(path)["E-DATA-WEIGHT-CONTRAST"]
+    assert "publishes 2 comparisons," in message
 
 
 def test_a_weighted_declared_contrast_is_refused(write_config, tmp_path):
@@ -5706,7 +5707,11 @@ def test_a_weighted_declared_contrast_is_refused(write_config, tmp_path):
         }
     )
     assert codes(path) == {"E-DATA-WEIGHT-CONTRAST"}
-    assert "1 comparison" in messages_by_code(path)["E-DATA-WEIGHT-CONTRAST"]
+    # The singular, and pinned as a whole word: `"1 comparison" in ...` would
+    # pass against `1 comparisons` too, which is the shape this slice keeps
+    # writing tests that cannot see.
+    message = messages_by_code(path)["E-DATA-WEIGHT-CONTRAST"]
+    assert "publishes 1 comparison," in message
 
 
 def test_a_weighted_baseline_that_generates_no_comparison_stays_legal(write_config, tmp_path):

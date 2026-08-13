@@ -292,6 +292,7 @@ The table below states each check by the mistake it catches. What `validate` *pr
 | Reporting stratum is populated | `report_by: [dx_family]` has a level with 4 units; below `limits.min_reported_n` (warning) |
 | Weight attribute exists | `data.units.weight_by` names `sampling_weight`, which is not a unit attribute |
 | Weights are usable | `sampling_weight` holds a zero or negative value for 3 units; a weight is what a unit stands for |
+| Weighted deltas aren't computed | `data.units.weight_by` is declared and the design resolves to a comparison — a `vs_baseline`, or a `statistics.contrasts` entry; each condition's own value and interval are weighted and no contrast construction is — specified, not built in this build |
 | Weighting looks undeclared | `sampling_weight` varies across units and looks like an inverse sampling probability, but `weight_by` is unset (warning) |
 | Resample strata exist | `statistics.resample.stratify_by` names `count_stratum`, which is not a unit attribute |
 | Correction declared for a family | 6 enumerated conditions × 3 metrics produce a family of 15 baseline comparisons with `statistics.correction: none` (warning). Not raised for a `sample`-only sweep, whose draws aren't a family |
