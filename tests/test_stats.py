@@ -1854,7 +1854,11 @@ def test_a_drawn_cluster_pools_its_units_rather_than_contributing_its_mean():
         sum(sum(v for v, _ in _POOL_CLUSTERS[c]) / len(_POOL_CLUSTERS[c]) for c in combo) / 4
         for combo in itertools.combinations_with_replacement("ABCD", 4)
     }
-    assert len(of_means) > 1  # the control: the rival construction is real
+    # The control that must report: the rival construction produces a real
+    # interval of its own over this roster — [6.0, 14.0] at this seed — and
+    # neither of its endpoints is achievable by pooling.
+    assert 6.0 in of_means and 6.0 not in _achievable()
+    assert 14.0 in of_means and 14.0 not in _achievable()
     assert got.low in _achievable() and got.low not in of_means
     assert got.high in _achievable() and got.high not in of_means
 
