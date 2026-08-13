@@ -1233,10 +1233,11 @@ def _check_assign(
     *Every axis is assigned* — a declared group axis with no block under `assign`.
     One finding per unassigned axis, in declaration order, because the remedy is one
     block per axis and a reader fixing the first would otherwise come back for the
-    second. Together with the row above this is the whole of § The one config file's
-    "`assign` is REQUIRED when `allocation` is `between`": an absent `assign` and an
-    empty `assign: {}` both leave every declared axis unassigned, and `between` with
-    no axes at all is the row above. Neither fires under `allocation: within`, whose
+    second. Together with *Allocation needs arms* this is the whole of § The one
+    config file's "`assign` is REQUIRED when `allocation` is `between`": an absent
+    `assign` and an empty `assign: {}` both leave every declared axis unassigned, and
+    `between` with no axes at all is what *Allocation needs arms* reports. Neither
+    fires under `allocation: within`, whose
     own row (*Arms need allocation*) states the fault differently — a unit cannot be
     in one arm and in all of them — and is reported by nothing in this build.
 
@@ -1246,13 +1247,14 @@ def _check_assign(
 
     *Assignment method isn't drawn* — a `method` in the enum but not yet
     executable (`random`, `blocked`), refused as `E-DATA-ASSIGN-DRAWN` rather than
-    `E-DATA-ASSIGN-METHOD`. Read from the same `elif` chain as the row above, so
-    the two are mutually exclusive by construction rather than by convention.
+    `E-DATA-ASSIGN-METHOD`. Read from the same `elif` chain *Assignment names a
+    method* is, so the two are mutually exclusive by construction rather than by
+    convention.
 
     **`method: by_attribute`'s two new rows, checked only in that branch of the
     same `elif` chain** — `from` and `levels` mean nothing under `random`/`blocked`,
-    already refused above, or under an absent/out-of-enum method, already refused
-    by the rows above that:
+    which *Assignment method isn't drawn* already refuses, or under an
+    absent/out-of-enum method, which *Assignment names a method* already refuses:
 
     *Assignment attribute exists* — `assign.<axis>.from`, declared or **defaulted
     to the axis name** (§ The one config file: "`from` is `by_attribute` only, and
@@ -1263,15 +1265,22 @@ def _check_assign(
     resolution as an attribute — and that lets the check run with no roster at
     all. **Where it diverges from `_check_weight_by`, stated rather than left
     silent**: `weight_by`/`cluster_by` are `envelope.py` `LEAF_TYPES` leaves, so a
-    non-`str` declaration there is `E-CONFIG-TYPE`'s to report and this module
+    non-`str` declaration there is `E-CONFIG-TYPE`'s to report and `_check_weight_by`
     returns rather than duplicating it. `assign.<axis>.from` is not — `assign`'s
-    children are axis names no fixed dotted path can type, the same reason
-    `method` itself carries no such guard — so there is no backstop to defer to.
-    Rather than inventing a second code for a fault this table has none for, a
-    non-`str`, non-`None` `from` is skipped exactly as the two siblings skip their
-    typed case: reported nowhere in this build, a gap rather than a decision, and
-    the axis's `from`/`levels` rows below it are skipped with it, there being no
-    string to resolve against `data.units.attributes` either way.
+    children are axis names no fixed dotted path can type, the same reason `method`
+    itself carries no such guard — so there is no backstop to defer to, and
+    returning silently the way the two siblings do would report a non-`str`,
+    non-`None` `from` nowhere at all: a fault this build's shape checks cannot see,
+    the inverse of what this pass exists to hunt for. So this branch, alone among
+    the three, does not defer: a non-`str` `from` is folded into
+    `E-DATA-ASSIGN-UNKNOWN` itself — the same absorption `E-DATA-ASSIGN-METHOD`
+    already performs for a non-mapping block, "the block naming no method that it
+    is" — rather than skipped or given a code of its own.
+
+    **An explicit `from: ""` matches the sibling rather than diverging**:
+    `_check_weight_by`'s own wording — present, not absent, so no default applies,
+    and an empty declaration changes no behavior — is reused verbatim for the same
+    shape, because there is no reason for the two to say it differently.
 
     *Attribute assignment resolves* — the resolved attribute's values, over the
     resolved roster, are not exactly the axis's declared `sweep.groups` levels —
@@ -1335,7 +1344,7 @@ def _check_assign(
 
     for axis, block in blocks.items():
         if block is None:
-            continue  # an absent block; the row above is the one that speaks
+            continue  # an absent block; *Every axis is assigned* is the one that speaks
         if not isinstance(block, dict):
             c.error(
                 "E-DATA-ASSIGN-METHOD",
@@ -1378,8 +1387,35 @@ def _check_assign(
             # at all.
             declared_from = block.get("from")
             if declared_from is not None and not isinstance(declared_from, str):
-                # No `E-CONFIG-TYPE` backstop exists for this leaf (see docstring);
-                # skipped rather than guessed at.
+                # No `E-CONFIG-TYPE` backstop exists for this leaf (see docstring):
+                # `assign`'s children are axis names no fixed dotted path can type,
+                # so nothing else reports a non-`str` `from`. Folded into
+                # `E-DATA-ASSIGN-UNKNOWN` rather than a new code, the way
+                # `E-DATA-ASSIGN-METHOD` already absorbs a non-mapping block as
+                # "the block naming no method that it is" — a value of the wrong
+                # type can never name an attribute either.
+                c.error(
+                    "E-DATA-ASSIGN-UNKNOWN",
+                    f"data.units.assign.{axis}.from",
+                    f"is a {type(declared_from).__name__} (`{declared_from!r}`) "
+                    f"rather than a string naming a unit attribute — `from` reads a "
+                    f"column per unit, so it has to be one",
+                )
+                continue
+            if declared_from == "":
+                # `_check_weight_by`'s own wording for the same shape: an empty
+                # string is present, not absent, so it does not take the default —
+                # and reporting it as "resolves to ''" would leave a reader
+                # wondering whether that is a real attribute name rather than a
+                # declaration that changes no behavior.
+                c.error(
+                    "E-DATA-ASSIGN-UNKNOWN",
+                    f"data.units.assign.{axis}.from",
+                    "is empty; it names the unit attribute holding the arm, and an "
+                    "empty declaration changes no behavior — which is the failure a "
+                    "truthy read of it would hide. Name the attribute, or remove the "
+                    "key to take the axis-name default",
+                )
                 continue
             resolved_from = declared_from if declared_from is not None else axis
             attrs = units.get("attributes") or []

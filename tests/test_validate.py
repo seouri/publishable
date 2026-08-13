@@ -7260,6 +7260,24 @@ def test_by_attribute_assignment_is_accepted(write_config, tmp_path):
     assert "E-DATA-ASSIGN-LEVELS" not in found
 
 
+def test_assign_levels_is_reported_through_a_real_validate_config(write_config, tmp_path):
+    """The direct `_check_assign` tests below all hand-build the `doc`/roster — this
+    is the one end-to-end path, through `validate_config` and a resolved roster from
+    a real `input_dir` CSV, so the wiring from `sweep.groups`' declared levels through
+    a resolved column to `units.arms_of` is live rather than merely unreached by the
+    control above. `treatment` is declared but no row names it."""
+    (tmp_path / "input" / "index.csv").write_text("patient_id,arm\np1,control\np2,control\n")
+    found = _error_codes(
+        write_config(_between({"arm": {"method": "by_attribute"}}, attributes=["arm"]))
+    )
+    assert found == {
+        "E-DATA-ALLOCATION-UNSUPPORTED",
+        "E-DATA-ASSIGN-UNSUPPORTED",
+        "E-SWEEP-GROUPS-UNSUPPORTED",
+        "E-DATA-ASSIGN-LEVELS",
+    }
+
+
 def test_assign_from_defaults_to_the_axis_name():
     """§ The one config file: `from` is `by_attribute` only, and **defaults to
     the axis name**. No `from` key at all, axis named `arm`, attribute `arm`
@@ -7319,6 +7337,41 @@ def test_assign_from_declared_overrides_the_default_and_reports_its_own_name():
     assert "defaulted from the axis name" not in c.findings[0].message
 
 
+def test_assign_from_a_non_string_is_reported_rather_than_skipped():
+    """`assign.<axis>.from` is a dynamic key `envelope.py`'s `LEAF_TYPES` cannot
+    type (unlike `weight_by`/`cluster_by`), so there is no `E-CONFIG-TYPE`
+    backstop for a non-`str` value to defer to — a config shape `validate` would
+    otherwise be silent about. Folded into `E-DATA-ASSIGN-UNKNOWN` rather than
+    skipped, naming the value's type rather than a resolved attribute name."""
+    c = Collector()
+    _check_assign(
+        {},
+        {"attributes": ["arm"], "assign": {"arm": {"method": "by_attribute", "from": 3}}},
+        None,
+        c,
+    )
+    assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-UNKNOWN"]
+    assert c.findings[0].path == "data.units.assign.arm.from"
+    assert "int" in c.findings[0].message
+    assert "3" in c.findings[0].message
+
+
+def test_assign_from_an_empty_string_matches_weight_bys_own_wording():
+    """Present, not absent, so the axis-name default does not apply — the same
+    shape `_check_weight_by` gives its own dedicated wording rather than the
+    generic "resolves to ''" a name-lookup miss would otherwise produce."""
+    c = Collector()
+    _check_assign(
+        {},
+        {"attributes": ["arm"], "assign": {"arm": {"method": "by_attribute", "from": ""}}},
+        None,
+        c,
+    )
+    assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-UNKNOWN"]
+    assert "is empty" in c.findings[0].message
+    assert "changes no behavior" in c.findings[0].message
+
+
 def _arm_roster(values: list[str | None]) -> UnitList:
     """A roster of units keyed `u0`, `u1`, ... holding `arm` at the given value —
     `None` meaning the unit carries no value for it at all, `clusters_of`'s own
@@ -7332,12 +7385,11 @@ def _arm_roster(values: list[str | None]) -> UnitList:
 
 
 def test_assign_levels_resolve_when_every_unit_names_a_declared_level():
-    """The accept path for `E-DATA-ASSIGN-LEVELS`: two units, one per declared
-    level. A cluster fixture would coincide with this partition at 2 units —
-    deliberately avoided by using 3 units with a repeated level, so an
-    arm-aware reader (grouping `control` twice) is distinguishable from a
-    cluster-aware one (which has no notion of `levels` at all and would not
-    even run this check)."""
+    """The accept path for `E-DATA-ASSIGN-LEVELS`: three units, one level
+    repeated. Deliberately not two units, one per level — that partition would
+    coincide with a two-cluster fixture, and an arm-aware reader (grouping
+    `control` twice) would be indistinguishable from a cluster-aware one, which
+    has no notion of `levels` at all and would not even run this check."""
     c = Collector()
     _check_assign(
         {"sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}},

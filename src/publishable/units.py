@@ -730,10 +730,11 @@ def arms_of(roster: UnitList, column: str, levels: Sequence[str]) -> dict[str, l
     `between` design `validate` approved whose conditions core cannot actually
     build, because the partition it draws at run time is not the one `validate`
     checked. `validate` calls this to turn a mismatch into
-    `E-DATA-ASSIGN-LEVELS`; task 12 calls it for the subset view a `between`
-    condition's roster is built from, and task 13 counts it — neither may
-    re-derive arm membership from the roster on its own, which is the defect
-    class this docstring is written to prevent a third instance of.
+    `E-DATA-ASSIGN-LEVELS`; the subset view a `between` condition's roster is
+    built from, and the per-arm `n` a report counts, both have to read the same
+    partition rather than re-deriving arm membership from the roster on their
+    own — which is the defect class this docstring is written to prevent a third
+    instance of.
 
     `column` names a **declared attribute** — `assign.<axis>.from`, already
     resolved against its default by the caller — not a source column, the same

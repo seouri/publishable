@@ -9,6 +9,7 @@ from publishable.units import (
     Unit,
     UnitList,
     apply_rule,
+    arms_of,
     cluster_count,
     clusters_of,
     collapse_measurements,
@@ -1000,6 +1001,90 @@ def test_cluster_count_reads_the_same_authority():
     assert cluster_count(roster, "site") == 1
     with pytest.raises(ContractError):
         cluster_count(UnitList([Unit(key="u0", paths=(), attributes={})]), "site")
+
+
+def test_arms_partition_units_by_declared_level_in_roster_order():
+    """`reference.md` § Allocation: `from` names "a unit attribute whose values are
+    exactly the declared levels". Uneven on purpose — 2 units in `control`, 1 in
+    `treatment` — so a caller reading `partition["control"]` back gets a list, not
+    a single unit, and roster order survives inside each bucket (`u2` before `u0`
+    within `control`, matching insertion order rather than being resorted)."""
+    roster = UnitList(
+        [
+            Unit(key="u2", paths=(), attributes={"arm": "control"}),
+            Unit(key="u1", paths=(), attributes={"arm": "treatment"}),
+            Unit(key="u0", paths=(), attributes={"arm": "control"}),
+        ]
+    )
+    partition = arms_of(roster, "arm", ["control", "treatment"])
+    assert [u.key for u in partition["control"]] == ["u2", "u0"]
+    assert [u.key for u in partition["treatment"]] == ["u1"]
+    # Every unit in the roster appears in exactly one bucket.
+    assert sum(len(units) for units in partition.values()) == len(roster)
+
+
+def test_arms_stringify_values_before_comparison():
+    """`clusters_of`'s own reason: a table yields `str` for every column, but a
+    hand-built roster need not, and an arm id is a label rather than a quantity.
+    `{'arm': 1}` (an `int`) has to resolve against levels declared as strings."""
+    roster = UnitList(
+        [
+            Unit(key="u0", paths=(), attributes={"arm": 1}),
+            Unit(key="u1", paths=(), attributes={"arm": 2}),
+        ]
+    )
+    partition = arms_of(roster, "arm", ["1", "2"])
+    assert [u.key for u in partition["1"]] == ["u0"]
+    assert [u.key for u in partition["2"]] == ["u1"]
+
+
+def test_arms_refuse_a_value_naming_no_declared_level():
+    """§ Allocation opens `between` with "each unit belongs to exactly one arm" —
+    a value naming none of the declared levels leaves that unit in none."""
+    roster = UnitList(
+        [
+            Unit(key="u0", paths=(), attributes={"arm": "control"}),
+            Unit(key="u1", paths=(), attributes={"arm": "unknown_arm"}),
+        ]
+    )
+    with pytest.raises(ContractError) as e:
+        arms_of(roster, "arm", ["control", "treatment"])
+    assert e.value.code == "E-DATA-ASSIGN-LEVELS"
+    assert "u1" in str(e.value)
+    assert "unknown_arm" in str(e.value)
+
+
+def test_arms_refuse_a_unit_with_no_value_at_all():
+    """The same violation `clusters_of` recognizes for a unit missing its
+    attribute entirely — folded into the same code and message as a value naming
+    the wrong level, rather than a distinct fault."""
+    roster = UnitList(
+        [
+            Unit(key="u0", paths=(), attributes={"arm": "control"}),
+            Unit(key="u1", paths=(), attributes={}),
+        ]
+    )
+    with pytest.raises(ContractError) as e:
+        arms_of(roster, "arm", ["control", "treatment"])
+    assert e.value.code == "E-DATA-ASSIGN-LEVELS"
+    assert "u1" in str(e.value)
+    assert "carries no value" in str(e.value)
+
+
+def test_arms_refuse_a_declared_level_with_no_unit():
+    """The other direction of set equality: every unit resolves to a declared
+    level, but `treatment` holds none of them, so that arm's condition would
+    resolve zero units."""
+    roster = UnitList(
+        [
+            Unit(key="u0", paths=(), attributes={"arm": "control"}),
+            Unit(key="u1", paths=(), attributes={"arm": "control"}),
+        ]
+    )
+    with pytest.raises(ContractError) as e:
+        arms_of(roster, "arm", ["control", "treatment"])
+    assert e.value.code == "E-DATA-ASSIGN-LEVELS"
+    assert "treatment" in str(e.value)
 
 
 def test_the_fold_basis_is_the_cluster_count_when_the_units_are_clustered():
