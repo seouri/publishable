@@ -4417,8 +4417,11 @@ def test_leave_one_out_draws_one_fold_per_cluster(tmp_path, monkeypatch):
     roster, not 15 — the number `run` executes, so `cli`'s own resolution of the
     fold basis is what this pins, not `validate`'s.
 
-    The partition still draws without the cluster mapping (a later slice wires
-    that), so this asserts the fold *count* rather than fold membership.
+    The fold *count* is all this asserts; membership is
+    `test_a_clustered_fold_puts_no_cluster_in_two_folds`'s, which pins the mapping
+    reaching the partitioner. The two are separate facts — the count comes from
+    `units.fold_basis` and the membership from `units.partition_units` — and each
+    was wired by its own task.
     """
     _without_the_cluster_refusal(monkeypatch)
     doc = run_a_project(
