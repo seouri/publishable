@@ -8,7 +8,12 @@ from tests.conftest import write_experiment_module
 from publishable.diagnostics import Collector
 from publishable.sweep import expand
 from publishable.units import Unit, UnitList
-from publishable.validate import _check_contrasts, _check_measurements, validate_config
+from publishable.validate import (
+    _check_contrasts,
+    _check_measurements,
+    _check_weight_by,
+    validate_config,
+)
 
 
 def base_config(tmp_path: Path) -> dict:
@@ -5362,3 +5367,267 @@ def test_a_baseline_beside_a_grid_is_untouched_by_the_sample_refusal(write_confi
             }
         )
     ) == set()
+
+
+# --- `data.units.weight_by` ------------------------------------------------
+#
+# `E-DATA-WEIGHT-UNSUPPORTED` is still live (it is retired in a later task), so
+# every one of these asserts its OWN identifier: a test that merely asserted
+# "some finding" would pass off the refusal and say nothing about these checks.
+
+
+def _weighted_table(tmp_path: Path, body: str, column: str = "sampling_weight") -> None:
+    """Write the roster these checks read, into the directory `write_config` points
+    `data.input_dir` at. Writing it anywhere else is how a probe comes back empty
+    for every input, including the one that had to fail."""
+    (tmp_path / "input" / "index.csv").write_text(f"patient_id,{column}\n{body}")
+
+
+def test_a_weight_by_naming_no_attribute_is_reported(write_config, tmp_path):
+    """Row 291: `weight_by` names `sampling_weight`, which is not a unit
+    attribute. `attributes` is the reference set — `weight_by` has to survive
+    resolution to be read per unit at analysis time."""
+    _weighted_table(tmp_path, "p1,2.0\np2,3.0\n")
+    path = write_config(
+        {"data.units": {"from": "index.csv", "key": "patient_id", "weight_by": "sampling_weight"}}
+    )
+    assert "E-DATA-WEIGHT-UNKNOWN" in codes(path)
+
+
+def test_a_declared_weight_attribute_is_not_reported_unknown(write_config, tmp_path):
+    """The second half of the same declaration: declaring the attribute is what
+    makes the name check pass, so the check is discriminating rather than
+    reporting on every `weight_by` there is."""
+    _weighted_table(tmp_path, "p1,2.0\np2,3.0\n")
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["sampling_weight"],
+                "weight_by": "sampling_weight",
+            }
+        }
+    )
+    found = codes(path)
+    assert "E-DATA-WEIGHT-UNKNOWN" not in found
+    assert "E-DATA-WEIGHT-INVALID" not in found
+
+
+def test_an_empty_weight_by_is_a_finding_not_a_default(write_config):
+    """Decision 3, the second truthiness hole: an empty declaration changes no
+    behavior, and silently reading it as "unset" makes the config lie.
+
+    The message is asserted, not only the code: `''` is also "not a unit
+    attribute", so the name check below reports the same identifier for it and a
+    code-only assertion cannot tell the two branches apart. What an empty
+    declaration needs said is that it is empty — telling a reader that `''` is
+    not among the declared attributes sends them to the wrong list."""
+    path = write_config(
+        {"data.units": {"from": "index.csv", "key": "patient_id", "weight_by": ""}}
+    )
+    found = messages_by_code(path)
+    assert "E-DATA-WEIGHT-UNKNOWN" in found
+    assert "is empty" in found["E-DATA-WEIGHT-UNKNOWN"]
+
+
+def test_a_non_string_weight_by_is_left_to_the_envelope(write_config):
+    """`envelope.LEAF_TYPES` types `data.units.weight_by` a `str`, so a number is
+    already `E-CONFIG-TYPE`. Reporting it a second time as "empty" would both
+    duplicate the finding and describe `3` with a word that does not fit it."""
+    path = write_config(
+        {"data.units": {"from": "index.csv", "key": "patient_id", "weight_by": 3}}
+    )
+    found = codes(path)
+    assert "E-CONFIG-TYPE" in found
+    assert "E-DATA-WEIGHT-UNKNOWN" not in found
+
+
+def test_the_name_check_still_runs_with_no_roster(write_config, tmp_path):
+    """The value half needs a roster; the name half does not, and reads the
+    declaration alone. Pinned with a resolvable-shaped config whose `input_dir`
+    is relative — `_check_units` returns `None` there — so this is a reachable
+    skip rather than the silent-skip class."""
+    path = write_config(
+        {
+            "data.input_dir": "input",
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "weight_by": "sampling_weight",
+            },
+        }
+    )
+    assert "E-DATA-WEIGHT-UNKNOWN" in codes(path)
+
+
+def test_a_zero_weight_is_refused(write_config, tmp_path):
+    """Row 292, the zero half: a weight is what a unit stands for, and a unit
+    standing for nothing is a unit that should not be in the roster."""
+    _weighted_table(tmp_path, "p1,2.0\np2,0\n")
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["sampling_weight"],
+                "weight_by": "sampling_weight",
+            }
+        }
+    )
+    assert "E-DATA-WEIGHT-INVALID" in codes(path)
+
+
+def test_a_negative_weight_is_refused(write_config, tmp_path):
+    """Row 292, the negative half. Separate from the zero case on purpose: a
+    check written `< 0` passes the negative test and lets a zero weight through."""
+    _weighted_table(tmp_path, "p1,2.0\np2,-1.5\n")
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["sampling_weight"],
+                "weight_by": "sampling_weight",
+            }
+        }
+    )
+    assert "E-DATA-WEIGHT-INVALID" in codes(path)
+
+
+def test_a_non_numeric_weight_is_refused(write_config, tmp_path):
+    """A weight that is not a number cannot be one. `csv.DictReader` yields
+    strings for every column, so "numeric" here means `is_measurement_numeric`
+    — the single authority — and not `isinstance(v, (int, float))`, which no
+    table-sourced value ever satisfies."""
+    _weighted_table(tmp_path, "p1,2.0\np2,unknown\n")
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["sampling_weight"],
+                "weight_by": "sampling_weight",
+            }
+        }
+    )
+    assert "E-DATA-WEIGHT-INVALID" in codes(path)
+
+
+def test_a_non_finite_weight_is_refused(write_config, tmp_path):
+    """`float("nan")` parses, and `nan <= 0` is `False`, so a positivity test
+    alone admits it — and every weighted mean it touches is `nan`."""
+    _weighted_table(tmp_path, "p1,2.0\np2,nan\n")
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["sampling_weight"],
+                "weight_by": "sampling_weight",
+            }
+        }
+    )
+    assert "E-DATA-WEIGHT-INVALID" in codes(path)
+
+
+def test_the_value_check_is_skipped_without_a_roster(write_config):
+    """The reachable half of the skip: with no roster there are no values, and
+    the name check above still reports. Called directly so the two halves are
+    distinguishable rather than inferred from one `validate_config` run."""
+    c = Collector()
+    _check_weight_by(
+        {"attributes": ["sampling_weight"], "weight_by": "sampling_weight"}, None, c
+    )
+    assert not c.findings
+
+
+@pytest.mark.parametrize("unset", [{}, {"weight_by": None}])
+def test_a_weight_looking_column_warns_when_nothing_declares_it(write_config, tmp_path, unset):
+    """Row 293. The positive direction comes first: a warning that can never fire
+    passes its own negative test trivially.
+
+    Both forms of "unset" are run. `init` materializes `weight_by: null`, so the
+    explicit null is the shape a real config carries and a check keyed on the
+    key's *absence* would miss it entirely. The message is asserted too: "a
+    warning fired" and "the warning about this column fired" are different
+    claims, and only the second is what row 293 promises."""
+    _weighted_table(tmp_path, "p1,2.0\np2,3.0\n")
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["sampling_weight"],
+                **unset,
+            }
+        }
+    )
+    found = messages_by_code(path)
+    assert "W-DATA-WEIGHT-UNDECLARED" in found
+    assert "sampling_weight" in found["W-DATA-WEIGHT-UNDECLARED"]
+
+
+def test_no_weight_warning_for_a_constant_column(write_config, tmp_path):
+    """A column that does not vary is not a sampling weight, and warning about it
+    would train a reader to ignore the warning."""
+    _weighted_table(tmp_path, "p1,2.0\np2,2.0\n")
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["sampling_weight"],
+            }
+        }
+    )
+    assert "W-DATA-WEIGHT-UNDECLARED" not in codes(path)
+
+
+def test_no_weight_warning_for_a_column_the_name_test_does_not_match(write_config, tmp_path):
+    """The name test is what keeps this warning off `age`, `dose` and `latency`,
+    every one of which is numeric, positive and varying. Same fixture as the
+    positive case but for the column name, so the two pin the trigger between
+    them."""
+    _weighted_table(tmp_path, "p1,2.0\np2,3.0\n", column="dose")
+    path = write_config(
+        {"data.units": {"from": "index.csv", "key": "patient_id", "attributes": ["dose"]}}
+    )
+    assert "W-DATA-WEIGHT-UNDECLARED" not in codes(path)
+
+
+def test_no_weight_warning_once_weight_by_declares_the_column(write_config, tmp_path):
+    """The warning is about a weight going *unused*, so declaring it is what
+    silences it — the one thing the message tells a reader to do."""
+    _weighted_table(tmp_path, "p1,2.0\np2,3.0\n")
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["sampling_weight"],
+                "weight_by": "sampling_weight",
+            }
+        }
+    )
+    assert "W-DATA-WEIGHT-UNDECLARED" not in codes(path)
+
+
+def test_no_weight_warning_for_a_zero_valued_weight_looking_column(write_config, tmp_path):
+    """`0` is not a positive weight, so the column does not look like an inverse
+    sampling probability — and with nothing declaring it, there is no
+    `E-DATA-WEIGHT-INVALID` to report either. Silence is the right answer for a
+    column the design never claimed was a weight."""
+    _weighted_table(tmp_path, "p1,2.0\np2,0\n")
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["sampling_weight"],
+            }
+        }
+    )
+    found = codes(path)
+    assert "W-DATA-WEIGHT-UNDECLARED" not in found
+    assert "E-DATA-WEIGHT-INVALID" not in found

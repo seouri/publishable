@@ -1,5 +1,6 @@
 """The S1 check subset. Collects rather than stops. docs/reference.md § Validation."""
 
+import math
 import re
 from pathlib import Path
 from typing import Any
@@ -437,9 +438,9 @@ def validate_config(
     _check_versions(doc, template, c)
     _check_data(doc, config_path, c)
     roster, technical_n, columns = _check_units(doc, c)
-    _check_measurements(
-        _units_declaration(doc.get("data") or {}, c) or {}, roster, technical_n, columns, c
-    )
+    units_decl = _units_declaration(doc.get("data") or {}, c) or {}
+    _check_measurements(units_decl, roster, technical_n, columns, c)
+    _check_weight_by(units_decl, roster, c)
     _check_replication(
         doc,
         template,
@@ -917,6 +918,181 @@ def _check_measurements(
                 "as one. Use `first` or `mode` for it, or a per-column map giving each "
                 "column the rule that fits it",
             )
+
+
+# A name test, and the only one in this module. `reference.md` § Weighted samples
+# states the trigger this list is half of: numeric, positive, varying across
+# units, and named like a weight. Without the name half the other three match
+# `age`, `dose`, `latency` and `score` — nearly every numeric attribute there is —
+# and a warning that fires on almost everything is one a reader learns to skip,
+# which costs more than the false positive on a `body_weight` column does. It is
+# admittedly not a core-vs-plugin-clean test: `weight` means body mass in a
+# wet-lab assay and a sampling weight in a survey, and no substring test can tell
+# them apart. What makes that payable is that the message states its own remedy
+# in one step — declare it, or rename it — so a false positive costs a reader one
+# decision rather than an investigation.
+_WEIGHT_NAME_HINTS = ("weight", "_prob", "probability")
+
+
+def _usable_weight(value: Any) -> float | None:
+    """`value` as a weight core could multiply by, or `None` if it is not one.
+
+    `units.is_measurement_numeric` is the numeric gate rather than a bare
+    `isinstance(value, (int, float))`, and that is load-bearing rather than
+    stylistic: `units._from_table` builds every attribute from `csv.DictReader`,
+    which yields `str` for every column whatever it holds, so an isinstance test
+    would refuse every table-sourced weight there is — the exact shape
+    `reference.md` § Weighted samples prints — and would make the undeclared-weight
+    warning below unreachable in the same stroke.
+
+    Finiteness is checked on top of positivity because `float("nan")` parses and
+    `nan <= 0` is `False`, so a positivity test alone admits a value that turns
+    every weighted mean it touches into `nan`.
+    """
+    if not is_measurement_numeric(value):
+        return None
+    number = float(value)
+    if not math.isfinite(number) or number <= 0:
+        return None
+    return number
+
+
+def _check_weight_by(units: dict[str, Any], roster: UnitList | None, c: Collector) -> None:
+    """`data.units.weight_by` — the attribute exists, its values are usable, and a
+    column that looks like a weight is not silently going unused.
+
+    `reference.md` § Validation, rows "Weight attribute exists", "Weights are
+    usable" and "Weighting looks undeclared".
+
+    **`data.units.attributes` is the reference set for the name**, and this is the
+    opposite of `_check_measurements`'s `by`, deliberately. A weight is read *per
+    unit at analysis time* — § Weighted samples: core "hands the column to
+    `aggregate` like any other attribute" — so it has to survive resolution as an
+    attribute, and `units._from_table` populates `Unit.attributes` from
+    `data.units.attributes` and nothing else. `measurements.by` is *consumed* at
+    collapse time and dropped from the merged unit, so it need not survive at all
+    and is checked against the source's columns instead. The § Validation rows say
+    exactly this: `weight_by` names something "which is not a unit attribute",
+    where `measurements.by` names a column of "a `reads.csv` with no `read_id`
+    column".
+
+    The declared list is read rather than the roster's realized attribute names so
+    the name check runs with no roster at all — the same construction
+    `_check_report_by` uses, and equivalent when a roster does resolve, since
+    `_from_table` refuses an attribute its table has no column for. Skipping the
+    *value* half when the roster is absent is not the silent skip H1 removed: the
+    name half still reports, and a test pins that.
+
+    Under a `{glob: ...}` source no attribute can be declared at all — `_from_glob`
+    refuses any name — so a `weight_by` there always draws
+    `E-DATA-WEIGHT-UNKNOWN`. That is truthful rather than a gap: a glob yields a
+    key and a path and nothing else, so no weight column exists to name.
+    """
+    declared = units.get("weight_by")
+    if declared is None:
+        _warn_undeclared_weight(units, roster, c)
+        return
+    if not isinstance(declared, str):
+        # `check_envelope` is what REPORTS this (`E-CONFIG-TYPE` — `envelope.py`
+        # types `data.units.weight_by` a `str`). Reporting it again here would
+        # both duplicate the finding and describe `3` as "empty", a word that
+        # does not fit it.
+        return
+    if not declared:
+        c.error(
+            "E-DATA-WEIGHT-UNKNOWN",
+            "data.units.weight_by",
+            "is empty; it names the unit attribute holding the weight, and an empty "
+            "declaration changes no behavior — which is the failure a truthy read of "
+            "it would hide. Name the attribute, or remove the key",
+        )
+        return
+    # A non-string item in `data.units.attributes` is `_check_units`'s own finding
+    # (`E-UNITS-ATTR-MISSING`); filtering it here just treats it as undeclared,
+    # which it already is, and keeps `set()` off an unhashable item in a module
+    # contracted to collect rather than raise.
+    #
+    # An absent or `null` `attributes` is an empty list, not a skip: "no
+    # attributes are declared, so `weight_by` names none of them" is exactly row
+    # 291's case, and skipping it would make the commonest form of the mistake the
+    # one form that reports nothing. Only a *present, wrongly-shaped* list is
+    # skipped, `E-CONFIG-SHAPE` having already reported it.
+    attrs = units.get("attributes") or []
+    if not isinstance(attrs, list):
+        return
+    names = sorted({a for a in attrs if isinstance(a, str)})
+    if declared not in names:
+        c.error(
+            "E-DATA-WEIGHT-UNKNOWN",
+            "data.units.weight_by",
+            f"names {declared!r}, which is not a unit attribute — a weight is read per "
+            f"unit, so it has to be one. `data.units.attributes` declares "
+            f"{', '.join(names) or 'none'}",
+        )
+        return
+    if roster is None:
+        return
+    bad = [
+        (u.key, u.attributes.get(declared))
+        for u in roster
+        if _usable_weight(u.attributes.get(declared)) is None
+    ]
+    if bad:
+        key, value = bad[0]
+        c.error(
+            "E-DATA-WEIGHT-INVALID",
+            "data.units.weight_by",
+            f"names {declared!r}, which holds a value that is not a positive finite "
+            f"number for {len(bad)} of {len(roster)} units (unit {key!r} holds "
+            f"{value!r}). A weight is how much of the population a unit stands for, so "
+            "zero, a negative, a non-number and a NaN are each a unit standing for "
+            "nothing core could weight with",
+        )
+
+
+def _warn_undeclared_weight(
+    units: dict[str, Any], roster: UnitList | None, c: Collector
+) -> None:
+    """`W-DATA-WEIGHT-UNDECLARED` — an attribute that looks like a sampling weight
+    while `weight_by` is unset.
+
+    The trigger cannot read the declaration it is about, so it reads the roster:
+    an attribute whose name contains `weight`, `_prob` or `probability`, whose
+    every value is a positive finite number, and which does not hold one value
+    across every unit. `reference.md` § Weighted samples states all four, and the
+    `W-` registry row repeats them, because a warning whose trigger is unstated is
+    one a user cannot act on.
+
+    Constancy is the discriminator that matters most in practice: a column that
+    does not vary weights nothing, and warning about it would teach a reader to
+    ignore the warning — which costs more than the missed case, this being a
+    warning about a *possible* omission rather than a fault.
+
+    Reported for the first candidate in sorted order rather than for each. The
+    remedy is the same sentence whichever one a reader looks at, and `weight_by`
+    takes one name, so a second warning adds no decision.
+    """
+    if roster is None:
+        return
+    for name in sorted({n for u in roster for n in u.attributes}):
+        if not any(hint in name.lower() for hint in _WEIGHT_NAME_HINTS):
+            continue
+        weights = [_usable_weight(u.attributes.get(name)) for u in roster]
+        if any(w is None for w in weights):
+            continue
+        if len(set(weights)) < 2:
+            continue
+        c.warn(
+            "W-DATA-WEIGHT-UNDECLARED",
+            f"data.units.attributes.{name}",
+            f"{name!r} is numeric, positive and varies across units, and its name reads "
+            "like an inverse sampling probability — but `data.units.weight_by` is unset, "
+            "so it is reported like any other attribute and no estimate is weighted by "
+            "it. An unweighted mean over an enriched sample answers a different question "
+            "than the population one, in the same shape. Set `data.units.weight_by` if it "
+            "is a weight, or rename the attribute if it is not",
+        )
+        return
 
 
 # Refusals that are properties of the DECLARATION, so `validate` reports them as
