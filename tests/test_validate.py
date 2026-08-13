@@ -6410,6 +6410,66 @@ def test_validate_reports_rather_than_raising_on_a_varying_cluster(write_config,
     assert any(f.code == "E-DATA-CLUSTER-VARIES" for f in c.findings)
 
 
+# --- an arm must not vary within a unit's measurement rows --------------------
+#
+# The same route as the cluster/weight pair above — `units.collapse_measurements`
+# raises, `_check_units` catches under `except ContractError` — for the third
+# declaration `CONSTANT_COLUMN_RULES` now reaches: `assign.<axis>.from`. No
+# fixture below declares `cluster_by`, so a varying `arm` cannot be mistaken for
+# a varying cluster.
+
+_ARM_MEASURED_UNITS = {
+    "from": "index.csv",
+    "key": "patient_id",
+    "attributes": ["read_id", "arm"],
+    "assign": {"arm": {"method": "by_attribute"}},
+    "measurements": {"by": "read_id", "collapse": "first"},
+}
+
+
+def test_an_arm_varying_within_a_units_rows_is_reported(write_config, tmp_path):
+    """§ Validation's *Arm is constant within a unit*: replicate rows declaring
+    `control` and `treatment` would collapse to whichever the file lists
+    first — deciding which condition p1 is measured in, not merely which side
+    of a split it lands on."""
+    _clustered_table(
+        tmp_path,
+        "patient_id,read_id,arm",
+        "p1,r1,control\np1,r2,treatment\np2,r3,control\n",
+    )
+    path = write_config({"data.units": _ARM_MEASURED_UNITS})
+    assert "E-DATA-ASSIGN-VARIES" in codes(path)
+
+
+def test_agreeing_arm_rows_are_not_reported(write_config, tmp_path):
+    """The arm half's own control. Same shape, rows that agree — must not
+    report — and the config declares `assign` at all, so a check that never
+    ran would also pass this."""
+    _clustered_table(
+        tmp_path,
+        "patient_id,read_id,arm",
+        "p1,r1,control\np1,r2,control\np2,r3,control\n",
+    )
+    path = write_config({"data.units": _ARM_MEASURED_UNITS})
+    assert "E-DATA-ASSIGN-VARIES" not in codes(path)
+
+
+def test_validate_reports_rather_than_raising_on_a_varying_arm(write_config, tmp_path):
+    """`validate` collects findings and never raises. The same `except
+    ContractError` in `_check_units` that catches the cluster/weight raise
+    catches this one too, and calling `validate_config` directly proves nothing
+    escaped it."""
+    _clustered_table(
+        tmp_path,
+        "patient_id,read_id,arm",
+        "p1,r1,control\np1,r2,treatment\n",
+    )
+    path = write_config({"data.units": _ARM_MEASURED_UNITS})
+    c = Collector()
+    validate_config(path, c)
+    assert any(f.code == "E-DATA-ASSIGN-VARIES" for f in c.findings)
+
+
 # --- `k` and `k: all` are bounded by clusters -------------------------------
 #
 # `reference.md` § Validation, *Folds fit inside the clusters* and
