@@ -4262,3 +4262,47 @@ def test_n_gains_effective_under_a_weighted_design(tmp_path: Path):
     # itself, and which of those cases applies here is a decision this pin must
     # not pre-empt.
     assert aggregated["pred"]["value"] == pytest.approx(2.0)
+
+
+def test_the_weight_column_reaches_aggregate_so_a_derived_metric_can_weight_itself(
+    tmp_path, monkeypatch
+):
+    """The other half of § Weighted samples' sentence, and the positive form of a
+    decision task 10 made: core "computes weighted means for `basis: units`
+    column metrics, hands the column to `aggregate` like any other attribute so a
+    derived metric can weight itself". So core does **not** weight a derived
+    metric — `aggregate` returned one number for the whole table and there is no
+    per-unit vector to weight — and what makes that an arrangement rather than an
+    omission is that the weight column actually arrives.
+
+    Declared as an ordinary attribute and *not* as `weight_by`, so this runs
+    today rather than joining the xfail above: what is under test is the merge
+    `_attributed` performs, and `weight_by` names a declared attribute like any
+    other. `pred` is 0/1/2/3 under weights 1/1/1/3, so a template weighting
+    itself gets 12/6 = 2.0 against the 1.5 core would report unweighted."""
+    import publishable.generators.experiment as experiment_gen
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    def _weighted_by_hand(self, units, cfg):
+        rows = list(units)
+        total = sum(float(row["sampling_weight"]) for row in rows)
+        return {
+            "weighted_pred": sum(float(row["sampling_weight"]) * row["pred"] for row in rows)
+            / total
+        }
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    monkeypatch.setattr(GenericTemplate, "aggregate", _weighted_by_hand)
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        roster_csv="patient_id,sampling_weight\np1,1\np2,1\np3,1\np4,3\n",
+        units_overrides={"attributes": ["sampling_weight"]},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert aggregated["weighted_pred"]["value"] == pytest.approx(2.0)
+    # The control that must report: core's own figure for the recorded column is
+    # the unweighted 1.5, since this config declares no `weight_by` — so the 2.0
+    # above is the template's arithmetic over a column it really received.
+    assert aggregated["pred"]["value"] == pytest.approx(1.5)

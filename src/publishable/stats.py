@@ -151,6 +151,36 @@ def kish_effective_n(weights: Sequence[Any]) -> float:
     return (total * total) / squares
 
 
+def _weighted_mean(checked: Sequence[float], values: Sequence[float]) -> float:
+    """Σwv / Σw, over weights `checked_weights` has already gated.
+
+    The single copy of the weighted mean in this module: `weighted_t_over_units`
+    centres its variance on it, `weighted_mean_of` is what `summarize_step`
+    reports, and `percentile_over_units` recomputes it on every draw. Three
+    copies is how a point estimate and the interval around it come to disagree
+    about what the estimate *is*, which no output shows.
+
+    `strict=True` on the zip: a values/weights length mismatch is a misaligned
+    weight vector, and the whole failure class this wiring guards against is one
+    that produces a plausible number instead of an error.
+    """
+    return sum(w * v for w, v in zip(checked, values, strict=True)) / sum(checked)
+
+
+def weighted_mean_of(values: Sequence[float], weights: Sequence[Any]) -> float | None:
+    """The weighted mean, or `None` for an empty sequence — `mean_of`'s sibling.
+
+    `reference.md` § Weighted samples: core "computes weighted means for
+    `basis: units` column metrics". A weighted interval around an unweighted
+    point estimate is the same half-delivered failure as an unweighted interval
+    beside a `weighted_by` marker, one level down, and it survives any check that
+    looks only at `ci95`.
+    """
+    if not values:
+        return None
+    return _weighted_mean(checked_weights(weights), values)
+
+
 def weighted_t_over_units(
     values: Sequence[float], weights: Sequence[Any], confidence: float = 0.95
 ) -> Interval | None:
@@ -191,7 +221,7 @@ def weighted_t_over_units(
     w = checked_weights(weights)
     total = sum(w)
     squares = sum(x * x for x in w)
-    mean = sum(a * v for a, v in zip(w, values, strict=True)) / total
+    mean = _weighted_mean(w, values)
     effective = kish_effective_n(w)
     if effective < 2:
         return None
@@ -301,7 +331,11 @@ def min_honest_draws(confidence: float = 0.95) -> int:
 
 
 def percentile_over_units(
-    values: Sequence[float], seed: int, draws: int = 2000, confidence: float = 0.95
+    values: Sequence[float],
+    seed: int,
+    draws: int = 2000,
+    confidence: float = 0.95,
+    weights: Sequence[Any] | None = None,
 ) -> Interval | None:
     """A percentile interval over the units, by resampling with replacement.
 
@@ -310,19 +344,52 @@ def percentile_over_units(
     recomputed on each bootstrap draw. A derived metric — one `aggregate`
     computed, with no per-unit value of its own — needs `aggregate` itself
     recomputed on each draw instead, which is what `percentile_of_derived` does.
+
+    With `weights`, the statistic recomputed on each draw is the *weighted* mean
+    and the draw itself is unchanged — `reference.md` § Weighted samples: "A
+    percentile interval draws units as usual and recomputes the weighted
+    statistic on each draw, so the weights are in the estimate rather than in the
+    drawing." Drawing units in proportion to their weights is a different
+    estimator, not an equivalent implementation of this one: a unit standing for
+    most of the population would then fill nearly every slot of every draw and
+    the interval would collapse onto its value, when what the weights say is how
+    much that unit *counts*, not how often it would be sampled again.
+
+    Two things this path deliberately does not inherit from
+    `weighted_t_over_units`. It applies no Kish floor — that construction refuses
+    an effective size below two because Kish's size is where its *degrees of
+    freedom* come from, and a percentile interval has none; its evidence is the
+    spread of the draws, which a concentrated weighting widens rather than
+    invalidates. And each value keeps its own weight through the sort: the pool
+    is sorted for the row-order invariance the unweighted branch explains below,
+    and sorting the two sequences separately would preserve that invariance while
+    silently re-pairing them — a mistake equal weights cannot see.
     """
     if len(values) < 2:
         return None
     if draws < min_honest_draws(confidence):
         return None
     rng = random.Random(seed)
-    # Sorted, not just `list(values)`: with a fixed seed, `rng.randrange(n)` draws
-    # the same sequence of *indices* regardless of input order, so drawing from an
-    # unsorted pool would make the resample depend on row order — the multiset of
-    # values must be all that matters.
-    pool = sorted(values)
-    n = len(pool)
-    means = sorted(sum(pool[rng.randrange(n)] for _ in range(n)) / n for _ in range(draws))
+    if weights is not None:
+        # `sorted` over the pairs, so a value and its weight travel together; the
+        # gate is `checked_weights`, the one authority `validate` and
+        # `kish_effective_n` also read, and it runs before any draw rather than
+        # producing 2000 draws' worth of `nan`.
+        pairs = sorted(zip(values, checked_weights(weights), strict=True))
+        n = len(pairs)
+        drawn_means = []
+        for _ in range(draws):
+            drawn = [pairs[rng.randrange(n)] for _ in range(n)]
+            drawn_means.append(_weighted_mean([w for _, w in drawn], [v for v, _ in drawn]))
+        means = sorted(drawn_means)
+    else:
+        # Sorted, not just `list(values)`: with a fixed seed, `rng.randrange(n)`
+        # draws the same sequence of *indices* regardless of input order, so
+        # drawing from an unsorted pool would make the resample depend on row
+        # order — the multiset of values must be all that matters.
+        pool = sorted(values)
+        n = len(pool)
+        means = sorted(sum(pool[rng.randrange(n)] for _ in range(n)) / n for _ in range(draws))
     lo, hi = _percentile_ranks(draws, confidence)
     return Interval(low=means[lo], high=means[hi], method="percentile_over_units")
 
@@ -819,6 +886,7 @@ def summarize_step(
     resample: "dict[str, Callable[[UnitTable], float | None]] | None" = None,
     draws: int = 2000,
     beside_n: dict[str, Any] | None = None,
+    weights: dict[str, Any] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Per-column value, basis, `n`, and interval over the collapsed unit table.
 
@@ -893,6 +961,47 @@ def summarize_step(
     the document's own example of a metric carrying `technical_n` is `r`, which
     `aggregate` derives. The computed keys are merged last and so always win: a
     caller cannot shadow `n`, `value`, or an interval with a key of this name.
+
+    `weights` is unit key → that unit's `data.units.weight_by` value, over the
+    whole roster, supplied only when the config declares one — the same mapping
+    `runner.attrition` takes, from the same place (`cli.py`), passed as the
+    roster holds it because `units.usable_weight` is the single authority that
+    reads a weight and it lives inside `checked_weights`. It changes a RECORDED
+    COLUMN's arithmetic in three places at once, all of which § Weighted samples
+    requires together: the `value` becomes the weighted mean, the interval
+    becomes `weighted_t_over_units`, and `n.effective` becomes Kish's size. A
+    weighted interval beside an unweighted point estimate would be a declaration
+    accepted whose effect is half delivered, and it survives every check that
+    reads only `ci95`.
+
+    **The weights are aligned to the units the column came from**, not to the
+    table and not to the roster: the value and its unit key are taken in one
+    pass, and the weight is looked up per key. A vector filtered differently
+    weights the wrong unit and produces a plausible number rather than an error.
+    Indexed rather than `.get`-ed, for the reason `runner._counts` states: every
+    key in the collapsed table came from the roster the caller built `weights`
+    from, so a default would quietly change the denominator instead of failing.
+
+    **`effective` is recomputed per column**, for exactly the reason `completed`
+    already is (above): a column recorded by a subset of the completed units is
+    an ordinary ragged shape, and printing the condition-wide effective size
+    beside it would name a size no interval was computed at — § Weighted samples
+    calls `effective` the size the interval *was* computed at. A full column's
+    figure is identical to `counts`'; a ragged one's is its own. It is set here
+    rather than left to `counts` so a stale value cannot survive the filter.
+
+    A DERIVED metric is not weighted here, and that is the same document's other
+    half: core "computes weighted means for `basis: units` column metrics, hands
+    the column to `aggregate` like any other attribute so a derived metric can
+    weight itself". There is no per-unit vector to weight — `aggregate` returned
+    one number for the whole table — and a weighted mean *of* that one number is
+    the number itself. Which weighting a derived metric needs is a property of
+    what it computes (a weighted correlation is not a weighted mean of anything),
+    so the weight column reaches `aggregate` as a unit attribute and the template
+    decides; `cli.py`'s `_attributed` is what puts it there. `weighted_by` and
+    `effective` still travel beside a derived metric — the declaration is true of
+    the run either way, and § Weighted samples' own example of both is `r`, a
+    derived metric.
     """
     columns: list[str] = []
     for cols in collapsed.values():
@@ -901,16 +1010,29 @@ def summarize_step(
                 columns.append(name)
     out: dict[str, dict[str, Any]] = {}
     for column in columns:
-        raw = [cols[column] for cols in collapsed.values() if column in cols]
+        # One pass over `(key, value)`, so the weights below cannot be filtered
+        # or ordered differently from the values they weight.
+        carried = [(key, cols[column]) for key, cols in collapsed.items() if column in cols]
+        raw = [value for _, value in carried]
         if not raw or not all(_is_numeric(v) for v in raw):
             continue
         values = [float(v) for v in raw]
-        interval = t_over_units(values)
+        n_block: dict[str, Any] = {**counts, "completed": len(values)}
+        interval: Interval | None
+        value: float | None
+        if weights is None:
+            interval = t_over_units(values)
+            value = mean_of(values)
+        else:
+            column_weights = [weights[key] for key, _ in carried]
+            interval = weighted_t_over_units(values, column_weights)
+            value = weighted_mean_of(values, column_weights)
+            n_block["effective"] = kish_effective_n(column_weights)
         out[column] = {
             **(beside_n or {}),
-            "value": mean_of(values),
+            "value": value,
             "basis": "units",
-            "n": {**counts, "completed": len(values)},
+            "n": n_block,
             "ci95": [interval.low, interval.high] if interval else None,
             "method": interval.method if interval else None,
             # `W-STATS-FAMILY` warns the person; this null tells the record. The

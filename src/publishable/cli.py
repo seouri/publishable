@@ -722,20 +722,20 @@ def command_run(config_path: Path) -> int:
     # prints it, and `effective` — Kish's size — JOINS `n`, so it travels in
     # `attrition`'s counts rather than here.
     #
-    # ⚠️ The VALUE is not weighted yet: a weighted mean and a
-    # `weighted_t_over_units` interval exist in `stats.py` but nothing calls them
-    # from this path, so `weighted_by` here marks a declaration rather than an
-    # arithmetic that happened. Harmless today — `E-DATA-WEIGHT-UNSUPPORTED`
-    # refuses every config that declares `weight_by`, so no run reaches this
-    # branch — and a wrong number the moment that refusal is retired. Retiring it
-    # without wiring the estimator is the forbidden move; see the task 9 report.
+    # The mapping itself travels to `summarize_step` as well, which is what makes
+    # `weighted_by` a fact about the arithmetic rather than a marker beside an
+    # unweighted number: every recorded column's `value` becomes the weighted
+    # mean, its interval `weighted_t_over_units`, and its `n.effective` Kish's
+    # size over that column's own units (`stats.summarize_step` says why all
+    # three move together, and why `effective` is per column while `attrition`'s
+    # is per condition). A derived metric is not weighted by core — the weight
+    # column reaches `aggregate` as a unit attribute, through `_attributed`, so a
+    # template weights whatever its own metric needs weighting by.
     #
-    # ⚠️ And one more the wiring has to settle: `summarize_step` recomputes
-    # `completed` PER COLUMN, from the units that actually carry it, while
-    # `effective` is computed once per condition over every completed unit. A
-    # ragged column — recorded for some units and not others — therefore prints a
-    # small `completed` beside an `effective` drawn from a larger set, and the two
-    # numbers a reader is invited to compare would not describe the same units.
+    # Passed as the roster holds the values, `str` and all, for the same reason
+    # `attrition` takes them that way: `stats.checked_weights` reads
+    # `units.usable_weight`, the single authority `validate` approved the config
+    # against, and a coercion here would be a second notion of a usable weight.
     weight_by = (units_decl or {}).get("weight_by")
     weights: dict[str, Any] | None = None
     weighted_beside: dict[str, Any] = {}
@@ -1145,6 +1145,7 @@ def command_run(config_path: Path) -> int:
                             resample=resample_fns,
                             draws=derived_metric_draws,
                             beside_n=beside_n,
+                            weights=weights,
                         )
                     except ContractError as exc:
                         prefix = f"{exc.code} " if exc.code else ""
@@ -1154,7 +1155,18 @@ def command_run(config_path: Path) -> int:
                             f"condition {cond.index} step {step_name!r}: "
                             f"{prefix}{type(exc).__name__}: {exc}",
                         )
-                        step_summary = summarize_step(collapsed, counts, beside_n=beside_n)
+                        # `weights` on the retry too: the collision costs the
+                        # `derived` mapping and nothing else, so the recorded
+                        # columns must come back with the same arithmetic they
+                        # had on the first call. Silently downgrading them to
+                        # unweighted numbers over a badly named derived key is
+                        # this slice's own failure class, reached through the
+                        # containment path. (A weight core cannot use cannot
+                        # arrive here: `attrition` above gates the same mapping
+                        # through `kish_effective_n`, outside any `try`.)
+                        step_summary = summarize_step(
+                            collapsed, counts, beside_n=beside_n, weights=weights
+                        )
                         # What the parent block dropped, every stratum of it
                         # drops too. A level's table carries the same columns as
                         # the whole one, so the collision that raised above
@@ -1425,6 +1437,13 @@ def command_run(config_path: Path) -> int:
                                 resample=strata_resample,
                                 draws=derived_metric_draws,
                                 beside_n=weighted_beside,
+                                # Same roster-wide mapping, filtered by the
+                                # level's own table exactly as it is filtered by
+                                # a ragged column's: a stratum's weighted mean
+                                # and its Kish size are its own, which is the
+                                # same reason `level_counts` is recomputed above
+                                # rather than copied down.
+                                weights=weights,
                             )
                             # At least one entry has to come from the level's own
                             # table. A block holding nothing but derived metrics
