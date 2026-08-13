@@ -23,8 +23,8 @@ from typing import Any
 # never a bare scalar, so both are typed `dict`. `measurements` is typed a
 # second time one level down, at `.by` and `.collapse`: its children have fixed
 # names and the block is no longer refused wholesale, so leaving it whole would
-# have made a `colapse` typo unreachable by any check the moment
-# `E-DATA-MEASUREMENTS-UNSUPPORTED` retired — a latent gap turning live. A path
+# have made a `colapse` typo unreachable by any check the moment the block's
+# wholesale refusal retired — a latent gap turning live. A path
 # that is both a leaf and a container is typed by the loop below AND descended
 # into by the closure, which is why the closure checks containers first.
 # `holdout` stays whole for now: `E-DATA-HOLDOUT-UNSUPPORTED` still refuses the

@@ -1870,7 +1870,8 @@ def test_a_null_subfield_is_not_a_declaration(write_config):
 
 
 def test_a_mean_collapse_over_a_string_column_is_refused(write_config, tmp_path):
-    """Row 243. `mean` over `site` has no meaning; the row names the remedies."""
+    """§ Validation, "Collapse rule fits the column". `mean` over `site` has no
+    meaning; the row names the remedies."""
     (tmp_path / "input" / "index.csv").write_text(
         "patient_id,site,read_id\np1,north,r1\np2,south,r2\n"
     )
@@ -5386,7 +5387,8 @@ def _weighted_table(tmp_path: Path, body: str, column: str = "sampling_weight") 
 
 
 def test_a_weight_by_naming_no_attribute_is_reported(write_config, tmp_path):
-    """Row 291: `weight_by` names `sampling_weight`, which is not a unit
+    """§ Validation, "Weight attribute exists": `weight_by` names
+    `sampling_weight`, which is not a unit
     attribute. `attributes` is the reference set — `weight_by` has to survive
     resolution to be read per unit at analysis time."""
     _weighted_table(tmp_path, "p1,2.0\np2,3.0\n")
@@ -5464,7 +5466,8 @@ def test_the_name_check_still_runs_with_no_roster(write_config, tmp_path):
 
 
 def test_a_zero_weight_is_refused(write_config, tmp_path):
-    """Row 292, the zero half: a weight is what a unit stands for, and a unit
+    """§ Validation, "Weights are usable", the zero half: a weight is what a
+    unit stands for, and a unit
     standing for nothing is a unit that should not be in the roster."""
     _weighted_table(tmp_path, "p1,2.0\np2,0\n")
     path = write_config(
@@ -5481,7 +5484,8 @@ def test_a_zero_weight_is_refused(write_config, tmp_path):
 
 
 def test_a_negative_weight_is_refused(write_config, tmp_path):
-    """Row 292, the negative half. Separate from the zero case on purpose: a
+    """§ Validation, "Weights are usable", the negative half. Separate from the
+    zero case on purpose: a
     check written `< 0` passes the negative test and lets a zero weight through."""
     _weighted_table(tmp_path, "p1,2.0\np2,-1.5\n")
     path = write_config(
@@ -5546,7 +5550,8 @@ def test_the_value_check_is_skipped_without_a_roster(write_config):
 
 @pytest.mark.parametrize("unset", [{}, {"weight_by": None}])
 def test_a_weight_looking_column_warns_when_nothing_declares_it(write_config, tmp_path, unset):
-    """Row 293. The positive direction comes first: a warning that can never fire
+    """§ Validation, "Weighting looks undeclared". The positive direction comes
+    first: a warning that can never fire
     passes its own negative test trivially.
 
     Both forms of "unset" are run. `init` materializes `weight_by: null`, so the
