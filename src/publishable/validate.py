@@ -1279,8 +1279,11 @@ def _check_assign(
 
     **An explicit `from: ""` matches the sibling rather than diverging**:
     `_check_weight_by`'s own wording — present, not absent, so no default applies,
-    and an empty declaration changes no behavior — is reused verbatim for the same
-    shape, because there is no reason for the two to say it differently.
+    and an empty declaration changes no behavior — carries over to the same shape,
+    because there is no reason for the two to say it differently. It is not
+    word-for-word: this message ends by naming the remedy the sibling has no
+    equivalent for, removing the key to take the axis-name default. `weight_by`
+    has no default to fall back to, so there the remedy is to name the attribute.
 
     *Attribute assignment resolves* — the resolved attribute's values, over the
     resolved roster, are not exactly the axis's declared `sweep.groups` levels —
