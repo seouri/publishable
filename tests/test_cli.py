@@ -486,6 +486,91 @@ def test_non_string_levels_make_arm_members_raise_rather_than_skip_narrowing():
         arm_members(roster, group_axes, conditions)
 
 
+_ARM_STEP = '''\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        for unit in io.units:
+            if unit.key == "c0":
+                # Ineligible, not failed — proves `control`'s `ineligible: 1`.
+                io.skip(unit.key, "deliberately ineligible")
+                continue
+            if unit.key == "t0":
+                # Neither recorded nor skipped — proves `treatment`'s `failed: 1`.
+                continue
+            io.record(unit.key, {{"score": 1.0}})
+        return {{}}
+'''
+
+
+def test_a_group_axis_actually_narrows_end_to_end(tmp_path: Path, monkeypatch):
+    """Task 13's finding 1, closed rather than mitigated: a real `sweep.groups`
+    + `allocation: between` + `assign` config, run all the way through
+    `main(["run", ...])` to a real `run.yaml`, proving `_condition_counts` is
+    actually wired into `command_run` — not merely present and correct in
+    isolation, which is what every test above this one can show and no more.
+
+    **What is patched, and why it is the whole gate.** `command_run` calls
+    `validate_config` first and returns `EXIT_WRONG` before creating a run
+    directory if `c.has_errors`. A real `sweep.groups` declaration draws
+    `E-SWEEP-GROUPS-UNSUPPORTED` from exactly one place:
+    `validate._check_unimplemented`, a single, isolated module-level function
+    — not threaded through `_check_assign` (which does the REAL arm-resolution
+    work this test exercises), not through envelope typing, not through any
+    other check. Monkeypatching only that one function to a no-op is therefore
+    sufficient, and it changes nothing else `validate` checks: `_check_assign`'s
+    seven real rules (`E-DATA-ASSIGN-LEVELS` among them) still run against the
+    resolved roster and still would refuse a genuinely malformed assignment.
+    **This patch becomes unnecessary once the slice that retires
+    `E-SWEEP-GROUPS-UNSUPPORTED` lands** (`_check_unimplemented`'s own
+    docstring names it as owed) — whoever does that should delete the
+    `monkeypatch.setattr` line here rather than leave a stale one behind.
+
+    **Fixture numbers, chosen to discriminate.** 8 `control` units and 3
+    `treatment` units, 11 total: every number in play — 8, 3, 11 — is
+    distinct from every other, unlike a 6/6 split (equal arms can't be told
+    apart by size) or task 13's own 7/5 fixture (whose sum, 12, is a number
+    this test doesn't otherwise use). `c0` (`control`) is `io.skip`-ped —
+    proving `ineligible: 1` for that arm specifically — and `t0` (`treatment`)
+    is left unsettled — proving `failed: 1` for that one. A regression to
+    counting the whole roster reports `resolved: 11` for BOTH arms and
+    `failed: {2, 8}` or similar wrong counts for each — never 8 and 3."""
+    import publishable.generators.experiment as experiment_gen
+    import publishable.validate as validate_mod
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _ARM_STEP)
+    monkeypatch.setattr(validate_mod, "_check_unimplemented", lambda doc, c: None)
+
+    control_rows = "\n".join(f"c{i},control" for i in range(8))
+    treatment_rows = "\n".join(f"t{i},treatment" for i in range(3))
+    roster_csv = f"patient_id,arm\n{control_rows}\n{treatment_rows}\n"
+
+    doc = run_a_project(
+        tmp_path,
+        roster_csv=roster_csv,
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+            "attributes": ["arm"],
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+    )
+
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    conditions = run["results"]["conditions"]
+    assert [c["label"] for c in conditions] == ["arm=control", "arm=treatment"]
+    control_n = conditions[0]["aggregated"]["step01_summarize_units"]["score"]["n"]
+    treatment_n = conditions[1]["aggregated"]["step01_summarize_units"]["score"]["n"]
+
+    assert control_n == {"resolved": 8, "completed": 7, "ineligible": 1, "failed": 0}
+    assert treatment_n == {"resolved": 3, "completed": 2, "ineligible": 0, "failed": 1}
+
+
 def test_cond_roster_narrows_each_condition_to_its_own_arm_size():
     """`_cond_roster` is the read side of the narrowing `execute_plan` already
     applies to what a condition's own executions run over — task 12's 7/5
