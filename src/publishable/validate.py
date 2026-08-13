@@ -446,6 +446,7 @@ def validate_config(
     _check_measurements(units_decl, roster, technical_n, columns, c)
     _check_weight_by(units_decl, roster, c)
     _check_cluster_by(doc, units_decl, roster, c)
+    _check_assign(doc, units_decl, c)
     # How many indivisible things a `fold` may be drawn from: the resolved unit
     # count, or the cluster count when `data.units.cluster_by` declares the units
     # are not independent draws (`reference.md` § Validation, *Folds fit inside the
@@ -1187,6 +1188,123 @@ def _check_cluster_by(
             f"unit when the split is drawn, so it has to be one. `data.units.attributes` "
             f"declares {', '.join(names) or 'none'}",
         )
+
+
+ASSIGN_METHODS = ("random", "by_attribute", "blocked")
+"""The assignment methods, in § The one config file's own order.
+
+The single source of the enum for `data.units.assign.<axis>.method`. Which of a
+block's other fields are read follows from which one it is — `from` is
+`by_attribute`'s, `block_size` is `blocked`'s — so a block whose discriminator is
+absent or misspelled describes no assignment at all, which is what
+`E-DATA-ASSIGN-METHOD` refuses.
+
+**All three are in the enum and only `by_attribute` is executable in this build.**
+That split is deliberate and stays: a value outside the enum is a malformed
+declaration, and `random`/`blocked` are well-formed declarations of an
+unimplemented draw, which is a refusal of a different kind reported under its own
+code.
+"""
+
+
+def _check_assign(doc: dict[str, Any], units: dict[str, Any], c: Collector) -> None:
+    """`data.units.allocation` and `data.units.assign` against each other and against
+    `sweep.groups` — three § Validation rows, all read from declarations alone, so
+    each reports whether or not a roster resolved.
+
+    *Allocation needs arms* — `allocation: between` with no group axis. § Allocation
+    puts the reason in one sentence: `between` "answers *how units reach an arm*, not
+    *what the arms are*", so the declaration on its own describes one cohort and
+    nothing to divide it into.
+
+    *Every axis is assigned* — a declared group axis with no block under `assign`.
+    One finding per unassigned axis, in declaration order, because the remedy is one
+    block per axis and a reader fixing the first would otherwise come back for the
+    second. Together with the row above this is the whole of § The one config file's
+    "`assign` is REQUIRED when `allocation` is `between`": an absent `assign` and an
+    empty `assign: {}` both leave every declared axis unassigned, and `between` with
+    no axes at all is the row above. Neither fires under `allocation: within`, whose
+    own row (*Arms need allocation*) states the fault differently — a unit cannot be
+    in one arm and in all of them — and is reported by nothing in this build.
+
+    *Assignment names a method*, which is **not** gated on `allocation`: it is a
+    check on the block, not on the pair, and an `assign` block naming no method
+    describes no assignment wherever it was declared.
+
+    Group axis names come from `sweep.selector_paths`, which is total over a
+    malformed `sweep.groups` and dedupes. One consequence, stated rather than left
+    to be discovered: `groups: [{by: 123}]` yields no axis name, so `between` beside
+    it reports *Allocation needs arms* — `groups` has no `_check_shape` guard yet
+    (the slice that retires `E-SWEEP-GROUPS-UNSUPPORTED` owes it), and a finding
+    that names the real consequence of an unreadable axis beats silence.
+
+    A non-mapping `assign` is skipped entirely: `envelope.py` types
+    `data.units.assign` a `dict`, so `E-CONFIG-TYPE` already reports it and a
+    second, derived finding on top is one more thing to read and nothing more to
+    fix. A non-mapping *axis block* has no such reporter — the envelope's own
+    comment says `assign`'s children are axis names no fixed dotted key could ever
+    name — so it is reported here, as the block naming no method that it is.
+    """
+    assign = units.get("assign")
+    # An absent or null `assign` is an empty one — the module's `or {}` convention,
+    # and the point of the row: a config with no `assign` key at all is exactly the
+    # shape "REQUIRED when `allocation` is `between`" refuses. A non-mapping is a
+    # different thing, and neither check reads it.
+    blocks = assign if isinstance(assign, dict) else {}
+    malformed = assign is not None and not isinstance(assign, dict)
+    sweep = doc.get("sweep")
+    axes = selector_paths(sweep) if isinstance(sweep, dict) else []
+
+    if units.get("allocation") == "between":
+        if not axes:
+            c.error(
+                "E-DATA-ALLOCATION-NO-ARMS",
+                "data.units.allocation",
+                "is `between`, but `sweep.groups` declares no axis to say what the arms "
+                "are — `between` says how a unit reaches an arm, not what the arms are, so "
+                "on its own it divides nothing. Declare a group axis, or use `within`",
+            )
+        elif not malformed:
+            for axis in axes:
+                if blocks.get(axis) is None:
+                    c.error(
+                        "E-DATA-ASSIGN-MISSING",
+                        "data.units.assign",
+                        f"declares no `{axis}` block, but `sweep.groups` declares that axis "
+                        f"and `data.units.allocation` is `between` — one block per axis is "
+                        f"what says how each unit reaches its arm, and an axis without one "
+                        f"names arms nothing puts a unit in",
+                    )
+
+    for axis, block in blocks.items():
+        if block is None:
+            continue  # an absent block; the row above is the one that speaks
+        if not isinstance(block, dict):
+            c.error(
+                "E-DATA-ASSIGN-METHOD",
+                f"data.units.assign.{axis}",
+                f"is a {type(block).__name__} (`{block!r}`) rather than a block declaring a "
+                f"`method`; the methods are {', '.join(ASSIGN_METHODS)}, and which of the "
+                f"block's other fields are read follows from which one it is",
+            )
+            continue
+        method = block.get("method")
+        where = f"data.units.assign.{axis}.method"
+        if method is None:
+            c.error(
+                "E-DATA-ASSIGN-METHOD",
+                where,
+                f"is not declared; the methods are {', '.join(ASSIGN_METHODS)}, and which of "
+                f"the block's other fields are read follows from which one it is, so a block "
+                f"without one describes no assignment",
+            )
+        elif method not in ASSIGN_METHODS:
+            c.error(
+                "E-DATA-ASSIGN-METHOD",
+                where,
+                f"is {method!r}, which is not an assignment method; expected one of "
+                f"{', '.join(ASSIGN_METHODS)}",
+            )
 
 
 def _check_fold_stratify_by(

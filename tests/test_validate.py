@@ -9,6 +9,8 @@ from publishable.diagnostics import Collector
 from publishable.sweep import expand
 from publishable.units import Unit, UnitList
 from publishable.validate import (
+    ASSIGN_METHODS,
+    _check_assign,
     _check_cluster_by,
     _check_contrasts,
     _check_fold_stratify_by,
@@ -7128,3 +7130,191 @@ def test_a_baseline_may_not_fix_a_group_level_while_ablate_is_declared(write_con
             }
         )
     ) == {"E-SWEEP-GROUPS-UNSUPPORTED"}
+
+
+# `data.units.allocation`, `data.units.assign`, and `sweep.groups` against each
+# other — § Validation's *Allocation needs arms*, *Every axis is assigned*, and
+# *Assignment names a method*.
+#
+# **Every config below still carries a live refusal**, and that is why each
+# assertion is an exact set rather than a membership test:
+# `E-DATA-ALLOCATION-UNSUPPORTED`, `E-SWEEP-GROUPS-UNSUPPORTED` and
+# `E-DATA-ASSIGN-UNSUPPORTED` all stay until the slice that retires them, so a
+# test asserting only that *some* error fired would pass with the new checks
+# deleted. The direct-`_check_assign` tests below are the second half of the
+# same discipline: they reach each check with nothing else running at all.
+
+_ARM_AXIS = [{"by": "arm", "levels": ["control", "treatment"]}]
+
+
+def _between(assign, axes=None, **extra) -> dict:
+    """A `between` design with a group axis, for `write_config`'s dotted overrides."""
+    units = {"from": "index.csv", "key": "patient_id", "allocation": "between", **extra}
+    if assign is not None:
+        units["assign"] = assign
+    return {"data.units": units, "sweep": {"groups": _ARM_AXIS if axes is None else axes}}
+
+
+def test_between_allocation_with_no_group_axis_has_no_arms(write_config):
+    """§ Allocation: `between` "answers *how units reach an arm*, not *what the
+    arms are*", so the declaration alone divides nothing.
+
+    The control must report — it carries the two live refusals — so an exact-set
+    assertion tells "the arms are declared" from "the check is dead"."""
+    assert _error_codes(
+        write_config({"data.units": {"from": "index.csv", "key": "patient_id",
+                                     "allocation": "between"}})
+    ) == {"E-DATA-ALLOCATION-UNSUPPORTED", "E-DATA-ALLOCATION-NO-ARMS"}
+
+    assert _error_codes(
+        write_config(_between({"arm": {"method": "by_attribute"}}))
+    ) == {
+        "E-DATA-ALLOCATION-UNSUPPORTED",
+        "E-DATA-ASSIGN-UNSUPPORTED",
+        "E-SWEEP-GROUPS-UNSUPPORTED",
+    }
+
+
+@pytest.mark.parametrize(
+    "assign,also",
+    [
+        (None, set()),
+        ({}, set()),
+        ({"arm": None}, {"E-DATA-ASSIGN-UNSUPPORTED"}),
+    ],
+)
+def test_a_group_axis_with_no_assign_block_is_refused(write_config, assign, also):
+    """The three shapes § The one config file's "REQUIRED when allocation is
+    `between`" covers on this side: no `assign` key at all, an empty `assign: {}`
+    — which is what `init` writes — and an axis key left null.
+
+    The third also carries `E-DATA-ASSIGN-UNSUPPORTED` and the first two do not,
+    which is the still-live refusal's own rule rather than this check's: it fires
+    on a *truthy* `assign`, and `{arm: null}` is truthy while `{}` is not. Spelled
+    out per-shape rather than smoothed over, since these are exact sets."""
+    assert _error_codes(write_config(_between(assign))) == {
+        "E-DATA-ALLOCATION-UNSUPPORTED",
+        "E-SWEEP-GROUPS-UNSUPPORTED",
+        "E-DATA-ASSIGN-MISSING",
+    } | also
+
+
+def test_each_unassigned_axis_is_reported_on_its_own():
+    """One finding per axis, in declaration order — a code set cannot tell one
+    finding from two, and the remedy is one block per axis.
+
+    Reached directly, with no refusal running beside it: `sex` is assigned and
+    `arm` is not, so a check that reported per-*config* rather than per-axis
+    would give one finding here and a check that ignored the assigned axis would
+    give two."""
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": [{"by": "sex", "levels": ["f", "m"]},
+                              {"by": "arm", "levels": ["control", "treatment"]}]}},
+        {"allocation": "between", "assign": {"sex": {"method": "by_attribute"}}},
+        c,
+    )
+    missing = [f for f in c.findings if f.code == "E-DATA-ASSIGN-MISSING"]
+    assert len(missing) == 1
+    assert "`arm`" in missing[0].message and "`sex`" not in missing[0].message
+
+
+def test_allocation_within_leaves_both_cross_field_rows_silent():
+    """Neither row is gated on `groups` alone. A group axis under the default
+    `within` is *Arms need allocation*, a row this build reports by nothing —
+    reporting a missing `assign` there would name the wrong fault."""
+    c = Collector()
+    _check_assign({"sweep": {"groups": _ARM_AXIS}}, {"from": "index.csv"}, c)
+    assert [f.code for f in c.findings] == []
+
+
+@pytest.mark.parametrize("method", list(ASSIGN_METHODS))
+def test_every_declared_assignment_method_is_accepted(write_config, method):
+    """The control for both method branches, and it must report: all three
+    methods are in the enum, and that `random` and `blocked` are not executable
+    in this build is a refusal of a different kind under its own code."""
+    assert _error_codes(write_config(_between({"arm": {"method": method}}))) == {
+        "E-DATA-ALLOCATION-UNSUPPORTED",
+        "E-DATA-ASSIGN-UNSUPPORTED",
+        "E-SWEEP-GROUPS-UNSUPPORTED",
+    }
+
+
+def test_an_assignment_declaring_no_method_is_refused(write_config):
+    """§ Validation's example exactly: a block declaring `stratify_by` and no
+    `method`. Which of the block's other fields are read follows from the
+    discriminator, so a block without one describes no assignment."""
+    assert _error_codes(
+        write_config(_between({"arm": {"stratify_by": ["site"]}}))
+    ) == {
+        "E-DATA-ALLOCATION-UNSUPPORTED",
+        "E-DATA-ASSIGN-UNSUPPORTED",
+        "E-SWEEP-GROUPS-UNSUPPORTED",
+        "E-DATA-ASSIGN-METHOD",
+    }
+
+    c = Collector()
+    _check_assign({}, {"assign": {"arm": {"stratify_by": ["site"]}}}, c)
+    assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-METHOD"]
+    assert c.findings[0].path == "data.units.assign.arm.method"
+    # The wording, not just the code: an absent `method` and a misspelled one
+    # share an identifier, so a test asserting the code alone passes with the
+    # presence branch deleted — `None` is not in the enum either, and the
+    # out-of-enum branch would catch it saying the wrong thing.
+    assert "not declared" in c.findings[0].message
+
+
+def test_an_assignment_method_outside_the_enum_is_refused(write_config):
+    """§ Validation's other example, `by_column`. A well-formed name that is not
+    one of the three is the branch a presence check alone would let through."""
+    assert _error_codes(
+        write_config(_between({"arm": {"method": "by_column"}}))
+    ) == {
+        "E-DATA-ALLOCATION-UNSUPPORTED",
+        "E-DATA-ASSIGN-UNSUPPORTED",
+        "E-SWEEP-GROUPS-UNSUPPORTED",
+        "E-DATA-ASSIGN-METHOD",
+    }
+
+    c = Collector()
+    _check_assign({}, {"assign": {"arm": {"method": "by_column"}}}, c)
+    assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-METHOD"]
+    assert "by_column" in c.findings[0].message
+
+
+@pytest.mark.parametrize(
+    "assign",
+    [
+        {"arm": "random"},                    # the block itself is not a block
+        {"arm": {"method": 3}},               # a non-string discriminator
+        {"arm": {"method": ["random"]}},      # a structural one
+    ],
+)
+def test_a_malformed_assignment_block_reports_rather_than_crashes(assign):
+    """`validate` collects and never raises, and `envelope.py` types
+    `data.units.assign` itself but none of its children — an axis name is not a
+    key any fixed dotted path could ever name — so nothing else speaks for
+    these."""
+    c = Collector()
+    _check_assign({}, {"assign": assign}, c)
+    assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-METHOD"]
+
+
+@pytest.mark.parametrize(
+    "doc,units",
+    [
+        ({"sweep": "grid"}, {"allocation": "between"}),
+        ({"sweep": {"groups": "arm"}}, {"allocation": "between"}),
+        ({"sweep": {"groups": [{"by": 123}]}}, {"allocation": "between", "assign": {}}),
+        ({}, {"allocation": 3, "assign": "random"}),
+        ({}, {"assign": []}),
+    ],
+)
+def test_the_assignment_checks_are_total_over_malformed_declarations(doc, units):
+    """Every one of these has its own reporter — `E-CONFIG-SHAPE` for a
+    string `sweep`, `E-CONFIG-TYPE` for a non-mapping `assign` — and none of
+    them may become a traceback here. The first three report the arms fault
+    honestly, since an unreadable axis is an axis nothing can assign."""
+    c = Collector()
+    _check_assign(doc, units, c)
+    assert all(f.code.startswith("E-DATA-") for f in c.findings)
