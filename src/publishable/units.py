@@ -13,7 +13,7 @@ import math
 import random
 import statistics
 from collections import Counter
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -718,6 +718,87 @@ def clusters_of(roster: UnitList, cluster_by: str) -> dict[str, str]:
             )
         membership[unit.key] = str(unit.attributes[cluster_by])
     return membership
+
+
+def arms_of(roster: UnitList, column: str, levels: Sequence[str]) -> dict[str, list[Unit]]:
+    """Which arm each unit belongs to, partitioned by declared level, in roster order.
+
+    **The single authority** for arm membership, beside `clusters_of` and for the
+    same reason: `validate` and the runner both have to ask "which units are in
+    this arm" of the same declaration, and a second notion of it is the
+    validate-clean-then-disagree gap in a new shape — here it would mean a
+    `between` design `validate` approved whose conditions core cannot actually
+    build, because the partition it draws at run time is not the one `validate`
+    checked. `validate` calls this to turn a mismatch into
+    `E-DATA-ASSIGN-LEVELS`; task 12 calls it for the subset view a `between`
+    condition's roster is built from, and task 13 counts it — neither may
+    re-derive arm membership from the roster on its own, which is the defect
+    class this docstring is written to prevent a third instance of.
+
+    `column` names a **declared attribute** — `assign.<axis>.from`, already
+    resolved against its default by the caller — not a source column, the same
+    side of the line `weight_by` and `cluster_by` fall on: an arm is read per
+    unit when a `between` condition's roster is drawn, so it has to survive
+    resolution as an attribute. `levels` is `sweep.groups`' declared list for
+    that axis, in its own order.
+
+    **Set equality, not subset tolerance, in either direction** —
+    `reference.md` § Allocation states it twice: the `by_attribute` example
+    annotates `from` as naming "a unit attribute whose values are exactly the
+    declared levels", and `allocation: between` opens "each unit belongs to
+    exactly one arm". So this raises `E-DATA-ASSIGN-LEVELS` for either
+    violation, one code because a caller only needs to know the partition is
+    unusable and the message is what says which:
+
+    - a unit's value names none of `levels` — that unit would belong to no
+      arm, and there is no fourth part of `n` for it;
+    - a declared level no unit's value names — that arm's condition would
+      resolve zero units.
+
+    A unit carrying no value for `column` at all is folded into the first
+    violation rather than raising a distinct fault — `clusters_of`'s convention
+    for the same situation: it, too, names no declared level, for the same
+    reason a value outside `levels` does not.
+
+    Values are stringified before comparison, `clusters_of`'s reason: a table
+    yields `str` for every column, and an arm id is a label rather than a
+    quantity nothing downstream does arithmetic on.
+
+    A caller may rely on every returned level's list being non-empty and on
+    every unit in `roster` appearing in exactly one of them — the exact
+    partition set equality promises once this returns without raising.
+    """
+    declared = list(levels)
+    declared_set = set(declared)
+    partition: dict[str, list[Unit]] = {level: [] for level in declared}
+    unmatched: list[tuple[str, str | None]] = []
+    for unit in roster:
+        value = str(unit.attributes[column]) if column in unit.attributes else None
+        if value is None or value not in declared_set:
+            unmatched.append((unit.key, value))
+            continue
+        partition[value].append(unit)
+    if unmatched:
+        key, value = unmatched[0]
+        holds = "carries no value for it" if value is None else f"holds {value!r}"
+        raise ContractError(
+            f"the arm attribute {column!r} does not resolve to the declared levels "
+            f"({', '.join(declared)}) — unit {key!r} {holds}, naming none of them. "
+            "Every unit belongs to exactly one arm, so a value naming none of the "
+            f"declared levels leaves that unit in none of them "
+            f"({len(unmatched)} of {len(roster)} units affected)",
+            code="E-DATA-ASSIGN-LEVELS",
+        )
+    empty = [level for level in declared if not partition[level]]
+    if empty:
+        raise ContractError(
+            f"the arm attribute {column!r} does not resolve to the declared levels "
+            f"— no unit's value names {', '.join(empty)}. Every declared level "
+            "needs at least one unit, or that arm's condition resolves zero of "
+            "them",
+            code="E-DATA-ASSIGN-LEVELS",
+        )
+    return partition
 
 
 def cluster_count_of(membership: Mapping[str, str], keys: Iterable[str]) -> int:

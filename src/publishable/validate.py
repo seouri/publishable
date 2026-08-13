@@ -35,6 +35,7 @@ from publishable.units import (
     COLLAPSE_RULES,
     NUMERIC_COLLAPSE_RULES,
     UnitList,
+    arms_of,
     fold_basis,
     is_measurement_numeric,
     resolve_units,
@@ -446,7 +447,7 @@ def validate_config(
     _check_measurements(units_decl, roster, technical_n, columns, c)
     _check_weight_by(units_decl, roster, c)
     _check_cluster_by(doc, units_decl, roster, c)
-    _check_assign(doc, units_decl, c)
+    _check_assign(doc, units_decl, roster, c)
     # How many indivisible things a `fold` may be drawn from: the resolved unit
     # count, or the cluster count when `data.units.cluster_by` declares the units
     # are not independent draws (`reference.md` § Validation, *Folds fit inside the
@@ -1217,10 +1218,12 @@ construction inside `ASSIGN_METHODS`, so it can never also be out-of-enum.
 """
 
 
-def _check_assign(doc: dict[str, Any], units: dict[str, Any], c: Collector) -> None:
+def _check_assign(
+    doc: dict[str, Any], units: dict[str, Any], roster: UnitList | None, c: Collector
+) -> None:
     """`data.units.allocation` and `data.units.assign` against each other and against
-    `sweep.groups` — four § Validation rows, all read from declarations alone, so
-    each reports whether or not a roster resolved.
+    `sweep.groups` — six § Validation rows, most read from declarations alone, so
+    each reports whether or not a roster resolved; the last two need the roster.
 
     *Allocation needs arms* — `allocation: between` with no group axis. § Allocation
     puts the reason in one sentence: `between` "answers *how units reach an arm*, not
@@ -1246,12 +1249,51 @@ def _check_assign(doc: dict[str, Any], units: dict[str, Any], c: Collector) -> N
     `E-DATA-ASSIGN-METHOD`. Read from the same `elif` chain as the row above, so
     the two are mutually exclusive by construction rather than by convention.
 
+    **`method: by_attribute`'s two new rows, checked only in that branch of the
+    same `elif` chain** — `from` and `levels` mean nothing under `random`/`blocked`,
+    already refused above, or under an absent/out-of-enum method, already refused
+    by the rows above that:
+
+    *Assignment attribute exists* — `assign.<axis>.from`, declared or **defaulted
+    to the axis name** (§ The one config file: "`from` is `by_attribute` only, and
+    defaults to the axis name"), is not in `data.units.attributes`.
+    `E-DATA-ASSIGN-UNKNOWN`. Modelled on `_check_weight_by`'s name half:
+    `data.units.attributes` is the reference set rather than the roster's realized
+    names, for the same reason — an arm is read per unit, so it has to survive
+    resolution as an attribute — and that lets the check run with no roster at
+    all. **Where it diverges from `_check_weight_by`, stated rather than left
+    silent**: `weight_by`/`cluster_by` are `envelope.py` `LEAF_TYPES` leaves, so a
+    non-`str` declaration there is `E-CONFIG-TYPE`'s to report and this module
+    returns rather than duplicating it. `assign.<axis>.from` is not — `assign`'s
+    children are axis names no fixed dotted path can type, the same reason
+    `method` itself carries no such guard — so there is no backstop to defer to.
+    Rather than inventing a second code for a fault this table has none for, a
+    non-`str`, non-`None` `from` is skipped exactly as the two siblings skip their
+    typed case: reported nowhere in this build, a gap rather than a decision, and
+    the axis's `from`/`levels` rows below it are skipped with it, there being no
+    string to resolve against `data.units.attributes` either way.
+
+    *Attribute assignment resolves* — the resolved attribute's values, over the
+    resolved roster, are not exactly the axis's declared `sweep.groups` levels —
+    **set equality, in either direction, one code**: a value naming no declared
+    level, or a declared level no unit's value names. `units.arms_of` is the
+    single authority, the same construction `units.clusters_of` is for
+    `cluster_by`; its `ContractError` is caught here and reported under its own
+    code, `E-DATA-ASSIGN-LEVELS`, the same reuse `_check_units` already makes of
+    `resolve_units`'s raise. Skipped when the roster did not resolve, when the
+    axis's declared `levels` did not resolve to a non-empty list of strings —
+    `sweep.groups`'s own shape fault, reported elsewhere or not at all in this
+    build — or when the attribute name above did not resolve, there being nothing
+    to partition against.
+
     Group axis names come from `sweep.selector_paths`, which is total over a
     malformed `sweep.groups` and dedupes. One consequence, stated rather than left
     to be discovered: `groups: [{by: 123}]` yields no axis name, so `between` beside
     it reports *Allocation needs arms* — `groups` has no `_check_shape` guard yet
     (the slice that retires `E-SWEEP-GROUPS-UNSUPPORTED` owes it), and a finding
-    that names the real consequence of an unreadable axis beats silence.
+    that names the real consequence of an unreadable axis beats silence. The two
+    new rows read `sweep.groups` a second way, entry by entry, since `levels` is
+    not a `by`-path `selector_paths` collects.
 
     A non-mapping `assign` is skipped entirely: `envelope.py` types
     `data.units.assign` a `dict`, so `E-CONFIG-TYPE` already reports it and a
@@ -1330,6 +1372,53 @@ def _check_assign(doc: dict[str, Any], units: dict[str, Any], c: Collector) -> N
                 f"system or the data already assigned, which is what a real trial does "
                 f"regardless. This value will be honored once drawing is built",
             )
+        else:
+            # `method == "by_attribute"`, the one value neither elif above caught —
+            # the branch where `from` and the axis's declared `levels` mean anything
+            # at all.
+            declared_from = block.get("from")
+            if declared_from is not None and not isinstance(declared_from, str):
+                # No `E-CONFIG-TYPE` backstop exists for this leaf (see docstring);
+                # skipped rather than guessed at.
+                continue
+            resolved_from = declared_from if declared_from is not None else axis
+            attrs = units.get("attributes") or []
+            if not isinstance(attrs, list):
+                continue
+            names = sorted({a for a in attrs if isinstance(a, str)})
+            if resolved_from not in names:
+                default_note = (
+                    "" if declared_from is not None else " (defaulted from the axis name)"
+                )
+                c.error(
+                    "E-DATA-ASSIGN-UNKNOWN",
+                    f"data.units.assign.{axis}.from",
+                    f"resolves to {resolved_from!r}{default_note}, which is not a unit "
+                    f"attribute — an arm is read per unit when a `between` roster is "
+                    f"built, so it has to be one. `data.units.attributes` declares "
+                    f"{', '.join(names) or 'none'}",
+                )
+                continue
+            if roster is None:
+                continue
+            levels: list[str] | None = None
+            if isinstance(sweep, dict):
+                for entry in sweep.get("groups") or []:
+                    if isinstance(entry, dict) and entry.get("by") == axis:
+                        candidate = entry.get("levels")
+                        if (
+                            isinstance(candidate, list)
+                            and candidate
+                            and all(isinstance(v, str) for v in candidate)
+                        ):
+                            levels = candidate
+                        break
+            if levels is None:
+                continue  # `sweep.groups`'s own shape fault, not this row's to report
+            try:
+                arms_of(roster, resolved_from, levels)
+            except ContractError as exc:
+                c.error(exc.code, f"data.units.assign.{axis}.from", str(exc))
 
 
 def _check_fold_stratify_by(

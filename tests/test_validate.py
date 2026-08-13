@@ -7165,12 +7165,16 @@ def test_between_allocation_with_no_group_axis_has_no_arms(write_config):
                                      "allocation": "between"}})
     ) == {"E-DATA-ALLOCATION-UNSUPPORTED", "E-DATA-ALLOCATION-NO-ARMS"}
 
+    # `_between` declares no `data.units.attributes` at all, so `arm` — defaulted
+    # from the axis name — resolves to no unit attribute either: a fourth, live
+    # code, `E-DATA-ASSIGN-UNKNOWN`, alongside the three `-UNSUPPORTED` refusals.
     assert _error_codes(
         write_config(_between({"arm": {"method": "by_attribute"}}))
     ) == {
         "E-DATA-ALLOCATION-UNSUPPORTED",
         "E-DATA-ASSIGN-UNSUPPORTED",
         "E-SWEEP-GROUPS-UNSUPPORTED",
+        "E-DATA-ASSIGN-UNKNOWN",
     }
 
 
@@ -7211,6 +7215,7 @@ def test_each_unassigned_axis_is_reported_on_its_own():
         {"sweep": {"groups": [{"by": "sex", "levels": ["f", "m"]},
                               {"by": "arm", "levels": ["control", "treatment"]}]}},
         {"allocation": "between", "assign": {"sex": {"method": "by_attribute"}}},
+        None,
         c,
     )
     missing = [f for f in c.findings if f.code == "E-DATA-ASSIGN-MISSING"]
@@ -7223,19 +7228,27 @@ def test_allocation_within_leaves_both_cross_field_rows_silent():
     `within` is *Arms need allocation*, a row this build reports by nothing —
     reporting a missing `assign` there would name the wrong fault."""
     c = Collector()
-    _check_assign({"sweep": {"groups": _ARM_AXIS}}, {"from": "index.csv"}, c)
+    _check_assign({"sweep": {"groups": _ARM_AXIS}}, {"from": "index.csv"}, None, c)
     assert [f.code for f in c.findings] == []
 
 
-def test_by_attribute_assignment_is_accepted(write_config):
+def test_by_attribute_assignment_is_accepted(write_config, tmp_path):
     """`by_attribute` is the one method that executes in this build, so it earns
     neither `E-DATA-ASSIGN-METHOD` (absent or out-of-enum) nor
     `E-DATA-ASSIGN-DRAWN` (in-enum but drawn) — the control for both, and it must
     still report: the three live `-UNSUPPORTED` refusals below discriminate "the
     config loaded and only the method-value checks are silent" from "nothing
     ran". The exact set is the number that matters — three codes, none of them
-    `E-DATA-ASSIGN-METHOD` or `E-DATA-ASSIGN-DRAWN`."""
-    found = _error_codes(write_config(_between({"arm": {"method": "by_attribute"}})))
+    `E-DATA-ASSIGN-METHOD` or `E-DATA-ASSIGN-DRAWN`.
+
+    This is also the accept path for `from`/`levels`: `write_config`'s
+    `index.csv` carries only `patient_id`, so an `arm` column is written here —
+    one row per declared level, covering both — to exercise `E-DATA-ASSIGN-UNKNOWN`
+    and `E-DATA-ASSIGN-LEVELS` resolving clean rather than merely being unreached."""
+    (tmp_path / "input" / "index.csv").write_text("patient_id,arm\np1,control\np2,treatment\n")
+    found = _error_codes(
+        write_config(_between({"arm": {"method": "by_attribute"}}, attributes=["arm"]))
+    )
     assert found == {
         "E-DATA-ALLOCATION-UNSUPPORTED",
         "E-DATA-ASSIGN-UNSUPPORTED",
@@ -7243,6 +7256,155 @@ def test_by_attribute_assignment_is_accepted(write_config):
     }
     assert "E-DATA-ASSIGN-DRAWN" not in found
     assert "E-DATA-ASSIGN-METHOD" not in found
+    assert "E-DATA-ASSIGN-UNKNOWN" not in found
+    assert "E-DATA-ASSIGN-LEVELS" not in found
+
+
+def test_assign_from_defaults_to_the_axis_name():
+    """§ The one config file: `from` is `by_attribute` only, and **defaults to
+    the axis name**. No `from` key at all, axis named `arm`, attribute `arm`
+    declared — the default is what makes this resolve, and reached directly
+    (no `allocation`, no `sweep`) so nothing else in `_check_assign` can speak
+    for it. Roster-free, `_check_weight_by`'s own construction: the name half
+    runs from the declaration alone."""
+    c = Collector()
+    _check_assign(
+        {},
+        {"attributes": ["arm"], "assign": {"arm": {"method": "by_attribute"}}},
+        None,
+        c,
+    )
+    assert [f.code for f in c.findings] == []
+
+
+def test_assign_from_default_is_reported_when_it_misses():
+    """Paired with the test above — same config, but `data.units.attributes`
+    does not list `arm`, so the very name the default produced is the one that
+    fails to resolve. Discriminates the default from a check that never ran:
+    a config omitting `from` passes the first test either way if the default
+    is dead code, but only the real default produces a finding naming `arm`
+    here. The message names the resolved value and says it was defaulted,
+    since that string is the only observable evidence of which name the
+    default produced."""
+    c = Collector()
+    _check_assign(
+        {},
+        {"attributes": ["site"], "assign": {"arm": {"method": "by_attribute"}}},
+        None,
+        c,
+    )
+    assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-UNKNOWN"]
+    assert c.findings[0].path == "data.units.assign.arm.from"
+    assert "'arm'" in c.findings[0].message
+    assert "defaulted from the axis name" in c.findings[0].message
+
+
+def test_assign_from_declared_overrides_the_default_and_reports_its_own_name():
+    """A declared `from` is read over the axis name, and the unknown message
+    names the *declared* value rather than the axis — `'cohort_label'`, not
+    `'arm'` — and does not claim a default that did not happen."""
+    c = Collector()
+    _check_assign(
+        {},
+        {
+            "attributes": ["site"],
+            "assign": {"arm": {"method": "by_attribute", "from": "cohort_label"}},
+        },
+        None,
+        c,
+    )
+    assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-UNKNOWN"]
+    assert "'cohort_label'" in c.findings[0].message
+    assert "'arm'" not in c.findings[0].message
+    assert "defaulted from the axis name" not in c.findings[0].message
+
+
+def _arm_roster(values: list[str | None]) -> UnitList:
+    """A roster of units keyed `u0`, `u1`, ... holding `arm` at the given value —
+    `None` meaning the unit carries no value for it at all, `clusters_of`'s own
+    missing-attribute case."""
+    return UnitList(
+        [
+            Unit(key=f"u{i}", paths=(), attributes={"arm": v} if v is not None else {})
+            for i, v in enumerate(values)
+        ]
+    )
+
+
+def test_assign_levels_resolve_when_every_unit_names_a_declared_level():
+    """The accept path for `E-DATA-ASSIGN-LEVELS`: two units, one per declared
+    level. A cluster fixture would coincide with this partition at 2 units —
+    deliberately avoided by using 3 units with a repeated level, so an
+    arm-aware reader (grouping `control` twice) is distinguishable from a
+    cluster-aware one (which has no notion of `levels` at all and would not
+    even run this check)."""
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}},
+        {
+            "attributes": ["arm"],
+            "assign": {"arm": {"method": "by_attribute"}},
+        },
+        _arm_roster(["control", "control", "treatment"]),
+        c,
+    )
+    assert [f.code for f in c.findings] == []
+
+
+def test_assign_levels_refused_when_a_value_names_no_declared_level():
+    """§ Allocation, twice: `from` "a unit attribute whose values are exactly
+    the declared levels", and `between` opens "each unit belongs to exactly
+    one arm". A unit holding `unknown_arm` — not `control` or `treatment` —
+    would belong to no arm, and there is no fourth part of `n` for it."""
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}},
+        {
+            "attributes": ["arm"],
+            "assign": {"arm": {"method": "by_attribute"}},
+        },
+        _arm_roster(["control", "treatment", "unknown_arm"]),
+        c,
+    )
+    assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-LEVELS"]
+    assert "unknown_arm" in c.findings[0].message
+
+
+def test_assign_levels_refused_when_a_unit_carries_no_value_at_all():
+    """The other route to the same violation `clusters_of` recognizes for
+    `cluster_by`: a unit with no value for the attribute at all belongs to no
+    arm exactly as one holding an unrecognized value does, so it is folded into
+    the same code and message rather than a distinct one."""
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}},
+        {
+            "attributes": ["arm"],
+            "assign": {"arm": {"method": "by_attribute"}},
+        },
+        _arm_roster(["control", "treatment", None]),
+        c,
+    )
+    assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-LEVELS"]
+    assert "carries no value" in c.findings[0].message
+
+
+def test_assign_levels_refused_when_a_declared_level_holds_no_unit():
+    """The other direction of set equality: every unit resolves to a declared
+    level, but one declared level — `treatment` — holds none of them, so that
+    arm's condition would resolve zero units."""
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}},
+        {
+            "attributes": ["arm"],
+            "assign": {"arm": {"method": "by_attribute"}},
+        },
+        _arm_roster(["control", "control", "control"]),
+        c,
+    )
+    assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-LEVELS"]
+    assert "treatment" in c.findings[0].message
 
 
 @pytest.mark.parametrize("method", ["random", "blocked"])
@@ -7262,7 +7424,7 @@ def test_a_drawn_assignment_method_is_refused(write_config, method):
     assert "E-DATA-ASSIGN-METHOD" not in found
 
     c = Collector()
-    _check_assign({}, {"assign": {"arm": {"method": method}}}, c)
+    _check_assign({}, {"assign": {"arm": {"method": method}}}, None, c)
     assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-DRAWN"]
     assert c.findings[0].path == "data.units.assign.arm.method"
     # The wording, not just the code: `E-DATA-ASSIGN-METHOD`'s out-of-enum branch
@@ -7289,7 +7451,7 @@ def test_an_assignment_declaring_no_method_is_refused(write_config):
     }
 
     c = Collector()
-    _check_assign({}, {"assign": {"arm": {"stratify_by": ["site"]}}}, c)
+    _check_assign({}, {"assign": {"arm": {"stratify_by": ["site"]}}}, None, c)
     assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-METHOD"]
     assert c.findings[0].path == "data.units.assign.arm.method"
     # The wording, not just the code: an absent `method` and a misspelled one
@@ -7312,7 +7474,7 @@ def test_an_assignment_method_outside_the_enum_is_refused(write_config):
     }
 
     c = Collector()
-    _check_assign({}, {"assign": {"arm": {"method": "by_column"}}}, c)
+    _check_assign({}, {"assign": {"arm": {"method": "by_column"}}}, None, c)
     assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-METHOD"]
     assert "by_column" in c.findings[0].message
 
@@ -7331,7 +7493,7 @@ def test_a_malformed_assignment_block_reports_rather_than_crashes(assign):
     key any fixed dotted path could ever name — so nothing else speaks for
     these."""
     c = Collector()
-    _check_assign({}, {"assign": assign}, c)
+    _check_assign({}, {"assign": assign}, None, c)
     assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-METHOD"]
 
 
@@ -7351,5 +7513,5 @@ def test_the_assignment_checks_are_total_over_malformed_declarations(doc, units)
     them may become a traceback here. The first three report the arms fault
     honestly, since an unreadable axis is an axis nothing can assign."""
     c = Collector()
-    _check_assign(doc, units, c)
+    _check_assign(doc, units, None, c)
     assert all(f.code.startswith("E-DATA-") for f in c.findings)
