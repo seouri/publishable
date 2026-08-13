@@ -119,7 +119,7 @@ def run_a_project(
     results_dir = tmp_path / "results"
     data.mkdir()
     # 10 patients by default, not 2: a `fold` design (`{kind: fold, k: 5}`) needs
-    # `k <= unit_count`, and every other caller in this module only ever checks
+    # `k <= fold_basis`, and every other caller in this module only ever checks
     # `results`/`sweep.yaml` shape, never the roster's exact size. `units` is a
     # caller-set override — a thin-pairing test wants a roster small enough that
     # `n_paired` trips `limits.min_reported_n` without inflating every other
@@ -4377,3 +4377,74 @@ def test_a_reporting_stratum_is_weighted_by_its_own_units(tmp_path, monkeypatch,
     # stratum's answer — so the two levels above are their own tables rather than
     # the parent's numbers copied down.
     assert step_block["pred"]["value"] == pytest.approx(8 / 6)
+
+
+# --- `k: all` is leave-one-cluster-out at `run` too ---------------------------
+
+# 7/3/3/1/1: 5 clusters over 15 units. Two numbers that cannot be confused, which
+# a roster of singleton clusters would make identical.
+_UNEVEN_CLUSTERS = "patient_id,site\n" + "".join(
+    f"p{i},{s}\n" for i, s in enumerate("aaaaaaabbbcccde")
+)
+
+
+def _without_the_cluster_refusal(monkeypatch):
+    """Let a `cluster_by` config through `run`'s own `validate` pass.
+
+    `E-DATA-CLUSTER-UNSUPPORTED` is still live — a later slice retires it — so no
+    clustered config reaches `command_run` at all today, and a test that waited for
+    that would leave this arrival path unpinned until then. Only that one finding
+    is dropped; every other error still refuses the run, so this cannot turn a
+    genuinely invalid config into a green one.
+    """
+    import publishable.cli as cli_module
+    from publishable.diagnostics import Collector
+
+    real = cli_module.validate_config
+
+    def _filtered(config_path, c, experiment=None):
+        inner = Collector()
+        doc = real(config_path, inner, experiment=experiment)
+        c.findings.extend(f for f in inner.findings if f.code != "E-DATA-CLUSTER-UNSUPPORTED")
+        return doc
+
+    monkeypatch.setattr(cli_module, "validate_config", _filtered)
+
+
+def test_leave_one_out_draws_one_fold_per_cluster(tmp_path, monkeypatch):
+    """`reference.md` § Validation, *Leave-one-out is affordable*: under
+    `cluster_by`, `k: all` is leave-one-*cluster*-out. 5 folds over this 15-unit
+    roster, not 15 — the number `run` executes, so `cli`'s own resolution of the
+    fold basis is what this pins, not `validate`'s.
+
+    The partition still draws without the cluster mapping (a later slice wires
+    that), so this asserts the fold *count* rather than fold membership.
+    """
+    _without_the_cluster_refusal(monkeypatch)
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "fold", "k": "all"}]},
+        roster_csv=_UNEVEN_CLUSTERS,
+        units_overrides={"attributes": ["site"], "cluster_by": "site"},
+    )
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+    assert [p["fold"] for p in sweep["partitions"]] == [
+        "fold01", "fold02", "fold03", "fold04", "fold05"
+    ]
+    assert len(doc["results"]) == 5
+
+
+def test_leave_one_out_draws_one_fold_per_unit_when_nothing_is_clustered(tmp_path):
+    """The control that must report, and the regression guard for every
+    unclustered design: the same 15-unit roster with `cluster_by` gone gives 15
+    folds. It needs no bypass — nothing refuses it — which is also what makes it
+    the half that would keep passing if the clustered half were never wired."""
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "fold", "k": "all"}]},
+        roster_csv=_UNEVEN_CLUSTERS,
+        units_overrides={"attributes": ["site"]},
+    )
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+    assert [p["fold"] for p in sweep["partitions"]] == [f"fold{i:02d}" for i in range(1, 16)]
+    assert len(doc["results"]) == 15

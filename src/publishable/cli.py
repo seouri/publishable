@@ -74,7 +74,14 @@ from publishable.sweep import (
 )
 from publishable.templates.base import BaseTemplate
 from publishable.templates.registry import get_template
-from publishable.units import Unit, UnitList, partition_units, resolve_units, units_hash
+from publishable.units import (
+    Unit,
+    UnitList,
+    fold_basis,
+    partition_units,
+    resolve_units,
+    units_hash,
+)
 from publishable.uv_support import uv_lock_info
 from publishable.validate import load_document, validate_config
 
@@ -749,11 +756,24 @@ def command_run(config_path: Path) -> int:
         weights = {u.key: u.attributes.get(weight_by) for u in roster}
         weighted_beside["weighted_by"] = weight_by
         beside_n["weighted_by"] = weight_by
-    # `unit_count` is what turns `{kind: fold, k: all}` into a real count and
-    # what `_fold_k` checks a declared `k` against — the same roster
-    # `_check_units`/`_check_replication` resolved at `validate` time, threaded
-    # through here rather than trusted blind, since `run` re-resolves it fresh.
-    levels = resolve_repeats(doc, digest, unit_count=len(roster) if roster is not None else None)
+    # Read straight from the declaration, not re-derived: `validate` guarantees a
+    # truthy `cluster_by` is a declared attribute every unit carries (an empty or
+    # wrongly-typed one is an error that returned above), so this is the same
+    # string `units.clusters_of` was approved against.
+    cluster_by = (units_decl or {}).get("cluster_by")
+    # `fold_basis` is what turns `{kind: fold, k: all}` into a real count and what
+    # `_fold_k` checks a declared `k` against — the resolved roster's units, or its
+    # clusters when `data.units.cluster_by` declares the units are not independent
+    # draws, since a cluster is indivisible and leave-one-out is then
+    # leave-one-*cluster*-out (`reference.md` § Validation, *Folds fit inside the
+    # clusters* and *Leave-one-out is affordable*). `units.fold_basis` is the one
+    # derivation, the same `validate` bounded `k` with, applied here to the roster
+    # `run` re-resolves fresh rather than trusted from the earlier pass.
+    levels = resolve_repeats(
+        doc,
+        digest,
+        fold_basis=fold_basis(roster, cluster_by) if roster is not None else None,
+    )
     repeats = cross_levels(levels)
     labels = [r.label for r in repeats if r.label] or [""]
     fold_level = next((lv for lv in levels if lv.kind == "fold"), None)

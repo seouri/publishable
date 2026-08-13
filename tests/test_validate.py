@@ -615,7 +615,7 @@ def test_an_unresolved_repl_code_is_not_swallowed(write_config, monkeypatch):
     import publishable.validate as validate_mod
     from publishable.errors import ContractError
 
-    def _boom(doc, digest, unit_count=None):
+    def _boom(doc, digest, fold_basis=None):
         raise ContractError("a future refusal nobody has classified yet", code="E-REPL-FUTURE")
 
     monkeypatch.setattr(validate_mod, "resolve_repeats", _boom)
@@ -905,7 +905,7 @@ def test_the_budget_check_fires_for_leave_one_out_against_the_real_roster(write_
     (`reference.md` § Sweeps and repeats) — and it was the one design that could
     not produce the warning, because `_repeat_total` returned `None` on any
     string count while `_check_replication` had already been threaded a real
-    `unit_count`. A 60-unit roster under `k: all` is 60 executions against a
+    `fold_basis`. A 60-unit roster under `k: all` is 60 executions against a
     budget of 10, and it must warn exactly as `k: 60` does."""
     (tmp_path / "input" / "index.csv").write_text(
         "patient_id\n" + "\n".join(f"p{i}" for i in range(1, 61)) + "\n"
@@ -939,12 +939,12 @@ def test_the_floor_warning_also_resolves_k_all_against_the_roster():
 
     doc = {"replication": {"repeats": [{"kind": "fold", "k": "all"}]}}
     resolved = Collector()
-    _check_replication(doc, ThreeRepeats(), resolved, unit_count=2)
+    _check_replication(doc, ThreeRepeats(), resolved, fold_basis=2)
     assert "W-REPL-FLOOR" in {f.code for f in resolved.findings}
 
     # ...and still silent when the roster genuinely could not resolve.
     unresolved = Collector()
-    _check_replication(doc, ThreeRepeats(), unresolved, unit_count=None)
+    _check_replication(doc, ThreeRepeats(), unresolved, fold_basis=None)
     assert "W-REPL-FLOOR" not in {f.code for f in unresolved.findings}
 
 
@@ -6184,3 +6184,155 @@ def test_validate_reports_rather_than_raising_on_a_varying_cluster(write_config,
     c = Collector()
     validate_config(path, c)
     assert any(f.code == "E-DATA-CLUSTER-VARIES" for f in c.findings)
+
+
+# --- `k` and `k: all` are bounded by clusters -------------------------------
+#
+# `reference.md` § Validation, *Folds fit inside the clusters* and
+# *Leave-one-out is affordable*. `E-DATA-CLUSTER-UNSUPPORTED` is still live, so
+# every check below either asserts that refusal is reported BESIDE the fold
+# finding — which is what proves the check was reached rather than shadowed — or
+# calls `_check_replication` directly, which never sees the refusal at all.
+#
+# The roster is 7/3/3/1/1 over 15 units: 5 clusters, 15 units, two numbers that
+# cannot be mistaken for each other. One unit per cluster would make the two
+# equal and every assertion here vacuous.
+_UNEVEN_SITES = "".join(f"p{i},{s}\n" for i, s in enumerate("aaaaaaabbbcccde"))
+
+_CLUSTERED_UNITS = {
+    "from": "index.csv",
+    "key": "patient_id",
+    "attributes": ["site"],
+    "cluster_by": "site",
+}
+_UNCLUSTERED_UNITS = {"from": "index.csv", "key": "patient_id", "attributes": ["site"]}
+
+
+def test_k_above_the_cluster_count_is_refused_through_validate(write_config, tmp_path):
+    """§ Validation, *Folds fit inside the clusters*: `k: 10` over 5 clusters.
+
+    `E-DATA-CLUSTER-UNSUPPORTED` is asserted alongside deliberately — it fires on
+    the same config, and without it this test could not tell "the fold check ran"
+    from "some finding fired", which is exactly how a check sitting behind a live
+    refusal comes to look implemented while being dead.
+    """
+    _clustered_table(tmp_path, "patient_id,site", _UNEVEN_SITES)
+    found = codes(
+        write_config(
+            {
+                "data.units": _CLUSTERED_UNITS,
+                "replication": {"repeats": [{"kind": "fold", "k": 10}]},
+            }
+        )
+    )
+    assert "E-REPL-FOLD-K-TOO-LARGE" in found
+    assert "E-DATA-CLUSTER-UNSUPPORTED" in found
+
+
+def test_the_same_k_is_accepted_over_the_same_units_undeclared(write_config, tmp_path):
+    """The control that must report. The roster is byte-identical and `k` is
+    unchanged; only `cluster_by` is gone, and 10 folds over 15 independent units is
+    a legal design. Without this, narrowing the basis to something wrong — or to a
+    constant — would still pass the refusal above."""
+    _clustered_table(tmp_path, "patient_id,site", _UNEVEN_SITES)
+    found = codes(
+        write_config(
+            {
+                "data.units": _UNCLUSTERED_UNITS,
+                "replication": {"repeats": [{"kind": "fold", "k": 10}]},
+            }
+        )
+    )
+    assert "E-REPL-FOLD-K-TOO-LARGE" not in found
+    assert "E-DATA-CLUSTER-UNSUPPORTED" not in found
+
+
+def test_leave_one_cluster_out_is_costed_in_clusters(write_config, tmp_path):
+    """§ Validation, *Leave-one-out is affordable*: the budget is counted over the
+    cluster count when `cluster_by` is declared. 1 condition × 5 clusters = 5
+    executions against a budget of 8, so no warning — and the sibling below is the
+    same config unclustered, where the same `k: all` is 15 and does warn."""
+    _clustered_table(tmp_path, "patient_id,site", _UNEVEN_SITES)
+    found = codes(
+        write_config(
+            {
+                "data.units": _CLUSTERED_UNITS,
+                "replication": {"repeats": [{"kind": "fold", "k": "all"}]},
+                "limits": {"max_executions": 8},
+            }
+        )
+    )
+    assert "W-EXEC-BUDGET" not in found
+    assert "E-REPL-FOLD-K-TOO-LARGE" not in found
+    assert "E-DATA-CLUSTER-UNSUPPORTED" in found
+
+
+def test_leave_one_out_is_costed_in_units_when_nothing_is_clustered(
+    write_config, tmp_path
+):
+    """The control that must report: the same roster and the same `k: all` with no
+    `cluster_by` is 15 executions against the same budget of 8, and warns. The two
+    together are what pin `k: all` to the cluster count rather than to the roster
+    size — a budget that read the roster either way would fail this pair."""
+    _clustered_table(tmp_path, "patient_id,site", _UNEVEN_SITES)
+    found = messages_by_code(
+        write_config(
+            {
+                "data.units": _UNCLUSTERED_UNITS,
+                "replication": {"repeats": [{"kind": "fold", "k": "all"}]},
+                "limits": {"max_executions": 8},
+            }
+        )
+    )
+    assert "W-EXEC-BUDGET" in found
+    assert "15 executions exceeds 8" in found["W-EXEC-BUDGET"]
+
+
+def test_the_cluster_bound_is_reported_by_a_direct_call_too(write_config, tmp_path):
+    """Called directly, where `E-DATA-CLUSTER-UNSUPPORTED` cannot reach: the basis
+    is the one number `validate_config` resolves through `units.fold_basis`, and
+    the refusal names the clusters it counted rather than a unit count nobody
+    supplied."""
+    from publishable.templates.builtin.generic import GenericTemplate
+    from publishable.validate import _check_replication
+
+    doc = {
+        "data": {"units": dict(_CLUSTERED_UNITS)},
+        "replication": {"repeats": [{"kind": "fold", "k": 10}]},
+    }
+    c = Collector()
+    _check_replication(doc, GenericTemplate(), c, fold_basis=5)
+    reported = [f for f in c.findings if f.code == "E-REPL-FOLD-K-TOO-LARGE"]
+    assert len(reported) == 1
+    assert "5 clusters of `site`" in reported[0].message
+
+    # ...and the same declaration over an unclustered basis of 15 is legal.
+    control = Collector()
+    _check_replication(
+        {"replication": doc["replication"]}, GenericTemplate(), control, fold_basis=15
+    )
+    assert "E-REPL-FOLD-K-TOO-LARGE" not in {f.code for f in control.findings}
+
+
+def test_an_unreadable_cluster_leaves_k_all_unresolved_rather_than_raising(
+    write_config, tmp_path
+):
+    """`cluster_by` names a column the roster carries but `attributes` never
+    declared, so resolution never read it and `units.fold_basis` raises
+    `E-DATA-CLUSTER-UNKNOWN`. `validate` collects and never raises: the basis is
+    unresolved, `k: all` reports `E-REPL-FOLD-K` — honest, the fold count genuinely
+    cannot be known — and the cluster finding beside it says why."""
+    _clustered_table(tmp_path, "patient_id,site", _UNEVEN_SITES)
+    c = Collector()
+    validate_config(
+        write_config(
+            {
+                "data.units": {"from": "index.csv", "key": "patient_id", "cluster_by": "site"},
+                "replication": {"repeats": [{"kind": "fold", "k": "all"}]},
+            }
+        ),
+        c,
+    )
+    found = {f.code for f in c.findings}
+    assert "E-DATA-CLUSTER-UNKNOWN" in found
+    assert "E-REPL-FOLD-K" in found

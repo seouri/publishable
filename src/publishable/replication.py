@@ -77,12 +77,22 @@ def _seed_members(digest: str, kind: str, n: int) -> tuple[RepeatMember, ...]:
     return tuple(RepeatMember(label=lb, seed=s) for lb, s in zip(labels, seeds, strict=True))
 
 
-def _fold_k(level: dict[str, Any], unit_count: int | None) -> int:
+def _fold_k(level: dict[str, Any], fold_basis: int | None, cluster_by: str | None = None) -> int:
     """`k` is an integer >= 2, or `all` for leave-one-out.
 
     `all` needs the roster, because "as many folds as there are things to leave
     out" is a fact about the cohort rather than the config — which is the whole
     reason reference.md § Repeat kinds prefers it to a hard-coded count.
+
+    `fold_basis` is that count of things to leave out, resolved by the caller
+    through `units.fold_basis`: the resolved unit count, or the cluster count when
+    `data.units.cluster_by` is declared, since a cluster is indivisible. One number
+    rather than a unit count beside a cluster count — two that could disagree, with
+    nothing to catch it.
+
+    `cluster_by` names the attribute only so the refusal says which things it
+    counted. It comes from the same `config` the levels do, so it cannot introduce
+    a second count; nothing here reads a value from it.
     """
     if level.get("stratify_by") is not None:
         raise ContractError(
@@ -93,22 +103,30 @@ def _fold_k(level: dict[str, Any], unit_count: int | None) -> int:
         )
     k = level.get("k")
     if k == "all":
-        if unit_count is None:
+        if fold_basis is None:
             raise ContractError(
                 "`{kind: fold, k: all}` needs the resolved roster to know how many "
                 "folds to draw, and none was supplied",
                 code="E-REPL-FOLD-K",
             )
-        k = unit_count
+        k = fold_basis
     if not isinstance(k, int) or isinstance(k, bool) or k < 2:
         raise ContractError(
             f"`{{kind: fold, k: {k!r}}}` is not a fold count; `k` is an integer >= 2, "
             "or `all` for leave-one-out",
             code="E-REPL-FOLD-K",
         )
-    if unit_count is not None and k > unit_count:
+    if fold_basis is not None and k > fold_basis:
+        if cluster_by:
+            raise ContractError(
+                f"`{{kind: fold, k: {k}}}` over {fold_basis} clusters of "
+                f"`{cluster_by}` would leave a fold with no cluster to test; a cluster "
+                "is indivisible, so `k` may not exceed the cluster count — the units "
+                "inside one cannot be dealt out to make the folds up",
+                code="E-REPL-FOLD-K-TOO-LARGE",
+            )
         raise ContractError(
-            f"`{{kind: fold, k: {k}}}` over {unit_count} resolved units would leave a "
+            f"`{{kind: fold, k: {k}}}` over {fold_basis} resolved units would leave a "
             "fold with nothing to test; a fold with no units is a declaration error, "
             "not a small fold",
             code="E-REPL-FOLD-K-TOO-LARGE",
@@ -172,9 +190,21 @@ def _check_batch_keys(kind: str, level: dict[str, Any]) -> None:
 
 
 def resolve_repeats(
-    config: dict[str, Any], digest: str, unit_count: int | None = None
+    config: dict[str, Any], digest: str, fold_basis: int | None = None
 ) -> list[RepeatLevel]:
+    """`fold_basis` is how many indivisible things a `fold` may be drawn from —
+    `units.fold_basis` of the resolved roster, which is the unit count unless
+    `data.units.cluster_by` is declared and the cluster count when it is. The
+    caller resolves it because the roster lives there; this reads `cluster_by`
+    from `config` only to say which of the two a refusal counted.
+    """
     levels = ((config.get("replication") or {}).get("repeats")) or []
+    cluster_by = ((config.get("data") or {}).get("units") or {}).get("cluster_by")
+    if not isinstance(cluster_by, str) or not cluster_by:
+        # A wrongly-typed or empty `cluster_by` is `check_envelope`'s finding and
+        # `_check_cluster_by`'s; here it only chooses a noun, and naming a cluster
+        # attribute that resolution never read would describe a count nobody took.
+        cluster_by = None
     if not levels:
         return [
             RepeatLevel(kind="seed", members=(RepeatMember(label="", seed=_seed_for(digest, 0)),))
@@ -197,7 +227,7 @@ def resolve_repeats(
         _check_count_field(kind, level)
         _check_batch_keys(kind, level)
         if kind == "fold":
-            n = _fold_k(level, unit_count)
+            n = _fold_k(level, fold_basis, cluster_by)
         else:
             n = int(level.get("n", 1))
             if n < 1:

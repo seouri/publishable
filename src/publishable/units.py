@@ -731,6 +731,30 @@ def cluster_count(roster: UnitList, cluster_by: str) -> int:
     return len(set(clusters_of(roster, cluster_by).values()))
 
 
+def fold_basis(roster: UnitList, cluster_by: str | None) -> int:
+    """How many indivisible things a `fold` level can distribute — the number `k`
+    is bounded by, and the number `{kind: fold, k: all}` resolves to.
+
+    **One number, not two.** A fold asks "how many things can be left out", which
+    is the unit count when the units are independent draws and the cluster count
+    when `data.units.cluster_by` says they are not: a cluster is the smallest thing
+    `partition_units` can move, so a `k` past the cluster count leaves a fold with
+    no cluster to test, and leave-one-out becomes leave-one-*cluster*-out
+    (`reference.md` § Validation, rows *Folds fit inside the clusters* and
+    *Leave-one-out is affordable*). Every caller resolves the basis here rather
+    than deciding for itself, and passes the one number on — a `k` checked against
+    the unit count while the partition is drawn over clusters is exactly the
+    disagreement this single derivation exists to prevent.
+
+    `cluster_count` is the authority for the clustered half, so an unreadable
+    cluster — a unit carrying no value for the attribute — raises
+    `E-DATA-CLUSTER-UNKNOWN` from there rather than being counted as a cluster of
+    its own. `validate` collects rather than raises, so its caller catches that and
+    treats the basis as unresolved.
+    """
+    return cluster_count(roster, cluster_by) if cluster_by else len(roster)
+
+
 def partition_units(
     roster: UnitList, k: int, digest: str, clusters: dict[str, str] | None = None
 ) -> list[list[Unit]]:

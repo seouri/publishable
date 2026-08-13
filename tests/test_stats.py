@@ -130,7 +130,7 @@ def _results_for_batch_seed():
 
 def _results_for_folds():
     """Labels resolved from `cfg([{"kind": "fold", "k": 2}])` at digest `"d"`
-    with `unit_count=4`: `fold01` and `fold02`."""
+    with `fold_basis=4`: `fold01` and `fold02`."""
     return [
         _repeat_result("analyze", "fold01", 0, {"u1": {"score": 1.0}, "u2": {"score": 2.0}}),
         _repeat_result("analyze", "fold02", 0, {"u3": {"score": 3.0}, "u4": {"score": 4.0}}),
@@ -161,7 +161,7 @@ def test_one_entry_per_level_outer_to_inner():
 
 def test_a_fold_level_contributes_no_entry():
     """Each unit is in exactly one fold, so there is nothing to average across."""
-    levels = resolve_repeats(cfg([{"kind": "fold", "k": 2}]), "d", unit_count=4)
+    levels = resolve_repeats(cfg([{"kind": "fold", "k": 2}]), "d", fold_basis=4)
     assert (
         repeat_spread(
             _results_for_folds(), "analyze", 0, levels, "score", keys={"u1", "u2", "u3", "u4"}
@@ -176,7 +176,7 @@ def test_a_fold_nested_with_another_level_is_omitted_entirely():
     the whole answer, the result is omitted entirely — a missing figure over a
     differently-computed one."""
     levels = resolve_repeats(
-        cfg([{"kind": "fold", "k": 2}, {"kind": "seed", "n": 2}]), "d", unit_count=4
+        cfg([{"kind": "fold", "k": 2}, {"kind": "seed", "n": 2}]), "d", fold_basis=4
     )
     results = [
         _repeat_result("analyze", "fold01_seed01", 0, {"u1": {"score": 1.0}, "u2": {"score": 2.0}}),

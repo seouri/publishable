@@ -11,6 +11,7 @@ from publishable.units import (
     cluster_count,
     clusters_of,
     collapse_measurements,
+    fold_basis,
     partition_units,
     resolve_units,
     units_hash,
@@ -324,10 +325,11 @@ def test_the_same_digest_reproduces_the_same_clustered_split():
 
 
 def test_more_folds_than_clusters_leaves_folds_empty_rather_than_raising():
-    """`k` past the cluster count is refused at `validate` (task 5 owns that check).
-    Until it is, the partitioner stays total and empty-handed rather than dividing
-    a cluster to fill a fold — an empty fold is a visibly useless split, a divided
-    cluster is a leaky one that looks fine."""
+    """`k` past the cluster count is refused at `validate`
+    (`E-REPL-FOLD-K-TOO-LARGE`, bounded by `fold_basis`), so a caller reaching here
+    with such a `k` is one that skipped that check. The partitioner stays total and
+    empty-handed rather than dividing a cluster to fill a fold — an empty fold is a
+    visibly useless split, a divided cluster is a leaky one that looks fine."""
     roster, clusters = _clustered({"S1": 2, "S2": 2})
     folds = partition_units(roster, k=4, digest="sha256:abc", clusters=clusters)
     assert sorted(len(f) for f in folds) == [0, 0, 2, 2]
@@ -806,6 +808,43 @@ def test_cluster_count_reads_the_same_authority():
     assert cluster_count(roster, "site") == 1
     with pytest.raises(ContractError):
         cluster_count(UnitList([Unit(key="u0", paths=(), attributes={})]), "site")
+
+
+def test_the_fold_basis_is_the_cluster_count_when_the_units_are_clustered():
+    """`reference.md` § Validation, *Folds fit inside the clusters*: a cluster is
+    indivisible, so what a fold may be drawn from is the cluster count.
+
+    Sizes 7/3/3/1/1 — 5 clusters over 15 units — deliberately: with one unit per
+    cluster the two numbers coincide and this assertion could not tell the cluster
+    count from the roster size.
+    """
+    roster, _ = _clustered({"S1": 7, "S2": 3, "S3": 3, "S4": 1, "S5": 1})
+    assert len(roster) == 15
+    assert fold_basis(roster, "site") == 5
+
+
+def test_the_fold_basis_is_the_unit_count_when_nothing_is_clustered():
+    """The control that must report: with no `cluster_by`, every unit is its own
+    independent draw and the basis is the roster size — the same 15-unit roster the
+    clustered case counts 5 of, so the two answers cannot be confused."""
+    roster, _ = _clustered({"S1": 7, "S2": 3, "S3": 3, "S4": 1, "S5": 1})
+    assert fold_basis(roster, None) == 15
+    assert fold_basis(roster, "") == 15
+
+
+def test_the_fold_basis_refuses_a_unit_with_no_cluster():
+    """`cluster_count` is the authority, so a unit carrying no value for the
+    attribute raises here rather than being counted as a cluster of its own — which
+    would inflate the basis and admit a `k` the partitioner cannot satisfy."""
+    roster = UnitList(
+        [
+            Unit(key="u0", paths=(), attributes={"site": "S1"}),
+            Unit(key="u1", paths=(), attributes={}),
+        ]
+    )
+    with pytest.raises(ContractError) as e:
+        fold_basis(roster, "site")
+    assert e.value.code == "E-DATA-CLUSTER-UNKNOWN"
 
 
 def test_cluster_ids_are_labels_whatever_the_source_supplied(input_dir: Path):

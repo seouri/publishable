@@ -34,6 +34,7 @@ from publishable.units import (
     COLLAPSE_RULES,
     NUMERIC_COLLAPSE_RULES,
     UnitList,
+    fold_basis,
     is_measurement_numeric,
     resolve_units,
     rule_for,
@@ -443,15 +444,43 @@ def validate_config(
     _check_measurements(units_decl, roster, technical_n, columns, c)
     _check_weight_by(units_decl, roster, c)
     _check_cluster_by(doc, units_decl, roster, c)
+    # How many indivisible things a `fold` may be drawn from: the resolved unit
+    # count, or the cluster count when `data.units.cluster_by` declares the units
+    # are not independent draws (`reference.md` § Validation, *Folds fit inside the
+    # clusters*). Resolved once, here, and handed to both checks that need it —
+    # `_check_replication` bounds `k` against it and `_check_sweep` sizes a
+    # `k: all` budget from it, and a `k` checked against one number while the
+    # budget counts another is the drift a single derivation removes.
+    #
+    # `units.fold_basis` raises `E-DATA-CLUSTER-UNKNOWN` when a unit carries no
+    # value for the cluster attribute — the case `_check_cluster_by` above reports
+    # from the declaration where it can, and `_check_units` reports for a column
+    # that never resolved. This module collects rather than raises, so an
+    # unreadable basis becomes `None`: a `k: all` then reports `E-REPL-FOLD-K`
+    # (honest — the fold count genuinely cannot be known) beside the cluster
+    # finding that explains why.
+    declared_cluster = units_decl.get("cluster_by")
+    # A wrongly-typed or empty `cluster_by` is reported by `check_envelope` and
+    # `_check_cluster_by`; counting clusters by it here would report a second,
+    # derived fault on top of the one the reader has to fix anyway.
+    usable_cluster = (
+        declared_cluster if isinstance(declared_cluster, str) and declared_cluster else None
+    )
+    basis: int | None = None
+    if roster is not None:
+        try:
+            basis = fold_basis(roster, usable_cluster)
+        except ContractError:
+            basis = None
     _check_replication(
         doc,
         template,
         c,
         experiment=experiment,
-        unit_count=len(roster) if roster is not None else None,
+        fold_basis=basis,
     )
     _check_unimplemented(doc, c)
-    _check_sweep(doc, template, c, unit_count=len(roster) if roster is not None else None)
+    _check_sweep(doc, template, c, fold_basis=basis)
     _check_contrasts(doc, c, roster)
     _check_hypotheses(doc, c, experiment, template)
     _check_report_by(doc, c, roster)
@@ -1315,18 +1344,20 @@ def _declared_count(level: dict[str, Any]) -> Any:
     return level.get("k") if level.get("kind") == "fold" else level.get("n")
 
 
-def _level_count(level: dict[str, Any], unit_count: int | None) -> int | None:
+def _level_count(level: dict[str, Any], fold_basis: int | None) -> int | None:
     """This level's count as a number, or `None` when there isn't one to have.
 
     `None` covers two cases the callers separate with `_declared_count`: nothing
     declared at all (which contributes 1×), and a count declared but unresolvable
     — `{kind: fold, k: all}` against a roster that did not resolve, or any other
     string `k`, which `resolve_repeats` reports by name. A resolvable `k: all` is
-    the roster size, the same number `_fold_k` gives the run.
+    the fold basis — the roster size, or the cluster count when
+    `data.units.cluster_by` is declared, leave-one-out being leave-one-*cluster*-out
+    there — the same number `_fold_k` gives the run.
     """
     count = _declared_count(level)
     if count == "all" and level.get("kind") == "fold":
-        return unit_count
+        return fold_basis
     if isinstance(count, bool) or not isinstance(count, int | float):
         return None
     return int(count)
@@ -1338,12 +1369,12 @@ def _check_replication(
     c: Collector,
     *,
     experiment: Any | None = None,
-    unit_count: int | None = None,
+    fold_basis: int | None = None,
 ) -> None:
     levels = ((doc.get("replication") or {}).get("repeats")) or []
     # A `fold` level partitions units into train/test splits; with no
     # `data.units` declared there is no roster to partition at all. Left
-    # unchecked, `resolve_repeats` accepts a fixed `k` with `unit_count=None`
+    # unchecked, `resolve_repeats` accepts a fixed `k` with `fold_basis=None`
     # (only `k: all` needs a count, and that already reports `E-REPL-FOLD-K`) —
     # so a config with a fold and no units would validate clean and then, at
     # `run`, either crash (`fold_members_for` zips a fold's members against no
@@ -1365,7 +1396,7 @@ def _check_replication(
     any_invalid = False
     has_unresolved_fold = False
     for level in levels:
-        count = _level_count(level, unit_count)
+        count = _level_count(level, fold_basis)
         if count is None and isinstance(_declared_count(level), str):
             # The count is declared as a word rather than a number and could not
             # be resolved — `{kind: fold, k: all}` with no roster, or any other
@@ -1401,14 +1432,16 @@ def _check_replication(
     # itself — fold, duplicate kinds, and depth past two levels among them. At run
     # time raising is right; here `validate` collects, so translate rather than let
     # it escape. The digest is a placeholder: seeds are irrelevant to a declaration
-    # check, only the shape of `replication.repeats` is. `unit_count` is the roster
-    # `_check_units` already resolved, threaded through rather than resolved again —
-    # `k: all` and an oversized `k` can only be checked against a real count. When
-    # the roster failed to resolve, `unit_count` is `None` and `k: all` reports
+    # check, only the shape of `replication.repeats` is. `fold_basis` is the count
+    # `validate_config` already resolved from the roster — its units, or its
+    # clusters under `data.units.cluster_by` — threaded through rather than
+    # resolved again: `k: all` and an oversized `k` can only be checked against a
+    # real count. When the roster or its clusters failed to resolve, `fold_basis`
+    # is `None` and `k: all` reports
     # `E-REPL-FOLD-K`, which is honest: the fold count genuinely cannot be known,
     # and the roster's own finding is already reported beside it.
     try:
-        resolve_repeats(doc, "validate", unit_count=unit_count)
+        resolve_repeats(doc, "validate", fold_basis=fold_basis)
     except ContractError as exc:
         if exc.code in REPL_DECLARATION_CODES:
             c.error(exc.code, "replication.repeats", str(exc))
@@ -1663,14 +1696,15 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
             )
 
 
-def _repeat_total(doc: dict[str, Any], unit_count: int | None) -> int | None:
+def _repeat_total(doc: dict[str, Any], fold_basis: int | None) -> int | None:
     """The product of every repeat level's count, permissively: an invalid level
     (`n < 1`) is already reported by `_check_replication` under its own identifier,
     so this treats it as absent rather than reporting the same defect twice under
     `W-EXEC-BUDGET`.
 
-    `{kind: fold, k: all}` resolves against `unit_count` — the roster
-    `_check_units` already resolved — because leave-one-out is the single design
+    `{kind: fold, k: all}` resolves against `fold_basis` — the roster
+    `_check_units` already resolved, counted in clusters when
+    `data.units.cluster_by` is declared — because leave-one-out is the single design
     `W-EXEC-BUDGET` matters most for (`reference.md` § Sweeps and repeats), and
     it was the one design that could not produce the warning while this function
     read a string and gave up.
@@ -1688,7 +1722,7 @@ def _repeat_total(doc: dict[str, Any], unit_count: int | None) -> int | None:
     levels = ((doc.get("replication") or {}).get("repeats")) or []
     total = 1
     for level in levels:
-        count = _level_count(level, unit_count)
+        count = _level_count(level, fold_basis)
         if count is None:
             # A string count that did not resolve is genuinely unknown; anything
             # else unreadable (a bool, a list) is reported under its own
@@ -1759,7 +1793,7 @@ def _check_sampled_values(
 
 
 def _check_sweep(
-    doc: dict[str, Any], template: Any, c: Collector, *, unit_count: int | None = None
+    doc: dict[str, Any], template: Any, c: Collector, *, fold_basis: int | None = None
 ) -> None:
     """Checks that only become reachable once a sweep actually expands: an
     unrecognised mode, an axis with nothing in it, a swept path the template
@@ -2240,7 +2274,7 @@ def _check_sweep(
                 "cell gets its own baseline",
             )
 
-    repeat_total = _repeat_total(doc, unit_count)
+    repeat_total = _repeat_total(doc, fold_basis)
     budget = (doc.get("limits") or {}).get("max_executions")
     # `repeat_total` is `None` only when a declared count cannot be resolved at
     # all — a `k: all` whose roster did not resolve, or a string `k` that is not
