@@ -1,4 +1,6 @@
+import itertools
 import math
+import random
 
 import pytest
 
@@ -23,6 +25,7 @@ from publishable.stats import (
     paired_t_over_units,
     percentile_of_derived,
     percentile_over_units,
+    percentile_over_units_clustered,
     repeat_spread,
     resample_seed,
     summarize_step,
@@ -1741,6 +1744,338 @@ def test_a_weight_the_percentile_path_cannot_use_is_refused_before_any_draw():
     with pytest.raises(ContractError) as exc:
         percentile_over_units([float(i) for i in range(50)], weights=[1.0] * 49 + [0.0], seed=7)
     assert exc.value.code == "E-DATA-WEIGHT-INVALID"
+
+
+# --- H3b task 10: the clustered percentile draw ------------------------------
+#
+# One roster serves the whole group, and every choice in it is defensive against
+# a fixture that cannot see the work:
+#
+# - **Four clusters, not three.** With G clusters a replicate is G draws, so the
+#   all-one-cluster replicate has probability G^-G: 1/27 at G = 3, which is
+#   ABOVE the 2.5 % tail and pins both endpoints onto the achievable set's
+#   extremes — where "pool the drawn clusters' units" and "average the drawn
+#   clusters' means" happen to coincide. At G = 4 it is 1/256, both ranks land
+#   interior, and the two constructions separate.
+# - **Unequal cluster sizes** (1, 2, 3, 2). Equal sizes make pooling units and
+#   averaging cluster means the same estimator, and the document's own "a
+#   resampled table has a varying row count" is exactly what equal sizes hide.
+# - **Interleaved value ranges.** B spans [0, 22] and C spans [2, 31] with A's
+#   single 4.0 inside both, so re-pairing values to clusters through a separate
+#   sort moves the answer. Clusters whose ranges are disjoint and ascending
+#   re-pair to themselves and see nothing.
+# - **Several units per cluster.** One unit per cluster is the same estimator as
+#   the unclustered draw; that case appears below only as the boundary pin it is.
+_POOL_CLUSTERS: dict[str, list[tuple[float, float]]] = {
+    "A": [(4.0, 1.0)],
+    "B": [(0.0, 1.0), (22.0, 1.0)],
+    "C": [(2.0, 1.0), (12.0, 1.0), (31.0, 9.0)],
+    "D": [(6.0, 1.0), (18.0, 1.0)],
+}
+_POOL_KEYS = ["a1", "b1", "b2", "c1", "c2", "c3", "d1", "d2"]
+_POOL_MEMBERSHIP = dict(
+    zip(_POOL_KEYS, ["A", "B", "B", "C", "C", "C", "D", "D"], strict=True)
+)
+_POOL_VALUES = [4.0, 0.0, 22.0, 2.0, 12.0, 31.0, 6.0, 18.0]
+_POOL_WEIGHTS = [1.0, 1.0, 1.0, 1.0, 1.0, 9.0, 1.0, 1.0]
+
+
+def _pooled(combo, weighted=False):
+    """The statistic one replicate of `combo` produces, from the cluster
+    declaration above rather than from the code under test: the drawn clusters'
+    units are pooled and the (weighted) mean is taken over the pool."""
+    units = [pair for name in combo for pair in _POOL_CLUSTERS[name]]
+    if weighted:
+        return sum(w * v for v, w in units) / sum(w for _, w in units)
+    return sum(v for v, _ in units) / len(units)
+
+
+def _achievable(weighted=False):
+    """Every value a whole-cluster replicate can produce: the 35 multisets of 4
+    clusters drawn with replacement, each pooled by `_pooled`. A whole-cluster
+    interval's endpoints are members of this set by construction; a unit-drawing
+    one's are not, which is what makes the membership assertion structural
+    rather than a numeric coincidence."""
+    return {
+        _pooled(combo, weighted)
+        for combo in itertools.combinations_with_replacement("ABCD", 4)
+    }
+
+
+def test_the_clustered_percentile_draws_clusters_not_units():
+    """`reference.md` § Clustered units: "Core draws whole clusters with
+    replacement, so a resampled table has a varying row count, and the
+    interval's effective `n` is the cluster count."
+    `experimental-designs.md` § Mistakes core prevents states the size of it:
+    "300 cells from 10 animals give a 10-draw interval".
+
+    Both endpoints are asserted exactly, as the pooled means of two named
+    multisets, and additionally as members of the 35-multiset achievable set. A
+    resample that draws 8 UNITS with replacement lands almost surely outside
+    that set — it can compose 8 values freely, where a 4-cluster draw can only
+    compose whole clusters — so the membership assertion catches the mutation
+    structurally rather than by the two numbers happening to differ.
+
+    The control that must report is the unclustered interval over the same eight
+    values: it reports [5.25, 19.0], neither endpoint achievable by any
+    whole-cluster replicate, so the numbers above are the clustering and not the
+    data's own spread."""
+    got = percentile_over_units_clustered(
+        _POOL_VALUES, _POOL_KEYS, _POOL_MEMBERSHIP, seed=7
+    )
+    assert got is not None
+    assert got.method == "percentile_over_units_clustered"
+    assert got.low == _pooled(("A", "A", "A", "D"))  # 36/5
+    assert got.high == _pooled(("B", "C", "C", "C"))  # 157/11
+    assert got.low in _achievable() and got.high in _achievable()
+    plain = percentile_over_units(_POOL_VALUES, seed=7)
+    assert plain is not None
+    assert plain.low == 5.25 and plain.high == 19.0
+    assert plain.low not in _achievable() and plain.high not in _achievable()
+
+
+def test_a_drawn_cluster_pools_its_units_rather_than_contributing_its_mean():
+    """"Core draws whole clusters with replacement, so a resampled table has a
+    varying row count" — the row count varies because the units are POOLED, so a
+    3-unit cluster carries three rows into the replicate and a 1-unit cluster
+    one. Averaging the drawn clusters' means instead gives every cluster equal
+    say, which is a different estimator that respects the groups just as
+    carefully and is invisible on any equal-sized fixture.
+
+    The two sets overlap, so this asserts membership in the pooled one *and*
+    absence from the mean one for these particular endpoints; the control that
+    must report is that the mean-of-means construction is non-empty and does
+    produce an interval-shaped pair of its own (6.0, 14.0 at this seed)."""
+    got = percentile_over_units_clustered(
+        _POOL_VALUES, _POOL_KEYS, _POOL_MEMBERSHIP, seed=7
+    )
+    assert got is not None
+    of_means = {
+        sum(sum(v for v, _ in _POOL_CLUSTERS[c]) / len(_POOL_CLUSTERS[c]) for c in combo) / 4
+        for combo in itertools.combinations_with_replacement("ABCD", 4)
+    }
+    assert len(of_means) > 1  # the control: the rival construction is real
+    assert got.low in _achievable() and got.low not in of_means
+    assert got.high in _achievable() and got.high not in of_means
+
+
+def test_the_clustered_percentile_keeps_each_value_with_its_cluster():
+    """`percentile_over_units` sorts its pool so the draw depends on the multiset
+    rather than on row order, and the clustered form must keep each value with
+    its CLUSTER through that sort — exactly as the weighted form keeps each value
+    with its own weight. Sorting the values and the cluster labels as separate
+    sequences preserves the invariance and silently re-groups them.
+
+    The re-paired construction is built here, independently, and must report: it
+    produces [2.0, 21.666…], a perfectly interval-shaped answer whose endpoints
+    are not achievable by any whole-cluster replicate of the declared roster."""
+    got = percentile_over_units_clustered(
+        _POOL_VALUES, _POOL_KEYS, _POOL_MEMBERSHIP, seed=7
+    )
+    assert got is not None
+    repaired: dict[str, list[tuple[float, float]]] = {}
+    for value, label in zip(
+        sorted(_POOL_VALUES), sorted(_POOL_MEMBERSHIP.values()), strict=True
+    ):
+        repaired.setdefault(label, []).append((value, 1.0))
+    rng = random.Random(7)
+    ordered = sorted(sorted(pool) for pool in repaired.values())
+    means = []
+    for _ in range(2000):
+        drawn = [pair for _ in range(4) for pair in ordered[rng.randrange(4)]]
+        means.append(sum(v for v, _ in drawn) / len(drawn))
+    means.sort()
+    assert (means[49], means[1949]) == (2.0, 65 / 3)
+    assert means[49] not in _achievable() and means[1949] not in _achievable()
+    assert (means[49], means[1949]) != (got.low, got.high)
+
+
+def test_the_clustered_percentile_is_invariant_to_row_order_and_to_cluster_labels():
+    """Row order, because the draw must depend on the multiset of clusters and
+    not on the sequence the roster arrived in. Cluster labels, because the
+    clusters are ordered by their own sorted contents rather than by name — a
+    site renamed from `S1` to `zzz` is not a different experiment."""
+    got = percentile_over_units_clustered(
+        _POOL_VALUES, _POOL_KEYS, _POOL_MEMBERSHIP, seed=7
+    )
+    order = [5, 0, 3, 7, 1, 4, 2, 6]
+    assert got == percentile_over_units_clustered(
+        [_POOL_VALUES[i] for i in order],
+        [_POOL_KEYS[i] for i in order],
+        _POOL_MEMBERSHIP,
+        seed=7,
+    )
+    renamed = {"A": "zzz", "B": "aaa", "C": "mmm", "D": "kkk"}
+    assert got == percentile_over_units_clustered(
+        _POOL_VALUES,
+        _POOL_KEYS,
+        {key: renamed[label] for key, label in _POOL_MEMBERSHIP.items()},
+        seed=7,
+    )
+
+
+def test_one_cluster_of_many_units_has_no_percentile_interval():
+    """The floor, and it is a derivation rather than an analogy to
+    `t_over_units_clustered`'s df — a percentile interval has none. At G = 1
+    every replicate draws the same single cluster, so the resampled distribution
+    is a point mass and both ranks land on it: a zero-width 95 % interval, which
+    § Statistical reporting refuses in those words. Reporting a point with no
+    interval is the honest answer for one draw."""
+    assert (
+        percentile_over_units_clustered(
+            _POOL_VALUES, _POOL_KEYS, dict.fromkeys(_POOL_KEYS, "only"), seed=7
+        )
+        is None
+    )
+
+
+def test_two_clusters_still_report_a_percentile():
+    """The control that must report, immediately above the floor: G = 2 has three
+    achievable replicates, so the interval has real width and is not refused.
+    There is deliberately no higher threshold here — the judgment that a
+    cluster count is too small for a resample belongs to `statistics.min_clusters`,
+    which `validate` warns on."""
+    membership = dict.fromkeys(_POOL_KEYS, "left")
+    for key in ("c1", "c2", "c3", "d1", "d2"):
+        membership[key] = "right"
+    got = percentile_over_units_clustered(_POOL_VALUES, _POOL_KEYS, membership, seed=7)
+    assert got is not None
+    assert got.high > got.low
+
+
+@pytest.mark.parametrize("values", [[], [1.0]])
+def test_the_clustered_percentile_needs_two_values(values):
+    """`percentile_over_units`' own floor, kept in front of the cluster one so the
+    two constructions refuse the same degenerate inputs."""
+    keys = [f"u{i}" for i in range(len(values))]
+    assert (
+        percentile_over_units_clustered(values, keys, dict.fromkeys(keys, "c"), seed=7)
+        is None
+    )
+
+
+def test_the_clustered_percentile_refuses_a_draw_count_below_the_honest_floor():
+    """Orthogonal to the cluster floor: this one is about how many replicates the
+    ranks are read off, not how many things each replicate draws."""
+    assert (
+        percentile_over_units_clustered(
+            _POOL_VALUES, _POOL_KEYS, _POOL_MEMBERSHIP, seed=7, draws=10
+        )
+        is None
+    )
+    assert (
+        percentile_over_units_clustered(
+            _POOL_VALUES, _POOL_KEYS, _POOL_MEMBERSHIP, seed=7, draws=2000
+        )
+        is not None
+    )
+
+
+def test_one_unit_per_cluster_reproduces_the_unclustered_percentile():
+    """The boundary that proves this is a generalization rather than a different
+    statistic — and a fixture that can see nothing else, which is exactly why it
+    is not the headline: with G = n each replicate draws n singleton clusters and
+    pools one unit from each, which is the unclustered draw index for index.
+
+    Digit for digit against the literals
+    `test_an_unweighted_percentile_interval_is_untouched_to_the_last_digit` pins,
+    so this is also the statement that ordering clusters by their sorted contents
+    (rather than by label) is what keeps the two identical."""
+    values = [float(i) for i in range(50)]
+    keys = [f"u{i}" for i in range(50)]
+    got = percentile_over_units_clustered(values, keys, {k: k for k in keys}, seed=7)
+    assert got is not None
+    assert (got.low, got.high) == (20.4, 28.54)
+    plain = percentile_over_units(values, seed=7)
+    assert plain is not None
+    assert (got.low, got.high) == (plain.low, plain.high)
+
+
+def test_a_clustered_percentile_draw_is_by_cluster_while_its_statistic_is_weighted():
+    """`reference.md` § Weighted samples: a percentile interval "recomputes the
+    weighted statistic on each draw, so the weights are in the estimate rather
+    than in the drawing", and "`cluster_by` still decides the draw when both are
+    declared, since a cluster is what's independent and a weight is what it
+    represents". The two sentences compose: the draw moves to clusters, the
+    weights stay in the estimate.
+
+    C's 31.0 carries weight 9, so a replicate holding C is dragged upward while
+    one holding none of it is untouched. Both endpoints are asserted exactly
+    against `_pooled(..., weighted=True)` and as members of the weighted
+    achievable set.
+
+    The control that must report is the unweighted clustered interval over the
+    same roster: its high bound is 157/11 ≈ 14.27 where the weighted one is 25.8,
+    so the upper endpoint is the weighting. Its LOW bound is identical, and that
+    is the fixture telling the truth rather than a coincidence — the low tail's
+    replicates contain no C at all, so there is no heavy weight in them to
+    matter."""
+    got = percentile_over_units_clustered(
+        _POOL_VALUES, _POOL_KEYS, _POOL_MEMBERSHIP, seed=7, weights=_POOL_WEIGHTS
+    )
+    assert got is not None
+    assert got.method == "percentile_over_units_clustered"
+    assert got.low == _pooled(("A", "A", "A", "D"), weighted=True)
+    assert got.high == _pooled(("C", "C", "C", "D"), weighted=True)
+    assert got.low in _achievable(True) and got.high in _achievable(True)
+    unweighted = percentile_over_units_clustered(
+        _POOL_VALUES, _POOL_KEYS, _POOL_MEMBERSHIP, seed=7
+    )
+    assert unweighted is not None
+    assert unweighted.high == _pooled(("B", "C", "C", "C"))
+    assert got.high > unweighted.high * 1.5
+
+
+def test_equal_weights_reproduce_the_unweighted_clustered_percentile_exactly():
+    """The boundary, digit for digit: at equal weights the weighted mean of a
+    pooled replicate *is* its plain mean, and the draw never depended on the
+    weights, so the two constructions must not merely agree closely."""
+    assert percentile_over_units_clustered(
+        _POOL_VALUES, _POOL_KEYS, _POOL_MEMBERSHIP, seed=7, weights=[3.0] * 8
+    ) == percentile_over_units_clustered(_POOL_VALUES, _POOL_KEYS, _POOL_MEMBERSHIP, seed=7)
+
+
+def test_a_weight_the_clustered_percentile_cannot_use_is_refused_before_any_draw():
+    """The same single authority on this path too: `units.usable_weight` via
+    `checked_weights`, under the identifier `validate` reports — and before the
+    grouping, rather than after 2000 replicates of `nan`."""
+    with pytest.raises(ContractError) as exc:
+        percentile_over_units_clustered(
+            _POOL_VALUES,
+            _POOL_KEYS,
+            _POOL_MEMBERSHIP,
+            seed=7,
+            weights=[1.0] * 7 + [0.0],
+        )
+    assert exc.value.code == "E-DATA-WEIGHT-INVALID"
+
+
+def test_a_unit_outside_the_clustered_percentile_membership_is_not_absorbed():
+    """`units.cluster_count_of`'s discipline, from this caller's side: a key the
+    membership doesn't hold is a core defect, and a cluster of its own for it
+    would raise G and change the draw instead of failing."""
+    with pytest.raises(KeyError):
+        percentile_over_units_clustered(
+            [1.0, 2.0, 3.0], ["u1", "u2", "u3"], {"u1": "c1", "u2": "c2"}, seed=7
+        )
+
+
+def test_the_same_seed_reproduces_the_clustered_percentile():
+    """Reproducibility only, deliberately without the "a different seed moves it"
+    half its unclustered sibling carries: a 4-cluster draw has 35 achievable
+    replicates and this roster's endpoints are the same two on every seed tried
+    (7, 1, 42, 99, 2026, 13). That discreteness is the clustered draw telling the
+    truth — 4 clusters really are 4 draws — and a fixture large enough to make
+    the seed move the answer would be a different test's fixture."""
+    assert percentile_over_units_clustered(
+        _POOL_VALUES, _POOL_KEYS, _POOL_MEMBERSHIP, seed=7
+    ) == percentile_over_units_clustered(_POOL_VALUES, _POOL_KEYS, _POOL_MEMBERSHIP, seed=7)
+    values = [float(i) for i in range(50)]
+    keys = [f"u{i}" for i in range(50)]
+    membership = {key: f"c{i // 2}" for i, key in enumerate(keys)}
+    assert percentile_over_units_clustered(
+        values, keys, membership, seed=7
+    ) != percentile_over_units_clustered(values, keys, membership, seed=99)
 
 
 def test_resample_seed_depends_on_the_digest():

@@ -463,6 +463,126 @@ def percentile_over_units(
     return Interval(low=means[lo], high=means[hi], method="percentile_over_units")
 
 
+def percentile_over_units_clustered(
+    values: Sequence[float],
+    keys: Sequence[str],
+    membership: Mapping[str, str],
+    seed: int,
+    draws: int = 2000,
+    confidence: float = 0.95,
+    weights: Sequence[Any] | None = None,
+) -> Interval | None:
+    """A percentile interval that resamples whole CLUSTERS, not rows.
+
+    `reference.md` § Clustered units: "`resample` resamples clusters, not rows. A
+    bootstrap that draws 300 cells with replacement from 10 animals produces
+    resamples far more alike than a fresh sample of animals would be, so the
+    percentile interval comes out too narrow… Core draws whole clusters with
+    replacement, so a resampled table has a varying row count, and the interval's
+    effective `n` is the cluster count." § Statistical reporting says the same
+    thing for the contrast forms — "the percentile forms resample whole clusters"
+    — and `experimental-designs.md` § Mistakes core prevents states the size of
+    it: "300 cells from 10 animals give a 10-draw interval".
+
+    **Each replicate draws `G` clusters with replacement and pools their units**,
+    where `G` is the cluster count. That is the whole construction, and the two
+    ways to get it wrong both produce a plausible number:
+
+    - Drawing `n` units and repairing the groups afterwards is a 300-draw
+      interval however carefully the groups are respected — the count of
+      independent draws is what the document names, and it is `G`.
+    - Averaging the drawn clusters' MEANS gives every cluster equal say. The
+      document says "pools their units" and calls out the "varying row count"
+      that follows, so a large cluster contributes more rows than a small one.
+      The two coincide exactly when the clusters are the same size, which is why
+      the fixtures here are deliberately unbalanced.
+
+    `G` comes from `units.cluster_count_of` — task 8's single counting expression,
+    so this cannot disagree with the `n.clusters` printed beside the interval or
+    with a fold's partition about what one cluster is. The number of pools drawn
+    from agrees with it *by construction* rather than by assertion: both are the
+    distinct values `membership` takes over these same `keys`.
+
+    **Each value keeps its cluster (and its weight) through the sort**, because
+    the grouping happens before any sort and carries the pairs. The pool is sorted
+    for the row-order invariance `percentile_over_units` explains — a fixed seed
+    draws a fixed sequence of *indices*, so the multiset must be all that matters
+    — and clusters are ordered by their own sorted contents rather than by label,
+    which is what makes a relabelled roster give the identical interval and what
+    makes the one-unit-per-cluster case reproduce `percentile_over_units` digit
+    for digit. Sorting values and cluster labels as separate sequences would
+    preserve the invariance and silently re-pair them; equal-sized clusters cannot
+    see that, and neither can clusters whose value ranges don't interleave.
+
+    **The floor is two clusters, and it is a derivation rather than an analogy to
+    `t_over_units_clustered`'s df.** A percentile interval has no df. At `G = 1`
+    every replicate draws the same single cluster, so the resampled distribution
+    is a point mass, both ranks land on it and the interval has zero width —
+    which § Statistical reporting refuses in those terms: "a zero-width 95 %
+    interval is not [honest]", and "reporting a point with no interval is
+    honest". The `len(values) < 2` guard in front of it is
+    `percentile_over_units`' own floor, kept so the two constructions refuse the
+    same degenerate inputs, and `draws < min_honest_draws(confidence)` is
+    orthogonal to both — that one is about how many replicates the ranks are read
+    off, not about how many things each replicate draws.
+
+    **There is deliberately no higher threshold on `G` here.** A three-cluster
+    resample reports, and the judgment that it is too few belongs to
+    `statistics.min_clusters` — `reference.md` § The one config file:
+    "`validate` warns when `resample` would draw fewer than this". A second
+    threshold in this module would be a competing authority for one judgment.
+
+    With `weights`, the statistic recomputed on each draw is the weighted mean
+    over the pooled units and the draw itself is unchanged. That is the
+    composition of two sentences rather than a choice: § Weighted samples says a
+    percentile interval "recomputes the weighted statistic on each draw, so the
+    weights are in the estimate rather than in the drawing", unqualified by what
+    the draw is, and then says "`cluster_by` still decides the draw when both are
+    declared, since a cluster is what's independent and a weight is what it
+    represents" — which moves the draw and says in its reason clause that the two
+    live in different places. A cluster drawn twice contributes its units' weights
+    twice, which is the only reading of "pools their units". `checked_weights`
+    gates once before any grouping, for the reason the unclustered weighted branch
+    states: a bad weight is refused before the draw rather than producing 2000
+    draws' worth of `nan`.
+
+    `strict=True` on the zip, for the reason `_weighted_mean` uses it: a
+    keys/values length mismatch is a misaligned cluster vector, and it would
+    produce a plausible number rather than an error.
+    """
+    if len(values) < 2:
+        return None
+    if draws < min_honest_draws(confidence):
+        return None
+    groups = cluster_count_of(membership, keys)
+    if groups < 2:
+        return None
+    # Unit weights of 1.0 when none were declared, so the pairs have one shape;
+    # the unweighted branch below still computes a plain mean, so this cannot move
+    # an unweighted interval by a digit.
+    carried = [1.0] * len(values) if weights is None else checked_weights(weights)
+    # Grouped BEFORE any sort, indexed rather than `.get`-ed for the reason
+    # `cluster_count_of` states: a key the roster doesn't hold is a core defect,
+    # and a cluster of its own for it would raise `G`.
+    pools: dict[str, list[tuple[float, float]]] = {}
+    for value, key, weight in zip(values, keys, carried, strict=True):
+        pools.setdefault(membership[key], []).append((float(value), weight))
+    ordered = sorted(sorted(pool) for pool in pools.values())
+    rng = random.Random(seed)
+    means: list[float] = []
+    for _ in range(draws):
+        drawn = [pair for _ in range(groups) for pair in ordered[rng.randrange(groups)]]
+        if weights is None:
+            means.append(sum(v for v, _ in drawn) / len(drawn))
+        else:
+            means.append(_weighted_mean([w for _, w in drawn], [v for v, _ in drawn]))
+    means.sort()
+    lo, hi = _percentile_ranks(draws, confidence)
+    return Interval(
+        low=means[lo], high=means[hi], method="percentile_over_units_clustered"
+    )
+
+
 def percentile_of_derived(
     collapsed: dict[str, dict[str, float]],
     compute: "Callable[[UnitTable], float | None]",
