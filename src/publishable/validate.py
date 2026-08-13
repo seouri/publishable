@@ -2892,9 +2892,10 @@ def _check_sweep(
     # yet counts as no resolvable family here; `_check_contrasts` reports the
     # shape or label fault under its own, more specific code.
     try:
-        comparisons = len(resolve_contrasts(doc, conditions))
+        resolved_contrasts = resolve_contrasts(doc, conditions)
     except (TypeError, KeyError, AttributeError, ValueError):
-        comparisons = 0
+        resolved_contrasts = []
+    comparisons = len(resolved_contrasts)
     # A weighted design that publishes a contrast. `reference.md` § Weighted
     # samples: core computes weighted means for `basis: units` metrics and a
     # weighted `t_over_units` interval whose df comes from Kish's effective size,
@@ -3002,6 +3003,70 @@ def _check_sweep(
             "the difference as an `Estimate` returned by a `summary` step, which core "
             "records as reported rather than recomputing. The combination will be honored "
             "once the paired and unpaired estimators take clusters",
+        )
+
+    # A contrast whose two conditions were assigned to different arms of a
+    # `sweep.groups` axis. `reference.md` § Allocation's pairing table: parameter
+    # axes only under `allocation: between` share the same arm's units and are
+    # "paired within that arm", but two conditions that differ on *any* `groups`
+    # axis hold disjoint sets of units — unpaired, "by construction". No
+    # construction in this build computes an unpaired interval:
+    # `paired_t_over_units` takes a list of per-unit *differences* and nothing
+    # else, and `grep -rn 'unpaired_\|welch_' src/` returns nothing to call — no
+    # `welch_t_over_units`, no `unpaired_percentile_over_units`. Reached, the
+    # delta would be computed over `stats.paired_keys`' intersection of two
+    # disjoint arms — empty by construction — so every downstream construction
+    # returns `None`, and the record would carry `{"delta": null, "paired":
+    # true, "n_paired": 0, "ci95": null}` for every metric, with a `paired: true`
+    # that is false and nothing saying so.
+    #
+    # **Unlike `E-DATA-WEIGHT-CONTRAST` and `E-DATA-CLUSTER-CONTRAST` above, this
+    # guard does not fire on `comparisons > 0`.** A weight or a cluster affects
+    # every contrast alike, but a group axis does not: in a `groups × grid`
+    # design, control-pearson vs. control-spearman shares the same arm's units
+    # and is paired and computable, while control-pearson vs. treatment-pearson
+    # is not. Firing on the resolved family's size alone would refuse the first
+    # comparison along with the second and make "each arm analyzed several
+    # ways" unexpressible. So this reads each resolved comparison individually:
+    # `cli._differing_axes` gives the axes two conditions disagree on, and
+    # intersecting that with either side's `selectors` — the group axes a
+    # condition actually carries a value for — is what tells a cross-arm
+    # comparison from a within-arm one.
+    #
+    # Temporary, and narrowly so: H4 Statistics owns the unpaired estimator
+    # family and lifts this the moment it exists. Like its two siblings it
+    # refuses a *combination* rather than a declaration, so it carries a row in
+    # § Validation's registry and is not one of the `NOT BUILT` declarations §
+    # The one config file counts.
+    from publishable.cli import _differing_axes
+
+    conditions_by_index = {cond.index: cond for cond in conditions}
+    for comp in resolved_contrasts:
+        of_cond = conditions_by_index.get(comp.of)
+        against_cond = conditions_by_index.get(comp.against)
+        if of_cond is None or against_cond is None:
+            continue
+        differing = _differing_axes(of_cond, against_cond)
+        group_selectors = of_cond.selectors | against_cond.selectors
+        group_axes = [axis for axis in differing if axis in group_selectors]
+        if not group_axes:
+            continue
+        plural = "" if len(group_axes) == 1 else "s"
+        c.error(
+            "E-DATA-ALLOCATION-CONTRAST",
+            "sweep.groups",
+            f"condition {comp.of} ({of_cond.label!r}) and condition {comp.against} "
+            f"({against_cond.label!r}) differ on group axis{plural} "
+            f"{', '.join(group_axes)} — `allocation: between` means the two conditions "
+            "hold disjoint sets of units, and no construction in this build computes an "
+            "unpaired interval: `paired_t_over_units` takes per-unit differences and "
+            "nothing else, and there is no `welch_t_over_units` or "
+            "`unpaired_percentile_over_units` to call. The delta would be computed over "
+            "an empty pairing and published as `null` beside a `paired: true` that is "
+            "false. Express the difference as an `Estimate` returned by a `summary` "
+            "step, which core records as reported rather than recomputing, or run the "
+            "two arms as separate runs and join them in a `study`. This will be honored "
+            "once the unpaired estimators exist",
         )
 
     if comparisons > 0 and (correction or "holm") == "none":

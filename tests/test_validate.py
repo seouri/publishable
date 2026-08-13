@@ -6307,6 +6307,124 @@ def test_the_cluster_warning_is_skipped_without_a_roster():
     assert not c.findings
 
 
+# --- a contrast whose two sides differ on a group axis has no unpaired ------
+# construction ----------------------------------------------------------------
+#
+# `E-DATA-ALLOCATION-CONTRAST` is the third row in this family, beside
+# `E-DATA-WEIGHT-CONTRAST` and `E-DATA-CLUSTER-CONTRAST` above — a refusal of a
+# *combination* a resolved comparison family can carry, not of a declaration.
+# It differs from its two siblings in the one way that matters: those two fire
+# on `comparisons > 0`, because a weight or a cluster affects every contrast in
+# the family alike. This one cannot — a `groups × grid` design's within-arm
+# comparisons (control-pearson vs. control-spearman) are paired and computable,
+# sharing the same arm's units, while its cross-arm ones (control-pearson vs.
+# treatment-pearson) are not, so the guard has to read each resolved comparison
+# on its own rather than the family's size.
+
+
+def test_a_group_axis_with_no_comparison_is_untouched(write_config):
+    """The first control: a declared `groups` axis with no baseline and no
+    `statistics.contrasts` resolves no comparison at all — `resolve_contrasts`
+    returns nothing to compare, so there is no unpaired delta for this guard to
+    prevent and it must draw nothing new. This is the plain groups-axis config
+    already exercised elsewhere in this file (`E-SWEEP-GROUPS-UNSUPPORTED`,
+    `E-DATA-ALLOCATION-WITHIN-ARMS`), and its finding set is the exact one it
+    has today — asserted here as a whole set, not a membership check, so a
+    change that adds `E-DATA-ALLOCATION-CONTRAST` to it would be caught."""
+    axis = [{"by": "arm", "levels": ["control", "treatment"]}]
+    assert codes(write_config({"sweep": {"groups": axis}})) == {
+        "E-SWEEP-GROUPS-UNSUPPORTED",
+        "E-DATA-ALLOCATION-WITHIN-ARMS",
+    }
+
+
+def test_a_within_allocation_contrast_is_untouched(write_config):
+    """The second control: an ordinary parameter sweep with a baseline — no
+    `groups` axis anywhere, so every condition's `selectors` is empty and the
+    guard's intersection is always empty. Its contrast is genuinely paired
+    (`reference.md` § Allocation: parameter axes only, under `within` or
+    `between`, share the same arm's units), and the finding set is empty,
+    exactly as it is without this task's change."""
+    path = write_config(
+        {
+            "sweep": {
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {"analysis.method": ["spearman", "kendall"]},
+            }
+        }
+    )
+    assert codes(path) == set()
+
+
+def test_a_generated_cross_arm_comparison_is_refused_and_the_within_arm_one_is_not(
+    write_config,
+):
+    """The third control, and the one the guard exists for: a `groups × grid`
+    design whose baseline fixes the group axis to one arm (`control`) rather
+    than per-cell. `sweep.expand` then renders one baseline row and
+    `contrasts.resolve_contrasts` compares every other condition against it —
+    including the `treatment` ones, which is what makes the baseline-generated
+    route (not just a declared `statistics.contrasts` entry) produce a
+    cross-arm comparison.
+
+    Four conditions result: `control/spearman` and `control/kendall`, each
+    differing from the `control/pearson` baseline on `analysis.method` alone
+    (same arm, paired, untouched), and `treatment/spearman` and
+    `treatment/kendall`, each differing on `arm` too (cross-arm, disjoint
+    units, refused). The count discriminates the guard from a
+    `comparisons > 0` one: four resolved comparisons, and the code fires on
+    exactly the two that actually cross arms — not zero, and not four."""
+    path = write_config(
+        {
+            "sweep": {
+                "groups": [{"by": "arm", "levels": ["control", "treatment"]}],
+                "grid": {"analysis.method": ["spearman", "kendall"]},
+                "baseline": {"arm": "control", "analysis.method": "pearson"},
+            }
+        }
+    )
+    c = Collector()
+    validate_config(path, c)
+    found = [f for f in c.findings if f.code == "E-DATA-ALLOCATION-CONTRAST"]
+    assert len(found) == 2
+    named = {f.message for f in found}
+    assert any("'arm=treatment__method=spearman'" in m for m in named)
+    assert any("'arm=treatment__method=kendall'" in m for m in named)
+    # Neither within-arm comparison is named by any finding.
+    assert not any("'arm=control__method=spearman'" in m for m in named)
+    assert not any("'arm=control__method=kendall'" in m for m in named)
+    for message in named:
+        assert "differ on group axis arm" in message
+
+
+def test_a_declared_contrast_across_arms_is_refused(write_config):
+    """The other source of a comparison: a `statistics.contrasts` entry naming
+    two conditions on either side of a `groups` axis directly, with no baseline
+    involved at all. This is the declared-contrast branch the generated one
+    above does not exercise — `resolve_contrasts` reaches it through the
+    `statistics.contrasts` loop rather than through a baseline match, so a
+    mutation that only breaks the baseline-generated path would still fail
+    this test."""
+    axis = [{"by": "arm", "levels": ["control", "treatment"]}]
+    path = write_config(
+        {
+            "sweep": {"groups": axis},
+            "statistics": {
+                "contrasts": [
+                    {"id": "t_vs_c", "of": "arm=treatment", "against": "arm=control"}
+                ]
+            },
+        }
+    )
+    c = Collector()
+    validate_config(path, c)
+    found = [f for f in c.findings if f.code == "E-DATA-ALLOCATION-CONTRAST"]
+    assert len(found) == 1
+    assert "'arm=treatment'" in found[0].message
+    assert "'arm=control'" in found[0].message
+    assert "differ on group axis arm" in found[0].message
+
+
 # --- a cluster and a weight must not vary within a unit's measurement rows ----
 #
 # `units.collapse_measurements` raises; `_check_units` wraps `resolve_units` in
@@ -7054,11 +7172,24 @@ def test_a_baseline_may_fix_a_group_level(write_config):
     beside the ones under test rather than filtered away: `validate` collects
     rather than stops, which is what makes the exemption testable today. So is
     `E-DATA-ALLOCATION-WITHIN-ARMS`: none of these three configs declares
-    `allocation`, which defaults to `within`, beside the declared `arm` axis."""
+    `allocation`, which defaults to `within`, beside the declared `arm` axis.
+
+    A baseline fixing the group axis to one arm (`{arm: control}`) is also the
+    shape `E-DATA-ALLOCATION-CONTRAST` refuses: with no `grid` beside it,
+    `sweep.expand` still crosses the bare `arm` axis into the product, so
+    `arm=treatment` is a real condition and `resolve_contrasts` compares it
+    against the single `control` baseline — a cross-arm, disjoint-units
+    comparison. It fires in the first and third configs below and not the
+    second, which declares no `groups` axis at all and so generates no
+    `arm=treatment` condition to compare."""
     axis = [{"by": "arm", "levels": ["control", "treatment"]}]
     assert _error_codes(
         write_config({"sweep": {"groups": axis, "baseline": {"arm": "control"}}})
-    ) == {"E-SWEEP-GROUPS-UNSUPPORTED", "E-DATA-ALLOCATION-WITHIN-ARMS"}
+    ) == {
+        "E-SWEEP-GROUPS-UNSUPPORTED",
+        "E-DATA-ALLOCATION-WITHIN-ARMS",
+        "E-DATA-ALLOCATION-CONTRAST",
+    }
 
     assert _error_codes(write_config({"sweep": {"baseline": {"arm": "control"}}})) == {
         "E-SWEEP-PATH-UNKNOWN"
@@ -7073,7 +7204,12 @@ def test_a_baseline_may_fix_a_group_level(write_config):
                 }
             }
         )
-    ) == {"E-SWEEP-GROUPS-UNSUPPORTED", "E-SWEEP-PATH-UNKNOWN", "E-DATA-ALLOCATION-WITHIN-ARMS"}
+    ) == {
+        "E-SWEEP-GROUPS-UNSUPPORTED",
+        "E-SWEEP-PATH-UNKNOWN",
+        "E-DATA-ALLOCATION-WITHIN-ARMS",
+        "E-DATA-ALLOCATION-CONTRAST",
+    }
 
 
 def test_a_group_axis_may_not_name_a_path_a_parameter_axis_writes(write_config):
@@ -7175,7 +7311,16 @@ def test_a_baseline_may_not_fix_a_group_level_while_ablate_is_declared(write_con
     without `ablate` is the ordinary per-cell design § Expansion modes' second
     table row describes. None of the three declares `allocation`, which
     defaults to `within`, beside the declared `cohort` axis, so
-    `E-DATA-ALLOCATION-WITHIN-ARMS` fires alongside every one of them."""
+    `E-DATA-ALLOCATION-WITHIN-ARMS` fires alongside every one of them.
+
+    The second control also carries `E-DATA-ALLOCATION-CONTRAST`: its baseline
+    fixes `cohort` to `derivation` and leaves `analysis.method` free, so
+    `sweep.expand` renders one per-cell baseline per method value **within
+    `derivation` alone** — `validation`'s two conditions have no baseline of
+    their own and are compared against `derivation`'s, a cross-cohort,
+    disjoint-units comparison for each. This is the same "a baseline fixing the
+    group axis to one arm" shape the first control carries, reached here
+    through a per-cell baseline rather than a fully-fixed one."""
     axis = [{"by": "cohort", "levels": ["derivation", "validation"]}]
     assert _error_codes(
         write_config(
@@ -7215,7 +7360,11 @@ def test_a_baseline_may_not_fix_a_group_level_while_ablate_is_declared(write_con
                 }
             }
         )
-    ) == {"E-SWEEP-GROUPS-UNSUPPORTED", "E-DATA-ALLOCATION-WITHIN-ARMS"}
+    ) == {
+        "E-SWEEP-GROUPS-UNSUPPORTED",
+        "E-DATA-ALLOCATION-WITHIN-ARMS",
+        "E-DATA-ALLOCATION-CONTRAST",
+    }
 
 
 # `data.units.allocation`, `data.units.assign`, and `sweep.groups` against each

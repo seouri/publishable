@@ -622,9 +622,15 @@ def _comparison_step_blocks(
     rather than reported as if it were clean. Both keys are absent, not
     `False`/`[]`, when only one axis differs. `paired` stays hard `True`
     here: the crossed-*group*-axis case `reference.md` shows with
-    `paired: false` and `unpaired_*` needs a group axis or
-    `allocation: between`, both refused (`E-SWEEP-GROUPS-UNSUPPORTED`,
-    `E-DATA-ALLOCATION-UNSUPPORTED`), so it is unreachable in this build.
+    `paired: false` and `unpaired_*` is the one `validate` refuses at
+    config time — `E-DATA-ALLOCATION-CONTRAST` reads the resolved comparison
+    family and rejects any comparison whose two sides differ on a
+    `sweep.groups` axis, since `allocation: between` makes those two sides
+    disjoint sets of units and no construction here computes an unpaired
+    interval. `cli` always validates before running, so every comparison
+    that reaches this function is genuinely paired rather than merely one
+    this build happens not to construct — `True` is a true claim about what
+    survived validation, not a placeholder for a case nothing can reach.
     """
     differs_on = _differing_axes(
         conditions_by_index[comp.of], conditions_by_index[comp.against]
