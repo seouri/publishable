@@ -7,10 +7,12 @@ from typing import Any
 
 import pytest
 import yaml
+from tests.test_stats import _repeat_result
 
 from publishable import BaseStep
 from publishable.cli import (
     _apply_execution_order,
+    _cond_roster,
     _resolved_group_axes,
     _wide_swept_paths,
     main,
@@ -20,6 +22,7 @@ from publishable.errors import ContractError
 from publishable.generators.experiment import generate_experiment
 from publishable.generators.step import generate_step
 from publishable.replication import LABEL_JOIN
+from publishable.runner import attrition
 from publishable.scope import Execution
 
 Ran = namedtuple("Ran", ["condition_index", "repeat_label"])
@@ -480,6 +483,181 @@ def test_non_string_levels_make_arm_members_raise_rather_than_skip_narrowing():
     )
     with pytest.raises(KeyError):
         arm_members(roster, group_axes, conditions)
+
+
+def test_cond_roster_narrows_each_condition_to_its_own_arm_size():
+    """`_cond_roster` is the read side of the narrowing `execute_plan` already
+    applies to what a condition's own executions run over — task 12's 7/5
+    fixture, reused rather than a fresh one (no arm fixture may share a
+    boundary with a cluster fixture, and this fixture already states why its
+    counts discriminate).
+
+    Exact sizes, not a reconciliation: this and
+    `test_cond_roster_covers_the_roster_exactly_once_per_unit` are kept as two
+    separate assertions on purpose, each able to fail on its own — a "sum to
+    the roster" combination (7 + 5 == 12) would be arithmetically implied the
+    moment 7 and 5 are already pinned here, which is the addendum's own
+    corrected finding about its first draft."""
+    from tests.test_runner import _arm_members12, _arm_roster12
+
+    roster = _arm_roster12()
+    arm_members_map = _arm_members12()
+
+    assert len(_cond_roster(roster, 0, arm_members_map)) == 7
+    assert len(_cond_roster(roster, 1, arm_members_map)) == 5
+
+
+def test_cond_roster_covers_the_roster_exactly_once_per_unit():
+    """Coverage, not a sum: `E-DATA-ASSIGN-LEVELS` (task 10) is what makes this
+    meaningful — no unit belongs to no arm, and no declared level is empty —
+    and it fails for reasons the pinned 7/5 counts above do not. Kept in its
+    own test, with no size assertion in it, so mutating "count the whole
+    roster per condition" is caught here independently of the sizes test
+    above rather than only inferred from it dying too."""
+    from tests.test_runner import _arm_members12, _arm_roster12
+
+    roster = _arm_roster12()
+    arm_members_map = _arm_members12()
+
+    control_keys = {u.key for u in _cond_roster(roster, 0, arm_members_map)}
+    treatment_keys = {u.key for u in _cond_roster(roster, 1, arm_members_map)}
+    assert control_keys | treatment_keys == {u.key for u in roster}
+    assert control_keys & treatment_keys == set()
+
+
+def test_cond_roster_is_the_same_object_with_no_group_axis():
+    """`roster is roster` (identity, not equality) is what `_cond_beside_n`
+    reads to decide whether `technical_n` survives — matching `execute_plan`'s
+    own `scoped_units = units` no-op when a run declares no group axis."""
+    from tests.test_runner import _arm_roster12
+
+    roster = _arm_roster12()
+    assert _cond_roster(roster, 0, None) is roster
+
+
+def test_attrition_reconciles_per_arm_over_the_uneven_7_5_fixture():
+    """The counts task 13 exists to fix: `attrition` given the WHOLE roster for
+    an arm-narrowed condition reports `resolved: 12` and derives the other
+    arm's units as `failed` — this asserts the fixed shape, `attrition` given
+    `_cond_roster`'s own answer.
+
+    One unit ineligible in `control` (`c0`, `io.skip`) and one failed in
+    `treatment` (`t0`, recorded nowhere) — matching the addendum's "make at
+    least one arm attrit": two clean arms would leave `ineligible`/`failed`
+    zero everywhere and the reconciliation would hold trivially for reasons
+    that don't discriminate this fix from the bug it fixes."""
+    from tests.test_runner import _arm_members12, _arm_roster12
+
+    roster = _arm_roster12()
+    arm_members_map = _arm_members12()
+    control_roster = _cond_roster(roster, 0, arm_members_map)
+    treatment_roster = _cond_roster(roster, 1, arm_members_map)
+
+    control_rows = {f"c{i}": {"r": 0.5} for i in range(1, 7)}  # c0 skipped
+    treatment_rows = {f"t{i}": {"r": 0.5} for i in range(1, 5)}  # t0 unsettled
+    results = [
+        _repeat_result("measure", "seed01", 0, control_rows, skipped=frozenset({"c0"})),
+        _repeat_result("measure", "seed01", 1, treatment_rows),
+    ]
+
+    control_counts = attrition(results, control_roster, "measure", 0)
+    treatment_counts = attrition(results, treatment_roster, "measure", 1)
+
+    # Exact numbers, not the reconciliation alone: `12 == 12 + 0 + 0` satisfies
+    # `resolved == completed + ineligible + failed` too, so asserting only the
+    # arithmetic is a check that cannot fail (the addendum's own first draft
+    # made exactly this mistake with "sum to the roster").
+    assert control_counts == {"resolved": 7, "completed": 6, "ineligible": 1, "failed": 0}
+    assert treatment_counts == {"resolved": 5, "completed": 4, "ineligible": 0, "failed": 1}
+    assert (
+        control_counts["resolved"]
+        == control_counts["completed"] + control_counts["ineligible"] + control_counts["failed"]
+    )
+    assert (
+        treatment_counts["resolved"]
+        == treatment_counts["completed"]
+        + treatment_counts["ineligible"]
+        + treatment_counts["failed"]
+    )
+
+
+def _crossing_stratum_fixture():
+    """A roster whose `site` attribute crosses both arms — `north` is 4 of 7
+    `control` units and 3 of 5 `treatment` units — so narrowing to one arm
+    actually removes units from a level, rather than a stratum confined to
+    one arm, which wouldn't discriminate the fix from the bug it fixes.
+    Distinct from `_arm_roster12`: a second attribute on the same units, not
+    a shared boundary with any cluster fixture."""
+    from publishable.units import Unit, UnitList
+
+    control = [
+        Unit(key=f"c{i}", attributes={"arm": "control", "site": "north" if i < 4 else "south"})
+        for i in range(7)
+    ]
+    treatment = [
+        Unit(
+            key=f"t{i}",
+            attributes={"arm": "treatment", "site": "north" if i < 3 else "south"},
+        )
+        for i in range(5)
+    ]
+    roster = UnitList(control + treatment)
+    arm_members_map = {
+        0: frozenset(u.key for u in roster if u.attributes["arm"] == "control"),
+        1: frozenset(u.key for u in roster if u.attributes["arm"] == "treatment"),
+    }
+    return roster, arm_members_map
+
+
+def test_report_by_levels_narrows_a_crossing_stratum_to_the_given_roster():
+    """`_report_by_levels` is the piece `command_run`'s `report_by` block calls
+    against `_cond_roster`'s answer, extracted specifically so this is
+    testable at all: the inline loop it replaces lives inside `command_run`'s
+    per-condition, per-step loop, which no test reaches with a real group
+    axis declared (`validate` refuses one outright in this build,
+    `E-SWEEP-GROUPS-UNSUPPORTED`) — extraction is what makes the narrowing a
+    function with one roster parameter rather than an untestable read of an
+    enclosing-scope name.
+
+    Calling the SAME function with the whole roster reproduces the bug this
+    fix removes — the other arm's units join a level that also exists in
+    this one — which is what makes this test able to fail: reverting the
+    call site inside `command_run` back to `roster` would revert to exactly
+    this."""
+    from publishable.cli import _report_by_levels
+
+    roster, arm_members_map = _crossing_stratum_fixture()
+    control_roster = _cond_roster(roster, 0, arm_members_map)
+
+    whole_keys, _whole_roster = _report_by_levels(roster, "site")["north"]
+    assert whole_keys == {"c0", "c1", "c2", "c3", "t0", "t1", "t2"}
+
+    arm_keys, arm_roster = _report_by_levels(control_roster, "site")["north"]
+    assert arm_keys == {"c0", "c1", "c2", "c3"}
+    assert {u.key for u in arm_roster} == arm_keys
+    assert arm_keys < whole_keys  # the narrowing actually removes units
+
+
+def test_cond_beside_n_withholds_technical_n_under_an_arm_only():
+    """Addendum item #5: `technical_n` beside a per-arm `n` needs a decision,
+    and the codebase already litigated this one level down — `report_by`'s
+    own level block withholds it rather than copying a whole-roster figure
+    onto a subset (`weighted_beside`, not `beside_n`, at that call site).
+    `_cond_beside_n` applies the same rule one level up, gated on
+    `_cond_roster`'s own identity signal for "no group axis narrowed this
+    condition"."""
+    from tests.test_runner import _arm_members12, _arm_roster12
+
+    from publishable.cli import _cond_beside_n
+
+    roster = _arm_roster12()
+    arm_members_map = _arm_members12()
+    beside_n = {"technical_n": {"min": 1, "max": 3, "median": 2}, "weighted_by": "w"}
+
+    control_roster = _cond_roster(roster, 0, arm_members_map)
+    assert _cond_beside_n(beside_n, control_roster, roster) == {"weighted_by": "w"}
+    # No group axis: `cond_roster is roster`, and nothing is withheld.
+    assert _cond_beside_n(beside_n, roster, roster) == beside_n
 
 
 def test_the_recorded_order_is_the_order_that_ran(tmp_path: Path):

@@ -45,7 +45,13 @@ from publishable.replication import (
 )
 from publishable.run_identity import RunLock, allocate_run_dir, point_latest
 from publishable.run_record import assemble_run_yaml, run_status, summary_values
-from publishable.runner import attrition, execute_plan, resolve_condition_cfg, resolve_wide_cfg
+from publishable.runner import (
+    _arm_keys,
+    attrition,
+    execute_plan,
+    resolve_condition_cfg,
+    resolve_wide_cfg,
+)
 from publishable.scaffold import scaffold_project
 from publishable.scope import Execution, build_plan
 from publishable.stats import (
@@ -339,6 +345,90 @@ def _resolved_group_axes(
         column = declared_from if isinstance(declared_from, str) and declared_from else axis
         axes[axis] = (column, levels)
     return axes
+
+
+def _cond_roster(
+    roster: "UnitList",
+    cond_index: int,
+    arm_members_map: "dict[int, frozenset[str]] | None",
+) -> "UnitList":
+    """The units condition `cond_index` counts against — its own arm's subset
+    of the shared roster when a group axis selects one, and the whole roster
+    (the same object, not a copy) otherwise.
+
+    This is the read side of the same narrowing `execute_plan` already applies
+    to the units a condition's steps EXECUTE against (`runner.py`'s own
+    `scoped_units`): `attrition` and `statistics.report_by`'s per-level table
+    both count units for a condition, and until this function existed they
+    counted the whole roster while the run itself executed only the arm —
+    `resolved: 12` reported beside 5 units the condition's own executions
+    never touched, with the other arm's 7 silently landing in `failed`
+    (`reference.md` § What isn't a repeat: "Under a group axis it doesn't
+    reconcile, and shouldn't — each arm's interval is over that arm's units").
+
+    Built on `runner._arm_keys`, not `units.arms_of` or a fresh comprehension
+    over `roster`: `arm_members_map` is `units.arm_members`'s answer, already
+    resolved once from the same conditions the plan itself was built from, and
+    `_arm_keys` is the guard `execute_plan` already raises through
+    (`E-RUN-ARM-UNRESOLVED`) for a condition index the resolved arms disagree
+    with the plan about. A fourth derivation of arm membership here — reaching
+    back into `units.arms_of` and re-reducing across axes per condition — is
+    exactly the defect the single-authority pattern (`arms_of`, then
+    `arm_members`, then this) exists to prevent a third instance of.
+    """
+    if arm_members_map is None:
+        return roster
+    keys = _arm_keys(cond_index, {u.key for u in roster}, arm_members_map)
+    return UnitList([u for u in roster if u.key in keys])
+
+
+def _cond_beside_n(
+    beside_n: dict[str, Any], cond_roster: "UnitList", roster: "UnitList"
+) -> dict[str, Any]:
+    """`beside_n` with `technical_n` withheld when `cond_roster` is an arm
+    rather than the whole roster.
+
+    `technical_n` is `{min, max, median}` over the WHOLE roster's measurement
+    counts (`command_run`'s own comment above where it is built) — the same
+    reason `report_by`'s per-level `summarize_step` call passes
+    `weighted_beside` rather than `beside_n`: copying a whole-roster figure
+    onto a subset states a spread nobody computed over that subset. Under a
+    group axis `cond_roster` IS such a subset, one level up from a
+    `report_by` level, so the same withholding applies here rather than
+    leaving a per-arm `n` sitting beside a figure describing units this
+    condition's own table does not hold.
+
+    `cond_roster is roster` (identity, not equality) is `_cond_roster`'s own
+    signal that no group axis narrowed this condition — the same check that
+    function documents for its no-narrowing return.
+    """
+    if cond_roster is roster:
+        return beside_n
+    return {k: v for k, v in beside_n.items() if k != "technical_n"}
+
+
+def _report_by_levels(
+    roster: "UnitList", attribute: str
+) -> dict[str, tuple[set[str], "UnitList"]]:
+    """Each level of `attribute` over `roster`, paired with the roster VIEW
+    `attrition` must count that level against — `report_by`'s per-level loop,
+    extracted so the narrowing is a function with one roster parameter rather
+    than an inline block reading a name from the enclosing scope.
+
+    Passing the whole roster here instead of a condition's own arm
+    (`_cond_roster`'s answer) is the S4b-Critical-shaped defect one level up:
+    the same comment at the call site below states it, "one key set decides
+    BOTH the table and the counts — a number reported against a denominator
+    computed over other units." Extracting this loop is what makes that
+    defect representable as a unit test at all: the inline block it replaces
+    lived inside `command_run`'s per-condition, per-step loop, which no test
+    reaches with a real group axis declared — `validate` refuses one outright
+    in this build (`E-SWEEP-GROUPS-UNSUPPORTED`).
+    """
+    out: dict[str, tuple[set[str], UnitList]] = {}
+    for level, keys in sorted(levels_for(roster, attribute).items()):
+        out[level] = (keys, UnitList([u for u in roster if u.key in keys]))
+    return out
 
 
 def _attributed(table: UnitTable, attributes: dict[str, dict[str, Any]]) -> UnitTable:
@@ -1249,13 +1339,22 @@ def command_run(config_path: Path) -> int:
                     and r.rows
                 }
                 aggregated[cond.index] = {}
+                # This condition's own arm — a subset view of `roster`, never a
+                # re-resolution — or `roster` itself, the same object, when no
+                # group axis selects one. `attrition` below (and `report_by`'s
+                # per-level table further down) must count what this
+                # condition's executions were actually handed: `_cond_roster`
+                # is the read side of the same narrowing `execute_plan` already
+                # applies to what those executions ran over.
+                cond_roster = _cond_roster(roster, cond.index, arm_members_map)
+                cond_beside_n = _cond_beside_n(beside_n, cond_roster, roster)
                 for step_name in sorted(recording_steps):
                     collapsed = collapse_repeats(
                         results, step_name, cond.index, fold_members=fold_members
                     )
                     counts = attrition(
                         results,
-                        roster,
+                        cond_roster,
                         step_name,
                         cond.index,
                         fold_members=fold_members,
@@ -1382,7 +1481,7 @@ def command_run(config_path: Path) -> int:
                             seed=resample_seed_value,
                             resample=resample_fns,
                             draws=derived_metric_draws,
-                            beside_n=beside_n,
+                            beside_n=cond_beside_n,
                             weights=weights,
                             clusters=clusters,
                         )
@@ -1406,7 +1505,7 @@ def command_run(config_path: Path) -> int:
                         step_summary = summarize_step(
                             collapsed,
                             counts,
-                            beside_n=beside_n,
+                            beside_n=cond_beside_n,
                             weights=weights,
                             clusters=clusters,
                         )
@@ -1539,7 +1638,17 @@ def command_run(config_path: Path) -> int:
                         # repeat levels, which `repeat_spread` above reads on
                         # every later pass of this loop.
                         levels_block: dict[str, dict[str, Any]] = {}
-                        for level, keys in sorted(levels_for(roster, attribute).items()):
+                        # `cond_roster`, not `roster`: under a group axis a
+                        # level's key set must not reach past this condition's
+                        # own arm into the other one — the same defect one
+                        # layer up `_cond_roster` exists to fix for `attrition`
+                        # above, one level in. `_report_by_levels(roster, ...)`
+                        # would let a level of `attribute` that happens to span
+                        # both arms hand `attrition` units the other arm's
+                        # executions never touched.
+                        for level, (keys, level_roster) in _report_by_levels(
+                            cond_roster, attribute
+                        ).items():
                             # One key set decides BOTH the table and the counts.
                             # Taking the level's rows beside the condition's `n`
                             # is the S4b Critical's shape — a number reported
@@ -1547,7 +1656,6 @@ def command_run(config_path: Path) -> int:
                             level_collapsed = {
                                 k: v for k, v in collapsed.items() if k in keys
                             }
-                            level_roster = UnitList([u for u in roster if u.key in keys])
                             level_counts = attrition(
                                 results,
                                 level_roster,

@@ -140,17 +140,26 @@ def attrition(
     skipped or missing within its own group is `ineligible` or `failed`.
 
     `resolved` counts what was handed out across this condition, not the cohort:
-    without a fold that is the full roster, since every execution receives it
-    whole. With a fold it is the union over every *declared* fold's members
-    intersected with the roster — which the partitions cover exactly, so it is
-    the full roster again, whether or not each fold's execution ran. That is the
-    right answer at this scope: the counts a condition reports are against the
-    cohort the condition was run over, and a fold whose execution is missing
-    leaves its units genuinely unsettled, so they land in `failed` rather than
-    vanishing from the denominator. The smaller-than-roster figure is a fact
-    about one *execution* — `reference.md` § Repeat kinds states it at that
-    level, "`n: {resolved: 1, completed: 1}` per execution" under `k: all` — and
-    this function is per-condition, so it is not the number to expect here. No
+    without a fold that is `roster` itself, since every execution receives it
+    whole. `roster` is not always the whole shared roster — under a group axis
+    (`reference.md` § Expansion modes) the caller has already narrowed it to
+    this condition's own arm (`cli.py`'s `_cond_roster`, built from
+    `units.arm_members`), the read-side counterpart of the narrowing
+    `execute_plan` applies to what this condition's executions actually ran
+    over. `attrition` does not re-derive that narrowing itself, and must not:
+    it takes whichever `roster` the call site resolved, arm or whole, exactly
+    once, the same single-authority reason `weights` and `clusters` arrive
+    pre-resolved rather than rebuilt here. With a fold it is the union over
+    every *declared* fold's members intersected with `roster` — which the
+    partitions cover exactly, so it comes back to `roster` again, whether or
+    not each fold's execution ran. That is the right answer at this scope: the
+    counts a condition reports are against the cohort (or arm) the condition
+    was run over, and a fold whose execution is missing leaves its units
+    genuinely unsettled, so they land in `failed` rather than vanishing from
+    the denominator. The smaller-than-roster figure is a fact about one
+    *execution* — `reference.md` § Repeat kinds states it at that level, "`n:
+    {resolved: 1, completed: 1}` per execution" under `k: all` — and this
+    function is per-condition, so it is not the number to expect here. No
     per-execution `n` is written in this build: `run.yaml`'s `per_repeat` stays
     verbatim what each step returned (see `run_record.assemble_run_yaml`).
 
