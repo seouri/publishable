@@ -472,6 +472,16 @@ def validate_config(
         try:
             basis = fold_basis(roster, usable_cluster)
         except ContractError:
+            # Swallowed so `validate` keeps collecting. Usually the same fault is
+            # reported beside this by `_check_cluster_by` — but **not always, and
+            # the difference matters.** `E-DATA-CLUSTER-UNKNOWN` raised here for a
+            # unit with no value for the attribute has no validate-time reporter:
+            # `_check_cluster_by` tests the declaration against `attributes`, not
+            # each unit's value. With no `fold` level nothing downstream needs the
+            # basis either, so a config in that shape validates clean and raises at
+            # `run`. The reachable case is `cluster_by` naming `measurements.by`
+            # where every unit has one measurement row; see `cli`'s note at the
+            # `clusters_of` call.
             basis = None
     # A `fold` level's `stratify_by`, from the same usable-cluster local the basis
     # was resolved from: the name it declares, and — when a cluster is declared —

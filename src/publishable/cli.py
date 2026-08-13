@@ -778,9 +778,19 @@ def command_run(config_path: Path) -> int:
     # `units.clusters_of` is the single authority, the same one `validate`, the fold
     # basis and the partition read, so a unit carrying no value for the attribute
     # raises `E-DATA-CLUSTER-UNKNOWN` here rather than being invented a cluster of
-    # its own. That window is closed for `run` the same way the weight one is:
-    # `command_run` validates first, against the same roster it then resolves, and
-    # the same code is one of the checks it runs.
+    # its own.
+    #
+    # **That window is NOT fully closed, and saying it was is what this comment
+    # used to do.** `command_run` does validate first against the same roster, but
+    # `E-DATA-CLUSTER-UNKNOWN` is not among the checks `validate` runs for a
+    # value-level absence — it is only ever raised, and `_check_cluster_by` tests
+    # the declaration against `attributes`, not each unit's value. One shape slips
+    # through: `cluster_by` naming `measurements.by` where **every unit has exactly
+    # one measurement row**. The collapse drops that attribute, the constancy check
+    # needs two rows to see a disagreement, so `validate` exits 0 and `run` raises
+    # here. `stratify_by` has a declaration-time refusal for the same shape
+    # (`E-REPL-FOLD-STRATIFY-UNKNOWN`); `cluster_by` has no counterpart yet, and
+    # that asymmetry is the gap rather than this line.
     clusters: dict[str, str] | None = None
     if isinstance(cluster_by, str) and cluster_by and roster is not None:
         clusters = clusters_of(roster, cluster_by)

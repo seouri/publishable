@@ -940,10 +940,19 @@ def partition_units(
     than a defect — stated here because it contradicts the at-most-one above, which
     holds for an unstratified split only.
 
-    **`k` is checked against the whole roster's basis, not against each stratum's.**
-    A `k` past some stratum's cluster count leaves that stratum contributing to fewer
-    than `k` folds, so a fold can hold none of it while `validate` saw a `k` well
-    inside `fold_basis` — a fold whose stratum mix is nothing like the roster's. The
+    **`k` is checked against the whole roster's basis, not against each stratum's,
+    and a fold can therefore come out EMPTY — not merely short of one stratum.**
+    Each stratum fills only as many folds as it has clusters, and the merge is
+    index-wise, so when every stratum has fewer than `k` the high-index folds hold
+    **nothing at all**. Six units as three plus three under `{k: all,
+    stratify_by: label}` fills folds 0-2 and leaves 3-5 empty: six executions run,
+    three of them over no units, `validate` silent because `fold_basis` is 6.
+    `_fold_k` refuses that shape by its own route — "a fold with no units is a
+    declaration error, not a small fold" — so this is core reaching by one path a
+    state it refuses by another. Recorded rather than fixed: the per-stratum bound
+    is a check that does not exist, and inventing one here would be a rule no
+    document states. **A weaker earlier version of this paragraph said a fold could
+    hold none of a *stratum*; that understated it.** The
     partition stays total and says so rather than dividing a cluster or dropping the
     stratification; `reference.md` § Validation bounds `k` by the roster's basis
     today, and a per-stratum bound is a check that does not exist yet.
