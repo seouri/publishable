@@ -216,6 +216,18 @@ def build_allocation_document(
     "absent rather than null, so 'not hashed' can't be misread as 'hashed
     to nothing'" — here, "no holdout key" rather than "a holdout of
     nothing." H3d adds the key once that refusal lifts.
+
+    **This is the file `resume` must read rather than re-draw.**
+    `reference.md` § Allocation and § Resuming both say `allocation.json` is
+    "read rather than re-drawn" on resume — a fact about which units landed
+    in which arm should not be re-computable to a different answer just
+    because the run is being continued. **That rule has no reader in this
+    build**: `OPERATION_COMMANDS = {"validate", "run"}` in `cli.py`, there is
+    no `resume` command yet, so nothing here calls this function a second
+    time against an existing `allocation.json`. This paragraph is the
+    contract a future `resume` must honour — read the existing file rather
+    than calling `build_allocation_document` again — not a description of
+    behavior this build has or tests.
     """
     # Gated on `group_axes` truthiness, which `cli._resolved_group_axes`'s own
     # docstring warns a caller against in general: an axis whose declared
@@ -251,7 +263,26 @@ def allocation_hash(document: dict[str, Any]) -> str:
     hash to different digests for the same document. A reader reproducing
     this by hand must re-canonicalize `allocation.json`'s parsed content
     (`json.dumps(json.load(...), sort_keys=True, separators=(",", ":"))`)
-    rather than hash the file's bytes directly."""
+    rather than hash the file's bytes directly.
+
+    **Why this lives here rather than as a fourth entry in `hashes.py`.**
+    `hashes.py` holds `code_hash`, `parameters_hash`, and `design_digest` —
+    all three hash something the caller already has lying around (the repo
+    tree, the config), not something this module built for them.
+    `manifest_hash` sits in `manifest.py`, next to `build_manifest`, for the
+    matching reason: it hashes the exact document its own module just
+    constructed, so the construction and the hash of what it constructs stay
+    one property of one artifact rather than two modules that have to agree
+    on a shape from a distance. `allocation_hash` follows `manifest_hash`'s
+    placement, not `hashes.py`'s: it hashes `build_allocation_document`'s
+    own return value, and that function lives in `artifacts.py` because
+    `allocation.json` is an artifact `cli.command_run` writes alongside the
+    others this module already handles. A future reader adding H3d's
+    `holdout` half should draw the same conclusion: `holdout_hash` (if one
+    is ever needed) belongs beside whatever builds the holdout partition's
+    document, not in `hashes.py` either — the module boundary here is "hashes
+    a document this file assembles," not "is a hash."
+    """
     payload = json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
     return "sha256:" + hashlib.sha256(payload).hexdigest()
 

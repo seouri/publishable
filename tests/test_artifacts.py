@@ -1305,3 +1305,64 @@ def test_allocation_hash_is_deterministic_and_content_sensitive():
     mutated = json.loads(json.dumps(doc))
     mutated["arms"]["arm"]["control"][0] = "c9"
     assert allocation_hash(mutated) != h1
+
+
+def test_allocation_hash_changes_when_two_units_swap_arms_and_nothing_else_moves():
+    """The discriminating form task 15's addendum asked for, in place of the
+    weaker mutation above: that test edits a unit key inside the document
+    (`"c3"` -> `"c9"`), which would also catch a hash that hashed something
+    else entirely, but it says nothing about whether `allocation_hash`
+    actually tracks *membership* rather than, say, the roster's contents.
+    Reassigning a single unit changes the roster's own multiset of `arm`
+    values (one fewer `control`, one more `treatment`), so a hash that
+    happened to cover the roster instead of the assignment would *also* move
+    and the test would pass while proving nothing about which one moved it.
+
+    Swapping two units — one `control`, one `treatment` — between arms keeps
+    the roster byte-identical in every column that isn't membership: same 13
+    keys, same per-arm counts (4 `control`, 9 `treatment`), same multiset of
+    `arm` values. Only which key sits in which arm changes. A hash sensitive
+    to the roster's contents but not to `arms_of`'s partition would be blind
+    to this and wrongly report no change.
+
+    `c0` (`control`) and `t0` (`treatment`) are the two swapped. On this
+    fixture the unswapped document hashes to
+    `sha256:bf077b6dceea21f680dc12c7b050f04af5ee405be7326afe81c920c3e605d7d6`
+    and the swapped one to
+    `sha256:74e5df039ba6eaaca52d561a0e4bd04a4d1fa7334c4f4bdc2f42ec6ea069981d`
+    (both recomputed directly against this build, not carried over from
+    memory) — two different digests for a roster whose 13 keys, per-arm
+    counts, and multiset of `arm` values are all unchanged; only which key
+    sits in which arm moved.
+    """
+    roster, control_keys, treatment_keys = _mixed_arm_roster()
+    group_axes = {"arm": ("arm", ["control", "treatment"])}
+    doc = build_allocation_document(roster, group_axes)
+    h1 = allocation_hash(doc)
+    assert h1 == "sha256:bf077b6dceea21f680dc12c7b050f04af5ee405be7326afe81c920c3e605d7d6"
+
+    swapped_units = []
+    for unit in roster:
+        if unit.key == "c0":
+            swapped_units.append(Unit(key=unit.key, attributes={"arm": "treatment"}))
+        elif unit.key == "t0":
+            swapped_units.append(Unit(key=unit.key, attributes={"arm": "control"}))
+        else:
+            swapped_units.append(unit)
+    swapped_roster = UnitList(swapped_units)
+
+    swapped_control = {*control_keys, "t0"} - {"c0"}
+    swapped_treatment = {*treatment_keys, "c0"} - {"t0"}
+    # Same per-arm sizes, same combined key set, same multiset of `arm`
+    # values — only membership moved.
+    assert len(swapped_control) == len(control_keys) == 4
+    assert len(swapped_treatment) == len(treatment_keys) == 9
+    assert swapped_control | swapped_treatment == set(control_keys) | set(treatment_keys)
+
+    swapped_doc = build_allocation_document(swapped_roster, group_axes)
+    h2 = allocation_hash(swapped_doc)
+
+    assert set(swapped_doc["arms"]["arm"]["control"]) == swapped_control
+    assert set(swapped_doc["arms"]["arm"]["treatment"]) == swapped_treatment
+    assert h2 == "sha256:74e5df039ba6eaaca52d561a0e4bd04a4d1fa7334c4f4bdc2f42ec6ea069981d"
+    assert h2 != h1
