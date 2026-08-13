@@ -6078,3 +6078,109 @@ def test_the_cluster_warning_is_skipped_without_a_roster():
     c = Collector()
     _check_cluster_by({}, {"attributes": ["site"]}, None, c)
     assert not c.findings
+
+
+# --- a cluster and a weight must not vary within a unit's measurement rows ----
+#
+# `units.collapse_measurements` raises; `_check_units` wraps `resolve_units` in
+# `except ContractError`, which is the route `E-UNITS-COLLAPSE-RULE` and
+# `E-DATA-MEASUREMENTS-COLLAPSE-TYPE` already take to become findings. These
+# tests are the validate surface of that route — the unit-level tests in
+# `test_units.py` pin the raise itself.
+
+_MEASURED_UNITS = {
+    "from": "index.csv",
+    "key": "patient_id",
+    "attributes": ["read_id", "site", "sampling_weight"],
+    "measurements": {"by": "read_id", "collapse": "first"},
+}
+
+
+def test_a_cluster_varying_within_a_units_rows_is_reported(write_config, tmp_path):
+    """§ Clustered units: replicate rows declaring `S1` and `S2` would collapse to
+    whichever the file happens to list first, and the unit's real site would then
+    be on both sides of a split."""
+    _clustered_table(
+        tmp_path,
+        "patient_id,read_id,site,sampling_weight",
+        "p1,r1,S1,2\np1,r2,S2,2\np2,r3,S3,2\n",
+    )
+    path = write_config({"data.units": dict(_MEASURED_UNITS, cluster_by="site")})
+    assert "E-DATA-CLUSTER-VARIES" in codes(path)
+
+
+def test_agreeing_cluster_rows_are_not_reported(write_config, tmp_path):
+    """The cluster half's control: the same config over rows that agree. A check
+    that reported for every measured roster would pass the test above too."""
+    _clustered_table(
+        tmp_path,
+        "patient_id,read_id,site,sampling_weight",
+        "p1,r1,S1,2\np1,r2,S1,2\np2,r3,S3,2\n",
+    )
+    path = write_config({"data.units": dict(_MEASURED_UNITS, cluster_by="site")})
+    found = codes(path)
+    assert "E-DATA-CLUSTER-VARIES" not in found
+    assert "E-DATA-WEIGHT-VARIES" not in found
+
+
+def test_a_weight_varying_within_a_units_rows_is_reported(write_config, tmp_path):
+    """The gap H3a left: § Weighted samples states this rule, and until now
+    nothing checked it. Reported at `validate`, through the same route."""
+    _clustered_table(
+        tmp_path,
+        "patient_id,read_id,site,sampling_weight",
+        "p1,r1,S1,1\np1,r2,S1,99\np2,r3,S3,2\n",
+    )
+    path = write_config({"data.units": dict(_MEASURED_UNITS, weight_by="sampling_weight")})
+    assert "E-DATA-WEIGHT-VARIES" in codes(path)
+
+
+def test_agreeing_weight_rows_are_not_reported(write_config, tmp_path):
+    """The weight half's own control."""
+    _clustered_table(
+        tmp_path,
+        "patient_id,read_id,site,sampling_weight",
+        "p1,r1,S1,2\np1,r2,S1,2\np2,r3,S3,2\n",
+    )
+    path = write_config({"data.units": dict(_MEASURED_UNITS, weight_by="sampling_weight")})
+    assert "E-DATA-WEIGHT-VARIES" not in codes(path)
+
+
+def test_neither_check_fires_where_measurements_is_undeclared(write_config, tmp_path):
+    """The worked example declares neither `measurements` nor `cluster_by`, and
+    every roster with one row per unit is in this shape: nothing merges, so no
+    column can disagree with itself and neither code may appear."""
+    _clustered_table(
+        tmp_path,
+        "patient_id,site,sampling_weight",
+        "p1,S1,2\np2,S3,2\n",
+    )
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["site", "sampling_weight"],
+                "cluster_by": "site",
+                "weight_by": "sampling_weight",
+            }
+        }
+    )
+    found = codes(path)
+    assert "E-DATA-CLUSTER-VARIES" not in found
+    assert "E-DATA-WEIGHT-VARIES" not in found
+
+
+def test_validate_reports_rather_than_raising_on_a_varying_cluster(write_config, tmp_path):
+    """`validate` collects findings and never raises. The `except ContractError`
+    in `_check_units` is what makes that true of this raise too, and a test
+    calling `validate_config` directly is what proves nothing escaped."""
+    _clustered_table(
+        tmp_path,
+        "patient_id,read_id,site,sampling_weight",
+        "p1,r1,S1,2\np1,r2,S2,2\n",
+    )
+    path = write_config({"data.units": dict(_MEASURED_UNITS, cluster_by="site")})
+    c = Collector()
+    validate_config(path, c)
+    assert any(f.code == "E-DATA-CLUSTER-VARIES" for f in c.findings)

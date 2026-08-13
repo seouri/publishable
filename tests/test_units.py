@@ -730,3 +730,194 @@ def test_cluster_ids_are_labels_whatever_the_source_supplied(input_dir: Path):
     assert set(clusters_of(roster, "site").values()) == {"a", "b"}
     numeric = UnitList([Unit(key="u0", paths=(), attributes={"site": 7})])
     assert clusters_of(numeric, "site") == {"u0": "7"}
+
+
+# --- a cluster and a weight must not vary within a unit's measurement rows ---
+#
+# `reference.md` § Clustered units and § Weighted samples: `measurements` collapses
+# these two columns like any other attribute, so replicate rows disagreeing about
+# them answer by row order. The check belongs here because `collapse_measurements`
+# is the one place holding the pre-collapse values — `validate` resolves the roster
+# and sees the post-collapse one, where the disagreement is already gone.
+
+
+def test_a_cluster_varying_within_a_unit_is_refused():
+    """A mis-collapsed cluster decides which side of a split a unit lands on."""
+    units = [
+        Unit(key="p1", paths=(), attributes={"read": "r1", "site": "S1"}),
+        Unit(key="p1", paths=(), attributes={"read": "r2", "site": "S2"}),
+    ]
+    with pytest.raises(ContractError) as e:
+        collapse_measurements(units, by="read", collapse="first", constant={"cluster_by": "site"})
+    assert e.value.code == "E-DATA-CLUSTER-VARIES"
+    assert "p1" in str(e.value) and "site" in str(e.value)
+
+
+def test_a_cluster_constant_within_a_unit_is_accepted():
+    """The control: same shape, agreeing rows, must NOT raise. Without it there is
+    no way to tell a check from a function that refuses every input."""
+    units = [
+        Unit(key="p1", paths=(), attributes={"read": "r1", "site": "S1"}),
+        Unit(key="p1", paths=(), attributes={"read": "r2", "site": "S1"}),
+    ]
+    collapsed, _ = collapse_measurements(
+        units, by="read", collapse="first", constant={"cluster_by": "site"}
+    )
+    assert collapsed[0].site == "S1"
+
+
+def test_a_weight_varying_within_a_unit_is_refused():
+    """The half H3a could only state: a weight is what one unit stands for, so
+    replicate rows carrying 1 and 99 would sum to a weight no row declared."""
+    units = [
+        Unit(key="p1", paths=(), attributes={"read": "r1", "w": "1"}),
+        Unit(key="p1", paths=(), attributes={"read": "r2", "w": "99"}),
+    ]
+    with pytest.raises(ContractError) as e:
+        collapse_measurements(units, by="read", collapse="first", constant={"weight_by": "w"})
+    assert e.value.code == "E-DATA-WEIGHT-VARIES"
+
+
+def test_a_weight_constant_within_a_unit_is_accepted():
+    """The weight half's own control."""
+    units = [
+        Unit(key="p1", paths=(), attributes={"read": "r1", "w": "2.5"}),
+        Unit(key="p1", paths=(), attributes={"read": "r2", "w": "2.5"}),
+    ]
+    collapsed, _ = collapse_measurements(
+        units, by="read", collapse="first", constant={"weight_by": "w"}
+    )
+    assert collapsed[0].w == "2.5"
+
+
+def test_the_two_codes_are_not_one_code():
+    """The cluster case and the weight case say different things about what
+    breaks — leakage versus a mis-sized contribution — so one identifier for both
+    would send a reader to the wrong section. Pinned in one place so a later
+    refactor that collapses the two tables fails here."""
+    rows = [
+        Unit(key="p1", paths=(), attributes={"read": "r1", "col": "a"}),
+        Unit(key="p1", paths=(), attributes={"read": "r2", "col": "b"}),
+    ]
+    codes = set()
+    for declaration in ("cluster_by", "weight_by"):
+        with pytest.raises(ContractError) as e:
+            collapse_measurements(rows, by="read", collapse="first", constant={declaration: "col"})
+        codes.add(e.value.code)
+    assert codes == {"E-DATA-CLUSTER-VARIES", "E-DATA-WEIGHT-VARIES"}
+
+
+def test_no_declaration_leaves_the_collapse_exactly_as_it_was():
+    """Totality over the declaration being absent entirely, which is every config
+    that declares neither — including the worked example. The default must check
+    nothing at all, or `measurements` would start refusing rosters it has always
+    collapsed."""
+    units = [
+        Unit(key="p1", paths=(), attributes={"read": "r1", "site": "S1"}),
+        Unit(key="p1", paths=(), attributes={"read": "r2", "site": "S2"}),
+    ]
+    collapsed, counts = collapse_measurements(units, by="read", collapse="first")
+    assert collapsed[0].site == "S1"
+    assert counts == [2]
+
+
+def test_a_column_absent_from_some_rows_is_not_a_disagreement():
+    """`validate` collects findings and never raises, so this function has to be
+    total over a name only some members carry. The rows that carry it agree, so
+    nothing about the collapsed value depends on row order — an absent cell is
+    the *presence* question, which `clusters_of` raises on after resolution, not
+    a disagreement between rows."""
+    units = [
+        Unit(key="p1", paths=(), attributes={"read": "r1", "site": "S1"}),
+        Unit(key="p1", paths=(), attributes={"read": "r2"}),
+    ]
+    collapsed, _ = collapse_measurements(
+        units, by="read", collapse="first", constant={"cluster_by": "site"}
+    )
+    assert collapsed[0].site == "S1"
+
+
+def test_a_null_cluster_beside_a_real_one_is_a_disagreement():
+    """Present-but-`None` is not absent: one row names a site and the other names
+    nothing, so which value survives is again the file's row order."""
+    units = [
+        Unit(key="p1", paths=(), attributes={"read": "r1", "site": None}),
+        Unit(key="p1", paths=(), attributes={"read": "r2", "site": "S2"}),
+    ]
+    with pytest.raises(ContractError) as e:
+        collapse_measurements(units, by="read", collapse="first", constant={"cluster_by": "site"})
+    assert e.value.code == "E-DATA-CLUSTER-VARIES"
+
+
+def test_a_cluster_naming_the_measurement_axis_is_refused():
+    """`cluster_by` naming the very column that distinguishes one measurement from
+    another varies within every unit by construction. The check runs over the
+    members directly rather than over the merge loop's column list, which excludes
+    `by` — so this case is reachable at all only because of that placement."""
+    units = [
+        Unit(key="p1", paths=(), attributes={"read": "r1"}),
+        Unit(key="p1", paths=(), attributes={"read": "r2"}),
+    ]
+    with pytest.raises(ContractError) as e:
+        collapse_measurements(units, by="read", collapse="first", constant={"cluster_by": "read"})
+    assert e.value.code == "E-DATA-CLUSTER-VARIES"
+
+
+def test_the_leakage_code_wins_over_the_collapse_type_code():
+    """A varying string cluster column under a blanket `mean` satisfies both this
+    check and `coerce_for_rule`'s. Ordering decision, pinned: the reader needs to
+    be told a unit is filed under two sites, not that `mean` doesn't fit strings —
+    fixing the rule name would leave the leak in place."""
+    units = [
+        Unit(key="p1", paths=(), attributes={"read": "r1", "site": "S1"}),
+        Unit(key="p1", paths=(), attributes={"read": "r2", "site": "S2"}),
+    ]
+    with pytest.raises(ContractError) as e:
+        collapse_measurements(units, by="read", collapse="mean", constant={"cluster_by": "site"})
+    assert e.value.code == "E-DATA-CLUSTER-VARIES"
+
+
+def test_both_declarations_over_one_column_each_check_their_own(input_dir: Path):
+    """The wiring, end to end through `resolve_units`, which is where the two
+    names come from `units_decl` with no new plumbing."""
+    _write_reads(
+        input_dir,
+        "patient_id,read_id,site,w\np1,r1,S1,2\np1,r2,S2,2\np2,r3,S3,3\n",
+    )
+    decl = {
+        "from": "reads.csv",
+        "key": "patient_id",
+        "attributes": ["site", "w", "read_id"],
+        "cluster_by": "site",
+        "weight_by": "w",
+        "measurements": {"by": "read_id", "collapse": "first"},
+    }
+    with pytest.raises(ContractError) as e:
+        resolve_units(decl, input_dir)
+    assert e.value.code == "E-DATA-CLUSTER-VARIES"
+    # The control: the same declarations over rows that agree resolve cleanly.
+    _write_reads(
+        input_dir,
+        "patient_id,read_id,site,w\np1,r1,S1,2\np1,r2,S1,2\np2,r3,S3,3\n",
+    )
+    roster, technical_n, _ = resolve_units(decl, input_dir)
+    assert clusters_of(roster, "site") == {"p1": "S1", "p2": "S3"}
+    assert technical_n == {"min": 1, "max": 2, "median": 1.5}
+
+
+def test_a_non_string_declaration_is_left_to_the_envelope(input_dir: Path):
+    """`validate` never raises, and a list-valued `cluster_by` used as a column
+    name is a `TypeError` escaping it — the same class `_check_units`'s own `key`
+    guard exists for. `E-CONFIG-TYPE` is the finding for a mistyped leaf; this
+    function's job is to stay total."""
+    _write_reads(input_dir, "patient_id,read_id,site\np1,r1,S1\np1,r2,S2\n")
+    decl = {
+        "from": "reads.csv",
+        "key": "patient_id",
+        "attributes": ["site", "read_id"],
+        "cluster_by": ["site"],
+        "weight_by": "",
+        "measurements": {"by": "read_id", "collapse": "first"},
+    }
+    roster, _, _ = resolve_units(decl, input_dir)
+    assert roster[0].site == "S1"

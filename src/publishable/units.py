@@ -299,8 +299,20 @@ def resolve_units(
     measurements = units_decl.get("measurements")
     if measurements:
         by = _measurement_axis(measurements)
+        # The two declarations whose column is a fact about the unit rather than
+        # about the measurement, read straight off the declaration this function
+        # already holds — no new plumbing, and no second place that could come to
+        # disagree with `units_decl` about which column is the cluster. The
+        # `isinstance` filter is load-bearing rather than defensive: a list-valued
+        # `cluster_by` is `E-CONFIG-TYPE`'s finding, and using one as a mapping key
+        # is a `TypeError` escaping `validate`, which never raises.
+        constant = {
+            declaration: units_decl[declaration]
+            for declaration in CONSTANT_COLUMN_RULES
+            if isinstance(units_decl.get(declaration), str) and units_decl[declaration]
+        }
         units, counts = collapse_measurements(
-            units, by, measurements.get("collapse", "first")
+            units, by, measurements.get("collapse", "first"), constant
         )
         # `{min, max, median}` rather than a scalar, per `reference.md` § What
         # isn't a repeat: real files are uneven, and a bare `technical_n: 3`
@@ -531,10 +543,52 @@ def apply_rule(rule: str, values: list[Any]) -> Any:
     return sum(values) / len(values)  # rule == "mean"
 
 
+CONSTANT_COLUMN_RULES: dict[str, tuple[str, str]] = {
+    "cluster_by": (
+        "E-DATA-CLUSTER-VARIES",
+        "A cluster is what a unit is not independent of, so it decides which side "
+        "of a train/test split the unit lands on — a unit filed under the wrong "
+        "one is a unit whose real cluster is on both sides. A cluster is a fact "
+        "about the unit, not about the measurement",
+    ),
+    "weight_by": (
+        "E-DATA-WEIGHT-VARIES",
+        "A weight is what one unit stands for, so collapsing disagreeing rows "
+        "gives that unit a weight no row declared — their sum under `sum`, or "
+        "whichever arrived first under the default rule. A weight is a fact "
+        "about the unit, not about the measurement",
+    ),
+}
+"""The declarations whose column may not vary within a unit's measurement rows.
+
+**Two codes, not one**, deliberately: `reference.md` § Clustered units and
+§ Weighted samples state the same rule about two different columns, and they say
+different things about what breaks — a mis-collapsed weight mis-sizes what one
+unit stands for, while a mis-collapsed cluster decides which side of a split that
+unit lands on. One identifier for both would send the reader to the section that
+does not describe the damage.
+
+Keyed by the *declaration* rather than by the column, so a config naming one
+column in both places is checked once for each rather than silently dropping one
+under a precedence rule nothing in the documents states.
+"""
+
+
 def collapse_measurements(
-    units: list[Unit], by: str, collapse: Any
+    units: list[Unit], by: str, collapse: Any, constant: Mapping[str, str] | None = None
 ) -> tuple[list[Unit], list[int]]:
     """Collapse rows sharing a `key` into one unit, in first-seen order.
+
+    `constant` maps a declaration in `CONSTANT_COLUMN_RULES` to the column it
+    names, and those columns are refused where they vary within one unit's rows
+    rather than being collapsed like any other attribute. **`validate` cannot host
+    that check**: `resolve_units` collapses internally, so a validate-time check
+    sees the post-collapse roster and the disagreeing values are already gone.
+    This function groups the rows by key and is the one place holding them.
+
+    Nothing else needs a second constancy check: this is the only path that merges
+    rows into a unit, so under no `measurements` declaration there is one row per
+    unit and no column can disagree with itself.
 
     `reference.md` § What isn't a repeat: rows sharing a key are technical
     replicates, collapsed at resolution, before any step sees them — which is
@@ -556,6 +610,35 @@ def collapse_measurements(
     collapsed: list[Unit] = []
     counts: list[int] = []
     for key, members in groups.items():
+        # Before the merge loop below, and over the members directly rather than
+        # over its column list: `names` excludes `by`, so a `cluster_by` naming
+        # the measurement axis itself — which varies within every unit by
+        # construction — would otherwise be reached by no check at all. Running
+        # first is also what makes this code win over
+        # `E-DATA-MEASUREMENTS-COLLAPSE-TYPE` for a varying string column under a
+        # numeric rule: both faults are real, and the one worth reporting is the
+        # unit filed under two clusters, not the rule name that would still leave
+        # the leak in place once it was fixed.
+        for declaration, column in (constant or {}).items():
+            values = [m.attributes[column] for m in members if column in m.attributes]
+            # A name only some members carry is not a disagreement: the rows that
+            # carry it agree, so nothing about the collapsed value depends on the
+            # order the file happens to be in. Whether every unit ends up with a
+            # value at all is the presence question `clusters_of` raises on, after
+            # resolution — and `validate` collects findings rather than raising, so
+            # being total here over a sparse column is what keeps this off its
+            # escape path.
+            if any(v != values[0] for v in values):
+                code, why = CONSTANT_COLUMN_RULES[declaration]
+                seen_values = list(dict.fromkeys(str(v) for v in values))
+                raise ContractError(
+                    f"`data.units.{declaration}` names {column!r}, which unit "
+                    f"{key!r} declares more than one value for across its "
+                    f"measurement rows ({', '.join(seen_values)}) — so which one "
+                    "survives the collapse is decided by the order the rows "
+                    f"happen to be in. {why}",
+                    code=code,
+                )
         names: list[str] = []
         for member in members:
             for name in member.attributes:
