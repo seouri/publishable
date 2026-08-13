@@ -9,6 +9,7 @@ from publishable.stats import (
     PairedResample,
     UnitTable,
     _percentile_ranks,
+    _t_critical,
     cohens_dz,
     collapse_repeats,
     handed_to,
@@ -26,6 +27,7 @@ from publishable.stats import (
     resample_seed,
     summarize_step,
     t_over_units,
+    t_over_units_clustered,
     weighted_t_over_units,
 )
 
@@ -1147,6 +1149,186 @@ def test_a_weight_validate_would_refuse_is_refused_here_too(bad):
     with pytest.raises(ContractError) as exc:
         weighted_t_over_units([1.0, 2.0, 3.0, 6.0], [1.0, 1.0, 1.0, bad])
     assert exc.value.code == "E-DATA-WEIGHT-INVALID"
+
+
+# --- H3b task 9: the cluster-robust estimator (CR1) ---------------------------
+#
+# Ten clusters of three units, with the units of a cluster sitting at its mean
+# −1, +0 and +1. Balanced clusters are what make the expectation independent of
+# the code under test: for the intercept-only sandwich with equal cluster size m,
+# the score of cluster g is S_g = m(ȳ_g − ȳ), so
+#
+#   V_CR1 = [G/(G−1)]·m²Σ(ȳ_g−ȳ)²/(mG)² = s²(cluster means)/G
+#
+# — the ordinary t interval over the G cluster means, at df = G − 1. That is a
+# textbook reduction, not this module's arithmetic, so `t_over_units` over the
+# ten means below is an expectation built from something already trusted.
+#
+# The within-cluster ±1 is not decoration: it makes the fixture's 30 values
+# spread differently from its 10 means, so an implementation reading the unit
+# count anywhere — for the df or for the sem's divisor — misses.
+_CLUSTER_MEANS = [1.0, 2.5, 3.0, 4.5, 5.0, 6.5, 7.0, 8.5, 9.0, 10.5]
+_BALANCED_VALUES = [m + d for m in _CLUSTER_MEANS for d in (-1.0, 0.0, 1.0)]
+_BALANCED_KEYS = [f"u{i}" for i in range(30)]
+_BALANCED_MEMBERSHIP = {f"u{i}": f"c{i // 3}" for i in range(30)}
+
+
+def test_the_clustered_interval_takes_its_df_from_the_cluster_count():
+    """10 clusters of 3 units. df must be 9, not 29 — the document's own example
+    is "10 animals give 9, not 299". Asserting only that the interval is wider
+    would pass against an implementation using the unit count, because a
+    cluster-robust interval over correlated data is wider either way.
+
+    The expectation is `t_over_units` over the ten cluster means, whose df is 9
+    by construction and which the balanced sandwich provably reduces to (see the
+    comment above this group) — so it does not come from the code under test.
+
+    The second assertion names the mutation directly: the same standard error at
+    t(29) rather than t(9) gives a half-width of 1.9949 against 2.2065, which
+    `approx` separates comfortably.
+    """
+    got = t_over_units_clustered(_BALANCED_VALUES, _BALANCED_KEYS, _BALANCED_MEMBERSHIP)
+    expected = t_over_units(_CLUSTER_MEANS)
+    assert got is not None and expected is not None
+    assert got.method == "t_over_units_clustered"
+    assert got.low == pytest.approx(expected.low)
+    assert got.high == pytest.approx(expected.high)
+    standard_error = (got.high - got.low) / 2 / _t_critical(9, 0.95)
+    assert (got.high - got.low) / 2 != pytest.approx(_t_critical(29, 0.95) * standard_error)
+
+
+def test_the_clustered_interval_is_the_cr1_sandwich_over_unbalanced_clusters():
+    """The balanced fixture above cannot see two things: the sandwich is centred
+    on the mean over UNITS, and unequal cluster sizes weight the clusters
+    unequally. Both coincide with the mean of the cluster means when every
+    cluster is the same size, so an implementation written as
+    `t_over_units(cluster_means)` — which the reduction invites — passes it.
+
+    Clusters of size 1, 2 and 3. Computed by hand from the intercept-only
+    sandwich, and checked against a matrix-form implementation written
+    separately:
+
+        ȳ = 16/6 = 2.66667                    (mean of cluster means is 3.33333)
+        S_A = 3.33333, S_B = −1.33333, S_C = −2.0;  Σ S_g² = 16.88889
+        V = (3/2)·16.88889/36 = 0.703704 → se = 0.838870, df = 2, t = 4.302653
+
+    giving [−0.94270, 6.27604]. The cluster-mean construction gives
+    [−2.40353, 9.07020] — nowhere near, on both the centre and the width.
+    """
+    values = [6.0, 0.0, 4.0, 1.0, 2.0, 3.0]
+    keys = ["a1", "b1", "b2", "c1", "c2", "c3"]
+    membership = {"a1": "A", "b1": "B", "b2": "B", "c1": "C", "c2": "C", "c3": "C"}
+    got = t_over_units_clustered(values, keys, membership)
+    assert got is not None
+    assert got.low == pytest.approx(-0.9427017491193528)
+    assert got.high == pytest.approx(6.276035082452686)
+    over_cluster_means = t_over_units([6.0, 2.0, 2.0])
+    assert over_cluster_means is not None
+    assert got.low != pytest.approx(over_cluster_means.low)
+
+
+def test_the_finite_sample_scaling_is_in_the_variance():
+    """The "CR1" half of the name. Dropping the G/(G−1) factor leaves CR0 — a
+    different construction wearing the same `method` string, narrower by exactly
+    √(G/(G−1)), which is 5.4% here and larger for every smaller cluster count.
+
+    Stated as the two numbers rather than as a ratio: over balanced clusters the
+    scaled standard error is the SAMPLE spread of the cluster means over √G, and
+    the unscaled one is their POPULATION spread over √G — the same s·√((G−1)/G)
+    the factor undoes. Both are computed here from the ten means, neither from
+    the module.
+    """
+    got = t_over_units_clustered(_BALANCED_VALUES, _BALANCED_KEYS, _BALANCED_MEMBERSHIP)
+    assert got is not None
+    mean = sum(_CLUSTER_MEANS) / 10
+    squares = sum((m - mean) ** 2 for m in _CLUSTER_MEANS)
+    scaled = math.sqrt(squares / 9) / math.sqrt(10)
+    unscaled = math.sqrt(squares / 10) / math.sqrt(10)
+    half = (got.high - got.low) / 2
+    assert half == pytest.approx(_t_critical(9, 0.95) * scaled)
+    assert half != pytest.approx(_t_critical(9, 0.95) * unscaled)
+
+
+def test_correlated_units_widen_the_interval_against_the_unclustered_one():
+    """The property the feature exists for, and deliberately not the headline:
+    it is true of a cluster-robust interval at any df, which is why the df tests
+    above carry the weight. Positive intra-cluster correlation is the case
+    § Clustered units describes — "ignoring clustering is the standard route to
+    intervals that are too narrow".
+
+    The control that must report is the unclustered interval over the same 30
+    values: it is unchanged by this task, and it is what "too narrow" is measured
+    against.
+    """
+    plain = t_over_units(_BALANCED_VALUES)
+    clustered = t_over_units_clustered(_BALANCED_VALUES, _BALANCED_KEYS, _BALANCED_MEMBERSHIP)
+    assert plain is not None and clustered is not None
+    assert plain.method == "t_over_units"
+    assert (clustered.high - clustered.low) > (plain.high - plain.low)
+
+
+def test_one_cluster_of_many_units_has_no_interval():
+    """CR1 with one cluster has df 0, so there is no interval to report — the
+    same refusal `t_over_units` makes below two values, on the count that is
+    actually the inference base here. 300 cells from one animal are one draw, and
+    reporting a point with no interval is honest; inventing one is not.
+    """
+    values = [float(i) for i in range(12)]
+    keys = [f"u{i}" for i in range(12)]
+    assert t_over_units_clustered(values, keys, dict.fromkeys(keys, "only")) is None
+
+
+def test_two_clusters_still_report():
+    """The control for the floor above: a construction refusing one cluster must
+    not refuse two. df = 1 makes it very wide — t(1) is 12.7 — which is the
+    honest width for two draws, not a reason to withhold it."""
+    values = [float(i) for i in range(12)]
+    keys = [f"u{i}" for i in range(12)]
+    membership = {key: ("left" if i < 6 else "right") for i, key in enumerate(keys)}
+    got = t_over_units_clustered(values, keys, membership)
+    assert got is not None and got.high > got.low
+
+
+@pytest.mark.parametrize("values", [[], [1.0]])
+def test_the_clustered_interval_needs_two_values(values):
+    """`t_over_units`' own floor, kept in front of the cluster one so the two
+    constructions refuse the same degenerate inputs."""
+    keys = [f"u{i}" for i in range(len(values))]
+    assert t_over_units_clustered(values, keys, dict.fromkeys(keys, "c")) is None
+
+
+def test_one_unit_per_cluster_reproduces_the_unclustered_interval():
+    """The boundary that proves this is a generalization rather than a different
+    statistic — and a fixture that can see nothing else: with G = n the df is
+    n − 1 either way and every score is a single residual, so the two
+    constructions coincide. That is exactly why it is not the headline test."""
+    values = [1.0, 2.0, 3.0, 4.0, 5.0]
+    keys = ["u1", "u2", "u3", "u4", "u5"]
+    got = t_over_units_clustered(values, keys, {key: key for key in keys})
+    plain = t_over_units(values)
+    assert got is not None and plain is not None
+    assert got.low == pytest.approx(plain.low)
+    assert got.high == pytest.approx(plain.high)
+
+
+def test_a_unit_outside_the_membership_mapping_is_not_absorbed():
+    """`units.cluster_count_of`'s discipline, from the caller's side: a key the
+    roster's membership doesn't hold is a core defect, and placing it in a
+    cluster of its own would raise G and narrow the interval instead of failing.
+    """
+    with pytest.raises(KeyError):
+        t_over_units_clustered([1.0, 2.0], ["u1", "u2"], {"u1": "c1"})
+
+
+def test_the_clustered_interval_honours_its_confidence():
+    narrow = t_over_units_clustered(
+        _BALANCED_VALUES, _BALANCED_KEYS, _BALANCED_MEMBERSHIP, confidence=0.80
+    )
+    wide = t_over_units_clustered(
+        _BALANCED_VALUES, _BALANCED_KEYS, _BALANCED_MEMBERSHIP, confidence=0.99
+    )
+    assert narrow is not None and wide is not None
+    assert (wide.high - wide.low) > (narrow.high - narrow.low)
 
 
 # --- H3a task 10: the weighted estimator, wired into `summarize_step` ---------

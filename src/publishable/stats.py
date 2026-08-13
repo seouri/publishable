@@ -10,7 +10,7 @@ See docs/reference.md § Statistical reporting.
 import hashlib
 import math
 import random
-from collections.abc import Callable, Collection, Iterator, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -234,6 +234,75 @@ def weighted_t_over_units(
     sem = math.sqrt(variance) / math.sqrt(effective)
     half = _t_critical(effective - 1, confidence) * sem
     return Interval(low=mean - half, high=mean + half, method="weighted_t_over_units")
+
+
+def t_over_units_clustered(
+    values: Sequence[float],
+    keys: Sequence[str],
+    membership: Mapping[str, str],
+    confidence: float = 0.95,
+) -> Interval | None:
+    """Cluster-robust (CR1) *t* on the per-unit values, df = clusters − 1.
+
+    `reference.md` § Statistical reporting: "Cluster-robust (CR1: the sandwich
+    estimator with the standard finite-sample scaling), df = clusters − 1. The df
+    is the part that bites — 10 animals give 9, not 299."
+
+    **The df is the construction**, not a detail of it. A cluster-robust interval
+    over positively correlated data comes out wider than `t_over_units` whatever
+    df it uses, so widening is not evidence that the cluster count reached the
+    critical value; only the number is.
+
+    The model core fits here is the mean, so the sandwich is the intercept-only
+    case: with `X'X = n` and a cluster's score `S_g = Σ_{i∈g}(v_i − v̄)`, the
+    variance of the mean is `Σ_g S_g² / n²` before scaling. **The finite-sample
+    scaling is the `G/(G−1)` factor**, and dropping it is not a rounding
+    difference — it is the CR0 estimator wearing this one's name, biased downward
+    by exactly the factor a small cluster count makes largest.
+
+    Two conventions for CR1 exist in the literature — the `G/(G−1)` of
+    MacKinnon–White, and Stata's `G/(G−1) · (n−1)/(n−k)` — and **they coincide
+    here**: `k`, the number of fitted parameters, is 1 for a mean, so the second
+    factor is `(n−1)/(n−1)`. There is nothing to choose between, which is why this
+    function names neither in its `method` string.
+
+    Returns `None` below two clusters, and for the same reason `t_over_units`
+    returns `None` below two values: df would be zero. That floor is on the
+    CLUSTER count, so 300 cells from one animal get a point and no interval —
+    which is the honest answer, one animal being one draw. The `len(values) < 2`
+    guard in front of it is `t_over_units`' own floor, kept so the two
+    constructions refuse the same degenerate inputs.
+
+    **The membership mapping is `units.clusters_of`'s**, passed whole rather than
+    pre-resolved to a label vector, and the count comes from
+    `units.cluster_count_of` — the single counting expression, so this df cannot
+    disagree with the `n.clusters` printed beside it or with a fold's partition
+    about what one cluster is. Indexed rather than `.get`-ed for the reason
+    `cluster_count_of` states: a key the roster doesn't hold is a core defect, and
+    absorbing it into a cluster of its own would raise `G` and narrow the interval.
+
+    `strict=True` on the zip, for the reason `_weighted_mean` uses it: a
+    keys/values length mismatch is a misaligned cluster vector, and it would
+    produce a plausible number rather than an error.
+    """
+    n = len(values)
+    if n < 2:
+        return None
+    groups = cluster_count_of(membership, keys)
+    if groups < 2:
+        return None
+    mean = sum(values) / n
+    # One residual sum per cluster: what makes this robust is that the residuals
+    # are added up WITHIN a cluster before being squared, so correlated units
+    # reinforce each other instead of counting as independent draws.
+    scores: dict[str, float] = {}
+    for key, value in zip(keys, values, strict=True):
+        label = membership[key]
+        scores[label] = scores.get(label, 0.0) + (value - mean)
+    meat = sum(s * s for s in scores.values())
+    variance = (groups / (groups - 1)) * meat / (n * n)
+    half = _t_critical(groups - 1, confidence) * math.sqrt(variance)
+    return Interval(low=mean - half, high=mean + half, method="t_over_units_clustered")
 
 
 def paired_t_over_units(diffs: Sequence[float], confidence: float = 0.95) -> Interval | None:
