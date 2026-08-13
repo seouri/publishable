@@ -74,7 +74,15 @@ from publishable.sweep import (
 )
 from publishable.templates.base import BaseTemplate
 from publishable.templates.registry import get_template
-from publishable.units import Unit, UnitList, partition_units, resolve_units, units_hash
+from publishable.units import (
+    Unit,
+    UnitList,
+    clusters_of,
+    fold_basis,
+    partition_units,
+    resolve_units,
+    units_hash,
+)
 from publishable.uv_support import uv_lock_info
 from publishable.validate import load_document, validate_config
 
@@ -749,11 +757,56 @@ def command_run(config_path: Path) -> int:
         weights = {u.key: u.attributes.get(weight_by) for u in roster}
         weighted_beside["weighted_by"] = weight_by
         beside_n["weighted_by"] = weight_by
-    # `unit_count` is what turns `{kind: fold, k: all}` into a real count and
-    # what `_fold_k` checks a declared `k` against — the same roster
-    # `_check_units`/`_check_replication` resolved at `validate` time, threaded
-    # through here rather than trusted blind, since `run` re-resolves it fresh.
-    levels = resolve_repeats(doc, digest, unit_count=len(roster) if roster is not None else None)
+    # Read straight from the declaration, not re-derived: `validate` guarantees a
+    # truthy `cluster_by` is a declared attribute every unit carries (an empty or
+    # wrongly-typed one is an error that returned above), so this is the same
+    # string `units.clusters_of` was approved against.
+    cluster_by = (units_decl or {}).get("cluster_by")
+    # One fact reaches the record from it, and it JOINS `n`: `clusters`, the number
+    # of distinct clusters the units a metric was computed over fall in
+    # (`reference.md` § The three-part `n`, joined by `clusters` "whenever
+    # `cluster_by` makes the cluster the inferential draw"; § Clustered units calls
+    # it "the effective sample size alongside the unit count"). So it travels in
+    # `attrition`'s counts, exactly where `effective` goes, rather than in
+    # `beside_n` — the two routes `stats.summarize_step` describes, and nothing in
+    # the documents shows a `clustered_by` sibling of `weighted_by`.
+    #
+    # The membership mapping itself goes to `summarize_step` as well, for the reason
+    # `weights` does: a ragged column's clusters are its own, and only the call that
+    # sees which units carried the column can count them.
+    #
+    # `units.clusters_of` is the single authority, the same one `validate`, the fold
+    # basis and the partition read, so a unit carrying no value for the attribute
+    # raises `E-DATA-CLUSTER-UNKNOWN` here rather than being invented a cluster of
+    # its own.
+    #
+    # **That window is NOT fully closed, and saying it was is what this comment
+    # used to do.** `command_run` does validate first against the same roster, but
+    # `E-DATA-CLUSTER-UNKNOWN` is not among the checks `validate` runs for a
+    # value-level absence — it is only ever raised, and `_check_cluster_by` tests
+    # the declaration against `attributes`, not each unit's value. One shape slips
+    # through: `cluster_by` naming `measurements.by` where **every unit has exactly
+    # one measurement row**. The collapse drops that attribute, the constancy check
+    # needs two rows to see a disagreement, so `validate` exits 0 and `run` raises
+    # here. `stratify_by` has a declaration-time refusal for the same shape
+    # (`E-REPL-FOLD-STRATIFY-UNKNOWN`); `cluster_by` has no counterpart yet, and
+    # that asymmetry is the gap rather than this line.
+    clusters: dict[str, str] | None = None
+    if isinstance(cluster_by, str) and cluster_by and roster is not None:
+        clusters = clusters_of(roster, cluster_by)
+    # `fold_basis` is what turns `{kind: fold, k: all}` into a real count and what
+    # `_fold_k` checks a declared `k` against — the resolved roster's units, or its
+    # clusters when `data.units.cluster_by` declares the units are not independent
+    # draws, since a cluster is indivisible and leave-one-out is then
+    # leave-one-*cluster*-out (`reference.md` § Validation, *Folds fit inside the
+    # clusters* and *Leave-one-out is affordable*). `units.fold_basis` is the one
+    # derivation, the same `validate` bounded `k` with, applied here to the roster
+    # `run` re-resolves fresh rather than trusted from the earlier pass.
+    levels = resolve_repeats(
+        doc,
+        digest,
+        fold_basis=fold_basis(roster, cluster_by) if roster is not None else None,
+    )
     repeats = cross_levels(levels)
     labels = [r.label for r in repeats if r.label] or [""]
     fold_level = next((lv for lv in levels if lv.kind == "fold"), None)
@@ -773,7 +826,62 @@ def command_run(config_path: Path) -> int:
                 "disagrees with itself about this fold",
                 code="E-RUN-FOLD-UNRESOLVED",
             )
-        partitions = partition_units(roster, fold_level.n, digest)
+        # `clusters` and `strata` together, or neither. Both change WHICH units a
+        # fold holds rather than how many folds there are, and each is unreachable
+        # from the call that only passes a count:
+        #
+        # - Without `clusters` a clustered design gets the right fold count (the
+        #   basis above) and the wrong membership — every fold trains on other
+        #   units of the cluster it tests on, which `reference.md` § Clustered units
+        #   calls "the difference between a valid evaluation and a leaky one" and
+        #   `experimental-designs.md` § Mistakes core prevents requires to be
+        #   structurally impossible. It is the whole point of declaring one, and no
+        #   interval construction can repair a metric that was already leaked into.
+        # - Without `strata` a declared `fold.stratify_by` is checked and then
+        #   ignored, which § Repeat kinds contradicts by calling such a fold
+        #   "stratified".
+        #
+        # Wiring one and not the other would ship half a guarantee that looks whole,
+        # so they arrive at the same call.
+        #
+        # The stratum mapping is built here rather than by a `strata_of` beside
+        # `clusters_of`, and the difference is deliberate: `clusters_of` raises
+        # `E-DATA-CLUSTER-UNKNOWN`, a code naming the wrong declaration for a reader
+        # whose config declares `fold.stratify_by`, and which code a missing value
+        # belongs under is a property of the declaration being served — `holdout`
+        # and `assign` will each read the same attribute under their own.
+        #
+        # Indexed, not `.get`-ed, and total over the roster because it has to be
+        # (`units.partition_units` raises `KeyError` on a gap, by contract): every
+        # unit carries every declared attribute, since `units._from_table` builds
+        # `Unit.attributes` from `data.units.attributes` for every row and a `glob`
+        # source refuses an `attributes` declaration outright. `validate` guarantees
+        # the name is one of those attributes (`E-REPL-FOLD-STRATIFY-UNKNOWN`), so a
+        # missing key is a core defect, exactly as it is for the weights. A unit
+        # whose cell is blank is stratum `''` — a real stratum of its own, which is
+        # what the source says it is; a sentinel string would instead merge those
+        # units into whatever real stratum happened to be spelled the same way.
+        #
+        # One path rebuilds `Unit.attributes` after resolution and was the
+        # exception: `units.collapse_measurements` drops the name equal to
+        # `data.units.measurements.by`, so a config stratifying on the measurement
+        # axis itself reached a bare `KeyError` here rather than a diagnostic. Task
+        # 11 named it unreachable because `E-REPL-FOLD-STRATIFY-UNSUPPORTED` refused
+        # every `stratify_by`; task 12 retired that code, which made it reachable
+        # and turned the note into a defect. It is now refused from the declaration
+        # by `_check_fold_stratify_by` under `E-REPL-FOLD-STRATIFY-UNKNOWN` — a
+        # `measurements.by` does not survive resolution as an attribute, which is
+        # that code's own meaning — so the subscript below cannot miss.
+        #
+        # Stringified for the reason `clusters_of` stringifies: a stratum is a label,
+        # nothing downstream does arithmetic on it, and one type keeps a hand-built
+        # roster and a table-sourced one giving the same split.
+        strata: dict[str, str] | None = None
+        if fold_level.stratify_by:
+            strata = {u.key: str(u.attributes[fold_level.stratify_by]) for u in roster}
+        partitions = partition_units(
+            roster, fold_level.n, digest, clusters=clusters, strata=strata
+        )
     fold_members = fold_members_for(levels, partitions) if partitions is not None else None
 
     conditions = expand(doc)
@@ -1023,6 +1131,7 @@ def command_run(config_path: Path) -> int:
                         cond.index,
                         fold_members=fold_members,
                         weights=weights,
+                        clusters=clusters,
                     )
                     max_ineligible = (doc.get("limits") or {}).get("max_ineligible_fraction")
                     if (
@@ -1146,6 +1255,7 @@ def command_run(config_path: Path) -> int:
                             draws=derived_metric_draws,
                             beside_n=beside_n,
                             weights=weights,
+                            clusters=clusters,
                         )
                     except ContractError as exc:
                         prefix = f"{exc.code} " if exc.code else ""
@@ -1165,7 +1275,11 @@ def command_run(config_path: Path) -> int:
                         # arrive here: `attrition` above gates the same mapping
                         # through `kish_effective_n`, outside any `try`.)
                         step_summary = summarize_step(
-                            collapsed, counts, beside_n=beside_n, weights=weights
+                            collapsed,
+                            counts,
+                            beside_n=beside_n,
+                            weights=weights,
+                            clusters=clusters,
                         )
                         # What the parent block dropped, every stratum of it
                         # drops too. A level's table carries the same columns as
@@ -1316,8 +1430,10 @@ def command_run(config_path: Path) -> int:
                                 # below is withheld because it is a whole-roster
                                 # figure that would have to be COPIED down, and
                                 # Kish's size over this stratum is a different
-                                # number this call computes from scratch.
+                                # number this call computes from scratch — as is
+                                # the number of clusters its own units fall in.
                                 weights=weights,
+                                clusters=clusters,
                             )
                             # Attrition happens during the run, so a level the
                             # roster-time `W-STATS-REPORTBY-THIN` counted as
@@ -1442,8 +1558,10 @@ def command_run(config_path: Path) -> int:
                                 # a ragged column's: a stratum's weighted mean
                                 # and its Kish size are its own, which is the
                                 # same reason `level_counts` is recomputed above
-                                # rather than copied down.
+                                # rather than copied down, and the same reason the
+                                # cluster mapping travels with it.
                                 weights=weights,
+                                clusters=clusters,
                             )
                             # At least one entry has to come from the level's own
                             # table. A block holding nothing but derived metrics

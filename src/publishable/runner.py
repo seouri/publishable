@@ -16,7 +16,7 @@ from publishable.replication import LABEL_JOIN, Repeat
 from publishable.scope import Execution
 from publishable.stats import handed_to, kish_effective_n
 from publishable.sweep import condition_dir_name
-from publishable.units import UnitList
+from publishable.units import UnitList, cluster_count_of
 
 
 @dataclass(frozen=True)
@@ -38,6 +38,7 @@ def _counts(
     ineligible: int,
     failed: int,
     weights: "dict[str, Any] | None",
+    clusters: "dict[str, str] | None",
 ) -> dict[str, float]:
     """The one builder all three of `attrition`'s return sites go through.
 
@@ -59,6 +60,28 @@ def _counts(
     `set`. Indexed rather than `.get`-ed because every completed key comes from
     the roster the caller built `weights` from; a `.get(k, 0)` default would
     quietly change the denominator instead of failing.
+
+    `clusters` is the same shape and arrives on the same rule: unit key → cluster
+    id over the whole roster, supplied only when `data.units.cluster_by` is
+    declared, and it adds `clusters` — the number of distinct clusters the
+    COMPLETED units fall in. The completed ones for the reason `effective` is over
+    them: `reference.md` § Clustered units reports the cluster count "as the
+    effective sample size alongside the unit count" and § Statistical reporting
+    gives `t_over_units_clustered` "df = clusters − 1", so this figure is the df of
+    an interval, and a df is over the units the interval was computed from. Over
+    the resolved roster instead it would name a df larger than any interval used,
+    and a reader comparing it against `completed` would be comparing two different
+    unit sets. It stays an `int`, unlike `effective`: a cluster count is a count of
+    whole things, and § Clustered units' own example prints `clusters: 10`.
+
+    Listed ahead of `effective` because § The three-part `n` names the joiners in
+    that order, and this dict's insertion order is what `run.yaml` renders.
+
+    Neither mapping carries a default, deliberately: a fourth return site added
+    later cannot forget one, because the call does not type-check without it. With
+    a default, that site would produce a clustered (or weighted) design reading as
+    a plain one — which is the exact failure this builder exists to prevent, and
+    no test can see it until the site exists.
     """
     out: dict[str, float] = {
         "resolved": resolved,
@@ -66,6 +89,8 @@ def _counts(
         "ineligible": ineligible,
         "failed": failed,
     }
+    if clusters is not None:
+        out["clusters"] = cluster_count_of(clusters, completed)
     if weights is not None:
         out["effective"] = kish_effective_n([weights[k] for k in sorted(completed)])
     return out
@@ -78,6 +103,7 @@ def attrition(
     condition_index: int,
     fold_members: dict[str, frozenset[str]] | None = None,
     weights: dict[str, Any] | None = None,
+    clusters: dict[str, str] | None = None,
 ) -> dict[str, float]:
     """The four counts, scoped to one step within one condition. A failed unit has
     no row anywhere, so failure is derived.
@@ -147,13 +173,21 @@ def attrition(
     It re-opens for any command that executes without validating first, which is
     `draft` and `resume` when they land (H9).
 
+    `clusters` is unit key → that unit's `data.units.cluster_by` value, supplied
+    the same way and from the same place, and it adds `clusters` to the returned
+    mapping (`_counts` says over which units and why). It is built by
+    `units.clusters_of`, the single authority for cluster membership, and counted
+    by `units.cluster_count_of`, the single counting expression — a second `len(set(
+    ...))` here is how a condition's cluster count and a fold's partition would
+    come to disagree about what one cluster is.
+
     This is the per-step, per-condition breakdown `stats.summarize_step` attaches
     as a metric's `n`. It is deliberately not what guards `max_failed_fraction`:
     that threshold is run-level and a union across every recording step (see
     `_units_failed_anywhere` in `execute_plan`), not an intersection scoped to one.
     """
     if roster is None:
-        return _counts(0, set(), 0, 0, weights)
+        return _counts(0, set(), 0, 0, weights, clusters)
     keys = {u.key for u in roster}
     recording = [
         r
@@ -167,7 +201,7 @@ def attrition(
         and r.execution.condition_index == condition_index
     ]
     if not recording:
-        return _counts(len(keys), set(), 0, len(keys), weights)
+        return _counts(len(keys), set(), 0, len(keys), weights, clusters)
     # Accumulated per label, exactly as `stats.collapse_repeats` accumulates its
     # rows: two executions sharing one repeat label (a resumed leaf re-reported,
     # say) must merge, not overwrite. A dict comprehension kept only the last
@@ -203,6 +237,7 @@ def attrition(
         len(ineligible),
         len(handed) - len(completed) - len(ineligible),
         weights,
+        clusters,
     )
 
 

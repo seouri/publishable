@@ -9,7 +9,9 @@ from publishable.diagnostics import Collector
 from publishable.sweep import expand
 from publishable.units import Unit, UnitList
 from publishable.validate import (
+    _check_cluster_by,
     _check_contrasts,
+    _check_fold_stratify_by,
     _check_measurements,
     _check_weight_by,
     validate_config,
@@ -509,12 +511,18 @@ def test_a_fold_level_with_no_units_declared_is_refused(write_config):
     assert "E-REPL-FOLD-NO-UNITS" in found
 
 
-def test_fold_stratify_by_is_refused_through_validate(write_config):
-    assert "E-REPL-FOLD-STRATIFY-UNSUPPORTED" in codes(
+def test_fold_stratify_by_is_no_longer_refused_as_unbuilt(write_config):
+    """`E-REPL-FOLD-STRATIFY-UNSUPPORTED` is retired: `partition_units` balances
+    the declared stratum across the folds, so the declaration changes the split.
+    What survives is the checking of the *name* — this config declares no
+    `data.units` at all, so it draws the roster refusal and the unknown-attribute
+    one, which is the control that must report."""
+    found = codes(
         write_config(
             {"replication": {"repeats": [{"kind": "fold", "k": 5, "stratify_by": "site"}]}}
         )
     )
+    assert found == {"E-REPL-FOLD-NO-UNITS", "E-REPL-FOLD-STRATIFY-UNKNOWN"}
 
 
 def test_fold_k_below_two_is_refused_through_validate(write_config):
@@ -614,7 +622,7 @@ def test_an_unresolved_repl_code_is_not_swallowed(write_config, monkeypatch):
     import publishable.validate as validate_mod
     from publishable.errors import ContractError
 
-    def _boom(doc, digest, unit_count=None):
+    def _boom(doc, digest, fold_basis=None):
         raise ContractError("a future refusal nobody has classified yet", code="E-REPL-FUTURE")
 
     monkeypatch.setattr(validate_mod, "resolve_repeats", _boom)
@@ -904,7 +912,7 @@ def test_the_budget_check_fires_for_leave_one_out_against_the_real_roster(write_
     (`reference.md` § Sweeps and repeats) — and it was the one design that could
     not produce the warning, because `_repeat_total` returned `None` on any
     string count while `_check_replication` had already been threaded a real
-    `unit_count`. A 60-unit roster under `k: all` is 60 executions against a
+    `fold_basis`. A 60-unit roster under `k: all` is 60 executions against a
     budget of 10, and it must warn exactly as `k: 60` does."""
     (tmp_path / "input" / "index.csv").write_text(
         "patient_id\n" + "\n".join(f"p{i}" for i in range(1, 61)) + "\n"
@@ -938,12 +946,12 @@ def test_the_floor_warning_also_resolves_k_all_against_the_roster():
 
     doc = {"replication": {"repeats": [{"kind": "fold", "k": "all"}]}}
     resolved = Collector()
-    _check_replication(doc, ThreeRepeats(), resolved, unit_count=2)
+    _check_replication(doc, ThreeRepeats(), resolved, fold_basis=2)
     assert "W-REPL-FLOOR" in {f.code for f in resolved.findings}
 
     # ...and still silent when the roster genuinely could not resolve.
     unresolved = Collector()
-    _check_replication(doc, ThreeRepeats(), unresolved, unit_count=None)
+    _check_replication(doc, ThreeRepeats(), unresolved, fold_basis=None)
     assert "W-REPL-FLOOR" not in {f.code for f in unresolved.findings}
 
 
@@ -1812,7 +1820,11 @@ def test_a_plain_units_block_is_now_accepted(write_config):
     [
         ("allocation", "between", "E-DATA-ALLOCATION-UNSUPPORTED"),
         ("assign", {"arm": {"method": "random"}}, "E-DATA-ASSIGN-UNSUPPORTED"),
-        ("cluster_by", "site", "E-DATA-CLUSTER-UNSUPPORTED"),
+        # `cluster_by` was a row here until it became a declaration core honors —
+        # it counts the clusters, keeps one out of two folds, and makes every
+        # `basis: units` interval cluster-robust. What it may not yet be combined
+        # with is checked by `test_a_clustered_generated_comparison_is_refused`
+        # below and, at run time, by `test_cli.py`'s `E-DATA-CLUSTER-DERIVED`.
         # `weight_by` was a row here until it became a declaration core honors;
         # what it may not yet be combined with is checked by
         # `test_a_weighted_generated_comparison_is_refused` below.
@@ -1840,7 +1852,6 @@ def test_a_resolver_source_is_refused_until_plugins_exist(write_config):
         {"from": {"resolver": "plate_wells"}, "key": "well"},
         {"from": "index.csv", "key": "patient_id", "allocation": "between"},
         {"from": "index.csv", "key": "patient_id", "assign": {"arm": {"method": "random"}}},
-        {"from": "index.csv", "key": "patient_id", "cluster_by": "site"},
         {"from": "index.csv", "key": "patient_id", "holdout": {"method": "random", "frac": 0.2}},
     ],
 )
@@ -5778,3 +5789,1128 @@ def test_a_weighted_report_by_is_not_a_contrast(write_config, tmp_path):
         }
     )
     assert codes(path) == set()
+
+
+# --- a clustered design -----------------------------------------------------
+#
+# `_check_unimplemented` refused a truthy `data.units.cluster_by` outright when
+# these were written, so a declaration check reported beside that refusal and a
+# test asserting only "some finding fired" would have passed off the refusal
+# instead. H3b task 12 retired it, the declaration now changing the record. What
+# survives from that arrangement is worth keeping on its own terms: every check
+# below is also exercised by a direct call, where no config-level finding can
+# stand in for the one under test.
+
+
+def _clustered_table(tmp_path: Path, header: str, body: str) -> None:
+    """Write the roster these checks read, into the directory `write_config`
+    points `data.input_dir` at. `write_config` writes a `patient_id`-only
+    `index.csv`, so a test needing more columns overwrites it here — writing it
+    anywhere else is how a probe comes back empty for every input."""
+    (tmp_path / "input" / "index.csv").write_text(f"{header}\n{body}")
+
+
+_SITE_BODY = "".join(f"p{i},{s}\n" for i, s in enumerate("aaabbbcccddd"))
+
+
+def test_a_cluster_by_naming_no_attribute_is_reported(write_config, tmp_path):
+    """§ Validation, "Cluster attribute exists": `cluster_by` names `site`, which
+    is not a unit attribute. `data.units.attributes` is the reference set — a
+    cluster is read per unit when the split is drawn, so it has to survive
+    resolution — and that is the opposite side of the line from
+    `measurements.by`, which names a source column."""
+    _clustered_table(tmp_path, "patient_id,site", _SITE_BODY)
+    path = write_config(
+        {"data.units": {"from": "index.csv", "key": "patient_id", "cluster_by": "site"}}
+    )
+    assert "E-DATA-CLUSTER-UNKNOWN" in codes(path)
+
+
+def test_a_declared_cluster_attribute_is_not_reported_unknown(write_config, tmp_path):
+    """The other half of the same declaration: declaring the attribute is what
+    makes the name check pass, so it discriminates rather than reporting on every
+    `cluster_by` there is."""
+    _clustered_table(tmp_path, "patient_id,site", _SITE_BODY)
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["site"],
+                "cluster_by": "site",
+            }
+        }
+    )
+    assert "E-DATA-CLUSTER-UNKNOWN" not in codes(path)
+
+
+def test_an_empty_cluster_by_is_reported(write_config, tmp_path):
+    """An empty declaration changes no behavior, which is the failure a truthy
+    read of it would hide — and `_check_unimplemented`'s refusal, which is such a
+    read, stays silent on it, so this is the only finding it draws."""
+    _clustered_table(tmp_path, "patient_id,site", _SITE_BODY)
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["site"],
+                "cluster_by": "",
+            }
+        }
+    )
+    # The whole finding set: an empty `cluster_by` draws the name check and nothing
+    # else. Asserted exactly since task 12 retired the unbuilt-declaration refusal
+    # that used to be the reason for naming a second code here.
+    assert codes(path) == {"E-DATA-CLUSTER-UNKNOWN"}
+
+
+def test_a_cluster_by_under_a_glob_source_is_reported(write_config, tmp_path):
+    """The glob cross-check, and it costs nothing extra: a glob yields a key and
+    a path and nothing else, so `_from_glob` refuses every declared attribute and
+    a `cluster_by` there can never name one."""
+    (tmp_path / "input" / "a.dcm").write_bytes(b"\x00")
+    path = write_config(
+        {"data.units": {"from": {"glob": "*.dcm"}, "key": "path", "cluster_by": "site"}}
+    )
+    assert "E-DATA-CLUSTER-UNKNOWN" in codes(path)
+
+
+def test_the_cluster_name_check_reports_without_a_roster():
+    """Called directly, with no roster and no `validate_config` around it: the name
+    half is checked from the declaration alone, so it reports whether or not a
+    roster resolved — which is the property this pins, and the reason it survived
+    the retirement of the refusal it used to be contrasted against."""
+    c = Collector()
+    _check_cluster_by({}, {"attributes": ["age"], "cluster_by": "site"}, None, c)
+    assert [f.code for f in c.findings] == ["E-DATA-CLUSTER-UNKNOWN"]
+
+
+def test_a_non_string_cluster_by_is_left_to_the_envelope(write_config, tmp_path):
+    """`E-CONFIG-TYPE` owns it, and describing `3` as "empty" would fit neither
+    the value nor the remedy.
+
+    Both halves are asserted, and the second is why this is not a vacuous test:
+    silence here proves the check defers, and `E-CONFIG-TYPE` in `codes` proves
+    there is something to defer *to* — `envelope.py`'s `LEAF_TYPES` really does
+    type `data.units.cluster_by` a `str`. Without the second assertion this could
+    not tell "correctly deferred" from "silently dropped" — a distinction that used
+    to be masked by the unbuilt-declaration refusal firing on a truthy `3`, and
+    which task 12's retirement of that refusal is what makes load-bearing."""
+    c = Collector()
+    _check_cluster_by({}, {"attributes": ["site"], "cluster_by": 3}, None, c)
+    assert not c.findings
+    _clustered_table(tmp_path, "patient_id,site", _SITE_BODY)
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["site"],
+                "cluster_by": 3,
+            }
+        }
+    )
+    assert "E-CONFIG-TYPE" in codes(path)
+
+
+# --- the clustered contrast family, which does not exist ----------------------
+#
+# H3b task 12 minted `E-DATA-CLUSTER-CONTRAST` in the place H3a's
+# `E-DATA-WEIGHT-CONTRAST` and H2's `E-SWEEP-SAMPLE-BASELINE` occupy: a narrow
+# refusal of a *combination* that retiring a broad declaration refusal had just
+# made reachable. § Statistical reporting gives each contrast construction a
+# `_clustered` suffix under `cluster_by` — cluster-robust *t* forms and percentile
+# forms resampling whole clusters "jointly across both sides when paired" — and
+# none of those five exists. The probes below mirror the weighted set above one for
+# one, because the guard is deliberately the same shape: it reads the *resolved*
+# comparison family, not the declaration.
+
+
+def _clustered_units(**extra) -> dict:
+    """The `data.units` block these checks share, the shape `_weighted_units` above
+    has: a declared cluster that resolves and passes every value check, so the only
+    finding left is the one under test."""
+    return {
+        "from": "index.csv",
+        "key": "patient_id",
+        "attributes": ["site"],
+        "cluster_by": "site",
+        **extra,
+    }
+
+
+def test_a_declared_cluster_by_is_no_longer_refused(write_config, tmp_path):
+    """The retirement itself. A clustered roster with no contrast in it validates
+    clean — not merely free of the old code, but free of every finding, which is
+    what says the design is one core runs today."""
+    _clustered_table(tmp_path, "patient_id,site", _SITE_BODY)
+    assert codes(write_config({"data.units": _clustered_units()})) == set()
+
+
+def test_a_clustered_generated_comparison_is_refused(write_config, tmp_path):
+    """A baseline over an enumerated axis generates two `vs_baseline` deltas, and
+    `paired_t_over_units` takes a list of per-unit differences and nothing else —
+    no membership, so no cluster. The delta and its interval would be drawn as if
+    every unit were independent, beside per-condition intervals that are
+    cluster-robust, with nothing in the record saying which is which."""
+    _clustered_table(tmp_path, "patient_id,site", _SITE_BODY)
+    path = write_config(
+        {
+            "data.units": _clustered_units(),
+            "sweep": {
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {"analysis.method": ["spearman", "kendall"]},
+            },
+        }
+    )
+    assert codes(path) == {"E-DATA-CLUSTER-CONTRAST"}
+    assert "publishes 2 comparisons," in messages_by_code(path)["E-DATA-CLUSTER-CONTRAST"]
+
+
+def test_a_clustered_declared_contrast_is_refused(write_config, tmp_path):
+    """The other source of a comparison. A `statistics.contrasts` entry is named
+    rather than generated, so no baseline is involved at all — and it reaches the
+    same unclustered estimator, which is why the guard reads the resolved family
+    rather than `sweep.baseline`."""
+    _clustered_table(tmp_path, "patient_id,site", _SITE_BODY)
+    path = write_config(
+        {
+            "data.units": _clustered_units(),
+            "sweep": {"grid": {"analysis.method": ["pearson", "spearman"]}},
+            "statistics": {
+                "contrasts": [
+                    {
+                        "id": "spearman_vs_pearson",
+                        "of": "method=spearman",
+                        "against": "method=pearson",
+                    }
+                ]
+            },
+        }
+    )
+    assert codes(path) == {"E-DATA-CLUSTER-CONTRAST"}
+    # The singular, pinned as a whole word: `"1 comparison" in ...` would pass
+    # against `1 comparisons` too.
+    assert "publishes 1 comparison," in messages_by_code(path)["E-DATA-CLUSTER-CONTRAST"]
+
+
+def test_a_clustered_baseline_that_generates_no_comparison_stays_legal(write_config, tmp_path):
+    """The edge that makes the guard narrower than `sweep.baseline` being declared,
+    and the one H3a's implementer found. A baseline with no axis beside it expands
+    to one condition, which `resolve_contrasts` skips as an `of` — the run publishes
+    no delta, so there is no too-narrow interval for the refusal to prevent."""
+    _clustered_table(tmp_path, "patient_id,site", _SITE_BODY)
+    overrides = {
+        "data.units": _clustered_units(),
+        "sweep": {"baseline": {"analysis.method": "pearson"}},
+    }
+    assert codes(write_config(overrides)) == set()
+    # The control that must report: the same clustered config with one axis added
+    # generates a comparison and is refused, so the silence above is this
+    # baseline's shape rather than a guard that never fires.
+    crossed = dict(overrides)
+    crossed["sweep"] = {
+        "baseline": {"analysis.method": "pearson"},
+        "grid": {"analysis.method": ["spearman"]},
+    }
+    assert codes(write_config(crossed)) == {"E-DATA-CLUSTER-CONTRAST"}
+
+
+def test_an_unclustered_comparison_is_untouched(write_config, tmp_path):
+    """The neighbouring shape: the same sweep with no `cluster_by` is the ordinary
+    design, and nothing about it moved."""
+    _clustered_table(tmp_path, "patient_id,site", _SITE_BODY)
+    path = write_config(
+        {
+            "data.units": {"from": "index.csv", "key": "patient_id", "attributes": ["site"]},
+            "sweep": {
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {"analysis.method": ["spearman", "kendall"]},
+            },
+        }
+    )
+    assert "E-DATA-CLUSTER-CONTRAST" not in codes(path)
+
+
+def test_a_clustered_report_by_is_not_a_contrast(write_config, tmp_path):
+    """`statistics.report_by` repeats a metric over strata "without adding
+    executions or joining the correction family" — it publishes no delta, and the
+    per-condition aggregation it repeats *is* clustered, so the refusal must not
+    reach it. A subgroup someone wants to *test* is a `within` contrast, which does
+    join the family and is refused above."""
+    body = "".join(f"p{i},s{i % 4},a\n" for i in range(12))
+    _clustered_table(tmp_path, "patient_id,site,cohort", body)
+    path = write_config(
+        {
+            "data.units": _clustered_units(attributes=["site", "cohort"]),
+            "statistics": {"report_by": ["cohort"]},
+        }
+    )
+    assert codes(path) == set()
+
+
+def test_an_empty_cluster_by_beside_a_comparison_is_not_the_contrast_refusal(
+    write_config, tmp_path
+):
+    """The under-firing control on the other side: an empty `cluster_by` declares
+    no clustering, so nothing about the delta is wrong and only the name check
+    reports. A truthy read is what keeps the two apart."""
+    _clustered_table(tmp_path, "patient_id,site", _SITE_BODY)
+    path = write_config(
+        {
+            "data.units": _clustered_units(cluster_by=""),
+            "sweep": {
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {"analysis.method": ["spearman"]},
+            },
+        }
+    )
+    assert codes(path) == {"E-DATA-CLUSTER-UNKNOWN"}
+
+
+def test_a_parameter_named_stratify_by_does_not_silence_the_cluster_warning(
+    write_config, tmp_path
+):
+    """The exclusion walk covers the four blocks that describe the design, not
+    `parameters` — a template may declare a parameter of any name, and one called
+    `stratify_by` silencing a real cluster column would be invisible to a reader."""
+    _clustered_table(tmp_path, "patient_id,site", _SITE_BODY)
+    path = write_config(
+        {
+            "data.units": {"from": "index.csv", "key": "patient_id", "attributes": ["site"]},
+            "parameters.analysis": {
+                "method": "pearson",
+                "min_samples": 30,
+                "confidence": 0.95,
+                "drop_missing": True,
+                "stratify_by": "site",
+            },
+        }
+    )
+    assert "W-DATA-CLUSTER-UNDECLARED" in codes(path)
+
+
+@pytest.mark.parametrize("unset", [{}, {"cluster_by": None}])
+def test_a_cluster_looking_column_warns_when_nothing_declares_it(write_config, tmp_path, unset):
+    """§ Validation, "Clustering looks undeclared". The positive direction comes
+    first: a warning that can never fire passes its own negative test trivially.
+
+    Both forms of "unset" are run — `init` materializes `cluster_by: null`, so a
+    check keyed on the key's absence would miss the shape a real config carries.
+    Four sites over twelve units: repeated, non-numeric, more than two, and every
+    unit carries one."""
+    _clustered_table(tmp_path, "patient_id,site", _SITE_BODY)
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["site"],
+                **unset,
+            }
+        }
+    )
+    found = messages_by_code(path)
+    assert "W-DATA-CLUSTER-UNDECLARED" in found
+    assert "site" in found["W-DATA-CLUSTER-UNDECLARED"]
+
+
+def test_the_worked_examples_own_attributes_do_not_warn(write_config, tmp_path):
+    """The control that decides whether the trigger is usable at all. `cohort-pilot`
+    declares `[label, age, sex]` and no `cluster_by`, and `sex` has two values over
+    many units — which "few distinct values, many units each" reads as a cluster.
+    A warning that fires on the project's own worked example is one every user
+    learns to ignore.
+
+    Each attribute is silenced by a different clause, which is what makes this a
+    test of the trigger rather than of one clause: `age` by the type clause, `label`
+    and `sex` by the "more than two distinct values" clause."""
+    _clustered_table(
+        tmp_path,
+        "patient_id,label,age,sex",
+        "".join(
+            f"p{i},{'case' if i % 2 else 'control'},{30 + (i % 4) * 5},{'f' if i % 3 else 'm'}\n"
+            for i in range(12)
+        ),
+    )
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["label", "age", "sex"],
+            }
+        }
+    )
+    assert "W-DATA-CLUSTER-UNDECLARED" not in codes(path)
+
+
+def test_no_cluster_warning_for_a_numeric_column(write_config, tmp_path):
+    """The type clause. `age`, `dose` and `latency` have repeated values too, and
+    a numeric column with repeated values is a measurement far more often than an
+    identifier — the cost being a missed integer-coded id, which is the right way
+    to be wrong here. Same fixture as the positive case but for the values."""
+    _clustered_table(
+        tmp_path,
+        "patient_id,site",
+        "".join(f"p{i},{s}\n" for i, s in enumerate("111222333444")),
+    )
+    path = write_config(
+        {"data.units": {"from": "index.csv", "key": "patient_id", "attributes": ["site"]}}
+    )
+    assert "W-DATA-CLUSTER-UNDECLARED" not in codes(path)
+
+
+def test_no_cluster_warning_for_a_column_that_is_a_second_key(write_config, tmp_path):
+    """The "held by more than one unit" clause: a column with one value per unit
+    is a second identity, not a grain units share."""
+    _clustered_table(
+        tmp_path,
+        "patient_id,site",
+        "".join(f"p{i},s{i}\n" for i in range(12)),
+    )
+    path = write_config(
+        {"data.units": {"from": "index.csv", "key": "patient_id", "attributes": ["site"]}}
+    )
+    assert "W-DATA-CLUSTER-UNDECLARED" not in codes(path)
+
+
+def test_no_cluster_warning_for_a_column_with_a_blank_cell(write_config, tmp_path):
+    """"Every unit carries a value for it" reads an empty cell as no value. A
+    sparse column would otherwise satisfy the type and repetition clauses on its
+    blanks alone."""
+    _clustered_table(
+        tmp_path,
+        "patient_id,site",
+        "".join(f"p{i},{s}\n" for i, s in enumerate(["a", "a", "b", "b", "c", ""])),
+    )
+    path = write_config(
+        {"data.units": {"from": "index.csv", "key": "patient_id", "attributes": ["site"]}}
+    )
+    assert "W-DATA-CLUSTER-UNDECLARED" not in codes(path)
+
+
+def test_no_cluster_warning_once_cluster_by_declares_the_column(write_config, tmp_path):
+    """The warning is about a cluster going *undeclared*, so declaring it is what
+    silences it — the one thing the message tells a reader to do."""
+    _clustered_table(tmp_path, "patient_id,site", _SITE_BODY)
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["site"],
+                "cluster_by": "site",
+            }
+        }
+    )
+    assert "W-DATA-CLUSTER-UNDECLARED" not in codes(path)
+
+
+def test_no_cluster_warning_for_an_attribute_null_test_shuffles(write_config, tmp_path):
+    """One of the exclusions: a cluster is what shuffling *respects*, not what it
+    names. Reported through `validate_config` even though `statistics.null_test`
+    is itself refused in this build — the refusal is a finding beside this one,
+    not a substitute for it."""
+    _clustered_table(tmp_path, "patient_id,site", _SITE_BODY)
+    path = write_config(
+        {
+            "data.units": {"from": "index.csv", "key": "patient_id", "attributes": ["site"]},
+            "statistics": {"null_test": {"method": "permutation", "n": 10, "shuffle": "site"}},
+        }
+    )
+    found = codes(path)
+    assert "W-DATA-CLUSTER-UNDECLARED" not in found
+    assert "E-STATS-NULLTEST-UNSUPPORTED" in found
+
+
+def test_no_cluster_warning_for_an_attribute_something_stratifies_on(write_config, tmp_path):
+    """`stratify_by` must be constant within a cluster, so it is coarser than one.
+    Collected by walking the document for the key, so a `stratify_by` on any block
+    accounts for its attribute — here a `fold` repeat level's."""
+    _clustered_table(tmp_path, "patient_id,site", _SITE_BODY)
+    path = write_config(
+        {
+            "data.units": {"from": "index.csv", "key": "patient_id", "attributes": ["site"]},
+            "replication.repeats": [{"kind": "fold", "k": 2, "stratify_by": "site"}],
+        }
+    )
+    assert "W-DATA-CLUSTER-UNDECLARED" not in codes(path)
+
+
+def test_the_cluster_warning_is_skipped_without_a_roster():
+    """The reachable half of the skip: with no roster there is no column to look
+    at. Called directly, so it is distinguishable from a run where every clause
+    simply failed."""
+    c = Collector()
+    _check_cluster_by({}, {"attributes": ["site"]}, None, c)
+    assert not c.findings
+
+
+# --- a cluster and a weight must not vary within a unit's measurement rows ----
+#
+# `units.collapse_measurements` raises; `_check_units` wraps `resolve_units` in
+# `except ContractError`, which is the route `E-UNITS-COLLAPSE-RULE` and
+# `E-DATA-MEASUREMENTS-COLLAPSE-TYPE` already take to become findings. These
+# tests are the validate surface of that route — the unit-level tests in
+# `test_units.py` pin the raise itself.
+
+_MEASURED_UNITS = {
+    "from": "index.csv",
+    "key": "patient_id",
+    "attributes": ["read_id", "site", "sampling_weight"],
+    "measurements": {"by": "read_id", "collapse": "first"},
+}
+
+
+def test_a_cluster_varying_within_a_units_rows_is_reported(write_config, tmp_path):
+    """§ Clustered units: replicate rows declaring `S1` and `S2` would collapse to
+    whichever the file happens to list first, and the unit's real site would then
+    be on both sides of a split."""
+    _clustered_table(
+        tmp_path,
+        "patient_id,read_id,site,sampling_weight",
+        "p1,r1,S1,2\np1,r2,S2,2\np2,r3,S3,2\n",
+    )
+    path = write_config({"data.units": dict(_MEASURED_UNITS, cluster_by="site")})
+    assert "E-DATA-CLUSTER-VARIES" in codes(path)
+
+
+def test_agreeing_cluster_rows_are_not_reported(write_config, tmp_path):
+    """The cluster half's control: the same config over rows that agree. A check
+    that reported for every measured roster would pass the test above too."""
+    _clustered_table(
+        tmp_path,
+        "patient_id,read_id,site,sampling_weight",
+        "p1,r1,S1,2\np1,r2,S1,2\np2,r3,S3,2\n",
+    )
+    path = write_config({"data.units": dict(_MEASURED_UNITS, cluster_by="site")})
+    found = codes(path)
+    assert "E-DATA-CLUSTER-VARIES" not in found
+    assert "E-DATA-WEIGHT-VARIES" not in found
+
+
+def test_a_weight_varying_within_a_units_rows_is_reported(write_config, tmp_path):
+    """The gap H3a left: § Weighted samples states this rule, and until now
+    nothing checked it. Reported at `validate`, through the same route."""
+    _clustered_table(
+        tmp_path,
+        "patient_id,read_id,site,sampling_weight",
+        "p1,r1,S1,1\np1,r2,S1,99\np2,r3,S3,2\n",
+    )
+    path = write_config({"data.units": dict(_MEASURED_UNITS, weight_by="sampling_weight")})
+    assert "E-DATA-WEIGHT-VARIES" in codes(path)
+
+
+def test_agreeing_weight_rows_are_not_reported(write_config, tmp_path):
+    """The weight half's own control."""
+    _clustered_table(
+        tmp_path,
+        "patient_id,read_id,site,sampling_weight",
+        "p1,r1,S1,2\np1,r2,S1,2\np2,r3,S3,2\n",
+    )
+    path = write_config({"data.units": dict(_MEASURED_UNITS, weight_by="sampling_weight")})
+    assert "E-DATA-WEIGHT-VARIES" not in codes(path)
+
+
+def test_neither_check_fires_where_measurements_is_undeclared(write_config, tmp_path):
+    """The worked example declares neither `measurements` nor `cluster_by`, and
+    every roster with one row per unit is in this shape: nothing merges, so no
+    column can disagree with itself and neither code may appear."""
+    _clustered_table(
+        tmp_path,
+        "patient_id,site,sampling_weight",
+        "p1,S1,2\np2,S3,2\n",
+    )
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["site", "sampling_weight"],
+                "cluster_by": "site",
+                "weight_by": "sampling_weight",
+            }
+        }
+    )
+    found = codes(path)
+    assert "E-DATA-CLUSTER-VARIES" not in found
+    assert "E-DATA-WEIGHT-VARIES" not in found
+
+
+def test_validate_reports_rather_than_raising_on_a_varying_cluster(write_config, tmp_path):
+    """`validate` collects findings and never raises. The `except ContractError`
+    in `_check_units` is what makes that true of this raise too, and a test
+    calling `validate_config` directly is what proves nothing escaped."""
+    _clustered_table(
+        tmp_path,
+        "patient_id,read_id,site,sampling_weight",
+        "p1,r1,S1,2\np1,r2,S2,2\n",
+    )
+    path = write_config({"data.units": dict(_MEASURED_UNITS, cluster_by="site")})
+    c = Collector()
+    validate_config(path, c)
+    assert any(f.code == "E-DATA-CLUSTER-VARIES" for f in c.findings)
+
+
+# --- `k` and `k: all` are bounded by clusters -------------------------------
+#
+# `reference.md` § Validation, *Folds fit inside the clusters* and
+# *Leave-one-out is affordable*. `E-DATA-CLUSTER-UNSUPPORTED` was live when these
+# were written, so each asserted that refusal BESIDE the fold finding to prove the
+# check was reached rather than shadowed. It is retired, so each now asserts the
+# **exact** finding set instead — an empty one where the design is legal — which
+# proves the same thing more strongly: a clustered config that validates clean is
+# a clean config, not one whose findings were filtered.
+#
+# The roster is 7/3/3/1/1 over 15 units: 5 clusters, 15 units, two numbers that
+# cannot be mistaken for each other. One unit per cluster would make the two
+# equal and every assertion here vacuous.
+_UNEVEN_SITES = "".join(f"p{i},{s}\n" for i, s in enumerate("aaaaaaabbbcccde"))
+
+_CLUSTERED_UNITS = {
+    "from": "index.csv",
+    "key": "patient_id",
+    "attributes": ["site"],
+    "cluster_by": "site",
+}
+_UNCLUSTERED_UNITS = {"from": "index.csv", "key": "patient_id", "attributes": ["site"]}
+
+
+def test_k_above_the_cluster_count_is_refused_through_validate(write_config, tmp_path):
+    """§ Validation, *Folds fit inside the clusters*: `k: 10` over 5 clusters.
+
+    The finding set is asserted exactly: `E-REPL-FOLD-K-TOO-LARGE` and nothing
+    else, so a clustered declaration no longer drags a refusal along with it, and
+    the sibling below is the control — the same roster and the same `k` with
+    `cluster_by` gone reports nothing at all.
+    """
+    _clustered_table(tmp_path, "patient_id,site", _UNEVEN_SITES)
+    found = codes(
+        write_config(
+            {
+                "data.units": _CLUSTERED_UNITS,
+                "replication": {"repeats": [{"kind": "fold", "k": 10}]},
+            }
+        )
+    )
+    assert found == {"E-REPL-FOLD-K-TOO-LARGE"}
+
+
+def test_the_same_k_is_accepted_over_the_same_units_undeclared(write_config, tmp_path):
+    """The control that must report. The roster is byte-identical and `k` is
+    unchanged; only `cluster_by` is gone, and 10 folds over 15 independent units is
+    a legal design. Without this, narrowing the basis to something wrong — or to a
+    constant — would still pass the refusal above."""
+    _clustered_table(tmp_path, "patient_id,site", _UNEVEN_SITES)
+    found = codes(
+        write_config(
+            {
+                "data.units": _UNCLUSTERED_UNITS,
+                "replication": {"repeats": [{"kind": "fold", "k": 10}]},
+            }
+        )
+    )
+    # `site` undeclared over this roster is exactly what
+    # `W-DATA-CLUSTER-UNDECLARED` looks for, and it is the whole finding set: the
+    # fold check is silent, which is the point.
+    assert found == {"W-DATA-CLUSTER-UNDECLARED"}
+
+
+def test_leave_one_cluster_out_is_costed_in_clusters(write_config, tmp_path):
+    """§ Validation, *Leave-one-out is affordable*: the budget is counted over the
+    cluster count when `cluster_by` is declared. 1 condition × 5 clusters = 5
+    executions against a budget of 8, so no warning — and the sibling below is the
+    same config unclustered, where the same `k: all` is 15 and does warn."""
+    _clustered_table(tmp_path, "patient_id,site", _UNEVEN_SITES)
+    found = codes(
+        write_config(
+            {
+                "data.units": _CLUSTERED_UNITS,
+                "replication": {"repeats": [{"kind": "fold", "k": "all"}]},
+                "limits": {"max_executions": 8},
+            }
+        )
+    )
+    assert found == set()
+
+
+def test_leave_one_out_is_costed_in_units_when_nothing_is_clustered(
+    write_config, tmp_path
+):
+    """The control that must report: the same roster and the same `k: all` with no
+    `cluster_by` is 15 executions against the same budget of 8, and warns. The two
+    together are what pin `k: all` to the cluster count rather than to the roster
+    size — a budget that read the roster either way would fail this pair."""
+    _clustered_table(tmp_path, "patient_id,site", _UNEVEN_SITES)
+    found = messages_by_code(
+        write_config(
+            {
+                "data.units": _UNCLUSTERED_UNITS,
+                "replication": {"repeats": [{"kind": "fold", "k": "all"}]},
+                "limits": {"max_executions": 8},
+            }
+        )
+    )
+    assert "W-EXEC-BUDGET" in found
+    assert "15 executions exceeds 8" in found["W-EXEC-BUDGET"]
+
+
+def test_the_cluster_bound_is_reported_by_a_direct_call_too(write_config, tmp_path):
+    """Called directly, with no config file around it: the basis is the one number
+    `validate_config` resolves through `units.fold_basis`, and the refusal names the
+    clusters it counted rather than a unit count nobody supplied."""
+    from publishable.templates.builtin.generic import GenericTemplate
+    from publishable.validate import _check_replication
+
+    doc = {
+        "data": {"units": dict(_CLUSTERED_UNITS)},
+        "replication": {"repeats": [{"kind": "fold", "k": 10}]},
+    }
+    c = Collector()
+    _check_replication(doc, GenericTemplate(), c, fold_basis=5)
+    reported = [f for f in c.findings if f.code == "E-REPL-FOLD-K-TOO-LARGE"]
+    assert len(reported) == 1
+    assert "5 clusters of `site`" in reported[0].message
+
+    # ...and the same declaration over an unclustered basis of 15 is legal.
+    control = Collector()
+    _check_replication(
+        {"replication": doc["replication"]}, GenericTemplate(), control, fold_basis=15
+    )
+    assert "E-REPL-FOLD-K-TOO-LARGE" not in {f.code for f in control.findings}
+
+
+def test_the_repeat_floor_counts_a_clustered_k_all_in_clusters_too(write_config):
+    """`_check_replication`'s *other* consumer of the basis. The refusal above goes
+    through `resolve_repeats`; `W-REPL-FLOOR` goes through `_level_count`, and the
+    two must read the same number or a design's repeat total means one thing to the
+    floor and another to the fold it executes.
+
+    `generic`'s `default_repeats` is 1, which no positive count can fall below, so
+    this needs a template that sets a floor — the same `ThreeRepeats` construction
+    the unclustered floor test uses.
+    """
+    from publishable.templates.builtin.generic import GenericTemplate
+    from publishable.validate import _check_replication
+
+    class ThreeRepeats(GenericTemplate):  # type: ignore[misc]
+        default_repeats = 3
+
+    doc = {
+        "data": {"units": dict(_CLUSTERED_UNITS)},
+        "replication": {"repeats": [{"kind": "fold", "k": "all"}]},
+    }
+    two_clusters = Collector()
+    _check_replication(doc, ThreeRepeats(), two_clusters, fold_basis=2)
+    assert "W-REPL-FLOOR" in {f.code for f in two_clusters.findings}
+
+    # The control that must report: the same declaration over the 15-unit basis
+    # those 2 clusters hold is 15 repeats, well above the floor. A floor reading
+    # the roster where the fold reads the clusters would warn here too.
+    fifteen_units = Collector()
+    _check_replication(doc, ThreeRepeats(), fifteen_units, fold_basis=15)
+    assert "W-REPL-FLOOR" not in {f.code for f in fifteen_units.findings}
+
+
+def test_an_unreadable_cluster_leaves_k_all_unresolved_rather_than_raising(
+    write_config, tmp_path
+):
+    """`cluster_by` names a column the roster carries but `attributes` never
+    declared, so resolution never read it and `units.fold_basis` raises
+    `E-DATA-CLUSTER-UNKNOWN`. `validate` collects and never raises: the basis is
+    unresolved, `k: all` reports `E-REPL-FOLD-K` — honest, the fold count genuinely
+    cannot be known — and the cluster finding beside it says why."""
+    _clustered_table(tmp_path, "patient_id,site", _UNEVEN_SITES)
+    c = Collector()
+    validate_config(
+        write_config(
+            {
+                "data.units": {"from": "index.csv", "key": "patient_id", "cluster_by": "site"},
+                "replication": {"repeats": [{"kind": "fold", "k": "all"}]},
+            }
+        ),
+        c,
+    )
+    found = {f.code for f in c.findings}
+    assert "E-DATA-CLUSTER-UNKNOWN" in found
+    assert "E-REPL-FOLD-K" in found
+
+
+# --- a fold's `stratify_by` ---------------------------------------------------
+#
+# `E-REPL-FOLD-STRATIFY-UNSUPPORTED` was live when these were written —
+# `resolve_repeats` refused any fold `stratify_by` before it read `k` at all — so
+# every probe asserted the refusal appeared *with* the finding, as the proof the
+# check was reached rather than shadowed. It is retired, so each probe asserts the
+# **exact** finding set instead, which proves the same thing without leaning on a
+# code that no longer exists. Each check is also exercised by a direct call.
+#
+# Only a `fold` level's `stratify_by` is checked here. § Validation's
+# "Stratification attribute exists" row names no particular one, and its
+# `data.units.assign.*.stratify_by` and `data.units.holdout.stratify_by` halves
+# belong to the slices that build those blocks.
+
+_ANIMAL_HEADER = "cell_id,animal_id,label"
+_ANIMAL_SIZES = {"A1": 7, "A2": 3, "A3": 3, "A4": 1, "A5": 1}
+_ANIMAL_LABELS = {"A1": "tumor", "A2": "normal", "A3": "tumor", "A4": "normal", "A5": "tumor"}
+
+
+def _animal_body(varying: bool) -> str:
+    """15 cells over 5 animals, sized 7/3/3/1/1, with `label` per animal.
+
+    Neither coincidence that would make the clustering check unfireable holds:
+    three of the animals hold several cells, so a stratum is not constant within a
+    cluster merely for the cluster being a singleton, and `label` takes both values
+    across the roster, so it is not constant globally either. `varying` flips one
+    cell of the three-cell animal `A3` — one character between the probe and its
+    control.
+    """
+    rows = []
+    for animal, n in _ANIMAL_SIZES.items():
+        for i in range(n):
+            label = _ANIMAL_LABELS[animal]
+            if varying and animal == "A3" and i == 0:
+                label = "normal"
+            rows.append(f"{animal}_{i},{animal},{label}")
+    return "".join(f"{r}\n" for r in rows)
+
+
+def _animal_config(write_config, tmp_path, *, varying: bool, attributes: list[str], **units):
+    """The roster and the config together, so **one argument decides both**.
+
+    `varying` writes the table as well as being the probe/control switch. Writing
+    the table beside the config from each test would let a `varying=True` probe be
+    paired with a `varying=False` roster — in a fixture whose whole discriminating
+    power is one cell's label, that is a probe silently testing the control.
+    """
+    _clustered_table(tmp_path, _ANIMAL_HEADER, _animal_body(varying=varying))
+    decl = {"from": "index.csv", "key": "cell_id", "attributes": attributes}
+    decl.update(units)
+    return write_config(
+        {
+            "data.units": decl,
+            "replication": {"repeats": [{"kind": "fold", "k": 2, "stratify_by": "label"}]},
+        }
+    )
+
+
+def test_a_fold_stratify_by_naming_no_attribute_is_reported(write_config, tmp_path):
+    """§ Validation, "Stratification attribute exists", at a `fold` level:
+    `stratify_by: label` is not in `data.units.attributes`, so the partitioner has
+    nothing to balance the folds on."""
+    found = codes(_animal_config(write_config, tmp_path, varying=False, attributes=["animal_id"]))
+    # `W-DATA-CLUSTER-UNDECLARED` rides along: `animal_id` is a column of repeated
+    # non-numeric labels and nothing declares it a cluster, which is exactly that
+    # warning's trigger. Asserted as part of the exact set rather than filtered out.
+    assert found == {"E-REPL-FOLD-STRATIFY-UNKNOWN", "W-DATA-CLUSTER-UNDECLARED"}
+
+
+def test_a_declared_fold_stratum_is_not_reported_unknown(write_config, tmp_path):
+    """The control that must report: the same roster and the same level, with
+    `label` declared — the one difference the check is allowed to read."""
+    found = codes(
+        _animal_config(write_config, tmp_path, varying=False, attributes=["animal_id", "label"])
+    )
+    assert found == {"W-DATA-CLUSTER-UNDECLARED"}
+
+
+def test_the_fold_stratum_name_check_reports_without_a_roster():
+    """Direct, and with no roster at all:
+    the name is read from the declaration, `_check_cluster_by`'s construction."""
+    c = Collector()
+    _check_fold_stratify_by(
+        {"replication": {"repeats": [{"kind": "fold", "k": 2, "stratify_by": "label"}]}},
+        {"attributes": ["age"]},
+        None,
+        None,
+        c,
+    )
+    assert [f.code for f in c.findings] == ["E-REPL-FOLD-STRATIFY-UNKNOWN"]
+    clean = Collector()
+    _check_fold_stratify_by(
+        {"replication": {"repeats": [{"kind": "fold", "k": 2, "stratify_by": "label"}]}},
+        {"attributes": ["label"]},
+        None,
+        None,
+        clean,
+    )
+    assert not clean.findings
+
+
+@pytest.mark.parametrize("declared", ["", [], ["label"], 3])
+def test_a_fold_stratify_by_that_is_no_attribute_name_is_reported(declared):
+    """Totality. `envelope.LEAF_TYPES` types `replication.repeats` a `list` and
+    nothing inside a level, so unlike `data.units.cluster_by` there is no
+    `E-CONFIG-TYPE` backstop for a non-string here: a fold stratifies on one
+    attribute named as a string, and the list form the `holdout`, `assign` and
+    `resample` blocks take is reported rather than silently accepted. An empty
+    declaration names nothing and changes no behavior, the fault an empty
+    `cluster_by` is reported for."""
+    c = Collector()
+    _check_fold_stratify_by(
+        {"replication": {"repeats": [{"kind": "fold", "k": 2, "stratify_by": declared}]}},
+        {"attributes": ["label"]},
+        None,
+        None,
+        c,
+    )
+    assert [f.code for f in c.findings] == ["E-REPL-FOLD-STRATIFY-UNKNOWN"]
+
+
+def test_a_level_with_no_stratify_by_is_not_reported():
+    """The `None` control: `init` writes no `stratify_by`, and the worked example
+    declares none, so an absent key must reach neither check."""
+    c = Collector()
+    _check_fold_stratify_by(
+        {"replication": {"repeats": [{"kind": "fold", "k": 2}, {"kind": "seed", "n": 5}]}},
+        {"attributes": ["label"]},
+        None,
+        None,
+        c,
+    )
+    assert not c.findings
+
+
+def test_a_fold_stratum_varying_within_a_cluster_is_reported(write_config, tmp_path):
+    """§ Validation, "Fold strata survive clustering": `{kind: fold, stratify_by:
+    label}` with `cluster_by: animal_id`, and `label` varies within animal `A3` — a
+    stratum can't be balanced across a split that can't divide the cluster carrying
+    both values."""
+    found = codes(
+        _animal_config(
+            write_config,
+            tmp_path,
+            varying=True,
+            attributes=["animal_id", "label"],
+            cluster_by="animal_id",
+        )
+    )
+    assert found == {"E-REPL-FOLD-STRATIFY-VARIES"}
+
+
+def test_a_fold_stratum_constant_within_every_cluster_is_accepted(write_config, tmp_path):
+    """The control that must report: the same design over the same animals with
+    `label` constant within each — one cell's label apart from the probe. A stratum
+    that agrees inside every indivisible cluster is exactly what a cluster-respecting
+    stratified fold can satisfy, so it is not refused."""
+    found = codes(
+        _animal_config(
+            write_config,
+            tmp_path,
+            varying=False,
+            attributes=["animal_id", "label"],
+            cluster_by="animal_id",
+        )
+    )
+    assert found == set()
+
+
+def test_the_fold_stratum_clustering_check_runs_on_a_direct_call():
+    """Direct, over a hand-built roster: the same check without a config file, so
+    a fixture that stopped resolving could not make this pass by silence."""
+    doc = {"replication": {"repeats": [{"kind": "fold", "k": 2, "stratify_by": "label"}]}}
+    decl = {"attributes": ["animal_id", "label"], "cluster_by": "animal_id"}
+    varying = UnitList(
+        [
+            Unit(key="c0", paths=(), attributes={"animal_id": "A3", "label": "tumor"}),
+            Unit(key="c1", paths=(), attributes={"animal_id": "A3", "label": "normal"}),
+        ]
+    )
+    c = Collector()
+    _check_fold_stratify_by(doc, decl, varying, "animal_id", c)
+    assert [f.code for f in c.findings] == ["E-REPL-FOLD-STRATIFY-VARIES"]
+    assert "A3" in c.findings[0].message
+    constant = UnitList(
+        [
+            Unit(key="c0", paths=(), attributes={"animal_id": "A3", "label": "tumor"}),
+            Unit(key="c1", paths=(), attributes={"animal_id": "A3", "label": "tumor"}),
+        ]
+    )
+    clean = Collector()
+    _check_fold_stratify_by(doc, decl, constant, "animal_id", clean)
+    assert not clean.findings
+
+
+def test_a_fold_stratum_naming_the_measurement_axis_is_reported(write_config, tmp_path):
+    """The hole task 11 named in `cli` and called unreachable, which task 12's
+    retirement of `E-REPL-FOLD-STRATIFY-UNSUPPORTED` made reachable.
+
+    `collapse_measurements` consumes `data.units.measurements.by`, so `rep` is a
+    declared attribute that no *resolved* unit carries — and `cli` rebuilds the
+    strata from the collapsed roster, where the subscript reached a bare `KeyError`
+    rather than a diagnostic. Reported under the name code because that is the fault
+    it already describes: the reference set is `attributes` rather than the source's
+    columns *because* a stratum has to survive resolution."""
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id,rep,val\n" + "".join(f"u{i},r{j},{i}\n" for i in range(6) for j in range(2))
+    )
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["rep", "val"],
+                "measurements": {"by": "rep", "collapse": "first"},
+            },
+            "replication": {"repeats": [{"kind": "fold", "k": 2, "stratify_by": "rep"}]},
+        }
+    )
+    found = codes(path)
+    assert "E-REPL-FOLD-STRATIFY-UNKNOWN" in found
+    assert "measurements.by" in messages_by_code(path)["E-REPL-FOLD-STRATIFY-UNKNOWN"]
+    # The control that must report clean: the identical config stratifying on the
+    # other declared attribute, which does survive the collapse. Without it this
+    # could not tell "the measurement axis is refused" from "any `stratify_by`
+    # beside a `measurements` block is".
+    clean = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["rep", "val"],
+                "measurements": {"by": "rep", "collapse": "first"},
+            },
+            "replication": {"repeats": [{"kind": "fold", "k": 2, "stratify_by": "val"}]},
+        }
+    )
+    assert "E-REPL-FOLD-STRATIFY-UNKNOWN" not in codes(clean)
+
+
+def test_the_measurement_axis_stratum_check_runs_on_a_direct_call():
+    """Direct, with no roster: both halves come from the declaration, which is why
+    this is a `validate` check and not the run-time raise `E-DATA-CLUSTER-VARIES` is
+    for the same declaration shape under `cluster_by` — that one needs the
+    pre-collapse rows in hand to prove the disagreement, and this one needs
+    nothing."""
+    doc = {"replication": {"repeats": [{"kind": "fold", "k": 2, "stratify_by": "rep"}]}}
+    decl = {"attributes": ["rep"], "measurements": {"by": "rep", "collapse": "first"}}
+    c = Collector()
+    _check_fold_stratify_by(doc, decl, None, None, c)
+    assert [f.code for f in c.findings] == ["E-REPL-FOLD-STRATIFY-UNKNOWN"]
+    # A `measurements` block of the wrong shape must not shadow this into a
+    # traceback: `E-DATA-MEASUREMENTS-INVALID` owns that fault, and the axis is
+    # simply unreadable here, so the stratum is left alone.
+    loose = Collector()
+    _check_fold_stratify_by(doc, {"attributes": ["rep"], "measurements": "rep"}, None, None, loose)
+    assert not loose.findings
+
+
+def test_a_varying_stratum_is_not_reported_without_a_cluster_by():
+    """Nothing is indivisible without `cluster_by`, so the same varying `label` is
+    a perfectly satisfiable stratification — the row is about the interaction, not
+    about the attribute."""
+    c = Collector()
+    _check_fold_stratify_by(
+        {"replication": {"repeats": [{"kind": "fold", "k": 2, "stratify_by": "label"}]}},
+        {"attributes": ["animal_id", "label"]},
+        UnitList(
+            [
+                Unit(key="c0", paths=(), attributes={"animal_id": "A3", "label": "tumor"}),
+                Unit(key="c1", paths=(), attributes={"animal_id": "A3", "label": "normal"}),
+            ]
+        ),
+        None,
+        c,
+    )
+    assert not c.findings
+
+
+def test_an_undeclared_fold_stratum_is_not_also_reported_as_varying():
+    """One finding, not two: the reader has to declare the attribute either way, and
+    a derived second fault on top of it is what `_check_cluster_by`'s own comment
+    argues against."""
+    c = Collector()
+    _check_fold_stratify_by(
+        {"replication": {"repeats": [{"kind": "fold", "k": 2, "stratify_by": "label"}]}},
+        {"attributes": ["animal_id"], "cluster_by": "animal_id"},
+        UnitList(
+            [
+                Unit(key="c0", paths=(), attributes={"animal_id": "A3", "label": "tumor"}),
+                Unit(key="c1", paths=(), attributes={"animal_id": "A3", "label": "normal"}),
+            ]
+        ),
+        "animal_id",
+        c,
+    )
+    assert [f.code for f in c.findings] == ["E-REPL-FOLD-STRATIFY-UNKNOWN"]
+
+
+def test_an_unreadable_cluster_leaves_the_stratum_check_silent_rather_than_raising():
+    """`validate` collects and never raises. `clusters_of` raises
+    `E-DATA-CLUSTER-UNKNOWN` for a unit carrying no cluster value, and that finding
+    is already reported beside this check, so an unreadable grouping is silence here
+    rather than a traceback."""
+    c = Collector()
+    _check_fold_stratify_by(
+        {"replication": {"repeats": [{"kind": "fold", "k": 2, "stratify_by": "label"}]}},
+        {"attributes": ["animal_id", "label"], "cluster_by": "animal_id"},
+        UnitList(
+            [
+                Unit(key="c0", paths=(), attributes={"animal_id": "A3", "label": "tumor"}),
+                Unit(key="c1", paths=(), attributes={"label": "normal"}),
+            ]
+        ),
+        "animal_id",
+        c,
+    )
+    assert not c.findings
+
+
+# --- what `_fold_k` reports now that its stratify refusal is gone --------------
+#
+# Task 6 pinned these two as the *pre*-flip expectations, asserting the flip code
+# was ABSENT, precisely so that retiring `E-REPL-FOLD-STRATIFY-UNSUPPORTED` — a
+# raise that sat ahead of every read of `k` — turned them over visibly in the diff
+# rather than being discovered afterwards. H3b task 12 retired it, and these are
+# the post-flip expectations. **Kept as pins rather than deleted**: what they
+# record is that this reordering happened, and that each config's surviving fault
+# is the one that was always there behind the refusal.
+#
+# `W-DATA-CLUSTER-UNDECLARED` rides along in both: `animal_id` is a column of
+# repeated non-numeric labels that nothing declares a cluster. Asserted as part of
+# the exact set rather than filtered out, so the flip is pinned against the whole
+# finding set and not against one member of it.
+
+
+def test_a_fold_stratify_by_reports_before_an_illegal_k(write_config, tmp_path):
+    """`{k: 1, stratify_by: label}` reported the stratify refusal and *not*
+    `E-REPL-FOLD-K` until task 12 retired that refusal. It now reports
+    `E-REPL-FOLD-K`: `k: 1` is not a partition into folds, and that was true all
+    along behind a refusal that returned before `k` was read."""
+    _clustered_table(tmp_path, _ANIMAL_HEADER, _animal_body(varying=False))
+    found = codes(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv",
+                    "key": "cell_id",
+                    "attributes": ["animal_id", "label"],
+                },
+                "replication": {"repeats": [{"kind": "fold", "k": 1, "stratify_by": "label"}]},
+            }
+        )
+    )
+    assert found == {"E-REPL-FOLD-K", "W-DATA-CLUSTER-UNDECLARED"}
+
+
+def test_a_fold_stratify_by_reports_before_an_oversized_k(write_config, tmp_path):
+    """`{k: 99, stratify_by: label}` over a 15-unit roster reported the stratify
+    refusal and *not* `E-REPL-FOLD-K-TOO-LARGE` until task 12 retired that refusal.
+    It now reports `E-REPL-FOLD-K-TOO-LARGE`. The roster is well under 99, so the
+    flip this pinned was genuinely reachable rather than a hypothetical."""
+    _clustered_table(tmp_path, _ANIMAL_HEADER, _animal_body(varying=False))
+    found = codes(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv",
+                    "key": "cell_id",
+                    "attributes": ["animal_id", "label"],
+                },
+                "replication": {"repeats": [{"kind": "fold", "k": 99, "stratify_by": "label"}]},
+            }
+        )
+    )
+    assert found == {"E-REPL-FOLD-K-TOO-LARGE", "W-DATA-CLUSTER-UNDECLARED"}

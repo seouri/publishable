@@ -10,7 +10,7 @@ See docs/reference.md § Statistical reporting.
 import hashlib
 import math
 import random
-from collections.abc import Callable, Collection, Iterator, Sequence
+from collections.abc import Callable, Collection, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -18,7 +18,7 @@ from scipy import stats as _scipy_stats
 
 from publishable.errors import ContractError
 from publishable.replication import LABEL_JOIN
-from publishable.units import usable_weight
+from publishable.units import cluster_count_of, usable_weight
 
 if TYPE_CHECKING:
     from publishable.replication import RepeatLevel
@@ -236,6 +236,161 @@ def weighted_t_over_units(
     return Interval(low=mean - half, high=mean + half, method="weighted_t_over_units")
 
 
+def t_over_units_clustered(
+    values: Sequence[float],
+    keys: Sequence[str],
+    membership: Mapping[str, str],
+    confidence: float = 0.95,
+) -> Interval | None:
+    """Cluster-robust (CR1) *t* on the per-unit values, df = clusters − 1.
+
+    `reference.md` § Statistical reporting: "Cluster-robust (CR1: the sandwich
+    estimator with the standard finite-sample scaling), df = clusters − 1. The df
+    is the part that bites — 10 animals give 9, not 299."
+
+    **The df is the construction**, not a detail of it. A cluster-robust interval
+    over positively correlated data comes out wider than `t_over_units` whatever
+    df it uses, so widening is not evidence that the cluster count reached the
+    critical value; only the number is.
+
+    The model core fits here is the mean, so the sandwich is the intercept-only
+    case: with `X'X = n` and a cluster's score `S_g = Σ_{i∈g}(v_i − v̄)`, the
+    variance of the mean is `Σ_g S_g² / n²` before scaling. **The finite-sample
+    scaling is the `G/(G−1)` factor**, and dropping it is not a rounding
+    difference — it is the CR0 estimator wearing this one's name, biased downward
+    by exactly the factor a small cluster count makes largest.
+
+    Two conventions for CR1 exist in the literature — the `G/(G−1)` of
+    MacKinnon–White, and Stata's `G/(G−1) · (n−1)/(n−k)` — and **they coincide
+    here**: `k`, the number of fitted parameters, is 1 for a mean, so the second
+    factor is `(n−1)/(n−1)`. There is nothing to choose between, which is why this
+    function names neither in its `method` string.
+
+    Returns `None` below two clusters, and for the same reason `t_over_units`
+    returns `None` below two values: df would be zero. That floor is on the
+    CLUSTER count, so 300 cells from one animal get a point and no interval —
+    which is the honest answer, one animal being one draw. The `len(values) < 2`
+    guard in front of it is `t_over_units`' own floor, kept so the two
+    constructions refuse the same degenerate inputs.
+
+    **The membership mapping is `units.clusters_of`'s**, passed whole rather than
+    pre-resolved to a label vector, and the count comes from
+    `units.cluster_count_of` — the single counting expression, so this df cannot
+    disagree with the `n.clusters` printed beside it or with a fold's partition
+    about what one cluster is. Indexed rather than `.get`-ed for the reason
+    `cluster_count_of` states: a key the roster doesn't hold is a core defect, and
+    absorbing it into a cluster of its own would raise `G` and narrow the interval.
+
+    `strict=True` on the zip, for the reason `_weighted_mean` uses it: a
+    keys/values length mismatch is a misaligned cluster vector, and it would
+    produce a plausible number rather than an error.
+    """
+    n = len(values)
+    if n < 2:
+        return None
+    groups = cluster_count_of(membership, keys)
+    if groups < 2:
+        return None
+    mean = sum(values) / n
+    # One residual sum per cluster: what makes this robust is that the residuals
+    # are added up WITHIN a cluster before being squared, so correlated units
+    # reinforce each other instead of counting as independent draws.
+    scores: dict[str, float] = {}
+    for key, value in zip(keys, values, strict=True):
+        label = membership[key]
+        scores[label] = scores.get(label, 0.0) + (value - mean)
+    meat = sum(s * s for s in scores.values())
+    variance = (groups / (groups - 1)) * meat / (n * n)
+    half = _t_critical(groups - 1, confidence) * math.sqrt(variance)
+    return Interval(low=mean - half, high=mean + half, method="t_over_units_clustered")
+
+
+def weighted_t_over_units_clustered(
+    values: Sequence[float],
+    keys: Sequence[str],
+    membership: Mapping[str, str],
+    weights: Sequence[Any],
+    confidence: float = 0.95,
+) -> Interval | None:
+    """Cluster-robust (CR1) *t* on the *weighted* per-unit mean, df = clusters − 1.
+
+    The construction a run declaring both `data.units.weight_by` and
+    `data.units.cluster_by` needs, and `reference.md` decides both halves of it in
+    one sentence each rather than leaving them to be picked here. § Weighted
+    samples: "`cluster_by` still decides the draw when both are declared, since a
+    cluster is what's independent and a weight is what it represents" — so the
+    **draw** is the cluster and the **estimate** is the weighted mean, the weight
+    being what a unit stands for rather than what it is grouped with. § Statistical
+    reporting gives the clustered form "df = clusters − 1" unqualified, and the df
+    is a property of the draw, so it comes from the cluster count here too.
+
+    **Kish's effective size appears nowhere in this interval**, and that is the
+    part worth reading twice. `weighted_t_over_units` takes its df from Kish's
+    size because there the draw *is* the unit and weighting concentrates the
+    estimate on fewer of them; once the cluster is the draw, the thing being
+    counted is clusters, and mixing the two would give an interval whose df came
+    from neither. `n.effective` is still reported beside this interval — it is a
+    fact about the weighting rather than about the construction — which is exactly
+    the arrangement § Weighted samples describes for `effective` and `clusters`
+    both joining `n`.
+
+    The sandwich is `t_over_units_clustered`'s with the weights in the score:
+    the estimating equation for a weighted mean is `Σ w_i (v_i − μ) = 0`, so a
+    cluster's score is `S_g = Σ_{i∈g} w_i (v_i − v̄_w)`, the bread is `1/Σw`, and
+
+        V_CR1 = [G/(G−1)] · Σ_g S_g² / (Σw)²
+
+    **At `w ≡ 1` that is `t_over_units_clustered` digit for digit** — `Σw = n` and
+    the score collapses to the residual sum — and it is a generalization rather
+    than a second construction for exactly that reason. Unlike
+    `weighted_t_over_units`, whose `Σw − Σw²/Σw` denominator is what buys it the
+    same reduction, nothing has to be corrected for here: the scaling that makes
+    CR1 CR1 is `G/(G−1)`, which counts clusters and knows nothing about weights.
+    `test_the_weighted_sandwich_reduces_to_the_unweighted_one_at_equal_weights` is
+    the oracle; if it ever fails, this formula is wrong rather than that test.
+
+    Invariant to rescaling the weights, as `weighted_t_over_units` is and for the
+    same reason: `S_g` scales with the weights and `(Σw)²` divides the square out,
+    so a weight column summing to a population size gives the same interval as one
+    summing to the row count.
+
+    Floors are the clustered ones: `None` below two values (`t_over_units`' own,
+    kept so every construction here refuses the same degenerate input) and `None`
+    below two clusters, where df would be zero. There is deliberately no Kish
+    floor, for the reason above — the effective size does not enter the df, so a
+    weighting that concentrates 10 clusters onto few units still has 9 df, with the
+    concentration showing up in the scores instead.
+
+    `weights` is annotated `Any` and gated by `checked_weights`, the single
+    authority `validate` approves a config against, for the reason
+    `weighted_t_over_units` states: a weight is a unit attribute and
+    `units._from_table` builds those from `csv.DictReader`, so every one of them
+    arrives as `str`.
+    """
+    n = len(values)
+    if n < 2:
+        return None
+    groups = cluster_count_of(membership, keys)
+    if groups < 2:
+        return None
+    w = checked_weights(weights)
+    total = sum(w)
+    mean = _weighted_mean(w, values)
+    # One weighted residual sum per cluster, added up WITHIN the cluster before
+    # being squared — the same reason `t_over_units_clustered` gives, with each
+    # residual carrying the weight of the unit that produced it.
+    scores: dict[str, float] = {}
+    for key, value, weight in zip(keys, values, w, strict=True):
+        label = membership[key]
+        scores[label] = scores.get(label, 0.0) + weight * (value - mean)
+    meat = sum(s * s for s in scores.values())
+    variance = (groups / (groups - 1)) * meat / (total * total)
+    half = _t_critical(groups - 1, confidence) * math.sqrt(variance)
+    return Interval(
+        low=mean - half, high=mean + half, method="weighted_t_over_units_clustered"
+    )
+
+
 def paired_t_over_units(diffs: Sequence[float], confidence: float = 0.95) -> Interval | None:
     """Student's t on the per-unit differences, df = n_paired − 1.
 
@@ -392,6 +547,126 @@ def percentile_over_units(
         means = sorted(sum(pool[rng.randrange(n)] for _ in range(n)) / n for _ in range(draws))
     lo, hi = _percentile_ranks(draws, confidence)
     return Interval(low=means[lo], high=means[hi], method="percentile_over_units")
+
+
+def percentile_over_units_clustered(
+    values: Sequence[float],
+    keys: Sequence[str],
+    membership: Mapping[str, str],
+    seed: int,
+    draws: int = 2000,
+    confidence: float = 0.95,
+    weights: Sequence[Any] | None = None,
+) -> Interval | None:
+    """A percentile interval that resamples whole CLUSTERS, not rows.
+
+    `reference.md` § Clustered units: "`resample` resamples clusters, not rows. A
+    bootstrap that draws 300 cells with replacement from 10 animals produces
+    resamples far more alike than a fresh sample of animals would be, so the
+    percentile interval comes out too narrow… Core draws whole clusters with
+    replacement, so a resampled table has a varying row count, and the interval's
+    effective `n` is the cluster count." § Statistical reporting says the same
+    thing for the contrast forms — "the percentile forms resample whole clusters"
+    — and `experimental-designs.md` § Mistakes core prevents states the size of
+    it: "300 cells from 10 animals give a 10-draw interval".
+
+    **Each replicate draws `G` clusters with replacement and pools their units**,
+    where `G` is the cluster count. That is the whole construction, and the two
+    ways to get it wrong both produce a plausible number:
+
+    - Drawing `n` units and repairing the groups afterwards is a 300-draw
+      interval however carefully the groups are respected — the count of
+      independent draws is what the document names, and it is `G`.
+    - Averaging the drawn clusters' MEANS gives every cluster equal say. The
+      document says "pools their units" and calls out the "varying row count"
+      that follows, so a large cluster contributes more rows than a small one.
+      The two coincide exactly when the clusters are the same size, which is why
+      the fixtures here are deliberately unbalanced.
+
+    `G` comes from `units.cluster_count_of` — task 8's single counting expression,
+    so this cannot disagree with the `n.clusters` printed beside the interval or
+    with a fold's partition about what one cluster is. The number of pools drawn
+    from agrees with it *by construction* rather than by assertion: both are the
+    distinct values `membership` takes over these same `keys`.
+
+    **Each value keeps its cluster (and its weight) through the sort**, because
+    the grouping happens before any sort and carries the pairs. The pool is sorted
+    for the row-order invariance `percentile_over_units` explains — a fixed seed
+    draws a fixed sequence of *indices*, so the multiset must be all that matters
+    — and clusters are ordered by their own sorted contents rather than by label,
+    which is what makes a relabelled roster give the identical interval and what
+    makes the one-unit-per-cluster case reproduce `percentile_over_units` digit
+    for digit. Sorting values and cluster labels as separate sequences would
+    preserve the invariance and silently re-pair them; equal-sized clusters cannot
+    see that, and neither can clusters whose value ranges don't interleave.
+
+    **The floor is two clusters, and it is a derivation rather than an analogy to
+    `t_over_units_clustered`'s df.** A percentile interval has no df. At `G = 1`
+    every replicate draws the same single cluster, so the resampled distribution
+    is a point mass, both ranks land on it and the interval has zero width —
+    which § Statistical reporting refuses in those terms: "a zero-width 95 %
+    interval is not [honest]", and "reporting a point with no interval is
+    honest". The `len(values) < 2` guard in front of it is
+    `percentile_over_units`' own floor, kept so the two constructions refuse the
+    same degenerate inputs, and `draws < min_honest_draws(confidence)` is
+    orthogonal to both — that one is about how many replicates the ranks are read
+    off, not about how many things each replicate draws.
+
+    **There is deliberately no higher threshold on `G` here.** A three-cluster
+    resample reports, and the judgment that it is too few belongs to
+    `statistics.min_clusters` — `reference.md` § The one config file:
+    "`validate` warns when `resample` would draw fewer than this". A second
+    threshold in this module would be a competing authority for one judgment.
+
+    With `weights`, the statistic recomputed on each draw is the weighted mean
+    over the pooled units and the draw itself is unchanged. That is the
+    composition of two sentences rather than a choice: § Weighted samples says a
+    percentile interval "recomputes the weighted statistic on each draw, so the
+    weights are in the estimate rather than in the drawing", unqualified by what
+    the draw is, and then says "`cluster_by` still decides the draw when both are
+    declared, since a cluster is what's independent and a weight is what it
+    represents" — which moves the draw and says in its reason clause that the two
+    live in different places. A cluster drawn twice contributes its units' weights
+    twice, which is the only reading of "pools their units". `checked_weights`
+    gates once before any grouping, for the reason the unclustered weighted branch
+    states: a bad weight is refused before the draw rather than producing 2000
+    draws' worth of `nan`.
+
+    `strict=True` on the zip, for the reason `_weighted_mean` uses it: a
+    keys/values length mismatch is a misaligned cluster vector, and it would
+    produce a plausible number rather than an error.
+    """
+    if len(values) < 2:
+        return None
+    if draws < min_honest_draws(confidence):
+        return None
+    groups = cluster_count_of(membership, keys)
+    if groups < 2:
+        return None
+    # Unit weights of 1.0 when none were declared, so the pairs have one shape;
+    # the unweighted branch below still computes a plain mean, so this cannot move
+    # an unweighted interval by a digit.
+    carried = [1.0] * len(values) if weights is None else checked_weights(weights)
+    # Grouped BEFORE any sort, indexed rather than `.get`-ed for the reason
+    # `cluster_count_of` states: a key the roster doesn't hold is a core defect,
+    # and a cluster of its own for it would raise `G`.
+    pools: dict[str, list[tuple[float, float]]] = {}
+    for value, key, weight in zip(values, keys, carried, strict=True):
+        pools.setdefault(membership[key], []).append((float(value), weight))
+    ordered = sorted(sorted(pool) for pool in pools.values())
+    rng = random.Random(seed)
+    means: list[float] = []
+    for _ in range(draws):
+        drawn = [pair for _ in range(groups) for pair in ordered[rng.randrange(groups)]]
+        if weights is None:
+            means.append(sum(v for v, _ in drawn) / len(drawn))
+        else:
+            means.append(_weighted_mean([w for _, w in drawn], [v for v, _ in drawn]))
+    means.sort()
+    lo, hi = _percentile_ranks(draws, confidence)
+    return Interval(
+        low=means[lo], high=means[hi], method="percentile_over_units_clustered"
+    )
 
 
 def percentile_of_derived(
@@ -887,6 +1162,7 @@ def summarize_step(
     draws: int = 2000,
     beside_n: dict[str, Any] | None = None,
     weights: dict[str, Any] | None = None,
+    clusters: dict[str, str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Per-column value, basis, `n`, and interval over the collapsed unit table.
 
@@ -1002,6 +1278,64 @@ def summarize_step(
     `effective` still travel beside a derived metric — the declaration is true of
     the run either way, and § Weighted samples' own example of both is `r`, a
     derived metric.
+
+    `clusters` is unit key → that unit's `data.units.cluster_by` value, over the
+    whole roster, supplied only when the config declares one — the same mapping
+    `runner.attrition` takes, from the same place. It adds `n.clusters`, the number
+    of distinct clusters the column's own units fall in, counted by
+    `units.cluster_count_of` (the single counting expression, so this cannot
+    disagree with `attrition`'s figure or with a fold's partition about what one
+    cluster is), **and it decides the interval**: a RECORDED COLUMN's becomes
+    `t_over_units_clustered`, or `weighted_t_over_units_clustered` when a weight is
+    declared too, since § Weighted samples has `cluster_by` decide the draw when
+    both are. § Clustered units calls the unclustered interval over clustered data
+    "too narrow" and § Statistical reporting names the construction, so a
+    `cluster_by` that only added a count would be a declaration accepted whose
+    effect is not delivered — the same half-delivery the weights paragraph above
+    describes, and it survives any check that reads only `n`.
+
+    **The keys the clusters are looked up by are the column's own**, taken in the
+    same pass as its values, for the reason the weights are: a differently filtered
+    vector groups the wrong unit, and the result is a number rather than an error.
+
+    A DERIVED metric's interval **cannot be clustered here, so the combination is
+    refused** — `E-DATA-CLUSTER-DERIVED`, raised below. The clustered draw for a
+    recomputed metric is a different construction from
+    `percentile_over_units_clustered` — each replicate drawing `G` clusters with
+    replacement and building a `UnitTable` from their pooled units, whose row count
+    varies per draw — and it does not exist. `percentile_of_derived` draws units,
+    so left to run it would report an interval "too narrow" in exactly the sense
+    § Clustered units names, beside recorded columns whose intervals *are*
+    cluster-robust and with nothing in the record saying which is which.
+
+    **Why the refusal is here rather than in `validate`.** Whether a template
+    derives a metric is not knowable before the run: `aggregate` is user code, core
+    never inspects the body of user Python, and a template that overrides
+    `aggregate` may still return `{}` for a given config — so "returns derived
+    metrics" has no validate-time meaning. This is the first point at which core
+    holds the answer, and it holds it as a fact rather than a guess. `cli.py`
+    contains the raise the same way it contains a derived key collision: the whole
+    `derived` mapping is dropped and re-summarized without it, the code is
+    disclosed through `W-STATS-AGGREGATE-FAILED`, and the run keeps its record and
+    its recorded columns. **Dropped, not published with `ci95: null`** — that state
+    already means "no resample callable, or no seed", and reusing it would
+    reintroduce the ambiguity `resample_draws`' `0`-versus-`null` distinction
+    exists to remove. H4 Statistics lifts this with the clustered contrast family
+    (`E-DATA-CLUSTER-CONTRAST`), which is the same missing construction one level
+    over.
+
+    **`clusters` is recomputed per column**, for exactly the reasons `completed`
+    and `effective` already are: § Clustered units reports the cluster count "as
+    the effective sample size alongside the unit count" and § Statistical
+    reporting gives `t_over_units_clustered` "df = clusters − 1", so the figure is
+    the df of *this column's* interval, and a ragged column drawn from a subset of
+    the completed units sits in a subset of their clusters. Printing the
+    condition-wide count beside it would name a df no interval used. A full
+    column's figure is identical to `counts`'; a ragged one's is its own.
+
+    A DERIVED metric takes the condition-wide figure from `counts` instead, as it
+    does for `effective`: `aggregate` returned one number over the whole collapsed
+    table, so there is no per-column carrier set to recompute over.
     """
     columns: list[str] = []
     for cols in collapsed.values():
@@ -1017,17 +1351,33 @@ def summarize_step(
         if not raw or not all(_is_numeric(v) for v in raw):
             continue
         values = [float(v) for v in raw]
+        # The column's own keys, taken from the same pass the values were: the
+        # cluster of a unit is looked up by key, so a vector filtered or ordered
+        # differently would group the wrong unit and produce a plausible number.
+        column_keys = [key for key, _ in carried]
         n_block: dict[str, Any] = {**counts, "completed": len(values)}
+        if clusters is not None:
+            n_block["clusters"] = cluster_count_of(clusters, column_keys)
         interval: Interval | None
         value: float | None
         if weights is None:
-            interval = t_over_units(values)
             value = mean_of(values)
+            interval = (
+                t_over_units(values)
+                if clusters is None
+                else t_over_units_clustered(values, column_keys, clusters)
+            )
         else:
             column_weights = [weights[key] for key, _ in carried]
-            interval = weighted_t_over_units(values, column_weights)
             value = weighted_mean_of(values, column_weights)
             n_block["effective"] = kish_effective_n(column_weights)
+            interval = (
+                weighted_t_over_units(values, column_weights)
+                if clusters is None
+                else weighted_t_over_units_clustered(
+                    values, column_keys, clusters, column_weights
+                )
+            )
         out[column] = {
             **(beside_n or {}),
             "value": value,
@@ -1065,6 +1415,31 @@ def summarize_step(
                 "derived key may not shadow a recorded column",
                 code="E-STEP-KEY-COLLISION",
             )
+        # The clustered derived draw, refused rather than drawn as if independent
+        # (the docstring says why it lives here and not in `validate`). Gated on
+        # what would actually be *drawn*, not on the declaration: with no callable
+        # or no seed no interval is built at all, so a clustered run whose derived
+        # metric was never going to be resampled publishes its point estimate as
+        # it always did and there is no too-narrow interval to prevent. Raised
+        # before a single derived key is written, so the caller drops the whole
+        # mapping rather than a record carrying some of it.
+        if clusters is not None and seed is not None:
+            drawable = sorted(k for k in derived if (resample or {}).get(k) is not None)
+            if drawable:
+                raise ContractError(
+                    f"{drawable[0]!r} is derived by the template's `aggregate`, and its "
+                    "interval is a percentile over resampled units while "
+                    "`data.units.cluster_by` declares that units are not independent. "
+                    "Resampling whole clusters for a recomputed metric is a construction "
+                    "this build does not have, and drawing units instead would report an "
+                    "interval narrower than the design supports beside recorded columns "
+                    "that are cluster-robust. The derived metrics are dropped for this "
+                    "step; the recorded columns keep their clustered intervals. Report "
+                    "the derived value as an `Estimate` from a `summary` step, which core "
+                    "records as reported rather than recomputing, or drop `cluster_by` if "
+                    "the units really are independent",
+                    code="E-DATA-CLUSTER-DERIVED",
+                )
         for key, value in derived.items():
             compute = (resample or {}).get(key)
             # `draws_used` is `None` only when resampling was never attempted

@@ -13,7 +13,7 @@ import math
 import random
 import statistics
 from collections import Counter
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -299,8 +299,29 @@ def resolve_units(
     measurements = units_decl.get("measurements")
     if measurements:
         by = _measurement_axis(measurements)
+        # The two declarations whose column is a fact about the unit rather than
+        # about the measurement, read straight off the declaration this function
+        # already holds — no new plumbing, and no second place that could come to
+        # disagree with `units_decl` about which column is the cluster. The
+        # `isinstance` filter is load-bearing rather than defensive: a list-valued
+        # `cluster_by` is `E-CONFIG-TYPE`'s finding, and using one as a mapping key
+        # is a `TypeError` escaping `validate`, which never raises.
+        # **A registry key must be a flat, string-valued key of `data.units`.**
+        # This indexes `units_decl` by the key itself, so it reaches `cluster_by`
+        # and `weight_by` and nothing nested. `assign.<axis>.from` and
+        # `holdout.from` are the next two columns that will want this rule and
+        # **neither is reachable this way** — adding either name to the registry
+        # no-ops silently, and so does spelling it as a dotted path. Verified by
+        # probe, not assumed. Whichever slice needs one owes an accessor here;
+        # the failure it would otherwise ship is the leak this check exists to
+        # close, arriving through a sibling declaration.
+        constant = {
+            declaration: units_decl[declaration]
+            for declaration in CONSTANT_COLUMN_RULES
+            if isinstance(units_decl.get(declaration), str) and units_decl[declaration]
+        }
         units, counts = collapse_measurements(
-            units, by, measurements.get("collapse", "first")
+            units, by, measurements.get("collapse", "first"), constant
         )
         # `{min, max, median}` rather than a scalar, per `reference.md` § What
         # isn't a repeat: real files are uneven, and a bare `technical_n: 3`
@@ -531,10 +552,52 @@ def apply_rule(rule: str, values: list[Any]) -> Any:
     return sum(values) / len(values)  # rule == "mean"
 
 
+CONSTANT_COLUMN_RULES: dict[str, tuple[str, str]] = {
+    "cluster_by": (
+        "E-DATA-CLUSTER-VARIES",
+        "A cluster is what a unit is not independent of, so it decides which side "
+        "of a train/test split the unit lands on — a unit filed under the wrong "
+        "one is a unit whose real cluster is on both sides. A cluster is a fact "
+        "about the unit, not about the measurement",
+    ),
+    "weight_by": (
+        "E-DATA-WEIGHT-VARIES",
+        "A weight is what one unit stands for, so collapsing disagreeing rows "
+        "gives that unit a weight no row declared — their sum under `sum`, or "
+        "whichever arrived first under the default rule. A weight is a fact "
+        "about the unit, not about the measurement",
+    ),
+}
+"""The declarations whose column may not vary within a unit's measurement rows.
+
+**Two codes, not one**, deliberately: `reference.md` § Clustered units and
+§ Weighted samples state the same rule about two different columns, and they say
+different things about what breaks — a mis-collapsed weight mis-sizes what one
+unit stands for, while a mis-collapsed cluster decides which side of a split that
+unit lands on. One identifier for both would send the reader to the section that
+does not describe the damage.
+
+Keyed by the *declaration* rather than by the column, so a config naming one
+column in both places is checked once for each rather than silently dropping one
+under a precedence rule nothing in the documents states.
+"""
+
+
 def collapse_measurements(
-    units: list[Unit], by: str, collapse: Any
+    units: list[Unit], by: str, collapse: Any, constant: Mapping[str, str] | None = None
 ) -> tuple[list[Unit], list[int]]:
     """Collapse rows sharing a `key` into one unit, in first-seen order.
+
+    `constant` maps a declaration in `CONSTANT_COLUMN_RULES` to the column it
+    names, and those columns are refused where they vary within one unit's rows
+    rather than being collapsed like any other attribute. **`validate` cannot host
+    that check**: `resolve_units` collapses internally, so a validate-time check
+    sees the post-collapse roster and the disagreeing values are already gone.
+    This function groups the rows by key and is the one place holding them.
+
+    Nothing else needs a second constancy check: this is the only path that merges
+    rows into a unit, so under no `measurements` declaration there is one row per
+    unit and no column can disagree with itself.
 
     `reference.md` § What isn't a repeat: rows sharing a key are technical
     replicates, collapsed at resolution, before any step sees them — which is
@@ -556,6 +619,35 @@ def collapse_measurements(
     collapsed: list[Unit] = []
     counts: list[int] = []
     for key, members in groups.items():
+        # Before the merge loop below, and over the members directly rather than
+        # over its column list: `names` excludes `by`, so a `cluster_by` naming
+        # the measurement axis itself — which varies within every unit by
+        # construction — would otherwise be reached by no check at all. Running
+        # first is also what makes this code win over
+        # `E-DATA-MEASUREMENTS-COLLAPSE-TYPE` for a varying string column under a
+        # numeric rule: both faults are real, and the one worth reporting is the
+        # unit filed under two clusters, not the rule name that would still leave
+        # the leak in place once it was fixed.
+        for declaration, column in (constant or {}).items():
+            values = [m.attributes[column] for m in members if column in m.attributes]
+            # A name only some members carry is not a disagreement: the rows that
+            # carry it agree, so nothing about the collapsed value depends on the
+            # order the file happens to be in. Whether every unit ends up with a
+            # value at all is the presence question `clusters_of` raises on, after
+            # resolution — and `validate` collects findings rather than raising, so
+            # being total here over a sparse column is what keeps this off its
+            # escape path.
+            if any(v != values[0] for v in values):
+                code, why = CONSTANT_COLUMN_RULES[declaration]
+                seen_values = list(dict.fromkeys(str(v) for v in values))
+                raise ContractError(
+                    f"`data.units.{declaration}` names {column!r}, which unit "
+                    f"{key!r} declares more than one value for across its "
+                    f"measurement rows ({', '.join(seen_values)}) — so which one "
+                    "survives the collapse is decided by the order the rows "
+                    f"happen to be in. {why}",
+                    code=code,
+                )
         names: list[str] = []
         for member in members:
             for name in member.attributes:
@@ -575,19 +667,317 @@ def collapse_measurements(
     return collapsed, counts
 
 
-def partition_units(roster: UnitList, k: int, digest: str) -> list[list[Unit]]:
+def clusters_of(roster: UnitList, cluster_by: str) -> dict[str, str]:
+    """Which cluster each unit belongs to, keyed by unit key, in roster order.
+
+    **The single authority** for cluster membership, and it sits beside
+    `usable_weight` and `is_measurement_numeric` for the reason those two do: the
+    partition, the interval constructions and `validate` all have to ask the same
+    question of the same declaration, and a second notion of "which units form one
+    cluster" is the validate-clean-then-disagree gap in a new shape — here it would
+    mean a config `validate` approved whose folds split a cluster the checks were
+    told was whole.
+
+    `cluster_by` names a **declared attribute**, not a source column — the same
+    side of that line `weight_by` falls on and the opposite side from
+    `measurements.by`. `reference.md` § Validation's *Cluster attribute exists* row
+    says the name is one "which is not a unit attribute", and `design-principles.md`
+    § Core vs. plugin lists `cluster_by` among the declarations that "all name
+    attributes". That is what makes it readable here at all: `_from_table`
+    populates `Unit.attributes` from `data.units.attributes` and nothing else, so a
+    column outside that list has not survived resolution.
+
+    Insertion order **is** roster order, deliberately. A caller needing the ordered
+    list of clusters — the partitioner does — derives it from this mapping rather
+    than walking the roster a second time, which is how the two would come to
+    disagree about which cluster came first, and `units_hash` already pins that the
+    resolved order is the reproducible one.
+
+    Values are stringified so the mapping has one type whatever the source
+    supplied: a table yields `str` for every column, but a hand-built roster or a
+    future resolver need not, and a cluster id is a label rather than a quantity —
+    nothing downstream does arithmetic on it.
+
+    A unit carrying no value for the attribute raises rather than being placed in a
+    cluster of its own. `reference.md` § Errors validate reports states this under
+    `E-DATA-CLUSTER-UNKNOWN`, the same code `validate` reports for a `cluster_by`
+    naming no declared attribute: an invented singleton cluster would silently make
+    a unit its own inferential draw, widening nothing and narrowing every interval
+    that counts clusters.
+    """
+    membership: dict[str, str] = {}
+    for unit in roster:
+        if cluster_by not in unit.attributes:
+            raise ContractError(
+                f"`data.units.cluster_by` names {cluster_by!r}, which unit "
+                f"{unit.key!r} carries no value for — a cluster is what a unit is "
+                "not independent of, so a unit with no cluster has no place on "
+                "either side of a split. Declare it in `data.units.attributes` and "
+                "give every unit a value for it",
+                code="E-DATA-CLUSTER-UNKNOWN",
+            )
+        membership[unit.key] = str(unit.attributes[cluster_by])
+    return membership
+
+
+def cluster_count_of(membership: Mapping[str, str], keys: Iterable[str]) -> int:
+    """How many distinct clusters a given set of unit keys falls in.
+
+    The counting expression, in one place. `cluster_count` below is the whole
+    roster's answer and this is the same question asked of a SUBSET — the units a
+    metric was actually computed over, which is what `n.clusters` reports
+    (`runner._counts`, `stats.summarize_step`). Those callers have no roster to
+    hand `cluster_count`: they hold a set of completed keys and the roster-wide
+    membership mapping. Writing `len({m[k] for k in keys})` at each of them would
+    be the second and third notion of "how many clusters is that", which is the
+    thing `clusters_of` exists to prevent one of.
+
+    Indexed rather than `.get`-ed, for the reason `runner._counts` states about
+    weights: every key a caller passes came from the roster the membership was
+    built from, so a missing one is a core defect and must drop out as a
+    `KeyError` rather than being absorbed into a cluster of its own — which would
+    quietly *raise* the count and narrow every interval computed from it.
+    """
+    return len({membership[key] for key in keys})
+
+
+def cluster_count(roster: UnitList, cluster_by: str) -> int:
+    """How many distinct clusters the roster holds.
+
+    Derived from `clusters_of` rather than counted in its own walk: the count is
+    what bounds `k` and what a cluster-robust interval's df is computed from, and a
+    count that disagreed with the membership it is supposed to summarize would put
+    a `k` past the number of groups the partitioner can actually produce.
+    """
+    membership = clusters_of(roster, cluster_by)
+    return cluster_count_of(membership, membership)
+
+
+def fold_basis(roster: UnitList, cluster_by: str | None) -> int:
+    """How many indivisible things a `fold` level can distribute — the number `k`
+    is bounded by, and the number `{kind: fold, k: all}` resolves to.
+
+    **One number, not two.** A fold asks "how many things can be left out", which
+    is the unit count when the units are independent draws and the cluster count
+    when `data.units.cluster_by` says they are not: a cluster is the smallest thing
+    `partition_units` can move, so a `k` past the cluster count leaves a fold with
+    no cluster to test, and leave-one-out becomes leave-one-*cluster*-out
+    (`reference.md` § Validation, rows *Folds fit inside the clusters* and
+    *Leave-one-out is affordable*). Every caller resolves the basis here rather
+    than deciding for itself, and passes the one number on — a `k` checked against
+    the unit count while the partition is drawn over clusters is exactly the
+    disagreement this single derivation exists to prevent.
+
+    `cluster_count` is the authority for the clustered half, so an unreadable
+    cluster — a unit carrying no value for the attribute — raises
+    `E-DATA-CLUSTER-UNKNOWN` from there rather than being counted as a cluster of
+    its own. `validate` collects rather than raises, so its caller catches that and
+    treats the basis as unresolved.
+    """
+    return cluster_count(roster, cluster_by) if cluster_by else len(roster)
+
+
+def stratum_varies_within_cluster(
+    roster: UnitList, cluster_by: str, stratify_by: str
+) -> tuple[str, list[str]] | None:
+    """The first cluster whose units disagree about the stratum attribute, with the
+    values it carries — or `None` when every cluster agrees.
+
+    **A stratum must be constant within a cluster** (`reference.md` § Clustered
+    units): balancing a stratum across a split means dealing its values out to
+    different sides, and a cluster that carries two of them cannot be dealt out at
+    all, being indivisible. Rather than silently prioritizing one of the two
+    constraints, core refuses the pair — so this reports the pair, and the caller
+    decides which declaration to name (`reference.md` § Validation, rows *Fold
+    strata survive clustering* and *Holdout strata survive clustering*, which is why
+    this returns a fault rather than raising one code).
+
+    Membership comes from `clusters_of`, the single authority, so a unit carrying no
+    cluster value raises `E-DATA-CLUSTER-UNKNOWN` from there rather than being
+    grouped into a cluster of its own — which would make its stratum trivially
+    constant and hide exactly the variation this looks for.
+
+    A unit carrying no value for the *stratum* is one the partitioner has nothing to
+    balance on, so within a cluster whose other units declare one it counts as a
+    variation like any other, rendered `no value` among the values reported. Units
+    that all carry none agree, and a stratum no unit carries at all is the caller's
+    own name check to report — an attribute the design never declared.
+
+    The first offender is in roster order, one finding being enough to fix and the
+    order already being part of the roster's identity.
+    """
+    membership = clusters_of(roster, cluster_by)
+    seen: dict[str, set[str]] = {}
+    order: list[str] = []
+    for unit in roster:
+        cluster = membership[unit.key]
+        if cluster not in seen:
+            seen[cluster] = set()
+            order.append(cluster)
+        value = unit.attributes.get(stratify_by)
+        seen[cluster].add("no value" if value is None else str(value))
+    for cluster in order:
+        if len(seen[cluster]) > 1:
+            return cluster, sorted(seen[cluster])
+    return None
+
+
+def _assign_whole_clusters(
+    units: list[Unit], k: int, rng: random.Random, clusters: dict[str, str] | None
+) -> list[list[Unit]]:
+    """One list of units into `k` folds, balanced by unit count, no cluster divided.
+
+    The single assignment rule, drawn from `rng` in the order it is called: the whole
+    roster reaches it once when nothing is stratified, and each stratum's units reach
+    it once when something is. A second rule for the stratified case would be a
+    second answer to "which units land together", which is the disagreement
+    `clusters_of` exists to prevent one level up.
+
+    **`clusters is None` is a cluster of one per unit, not another path.** That is an
+    identity rather than an approximation: `random.shuffle` permutes by index and
+    reads only the length, so shuffling the one-name-per-unit list draws the same
+    permutation as shuffling the units did; the descending-size sort is stable and
+    every size is 1, so it is the identity; and least-loaded assignment of size-1
+    items deals them out round-robin, which is `shuffled[i::k]` term for term. The
+    unclustered draw is therefore the same draw it was before clusters existed, and
+    `test_the_unclustered_draw_is_unmoved_by_the_clustered_rewrite` is its oracle.
+
+    Keying by `unit.key` is what that rests on, and unit keys are unique — a repeated
+    one is refused at resolution as `E-UNITS-KEY-DUPLICATE`, so no two units can
+    collapse into one accidental cluster here.
+    """
+    if clusters is None:
+        clusters = {unit.key: unit.key for unit in units}
+    # `clusters[...]`, not `.get`: `clusters_of` is total over the roster it was
+    # given and raises `E-DATA-CLUSTER-UNKNOWN` for a unit carrying no cluster, so
+    # a key missing here means the caller passed a mapping from a different roster
+    # — a core defect. A `.get` default would place that unit in an invented
+    # cluster of its own, which is the silent version of exactly the leak this
+    # function exists to prevent.
+    members: dict[str, list[Unit]] = {}
+    for unit in units:
+        members.setdefault(clusters[unit.key], []).append(unit)
+    order = list(members)
+    rng.shuffle(order)
+    order.sort(key=lambda name: -len(members[name]))
+    folds: list[list[Unit]] = [[] for _ in range(k)]
+    for name in order:
+        folds[min(range(k), key=lambda i: len(folds[i]))].extend(members[name])
+    return folds
+
+
+def partition_units(
+    roster: UnitList,
+    k: int,
+    digest: str,
+    clusters: dict[str, str] | None = None,
+    strata: dict[str, str] | None = None,
+) -> list[list[Unit]]:
     """Split the roster into `k` test partitions, each unit in exactly one.
 
     Drawn from the design digest rather than `parameters_hash`: editing an
     unrelated parameter must not redraw every fold boundary (reference.md
-    § What auto-derives from). Sizes differ by at most one, so no fold is
-    systematically smaller than its neighbours.
+    § What auto-derives from).
+
+    `clusters` is `clusters_of`'s mapping — **the single authority** on which units
+    form one cluster, never a second notion derived here. With it, whole clusters
+    go to one side of a split and a cluster is never divided between train and
+    test. `reference.md` § Clustered units says why that is correctness rather than
+    refinement: 300 cells from 10 animals split without regard to `animal_id` train
+    on other cells of the animal they test on, and the metric is inflated *before*
+    any interval is computed — a cluster-robust standard error cannot repair a
+    number that was already leaked into.
+
+    Sizes differ by at most one when `clusters` is `None`. When it is not, they are
+    **as even as indivisible clusters allow** — the unit count is what balances,
+    but a cluster is the smallest thing that can move, so one large cluster sets a
+    floor no assignment can get under. Saying the stronger thing here would be
+    claiming a guarantee the code does not provide.
+
+    The order is part of the contract. The clusters are shuffled with the
+    digest-seeded RNG and then sorted **largest first**, each going to the
+    currently-smallest fold. Both halves are load-bearing: the shuffle is what
+    keeps the draw a function of the design digest and what breaks ties among
+    equal-sized clusters (the only place it can still matter once the sort is
+    stable), while smallest-first assignment over the same clusters strands the
+    large ones and gives a visibly worse split. `list.sort` is stable, so the
+    shuffle survives inside each size.
+
+    A `k` past the number of clusters leaves the surplus folds **empty** rather
+    than dividing a cluster to fill them — an empty fold is a visibly useless
+    split, a divided one is a leaky split that looks fine. `validate` refuses that
+    `k` against the cluster count; this stays total for the case where it did not.
+
+    `strata` is the same shape — unit key to stratum value — and is what makes a
+    `fold` level's `stratify_by` change the split rather than only being checked
+    (`reference.md` § Repeat kinds calls a fold "stratified" when it is declared).
+    Each stratum is partitioned **on its own**, by the rule above, and the per-stratum
+    folds are merged **index-wise**: fold `i` is every stratum's fold `i`. So each
+    fold holds close to the roster's mix of the stratum, which is the whole point of
+    declaring one, and no second balancer is introduced — one greedy objective (unit
+    count) still runs, just once per stratum.
+
+    **That composition is sound only while `stratum_varies_within_cluster` refuses
+    the pair it refuses.** Balancing unit count and balancing stratum proportions are
+    independent objectives, and two greedy passes over the same clusters would fight;
+    what dissolves the conflict is that a cluster carries exactly one stratum value,
+    so a cluster belongs to exactly one stratum and each per-stratum partition sees
+    whole clusters. A later change that let a cluster straddle two strata would have
+    to answer which stratum's partition owns it, and would silently divide it here.
+    `reference.md` § Validation's *Fold strata survive clustering* row is the check;
+    if it goes, this does.
+
+    **With `strata`, fold sizes can differ by more than one.** When the things being
+    dealt out inside a stratum are all the same size — every unclustered roster, each
+    unit its own cluster of one — each stratum's fold list comes out non-increasing
+    and fold 0 collects every stratum's ceiling: three strata of three units at
+    `k = 2` give 6 and 3, not 5 and 4, so the spread is bounded by the number of
+    strata. With clusters of unequal size no such bound holds, because the
+    at-most-one-cluster floor above applies **per stratum** and the floors add: two
+    strata of clusters 7+3 and 3+1+1 at `k = 2` give 10 and 5. Balancing the count
+    *across* strata is what would divide a stratum's share unevenly, which is the
+    thing being declared away, so this is the prescribed rule's consequence rather
+    than a defect — stated here because it contradicts the at-most-one above, which
+    holds for an unstratified split only.
+
+    **`k` is checked against the whole roster's basis, not against each stratum's,
+    and a fold can therefore come out EMPTY — not merely short of one stratum.**
+    Each stratum fills only as many folds as it has clusters, and the merge is
+    index-wise, so when every stratum has fewer than `k` the high-index folds hold
+    **nothing at all**. Six units as three plus three under `{k: all,
+    stratify_by: label}` fills folds 0-2 and leaves 3-5 empty: six executions run,
+    three of them over no units, `validate` silent because `fold_basis` is 6.
+    `_fold_k` refuses that shape by its own route — "a fold with no units is a
+    declaration error, not a small fold" — so this is core reaching by one path a
+    state it refuses by another. Recorded rather than fixed: the per-stratum bound
+    is a check that does not exist, and inventing one here would be a rule no
+    document states. **A weaker earlier version of this paragraph said a fold could
+    hold none of a *stratum*; that understated it.** The
+    partition stays total and says so rather than dividing a cluster or dropping the
+    stratification; `reference.md` § Validation bounds `k` by the roster's basis
+    today, and a per-stratum bound is a check that does not exist yet.
+
+    The mapping must be **total over the roster**, like `clusters`: a unit missing
+    from it raises `KeyError` as a core defect rather than being given a stratum of
+    its own. A unit carrying no value for the stratum attribute is possible after
+    `validate` (a whole cluster carrying none agrees with itself), so how such a unit
+    is rendered — a stratum of its own, or a refusal — is the caller's decision, made
+    where the attribute is read.
     """
     units = list(roster)
     rng = random.Random(_seed_from(digest))
-    shuffled = list(units)
-    rng.shuffle(shuffled)
-    return [shuffled[i::k] for i in range(k)]
+    if strata is None:
+        return _assign_whole_clusters(units, k, rng, clusters)
+    grouped: dict[str, list[Unit]] = {}
+    for unit in units:
+        grouped.setdefault(strata[unit.key], []).append(unit)
+    per_stratum = [
+        _assign_whole_clusters(members, k, rng, clusters) for members in grouped.values()
+    ]
+    # Index-wise, not sorted by size: sorting would re-pair the strata's pieces
+    # against each other for no stated reason, and the fold a unit lands in is part
+    # of this function's contract.
+    return [[unit for folds in per_stratum for unit in folds[i]] for i in range(k)]
 
 
 def _seed_from(digest: str) -> int:

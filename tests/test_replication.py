@@ -123,7 +123,7 @@ def test_rejected_kinds_are_refused_by_name_with_a_pointer(kind, pointer):
 
 
 def test_a_fold_level_resolves_to_k_members():
-    levels = resolve_repeats(cfg([{"kind": "fold", "k": 5}]), "d", unit_count=240)
+    levels = resolve_repeats(cfg([{"kind": "fold", "k": 5}]), "d", fold_basis=240)
     assert levels[0].kind == "fold"
     assert [m.label for m in levels[0].members] == [
         "fold01", "fold02", "fold03", "fold04", "fold05"
@@ -131,20 +131,91 @@ def test_a_fold_level_resolves_to_k_members():
 
 
 def test_k_all_resolves_against_the_roster():
-    levels = resolve_repeats(cfg([{"kind": "fold", "k": "all"}]), "d", unit_count=7)
+    levels = resolve_repeats(cfg([{"kind": "fold", "k": "all"}]), "d", fold_basis=7)
     assert levels[0].n == 7
 
 
 def test_k_larger_than_the_roster_is_refused():
     with pytest.raises(ContractError) as exc:
-        resolve_repeats(cfg([{"kind": "fold", "k": 300}]), "d", unit_count=240)
+        resolve_repeats(cfg([{"kind": "fold", "k": 300}]), "d", fold_basis=240)
     assert exc.value.code == "E-REPL-FOLD-K-TOO-LARGE"
 
 
 def test_k_below_two_is_refused():
     with pytest.raises(ContractError) as exc:
-        resolve_repeats(cfg([{"kind": "fold", "k": 1}]), "d", unit_count=240)
+        resolve_repeats(cfg([{"kind": "fold", "k": 1}]), "d", fold_basis=240)
     assert exc.value.code == "E-REPL-FOLD-K"
+
+
+def _clustered_cfg(repeats, cluster_by="animal_id"):
+    """The same `replication` block, under a config declaring `cluster_by`.
+
+    Only the *noun* comes from here: `resolve_repeats` reads `cluster_by` to say
+    which things it counted, and the count itself is `fold_basis`, resolved by the
+    caller from the roster. That is what keeps the two from disagreeing.
+    """
+    return {
+        "data": {"units": {"from": "index.csv", "key": "id", "cluster_by": cluster_by}},
+        "replication": {"repeats": repeats},
+    }
+
+
+def test_k_above_the_cluster_count_is_refused():
+    """§ Validation, *Folds fit inside the clusters*: `{kind: fold, k: 10}` with
+    `cluster_by: animal_id` over 6 animals. `fold_basis=6` is the cluster count the
+    caller resolved; the unit count behind it is larger and irrelevant, which is
+    the whole point."""
+    with pytest.raises(ContractError) as exc:
+        resolve_repeats(_clustered_cfg([{"kind": "fold", "k": 10}]), "d", fold_basis=6)
+    assert exc.value.code == "E-REPL-FOLD-K-TOO-LARGE"
+    assert "6 clusters of `animal_id`" in str(exc.value)
+
+
+def test_the_same_k_is_accepted_when_nothing_is_clustered():
+    """The control that must report: `k: 10` against a basis of 15 is a legal fold
+    count, so the refusal above is the clustering and not the `k`."""
+    levels = resolve_repeats(cfg([{"kind": "fold", "k": 10}]), "d", fold_basis=15)
+    assert levels[0].n == 10
+
+
+def test_k_all_is_leave_one_cluster_out():
+    """§ Validation, *Leave-one-out is affordable*: under `cluster_by`, `k: all`
+    stops meaning one unit per fold. 5 clusters over the 15-unit roster
+    `units.fold_basis` counted, so 5 folds — not 15."""
+    levels = resolve_repeats(_clustered_cfg([{"kind": "fold", "k": "all"}]), "d", fold_basis=5)
+    assert levels[0].n == 5
+    assert [m.label for m in levels[0].members] == [
+        "fold01", "fold02", "fold03", "fold04", "fold05"
+    ]
+
+
+def test_k_all_is_leave_one_unit_out_when_nothing_is_clustered():
+    """The unclustered control: the same 15-unit roster with no `cluster_by` gives
+    a basis of 15, so `k: all` is 15 folds. Uneven clusters are what make the two
+    numbers different — one unit per cluster and neither behaviour is visible."""
+    levels = resolve_repeats(cfg([{"kind": "fold", "k": "all"}]), "d", fold_basis=15)
+    assert levels[0].n == 15
+
+
+def test_k_all_over_a_single_cluster_reports_the_illegal_count_it_resolved_to():
+    """One cluster leaves nothing to hold out against, so `k: all` resolves to 1
+    and falls into the `k >= 2` refusal — reported by number rather than by the
+    word `all`, which is what says the count was resolved and found illegal rather
+    than unreadable. A diagnostic, never a traceback."""
+    with pytest.raises(ContractError) as exc:
+        resolve_repeats(_clustered_cfg([{"kind": "fold", "k": "all"}]), "d", fold_basis=1)
+    assert exc.value.code == "E-REPL-FOLD-K"
+    assert "k: 1" in str(exc.value)
+
+
+def test_an_empty_cluster_by_does_not_rename_the_units_the_refusal_counted():
+    """An empty `cluster_by` changes no behavior and is reported elsewhere
+    (`E-DATA-CLUSTER-UNKNOWN`); the basis it produces is the unit count, so the
+    refusal must not describe those units as clusters of ``."""
+    with pytest.raises(ContractError) as exc:
+        resolve_repeats(_clustered_cfg([{"kind": "fold", "k": 300}], ""), "d", fold_basis=240)
+    assert exc.value.code == "E-REPL-FOLD-K-TOO-LARGE"
+    assert "240 resolved units" in str(exc.value)
 
 
 def test_k_all_without_a_roster_is_refused():
@@ -153,17 +224,22 @@ def test_k_all_without_a_roster_is_refused():
     assert exc.value.code == "E-REPL-FOLD-K"
 
 
-def test_stratify_by_is_refused():
-    with pytest.raises(ContractError) as exc:
-        resolve_repeats(
-            cfg([{"kind": "fold", "k": 5, "stratify_by": "site"}]), "d", unit_count=240
-        )
-    assert exc.value.code == "E-REPL-FOLD-STRATIFY-UNSUPPORTED"
+def test_stratify_by_resolves_and_rides_the_level():
+    """`E-REPL-FOLD-STRATIFY-UNSUPPORTED` was raised here, above every `k` check,
+    until `partition_units` learned to balance a stratum. It is retired: the
+    declaration resolves, and the name rides the level so `cli` has one reader of
+    which level is the fold and what it stratifies on."""
+    levels = resolve_repeats(
+        cfg([{"kind": "fold", "k": 5, "stratify_by": "site"}]), "d", fold_basis=240
+    )
+    assert len(levels) == 1
+    assert levels[0].n == 5
+    assert levels[0].stratify_by == "site"
 
 
 def test_fold_outside_seed_composes_labels_outer_to_inner():
     levels = resolve_repeats(
-        cfg([{"kind": "fold", "k": 2}, {"kind": "seed", "n": 2}]), "d", unit_count=10
+        cfg([{"kind": "fold", "k": 2}, {"kind": "seed", "n": 2}]), "d", fold_basis=10
     )
     labels = [lf.label for lf in cross_levels(levels)]
     assert labels[0].startswith("fold01" + LABEL_JOIN)
@@ -327,7 +403,7 @@ def test_no_fold_level_yields_none():
 
 
 def test_a_fold_level_maps_each_label_to_its_partition():
-    levels = resolve_repeats(cfg([{"kind": "fold", "k": 2}]), "d", unit_count=4)
+    levels = resolve_repeats(cfg([{"kind": "fold", "k": 2}]), "d", fold_basis=4)
     parts = [[_u("a"), _u("b")], [_u("c"), _u("d")]]
     assert fold_members_for(levels, parts) == {
         "fold01": frozenset({"a", "b"}),
@@ -336,7 +412,7 @@ def test_a_fold_level_maps_each_label_to_its_partition():
 
 
 def test_the_map_covers_every_unit_exactly_once():
-    levels = resolve_repeats(cfg([{"kind": "fold", "k": 3}]), "d", unit_count=9)
+    levels = resolve_repeats(cfg([{"kind": "fold", "k": 3}]), "d", fold_basis=9)
     parts = [[_u(f"u{i}") for i in grp] for grp in ([0, 1, 2], [3, 4, 5], [6, 7, 8])]
     members = fold_members_for(levels, parts)
     allk = [k for s in members.values() for k in s]
@@ -350,7 +426,7 @@ def test_a_fold_in_non_outermost_position_is_still_found_by_kind():
     (`batch01`/`batch02`) would not match — this is what proves the selection is
     by kind, not position."""
     levels = resolve_repeats(
-        cfg([{"kind": "batch", "n": 2}, {"kind": "fold", "k": 2}]), "d", unit_count=4
+        cfg([{"kind": "batch", "n": 2}, {"kind": "fold", "k": 2}]), "d", fold_basis=4
     )
     parts = [[_u("a"), _u("b")], [_u("c"), _u("d")]]
     assert fold_members_for(levels, parts) == {
@@ -384,8 +460,8 @@ def test_a_batch_declaring_k_still_reports_the_count_field_message():
 def test_the_key_closure_does_not_reach_a_seed_level():
     """The closure is `batch`-only. `seeds: [17, 42, …]` is a documented `seed`
     field (`reference.md` § Repeat kinds), so refusing it here would reject a
-    declaration the document allows; a `fold` level's `stratify_by` reaches its
-    own refusal (`E-REPL-FOLD-STRATIFY-UNSUPPORTED`) rather than this one."""
+    declaration the document allows; a `fold` level's `stratify_by` is a documented
+    `fold` field and resolves rather than reaching this refusal."""
     try:
         resolve_repeats(cfg([{"kind": "seed", "n": 2, "seeds": [17, 42]}]), "d")
     except ContractError as exc:  # pragma: no cover — nothing raises here today
@@ -394,6 +470,14 @@ def test_the_key_closure_does_not_reach_a_seed_level():
         # a code of its own. What this test owns is only that the refusal is not
         # this one.
         assert exc.code != "E-REPL-LEVEL-FIELD"
+    # The control that must report: the same closure over a `fold` field it does
+    # not know still refuses, so this is not a test of a closure that gave up.
+    assert (
+        resolve_repeats(
+            cfg([{"kind": "fold", "k": 2, "stratify_by": "label"}]), "d", fold_basis=4
+        )[0].stratify_by
+        == "label"
+    )
     with pytest.raises(ContractError) as e:
-        resolve_repeats(cfg([{"kind": "fold", "k": 2, "stratify_by": "label"}]), "d", unit_count=4)
-    assert e.value.code == "E-REPL-FOLD-STRATIFY-UNSUPPORTED"
+        resolve_repeats(cfg([{"kind": "batch", "n": 2, "stratify_by": "label"}]), "d")
+    assert e.value.code == "E-REPL-LEVEL-FIELD"

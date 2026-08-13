@@ -1,4 +1,5 @@
 # tests/test_units.py
+from collections import Counter
 from pathlib import Path
 
 import pytest
@@ -8,9 +9,13 @@ from publishable.units import (
     Unit,
     UnitList,
     apply_rule,
+    cluster_count,
+    clusters_of,
     collapse_measurements,
+    fold_basis,
     partition_units,
     resolve_units,
+    stratum_varies_within_cluster,
     units_hash,
 )
 
@@ -242,6 +247,284 @@ def test_a_different_digest_gives_a_different_split():
     a = partition_units(_roster(50), 5, "d")
     b = partition_units(_roster(50), 5, "other")
     assert [[u.key for u in p] for p in a] != [[u.key for u in p] for p in b]
+
+
+def test_the_unclustered_draw_is_unmoved_by_the_clustered_rewrite():
+    """The literal split HEAD produced before `clusters` existed, pinned as bytes.
+
+    The other unclustered tests pin reproducibility and shape — the same digest
+    twice, sizes within one — which a rewritten unclustered path would still
+    satisfy while allocating different units to different folds. `cohort-pilot`
+    and every other unclustered design rests on this draw being the same one.
+    """
+    parts = partition_units(_roster(50), 5, "d")
+    assert [[u.key for u in p] for p in parts] == [
+        ["u018", "u019", "u034", "u029", "u025", "u023", "u007", "u016", "u013", "u035"],
+        ["u036", "u000", "u043", "u040", "u026", "u032", "u003", "u031", "u022", "u041"],
+        ["u020", "u046", "u004", "u001", "u038", "u049", "u017", "u030", "u012", "u033"],
+        ["u039", "u021", "u028", "u010", "u045", "u048", "u009", "u024", "u014", "u042"],
+        ["u011", "u006", "u002", "u005", "u015", "u037", "u027", "u008", "u047", "u044"],
+    ]
+
+
+def _clustered(sizes: dict[str, int]) -> tuple[UnitList, dict[str, str]]:
+    units, clusters = [], {}
+    for site, n in sizes.items():
+        for i in range(n):
+            key = f"{site}_{i}"
+            units.append(Unit(key=key, paths=(), attributes={"site": site}))
+            clusters[key] = site
+    return UnitList(units), clusters
+
+
+def test_no_cluster_is_split_across_folds():
+    """Cluster sizes 7/3/3/1/1 over k=2. Deliberately uneven: with equal-sized or
+    singleton clusters the clustered and unclustered partitioners agree, so a test
+    over those could not see this rewrite at all.
+
+    The `{8, 7}` assertion discriminates twice over. Assigning units rather than
+    whole clusters splits a cluster and trips the `seen` check; balancing cluster
+    count rather than unit count puts 7+3 against 3+1+1 and gives `{10, 5}`; and
+    under this digest the shuffle draws the size-7 cluster **last**, so dropping
+    the largest-first sort also gives `{10, 5}` rather than coinciding with the
+    sorted answer as it does for shuffles that draw it early.
+    """
+    roster, clusters = _clustered({"S1": 7, "S2": 3, "S3": 3, "S4": 1, "S5": 1})
+    folds = partition_units(roster, k=2, digest="sha256:abc", clusters=clusters)
+    seen: dict[str, int] = {}
+    for f, fold in enumerate(folds):
+        for u in fold:
+            assert seen.setdefault(clusters[u.key], f) == f, "a cluster spans two folds"
+    assert sum(len(f) for f in folds) == 15  # every unit lands
+    assert len({u.key for f in folds for u in f}) == 15  # and lands exactly once
+    assert {len(f) for f in folds} == {8, 7}  # balanced by UNIT count
+
+
+def test_the_clustered_draw_follows_the_digest():
+    """Six clusters of 3 over k=3, where the largest-first sort is a no-op and the
+    shuffle is the only thing deciding which cluster lands where.
+
+    Membership, not sizes: with equal clusters every fold holds 6 units whatever
+    the order, so a size assertion here is a check that could not fail. Dropping
+    the shuffle makes the assignment a function of the sizes alone and this test
+    is what reports it.
+    """
+    roster, clusters = _clustered({f"C{i}": 3 for i in range(6)})
+    a = partition_units(roster, k=3, digest="sha256:0000", clusters=clusters)
+    b = partition_units(roster, k=3, digest="sha256:0001", clusters=clusters)
+    as_sites = [sorted({clusters[u.key] for u in fold}) for fold in a]
+    bs_sites = [sorted({clusters[u.key] for u in fold}) for fold in b]
+    assert as_sites != bs_sites, "the clustered draw must be a function of the digest"
+    assert [len(f) for f in a] == [6, 6, 6]
+    assert [len(f) for f in b] == [6, 6, 6]
+
+
+def test_the_same_digest_reproduces_the_same_clustered_split():
+    roster, clusters = _clustered({"S1": 7, "S2": 3, "S3": 3, "S4": 1, "S5": 1})
+    a = partition_units(roster, k=2, digest="sha256:abc", clusters=clusters)
+    b = partition_units(roster, k=2, digest="sha256:abc", clusters=clusters)
+    assert [[u.key for u in p] for p in a] == [[u.key for u in p] for p in b]
+
+
+def test_more_folds_than_clusters_leaves_folds_empty_rather_than_raising():
+    """`k` past the cluster count is refused at `validate`
+    (`E-REPL-FOLD-K-TOO-LARGE`, bounded by `fold_basis`), so a caller reaching here
+    with such a `k` is one that skipped that check. The partitioner stays total and
+    empty-handed rather than dividing a cluster to fill a fold — an empty fold is a
+    visibly useless split, a divided cluster is a leaky one that looks fine."""
+    roster, clusters = _clustered({"S1": 2, "S2": 2})
+    folds = partition_units(roster, k=4, digest="sha256:abc", clusters=clusters)
+    assert sorted(len(f) for f in folds) == [0, 0, 2, 2]
+
+
+def _by_stratum(sizes: dict[str, int]) -> tuple[UnitList, dict[str, str]]:
+    """One unit per member, `label` carrying the stratum and no clustering."""
+    units, strata = [], {}
+    for label, n in sizes.items():
+        for i in range(n):
+            key = f"{label}_{i}"
+            units.append(Unit(key=key, paths=(), attributes={"label": label}))
+            strata[key] = label
+    return UnitList(units), strata
+
+
+def _clustered_by_stratum(
+    spec: dict[str, list[int]],
+) -> tuple[UnitList, dict[str, str], dict[str, str]]:
+    """Clusters of the given sizes, every cluster wholly inside one stratum — which
+    is what `units.stratum_varies_within_cluster` guarantees a validated config is."""
+    units, clusters, strata = [], {}, {}
+    for label, sizes in spec.items():
+        for c, n in enumerate(sizes):
+            cluster = f"{label}c{c}"
+            for i in range(n):
+                key = f"{cluster}_{i}"
+                units.append(
+                    Unit(key=key, paths=(), attributes={"label": label, "site": cluster})
+                )
+                clusters[key], strata[key] = cluster, label
+    return UnitList(units), clusters, strata
+
+
+def test_each_fold_gets_a_proportional_share_of_each_stratum():
+    """12 units, 8 `label=0` and 4 `label=1`, at k=2, so each fold must hold 4 and 2.
+
+    Deliberately asymmetric, and deliberately under digest `sha256:0000`. An 8/4
+    roster is not enough on its own: under `sha256:abc` and under `"d"` the
+    *unstratified* draw already lands 4/2 in both folds, so this assertion would pass
+    against a partitioner that ignored `strata` entirely. Under `sha256:0000` it does
+    not — `test_an_unstratified_draw_of_the_same_stratum_fixture_is_lopsided` pins the
+    3/3 and 5/1 it gives instead, and is this test's control.
+    """
+    roster, strata = _by_stratum({"0": 8, "1": 4})
+    folds = partition_units(roster, k=2, digest="sha256:0000", strata=strata)
+    assert [len(f) for f in folds] == [6, 6]
+    for fold in folds:
+        counts = Counter(u.label for u in fold)
+        assert counts["0"] == 4
+        assert counts["1"] == 2
+
+
+def test_an_unstratified_draw_of_the_same_stratum_fixture_is_lopsided():
+    """The control that must report: the same roster and digest with no `strata`
+    splits the small stratum 3/1, not 2/2. Named with `stratum` so `pytest -k
+    stratum` runs it beside the probe rather than leaving the probe unaccompanied."""
+    roster, _ = _by_stratum({"0": 8, "1": 4})
+    folds = partition_units(roster, k=2, digest="sha256:0000")
+    assert [dict(Counter(u.label for u in f)) for f in folds] == [
+        {"0": 3, "1": 3},
+        {"0": 5, "1": 1},
+    ]
+
+
+def test_one_stratum_over_the_whole_roster_is_the_unstratified_draw():
+    """A single stratum has nothing to balance, so it must reproduce the draw exactly
+    — the same units in the same folds in the same order, not merely the same sizes.
+    This is what pins the stratified path onto the one assignment rule: a second rule
+    for the stratified case would be free to differ here."""
+    roster, strata = _by_stratum({"only": 50})
+    stratified = partition_units(roster, k=5, digest="d", strata=strata)
+    plain = partition_units(roster, k=5, digest="d")
+    assert [[u.key for u in f] for f in stratified] == [[u.key for u in f] for f in plain]
+
+
+def test_no_cluster_is_split_across_a_stratified_fold():
+    """Stratification must not reintroduce the leak. Clusters 7/3/3/1/1, each wholly
+    inside one stratum (`A` holds 7+3, `B` holds 3+1+1), at k=2.
+
+    Task 4's `test_no_cluster_is_split_across_folds` cannot see this: it passes no
+    `strata`, so a stratifier that partitioned units instead of clusters — or that
+    ignored `clusters` once `strata` arrived — would leave it green. The uneven sizes
+    are what make the leak visible; with singleton clusters every assignment keeps
+    them whole trivially.
+    """
+    roster, clusters, strata = _clustered_by_stratum({"A": [7, 3], "B": [3, 1, 1]})
+    folds = partition_units(
+        roster, k=2, digest="sha256:0000", clusters=clusters, strata=strata
+    )
+    seen: dict[str, int] = {}
+    for f, fold in enumerate(folds):
+        for u in fold:
+            assert seen.setdefault(clusters[u.key], f) == f, "a cluster spans two folds"
+    assert sum(len(f) for f in folds) == 15
+    assert len({u.key for f in folds for u in f}) == 15
+    assert [dict(Counter(u.label for u in f)) for f in folds] == [
+        {"A": 7, "B": 3},
+        {"A": 3, "B": 2},
+    ]
+
+
+def test_the_clustered_stratified_split_pins_which_fold_each_cluster_lands_in():
+    """Stratum `A` in clusters 3/2/2/2 and `B` in 5/1/1/1/1, at k=3 — the shape where
+    the per-stratum fold sizes are *not* in descending order (`A` gives 3/4/2), so
+    merging the strata index-wise and merging them sorted by size differ.
+
+    Pinned as membership because that difference is an arrangement, not an imbalance:
+    sorting cannot change any stratum's multiset of piece sizes, and on this very
+    fixture it lands marginally *closer* to the roster's 1:1 mix (4/9 and 3/5 against
+    3/8 and 4/6). There is therefore no proportional assertion that could justly
+    condemn it, and this test condemns it on the contract instead — which fold a unit
+    lands in is a function of the digest, and `partition_units` says so.
+    """
+    roster, clusters, strata = _clustered_by_stratum(
+        {"A": [3, 2, 2, 2], "B": [5, 1, 1, 1, 1]}
+    )
+    folds = partition_units(
+        roster, k=3, digest="sha256:0000", clusters=clusters, strata=strata
+    )
+    assert [sorted({u.site for u in f}) for f in folds] == [
+        ["Ac0", "Bc0"],
+        ["Ac1", "Ac2", "Bc1", "Bc3"],
+        ["Ac3", "Bc2", "Bc4"],
+    ]
+    assert [dict(Counter(u.label for u in f)) for f in folds] == [
+        {"A": 3, "B": 5},
+        {"A": 4, "B": 2},
+        {"A": 2, "B": 2},
+    ]
+
+
+def test_stratified_fold_sizes_can_differ_by_more_than_one():
+    """Three strata of three units at k=2 give 6 and 3, not 5 and 4: with equal-sized
+    things to deal out, each stratum's fold list is non-increasing and fold 0 takes
+    every stratum's ceiling. Pinned because it contradicts
+    `test_partition_sizes_differ_by_at_most_one`, which holds for an unstratified
+    split only — evening the totals out is what would divide a stratum's share
+    unevenly, and that is the thing being declared away.
+
+    The bound is the stratum count here and *nothing* once clusters are uneven:
+    `test_no_cluster_is_split_across_a_stratified_fold` is two strata at k=2 with
+    sizes 10 and 5, because the one-large-cluster floor applies per stratum and the
+    floors add.
+    """
+    roster, strata = _by_stratum({"a": 3, "b": 3, "c": 3})
+    folds = partition_units(roster, k=2, digest="sha256:0000", strata=strata)
+    assert [len(f) for f in folds] == [6, 3]
+    assert [dict(Counter(u.label for u in f)) for f in folds] == [
+        {"a": 2, "b": 2, "c": 2},
+        {"a": 1, "b": 1, "c": 1},
+    ]
+
+
+def test_a_k_past_a_single_stratum_leaves_a_fold_holding_none_of_it():
+    """`validate` bounds `k` by `fold_basis` over the **whole roster**, which
+    stratification turns into a per-stratum question nothing checks: 6 clusters here,
+    so k=3 validates cleanly, but stratum `B` has only 2 clusters and reaches only 2
+    folds — the third holds no `B` at all, while § Repeat kinds still calls the fold
+    stratified.
+
+    Pinned as behaviour, not fixed: the partitioner stays total and visibly short of a
+    stratum rather than dividing a cluster to fill the fold, which is the same stance
+    `test_more_folds_than_clusters_leaves_folds_empty_rather_than_raising` takes. The
+    missing per-stratum bound is a `validate` gap, recorded rather than closed here.
+    """
+    roster, clusters, strata = _clustered_by_stratum({"A": [2, 2, 2, 2], "B": [2, 2]})
+    assert fold_basis(roster, "site") == 6, "so k=3 is well inside what validate allows"
+    folds = partition_units(
+        roster, k=3, digest="sha256:0000", clusters=clusters, strata=strata
+    )
+    assert [dict(Counter(u.label for u in f)) for f in folds] == [
+        {"A": 4, "B": 2},
+        {"A": 2, "B": 2},
+        {"A": 2},
+    ]
+
+
+def test_the_same_digest_reproduces_the_same_stratified_split():
+    roster, strata = _by_stratum({"0": 8, "1": 4})
+    a = partition_units(roster, k=2, digest="sha256:0000", strata=strata)
+    b = partition_units(roster, k=2, digest="sha256:0000", strata=strata)
+    assert [[u.key for u in f] for f in a] == [[u.key for u in f] for f in b]
+
+
+def test_a_unit_missing_from_the_stratum_mapping_is_a_core_defect():
+    """Total over the roster or not at all, the rule `clusters` already follows: a
+    `.get` default would give the unit a stratum of its own and balance the split
+    around a value nobody declared."""
+    roster, strata = _by_stratum({"0": 4, "1": 2})
+    del strata["1_0"]
+    with pytest.raises(KeyError):
+        partition_units(roster, k=2, digest="sha256:0000", strata=strata)
 
 
 def test_writing_a_unit_field_raises_the_documented_code() -> None:
@@ -652,3 +935,436 @@ def test_technical_n_is_absent_when_measurements_is_undeclared(input_dir: Path):
     roster, technical_n, _ = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
     assert len(roster) == 3
     assert technical_n is None
+
+
+# --- cluster membership, one authority --------------------------------------
+
+
+def test_clusters_group_units_by_their_declared_attribute():
+    """`reference.md` § Clustered units: `cluster_by` names a declared attribute,
+    and the mapping it produces is what the partition, the checks and the
+    cluster-robust intervals all read. Deliberately uneven — 3 clusters over 5
+    units — because equal cluster sizes make a per-unit mapping and a per-cluster
+    one indistinguishable."""
+    units = [
+        Unit(key=f"u{i}", paths=(), attributes={"site": s})
+        for i, s in enumerate(["S1", "S1", "S1", "S2", "S3"])
+    ]
+    roster = UnitList(units)
+    assert clusters_of(roster, "site") == {
+        "u0": "S1",
+        "u1": "S1",
+        "u2": "S1",
+        "u3": "S2",
+        "u4": "S3",
+    }
+    assert cluster_count(roster, "site") == 3
+
+
+def test_cluster_membership_is_in_roster_order():
+    """Insertion order is roster order, which is what lets a caller needing the
+    ordered cluster list derive it here rather than walking the roster again."""
+    roster = UnitList(
+        [
+            Unit(key="u0", paths=(), attributes={"site": "S2"}),
+            Unit(key="u1", paths=(), attributes={"site": "S1"}),
+            Unit(key="u2", paths=(), attributes={"site": "S2"}),
+        ]
+    )
+    assert list(clusters_of(roster, "site").values()) == ["S2", "S1", "S2"]
+
+
+def test_a_unit_carrying_no_cluster_value_is_refused():
+    """A singleton cluster invented for a unit with no value would make that unit
+    its own inferential draw. `reference.md` § Errors validate reports gives this
+    the same code `validate` reports for a `cluster_by` naming no attribute."""
+    roster = UnitList(
+        [
+            Unit(key="u0", paths=(), attributes={"site": "S1"}),
+            Unit(key="u1", paths=(), attributes={}),
+        ]
+    )
+    with pytest.raises(ContractError) as e:
+        clusters_of(roster, "site")
+    assert e.value.code == "E-DATA-CLUSTER-UNKNOWN"
+    assert "u1" in str(e.value)
+
+
+def test_cluster_count_reads_the_same_authority():
+    """The count is derived from the membership rather than counted separately:
+    a count above the number of groups the partitioner can produce is a `k` that
+    cannot be satisfied."""
+    roster = UnitList(
+        [Unit(key=f"u{i}", paths=(), attributes={"site": "S1"}) for i in range(4)]
+    )
+    assert cluster_count(roster, "site") == 1
+    with pytest.raises(ContractError):
+        cluster_count(UnitList([Unit(key="u0", paths=(), attributes={})]), "site")
+
+
+def test_the_fold_basis_is_the_cluster_count_when_the_units_are_clustered():
+    """`reference.md` § Validation, *Folds fit inside the clusters*: a cluster is
+    indivisible, so what a fold may be drawn from is the cluster count.
+
+    Sizes 7/3/3/1/1 — 5 clusters over 15 units — deliberately: with one unit per
+    cluster the two numbers coincide and this assertion could not tell the cluster
+    count from the roster size.
+    """
+    roster, _ = _clustered({"S1": 7, "S2": 3, "S3": 3, "S4": 1, "S5": 1})
+    assert len(roster) == 15
+    assert fold_basis(roster, "site") == 5
+
+
+def test_the_fold_basis_is_the_unit_count_when_nothing_is_clustered():
+    """The control that must report: with no `cluster_by`, every unit is its own
+    independent draw and the basis is the roster size — the same 15-unit roster the
+    clustered case counts 5 of, so the two answers cannot be confused."""
+    roster, _ = _clustered({"S1": 7, "S2": 3, "S3": 3, "S4": 1, "S5": 1})
+    assert fold_basis(roster, None) == 15
+    assert fold_basis(roster, "") == 15
+
+
+def test_the_fold_basis_refuses_a_unit_with_no_cluster():
+    """`cluster_count` is the authority, so a unit carrying no value for the
+    attribute raises here rather than being counted as a cluster of its own — which
+    would inflate the basis and admit a `k` the partitioner cannot satisfy."""
+    roster = UnitList(
+        [
+            Unit(key="u0", paths=(), attributes={"site": "S1"}),
+            Unit(key="u1", paths=(), attributes={}),
+        ]
+    )
+    with pytest.raises(ContractError) as e:
+        fold_basis(roster, "site")
+    assert e.value.code == "E-DATA-CLUSTER-UNKNOWN"
+
+
+def test_cluster_ids_are_labels_whatever_the_source_supplied(input_dir: Path):
+    """A table yields `str` for every column, but a hand-built roster need not,
+    and a cluster id is a label rather than a quantity."""
+    roster, _, _ = resolve_units(
+        {"from": "index.csv", "key": "patient_id", "attributes": ["site"]}, input_dir
+    )
+    assert set(clusters_of(roster, "site").values()) == {"a", "b"}
+    numeric = UnitList([Unit(key="u0", paths=(), attributes={"site": 7})])
+    assert clusters_of(numeric, "site") == {"u0": "7"}
+
+
+# --- a cluster and a weight must not vary within a unit's measurement rows ---
+#
+# `reference.md` § Clustered units and § Weighted samples: `measurements` collapses
+# these two columns like any other attribute, so replicate rows disagreeing about
+# them answer by row order. The check belongs here because `collapse_measurements`
+# is the one place holding the pre-collapse values — `validate` resolves the roster
+# and sees the post-collapse one, where the disagreement is already gone.
+
+
+def test_a_cluster_varying_within_a_unit_is_refused():
+    """A mis-collapsed cluster decides which side of a split a unit lands on."""
+    units = [
+        Unit(key="p1", paths=(), attributes={"read": "r1", "site": "S1"}),
+        Unit(key="p1", paths=(), attributes={"read": "r2", "site": "S2"}),
+    ]
+    with pytest.raises(ContractError) as e:
+        collapse_measurements(units, by="read", collapse="first", constant={"cluster_by": "site"})
+    assert e.value.code == "E-DATA-CLUSTER-VARIES"
+    assert "p1" in str(e.value) and "site" in str(e.value)
+
+
+def test_a_cluster_constant_within_a_unit_is_accepted():
+    """The control: same shape, agreeing rows, must NOT raise. Without it there is
+    no way to tell a check from a function that refuses every input."""
+    units = [
+        Unit(key="p1", paths=(), attributes={"read": "r1", "site": "S1"}),
+        Unit(key="p1", paths=(), attributes={"read": "r2", "site": "S1"}),
+    ]
+    collapsed, _ = collapse_measurements(
+        units, by="read", collapse="first", constant={"cluster_by": "site"}
+    )
+    assert collapsed[0].site == "S1"
+
+
+def test_a_weight_varying_within_a_unit_is_refused():
+    """The half H3a could only state: a weight is what one unit stands for, so
+    replicate rows carrying 1 and 99 would sum to a weight no row declared."""
+    units = [
+        Unit(key="p1", paths=(), attributes={"read": "r1", "w": "1"}),
+        Unit(key="p1", paths=(), attributes={"read": "r2", "w": "99"}),
+    ]
+    with pytest.raises(ContractError) as e:
+        collapse_measurements(units, by="read", collapse="first", constant={"weight_by": "w"})
+    assert e.value.code == "E-DATA-WEIGHT-VARIES"
+
+
+def test_a_weight_constant_within_a_unit_is_accepted():
+    """The weight half's own control."""
+    units = [
+        Unit(key="p1", paths=(), attributes={"read": "r1", "w": "2.5"}),
+        Unit(key="p1", paths=(), attributes={"read": "r2", "w": "2.5"}),
+    ]
+    collapsed, _ = collapse_measurements(
+        units, by="read", collapse="first", constant={"weight_by": "w"}
+    )
+    assert collapsed[0].w == "2.5"
+
+
+def test_the_two_codes_are_not_one_code():
+    """The cluster case and the weight case say different things about what
+    breaks — leakage versus a mis-sized contribution — so one identifier for both
+    would send a reader to the wrong section. Pinned in one place so a later
+    refactor that collapses the two tables fails here."""
+    rows = [
+        Unit(key="p1", paths=(), attributes={"read": "r1", "col": "a"}),
+        Unit(key="p1", paths=(), attributes={"read": "r2", "col": "b"}),
+    ]
+    codes = set()
+    for declaration in ("cluster_by", "weight_by"):
+        with pytest.raises(ContractError) as e:
+            collapse_measurements(rows, by="read", collapse="first", constant={declaration: "col"})
+        codes.add(e.value.code)
+    assert codes == {"E-DATA-CLUSTER-VARIES", "E-DATA-WEIGHT-VARIES"}
+
+
+def test_no_declaration_leaves_the_collapse_exactly_as_it_was():
+    """Totality over the declaration being absent entirely, which is every config
+    that declares neither — including the worked example. The default must check
+    nothing at all, or `measurements` would start refusing rosters it has always
+    collapsed."""
+    units = [
+        Unit(key="p1", paths=(), attributes={"read": "r1", "site": "S1"}),
+        Unit(key="p1", paths=(), attributes={"read": "r2", "site": "S2"}),
+    ]
+    collapsed, counts = collapse_measurements(units, by="read", collapse="first")
+    assert collapsed[0].site == "S1"
+    assert counts == [2]
+
+
+def test_a_column_absent_from_some_rows_is_not_a_disagreement():
+    """`validate` collects findings and never raises, so this function has to be
+    total over a name only some members carry. The rows that carry it agree, so
+    nothing about the collapsed value depends on row order — an absent cell is
+    the *presence* question, which `clusters_of` raises on after resolution, not
+    a disagreement between rows."""
+    units = [
+        Unit(key="p1", paths=(), attributes={"read": "r1", "site": "S1"}),
+        Unit(key="p1", paths=(), attributes={"read": "r2"}),
+    ]
+    collapsed, _ = collapse_measurements(
+        units, by="read", collapse="first", constant={"cluster_by": "site"}
+    )
+    assert collapsed[0].site == "S1"
+
+
+def test_a_null_cluster_beside_a_real_one_is_a_disagreement():
+    """Present-but-`None` is not absent: one row names a site and the other names
+    nothing, so which value survives is again the file's row order."""
+    units = [
+        Unit(key="p1", paths=(), attributes={"read": "r1", "site": None}),
+        Unit(key="p1", paths=(), attributes={"read": "r2", "site": "S2"}),
+    ]
+    with pytest.raises(ContractError) as e:
+        collapse_measurements(units, by="read", collapse="first", constant={"cluster_by": "site"})
+    assert e.value.code == "E-DATA-CLUSTER-VARIES"
+
+
+def test_a_cluster_naming_the_measurement_axis_is_refused():
+    """`cluster_by` naming the very column that distinguishes one measurement from
+    another varies within every unit by construction. The check runs over the
+    members directly rather than over the merge loop's column list, which excludes
+    `by` — so this case is reachable at all only because of that placement."""
+    units = [
+        Unit(key="p1", paths=(), attributes={"read": "r1"}),
+        Unit(key="p1", paths=(), attributes={"read": "r2"}),
+    ]
+    with pytest.raises(ContractError) as e:
+        collapse_measurements(units, by="read", collapse="first", constant={"cluster_by": "read"})
+    assert e.value.code == "E-DATA-CLUSTER-VARIES"
+
+
+def test_the_leakage_code_wins_over_the_collapse_type_code():
+    """A varying string cluster column under a blanket `mean` satisfies both this
+    check and `coerce_for_rule`'s. Ordering decision, pinned: the reader needs to
+    be told a unit is filed under two sites, not that `mean` doesn't fit strings —
+    fixing the rule name would leave the leak in place."""
+    units = [
+        Unit(key="p1", paths=(), attributes={"read": "r1", "site": "S1"}),
+        Unit(key="p1", paths=(), attributes={"read": "r2", "site": "S2"}),
+    ]
+    with pytest.raises(ContractError) as e:
+        collapse_measurements(units, by="read", collapse="mean", constant={"cluster_by": "site"})
+    assert e.value.code == "E-DATA-CLUSTER-VARIES"
+
+
+def test_both_declarations_over_one_column_each_check_their_own(input_dir: Path):
+    """The wiring, end to end through `resolve_units`, which is where the two
+    names come from `units_decl` with no new plumbing."""
+    _write_reads(
+        input_dir,
+        "patient_id,read_id,site,w\np1,r1,S1,2\np1,r2,S2,2\np2,r3,S3,3\n",
+    )
+    decl = {
+        "from": "reads.csv",
+        "key": "patient_id",
+        "attributes": ["site", "w", "read_id"],
+        "cluster_by": "site",
+        "weight_by": "w",
+        "measurements": {"by": "read_id", "collapse": "first"},
+    }
+    with pytest.raises(ContractError) as e:
+        resolve_units(decl, input_dir)
+    assert e.value.code == "E-DATA-CLUSTER-VARIES"
+    # The other half of the same wiring: the cluster column agrees and the weight
+    # column is the one that varies, so this fires the weight raise through
+    # `resolve_units` rather than through a hand-built `constant`.
+    _write_reads(
+        input_dir,
+        "patient_id,read_id,site,w\np1,r1,S1,1\np1,r2,S1,99\np2,r3,S3,3\n",
+    )
+    with pytest.raises(ContractError) as e:
+        resolve_units(decl, input_dir)
+    assert e.value.code == "E-DATA-WEIGHT-VARIES"
+    # The control: the same declarations over rows that agree resolve cleanly.
+    _write_reads(
+        input_dir,
+        "patient_id,read_id,site,w\np1,r1,S1,2\np1,r2,S1,2\np2,r3,S3,3\n",
+    )
+    roster, technical_n, _ = resolve_units(decl, input_dir)
+    assert clusters_of(roster, "site") == {"p1": "S1", "p2": "S3"}
+    assert technical_n == {"min": 1, "max": 2, "median": 1.5}
+
+
+def test_a_non_string_declaration_is_left_to_the_envelope(input_dir: Path):
+    """`validate` never raises, and a list-valued `cluster_by` used as a column
+    name is a `TypeError` escaping it — the same class `_check_units`'s own `key`
+    guard exists for. `E-CONFIG-TYPE` is the finding for a mistyped leaf; this
+    function's job is to stay total."""
+    _write_reads(input_dir, "patient_id,read_id,site\np1,r1,S1\np1,r2,S2\n")
+    decl = {
+        "from": "reads.csv",
+        "key": "patient_id",
+        "attributes": ["site", "read_id"],
+        "cluster_by": ["site"],
+        "weight_by": "",
+        "measurements": {"by": "read_id", "collapse": "first"},
+    }
+    roster, _, _ = resolve_units(decl, input_dir)
+    assert roster[0].site == "S1"
+
+
+def test_a_column_no_row_carries_is_not_a_disagreement_either(input_dir: Path):
+    """The fourth totality case: `cluster_by` naming a column absent from *every*
+    row, which happens whenever it names something `data.units.attributes` does not
+    declare. Resolution must complete — the finding is `E-DATA-CLUSTER-UNKNOWN`,
+    made where membership is read — so the empty-group case may not raise, and may
+    not be an `IndexError` either."""
+    _write_reads(input_dir, "patient_id,read_id,depth\np1,r1,10\np1,r2,20\n")
+    decl = {
+        "from": "reads.csv",
+        "key": "patient_id",
+        "attributes": ["depth", "read_id"],
+        "cluster_by": "site",
+        "measurements": {"by": "read_id", "collapse": "first"},
+    }
+    roster, _, _ = resolve_units(decl, input_dir)
+    with pytest.raises(ContractError) as e:
+        clusters_of(roster, "site")
+    assert e.value.code == "E-DATA-CLUSTER-UNKNOWN"
+
+
+# --- a stratum must be constant within a cluster ------------------------------
+
+
+def _strata(rows: list[tuple[str, str, str]]) -> UnitList:
+    """`(key, animal, label)` rows, as a roster carrying both attributes."""
+    return UnitList(
+        [
+            Unit(key=key, paths=(), attributes={"animal_id": animal, "label": label})
+            for key, animal, label in rows
+        ]
+    )
+
+
+_ANIMALS = {"A1": 7, "A2": 3, "A3": 3, "A4": 1, "A5": 1}
+_ANIMAL_LABELS = {"A1": "tumor", "A2": "normal", "A3": "tumor", "A4": "normal", "A5": "tumor"}
+
+
+def _animal_rows(varying: bool) -> list[tuple[str, str, str]]:
+    """The fixture both halves share: 15 cells over 5 animals, sized 7/3/3/1/1.
+
+    It discriminates because neither coincidence holds. Animals `A1`, `A2` and
+    `A3` hold several cells each, so a stratum is not constant within a cluster
+    merely for the cluster being a singleton; and `label` takes both values across
+    the roster, so it is not constant globally either. `varying` flips exactly one
+    cell of `A3` — a three-cell animal, so the flipped cell has siblings to
+    disagree with — which is the whole difference between the probe and its
+    control.
+    """
+    rows = []
+    for animal, n in _ANIMALS.items():
+        for i in range(n):
+            label = _ANIMAL_LABELS[animal]
+            if varying and animal == "A3" and i == 0:
+                label = "normal"
+            rows.append((f"{animal}_{i}", animal, label))
+    return rows
+
+
+def test_a_stratum_varying_inside_a_cluster_is_found():
+    """`reference.md` § Clustered units: stratifying folds on an attribute that
+    varies inside a cluster is unsatisfiable once the cluster is indivisible. The
+    offender is named with the values it carries, so the reader knows which animal
+    to look at."""
+    roster = _strata(_animal_rows(varying=True))
+    found = stratum_varies_within_cluster(roster, "animal_id", "label")
+    assert found is not None
+    cluster, values = found
+    assert cluster == "A3"
+    assert values == ["normal", "tumor"]
+
+
+def test_a_stratum_constant_within_every_cluster_is_not_found():
+    """The control that must report: the same 15 cells over the same 5 animals,
+    with `label` constant within each animal and differing *across* them — a
+    stratum a cluster-respecting split can balance, differing from the probe by one
+    cell's label."""
+    roster = _strata(_animal_rows(varying=False))
+    assert stratum_varies_within_cluster(roster, "animal_id", "label") is None
+
+
+def test_a_cell_carrying_no_stratum_value_varies_from_its_siblings():
+    """Totality: a cell with no value for the stratum has nothing to be balanced
+    on, so within a cluster whose other cells declare one it is a variation like any
+    other. Two cells both carrying none agree, and a stratum no unit carries at all
+    is the `-UNKNOWN` half's finding rather than this one's."""
+    roster = _strata([("c0", "A1", "tumor")])
+    roster = UnitList(
+        [
+            roster[0],
+            Unit(key="c1", paths=(), attributes={"animal_id": "A1"}),
+        ]
+    )
+    found = stratum_varies_within_cluster(roster, "animal_id", "label")
+    assert found == ("A1", ["no value", "tumor"])
+    both_missing = UnitList(
+        [
+            Unit(key="c0", paths=(), attributes={"animal_id": "A1"}),
+            Unit(key="c1", paths=(), attributes={"animal_id": "A1"}),
+        ]
+    )
+    assert stratum_varies_within_cluster(both_missing, "animal_id", "label") is None
+
+
+def test_the_stratum_check_reads_cluster_membership_from_the_one_authority():
+    """`clusters_of` is the single authority, so a unit carrying no cluster value
+    raises `E-DATA-CLUSTER-UNKNOWN` from there rather than being grouped into a
+    cluster of its own — which would make its stratum trivially constant and hide a
+    real variation."""
+    roster = UnitList(
+        [
+            Unit(key="c0", paths=(), attributes={"animal_id": "A1", "label": "tumor"}),
+            Unit(key="c1", paths=(), attributes={"label": "normal"}),
+        ]
+    )
+    with pytest.raises(ContractError) as e:
+        stratum_varies_within_cluster(roster, "animal_id", "label")
+    assert e.value.code == "E-DATA-CLUSTER-UNKNOWN"

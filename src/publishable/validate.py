@@ -1,6 +1,7 @@
 """The S1 check subset. Collects rather than stops. docs/reference.md § Validation."""
 
 import re
+from collections import Counter
 from pathlib import Path
 from typing import Any
 
@@ -33,9 +34,11 @@ from publishable.units import (
     COLLAPSE_RULES,
     NUMERIC_COLLAPSE_RULES,
     UnitList,
+    fold_basis,
     is_measurement_numeric,
     resolve_units,
     rule_for,
+    stratum_varies_within_cluster,
     usable_weight,
 )
 
@@ -441,15 +444,60 @@ def validate_config(
     units_decl = _units_declaration(doc.get("data") or {}, c) or {}
     _check_measurements(units_decl, roster, technical_n, columns, c)
     _check_weight_by(units_decl, roster, c)
+    _check_cluster_by(doc, units_decl, roster, c)
+    # How many indivisible things a `fold` may be drawn from: the resolved unit
+    # count, or the cluster count when `data.units.cluster_by` declares the units
+    # are not independent draws (`reference.md` § Validation, *Folds fit inside the
+    # clusters*). Resolved once, here, and handed to both checks that need it —
+    # `_check_replication` bounds `k` against it and `_check_sweep` sizes a
+    # `k: all` budget from it, and a `k` checked against one number while the
+    # budget counts another is the drift a single derivation removes.
+    #
+    # `units.fold_basis` raises `E-DATA-CLUSTER-UNKNOWN` when a unit carries no
+    # value for the cluster attribute — the case `_check_cluster_by` above reports
+    # from the declaration where it can, and `_check_units` reports for a column
+    # that never resolved. This module collects rather than raises, so an
+    # unreadable basis becomes `None`: a `k: all` then reports `E-REPL-FOLD-K`
+    # (honest — the fold count genuinely cannot be known) beside the cluster
+    # finding that explains why.
+    declared_cluster = units_decl.get("cluster_by")
+    # A wrongly-typed or empty `cluster_by` is reported by `check_envelope` and
+    # `_check_cluster_by`; counting clusters by it here would report a second,
+    # derived fault on top of the one the reader has to fix anyway.
+    usable_cluster = (
+        declared_cluster if isinstance(declared_cluster, str) and declared_cluster else None
+    )
+    basis: int | None = None
+    if roster is not None:
+        try:
+            basis = fold_basis(roster, usable_cluster)
+        except ContractError:
+            # Swallowed so `validate` keeps collecting. Usually the same fault is
+            # reported beside this by `_check_cluster_by` — but **not always, and
+            # the difference matters.** `E-DATA-CLUSTER-UNKNOWN` raised here for a
+            # unit with no value for the attribute has no validate-time reporter:
+            # `_check_cluster_by` tests the declaration against `attributes`, not
+            # each unit's value. With no `fold` level nothing downstream needs the
+            # basis either, so a config in that shape validates clean and raises at
+            # `run`. The reachable case is `cluster_by` naming `measurements.by`
+            # where every unit has one measurement row; see `cli`'s note at the
+            # `clusters_of` call.
+            basis = None
+    # A `fold` level's `stratify_by`, from the same usable-cluster local the basis
+    # was resolved from: the name it declares, and — when a cluster is declared —
+    # whether the stratum survives a split that cannot divide one. Not in
+    # `replication._fold_k`, which sees the declaration and a count and never a
+    # roster.
+    _check_fold_stratify_by(doc, units_decl, roster, usable_cluster, c)
     _check_replication(
         doc,
         template,
         c,
         experiment=experiment,
-        unit_count=len(roster) if roster is not None else None,
+        fold_basis=basis,
     )
     _check_unimplemented(doc, c)
-    _check_sweep(doc, template, c, unit_count=len(roster) if roster is not None else None)
+    _check_sweep(doc, template, c, fold_basis=basis)
     _check_contrasts(doc, c, roster)
     _check_hypotheses(doc, c, experiment, template)
     _check_report_by(doc, c, roster)
@@ -1072,6 +1120,349 @@ def _warn_undeclared_weight(
         return
 
 
+def _check_cluster_by(
+    doc: dict[str, Any], units: dict[str, Any], roster: UnitList | None, c: Collector
+) -> None:
+    """`data.units.cluster_by` — the attribute exists, and a column that looks like
+    a cluster identifier is not silently going undeclared.
+
+    `reference.md` § Validation, rows "Cluster attribute exists" and "Clustering
+    looks undeclared".
+
+    **`data.units.attributes` is the reference set for the name**, the same side of
+    the line `_check_weight_by` reads and the opposite side from
+    `_check_measurements`'s `by`. The § Validation row says `cluster_by` names
+    something "which is not a unit attribute", where `measurements.by` names a
+    column of "a `reads.csv` with no `read_id` column"; a cluster is read per unit
+    when the partition is drawn, so it has to survive resolution as an attribute,
+    where a `by` is consumed at collapse time and dropped from the merged unit.
+    That also supplies the glob cross-check for free: `_from_glob` refuses every
+    declared attribute, so a `cluster_by` under a `{glob: ...}` source always draws
+    `E-DATA-CLUSTER-UNKNOWN` — truthfully, a glob yielding a key and a path and
+    nothing else.
+
+    The declaration is read rather than the roster's realized attribute names, so
+    the name check runs with no roster at all — `_check_weight_by`'s construction,
+    and equivalent when a roster does resolve, since `_from_table` refuses an
+    attribute its table has no column for.
+
+    There is no *value* half here, unlike the weight check: any label is a usable
+    cluster id, and the one value fault there is — a unit carrying none — is
+    `units.clusters_of`'s raise, under this same code.
+    """
+    declared = units.get("cluster_by")
+    if declared is None:
+        _warn_undeclared_cluster(doc, units, roster, c)
+        return
+    if not isinstance(declared, str):
+        # `check_envelope` reports this (`E-CONFIG-TYPE` — `envelope.py` types
+        # `data.units.cluster_by` a `str`). Reporting it again here would duplicate
+        # the finding and describe `3` as "empty", a word that does not fit it.
+        return
+    if not declared:
+        c.error(
+            "E-DATA-CLUSTER-UNKNOWN",
+            "data.units.cluster_by",
+            "is empty; it names the unit attribute holding the cluster identity, and "
+            "an empty declaration changes no behavior — which is the failure a truthy "
+            "read of it would hide. Name the attribute, or remove the key",
+        )
+        return
+    # A non-string item in `data.units.attributes` is `_check_units`'s own finding
+    # (`E-UNITS-ATTR-MISSING`); filtering it here treats it as undeclared, which it
+    # already is, and keeps `set()` off an unhashable item in a module contracted to
+    # collect rather than raise. An absent or `null` `attributes` is an empty list
+    # rather than a skip, for the reason `_check_weight_by` states: "no attributes
+    # are declared, so `cluster_by` names none of them" is exactly the row's case.
+    attrs = units.get("attributes") or []
+    if not isinstance(attrs, list):
+        return
+    names = sorted({a for a in attrs if isinstance(a, str)})
+    if declared not in names:
+        c.error(
+            "E-DATA-CLUSTER-UNKNOWN",
+            "data.units.cluster_by",
+            f"names {declared!r}, which is not a unit attribute — a cluster is read per "
+            f"unit when the split is drawn, so it has to be one. `data.units.attributes` "
+            f"declares {', '.join(names) or 'none'}",
+        )
+
+
+def _check_fold_stratify_by(
+    doc: dict[str, Any],
+    units: dict[str, Any],
+    roster: UnitList | None,
+    cluster_by: str | None,
+    c: Collector,
+) -> None:
+    """A `fold` level's `stratify_by` — the attribute exists, and it survives the
+    clustering that decides what a split cannot divide.
+
+    `reference.md` § Validation, rows "Stratification attribute exists" and "Fold
+    strata survive clustering". **Only the `fold` level's**: the first row names no
+    particular `stratify_by`, and its `data.units.assign.<axis>.stratify_by` and
+    `data.units.holdout.stratify_by` halves belong to the slices that build those
+    blocks, so neither is discharged by this.
+
+    **`data.units.attributes` is the reference set for the name**, the side of the
+    line `_check_cluster_by` and `_check_weight_by` read, and for the same reason: a
+    stratum is read per unit when the partition is drawn, so it has to survive
+    resolution as an attribute rather than merely be a column of the source. Read
+    from the declaration, so the name check runs with no roster at all.
+
+    **A `data.units.measurements.by` fails that test too**, and is refused under the
+    same code for it: the measurement axis is consumed where the rows collapse, so a
+    stratum naming it is declared as an attribute and absent from every resolved
+    unit. Before task 12 retired `E-REPL-FOLD-STRATIFY-UNSUPPORTED` no config
+    reached the partition at all and `cli` merely carried a note about the
+    `KeyError`; retiring it made the path reachable, which is what makes this a
+    check rather than a note.
+
+    Unlike `data.units.cluster_by` there is **no `E-CONFIG-TYPE` backstop** for a
+    value of the wrong type: `envelope.LEAF_TYPES` types `replication.repeats` a
+    `list` and nothing inside a level, so a `stratify_by: [label]` — the list form
+    `holdout`, `assign` and `statistics.resample` each take — would otherwise be
+    reported by no check at all. A fold stratifies on one attribute named as a
+    string, and anything else, an empty string or empty list included, names none.
+
+    The clustering half needs the cluster membership and the stratum values
+    together, which is why it lives here rather than in `replication._fold_k`: that
+    function sees the declaration and a count, and never a roster. `cluster_by` is
+    handed in — `validate_config`'s one usable-cluster local, the same value
+    `units.fold_basis` was resolved from — so nothing here decides for itself what a
+    usable cluster declaration is.
+
+    When the attribute is not declared at all, the clustering check is skipped: the
+    reader has to declare it either way, and a second finding derived from the first
+    is the noise `_check_cluster_by` argues against.
+    """
+    levels = ((doc.get("replication") or {}).get("repeats")) or []
+    if not isinstance(levels, list):
+        return  # `check_envelope` types `replication.repeats`; `_check_shape` too
+    attrs = units.get("attributes") or []
+    names = sorted({a for a in attrs if isinstance(a, str)}) if isinstance(attrs, list) else []
+    for level in levels:
+        if not isinstance(level, dict) or level.get("kind") != "fold":
+            continue
+        declared = level.get("stratify_by")
+        if declared is None:
+            continue
+        if not isinstance(declared, str) or not declared:
+            empty = declared == "" or declared == []
+            c.error(
+                "E-REPL-FOLD-STRATIFY-UNKNOWN",
+                "replication.repeats",
+                (
+                    "declares an empty `fold.stratify_by`, which names no attribute to "
+                    "balance the folds on and changes no behavior — which is the failure "
+                    "a truthy read of it would hide. Name the attribute, or remove the key"
+                )
+                if empty
+                else (
+                    f"declares `fold.stratify_by: {declared!r}`, which is not the name of a "
+                    "unit attribute; a fold balances its folds on one declared attribute, "
+                    "named as a string"
+                ),
+            )
+            continue
+        if declared not in names:
+            c.error(
+                "E-REPL-FOLD-STRATIFY-UNKNOWN",
+                "replication.repeats",
+                f"declares `fold.stratify_by: {declared}`, which is not a unit attribute — "
+                "a stratum is read per unit when the partition is drawn, so it has to be "
+                f"one. `data.units.attributes` declares {', '.join(names) or 'none'}",
+            )
+            continue
+        # Declared as an attribute *and* named as the measurement axis, which is a
+        # name that does not survive resolution: `collapse_measurements` consumes
+        # `measurements.by` — it distinguished the rows and has no value once they
+        # are one unit — so `cli` would rebuild the strata from an attribute the
+        # collapsed roster no longer carries and reach a bare `KeyError`. Reported
+        # under the same code as an undeclared name because it is the same fault
+        # under this code's own reasoning: the reference set is `attributes` rather
+        # than the source's columns *because* a stratum has to survive resolution,
+        # and this one does not.
+        #
+        # Deliberately asymmetric with `data.units.cluster_by`, which reaches
+        # `E-DATA-CLUSTER-VARIES` at run time for the same declaration shape: a
+        # cluster naming the measurement axis varies within every unit by
+        # construction, and `collapse_measurements` is the one place holding the
+        # pre-collapse rows that prove it. A stratum's fault needs no rows — the two
+        # declarations alone settle it — so it is refused here, from the
+        # declaration, and the two codes say different things about what broke.
+        measurements = units.get("measurements")
+        axis = measurements.get("by") if isinstance(measurements, dict) else None
+        if isinstance(axis, str) and axis == declared:
+            c.error(
+                "E-REPL-FOLD-STRATIFY-UNKNOWN",
+                "replication.repeats",
+                f"declares `fold.stratify_by: {declared}`, which `data.units.measurements.by` "
+                "also names — the measurement axis is consumed when a unit's rows collapse "
+                "and is not an attribute of the resolved unit, so there is nothing left to "
+                "balance the folds on. Stratify on an attribute that survives the collapse",
+            )
+            continue
+        if roster is None or not cluster_by:
+            continue
+        try:
+            offender = stratum_varies_within_cluster(roster, cluster_by, declared)
+        except ContractError:
+            # `clusters_of` refuses a unit carrying no cluster value
+            # (`E-DATA-CLUSTER-UNKNOWN`), which is already reported beside this by
+            # `_check_cluster_by` or by the resolution `_check_units` performed.
+            # This module collects rather than raises, so an unreadable grouping is
+            # silence here rather than a traceback.
+            return
+        if offender is not None:
+            cluster, values = offender
+            c.error(
+                "E-REPL-FOLD-STRATIFY-VARIES",
+                "replication.repeats",
+                f"declares `fold.stratify_by: {declared}`, which varies within "
+                f"`{cluster_by}` {cluster} — it carries {', '.join(values)}. A cluster is "
+                "indivisible, so a stratum cannot be balanced across a split that cannot "
+                "divide the cluster carrying both values; stratify on an attribute that is "
+                "constant within a cluster, or drop the stratification",
+            )
+
+
+def _accounted_attribute_names(doc: dict[str, Any], units: dict[str, Any]) -> set[str]:
+    """Attribute names another declaration already accounts for, so the
+    undeclared-cluster warning stays off them.
+
+    `reference.md`'s `W-DATA-CLUSTER-UNDECLARED` row names four: an attribute a
+    `sweep.groups` axis names or an `assign.from` reads, since every `between`
+    design's arm would otherwise report one; any `stratify_by`, which must be
+    constant within a cluster and so is coarser than one; and
+    `statistics.null_test`'s `shuffle`, which names the label a cluster is what
+    shuffling *respects*.
+
+    `stratify_by` is collected by walking for the key rather than from an
+    enumerated list of the blocks that carry one (`assign.<axis>`, a `fold` repeat
+    level, `statistics.resample`). The row says *any* `stratify_by`, and an
+    enumeration would quietly stop matching the row the first time a block gains
+    one — which is a live prospect while three of those blocks are still unbuilt.
+
+    The walk is over the four blocks that describe the design, **not the whole
+    document**: `parameters` is the template's namespace, and a template free to
+    declare a parameter of any name is free to declare one called `stratify_by`,
+    which would silence a real cluster column for no reason a reader could see.
+    """
+    accounted: set[str] = set()
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            for key, value in node.items():
+                if key == "stratify_by":
+                    if isinstance(value, str):
+                        accounted.add(value)
+                    elif isinstance(value, list):
+                        accounted.update(v for v in value if isinstance(v, str))
+                walk(value)
+        elif isinstance(node, list):
+            for item in node:
+                walk(item)
+
+    for block in ("data", "sweep", "replication", "statistics"):
+        walk(doc.get(block))
+    groups = (doc.get("sweep") or {}).get("groups") or []
+    if isinstance(groups, list):
+        for axis in groups:
+            if isinstance(axis, dict) and isinstance(axis.get("by"), str):
+                accounted.add(axis["by"])
+    assign = units.get("assign") or {}
+    if isinstance(assign, dict):
+        for axis_name, block in assign.items():
+            # The axis name is the default `from`, per § The one config file's
+            # `from: arm  # by_attribute; defaults to the axis name`, so an
+            # assignment reading its own column accounts for it either way.
+            if isinstance(axis_name, str):
+                accounted.add(axis_name)
+            if isinstance(block, dict) and isinstance(block.get("from"), str):
+                accounted.add(block["from"])
+    null_test = (doc.get("statistics") or {}).get("null_test") or {}
+    if isinstance(null_test, dict) and isinstance(null_test.get("shuffle"), str):
+        accounted.add(null_test["shuffle"])
+    return accounted
+
+
+def _warn_undeclared_cluster(
+    doc: dict[str, Any], units: dict[str, Any], roster: UnitList | None, c: Collector
+) -> None:
+    """`W-DATA-CLUSTER-UNDECLARED` — an attribute that looks like a cluster
+    identifier while `cluster_by` is unset.
+
+    The four clauses are `reference.md`'s row verbatim, and each earns its place
+    against a false positive the documents themselves contain:
+
+    1. **every unit carries a value for it** — a column some units lack is not a
+       grain the whole roster is partitioned on;
+    2. **its values are not all numeric**, read through `units.is_measurement_numeric`
+       so a table-sourced `"37"` counts as the number it holds — this is what keeps
+       the warning off `age`, `dose` and `latency`, whose distinct values are also
+       each held by several units. Its cost is a missed integer-coded identifier,
+       which is the right way to be wrong: a numeric column with repeated values is
+       a measurement far more often than an identifier;
+    3. **more than two distinct values** — two is a level set like `label` or `sex`,
+       and a cluster-robust *t* has df = clusters − 1, so two clusters is no
+       inference base at all;
+    4. **at least one value held by more than one unit** — otherwise the column is
+       effectively a second key.
+
+    Plus the exclusions `_accounted_attribute_names` collects. `statistics.report_by`
+    is deliberately **not** among them: a run that reports by `site` while `site`
+    really is a cluster wants both declarations, not silence.
+
+    Deliberately **not** built on `units.clusters_of`. That function answers "which
+    cluster is this unit in" for a declaration that exists — and raises when a unit
+    carries no value, which is clause 1's ordinary case here rather than a fault.
+    This is a scan for *candidates*, a different question, and reading it as a
+    second notion of membership is the misreading to avoid: nothing here decides
+    what any cluster contains.
+
+    Reported for the first candidate in sorted order rather than for each, as the
+    weight warning is and for the same reason: `cluster_by` takes one name and the
+    remedy is the same sentence whichever candidate a reader looks at.
+    """
+    if roster is None:
+        return
+    accounted = _accounted_attribute_names(doc, units)
+    for name in sorted({n for u in roster for n in u.attributes}):
+        if name in accounted:
+            continue
+        if any(name not in u.attributes for u in roster):
+            continue
+        values = [u.attributes[name] for u in roster]
+        # An empty cell is "carries no value", not "carries the empty label": a
+        # sparse column would otherwise satisfy clauses 2 and 4 together on its
+        # blanks alone, which is the commonest false positive this clause has.
+        if any(v is None or (isinstance(v, str) and not v.strip()) for v in values):
+            continue
+        if all(is_measurement_numeric(v) for v in values):
+            continue
+        # Stringified for the same reason `clusters_of` stringifies: a cluster id is
+        # a label, and a hand-built roster may carry something `set` cannot hold.
+        counts = Counter(str(v) for v in values)
+        if len(counts) <= 2:
+            continue
+        if max(counts.values()) < 2:
+            continue
+        c.warn(
+            "W-DATA-CLUSTER-UNDECLARED",
+            f"data.units.attributes.{name}",
+            f"{name!r} holds {len(counts)} repeated non-numeric labels across "
+            f"{len(roster)} units — too few to be a second key and too many to be a "
+            "level set, which is the shape of a cluster identifier — but "
+            "`data.units.cluster_by` is unset, so core treats every unit as an "
+            "independent draw. Intervals computed that way are too narrow, and a fold "
+            "may put one cluster on both sides of the split. Set "
+            "`data.units.cluster_by` if it is a cluster, and ignore this if the units "
+            "really are independent",
+        )
+        return
+
+
 # Refusals that are properties of the DECLARATION, so `validate` reports them as
 # findings. Anything else `resolve_repeats` raises is a genuine fault and still
 # propagates — swallowing all of them is how a real error becomes a silent pass.
@@ -1080,7 +1471,6 @@ def _warn_undeclared_weight(
 # `test_an_unresolved_repl_code_is_not_swallowed` pins that escape path.
 REPL_DECLARATION_CODES = frozenset(
     {
-        "E-REPL-FOLD-STRATIFY-UNSUPPORTED",
         "E-REPL-FOLD-K",
         "E-REPL-FOLD-K-TOO-LARGE",
         "E-REPL-LEVEL-DUPLICATE",
@@ -1109,18 +1499,20 @@ def _declared_count(level: dict[str, Any]) -> Any:
     return level.get("k") if level.get("kind") == "fold" else level.get("n")
 
 
-def _level_count(level: dict[str, Any], unit_count: int | None) -> int | None:
+def _level_count(level: dict[str, Any], fold_basis: int | None) -> int | None:
     """This level's count as a number, or `None` when there isn't one to have.
 
     `None` covers two cases the callers separate with `_declared_count`: nothing
     declared at all (which contributes 1×), and a count declared but unresolvable
     — `{kind: fold, k: all}` against a roster that did not resolve, or any other
     string `k`, which `resolve_repeats` reports by name. A resolvable `k: all` is
-    the roster size, the same number `_fold_k` gives the run.
+    the fold basis — the roster size, or the cluster count when
+    `data.units.cluster_by` is declared, leave-one-out being leave-one-*cluster*-out
+    there — the same number `_fold_k` gives the run.
     """
     count = _declared_count(level)
     if count == "all" and level.get("kind") == "fold":
-        return unit_count
+        return fold_basis
     if isinstance(count, bool) or not isinstance(count, int | float):
         return None
     return int(count)
@@ -1132,12 +1524,12 @@ def _check_replication(
     c: Collector,
     *,
     experiment: Any | None = None,
-    unit_count: int | None = None,
+    fold_basis: int | None = None,
 ) -> None:
     levels = ((doc.get("replication") or {}).get("repeats")) or []
     # A `fold` level partitions units into train/test splits; with no
     # `data.units` declared there is no roster to partition at all. Left
-    # unchecked, `resolve_repeats` accepts a fixed `k` with `unit_count=None`
+    # unchecked, `resolve_repeats` accepts a fixed `k` with `fold_basis=None`
     # (only `k: all` needs a count, and that already reports `E-REPL-FOLD-K`) —
     # so a config with a fold and no units would validate clean and then, at
     # `run`, either crash (`fold_members_for` zips a fold's members against no
@@ -1159,7 +1551,7 @@ def _check_replication(
     any_invalid = False
     has_unresolved_fold = False
     for level in levels:
-        count = _level_count(level, unit_count)
+        count = _level_count(level, fold_basis)
         if count is None and isinstance(_declared_count(level), str):
             # The count is declared as a word rather than a number and could not
             # be resolved — `{kind: fold, k: all}` with no roster, or any other
@@ -1195,14 +1587,16 @@ def _check_replication(
     # itself — fold, duplicate kinds, and depth past two levels among them. At run
     # time raising is right; here `validate` collects, so translate rather than let
     # it escape. The digest is a placeholder: seeds are irrelevant to a declaration
-    # check, only the shape of `replication.repeats` is. `unit_count` is the roster
-    # `_check_units` already resolved, threaded through rather than resolved again —
-    # `k: all` and an oversized `k` can only be checked against a real count. When
-    # the roster failed to resolve, `unit_count` is `None` and `k: all` reports
+    # check, only the shape of `replication.repeats` is. `fold_basis` is the count
+    # `validate_config` already resolved from the roster — its units, or its
+    # clusters under `data.units.cluster_by` — threaded through rather than
+    # resolved again: `k: all` and an oversized `k` can only be checked against a
+    # real count. When the roster or its clusters failed to resolve, `fold_basis`
+    # is `None` and `k: all` reports
     # `E-REPL-FOLD-K`, which is honest: the fold count genuinely cannot be known,
     # and the roster's own finding is already reported beside it.
     try:
-        resolve_repeats(doc, "validate", unit_count=unit_count)
+        resolve_repeats(doc, "validate", fold_basis=fold_basis)
     except ContractError as exc:
         if exc.code in REPL_DECLARATION_CODES:
             c.error(exc.code, "replication.repeats", str(exc))
@@ -1273,16 +1667,17 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     "Ablation baseline isn't a group level", which needs a group axis to have a
     level for a baseline to fix. `.groups` is read by nothing yet. It resolves a unit roster, but
     several `data.units` sub-fields — allocation other than
-    `within`, `assign`, `cluster_by`, `holdout`, `weight_by`,
+    `within`, `assign`, `holdout`,
     and a `resolver` source — are read by nothing yet either.
     `data.units.measurements` is no longer among them: `resolve_units` collapses
     the rows an input table carries, `StepIO.finalize` collapses the ones a step
     records under `measurement=`, and `technical_n` reaches every metric block,
-    so the declaration changes the record. Each of these
+    so the declaration changes the record. Neither are `weight_by` and
+    `cluster_by`: each decides an interval's construction, and a `cluster_by`
+    decides a `fold`'s partition as well. Each of these
     would otherwise validate clean and then run something other than what the
     config describes — the same class of failure `resolve_repeats` already
-    refuses for repeat levels: `E-REPL-FOLD-STRATIFY-UNSUPPORTED` for
-    `fold.stratify_by`, `E-REPL-LEVEL-DUPLICATE` for two levels of the same
+    refuses for repeat levels: `E-REPL-LEVEL-DUPLICATE` for two levels of the same
     kind, and `E-REPL-LEVEL-DEPTH` past two levels, and
     `E-REPL-LEVEL-BATCH-INNER` for a `batch` that is not the outermost level.
     `batch` and `fold` themselves are no longer refused — both are supported
@@ -1393,7 +1788,17 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
         )
     for field, code in (
         ("assign", "E-DATA-ASSIGN-UNSUPPORTED"),
-        ("cluster_by", "E-DATA-CLUSTER-UNSUPPORTED"),
+        # `cluster_by` was here. `_check_cluster_by` checks the declaration for
+        # real, `attrition` counts the clusters, `partition_units` keeps one out
+        # of two folds, and `summarize_step` gives every `basis: units` column a
+        # cluster-robust interval — so the declaration changes the record, which
+        # is the test this family applies. What a clustered run may *not* yet do
+        # is publish a contrast (`_check_sweep` refuses that combination
+        # under `E-DATA-CLUSTER-CONTRAST`) or resample a derived metric
+        # (`stats.summarize_step` raises `E-DATA-CLUSTER-DERIVED` at run time,
+        # that one not being knowable from a declaration at all). Both refuse a
+        # combination rather than a declaration, which is why neither is in this
+        # loop.
         # `weight_by` was here. `_check_weight_by` checks the declaration for
         # real, `attrition` computes Kish's effective size from it, and
         # `summarize_step` weights every `basis: units` column's value and
@@ -1457,14 +1862,15 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
             )
 
 
-def _repeat_total(doc: dict[str, Any], unit_count: int | None) -> int | None:
+def _repeat_total(doc: dict[str, Any], fold_basis: int | None) -> int | None:
     """The product of every repeat level's count, permissively: an invalid level
     (`n < 1`) is already reported by `_check_replication` under its own identifier,
     so this treats it as absent rather than reporting the same defect twice under
     `W-EXEC-BUDGET`.
 
-    `{kind: fold, k: all}` resolves against `unit_count` — the roster
-    `_check_units` already resolved — because leave-one-out is the single design
+    `{kind: fold, k: all}` resolves against `fold_basis` — the roster
+    `_check_units` already resolved, counted in clusters when
+    `data.units.cluster_by` is declared — because leave-one-out is the single design
     `W-EXEC-BUDGET` matters most for (`reference.md` § Sweeps and repeats), and
     it was the one design that could not produce the warning while this function
     read a string and gave up.
@@ -1482,7 +1888,7 @@ def _repeat_total(doc: dict[str, Any], unit_count: int | None) -> int | None:
     levels = ((doc.get("replication") or {}).get("repeats")) or []
     total = 1
     for level in levels:
-        count = _level_count(level, unit_count)
+        count = _level_count(level, fold_basis)
         if count is None:
             # A string count that did not resolve is genuinely unknown; anything
             # else unreadable (a bool, a list) is reported under its own
@@ -1553,7 +1959,7 @@ def _check_sampled_values(
 
 
 def _check_sweep(
-    doc: dict[str, Any], template: Any, c: Collector, *, unit_count: int | None = None
+    doc: dict[str, Any], template: Any, c: Collector, *, fold_basis: int | None = None
 ) -> None:
     """Checks that only become reachable once a sweep actually expands: an
     unrecognised mode, an axis with nothing in it, a swept path the template
@@ -2034,7 +2440,7 @@ def _check_sweep(
                 "cell gets its own baseline",
             )
 
-    repeat_total = _repeat_total(doc, unit_count)
+    repeat_total = _repeat_total(doc, fold_basis)
     budget = (doc.get("limits") or {}).get("max_executions")
     # `repeat_total` is `None` only when a declared count cannot be resolved at
     # all — a `k: all` whose roster did not resolve, or a string `k` that is not
@@ -2136,7 +2542,11 @@ def _check_sweep(
     # row in § Validation's registry and is not one of the `NOT BUILT`
     # declarations § The one config file counts — the same placement
     # `E-SWEEP-SAMPLE-BASELINE` and `E-SWEEP-ABLATE-CROSSED` have.
-    weight_by = (_units_declaration(doc.get("data") or {}, c) or {}).get("weight_by")
+    # One call, read twice. `_units_declaration` takes the collector and reports
+    # a malformed `data.units` under its own code, so a second call in the same
+    # pass would report the same fault twice.
+    units_here = _units_declaration(doc.get("data") or {}, c) or {}
+    weight_by = units_here.get("weight_by")
     if comparisons > 0 and isinstance(weight_by, str) and weight_by:
         plural = "" if comparisons == 1 else "s"
         c.error(
@@ -2153,6 +2563,58 @@ def _check_sweep(
             "returned by a `summary` step, which core records as reported rather than "
             "recomputing. The combination will be honored once the paired estimators "
             "take weights",
+        )
+
+    # A clustered design that publishes a contrast. `reference.md` § Statistical
+    # reporting: when `cluster_by` is declared each contrast construction "takes a
+    # `_clustered` suffix and reads the cluster as the draw" — the *t* forms
+    # cluster-robust with df = clusters − 1 "over the differenced values when
+    # paired and over the arm-level ones when not", and the percentile forms
+    # resampling whole clusters, "jointly across both sides when paired". **None
+    # of those five constructions exists in this build.** `stats.paired_t_over_units`
+    # takes a list of per-unit differences and nothing else;
+    # `paired_delta_of_derived` and `paired_percentile_of_derived` take rows and a
+    # seed and know nothing about membership; there is no unpaired form at all.
+    # So a clustered run's `vs_baseline` delta and its interval would be drawn as
+    # if every unit were an independent observation — which is the one thing the
+    # declaration says they are not — sitting beside per-condition intervals that
+    # *are* cluster-robust (`summarize_step` wires those), with nothing in the
+    # record distinguishing the two. § Clustered units calls exactly that interval
+    # "too narrow", and the delta is the number a reader acts on.
+    #
+    # **The guard reads the resolved family, not the declaration**, for the
+    # reasons the weighted one above states in full: a `sweep.baseline` with no
+    # axis beside it expands to a single `is_baseline` row that is never a
+    # comparison's subject, so such a run publishes no delta and stays legal,
+    # while a declared `statistics.contrasts` entry over a sweep with no baseline
+    # publishes one and is caught. `statistics.report_by` is outside it on the
+    # same argument — a stratum repeats the per-condition aggregation, whose
+    # interval *is* clustered, and publishes no delta.
+    #
+    # Temporary, and narrowly so: H4 Statistics owns the `_clustered` contrast
+    # family and lifts this the moment those constructions exist. Like
+    # `E-DATA-WEIGHT-CONTRAST` it refuses a *combination* rather than a
+    # declaration, so it carries a row in § Validation's registry and is not one
+    # of the `NOT BUILT` declarations § The one config file counts —
+    # `data.units.cluster_by` itself is built, and a clustered run publishing no
+    # contrast gets cluster-robust intervals on every `basis: units` column.
+    cluster_by = units_here.get("cluster_by")
+    if comparisons > 0 and isinstance(cluster_by, str) and cluster_by:
+        plural = "" if comparisons == 1 else "s"
+        c.error(
+            "E-DATA-CLUSTER-CONTRAST",
+            "data.units.cluster_by",
+            f"makes the cluster the inferential draw for each condition's own interval, and "
+            f"this design also publishes {comparisons} comparison{plural}, which no "
+            "construction in this build clusters: a `vs_baseline` delta and a declared "
+            "`statistics.contrasts` entry are both computed over per-unit differences as "
+            "though the units were independent, so the delta's interval would be narrower "
+            "than the design supports while the values beside it are cluster-robust, with "
+            "nothing in the record saying so. Declare one or the other here: drop "
+            "`cluster_by` only if the units really are independent, or keep it and express "
+            "the difference as an `Estimate` returned by a `summary` step, which core "
+            "records as reported rather than recomputing. The combination will be honored "
+            "once the paired and unpaired estimators take clusters",
         )
 
     if comparisons > 0 and (correction or "holm") == "none":

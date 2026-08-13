@@ -352,7 +352,7 @@ def test_a_fold_level_records_its_partitions():
     from publishable.replication import cross_levels, resolve_repeats
     from publishable.sweep import expand, sweep_document
 
-    levels = resolve_repeats(cfg([{"kind": "fold", "k": 2}]), "d", unit_count=4)
+    levels = resolve_repeats(cfg([{"kind": "fold", "k": 2}]), "d", fold_basis=4)
     parts = [[_u("a"), _u("b")], [_u("c"), _u("d")]]
     doc = sweep_document(expand({}), levels, cross_levels(levels), "sha256:x",
                          "as_declared", [], None, partitions=parts)

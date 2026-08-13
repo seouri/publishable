@@ -119,7 +119,7 @@ def run_a_project(
     results_dir = tmp_path / "results"
     data.mkdir()
     # 10 patients by default, not 2: a `fold` design (`{kind: fold, k: 5}`) needs
-    # `k <= unit_count`, and every other caller in this module only ever checks
+    # `k <= fold_basis`, and every other caller in this module only ever checks
     # `results`/`sweep.yaml` shape, never the roster's exact size. `units` is a
     # caller-set override — a thin-pairing test wants a roster small enough that
     # `n_paired` trips `limits.min_reported_n` without inflating every other
@@ -4377,3 +4377,540 @@ def test_a_reporting_stratum_is_weighted_by_its_own_units(tmp_path, monkeypatch,
     # stratum's answer — so the two levels above are their own tables rather than
     # the parent's numbers copied down.
     assert step_block["pred"]["value"] == pytest.approx(8 / 6)
+
+
+# --- `k: all` is leave-one-cluster-out at `run` too ---------------------------
+
+# 7/3/3/1/1: 5 clusters over 15 units. Two numbers that cannot be confused, which
+# a roster of singleton clusters would make identical.
+_UNEVEN_CLUSTERS = "patient_id,site\n" + "".join(
+    f"p{i},{s}\n" for i, s in enumerate("aaaaaaabbbcccde")
+)
+
+
+def test_leave_one_out_draws_one_fold_per_cluster(tmp_path, monkeypatch):
+    """`reference.md` § Validation, *Leave-one-out is affordable*: under
+    `cluster_by`, `k: all` is leave-one-*cluster*-out. 5 folds over this 15-unit
+    roster, not 15 — the number `run` executes, so `cli`'s own resolution of the
+    fold basis is what this pins, not `validate`'s.
+
+    The fold *count* is all this asserts; membership is
+    `test_a_clustered_fold_puts_no_cluster_in_two_folds`'s, which pins the mapping
+    reaching the partitioner. The two are separate facts — the count comes from
+    `units.fold_basis` and the membership from `units.partition_units` — and each
+    was wired by its own task.
+    """
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "fold", "k": "all"}]},
+        roster_csv=_UNEVEN_CLUSTERS,
+        units_overrides={"attributes": ["site"], "cluster_by": "site"},
+    )
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+    assert [p["fold"] for p in sweep["partitions"]] == [
+        "fold01", "fold02", "fold03", "fold04", "fold05"
+    ]
+    assert len(doc["results"]) == 5
+
+
+def test_leave_one_out_draws_one_fold_per_unit_when_nothing_is_clustered(tmp_path):
+    """The control that must report, and the regression guard for every
+    unclustered design: the same 15-unit roster with `cluster_by` gone gives 15
+    folds. It needs no bypass — nothing refuses it — which is also what makes it
+    the half that would keep passing if the clustered half were never wired."""
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "fold", "k": "all"}]},
+        roster_csv=_UNEVEN_CLUSTERS,
+        units_overrides={"attributes": ["site"]},
+    )
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+    assert [p["fold"] for p in sweep["partitions"]] == [f"fold{i:02d}" for i in range(1, 16)]
+    assert len(doc["results"]) == 15
+
+
+# --- H3b task 8: `n` gains `clusters`, read back from a real `run.yaml` --------
+
+
+def test_an_unclustered_run_grows_no_clusters_key(tmp_path: Path):
+    """The regression, end to end. `reference.md` § The three-part `n`: `clusters`
+    joins `n` "whenever `cluster_by` makes the cluster the inferential draw", "each
+    present only when it applies so a design that never skips reads as it always
+    did". The roster here is the clustered-shaped one and the `site` column is
+    declared as an ordinary attribute, so `n` stays four parts on the declaration
+    alone — nothing about the data may add the key. Both metric shapes: a recorded
+    column and a derived one."""
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        aggregate_returns="total",
+        roster_csv=_UNEVEN_CLUSTERS,
+        units_overrides={"attributes": ["site"]},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    for name in ("pred", "total"):
+        assert set(aggregated[name]["n"]) == {"resolved", "completed", "ineligible", "failed"}
+    # The control that must report: the run really did produce both metric shapes
+    # over the 15-unit roster, so the sets above are not empty blocks.
+    assert aggregated["pred"]["n"]["completed"] == 15
+    assert aggregated["total"]["value"] is not None
+
+
+def test_n_gains_clusters_under_a_clustered_design(tmp_path, monkeypatch):
+    """§ Clustered units: core "reports the number of clusters as the effective
+    sample size alongside the unit count", and § The three-part `n` has `clusters`
+    join the four parts rather than replace them — its own example being
+    `n: {resolved: 300, completed: 300, failed: 0, clusters: 10}`.
+
+    5 clusters over 15 units, every one completing: the cluster count and the unit
+    count are different numbers, which is the only way a reader — or this test —
+    can tell which of the two is being reported.
+
+    **The derived half of this test was retired with H3b task 12's second refusal**
+    and moved to `test_a_clustered_derived_metric_is_refused_rather_than_drawn`
+    below: a derived metric under `cluster_by` no longer reaches the record at all,
+    so there is no `n` of its own to carry a cluster count. This one now asserts
+    the recorded column, which is where the count belongs and always did. The
+    project still derives `total` — the recorded column has to come from
+    somewhere — and the refusal drops it, which the test below is what pins."""
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        aggregate_returns="total",
+        roster_csv=_UNEVEN_CLUSTERS,
+        units_overrides={"attributes": ["site"], "cluster_by": "site"},
+    )
+    text = (doc["run_dir"] / "run.yaml").read_text()
+    run = yaml.safe_load(text)
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert aggregated["pred"]["n"] == {
+        "resolved": 15,
+        "completed": 15,
+        "ineligible": 0,
+        "failed": 0,
+        "clusters": 5,
+    }
+    # Every part renders as an integer in the file. `counts` is annotated
+    # `dict[str, float]` for Kish's sake, and a `resolved: 15.0` in the record
+    # would be a visible regression no `isinstance` check can see (`15 == 15.0`),
+    # so this reads the rendered text. Unweighted deliberately: `effective` is
+    # legitimately fractional, and it is absent here.
+    blocks = re.findall(r"\n\s+n:\n((?:\s+[a-z_]+: .*\n)+)", text)
+    assert blocks, "no `n` block found in run.yaml"
+    for block in blocks:
+        assert "clusters: 5" in block
+        assert re.search(r"\d+\.\d+", block) is None, block
+
+
+# --- H3b task 12: the clustered derived draw, refused rather than drawn --------
+
+
+def test_a_clustered_derived_metric_is_refused_rather_than_drawn(tmp_path, capsys):
+    """§ Statistical reporting gives a derived metric "a percentile `ci95` from
+    resampling units — or clusters, when `cluster_by` is declared". The clustered
+    form of that draw does not exist, and `percentile_of_derived` draws units
+    unconditionally, so the combination is refused at run time under
+    `E-DATA-CLUSTER-DERIVED` — not at `validate`, because whether a template's
+    `aggregate` returns anything is not knowable from a declaration.
+
+    Three things at once, all of them exact: the derived metric is **absent** from
+    the record rather than present with a null interval, the identifier is
+    disclosed, and the recorded column beside it keeps its cluster-robust interval
+    — the refusal costs the derived mapping and nothing else."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        aggregate_returns="total",
+        roster_csv=_UNEVEN_CLUSTERS,
+        units_overrides={"attributes": ["site"], "cluster_by": "site"},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert "total" not in aggregated
+    # Dropped, not published with `ci95: null` — that state already means "no
+    # resample callable, or no seed", and the record must not hold two meanings
+    # for it.
+    assert set(aggregated) == {"pred"}
+    assert aggregated["pred"]["method"] == "t_over_units_clustered"
+    assert aggregated["pred"]["n"]["clusters"] == 5
+    # The identifier reaches a reader, through the containment `cli` already had
+    # for a derived key collision.
+    out = doc["stdout"]
+    assert "E-DATA-CLUSTER-DERIVED" in out
+    assert "W-STATS-AGGREGATE-FAILED" in out
+    # And the run kept its record: a refusal after every execution is paid for
+    # must not cost the run its `run.yaml`.
+    assert run["status"] == "completed"
+
+
+def test_the_same_derived_metric_unclustered_is_drawn_as_it_always_was(tmp_path, capsys):
+    """The control that must report: the identical project without `cluster_by`
+    publishes `total` with a percentile interval over 2000 draws. The refusal is a
+    property of the combination, not of deriving a metric."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        aggregate_returns="total",
+        roster_csv=_UNEVEN_CLUSTERS,
+        units_overrides={"attributes": ["site"]},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert aggregated["total"]["value"] == 7.0
+    assert aggregated["total"]["method"] == "percentile_over_units"
+    assert aggregated["total"]["resample_draws"] == 2000
+    assert "E-DATA-CLUSTER-DERIVED" not in doc["stdout"]
+
+
+def test_the_shipped_template_derives_nothing_so_no_generated_project_is_reached():
+    """The blast radius of the refusal above, measured rather than asserted: core
+    ships exactly one template, and `generic` does not override `aggregate` at all
+    — `publishable init` therefore generates no project that can reach
+    `E-DATA-CLUSTER-DERIVED`. Only a user-written template that derives a metric
+    does, which is why the refusal is narrow enough to carry until H4 builds the
+    construction."""
+    from publishable.templates.base import BaseTemplate
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    assert GenericTemplate.aggregate is BaseTemplate.aggregate
+
+
+# --- H3b task 11: the partition and the intervals, reached by a real run -------
+
+
+def _fold_membership(run_dir: Path) -> dict[str, list[str]]:
+    """Which units each fold actually held, read from the per-fold `units.parquet`.
+
+    The one route to fold *membership* from outside a run — `sweep.yaml` records
+    the fold labels and nothing about which unit went where. A `repeat`-scope step
+    is handed its own fold's units (`runner.execute_plan` narrows `io.units` to
+    them), and the generated step records one row per unit it was handed, so each
+    fold's table *is* its membership. Asserting membership rather than sizes is
+    load-bearing: the clustered and unclustered partitioners agree on the sizes of
+    some rosters while disagreeing about who is in which fold.
+    """
+    from publishable.artifacts import _decode_parquet
+
+    out: dict[str, list[str]] = {}
+    for path in sorted(run_dir.rglob("units.parquet")):
+        rows = _decode_parquet(path.read_bytes())
+        out[path.parent.parent.name] = [row["unit"] for row in rows]
+    return out
+
+
+def test_a_clustered_fold_puts_no_cluster_in_two_folds(tmp_path, monkeypatch):
+    """The leak this slice exists to close, end to end. `reference.md` § Clustered
+    units: a split made without regard to the cluster trains on other units of the
+    cluster it tests on, and that is "the difference between a valid evaluation and
+    a leaky one" — `experimental-designs.md` § Mistakes core prevents requires it to
+    be structurally impossible, which it is only once `run` passes the membership to
+    the partitioner.
+
+    5 clusters of 7/3/3/1/1 at `k = 3`. The partition is pinned as exact
+    membership, never as sizes: the two partitioners give the same fold sizes on
+    some rosters while differing about who is in which fold, so a size assertion
+    would pass against the unwired call. The rule — "as even as indivisible
+    clusters allow" — shows in the 7/4/4 that follows from cluster `a` being
+    indivisible.
+    """
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "fold", "k": 3}], "order": "as_declared"},
+        roster_csv=_UNEVEN_CLUSTERS,
+        units_overrides={"attributes": ["site"], "cluster_by": "site"},
+    )
+    folds = _fold_membership(doc["run_dir"])
+    assert folds == {
+        "fold01": ["p0", "p1", "p2", "p3", "p4", "p5", "p6"],
+        "fold02": ["p7", "p8", "p9", "p13"],
+        "fold03": ["p10", "p11", "p12", "p14"],
+    }
+    # The property the membership above is one instance of, asserted separately so
+    # a redrawn partition (a changed digest) still fails for the right reason.
+    sites = dict(
+        zip(
+            (f"p{i}" for i in range(15)),
+            "aaaaaaabbbcccde",
+            strict=True,
+        )
+    )
+    seen: dict[str, str] = {}
+    for fold, keys in folds.items():
+        for key in keys:
+            assert seen.setdefault(sites[key], fold) == fold, (
+                f"cluster {sites[key]} appears in {seen[sites[key]]} and {fold}"
+            )
+    assert sorted(k for keys in folds.values() for k in keys) == sorted(sites)
+
+
+def test_a_clustered_folds_units_reconcile_in_the_record(tmp_path, monkeypatch):
+    """The partition changed shape, so the accounting that reads it is checked at
+    the record and not only at the artifacts. Every fold partition before this one
+    was within one of equal; a clustered one is 7/4/4 here because a cluster is
+    indivisible, and `attrition` and `_units_failed_anywhere` reach the counts
+    through `fold_members`.
+
+    `completed == 15` is the load-bearing half: every unit reached exactly one fold
+    and every fold's rows collapsed into the one table, so an uneven partition still
+    covers the roster exactly once. The reconciliation
+    `resolved == completed + ineligible + failed` is what would break if a fold's
+    units were counted twice or dropped."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "fold", "k": 3}], "order": "as_declared"},
+        roster_csv=_UNEVEN_CLUSTERS,
+        units_overrides={"attributes": ["site"], "cluster_by": "site"},
+    )
+    n = _pred(doc["run_dir"])["n"]
+    assert n["resolved"] == n["completed"] + n["ineligible"] + n["failed"]
+    assert n == {
+        "resolved": 15,
+        "completed": 15,
+        "ineligible": 0,
+        "failed": 0,
+        "clusters": 5,
+    }
+    # The control that must report: the folds really were uneven, so the counts
+    # above are over the clustered partition and not an equal-sized one.
+    assert [len(keys) for keys in _fold_membership(doc["run_dir"]).values()] == [7, 4, 4]
+
+
+def test_an_unclustered_fold_of_the_same_roster_splits_a_cluster(tmp_path):
+    """The control that must report, and the half that would keep passing if the
+    clustered argument were never wired: the same 15-unit roster with `site`
+    declared as an ordinary attribute puts cluster `a` in all three folds. It needs
+    no bypass — nothing refuses it — and its folds are 5/5/5, which is why the
+    clustered test above cannot rest on sizes."""
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "fold", "k": 3}], "order": "as_declared"},
+        roster_csv=_UNEVEN_CLUSTERS,
+        units_overrides={"attributes": ["site"]},
+    )
+    folds = _fold_membership(doc["run_dir"])
+    assert folds == {
+        "fold01": ["p0", "p2", "p8", "p11", "p13"],
+        "fold02": ["p1", "p3", "p7", "p10", "p14"],
+        "fold03": ["p4", "p5", "p6", "p9", "p12"],
+    }
+    # Cluster `a` is p0..p6, and every fold holds some of it.
+    for keys in folds.values():
+        assert any(int(key[1:]) < 7 for key in keys)
+
+
+# 10 units labelled `0` and 4 labelled `1`, each its own cluster. `k = 2`, so a
+# stratified split gives 5/5 of the first and 2/2 of the second. The digest is what
+# makes this fixture discriminating: the unstratified draw over the same roster is
+# 4/3 and 6/1 (pinned by the control below), so a partition ignoring `strata` lands
+# nowhere near the proportional split — the coincidence that made an earlier 8/4
+# fixture unable to see the stratification at all.
+_STRATIFIED_ROSTER = "patient_id,label\n" + "".join(
+    f"p{i},{label}\n" for i, label in enumerate("00000000001111")
+)
+
+
+def _stratum_counts(run_dir: Path) -> dict[str, tuple[int, int]]:
+    """Each fold's (label `0`, label `1`) counts, from its membership."""
+    labels = dict(
+        zip((f"p{i}" for i in range(14)), "00000000001111", strict=True)
+    )
+    return {
+        fold: (
+            sum(1 for key in keys if labels[key] == "0"),
+            sum(1 for key in keys if labels[key] == "1"),
+        )
+        for fold, keys in _fold_membership(run_dir).items()
+    }
+
+
+def test_a_stratified_fold_balances_the_declared_stratum(tmp_path, monkeypatch):
+    """`reference.md` § Repeat kinds calls a `fold` declaring `stratify_by`
+    "stratified", so a declaration that was checked and then ignored would make
+    that sentence false. Each fold gets its proportional share of both labels —
+    5/2 and 5/2 — which the unstratified control below does not.
+
+    The exact membership is pinned as well as the composition: the composition
+    alone cannot see a merge that pairs the wrong strata's folds together."""
+    doc = run_a_project(
+        tmp_path,
+        replication={
+            "repeats": [{"kind": "fold", "k": 2, "stratify_by": "label"}],
+            "order": "as_declared",
+        },
+        roster_csv=_STRATIFIED_ROSTER,
+        units_overrides={"attributes": ["label"]},
+    )
+    assert _stratum_counts(doc["run_dir"]) == {"fold01": (5, 2), "fold02": (5, 2)}
+    folds = _fold_membership(doc["run_dir"])
+    assert sorted(k for keys in folds.values() for k in keys) == sorted(
+        f"p{i}" for i in range(14)
+    )
+
+
+def test_an_unstratified_fold_of_the_same_roster_is_lopsided(tmp_path):
+    """The control that must report: the same roster with the `stratify_by` key
+    removed splits the minority label 3/1 rather than 2/2. Without this, the
+    proportional test above would pass against a partitioner that never read
+    `strata` — which is exactly what an earlier fixture did."""
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "fold", "k": 2}], "order": "as_declared"},
+        roster_csv=_STRATIFIED_ROSTER,
+        units_overrides={"attributes": ["label"]},
+    )
+    assert _stratum_counts(doc["run_dir"]) == {"fold01": (4, 3), "fold02": (6, 1)}
+
+
+# The interval group's roster: the same 5 clusters, with a per-unit sampling weight
+# that varies WITHIN cluster `a` (1 and 2) — a weight vector resolved per cluster
+# rather than per unit would give a different weighted mean. `pred` is the
+# recording step's column, `float(i)` over the roster order, so every expectation
+# below is computable from the declaration alone.
+_CLUSTERED_WEIGHTED = "patient_id,site,sampling_weight,cohort\n" + "".join(
+    f"p{i},{site},{weight},{'inside' if i < 7 else 'spread'}\n"
+    for i, (site, weight) in enumerate(
+        zip("aaaaaaabbbcccde", [1, 2, 1, 2, 1, 2, 1, 3, 3, 3, 1, 1, 1, 5, 2], strict=True)
+    )
+)
+
+
+def _pred(run_dir: Path, stratum: str | None = None) -> dict[str, Any]:
+    run = yaml.safe_load((run_dir / "run.yaml").read_text())
+    block = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    return block["by"]["cohort"][stratum]["pred"] if stratum else block["pred"]
+
+
+def test_a_clustered_run_reports_the_cluster_robust_interval(tmp_path, monkeypatch):
+    """Both halves of "wired", end to end: the `method` names the construction and
+    the endpoints are it. § Clustered units: core "then computes cluster-robust
+    intervals — over the same per-unit table every other interval comes from".
+
+    15 units of `pred` = 0..14 in 5 clusters of 7/3/3/1/1. Σ(v−v̄) per cluster is
+    −28, 3, 12, 6, 7, so ΣS² = 1022 and V = (5/4)·1022/225, giving se = 2.38281 at
+    df 4 (t = 2.776445) — an interval of [0.38426, 13.61574]. Computed from the
+    roster rather than captured from a run.
+    """
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        roster_csv=_UNEVEN_CLUSTERS,
+        units_overrides={"attributes": ["site"], "cluster_by": "site"},
+    )
+    pred = _pred(doc["run_dir"])
+    assert pred["method"] == "t_over_units_clustered"
+    assert pred["ci95"][0] == pytest.approx(0.38426217037288346)
+    assert pred["ci95"][1] == pytest.approx(13.615737829627117)
+    assert pred["value"] == pytest.approx(7.0)
+    assert pred["n"] == {
+        "resolved": 15,
+        "completed": 15,
+        "ineligible": 0,
+        "failed": 0,
+        "clusters": 5,
+    }
+    # The reconciliation `run.yaml` must always satisfy — nothing about this
+    # wiring may move units between the parts of `n`.
+    assert pred["n"]["resolved"] == (
+        pred["n"]["completed"] + pred["n"]["ineligible"] + pred["n"]["failed"]
+    )
+
+
+def test_an_unclustered_run_of_the_same_column_keeps_the_plain_interval(tmp_path, monkeypatch):
+    """The control that must report, and the regression guard for the worked
+    example: the same values with `site` an ordinary attribute give `t_over_units`
+    over 14 df — [4.52341, 9.47659], less than half the width above. Both numbers
+    are in the record, so a `method` that changed without the endpoints (or the
+    reverse) fails here."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        roster_csv=_UNEVEN_CLUSTERS,
+        units_overrides={"attributes": ["site"]},
+    )
+    pred = _pred(doc["run_dir"])
+    assert pred["method"] == "t_over_units"
+    assert pred["ci95"][0] == pytest.approx(4.523413656752661)
+    assert pred["ci95"][1] == pytest.approx(9.47658634324734)
+    assert "clusters" not in pred["n"]
+
+
+def test_a_weighted_clustered_run_reports_the_weighted_sandwich(tmp_path, monkeypatch):
+    """The branch a run declaring both lands on. § Weighted samples: "`cluster_by`
+    still decides the draw when both are declared, since a cluster is what's
+    independent and a weight is what it represents" — so the draw (and the df) is
+    the cluster and the estimate is the weighted mean.
+
+    Weights 1/2 alternating inside cluster `a` then 3/3/3, 1/1/1, 5, 2: Σw = 29,
+    v̄_w = 228/29 = 7.86207, and the weighted cluster scores give se = 2.20285 at
+    df 4 — [1.74598, 13.97815]. Kish's size is 11.21333 and appears in `n.effective`
+    but **not** in the df, which is the part a mixed construction would get wrong.
+    """
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        roster_csv=_CLUSTERED_WEIGHTED,
+        units_overrides={
+            "attributes": ["site", "sampling_weight", "cohort"],
+            "cluster_by": "site",
+            "weight_by": "sampling_weight",
+        },
+    )
+    pred = _pred(doc["run_dir"])
+    assert pred["method"] == "weighted_t_over_units_clustered"
+    assert pred["value"] == pytest.approx(7.862068965517241)
+    assert pred["ci95"][0] == pytest.approx(1.745983627074943)
+    assert pred["ci95"][1] == pytest.approx(13.978154303959538)
+    assert pred["n"]["effective"] == pytest.approx(11.213333333333333)
+    assert pred["n"]["clusters"] == 5
+    assert pred["weighted_by"] == "sampling_weight"
+
+
+def test_a_reporting_stratum_inside_one_cluster_reports_no_interval(tmp_path, monkeypatch):
+    """A consequence to preserve rather than tidy away. § Reporting strata makes a
+    level block the aggregation repeated over the subset, and a subset's clusters
+    are its own — so the `inside` cohort, whose seven units are all cluster `a`, has
+    one draw and no df, and reports its point with `ci95: null` while its parent
+    block and its sibling both carry intervals. It reads as a bug and it is the
+    honest answer.
+
+    The sibling `spread` cohort is the control that must report: its eight units
+    span 4 clusters, so it gets an interval at df 3.
+    """
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        roster_csv=_CLUSTERED_WEIGHTED,
+        units_overrides={"attributes": ["site", "cohort"], "cluster_by": "site"},
+        statistics={"report_by": ["cohort"]},
+    )
+    inside = _pred(doc["run_dir"], "inside")
+    assert inside["ci95"] is None
+    assert inside["method"] is None
+    assert inside["value"] == pytest.approx(3.0)
+    assert inside["n"]["clusters"] == 1
+    spread = _pred(doc["run_dir"], "spread")
+    assert spread["method"] == "t_over_units_clustered"
+    assert spread["n"]["clusters"] == 4
+    assert spread["ci95"][0] == pytest.approx(6.4692503141912505)
+    assert spread["ci95"][1] == pytest.approx(14.53074968580875)
+    # The parent keeps its own interval over all five clusters, so the `null`
+    # above is the stratum's cluster count and not a block-wide loss.
+    assert _pred(doc["run_dir"])["method"] == "t_over_units_clustered"
