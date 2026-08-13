@@ -1669,3 +1669,28 @@ def test_beside_n_cannot_shadow_a_computed_metric_key():
     )
     assert out["score"]["n"] == counts
     assert out["score"]["technical_n"] == {"min": 2, "max": 3, "median": 3}
+
+
+def test_a_fractional_effective_rides_counts_into_every_metrics_n():
+    """`effective` JOINS `n`, so it travels in `counts` and needs no carrier of
+    its own — and it must survive as the fractional number `runner.attrition`
+    computed. `reference.md` § Weighted samples prints `effective: 191.4` beside
+    a `completed` of 228: rounding it to an `int` would name a size no interval
+    was computed at, which is why `counts` is `dict[str, float]`.
+
+    Asserted on both metric shapes. The document's own example is `r`, which
+    `aggregate` derives, and the derived branch builds its `n` from a separate
+    literal — so a change made in only the recorded-column loop reads correctly
+    for `pred` and drops `effective` for `r`."""
+    collapsed = {"u1": {"score": 1.0}, "u2": {"score": 3.0}}
+    counts = {"resolved": 3, "completed": 2, "ineligible": 1, "failed": 0, "effective": 1.6}
+    out = summarize_step(collapsed, counts, derived={"total": 4.0})
+    for name in ("score", "total"):
+        assert out[name]["n"]["effective"] == pytest.approx(1.6)
+        # Beside `completed`, not replacing it: weights change what each unit
+        # contributes, not how many there were.
+        assert out[name]["n"]["completed"] == 2
+    # The control: `completed` is still recomputed per column rather than taken
+    # from `counts`, so this is not passing off a verbatim copy of the mapping.
+    ragged = summarize_step({"u1": {"score": 1.0}}, counts)
+    assert ragged["score"]["n"] == {**counts, "completed": 1}

@@ -715,6 +715,33 @@ def command_run(config_path: Path) -> int:
     beside_n: dict[str, Any] = {}
     if technical_n is not None and technical_n["max"] > 1:
         beside_n["technical_n"] = technical_n
+    # `data.units.weight_by` names a unit attribute holding the inverse sampling
+    # probability (`reference.md` § Weighted samples). Two facts reach the record
+    # from it, by the two different routes `stats.summarize_step` describes:
+    # `weighted_by` sits BESIDE `n`, exactly where the document's own example
+    # prints it, and `effective` — Kish's size — JOINS `n`, so it travels in
+    # `attrition`'s counts rather than here.
+    #
+    # ⚠️ The VALUE is not weighted yet: a weighted mean and a
+    # `weighted_t_over_units` interval exist in `stats.py` but nothing calls them
+    # from this path, so `weighted_by` here marks a declaration rather than an
+    # arithmetic that happened. Harmless today — `E-DATA-WEIGHT-UNSUPPORTED`
+    # refuses every config that declares `weight_by`, so no run reaches this
+    # branch — and a wrong number the moment that refusal is retired. Retiring it
+    # without wiring the estimator is the forbidden move; see the task 9 report.
+    weight_by = (units_decl or {}).get("weight_by")
+    weights: dict[str, Any] | None = None
+    weighted_beside: dict[str, Any] = {}
+    if isinstance(weight_by, str) and weight_by and roster is not None:
+        # `.get`, not `[...]`: `validate` guarantees `weight_by` names a declared
+        # attribute and `_from_table` gives every unit every declared attribute,
+        # so a missing one is a core defect — and `None` reaches
+        # `kish_effective_n`, which refuses it as `E-DATA-WEIGHT-INVALID` under
+        # the same single authority `validate` used. A comprehension that skipped
+        # the unit instead would quietly shrink the denominator.
+        weights = {u.key: u.attributes.get(weight_by) for u in roster}
+        weighted_beside["weighted_by"] = weight_by
+        beside_n["weighted_by"] = weight_by
     # `unit_count` is what turns `{kind: fold, k: all}` into a real count and
     # what `_fold_k` checks a declared `k` against — the same roster
     # `_check_units`/`_check_replication` resolved at `validate` time, threaded
@@ -983,7 +1010,12 @@ def command_run(config_path: Path) -> int:
                         results, step_name, cond.index, fold_members=fold_members
                     )
                     counts = attrition(
-                        results, roster, step_name, cond.index, fold_members=fold_members
+                        results,
+                        roster,
+                        step_name,
+                        cond.index,
+                        fold_members=fold_members,
+                        weights=weights,
                     )
                     max_ineligible = (doc.get("limits") or {}).get("max_ineligible_fraction")
                     if (
@@ -1260,6 +1292,13 @@ def command_run(config_path: Path) -> int:
                                 step_name,
                                 cond.index,
                                 fold_members=fold_members,
+                                # Recomputed over the level's own units, which is
+                                # what makes it carryable at all: `technical_n`
+                                # below is withheld because it is a whole-roster
+                                # figure that would have to be COPIED down, and
+                                # Kish's size over this stratum is a different
+                                # number this call computes from scratch.
+                                weights=weights,
                             )
                             # Attrition happens during the run, so a level the
                             # roster-time `W-STATS-REPORTBY-THIN` counted as
@@ -1356,8 +1395,8 @@ def command_run(config_path: Path) -> int:
                             # level: a level resamples from its own key set,
                             # which is already what makes the draw its own.
                             #
-                            # No `beside_n`, for the same reason a level block
-                            # carries no `repeat_spread`: `technical_n` is
+                            # `weighted_beside`, not the parent's `beside_n`, and
+                            # the difference is the whole rule: `technical_n` is
                             # `{min, max, median}` over the WHOLE roster, and a
                             # stratum's own units may have collapsed a different
                             # number of measurements each. Copying the parent's
@@ -1365,7 +1404,12 @@ def command_run(config_path: Path) -> int:
                             # computed over that subset, and `reference.md`
                             # § Reporting strata documents a level block as the
                             # aggregation repeated over the subset, not the
-                            # parent's numbers re-shown.
+                            # parent's numbers re-shown — the same reason a level
+                            # block carries no `repeat_spread`. `weighted_by`
+                            # names the declaration rather than reporting a
+                            # figure, and is as true of a stratum as of the whole
+                            # roster, so withholding it would leave a block whose
+                            # `n` carries `effective` with nothing saying why.
                             level_summary = summarize_step(
                                 level_collapsed,
                                 level_counts,
@@ -1373,6 +1417,7 @@ def command_run(config_path: Path) -> int:
                                 seed=resample_seed_value,
                                 resample=strata_resample,
                                 draws=derived_metric_draws,
+                                beside_n=weighted_beside,
                             )
                             # At least one entry has to come from the level's own
                             # table. A block holding nothing but derived metrics

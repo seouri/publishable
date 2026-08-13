@@ -4186,3 +4186,64 @@ def test_a_report_by_level_block_carries_no_technical_n(tmp_path: Path):
         for metric in block.values():
             assert "technical_n" not in metric
 
+
+# --- H3a task 9: `n` gains `effective`, and the record carries `weighted_by` ---
+
+
+def test_an_unweighted_run_grows_no_effective_and_no_weighted_by(tmp_path: Path):
+    """The regression, read back from a real `run.yaml`. `reference.md` § The
+    three-part `n`: `effective` joins `n` "whenever `weight_by` makes Kish's size
+    the one the interval was computed at", "each present only when it applies so a
+    design that never skips reads as it always did". A run that declares no
+    `weight_by` must read exactly as it always did — four parts in `n`, and no
+    `weighted_by` beside it, on both metric shapes (a recorded column and a
+    derived one)."""
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        aggregate_returns="total",
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    for name in ("pred", "total"):
+        assert set(aggregated[name]["n"]) == {"resolved", "completed", "ineligible", "failed"}
+        assert "effective" not in aggregated[name]["n"]
+        assert "weighted_by" not in aggregated[name]
+    # The control that must report: the run really did produce metrics of both
+    # shapes with a populated `n`, so the assertions above are not passing off an
+    # empty block.
+    assert aggregated["pred"]["n"]["completed"] == 10
+    assert aggregated["total"]["value"] is not None
+
+
+@pytest.mark.xfail(
+    strict=True,
+    reason="`E-DATA-WEIGHT-UNSUPPORTED` refuses every config declaring `weight_by` and "
+    "`command_run` returns before executing, so no end-to-end run can reach the wiring "
+    "this pins — task 11 retires that refusal. Strict, so it XPASSes and fails the suite "
+    "the moment it does, which is the handoff: the wiring is unit-tested in "
+    "tests/test_runner.py (`attrition`) and tests/test_stats.py (`summarize_step`), and "
+    "this is the only assertion that can see the two meeting in `run.yaml`",
+)
+def test_n_gains_effective_under_a_weighted_design(tmp_path: Path):
+    """§ Weighted samples prints exactly this shape: `weighted_by` beside the
+    value, `effective` inside `n` beside `completed`.
+
+    Four units weighted 1/1/1/3, all completing, so Kish's size is
+    (1+1+1+3)² / (1+1+1+9) = 36/12 = exactly 3.0 against a `completed` of 4 —
+    the two figures differ, which is the point of reporting both."""
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        aggregate_returns="total",
+        roster_csv="patient_id,sampling_weight\np1,1\np2,1\np3,1\np4,3\n",
+        units_overrides={
+            "attributes": ["sampling_weight"],
+            "weight_by": "sampling_weight",
+        },
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert aggregated["pred"]["weighted_by"] == "sampling_weight"
+    assert aggregated["pred"]["n"]["effective"] == pytest.approx(3.0)
+    assert aggregated["pred"]["n"]["completed"] == 4

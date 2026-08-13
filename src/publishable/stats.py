@@ -815,7 +815,7 @@ def repeat_spread(
 
 def summarize_step(
     collapsed: dict[str, dict[str, float]],
-    counts: dict[str, int],
+    counts: dict[str, float],
     derived: dict[str, Any] | None = None,
     seed: int | None = None,
     resample: "dict[str, Callable[[UnitTable], float | None]] | None" = None,
@@ -882,9 +882,11 @@ def summarize_step(
 
     - **A key that JOINS `n` travels in `counts`.** § What isn't a repeat says the
       three-part `n` is "joined by `clusters` … by `effective` … by `ineligible`",
-      so those are parts of `n` and need no new carrier. (`counts` is annotated
-      `dict[str, int]`; `effective` is Kish's size and is not an integer, so the
-      task that adds it widens that annotation rather than inventing a route.)
+      so those are parts of `n` and need no new carrier. `effective` arrives that
+      way — `runner.attrition` puts it there under a declared `weight_by` — which
+      is why `counts` is annotated `dict[str, float]` rather than `dict[str,
+      int]`: Kish's effective size is fractional for any uneven weighting, and
+      rounding it would name a size no interval was computed at.
     - **A key that sits BESIDE `n` travels here.** § What isn't a repeat shows
       `technical_n` as a sibling of `n` in the metric block, and § Weighted
       samples shows `weighted_by` in the same position.

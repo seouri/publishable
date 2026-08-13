@@ -14,7 +14,7 @@ from publishable.config import Config, SweptAway
 from publishable.errors import ContractError
 from publishable.replication import LABEL_JOIN, Repeat
 from publishable.scope import Execution
-from publishable.stats import handed_to
+from publishable.stats import handed_to, kish_effective_n
 from publishable.sweep import condition_dir_name
 from publishable.units import UnitList
 
@@ -32,13 +32,53 @@ class ExecutionResult:
     rows: tuple[dict[str, Any], ...] = ()
 
 
+def _counts(
+    resolved: int,
+    completed: "set[str]",
+    ineligible: int,
+    failed: int,
+    weights: "dict[str, Any] | None",
+) -> dict[str, float]:
+    """The one builder all three of `attrition`'s return sites go through.
+
+    Three parallel dict literals is how `effective` reaches two of them and not
+    the third — a design that weights reading as one that doesn't, at whichever
+    site a given run happens to take. The shape is decided here instead.
+
+    `effective` is Kish's size over the COMPLETED units' weights: those are the
+    units a `basis: units` interval is computed from, so they are the ones whose
+    concentration its degrees of freedom come from (`reference.md` § Weighted
+    samples). It is `float` rather than `int` — an uneven weighting's effective
+    size is not a whole number, and rounding it would report a size no interval
+    was computed at. Present only when `weight_by` is declared, on the rule the
+    three-part `n` states for every one of its parts: "each present only when it
+    applies so a design that never skips reads as it always did".
+
+    Sorted for reproducibility — Kish's ratio is order-independent in exact
+    arithmetic but its two sums are not in floating point, and `completed` is a
+    `set`. Indexed rather than `.get`-ed because every completed key comes from
+    the roster the caller built `weights` from; a `.get(k, 0)` default would
+    quietly change the denominator instead of failing.
+    """
+    out: dict[str, float] = {
+        "resolved": resolved,
+        "completed": len(completed),
+        "ineligible": ineligible,
+        "failed": failed,
+    }
+    if weights is not None:
+        out["effective"] = kish_effective_n([weights[k] for k in sorted(completed)])
+    return out
+
+
 def attrition(
     results: list[ExecutionResult],
     roster: "UnitList | None",
     step_name: str,
     condition_index: int,
     fold_members: dict[str, frozenset[str]] | None = None,
-) -> dict[str, int]:
+    weights: dict[str, Any] | None = None,
+) -> dict[str, float]:
     """The four counts, scoped to one step within one condition. A failed unit has
     no row anywhere, so failure is derived.
 
@@ -88,13 +128,32 @@ def attrition(
     per-execution `n` is written in this build: `run.yaml`'s `per_repeat` stays
     verbatim what each step returned (see `run_record.assemble_run_yaml`).
 
+    `weights` is unit key → that unit's `data.units.weight_by` value, supplied
+    only when the config declares one, and it is what adds `effective` to the
+    returned mapping (`_counts` says what the figure is and why it is
+    conditional). The values are passed through as the roster holds them —
+    `str`, under a table source — because `stats.kish_effective_n` gates and
+    parses its own input against `units.usable_weight`, the single authority
+    `validate` approves a config's weights against. Coercing here would be a
+    second notion of a usable weight, which is the thing this slice most
+    carefully has only one of.
+
+    That gating RAISES `ContractError` · `E-DATA-WEIGHT-INVALID` on a weight
+    that is zero, negative, non-finite or non-numeric, and this call sits
+    outside `cli.py`'s containment around `summarize_step`. For `run` the window
+    is closed: `command_run` validates before it executes, against the same
+    roster it then resolves, and `E-DATA-WEIGHT-INVALID` is one of the checks it
+    runs — the same reasoning that closes `measurements`' validate/run window.
+    It re-opens for any command that executes without validating first, which is
+    `draft` and `resume` when they land (H9).
+
     This is the per-step, per-condition breakdown `stats.summarize_step` attaches
     as a metric's `n`. It is deliberately not what guards `max_failed_fraction`:
     that threshold is run-level and a union across every recording step (see
     `_units_failed_anywhere` in `execute_plan`), not an intersection scoped to one.
     """
     if roster is None:
-        return {"resolved": 0, "completed": 0, "ineligible": 0, "failed": 0}
+        return _counts(0, set(), 0, 0, weights)
     keys = {u.key for u in roster}
     recording = [
         r
@@ -108,7 +167,7 @@ def attrition(
         and r.execution.condition_index == condition_index
     ]
     if not recording:
-        return {"resolved": len(keys), "completed": 0, "ineligible": 0, "failed": len(keys)}
+        return _counts(len(keys), set(), 0, len(keys), weights)
     # Accumulated per label, exactly as `stats.collapse_repeats` accumulates its
     # rows: two executions sharing one repeat label (a resumed leaf re-reported,
     # say) must merge, not overwrite. A dict comprehension kept only the last
@@ -138,12 +197,13 @@ def attrition(
             completed.add(key)
         elif all(key in skipped_by_label[lb] for lb in mine):
             ineligible.add(key)
-    return {
-        "resolved": len(handed),
-        "completed": len(completed),
-        "ineligible": len(ineligible),
-        "failed": len(handed) - len(completed) - len(ineligible),
-    }
+    return _counts(
+        len(handed),
+        completed,
+        len(ineligible),
+        len(handed) - len(completed) - len(ineligible),
+        weights,
+    )
 
 
 def _handed_keys(
