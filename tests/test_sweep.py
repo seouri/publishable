@@ -4,11 +4,13 @@ from publishable.sweep import (
     NON_PRODUCT_MODES,
     PARAMETER_AXIS_MODES,
     PRODUCT_MODES,
+    SELECTOR_MODES,
     SWEEP_MODES,
     Condition,
     _axes,
     expand,
     parameter_axis_modes_present,
+    selector_paths,
 )
 
 
@@ -893,6 +895,94 @@ def test_the_mode_vocabulary_is_partitioned_and_parameter_axes_are_a_subset() ->
     assert parameter_axis_modes_present({"groups": groups}) == []
     assert not _axes({"groups": groups}, sample_seed=7)
     assert expand({"sweep": {"groups": groups}}) == []
+
+
+def test_a_group_path_is_marked_a_selector_and_a_parameter_path_is_not() -> None:
+    """§ Expansion modes: "a group level is a *set of units*", and a baseline
+    "accepts group levels as well as parameter paths, so `{arm: control}`
+    designates the control arm". So a condition's `values` can hold two kinds of
+    path, and `runner.resolve_condition_cfg`'s reading — every path names a leaf
+    under `parameters` — is true of one of them. `Condition.selectors` is which,
+    answered once by `expand` rather than re-derived by each reader.
+
+    `groups` is a **list** of `{by, levels}` entries, per § Expansion modes:
+    "`groups` is a list, always … there is no mapping shorthand". The axis name
+    is the entry's `by`, and that is the path a group cell sets.
+
+    The baseline is the route this build can reach: `groups` itself expands to
+    no cells until the slice that builds it, but a baseline fixing a group level
+    puts `arm` into a row's values today. That makes one `expand` call carry
+    both halves — the two baseline rows, which fix `arm` and must mark it, and
+    the two product rows, which are parameter cells alone and must mark
+    nothing."""
+    conditions = expand(
+        {
+            "sweep": {
+                "groups": [{"by": "arm", "levels": ["control", "treatment"]}],
+                "grid": {"analysis.method": ["pearson", "spearman"]},
+                "baseline": {"arm": "control"},
+            }
+        }
+    )
+
+    assert [dict(c.values) for c in conditions] == [
+        {"analysis.method": "pearson", "arm": "control"},
+        {"analysis.method": "spearman", "arm": "control"},
+        {"analysis.method": "pearson"},
+        {"analysis.method": "spearman"},
+    ]
+    assert [c.selectors for c in conditions] == [
+        frozenset({"arm"}),
+        frozenset({"arm"}),
+        frozenset(),
+        frozenset(),
+    ]
+    # The complement is the half `resolve_condition_cfg` may keep reading as a
+    # parameter path — stated as the subtraction the readers will perform.
+    assert [set(c.values) - c.selectors for c in conditions] == [
+        {"analysis.method"},
+        {"analysis.method"},
+        {"analysis.method"},
+        {"analysis.method"},
+    ]
+
+    # A grid-only sweep is the control for the marking itself: no `groups`
+    # declared, so nothing in the run selects units, whatever its paths are
+    # named. `arm` here is an ordinary swept parameter.
+    plain = expand({"sweep": {"grid": {"arm": ["control", "treatment"]}}})
+    assert [c.selectors for c in plain] == [frozenset(), frozenset()]
+
+    # And `selectors` is coerced rather than trusted, for the reason `values` is
+    # wrapped: a caller's mutable set must not stay a live handle on it.
+    handle = {"arm"}
+    condition = Condition(index=0, label=None, values={"arm": "control"}, selectors=handle)
+    handle.add("sex")
+    assert condition.selectors == frozenset({"arm"})
+
+
+def test_selector_paths_is_total_over_a_malformed_groups_block() -> None:
+    """`validate` expands inside a `try` because it collects findings rather than
+    raising, so a shape this crashed on would be a config that validates clean
+    and crashes `run`. The mapping form § Expansion modes refuses is the one a
+    user most plausibly writes, and it must yield no selector paths rather than
+    an `AttributeError`."""
+    assert selector_paths({"groups": [{"by": "arm", "levels": ["control"]}]}) == ["arm"]
+    assert selector_paths({}) == []
+    assert selector_paths({"groups": None}) == []
+    assert selector_paths({"groups": {"arm": ["control", "treatment"]}}) == []
+    assert selector_paths({"groups": ["arm"]}) == []
+    assert selector_paths({"groups": [{"levels": ["control"]}]}) == []
+    assert selector_paths({"groups": [{"by": 3, "levels": ["control"]}]}) == []
+    # Deduped in declared order, like `_swept_paths` and `ablated_paths`.
+    assert selector_paths(
+        {"groups": [{"by": "sex", "levels": ["f", "m"]},
+                    {"by": "arm", "levels": ["control"]},
+                    {"by": "sex", "levels": ["f"]}]}
+    ) == ["sex", "arm"]
+    # A grid path is never one: `groups` is the only mode outside
+    # `PARAMETER_AXIS_MODES`, which is what `SELECTOR_MODES` derives from.
+    assert SELECTOR_MODES == ("groups",)
+    assert selector_paths({"grid": {"analysis.method": ["pearson"]}}) == []
 
 
 def test_a_baseline_fixing_some_axes_expands_over_the_rest() -> None:

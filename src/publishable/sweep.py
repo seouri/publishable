@@ -46,6 +46,25 @@ class Condition:
     label: str | None
     values: Mapping[str, Any] = field(default_factory=dict)
     is_baseline: bool = False
+    selectors: frozenset[str] = frozenset()
+    """Which of this condition's `values` paths select *units* rather than set a parameter.
+
+    `runner.resolve_condition_cfg` reads a condition's `values` as "each dotted
+    path names a leaf under `parameters`", and for `grid`, `paired`, `sample`,
+    `ablate` and a parameter `baseline` that is exactly true. A group cell
+    breaks it: § Expansion modes says "a group level is a *set of units*", so
+    `{arm: control}` names no parameter at all — laid over `parameters` it would
+    invent an `arm` no template declares and carry it into `parameters_hash`,
+    which is the opposite of the claim § Expansion modes makes about a group
+    axis ("same code, same parameters, different units").
+
+    Carried on the condition rather than re-derived per reader, and set by
+    `expand`, which is the only place that knows which mode produced a cell:
+    every consumer of `values` needs the same answer, and seven independent
+    "is this a group path?" derivations is how six agree and one does not.
+    **The readers still ignore it in this build** — teaching them is the next
+    task's, and until then the field is a marking with no consequence.
+    """
 
     def __post_init__(self) -> None:
         # `values` is a plain dict handed in by `expand`; without wrapping it, a
@@ -55,6 +74,12 @@ class Condition:
         # with `sweep.yaml`, written from these same objects. Same fix as
         # `Unit.attributes` in `units.py`, same reason.
         object.__setattr__(self, "values", MappingProxyType(dict(self.values)))
+        # Same treatment, one line shorter because the target type is already
+        # immutable: the *annotation* says `frozenset`, the constructor accepts
+        # whatever it is handed, and a caller passing a plain `set` would keep a
+        # live handle on a condition's selector set. Coercing here is what makes
+        # the annotation true of every instance.
+        object.__setattr__(self, "selectors", frozenset(self.selectors))
 
 
 SWEPT_VALUE_PATTERN = r"^[A-Za-z0-9._+-]+$"
@@ -438,6 +463,52 @@ subset of `PRODUCT_MODES`, so the two together would double-count `grid`,
 """
 
 
+SELECTOR_MODES = tuple(mode for mode in PRODUCT_MODES if mode not in PARAMETER_AXIS_MODES)
+"""The product modes that vary *units* — the residual of the parameter-axis predicate.
+
+Derived rather than written out as `("groups",)`, for the same reason
+`SWEEP_MODES` is: `PARAMETER_AXIS_MODES` is already the repo's answer to "does
+this mode name a parameter path?", and a second hand-maintained tuple is free
+to disagree with it. A product mode added and left out of
+`PARAMETER_AXIS_MODES` becomes a selector mode here automatically, which is the
+safe direction — its paths are marked as selecting units rather than silently
+laid over `parameters`.
+
+The residual is pinned as the literal `{"groups"}` in `tests/test_sweep.py`, so
+the derivation cannot quietly become empty.
+"""
+
+
+def selector_paths(sweep: dict[str, Any]) -> list[str]:
+    """Every path a `SELECTOR_MODES` mode varies, deduped, in declared order.
+
+    The counterpart to `_swept_paths`, which collects the parameter axes'. Read
+    one mode at a time because each has its own shape — today `groups` alone,
+    whose entries § Expansion modes fixes as `{by: <axis>, levels: [...]}` in a
+    **list** ("`groups` is a list, always … there is no mapping shorthand"), so
+    the axis name is each entry's `by`. A second selector mode has to be read
+    here explicitly; membership in `SELECTOR_MODES` alone will not find its
+    paths.
+
+    Total over malformed input, deliberately, and the same premise as
+    `_swept_paths`: `validate` expands inside a `try` because it collects
+    findings rather than raising, so a shape fault this function crashed on
+    would be a config that validates clean and crashes `run`. A mapping-form
+    `groups`, an entry with no `by`, and a bare string entry each contribute no
+    selector path rather than an `AttributeError`; refusing them is
+    `validate`'s.
+    """
+    paths: list[str] = []
+    for mode in SELECTOR_MODES:
+        for entry in sweep.get(mode) or []:
+            if not isinstance(entry, dict):
+                continue
+            by = entry.get("by")
+            if isinstance(by, str) and by not in paths:
+                paths.append(by)
+    return paths
+
+
 def parameter_axis_modes_present(sweep: dict[str, Any]) -> list[str]:
     """Which of `PARAMETER_AXIS_MODES` this `sweep` declares, in that tuple's order.
 
@@ -788,9 +859,17 @@ def expand(config: dict[str, Any]) -> list[Condition]:
     # why the union is taken here rather than inside `_swept_paths`.
     swept = _swept_paths(sweep)
     swept += [path for path in ablated_paths(sweep) if path not in swept]
+    # Not unioned into `swept`: a group path is not a swept parameter path, and
+    # `_keys_for` shortening one more path would move labels task 5 owns
+    # (§ How artifacts are organized orders group axes before parameter ones).
+    selectors = selector_paths(sweep)
     return [
         Condition(index=i, label=label_for(labelled, swept, is_baseline),
-                  values=values, is_baseline=is_baseline)
+                  values=values, is_baseline=is_baseline,
+                  # Per row, not per sweep: a group path reaches a row's values
+                  # only when that row's cell or baseline actually fixed it, and
+                  # a row of parameter cells alone must mark nothing.
+                  selectors=frozenset(p for p in values if p in selectors))
         for i, (values, labelled, is_baseline) in enumerate(rows)
     ]
 
