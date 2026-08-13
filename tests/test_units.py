@@ -465,17 +465,48 @@ def test_the_clustered_stratified_split_pins_which_fold_each_cluster_lands_in():
 
 
 def test_stratified_fold_sizes_can_differ_by_more_than_one():
-    """Three strata of three units at k=2 give 6 and 3, not 5 and 4: every stratum's
-    fold list is non-increasing, so fold 0 takes each stratum's ceiling. Pinned
-    because it contradicts `test_partition_sizes_differ_by_at_most_one`, which holds
-    for an unstratified split only — evening the totals out is what would divide a
-    stratum's share unevenly, and that is the thing being declared away."""
+    """Three strata of three units at k=2 give 6 and 3, not 5 and 4: with equal-sized
+    things to deal out, each stratum's fold list is non-increasing and fold 0 takes
+    every stratum's ceiling. Pinned because it contradicts
+    `test_partition_sizes_differ_by_at_most_one`, which holds for an unstratified
+    split only — evening the totals out is what would divide a stratum's share
+    unevenly, and that is the thing being declared away.
+
+    The bound is the stratum count here and *nothing* once clusters are uneven:
+    `test_no_cluster_is_split_across_a_stratified_fold` is two strata at k=2 with
+    sizes 10 and 5, because the one-large-cluster floor applies per stratum and the
+    floors add.
+    """
     roster, strata = _by_stratum({"a": 3, "b": 3, "c": 3})
     folds = partition_units(roster, k=2, digest="sha256:0000", strata=strata)
     assert [len(f) for f in folds] == [6, 3]
     assert [dict(Counter(u.label for u in f)) for f in folds] == [
         {"a": 2, "b": 2, "c": 2},
         {"a": 1, "b": 1, "c": 1},
+    ]
+
+
+def test_a_k_past_a_single_stratum_leaves_a_fold_holding_none_of_it():
+    """`validate` bounds `k` by `fold_basis` over the **whole roster**, which
+    stratification turns into a per-stratum question nothing checks: 6 clusters here,
+    so k=3 validates cleanly, but stratum `B` has only 2 clusters and reaches only 2
+    folds — the third holds no `B` at all, while § Repeat kinds still calls the fold
+    stratified.
+
+    Pinned as behaviour, not fixed: the partitioner stays total and visibly short of a
+    stratum rather than dividing a cluster to fill the fold, which is the same stance
+    `test_more_folds_than_clusters_leaves_folds_empty_rather_than_raising` takes. The
+    missing per-stratum bound is a `validate` gap, recorded rather than closed here.
+    """
+    roster, clusters, strata = _clustered_by_stratum({"A": [2, 2, 2, 2], "B": [2, 2]})
+    assert fold_basis(roster, "site") == 6, "so k=3 is well inside what validate allows"
+    folds = partition_units(
+        roster, k=3, digest="sha256:0000", clusters=clusters, strata=strata
+    )
+    assert [dict(Counter(u.label for u in f)) for f in folds] == [
+        {"A": 4, "B": 2},
+        {"A": 2, "B": 2},
+        {"A": 2},
     ]
 
 

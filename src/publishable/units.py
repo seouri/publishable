@@ -905,13 +905,26 @@ def partition_units(
     `reference.md` § Validation's *Fold strata survive clustering* row is the check;
     if it goes, this does.
 
-    **With `strata`, fold sizes can differ by more than one** — by up to the number
-    of strata. Every per-stratum fold list is non-increasing in size, so fold 0
-    collects each stratum's ceiling: three strata of three units at `k = 2` give 6
-    and 3, not 5 and 4. Balancing the count *across* strata is what would divide a
-    stratum's share unevenly, which is the thing being declared away, so this is the
-    prescribed rule's consequence rather than a defect — stated here because it
-    contradicts the at-most-one above, which holds for an unstratified split only.
+    **With `strata`, fold sizes can differ by more than one.** When the things being
+    dealt out inside a stratum are all the same size — every unclustered roster, each
+    unit its own cluster of one — each stratum's fold list comes out non-increasing
+    and fold 0 collects every stratum's ceiling: three strata of three units at
+    `k = 2` give 6 and 3, not 5 and 4, so the spread is bounded by the number of
+    strata. With clusters of unequal size no such bound holds, because the
+    at-most-one-cluster floor above applies **per stratum** and the floors add: two
+    strata of clusters 7+3 and 3+1+1 at `k = 2` give 10 and 5. Balancing the count
+    *across* strata is what would divide a stratum's share unevenly, which is the
+    thing being declared away, so this is the prescribed rule's consequence rather
+    than a defect — stated here because it contradicts the at-most-one above, which
+    holds for an unstratified split only.
+
+    **`k` is checked against the whole roster's basis, not against each stratum's.**
+    A `k` past some stratum's cluster count leaves that stratum contributing to fewer
+    than `k` folds, so a fold can hold none of it while `validate` saw a `k` well
+    inside `fold_basis` — a fold whose stratum mix is nothing like the roster's. The
+    partition stays total and says so rather than dividing a cluster or dropping the
+    stratification; `reference.md` § Validation bounds `k` by the roster's basis
+    today, and a per-stratum bound is a check that does not exist yet.
 
     The mapping must be **total over the roster**, like `clusters`: a unit missing
     from it raises `KeyError` as a core defect rather than being given a stratum of
