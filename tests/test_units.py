@@ -895,6 +895,16 @@ def test_both_declarations_over_one_column_each_check_their_own(input_dir: Path)
     with pytest.raises(ContractError) as e:
         resolve_units(decl, input_dir)
     assert e.value.code == "E-DATA-CLUSTER-VARIES"
+    # The other half of the same wiring: the cluster column agrees and the weight
+    # column is the one that varies, so this fires the weight raise through
+    # `resolve_units` rather than through a hand-built `constant`.
+    _write_reads(
+        input_dir,
+        "patient_id,read_id,site,w\np1,r1,S1,1\np1,r2,S1,99\np2,r3,S3,3\n",
+    )
+    with pytest.raises(ContractError) as e:
+        resolve_units(decl, input_dir)
+    assert e.value.code == "E-DATA-WEIGHT-VARIES"
     # The control: the same declarations over rows that agree resolve cleanly.
     _write_reads(
         input_dir,
@@ -921,3 +931,23 @@ def test_a_non_string_declaration_is_left_to_the_envelope(input_dir: Path):
     }
     roster, _, _ = resolve_units(decl, input_dir)
     assert roster[0].site == "S1"
+
+
+def test_a_column_no_row_carries_is_not_a_disagreement_either(input_dir: Path):
+    """The fourth totality case: `cluster_by` naming a column absent from *every*
+    row, which happens whenever it names something `data.units.attributes` does not
+    declare. Resolution must complete — the finding is `E-DATA-CLUSTER-UNKNOWN`,
+    made where membership is read — so the empty-group case may not raise, and may
+    not be an `IndexError` either."""
+    _write_reads(input_dir, "patient_id,read_id,depth\np1,r1,10\np1,r2,20\n")
+    decl = {
+        "from": "reads.csv",
+        "key": "patient_id",
+        "attributes": ["depth", "read_id"],
+        "cluster_by": "site",
+        "measurements": {"by": "read_id", "collapse": "first"},
+    }
+    roster, _, _ = resolve_units(decl, input_dir)
+    with pytest.raises(ContractError) as e:
+        clusters_of(roster, "site")
+    assert e.value.code == "E-DATA-CLUSTER-UNKNOWN"
