@@ -1,6 +1,7 @@
 # tests/test_artifacts.py
 import json
 from pathlib import Path
+from typing import Any
 
 import numpy as np
 import pytest
@@ -347,6 +348,394 @@ def test_recording_a_column_matching_a_declared_attribute_is_a_key_collision(
     assert "site" in str(e.value)
     io.record("p0", {"pred": 1})
     assert io.rows() == [{"unit": "p0", "pred": 1}]
+
+
+def test_two_measurements_of_one_unit_are_both_kept(tmp_path: Path):
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    io = StepIO(
+        step_dir=sd,
+        input_dir=tmp_path / "in",
+        run_dir=tmp_path / "run",
+        measurements={"by": "read_id", "collapse": "mean"},
+    )
+    io.record("p1", {"score": 10}, measurement="r1")
+    io.record("p1", {"score": 20}, measurement="r2")
+    assert io.measurement_rows() == [
+        {"unit": "p1", "measurement": "r1", "score": 10},
+        {"unit": "p1", "measurement": "r2", "score": 20},
+    ]
+
+
+def test_two_records_without_a_measurement_are_first_write_wins(tmp_path: Path):
+    """The retry path, unchanged. This is the behaviour `measurement=` exists
+    to be distinguishable from."""
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    io = StepIO(
+        step_dir=sd,
+        input_dir=tmp_path / "in",
+        run_dir=tmp_path / "run",
+        measurements={"by": "read_id", "collapse": "mean"},
+    )
+    io.record("p1", {"score": 10})
+    io.record("p1", {"score": 20})
+    assert io.rows() == [{"unit": "p1", "score": 10}]
+    assert io.measurement_rows() == []
+
+
+def test_a_measurement_without_the_declaration_raises(tmp_path: Path):
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    io = StepIO(step_dir=sd, input_dir=tmp_path / "in", run_dir=tmp_path / "run")
+    with pytest.raises(ContractError) as e:
+        io.record("p1", {"score": 10}, measurement="r1")
+    assert e.value.code == "E-STEP-MEASUREMENT-UNDECLARED"
+
+
+def test_a_record_without_a_measurement_is_untouched_by_the_undeclared_check(
+    tmp_path: Path,
+):
+    """Control for the previous test: an undeclared `data.units.measurements`
+    must not block the ordinary, non-`measurement=` path — only the raise
+    itself is new behaviour."""
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    io = StepIO(step_dir=sd, input_dir=tmp_path / "in", run_dir=tmp_path / "run")
+    io.record("p1", {"score": 10})
+    assert io.rows() == [{"unit": "p1", "score": 10}]
+
+
+def test_a_resumed_measurement_is_idempotent_first_write_wins(tmp_path: Path):
+    """The declaration's other half: a resumed *measurement* deduplicates by
+    `(unit, measurement)` exactly as a resumed plain record deduplicates by
+    unit — same rule, different key."""
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    io = StepIO(
+        step_dir=sd,
+        input_dir=tmp_path / "in",
+        run_dir=tmp_path / "run",
+        measurements={"by": "read_id", "collapse": "mean"},
+    )
+    io.record("p1", {"score": 10}, measurement="r1")
+    io.record("p1", {"score": 99}, measurement="r1")
+    assert io.measurement_rows() == [{"unit": "p1", "measurement": "r1", "score": 10}]
+
+
+def test_a_measurement_row_may_not_name_a_column_unit_or_measurement(tmp_path: Path):
+    """`unit` and `measurement` are the measurement row's own structural columns —
+    reserved for the same reason `record`'s plain path already reserves `unit`."""
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    io = StepIO(
+        step_dir=sd,
+        input_dir=tmp_path / "in",
+        run_dir=tmp_path / "run",
+        measurements={"by": "read_id", "collapse": "mean"},
+    )
+    with pytest.raises(ContractError) as e:
+        io.record("p1", {"unit": "IMPOSTER"}, measurement="r1")
+    assert e.value.code == "E-STEP-KEY-COLLISION"
+    with pytest.raises(ContractError) as e:
+        io.record("p1", {"measurement": "IMPOSTER"}, measurement="r1")
+    assert e.value.code == "E-STEP-KEY-COLLISION"
+
+
+def test_measuring_a_key_not_in_the_roster_is_refused(tmp_path: Path):
+    """Control: the plain path already refuses this (`E-STEP-UNIT-UNKNOWN`); the
+    measurement path must not bypass the roster just because it skips the rest
+    of `_settle`."""
+    from publishable.units import Unit, UnitList
+
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    io = StepIO(
+        step_dir=sd,
+        input_dir=tmp_path / "in",
+        run_dir=tmp_path / "run",
+        units=UnitList([Unit(key="p0")]),
+        measurements={"by": "read_id", "collapse": "mean"},
+    )
+    with pytest.raises(ContractError) as e:
+        io.record("ghost", {"score": 1}, measurement="r1")
+    assert e.value.code == "E-STEP-UNIT-UNKNOWN"
+
+
+def test_measuring_a_skipped_unit_is_settled(tmp_path: Path):
+    """A `skip`ped unit is ineligible by design; a later measurement re-entering
+    it as a completed result is exactly the accounting failure `ineligible`
+    exists to prevent, so this must raise even though a second measurement of
+    an *unskipped* unit (the next test) must not."""
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    io = StepIO(
+        step_dir=sd,
+        input_dir=tmp_path / "in",
+        run_dir=tmp_path / "run",
+        measurements={"by": "read_id", "collapse": "mean"},
+    )
+    io.skip("p1", "no baseline visit")
+    with pytest.raises(ContractError) as e:
+        io.record("p1", {"score": 10}, measurement="r1")
+    assert e.value.code == "E-STEP-UNIT-SETTLED"
+    assert io.measurement_rows() == []
+
+
+def test_a_second_measurement_of_an_unskipped_unit_is_not_settled(tmp_path: Path):
+    """Control for the previous test: a unit that was neither skipped nor
+    plain-recorded must still accept a second, *different* measurement — the
+    whole point of `measurement=`."""
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    io = StepIO(
+        step_dir=sd,
+        input_dir=tmp_path / "in",
+        run_dir=tmp_path / "run",
+        measurements={"by": "read_id", "collapse": "mean"},
+    )
+    io.record("p1", {"score": 10}, measurement="r1")
+    io.record("p1", {"score": 20}, measurement="r2")
+    assert len(io.measurement_rows()) == 2
+
+
+def test_skipping_a_measured_unit_is_settled(tmp_path: Path):
+    """The mirror of `test_measuring_a_skipped_unit_is_settled`: a unit already
+    carrying a measurement row must not then be skipped, or it would be counted
+    `ineligible` and produce a result once task 5 collapses it — the same rule,
+    the other call order."""
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    io = StepIO(
+        step_dir=sd,
+        input_dir=tmp_path / "in",
+        run_dir=tmp_path / "run",
+        measurements={"by": "read_id", "collapse": "mean"},
+    )
+    io.record("p1", {"score": 1}, measurement="r1")
+    with pytest.raises(ContractError) as e:
+        io.skip("p1", "reason")
+    assert e.value.code == "E-STEP-UNIT-SETTLED"
+    assert io.skipped == {}
+
+
+def test_skipping_an_unmeasured_unit_still_succeeds(tmp_path: Path):
+    """Control for the previous test: a unit that was never measured must still
+    be skippable — the new check must not block the ordinary case."""
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    io = StepIO(
+        step_dir=sd,
+        input_dir=tmp_path / "in",
+        run_dir=tmp_path / "run",
+        measurements={"by": "read_id", "collapse": "mean"},
+    )
+    io.skip("p1", "reason")
+    assert io.skipped == {"p1": "reason"}
+
+
+def test_a_measurement_column_matching_a_declared_attribute_is_a_key_collision(
+    tmp_path: Path,
+):
+    """Control: the plain path already refuses this for `site`; the measurement
+    path must refuse it identically rather than folding a shadowed attribute
+    into a row task 5 will later merge against the same unit's `site`."""
+    from publishable.units import Unit, UnitList
+
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True)
+    (tmp_path / "in").mkdir()
+    roster = UnitList([Unit(key="p0", attributes={"site": "A"})])
+    io = StepIO(
+        step_dir=sd,
+        input_dir=tmp_path / "in",
+        run_dir=tmp_path / "run",
+        units=roster,
+        measurements={"by": "read_id", "collapse": "mean"},
+    )
+    with pytest.raises(ContractError) as e:
+        io.record("p0", {"site": "x"}, measurement="r1")
+    assert e.value.code == "E-STEP-KEY-COLLISION"
+    assert "site" in str(e.value)
+    io.record("p0", {"score": 1}, measurement="r1")
+    assert io.measurement_rows() == [{"unit": "p0", "measurement": "r1", "score": 1}]
+
+
+def _measuring_io(tmp_path: Path, collapse: Any = "mean", **kwargs: Any) -> StepIO:
+    """A `StepIO` whose `data.units.measurements` is declared, for the collapse tests."""
+    sd = tmp_path / "run" / "s"
+    sd.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "in").mkdir(exist_ok=True)
+    return StepIO(
+        step_dir=sd,
+        input_dir=tmp_path / "in",
+        run_dir=tmp_path / "run",
+        measurements={"by": "read_id", "collapse": collapse},
+        **kwargs,
+    )
+
+
+def _read_parquet(path: Path) -> Any:
+    from publishable.artifacts import _decode_parquet
+
+    return _decode_parquet(path.read_bytes())
+
+
+def test_measurement_rows_collapse_into_one_unit_row(tmp_path: Path):
+    """Three asymmetric values, so `mean` and `median` cannot agree by accident —
+    a two-row 10/20 case collapses to 15.0 under either rule and would report a
+    pass for a collapse that ignored the declared rule entirely."""
+    io = _measuring_io(tmp_path)
+    io.record("p1", {"score": 10}, measurement="r1")
+    io.record("p1", {"score": 20}, measurement="r2")
+    io.record("p1", {"score": 60}, measurement="r3")
+    io.finalize()
+    assert _read_parquet(io.step_dir / "units.parquet") == [{"unit": "p1", "score": 30.0}]
+
+
+def test_a_measured_only_unit_is_completed_not_failed(tmp_path: Path):
+    """The central obligation: `completed` is "how many distinct unit keys reached
+    `io.record`" (`reference.md` § The unit table is the inference base), and the
+    runner derives `failed` by subtraction — so a measured unit missing from
+    `recorded_keys` is silently counted as a failure."""
+    io = _measuring_io(tmp_path)
+    io.record("p1", {"score": 10}, measurement="r1")
+    io.record("p1", {"score": 20}, measurement="r2")
+    io.record("p2", {"score": 5})  # the control: the plain path, already counted
+    io.finalize()
+    assert io.recorded_keys == {"p1", "p2"}
+
+
+def test_measurements_parquet_holds_the_uncollapsed_rows(tmp_path: Path):
+    io = _measuring_io(tmp_path)
+    io.record("p1", {"score": 10}, measurement="r1")
+    io.record("p1", {"score": 20}, measurement="r2")
+    io.finalize()
+    assert _read_parquet(io.step_dir / "measurements.parquet") == [
+        {"unit": "p1", "measurement": "r1", "score": 10},
+        {"unit": "p1", "measurement": "r2", "score": 20},
+    ]
+
+
+def test_no_measurements_parquet_when_no_step_measured(tmp_path: Path):
+    """Decision 5: the file holds what the run measured, not what the input carried.
+    The declaration is present here — an input-path run carries it in every
+    execution — so guarding the write on the declaration rather than on the rows
+    would produce the file for every such run."""
+    io = _measuring_io(tmp_path)
+    io.record("p1", {"score": 10})
+    io.finalize()
+    assert not (io.step_dir / "measurements.parquet").exists()
+    assert _read_parquet(io.step_dir / "units.parquet") == [{"unit": "p1", "score": 10}]
+
+
+def test_a_numeric_rule_coerces_a_recorded_string_before_applying(tmp_path: Path):
+    """`coerce_scalars` guarantees a scalar, not a number: a step recording `"10"`
+    reaches the collapse as a `str`, where `mean` would return the string `"10"`
+    through `apply_rule`'s constant-column shortcut. `coerce_for_rule` is what closes
+    it, the same call the input path makes."""
+    io = _measuring_io(tmp_path)
+    io.record("p1", {"score": "10"}, measurement="r1")
+    io.record("p1", {"score": "20"}, measurement="r2")
+    io.finalize()
+    assert _read_parquet(io.step_dir / "units.parquet") == [{"unit": "p1", "score": 15.0}]
+
+
+def test_measurement_rows_need_not_agree_on_columns(tmp_path: Path):
+    """`reference.md` § The per-unit tables: a column absent from a row reads as
+    null. A per-column rule is used so the two columns cannot pass by sharing one."""
+    io = _measuring_io(tmp_path, collapse={"score": "mean", "note": "first"})
+    io.record("p1", {"score": 10}, measurement="r1")
+    io.record("p1", {"score": 20, "note": "late"}, measurement="r2")
+    io.finalize()
+    assert _read_parquet(io.step_dir / "units.parquet") == [
+        {"unit": "p1", "score": 15.0, "note": "late"}
+    ]
+    assert _read_parquet(io.step_dir / "measurements.parquet") == [
+        {"unit": "p1", "measurement": "r1", "score": 10, "note": None},
+        {"unit": "p1", "measurement": "r2", "score": 20, "note": "late"},
+    ]
+
+
+def test_an_unnamed_column_falls_back_to_first(tmp_path: Path):
+    """`rule_for`'s documented fallback, reached through the step path: a column
+    the map does not name carries its first value rather than a guessed statistic."""
+    io = _measuring_io(tmp_path, collapse={"score": "mean"})
+    io.record("p1", {"score": 10, "site": "A"}, measurement="r1")
+    io.record("p1", {"score": 20, "site": "B"}, measurement="r2")
+    io.finalize()
+    assert _read_parquet(io.step_dir / "units.parquet") == [
+        {"unit": "p1", "score": 15.0, "site": "A"}
+    ]
+
+
+def test_a_collapsed_unit_row_carries_its_declared_attributes(tmp_path: Path):
+    """Collapsing into `_rows` rather than into a parallel table is what gets the
+    declared-attribute merge `units.parquet` already does — for free and by the
+    same code, so the two kinds of unit row cannot come to differ in shape."""
+    roster = UnitList([Unit(key="p1", attributes={"site": "A"})])
+    io = _measuring_io(tmp_path, units=roster)
+    io.record("p1", {"score": 10}, measurement="r1")
+    io.record("p1", {"score": 20}, measurement="r2")
+    io.finalize()
+    assert _read_parquet(io.step_dir / "units.parquet") == [
+        {"unit": "p1", "site": "A", "score": 15.0}
+    ]
+
+
+def test_measuring_a_plain_recorded_unit_is_settled(tmp_path: Path):
+    """A unit may arrive by one path or the other, never both. Defining a winner
+    instead would make the declared `collapse` rule apply or not depending on the
+    order two calls happened to be made in, inside one step."""
+    io = _measuring_io(tmp_path)
+    io.record("p1", {"score": 1})
+    with pytest.raises(ContractError) as e:
+        io.record("p1", {"score": 2}, measurement="r1")
+    assert e.value.code == "E-STEP-UNIT-SETTLED"
+    assert io.measurement_rows() == []
+
+
+def test_plain_recording_a_measured_unit_is_settled(tmp_path: Path):
+    """The same rule, the other call order — and the one that cannot be reached
+    through `_rows` first-write-wins, since a measured unit is not in `_rows` yet."""
+    io = _measuring_io(tmp_path)
+    io.record("p1", {"score": 1}, measurement="r1")
+    with pytest.raises(ContractError) as e:
+        io.record("p1", {"score": 2})
+    assert e.value.code == "E-STEP-UNIT-SETTLED"
+    assert io.rows() == []
+
+
+def test_a_different_unit_may_be_plain_recorded_alongside_a_measured_one(
+    tmp_path: Path,
+):
+    """Control for the two above: the refusal is per unit, not a ban on a step
+    that both measures and records.
+
+    A collapsed unit lands after every plain one whatever order the step recorded
+    them in, because the collapse runs at `finalize`. No document pins
+    `units.parquet`'s row order, and every reader keys by unit — but it is
+    behaviour, so it is asserted rather than left to be discovered.
+    """
+    io = _measuring_io(tmp_path)
+    io.record("p1", {"score": 1}, measurement="r1")
+    io.record("p2", {"score": 2})
+    io.finalize()
+    assert _read_parquet(io.step_dir / "units.parquet") == [
+        {"unit": "p2", "score": 2.0},
+        {"unit": "p1", "score": 1.0},
+    ]
 
 
 def test_recorded_keys_skipped_and_rows_are_not_live_handles(tmp_path: Path):

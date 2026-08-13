@@ -7,7 +7,13 @@ from tests.conftest import write_experiment_module
 
 from publishable.diagnostics import Collector
 from publishable.sweep import expand
-from publishable.validate import _check_contrasts, validate_config
+from publishable.units import Unit, UnitList
+from publishable.validate import (
+    _check_contrasts,
+    _check_measurements,
+    _check_weight_by,
+    validate_config,
+)
 
 
 def base_config(tmp_path: Path) -> dict:
@@ -1807,8 +1813,9 @@ def test_a_plain_units_block_is_now_accepted(write_config):
         ("allocation", "between", "E-DATA-ALLOCATION-UNSUPPORTED"),
         ("assign", {"arm": {"method": "random"}}, "E-DATA-ASSIGN-UNSUPPORTED"),
         ("cluster_by", "site", "E-DATA-CLUSTER-UNSUPPORTED"),
-        ("weight_by", "sampling_weight", "E-DATA-WEIGHT-UNSUPPORTED"),
-        ("measurements", {"by": "read_id"}, "E-DATA-MEASUREMENTS-UNSUPPORTED"),
+        # `weight_by` was a row here until it became a declaration core honors;
+        # what it may not yet be combined with is checked by
+        # `test_a_weighted_generated_comparison_is_refused` below.
         ("holdout", {"method": "random", "frac": 0.2}, "E-DATA-HOLDOUT-UNSUPPORTED"),
     ],
 )
@@ -1834,8 +1841,6 @@ def test_a_resolver_source_is_refused_until_plugins_exist(write_config):
         {"from": "index.csv", "key": "patient_id", "allocation": "between"},
         {"from": "index.csv", "key": "patient_id", "assign": {"arm": {"method": "random"}}},
         {"from": "index.csv", "key": "patient_id", "cluster_by": "site"},
-        {"from": "index.csv", "key": "patient_id", "weight_by": "sampling_weight"},
-        {"from": "index.csv", "key": "patient_id", "measurements": {"by": "read_id"}},
         {"from": "index.csv", "key": "patient_id", "holdout": {"method": "random", "frac": 0.2}},
     ],
 )
@@ -1862,6 +1867,537 @@ def test_a_null_subfield_is_not_a_declaration(write_config):
     }
     found = codes(write_config({"data.units": units}))
     assert not [c for c in found if c.endswith("-UNSUPPORTED")]
+
+
+def test_a_mean_collapse_over_a_string_column_is_refused(write_config, tmp_path):
+    """§ Validation, "Collapse rule fits the column". `mean` over `site` has no
+    meaning; the row names the remedies."""
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id,site,read_id\np1,north,r1\np2,south,r2\n"
+    )
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["site", "read_id"],
+                "measurements": {"by": "read_id", "collapse": "mean"},
+            }
+        }
+    )
+    assert "E-DATA-MEASUREMENTS-COLLAPSE-TYPE" in codes(path)
+
+
+def test_a_per_column_map_sparing_the_string_column_is_accepted(write_config, tmp_path):
+    """The remedy the row names must actually work, or the check is a trap."""
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id,site,depth,read_id\np1,north,10,r1\np2,south,20,r2\n"
+    )
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["site", "depth", "read_id"],
+                "measurements": {"by": "read_id", "collapse": {"depth": "mean", "site": "first"}},
+            }
+        }
+    )
+    assert "E-DATA-MEASUREMENTS-COLLAPSE-TYPE" not in codes(path)
+
+
+def test_measurements_missing_by_is_refused(write_config):
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "measurements": {"collapse": "mean"},
+            }
+        }
+    )
+    assert "E-DATA-MEASUREMENTS-INVALID" in codes(path)
+
+
+def test_an_empty_measurements_block_is_a_finding_not_a_default(write_config):
+    """Decision 3. The truthiness gate that lets `{}` through today is a hole:
+    un-refusing a declaration must not turn its empty form into a working default.
+    Exactly one finding, at the block's own path — not the `by`-shaped one a
+    dict-but-empty `{}` would also earn by falling through to the next check —
+    which is what makes this a distinct branch from
+    `test_measurements_missing_by_is_refused` rather than the same one reached
+    twice."""
+    path = write_config(
+        {"data.units": {"from": "index.csv", "key": "patient_id", "measurements": {}}}
+    )
+    c = Collector()
+    validate_config(path, c)
+    relevant = [
+        f
+        for f in c.findings
+        if f.code.startswith("E-DATA-MEASUREMENTS") or f.code == "E-UNITS-COLLAPSE-RULE"
+    ]
+    assert {f.code for f in relevant} == {"E-DATA-MEASUREMENTS-INVALID"}
+    assert relevant[0].path == "data.units.measurements"
+
+
+def test_a_constant_string_column_is_refused_despite_surviving_at_run_time(write_config, tmp_path):
+    """`units.apply_rule`'s constant-column shortcut would let `mean` over a *constant*
+    `site` string survive at run time without ever dispatching to a numeric
+    operation. `validate` refuses it anyway: a check whose verdict depends on
+    whether the data happened to be constant is one nobody could act on, and the
+    document draws no such exception for row 243."""
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id,site,read_id\np1,north,r1\np2,north,r2\n"
+    )
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["site", "read_id"],
+                "measurements": {"by": "read_id", "collapse": "mean"},
+            }
+        }
+    )
+    assert "E-DATA-MEASUREMENTS-COLLAPSE-TYPE" in codes(path)
+
+
+def test_sum_over_a_real_boolean_column_is_refused(write_config):
+    """A CSV cannot carry a genuine `bool` attribute — `csv.DictReader` yields
+    strings — so this exercises the check directly with a hand-built roster, the
+    same gate `units.apply_rule` uses (`bool` is excluded from "numeric" even though
+    `isinstance(True, int)` is `True`)."""
+    roster = UnitList(
+        [
+            Unit(key="p1", attributes={"flag": True, "read_id": "r1"}),
+            Unit(key="p2", attributes={"flag": True, "read_id": "r2"}),
+        ]
+    )
+    c = Collector()
+    _check_measurements(
+        {"measurements": {"by": "read_id", "collapse": {"flag": "sum"}}},
+        roster,
+        None,
+        frozenset({"flag", "read_id"}),
+        c,
+    )
+    assert "E-DATA-MEASUREMENTS-COLLAPSE-TYPE" in {f.code for f in c.findings}
+
+
+def test_sum_over_a_csv_sourced_boolean_looking_column_is_refused(write_config, tmp_path):
+    """The reachable-from-CSV half of the same fault: `"True"`/`"False"` do not
+    parse as `float`, so they are refused under a numeric rule the same as any
+    other non-numeric string — `bool`-vs-`str` is not a distinction this check
+    needs to draw, only numeric-vs-not."""
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id,active,read_id\np1,True,r1\np2,False,r2\n"
+    )
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["active", "read_id"],
+                "measurements": {"by": "read_id", "collapse": {"active": "sum"}},
+            }
+        }
+    )
+    assert "E-DATA-MEASUREMENTS-COLLAPSE-TYPE" in codes(path)
+
+
+def test_a_numeric_looking_csv_string_column_is_accepted_under_mean(write_config, tmp_path):
+    """Decision: a table-sourced column arrives as `str` (`csv.DictReader` does no
+    coercion, and neither does `resolve_units` yet — that typing is task 3's).
+    Treating every table column as non-numeric would refuse `collapse: mean` over
+    the ordinary numeric case everywhere it appears. `"10"`/`"20"` parse as
+    `float`, so they are accepted; only a value that does NOT parse (`"north"`) is
+    refused. **Consequence, not yet closed**: `units.apply_rule`'s `sum`/`median` on
+    these same strings raises a bare `TypeError` at run time until task 3 adds the
+    coercion this check does not perform — a cross-task gap, not a bug here."""
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id,depth,read_id\np1,10,r1\np2,20,r2\n"
+    )
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["depth", "read_id"],
+                "measurements": {"by": "read_id", "collapse": {"depth": "mean"}},
+            }
+        }
+    )
+    assert "E-DATA-MEASUREMENTS-COLLAPSE-TYPE" not in codes(path)
+
+
+def test_an_unknown_collapse_rule_name_draws_the_shared_collapse_rule_code(write_config):
+    """`reference.md` § Errors `validate` reports already dual-lists
+    `E-UNITS-COLLAPSE-RULE` for exactly this fault — the same code
+    `units.apply_rule` raises once task 3 wires collapse into `resolve_units` — so
+    this check reuses it rather than minting a second code (`-INVALID`) for the
+    fault `apply_rule` will also raise on, the "one problem, two codes" split
+    `_check_units`'s own docstring names as the failure to avoid absent a
+    surface-split reason."""
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "measurements": {"by": "read_id", "collapse": "bogus"},
+            }
+        }
+    )
+    found = codes(path)
+    assert "E-UNITS-COLLAPSE-RULE" in found
+    assert "E-DATA-MEASUREMENTS-INVALID" not in found
+
+
+def test_an_omitted_collapse_draws_invalid_not_the_named_rule_code(write_config):
+    """`E-UNITS-COLLAPSE-RULE`'s own row says it fires for a rule that *names*
+    something outside `mean`/`median`/`sum`/`first`/`mode` — an omission names
+    nothing, so it belongs to the shape family instead. Routing it there also
+    keeps `E-UNITS-COLLAPSE-RULE` meaning exactly what both its registry rows
+    say, which matters more than usual since it is dual-listed with the code
+    `units.apply_rule` itself raises."""
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "measurements": {"by": "read_id"},
+            }
+        }
+    )
+    found = codes(path)
+    assert "E-DATA-MEASUREMENTS-INVALID" in found
+    assert "E-UNITS-COLLAPSE-RULE" not in found
+
+
+def test_an_empty_collapse_map_defaults_every_column_to_first_and_is_accepted(
+    write_config, tmp_path
+):
+    """A per-column map's un-named column falls back to `first`
+    (`units.rule_for`'s own fallback), so an empty map names no column and
+    every column takes that fallback — the same declaration as `collapse:
+    first` written out for nothing. Pinned as accepted rather than as a second
+    empty-mapping refusal: `measurements.collapse: {}` is a coherent (if
+    vacuous) per-column map, unlike `measurements: {}` itself, which names
+    neither `by` nor `collapse` at all."""
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id,site,read_id\np1,north,r1\np2,south,r2\n"
+    )
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["site", "read_id"],
+                "measurements": {"by": "read_id", "collapse": {}},
+            }
+        }
+    )
+    found = codes(path)
+    assert "E-DATA-MEASUREMENTS-COLLAPSE-TYPE" not in found
+    assert "E-UNITS-COLLAPSE-RULE" not in found
+    assert "E-DATA-MEASUREMENTS-INVALID" not in found
+
+
+def test_a_non_string_by_is_reported_rather_than_crashing(write_config):
+    """`by` feeds a set difference (`{... for u in roster ...} - {by}`) further
+    down the check — a list or dict `by` is unhashable there, so the check must
+    normalize a wrongly-typed `by` to something hashable before that point, not
+    merely flag it and carry the raw value forward."""
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "measurements": {"by": ["a"], "collapse": "first"},
+            }
+        }
+    )
+    found = codes(path)  # must not raise
+    assert "E-DATA-MEASUREMENTS-INVALID" in found
+
+
+def test_the_roster_skip_does_not_swallow_the_shape_check(write_config, tmp_path):
+    """When the roster cannot resolve, the type half of the check is skipped — but
+    the shape half must still run, or an unreadable `input_dir` becomes a second
+    way for a malformed `measurements` block to validate clean."""
+    empty_dir = tmp_path / "empty_input"
+    empty_dir.mkdir()
+    path = write_config(
+        {
+            "data.input_dir": str(empty_dir),
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "measurements": {"collapse": "mean"},
+            },
+        }
+    )
+    found = codes(path)
+    assert "E-DATA-UNREADABLE" in found
+    assert "E-DATA-MEASUREMENTS-INVALID" in found
+    assert "E-DATA-MEASUREMENTS-COLLAPSE-TYPE" not in found
+
+
+def test_a_repeated_key_is_not_a_duplicate_once_measurements_is_declared(write_config, tmp_path):
+    """Resolution collapses before it checks uniqueness, and `validate` resolves
+    the same roster `run` will — so the repeated key that is the *point* of a
+    `measurements` declaration must not also be reported as a defect."""
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id,depth,read_id\np1,10,r1\np1,20,r2\np2,30,r3\n"
+    )
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["depth", "read_id"],
+                "measurements": {"by": "read_id", "collapse": {"depth": "mean"}},
+            }
+        }
+    )
+    found = codes(path)
+    assert "E-UNITS-KEY-DUPLICATE" not in found
+    assert "E-DATA-MEASUREMENTS-COLLAPSE-TYPE" not in found
+
+
+def test_a_mixed_column_under_mean_is_a_finding_rather_than_an_escaping_type_error(
+    write_config, tmp_path
+):
+    """The invariant this task is most able to break: `validate` collects findings
+    and never raises. `_check_units` wraps resolution in `except ContractError`
+    only, so the arithmetic the collapse now performs has to refuse with a code —
+    a bare `TypeError` out of `sum` would come straight out of `validate_config`.
+    `codes(path)` calls it, so this test fails by erroring if that ever regresses."""
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id,depth,read_id\np1,10,r1\np1,north,r2\n"
+    )
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["depth", "read_id"],
+                "measurements": {"by": "read_id", "collapse": {"depth": "mean"}},
+            }
+        }
+    )
+    assert "E-DATA-MEASUREMENTS-COLLAPSE-TYPE" in codes(path)
+
+
+_MEASURED_CSV = (
+    # Asymmetric on purpose: mean 30, median 20, sum 90, first 10 all differ, so a
+    # rule swapped for another one cannot pass by coincidence.
+    "patient_id,depth,read_id\n"
+    "p1,10,r1\np1,20,r2\np1,60,r3\n"
+    "p2,30,r1\np2,40,r2\np2,80,r3\n"
+)
+
+
+def test_a_measurements_by_naming_no_column_is_refused_when_rows_were_collapsed(
+    write_config, tmp_path
+):
+    """The wrong-answer path retiring `E-DATA-MEASUREMENTS-UNSUPPORTED` would open.
+
+    `units.collapse_measurements` groups on the unit key alone, so a `by` naming
+    nothing collapses exactly as a correct one would — and reports a `technical_n`
+    claiming the merge was intentional. Rows nothing declared to be measurements of
+    one unit, averaged."""
+    (tmp_path / "input" / "index.csv").write_text(_MEASURED_CSV)
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["depth", "read_id"],
+                "measurements": {"by": "nonexistent", "collapse": {"depth": "mean"}},
+            }
+        }
+    )
+    c = Collector()
+    validate_config(path, c)
+    offending = [f for f in c.findings if f.code == "E-UNITS-ATTR-MISSING"]
+    assert offending, {f.code for f in c.findings}
+    assert offending[0].path == "data.units.measurements.by"
+
+
+def test_the_documents_own_fence_shape_is_accepted(write_config, tmp_path):
+    """`reference.md` § What isn't a repeat and `experimental-designs.md`
+    § Technical and biological replication both print `from`/`key`/`measurements`
+    with **no `attributes` key at all**, and `design-principles.md` — the
+    tiebreaker — lists `measurements.by` beside `attributes` as a parallel namer of
+    an input field rather than a member of it. So `by` naming a real column of the
+    source table is the documented shape, and checking it against the declared
+    attributes would refuse the document's own example."""
+    (tmp_path / "input" / "index.csv").write_text(_MEASURED_CSV)
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "measurements": {"by": "read_id", "collapse": "mean"},
+            }
+        }
+    )
+    found = codes(path)
+    assert "E-UNITS-ATTR-MISSING" not in found
+    assert not [c for c in found if c.startswith("E-")], found
+
+
+def test_a_by_no_column_carries_is_refused_even_with_no_attributes_declared(
+    write_config, tmp_path
+):
+    """The control for the fence test above, and the wrong-answer path itself in
+    the shape the documents print: the same config with a typo'd `by`, which names
+    no column of `index.csv`, must still be refused."""
+    (tmp_path / "input" / "index.csv").write_text(_MEASURED_CSV)
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "measurements": {"by": "raed_id", "collapse": "mean"},
+            }
+        }
+    )
+    c = Collector()
+    validate_config(path, c)
+    offending = [f for f in c.findings if f.code == "E-UNITS-ATTR-MISSING"]
+    assert offending, {f.code for f in c.findings}
+    assert offending[0].path == "data.units.measurements.by"
+    assert "index.csv does not have" in offending[0].message
+
+
+def test_a_by_naming_a_real_column_is_accepted(write_config, tmp_path):
+    """The control the refusal needs: the same table, the same collapse, and a `by`
+    that names a real column — no finding, or the check refuses every config. Here
+    the column is also declared under `attributes`, which is legal and irrelevant:
+    the check reads the source's columns, not the declared set."""
+    (tmp_path / "input" / "index.csv").write_text(_MEASURED_CSV)
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["depth", "read_id"],
+                "measurements": {"by": "read_id", "collapse": {"depth": "mean"}},
+            }
+        }
+    )
+    found = codes(path)
+    assert "E-UNITS-ATTR-MISSING" not in found
+    assert not [c for c in found if c.startswith("E-DATA-MEASUREMENTS")]
+
+
+def test_a_by_no_input_column_carries_is_accepted_when_nothing_was_collapsed(
+    write_config, tmp_path
+):
+    """The step path's `by` names a measurement identity the STEP invents —
+    `io.record(unit.key, values, measurement=read_id)` — and no input column
+    carries it. `artifacts._collapse_measurements` never reads `by`, and with one
+    row per unit the input path merged nothing, so there is no wrong number to
+    refuse and refusing would refuse a documented design."""
+    (tmp_path / "input" / "index.csv").write_text("patient_id,depth\np1,10\np2,30\n")
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["depth"],
+                "measurements": {"by": "read_id", "collapse": {"depth": "mean"}},
+            }
+        }
+    )
+    assert "E-UNITS-ATTR-MISSING" not in codes(path)
+
+
+def test_a_declared_measurements_block_is_no_longer_refused(write_config, tmp_path):
+    """The retirement. Over a table that really carries two rows per patient, so
+    the honoured path is the one exercised — a config whose roster fails to
+    resolve would pass this assertion without ever reaching the collapse."""
+    (tmp_path / "input" / "index.csv").write_text(_MEASURED_CSV)
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["depth", "read_id"],
+                "measurements": {"by": "read_id", "collapse": {"depth": "mean"}},
+            }
+        }
+    )
+    found = codes(path)
+    assert "E-DATA-MEASUREMENTS-UNSUPPORTED" not in found
+    assert not [c for c in found if c.startswith("E-")], found
+
+
+def test_a_typo_inside_the_measurements_block_is_now_reported(write_config, tmp_path):
+    """The gap retiring the refusal would otherwise turn live. `measurements` is
+    typed at `.by` and `.collapse` rather than left a whole leaf, so
+    `check_envelope` descends into it and a misspelled child is a finding rather
+    than a silently ignored key."""
+    (tmp_path / "input" / "index.csv").write_text(_MEASURED_CSV)
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["depth", "read_id"],
+                "measurements": {"by": "read_id", "colapse": "mean"},
+            }
+        }
+    )
+    c = Collector()
+    validate_config(path, c)
+    unknown = [f for f in c.findings if f.code == "E-CONFIG-KEY-UNKNOWN"]
+    assert unknown, {f.code for f in c.findings}
+    assert unknown[0].path == "data.units.measurements.colapse"
+
+
+def test_a_per_column_collapse_map_is_a_leaf_not_a_container(write_config, tmp_path):
+    """`collapse: {depth: mean}` names COLUMNS, which no dotted path reaches. The
+    closure must stop at `collapse` — descending would report every column name
+    in the map as an unknown key, which is the trap a half-typed block sets."""
+    (tmp_path / "input" / "index.csv").write_text(_MEASURED_CSV)
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["depth", "read_id"],
+                "measurements": {"by": "read_id", "collapse": {"depth": "mean"}},
+            }
+        }
+    )
+    assert "E-CONFIG-KEY-UNKNOWN" not in codes(path)
+
+
+def test_a_non_mapping_measurements_block_is_still_typed(write_config):
+    """Typing the children must not cost the block its own type check: the leaf
+    entry stays in `LEAF_TYPES` beside them."""
+    path = write_config(
+        {"data.units": {"from": "index.csv", "key": "patient_id", "measurements": "yes"}}
+    )
+    found = codes(path)
+    # Both, not either: an `or` here would let an `E-CONFIG-TYPE` regression pass
+    # on the strength of the finding this task did not add.
+    assert "E-CONFIG-TYPE" in found
+    assert "E-DATA-MEASUREMENTS-INVALID" in found
+
+
+def test_check_measurements_called_directly_with_no_roster_still_finds_shape_faults():
+    """The check must be exercisable on its own, not only reachable through
+    `validate_config` — this is the direct-call route the brief asks for, and the
+    one that proves the `roster is None` branch skips the type half without
+    skipping the shape half."""
+    c = Collector()
+    _check_measurements({"measurements": {"collapse": "mean"}}, None, None, frozenset(), c)
+    assert "E-DATA-MEASUREMENTS-INVALID" in {f.code for f in c.findings}
+    assert "E-DATA-MEASUREMENTS-COLLAPSE-TYPE" not in {f.code for f in c.findings}
 
 
 def test_a_declared_contrast_is_no_longer_refused(write_config):
@@ -4833,3 +5369,412 @@ def test_a_baseline_beside_a_grid_is_untouched_by_the_sample_refusal(write_confi
             }
         )
     ) == set()
+
+
+# --- `data.units.weight_by` ------------------------------------------------
+#
+# Every one of these asserts its OWN identifier rather than "some finding":
+# these checks ran beside a blanket refusal of the whole declaration for most of
+# their life, and a test asserting only that something was reported would have
+# passed off that refusal and said nothing about the check under it.
+
+
+def _weighted_table(tmp_path: Path, body: str, column: str = "sampling_weight") -> None:
+    """Write the roster these checks read, into the directory `write_config` points
+    `data.input_dir` at. Writing it anywhere else is how a probe comes back empty
+    for every input, including the one that had to fail."""
+    (tmp_path / "input" / "index.csv").write_text(f"patient_id,{column}\n{body}")
+
+
+def test_a_weight_by_naming_no_attribute_is_reported(write_config, tmp_path):
+    """§ Validation, "Weight attribute exists": `weight_by` names
+    `sampling_weight`, which is not a unit
+    attribute. `attributes` is the reference set — `weight_by` has to survive
+    resolution to be read per unit at analysis time."""
+    _weighted_table(tmp_path, "p1,2.0\np2,3.0\n")
+    path = write_config(
+        {"data.units": {"from": "index.csv", "key": "patient_id", "weight_by": "sampling_weight"}}
+    )
+    assert "E-DATA-WEIGHT-UNKNOWN" in codes(path)
+
+
+def test_a_declared_weight_attribute_is_not_reported_unknown(write_config, tmp_path):
+    """The second half of the same declaration: declaring the attribute is what
+    makes the name check pass, so the check is discriminating rather than
+    reporting on every `weight_by` there is."""
+    _weighted_table(tmp_path, "p1,2.0\np2,3.0\n")
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["sampling_weight"],
+                "weight_by": "sampling_weight",
+            }
+        }
+    )
+    found = codes(path)
+    assert "E-DATA-WEIGHT-UNKNOWN" not in found
+    assert "E-DATA-WEIGHT-INVALID" not in found
+
+
+def test_an_empty_weight_by_is_a_finding_not_a_default(write_config):
+    """Decision 3, the second truthiness hole: an empty declaration changes no
+    behavior, and silently reading it as "unset" makes the config lie.
+
+    The message is asserted, not only the code: `''` is also "not a unit
+    attribute", so the name check below reports the same identifier for it and a
+    code-only assertion cannot tell the two branches apart. What an empty
+    declaration needs said is that it is empty — telling a reader that `''` is
+    not among the declared attributes sends them to the wrong list."""
+    path = write_config(
+        {"data.units": {"from": "index.csv", "key": "patient_id", "weight_by": ""}}
+    )
+    found = messages_by_code(path)
+    assert "E-DATA-WEIGHT-UNKNOWN" in found
+    assert "is empty" in found["E-DATA-WEIGHT-UNKNOWN"]
+
+
+def test_a_non_string_weight_by_is_left_to_the_envelope(write_config):
+    """`envelope.LEAF_TYPES` types `data.units.weight_by` a `str`, so a number is
+    already `E-CONFIG-TYPE`. Reporting it a second time as "empty" would both
+    duplicate the finding and describe `3` with a word that does not fit it."""
+    path = write_config(
+        {"data.units": {"from": "index.csv", "key": "patient_id", "weight_by": 3}}
+    )
+    found = codes(path)
+    assert "E-CONFIG-TYPE" in found
+    assert "E-DATA-WEIGHT-UNKNOWN" not in found
+
+
+def test_the_name_check_still_runs_with_no_roster(write_config, tmp_path):
+    """The value half needs a roster; the name half does not, and reads the
+    declaration alone. Pinned with a resolvable-shaped config whose `input_dir`
+    is relative — `_check_units` returns `None` there — so this is a reachable
+    skip rather than the silent-skip class."""
+    path = write_config(
+        {
+            "data.input_dir": "input",
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "weight_by": "sampling_weight",
+            },
+        }
+    )
+    assert "E-DATA-WEIGHT-UNKNOWN" in codes(path)
+
+
+def test_a_zero_weight_is_refused(write_config, tmp_path):
+    """§ Validation, "Weights are usable", the zero half: a weight is what a
+    unit stands for, and a unit
+    standing for nothing is a unit that should not be in the roster."""
+    _weighted_table(tmp_path, "p1,2.0\np2,0\n")
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["sampling_weight"],
+                "weight_by": "sampling_weight",
+            }
+        }
+    )
+    assert "E-DATA-WEIGHT-INVALID" in codes(path)
+
+
+def test_a_negative_weight_is_refused(write_config, tmp_path):
+    """§ Validation, "Weights are usable", the negative half. Separate from the
+    zero case on purpose: a
+    check written `< 0` passes the negative test and lets a zero weight through."""
+    _weighted_table(tmp_path, "p1,2.0\np2,-1.5\n")
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["sampling_weight"],
+                "weight_by": "sampling_weight",
+            }
+        }
+    )
+    assert "E-DATA-WEIGHT-INVALID" in codes(path)
+
+
+def test_a_non_numeric_weight_is_refused(write_config, tmp_path):
+    """A weight that is not a number cannot be one. `csv.DictReader` yields
+    strings for every column, so "numeric" here means `is_measurement_numeric`
+    — the single authority — and not `isinstance(v, (int, float))`, which no
+    table-sourced value ever satisfies."""
+    _weighted_table(tmp_path, "p1,2.0\np2,unknown\n")
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["sampling_weight"],
+                "weight_by": "sampling_weight",
+            }
+        }
+    )
+    assert "E-DATA-WEIGHT-INVALID" in codes(path)
+
+
+def test_a_non_finite_weight_is_refused(write_config, tmp_path):
+    """`float("nan")` parses, and `nan <= 0` is `False`, so a positivity test
+    alone admits it — and every weighted mean it touches is `nan`."""
+    _weighted_table(tmp_path, "p1,2.0\np2,nan\n")
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["sampling_weight"],
+                "weight_by": "sampling_weight",
+            }
+        }
+    )
+    assert "E-DATA-WEIGHT-INVALID" in codes(path)
+
+
+def test_the_value_check_is_skipped_without_a_roster(write_config):
+    """The reachable half of the skip: with no roster there are no values, and
+    the name check above still reports. Called directly so the two halves are
+    distinguishable rather than inferred from one `validate_config` run."""
+    c = Collector()
+    _check_weight_by(
+        {"attributes": ["sampling_weight"], "weight_by": "sampling_weight"}, None, c
+    )
+    assert not c.findings
+
+
+@pytest.mark.parametrize("unset", [{}, {"weight_by": None}])
+def test_a_weight_looking_column_warns_when_nothing_declares_it(write_config, tmp_path, unset):
+    """§ Validation, "Weighting looks undeclared". The positive direction comes
+    first: a warning that can never fire
+    passes its own negative test trivially.
+
+    Both forms of "unset" are run. `init` materializes `weight_by: null`, so the
+    explicit null is the shape a real config carries and a check keyed on the
+    key's *absence* would miss it entirely. The message is asserted too: "a
+    warning fired" and "the warning about this column fired" are different
+    claims, and only the second is what row 293 promises."""
+    _weighted_table(tmp_path, "p1,2.0\np2,3.0\n")
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["sampling_weight"],
+                **unset,
+            }
+        }
+    )
+    found = messages_by_code(path)
+    assert "W-DATA-WEIGHT-UNDECLARED" in found
+    assert "sampling_weight" in found["W-DATA-WEIGHT-UNDECLARED"]
+
+
+def test_no_weight_warning_for_a_constant_column(write_config, tmp_path):
+    """A column that does not vary is not a sampling weight, and warning about it
+    would train a reader to ignore the warning."""
+    _weighted_table(tmp_path, "p1,2.0\np2,2.0\n")
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["sampling_weight"],
+            }
+        }
+    )
+    assert "W-DATA-WEIGHT-UNDECLARED" not in codes(path)
+
+
+def test_no_weight_warning_for_a_column_the_name_test_does_not_match(write_config, tmp_path):
+    """The name test is what keeps this warning off `age`, `dose` and `latency`,
+    every one of which is numeric, positive and varying. Same fixture as the
+    positive case but for the column name, so the two pin the trigger between
+    them."""
+    _weighted_table(tmp_path, "p1,2.0\np2,3.0\n", column="dose")
+    path = write_config(
+        {"data.units": {"from": "index.csv", "key": "patient_id", "attributes": ["dose"]}}
+    )
+    assert "W-DATA-WEIGHT-UNDECLARED" not in codes(path)
+
+
+def test_no_weight_warning_once_weight_by_declares_the_column(write_config, tmp_path):
+    """The warning is about a weight going *unused*, so declaring it is what
+    silences it — the one thing the message tells a reader to do."""
+    _weighted_table(tmp_path, "p1,2.0\np2,3.0\n")
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["sampling_weight"],
+                "weight_by": "sampling_weight",
+            }
+        }
+    )
+    assert "W-DATA-WEIGHT-UNDECLARED" not in codes(path)
+
+
+def test_no_weight_warning_for_a_zero_valued_weight_looking_column(write_config, tmp_path):
+    """`0` is not a positive weight, so the column does not look like an inverse
+    sampling probability — and with nothing declaring it, there is no
+    `E-DATA-WEIGHT-INVALID` to report either. Silence is the right answer for a
+    column the design never claimed was a weight."""
+    _weighted_table(tmp_path, "p1,2.0\np2,0\n")
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["sampling_weight"],
+            }
+        }
+    )
+    found = codes(path)
+    assert "W-DATA-WEIGHT-UNDECLARED" not in found
+    assert "E-DATA-WEIGHT-INVALID" not in found
+
+
+# --- a weighted design beside a contrast ------------------------------------
+#
+# `E-DATA-WEIGHT-UNSUPPORTED` is retired: `weight_by` is a declaration core
+# honors, for a single condition's value, interval and `n.effective`. No
+# *contrast* construction weights — `paired_t_over_units` takes differences and
+# nothing else — so the one combination that would publish a wrong delta is
+# refused under its own code until the paired estimators weight.
+
+
+def _weighted_units(**extra) -> dict:
+    """The `data.units` block these checks share: a declared weight that resolves
+    and passes every value check, so the only finding left is the one under test."""
+    return {
+        "from": "index.csv",
+        "key": "patient_id",
+        "attributes": ["sampling_weight"],
+        "weight_by": "sampling_weight",
+        **extra,
+    }
+
+
+def test_a_declared_weight_by_is_no_longer_refused(write_config, tmp_path):
+    """The retirement itself. A weighted roster with no contrast in it validates
+    clean — not merely free of the old code, but free of every finding, which is
+    what says the design is one core runs today."""
+    _weighted_table(tmp_path, "p1,2.0\np2,3.0\n")
+    path = write_config({"data.units": _weighted_units()})
+    assert codes(path) == set()
+
+
+def test_a_weighted_generated_comparison_is_refused(write_config, tmp_path):
+    """A baseline over an enumerated axis generates two `vs_baseline` deltas, and
+    `paired_t_over_units` weights neither side. The delta and its interval would
+    be unweighted numbers reported beside weighted per-condition values — two
+    answers to different questions in one block."""
+    _weighted_table(tmp_path, "p1,2.0\np2,3.0\n")
+    path = write_config(
+        {
+            "data.units": _weighted_units(),
+            "sweep": {
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {"analysis.method": ["spearman", "kendall"]},
+            },
+        }
+    )
+    assert codes(path) == {"E-DATA-WEIGHT-CONTRAST"}
+    message = messages_by_code(path)["E-DATA-WEIGHT-CONTRAST"]
+    assert "publishes 2 comparisons," in message
+
+
+def test_a_weighted_declared_contrast_is_refused(write_config, tmp_path):
+    """The other source of a comparison. A `statistics.contrasts` entry is named
+    rather than generated, so no baseline is involved at all — and it reaches the
+    same unweighted `paired_t_over_units`, which is why the guard reads the
+    resolved family rather than `sweep.baseline`."""
+    _weighted_table(tmp_path, "p1,2.0\np2,3.0\n")
+    path = write_config(
+        {
+            "data.units": _weighted_units(),
+            "sweep": {"grid": {"analysis.method": ["pearson", "spearman"]}},
+            "statistics": {
+                "contrasts": [
+                    {
+                        "id": "spearman_vs_pearson",
+                        "of": "method=spearman",
+                        "against": "method=pearson",
+                    }
+                ]
+            },
+        }
+    )
+    assert codes(path) == {"E-DATA-WEIGHT-CONTRAST"}
+    # The singular, and pinned as a whole word: `"1 comparison" in ...` would
+    # pass against `1 comparisons` too, which is the shape this slice keeps
+    # writing tests that cannot see.
+    message = messages_by_code(path)["E-DATA-WEIGHT-CONTRAST"]
+    assert "publishes 1 comparison," in message
+
+
+def test_a_weighted_baseline_that_generates_no_comparison_stays_legal(write_config, tmp_path):
+    """The edge that makes the guard narrower than `sweep.baseline` being
+    declared. A baseline with no axis beside it expands to one condition, which
+    `resolve_contrasts` skips as an `of` — the run publishes no delta at all, so
+    there is no unweighted number for the refusal to prevent. Refusing it would
+    strand a design core computes correctly."""
+    _weighted_table(tmp_path, "p1,2.0\np2,3.0\n")
+    overrides = {
+        "data.units": _weighted_units(),
+        "sweep": {"baseline": {"analysis.method": "pearson"}},
+    }
+    assert codes(write_config(overrides)) == set()
+    # The control that must report: the same weighted config with one axis added
+    # generates a comparison and is refused, so the silence above is this
+    # baseline's shape rather than a guard that never fires.
+    crossed = dict(overrides)
+    crossed["sweep"] = {
+        "baseline": {"analysis.method": "pearson"},
+        "grid": {"analysis.method": ["spearman"]},
+    }
+    assert codes(write_config(crossed)) == {"E-DATA-WEIGHT-CONTRAST"}
+
+
+def test_an_unweighted_comparison_is_untouched(write_config, tmp_path):
+    """The neighbouring shape: the same sweep with no `weight_by` is the ordinary
+    design, and nothing about it moved."""
+    _weighted_table(tmp_path, "p1,2.0\np2,3.0\n")
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["sampling_weight"],
+            },
+            "sweep": {
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {"analysis.method": ["spearman", "kendall"]},
+            },
+        }
+    )
+    assert "E-DATA-WEIGHT-CONTRAST" not in codes(path)
+
+
+def test_a_weighted_report_by_is_not_a_contrast(write_config, tmp_path):
+    """`statistics.report_by` repeats a metric over strata "without adding
+    executions or joining the correction family" — it publishes no delta, so it
+    is not a contrast and the refusal must not reach it. A subgroup someone wants
+    to *test* is a `within` contrast, which does join the family and is refused
+    above."""
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id,sampling_weight,cohort\np1,2.0,a\np2,3.0,b\n"
+    )
+    path = write_config(
+        {
+            "data.units": _weighted_units(attributes=["sampling_weight", "cohort"]),
+            "statistics": {"report_by": ["cohort"]},
+        }
+    )
+    assert codes(path) == set()

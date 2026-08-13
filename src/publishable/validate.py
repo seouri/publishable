@@ -29,7 +29,15 @@ from publishable.sweep import (
 )
 from publishable.templates.base import BaseTemplate
 from publishable.templates.registry import get_template, template_names
-from publishable.units import UnitList, resolve_units
+from publishable.units import (
+    COLLAPSE_RULES,
+    NUMERIC_COLLAPSE_RULES,
+    UnitList,
+    is_measurement_numeric,
+    resolve_units,
+    rule_for,
+    usable_weight,
+)
 
 REQUIRED_METADATA = ("description", "authors")
 
@@ -429,7 +437,10 @@ def validate_config(
     _check_parameters(doc, template, c)
     _check_versions(doc, template, c)
     _check_data(doc, config_path, c)
-    roster = _check_units(doc, c)
+    roster, technical_n, columns = _check_units(doc, c)
+    units_decl = _units_declaration(doc.get("data") or {}, c) or {}
+    _check_measurements(units_decl, roster, technical_n, columns, c)
+    _check_weight_by(units_decl, roster, c)
     _check_replication(
         doc,
         template,
@@ -649,7 +660,9 @@ def _units_declaration(data: dict[str, Any], c: Collector) -> dict[str, Any] | N
     return units_decl
 
 
-def _check_units(doc: dict[str, Any], c: Collector) -> UnitList | None:
+def _check_units(
+    doc: dict[str, Any], c: Collector
+) -> tuple[UnitList | None, dict[str, float] | None, frozenset[str]]:
     """Resolve the roster so unit checks are real rather than deferred to run time.
 
     A `ContractError` from resolution becomes a diagnostic carrying the SAME
@@ -668,7 +681,7 @@ def _check_units(doc: dict[str, Any], c: Collector) -> UnitList | None:
       for the same declaration, describing a resolver as a missing file.
 
     No other `-UNSUPPORTED` field is skipped on: `allocation`, `assign`,
-    `cluster_by`, `weight_by`, `measurements`, and `holdout` are not read by
+    `cluster_by`, `weight_by`, and `holdout` are not read by
     `resolve_units` at all, so resolving against a real table or glob alongside
     one of those refusals adds a genuine, independent finding — a duplicate key
     in the roster is a real defect whether or not `holdout` is also declared —
@@ -676,15 +689,20 @@ def _check_units(doc: dict[str, Any], c: Collector) -> UnitList | None:
 
     Returns the resolved roster, or `None` when resolution did not happen or did
     not succeed — `_check_replication` uses its length to check a `fold` count
-    against real units rather than resolving the roster a second time.
+    against real units rather than resolving the roster a second time — and
+    `technical_n` beside it, which is `None` under the same conditions and
+    whenever `data.units.measurements` is undeclared. `_check_measurements` reads
+    it to tell an input table that actually carried replicates from one that did
+    not: `{max: 1}` means no row was merged, which is what separates a `by` that
+    names an input column from one naming a measurement a step invents.
     """
     data = doc.get("data") or {}
     units_decl = _units_declaration(data, c)
     if units_decl is None:
-        return None
+        return None, None, frozenset()
     input_dir = data.get("input_dir")
     if not input_dir:
-        return None  # E-DATA-REQUIRED already reported by _check_data
+        return None, None, frozenset()  # E-DATA-REQUIRED already reported by _check_data
     if not isinstance(input_dir, str):
         # `check_envelope` is what REPORTS this (E-CONFIG-TYPE) — this guard
         # exists because this function may be reached without it having run: a
@@ -694,13 +712,15 @@ def _check_units(doc: dict[str, Any], c: Collector) -> UnitList | None:
         # already guards — the two read the same leaf for two different purposes
         # (whether the directory is usable at all vs. whether a roster resolves
         # against it), so each needs its own guard.
-        return None
+        return None, None, frozenset()
     path = Path(input_dir).expanduser()
     if not path.is_absolute() or not path.is_dir() or not any(path.iterdir()):
-        return None  # E-DATA-NOT-ABSOLUTE / E-DATA-UNREADABLE already reported by _check_data
+        # E-DATA-NOT-ABSOLUTE / E-DATA-UNREADABLE already reported by _check_data
+        return None, None, frozenset()
     source = units_decl.get("from")
     if isinstance(source, dict) and "resolver" in source:
-        return None  # E-DATA-RESOLVER-UNSUPPORTED already reported by _check_unimplemented
+        # E-DATA-RESOLVER-UNSUPPORTED already reported by _check_unimplemented
+        return None, None, frozenset()
     key = units_decl.get("key")
     if key is not None and not isinstance(key, str):
         # `check_envelope` is what REPORTS this (E-CONFIG-TYPE) — this guard
@@ -713,7 +733,7 @@ def _check_units(doc: dict[str, Any], c: Collector) -> UnitList | None:
         # this guard matching what `check_envelope` already typed the leaf as,
         # rather than only covering the unhashable subset that happens to crash
         # today.
-        return None
+        return None, None, frozenset()
     # `LEAF_TYPES` types `data.units.attributes` itself a `list` — and it is one
     # here, so `check_envelope` reports nothing — but names no dotted path for a
     # list ELEMENT (the same reason `sweep.grid`'s axis values aren't in the
@@ -739,12 +759,317 @@ def _check_units(doc: dict[str, Any], c: Collector) -> UnitList | None:
                     "data.units.attributes",
                     f"names {bad!r}, which {source} does not have",
                 )
-            return None
+            return None, None, frozenset()
     try:
-        return resolve_units(units_decl, path)
+        # `technical_n` and the source's columns are passed out rather than
+        # discarded: `run` reports the first, and `_check_measurements` reads its
+        # `max` to know whether the input path merged any rows at all and the
+        # second to know what `measurements.by` could name.
+        roster, technical_n, columns = resolve_units(units_decl, path)
+        return roster, technical_n, columns
     except ContractError as exc:
         c.error(exc.code, "data.units", str(exc))
-        return None
+        return None, None, frozenset()
+
+
+def _check_measurements(
+    units: dict[str, Any],
+    roster: UnitList | None,
+    technical_n: dict[str, float] | None,
+    columns: frozenset[str],
+    c: Collector,
+) -> None:
+    """`data.units.measurements` — shape, then `by`, then the collapse rule against the column.
+
+    `reference.md` § Validation, "Collapse rule fits the column": `measurements.collapse:
+    mean` over `site`, which is a string, has no meaning — use `first` or `mode`, or a
+    per-column map. The type comes from the *resolved roster's own attribute values*
+    rather than from the declaration, because `attributes` declares names, not types.
+    When the roster does not resolve, the type half is skipped, but the shape half
+    still runs below it: a config can be wrong about `measurements`'s shape with no
+    `input_dir` in reach at all, and skipping both together would make the roster's
+    absence swallow an unrelated fault.
+
+    A single rule applies to every collapsed column (a per-column map's un-named
+    columns fall back to `first`, the same fallback `units.rule_for` uses), so a
+    *constant* string column is refused here even though `units.apply_rule`'s
+    constant-column shortcut would let `mean` survive it at run time: whether a
+    check's verdict depends on the data happening to be constant is not something a
+    reader can act on, and the document draws no such exception for row 243.
+    """
+    decl = units.get("measurements")
+    if decl is None:
+        return
+    if not isinstance(decl, dict) or not decl:
+        c.error(
+            "E-DATA-MEASUREMENTS-INVALID",
+            "data.units.measurements",
+            "is empty or is not a mapping; it needs `by` (the attribute distinguishing "
+            "one measurement of a unit from another) and `collapse` (how rows sharing a "
+            "key become one). An empty declaration changes no behavior, which is the "
+            "failure the refusal it replaces exists to prevent",
+        )
+        return
+    by = decl.get("by")
+    valid_by = by if isinstance(by, str) and by else None
+    if valid_by is None:
+        c.error(
+            "E-DATA-MEASUREMENTS-INVALID",
+            "data.units.measurements.by",
+            "is missing or is not an attribute name; without it nothing distinguishes "
+            "a second measurement of one unit from a resumed retry of the same one, "
+            "and the two collapse in opposite directions",
+        )
+    elif technical_n is not None and technical_n["max"] > 1:
+        # The input table actually merged rows, so `by` had to name one of ITS
+        # columns — and `units.collapse_measurements` groups on the unit `key`
+        # alone, reading `by` only to drop that name from the merged attributes.
+        # A `by` naming nothing therefore collapses exactly as a correct one
+        # would, and reports a `technical_n` claiming the merge was intentional:
+        # rows nothing declared to be measurements of one unit, averaged. That is
+        # a wrong number rather than a missing diagnostic, which is why it is
+        # refused before the block stops being refused wholesale.
+        #
+        # The source's COLUMNS, never `data.units.attributes`.
+        # `design-principles.md` § Core vs. plugin lists `key`, `attributes`,
+        # `cluster_by`, `measurements.by`, `holdout.from`, `assign.from`,
+        # `stratify_by` and `null_test.shuffle` as parallel namers of input fields, so
+        # `by` names a column in its own right; the fence in `reference.md`
+        # § What isn't a repeat declares no `attributes` at all, and against the
+        # declared set this check would refuse the document's own example.
+        #
+        # Gated on `max > 1` rather than checked unconditionally, because the
+        # same declaration serves the step path — `io.record(..., measurement=)`
+        # — where the measurement identity is one the STEP invents and no input
+        # column carries it. `artifacts._collapse_measurements` never reads `by`
+        # at all, so an unnameable axis there costs nothing and refusing it
+        # would refuse a design `reference.md` § What isn't a repeat documents.
+        # (Recorded in `docs/superpowers/spec-defects.md`: `by` means two
+        # different things on the two paths and only the first is checkable.)
+        #
+        # `E-UNITS-ATTR-MISSING`, not a second identifier: its own row already
+        # states this predicate — "names a value the source table has no column
+        # for" — and this is that question asked about a second field.
+        if valid_by not in columns:
+            source = units.get("from")
+            where = source if isinstance(source, str) else "the unit source"
+            c.error(
+                "E-UNITS-ATTR-MISSING",
+                "data.units.measurements.by",
+                f"names {valid_by!r}, which {where} does not have, while rows sharing a key "
+                f"were collapsed anyway (up to {int(technical_n['max'])} per unit). Nothing "
+                "distinguished those rows as measurements of one unit, so the collapsed "
+                "values average rows the design never said belonged together. Name the "
+                "column that tells one measurement of a unit from another, or remove "
+                "`data.units.measurements` if the repeated key is a duplicate",
+            )
+    collapse = decl.get("collapse")
+    if collapse is None:
+        # `E-UNITS-COLLAPSE-RULE`, below, is reserved for a rule that NAMES
+        # something invalid — `reference.md`'s row for it says exactly that
+        # ("names a rule that is none of `mean`, `median`, `sum`, `first`, or
+        # `mode`"), and an omission names nothing. Routing a missing `collapse`
+        # there would make that row, which is dual-listed with `units.apply_rule`'s
+        # own raise, mean two different things depending on which surface hit it.
+        c.error(
+            "E-DATA-MEASUREMENTS-INVALID",
+            "data.units.measurements.collapse",
+            "is missing; `collapse` is required alongside `by` — how rows sharing "
+            "a key become one",
+        )
+        return
+    rules = list(collapse.values()) if isinstance(collapse, dict) else [collapse]
+    for rule in rules:
+        if rule not in COLLAPSE_RULES:
+            # Same code `units.apply_rule` raises once task 3 wires collapse into
+            # `resolve_units` — `reference.md` § Errors `validate` reports already
+            # lists `E-UNITS-COLLAPSE-RULE` as one identifier reached from both
+            # surfaces, the same reuse `E-REPL-SEED-COLLISION` illustrates, so this
+            # is not a second code for the fault `apply_rule` will also raise on.
+            c.error(
+                "E-UNITS-COLLAPSE-RULE",
+                "data.units.measurements.collapse",
+                f"is {rule!r}; expected one of {', '.join(COLLAPSE_RULES)}, or a "
+                "mapping of column name to one of them",
+            )
+            return
+    if roster is None:
+        return
+    for name in sorted({n for u in roster for n in u.attributes} - {valid_by}):
+        # `units.rule_for`, not a second copy of its fallback: this check and the
+        # collapse it guards must not come to hold two different ideas of which
+        # rule a column gets. The two copies had already drifted — the inline one
+        # skipped `rule_for`'s `str()` coercion — which is how a config could
+        # validate against one reading and run under the other.
+        rule = rule_for(name, collapse)
+        if rule not in NUMERIC_COLLAPSE_RULES:
+            continue
+        offenders = [
+            u.attributes[name]
+            for u in roster
+            if name in u.attributes and not is_measurement_numeric(u.attributes[name])
+        ]
+        if offenders:
+            c.error(
+                "E-DATA-MEASUREMENTS-COLLAPSE-TYPE",
+                f"data.units.measurements.collapse.{name}",
+                f"is {rule!r} over {name!r}, which holds {offenders[0]!r} — a "
+                f"{type(offenders[0]).__name__} that is not numeric and does not parse "
+                "as one. Use `first` or `mode` for it, or a per-column map giving each "
+                "column the rule that fits it",
+            )
+
+
+# A name test, and the only one in this module. `reference.md` § Weighted samples
+# states the trigger this list is half of: numeric, positive, varying across
+# units, and named like a weight. Without the name half the other three match
+# `age`, `dose`, `latency` and `score` — nearly every numeric attribute there is —
+# and a warning that fires on almost everything is one a reader learns to skip,
+# which costs more than the false positive on a `body_weight` column does. It is
+# admittedly not a core-vs-plugin-clean test: `weight` means body mass in a
+# wet-lab assay and a sampling weight in a survey, and no substring test can tell
+# them apart. What makes that payable is that the message states its own remedy
+# in one step — declare it, or rename it — so a false positive costs a reader one
+# decision rather than an investigation.
+_WEIGHT_NAME_HINTS = ("weight", "_prob", "probability")
+
+
+def _check_weight_by(units: dict[str, Any], roster: UnitList | None, c: Collector) -> None:
+    """`data.units.weight_by` — the attribute exists, its values are usable, and a
+    column that looks like a weight is not silently going unused.
+
+    `reference.md` § Validation, rows "Weight attribute exists", "Weights are
+    usable" and "Weighting looks undeclared".
+
+    **`data.units.attributes` is the reference set for the name**, and this is the
+    opposite of `_check_measurements`'s `by`, deliberately. A weight is read *per
+    unit at analysis time* — § Weighted samples: core "hands the column to
+    `aggregate` like any other attribute" — so it has to survive resolution as an
+    attribute, and `units._from_table` populates `Unit.attributes` from
+    `data.units.attributes` and nothing else. `measurements.by` is *consumed* at
+    collapse time and dropped from the merged unit, so it need not survive at all
+    and is checked against the source's columns instead. The § Validation rows say
+    exactly this: `weight_by` names something "which is not a unit attribute",
+    where `measurements.by` names a column of "a `reads.csv` with no `read_id`
+    column".
+
+    The declared list is read rather than the roster's realized attribute names so
+    the name check runs with no roster at all — the same construction
+    `_check_report_by` uses, and equivalent when a roster does resolve, since
+    `_from_table` refuses an attribute its table has no column for. Skipping the
+    *value* half when the roster is absent is not the silent skip H1 removed: the
+    name half still reports, and a test pins that.
+
+    Under a `{glob: ...}` source no attribute can be declared at all — `_from_glob`
+    refuses any name — so a `weight_by` there always draws
+    `E-DATA-WEIGHT-UNKNOWN`. That is truthful rather than a gap: a glob yields a
+    key and a path and nothing else, so no weight column exists to name.
+    """
+    declared = units.get("weight_by")
+    if declared is None:
+        _warn_undeclared_weight(units, roster, c)
+        return
+    if not isinstance(declared, str):
+        # `check_envelope` is what REPORTS this (`E-CONFIG-TYPE` — `envelope.py`
+        # types `data.units.weight_by` a `str`). Reporting it again here would
+        # both duplicate the finding and describe `3` as "empty", a word that
+        # does not fit it.
+        return
+    if not declared:
+        c.error(
+            "E-DATA-WEIGHT-UNKNOWN",
+            "data.units.weight_by",
+            "is empty; it names the unit attribute holding the weight, and an empty "
+            "declaration changes no behavior — which is the failure a truthy read of "
+            "it would hide. Name the attribute, or remove the key",
+        )
+        return
+    # A non-string item in `data.units.attributes` is `_check_units`'s own finding
+    # (`E-UNITS-ATTR-MISSING`); filtering it here just treats it as undeclared,
+    # which it already is, and keeps `set()` off an unhashable item in a module
+    # contracted to collect rather than raise.
+    #
+    # An absent or `null` `attributes` is an empty list, not a skip: "no
+    # attributes are declared, so `weight_by` names none of them" is exactly row
+    # 291's case, and skipping it would make the commonest form of the mistake the
+    # one form that reports nothing. Only a *present, wrongly-shaped* list is
+    # skipped, `E-CONFIG-SHAPE` having already reported it.
+    attrs = units.get("attributes") or []
+    if not isinstance(attrs, list):
+        return
+    names = sorted({a for a in attrs if isinstance(a, str)})
+    if declared not in names:
+        c.error(
+            "E-DATA-WEIGHT-UNKNOWN",
+            "data.units.weight_by",
+            f"names {declared!r}, which is not a unit attribute — a weight is read per "
+            f"unit, so it has to be one. `data.units.attributes` declares "
+            f"{', '.join(names) or 'none'}",
+        )
+        return
+    if roster is None:
+        return
+    bad = [
+        (u.key, u.attributes.get(declared))
+        for u in roster
+        if usable_weight(u.attributes.get(declared)) is None
+    ]
+    if bad:
+        key, value = bad[0]
+        c.error(
+            "E-DATA-WEIGHT-INVALID",
+            "data.units.weight_by",
+            f"names {declared!r}, which holds a value that is not a positive finite "
+            f"number for {len(bad)} of {len(roster)} units (unit {key!r} holds "
+            f"{value!r}). A weight is how much of the population a unit stands for, so "
+            "zero, a negative, a non-number and a NaN are each a unit standing for "
+            "nothing core could weight with",
+        )
+
+
+def _warn_undeclared_weight(
+    units: dict[str, Any], roster: UnitList | None, c: Collector
+) -> None:
+    """`W-DATA-WEIGHT-UNDECLARED` — an attribute that looks like a sampling weight
+    while `weight_by` is unset.
+
+    The trigger cannot read the declaration it is about, so it reads the roster:
+    an attribute whose name contains `weight`, `_prob` or `probability`, whose
+    every value is a positive finite number, and which does not hold one value
+    across every unit. `reference.md` § Weighted samples states all four, and the
+    `W-` registry row repeats them, because a warning whose trigger is unstated is
+    one a user cannot act on.
+
+    Constancy is the discriminator that matters most in practice: a column that
+    does not vary weights nothing, and warning about it would teach a reader to
+    ignore the warning — which costs more than the missed case, this being a
+    warning about a *possible* omission rather than a fault.
+
+    Reported for the first candidate in sorted order rather than for each. The
+    remedy is the same sentence whichever one a reader looks at, and `weight_by`
+    takes one name, so a second warning adds no decision.
+    """
+    if roster is None:
+        return
+    for name in sorted({n for u in roster for n in u.attributes}):
+        if not any(hint in name.lower() for hint in _WEIGHT_NAME_HINTS):
+            continue
+        weights = [usable_weight(u.attributes.get(name)) for u in roster]
+        if any(w is None for w in weights):
+            continue
+        if len(set(weights)) < 2:
+            continue
+        c.warn(
+            "W-DATA-WEIGHT-UNDECLARED",
+            f"data.units.attributes.{name}",
+            f"{name!r} is numeric, positive and varies across units, and its name reads "
+            "like an inverse sampling probability — but `data.units.weight_by` is unset, "
+            "so it is reported like any other attribute and no estimate is weighted by "
+            "it. An unweighted mean over an enriched sample answers a different question "
+            "than the population one, in the same shape. Set `data.units.weight_by` if it "
+            "is a weight, or rename the attribute if it is not",
+        )
+        return
 
 
 # Refusals that are properties of the DECLARATION, so `validate` reports them as
@@ -948,8 +1273,12 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     "Ablation baseline isn't a group level", which needs a group axis to have a
     level for a baseline to fix. `.groups` is read by nothing yet. It resolves a unit roster, but
     several `data.units` sub-fields — allocation other than
-    `within`, `assign`, `cluster_by`, `weight_by`, `measurements`, `holdout`,
-    and a `resolver` source — are read by nothing yet either. Each of these
+    `within`, `assign`, `cluster_by`, `holdout`, `weight_by`,
+    and a `resolver` source — are read by nothing yet either.
+    `data.units.measurements` is no longer among them: `resolve_units` collapses
+    the rows an input table carries, `StepIO.finalize` collapses the ones a step
+    records under `measurement=`, and `technical_n` reaches every metric block,
+    so the declaration changes the record. Each of these
     would otherwise validate clean and then run something other than what the
     config describes — the same class of failure `resolve_repeats` already
     refuses for repeat levels: `E-REPL-FOLD-STRATIFY-UNSUPPORTED` for
@@ -1065,8 +1394,18 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     for field, code in (
         ("assign", "E-DATA-ASSIGN-UNSUPPORTED"),
         ("cluster_by", "E-DATA-CLUSTER-UNSUPPORTED"),
-        ("weight_by", "E-DATA-WEIGHT-UNSUPPORTED"),
-        ("measurements", "E-DATA-MEASUREMENTS-UNSUPPORTED"),
+        # `weight_by` was here. `_check_weight_by` checks the declaration for
+        # real, `attrition` computes Kish's effective size from it, and
+        # `summarize_step` weights every `basis: units` column's value and
+        # interval — so the declaration changes the record, which is the test
+        # this family applies. What a weighted run may *not* yet do is publish a
+        # contrast: `_check_sweep` refuses that combination under
+        # `E-DATA-WEIGHT-CONTRAST`, which is a refusal of a combination rather
+        # than of a declaration and so belongs there rather than in this loop.
+        # `measurements` was here. `_check_measurements` now checks the block for
+        # real, `resolve_units` collapses the input path, `finalize` collapses the
+        # step path, and `technical_n` reaches every metric block — so the
+        # declaration changes the record, which is the test this family applies.
         ("holdout", "E-DATA-HOLDOUT-UNSUPPORTED"),
     ):
         # `init` writes these as null; only a real declaration is refused.
@@ -1763,6 +2102,59 @@ def _check_sweep(
         comparisons = len(resolve_contrasts(doc, conditions))
     except (TypeError, KeyError, AttributeError, ValueError):
         comparisons = 0
+    # A weighted design that publishes a contrast. `reference.md` § Weighted
+    # samples: core computes weighted means for `basis: units` metrics and a
+    # weighted `t_over_units` interval whose df comes from Kish's effective size,
+    # and "a contrast between two weighted conditions uses the same weights on
+    # both sides". Nothing in this build weights a contrast at all:
+    # `stats.paired_t_over_units` takes a list of per-unit differences and
+    # nothing else, and `paired_delta_of_derived` / `paired_percentile_of_derived`
+    # likewise take no weights — so a weighted run's `vs_baseline` delta and its
+    # interval would be unweighted numbers sitting beside weighted per-condition
+    # values, each side answering a different question with nothing in the record
+    # distinguishing them. That is the same defect the per-condition wiring was
+    # widened to prevent one level up, one level down.
+    #
+    # **The guard reads the resolved family, not the declaration.** It fires on
+    # what `resolve_contrasts` will actually build — the same count
+    # `W-STATS-FAMILY` below reports — because `sweep.baseline` does not imply a
+    # comparison: a baseline with no axis beside it expands to a single
+    # `is_baseline` row, which the generated loop skips as an `of`, so the run
+    # publishes no delta and there is no wrong number to prevent. Refusing every
+    # declared `baseline` would strand that design, which is the
+    # wider-than-the-harm failure `E-SWEEP-SAMPLE-BASELINE` checked for
+    # explicitly. Reading the family also picks up the other source of a delta —
+    # a declared `statistics.contrasts` entry over a sweep with no baseline at
+    # all — which a declaration-shaped guard would have missed in the other
+    # direction. `statistics.report_by` is deliberately outside it: a stratum
+    # repeats a metric without publishing a delta or joining the family, and its
+    # weighted values are the same construction the whole-table block gets.
+    #
+    # Temporary, and narrowly so: H4 Statistics owns the paired estimator family
+    # and lifts this the moment those three constructions take weights. It is a
+    # refusal of a *combination* rather than of a declaration, so it carries a
+    # row in § Validation's registry and is not one of the `NOT BUILT`
+    # declarations § The one config file counts — the same placement
+    # `E-SWEEP-SAMPLE-BASELINE` and `E-SWEEP-ABLATE-CROSSED` have.
+    weight_by = (_units_declaration(doc.get("data") or {}, c) or {}).get("weight_by")
+    if comparisons > 0 and isinstance(weight_by, str) and weight_by:
+        plural = "" if comparisons == 1 else "s"
+        c.error(
+            "E-DATA-WEIGHT-CONTRAST",
+            "data.units.weight_by",
+            f"weights each condition's own value and interval, and this design also "
+            f"publishes {comparisons} comparison{plural}, which no construction in this "
+            "build weights: a `vs_baseline` delta and a declared `statistics.contrasts` "
+            "entry are both computed over unweighted per-unit differences, so the delta "
+            "would answer a different question than the two weighted values it sits "
+            "beside, with nothing in the record saying so. Declare one or the other "
+            "here: drop `weight_by` and report the contrast over the sample as it was "
+            "drawn, or keep the weighting and express the difference as an `Estimate` "
+            "returned by a `summary` step, which core records as reported rather than "
+            "recomputing. The combination will be honored once the paired estimators "
+            "take weights",
+        )
+
     if comparisons > 0 and (correction or "holm") == "none":
         c.warn(
             "W-STATS-FAMILY",

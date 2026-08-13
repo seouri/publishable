@@ -696,7 +696,59 @@ def command_run(config_path: Path) -> int:
     input_dir = Path(doc["data"]["input_dir"]).expanduser()
     output_dir = Path(doc["data"]["output_dir"]).expanduser()
     units_decl: dict[str, Any] | None = (doc.get("data") or {}).get("units")
-    roster = resolve_units(units_decl, input_dir) if units_decl else None  # phase 5: roster
+    # phase 5: roster. `technical_n` — `{min, max, median}` over the measurement
+    # counts rows sharing a key collapsed from — travels to every metric block as
+    # `summarize_step`'s `beside_n`, which is the route for a fact `reference.md`
+    # shows *beside* `n` rather than inside it (`stats.summarize_step` states the
+    # two-route rule and which document sentence decides each). `provenance.units`
+    # is documented as exactly `{n, key}`, so parking it there would invent a
+    # `run.yaml` field no document describes.
+    roster, technical_n, _columns = (
+        resolve_units(units_decl, input_dir) if units_decl else (None, None, frozenset())
+    )
+    # Carried only when the input path actually merged rows. A run whose STEP does
+    # the measuring (`io.record(..., measurement=)`) has one input row per unit, so
+    # an ungated `technical_n` would report `{min: 1, max: 1, median: 1}` beside a
+    # `measurements.parquet` holding three rows per unit — a false claim of no
+    # replication, which is worse than the missing one. The step path's own counts
+    # are not carried in this build; see `docs/superpowers/spec-defects.md`.
+    beside_n: dict[str, Any] = {}
+    if technical_n is not None and technical_n["max"] > 1:
+        beside_n["technical_n"] = technical_n
+    # `data.units.weight_by` names a unit attribute holding the inverse sampling
+    # probability (`reference.md` § Weighted samples). Two facts reach the record
+    # from it, by the two different routes `stats.summarize_step` describes:
+    # `weighted_by` sits BESIDE `n`, exactly where the document's own example
+    # prints it, and `effective` — Kish's size — JOINS `n`, so it travels in
+    # `attrition`'s counts rather than here.
+    #
+    # The mapping itself travels to `summarize_step` as well, which is what makes
+    # `weighted_by` a fact about the arithmetic rather than a marker beside an
+    # unweighted number: every recorded column's `value` becomes the weighted
+    # mean, its interval `weighted_t_over_units`, and its `n.effective` Kish's
+    # size over that column's own units (`stats.summarize_step` says why all
+    # three move together, and why `effective` is per column while `attrition`'s
+    # is per condition). A derived metric is not weighted by core — the weight
+    # column reaches `aggregate` as a unit attribute, through `_attributed`, so a
+    # template weights whatever its own metric needs weighting by.
+    #
+    # Passed as the roster holds the values, `str` and all, for the same reason
+    # `attrition` takes them that way: `stats.checked_weights` reads
+    # `units.usable_weight`, the single authority `validate` approved the config
+    # against, and a coercion here would be a second notion of a usable weight.
+    weight_by = (units_decl or {}).get("weight_by")
+    weights: dict[str, Any] | None = None
+    weighted_beside: dict[str, Any] = {}
+    if isinstance(weight_by, str) and weight_by and roster is not None:
+        # `.get`, not `[...]`: `validate` guarantees `weight_by` names a declared
+        # attribute and `_from_table` gives every unit every declared attribute,
+        # so a missing one is a core defect — and `None` reaches
+        # `kish_effective_n`, which refuses it as `E-DATA-WEIGHT-INVALID` under
+        # the same single authority `validate` used. A comprehension that skipped
+        # the unit instead would quietly shrink the denominator.
+        weights = {u.key: u.attributes.get(weight_by) for u in roster}
+        weighted_beside["weighted_by"] = weight_by
+        beside_n["weighted_by"] = weight_by
     # `unit_count` is what turns `{kind: fold, k: all}` into a real count and
     # what `_fold_k` checks a declared `k` against — the same roster
     # `_check_units`/`_check_replication` resolved at `validate` time, threaded
@@ -843,6 +895,7 @@ def command_run(config_path: Path) -> int:
             units=roster,
             max_failed_fraction=(doc.get("limits") or {}).get("max_failed_fraction"),
             fold_members=fold_members,
+            measurements=(units_decl or {}).get("measurements"),
         )
 
         status = run_status(results)
@@ -964,7 +1017,12 @@ def command_run(config_path: Path) -> int:
                         results, step_name, cond.index, fold_members=fold_members
                     )
                     counts = attrition(
-                        results, roster, step_name, cond.index, fold_members=fold_members
+                        results,
+                        roster,
+                        step_name,
+                        cond.index,
+                        fold_members=fold_members,
+                        weights=weights,
                     )
                     max_ineligible = (doc.get("limits") or {}).get("max_ineligible_fraction")
                     if (
@@ -1086,6 +1144,8 @@ def command_run(config_path: Path) -> int:
                             seed=resample_seed_value,
                             resample=resample_fns,
                             draws=derived_metric_draws,
+                            beside_n=beside_n,
+                            weights=weights,
                         )
                     except ContractError as exc:
                         prefix = f"{exc.code} " if exc.code else ""
@@ -1095,7 +1155,18 @@ def command_run(config_path: Path) -> int:
                             f"condition {cond.index} step {step_name!r}: "
                             f"{prefix}{type(exc).__name__}: {exc}",
                         )
-                        step_summary = summarize_step(collapsed, counts)
+                        # `weights` on the retry too: the collision costs the
+                        # `derived` mapping and nothing else, so the recorded
+                        # columns must come back with the same arithmetic they
+                        # had on the first call. Silently downgrading them to
+                        # unweighted numbers over a badly named derived key is
+                        # this slice's own failure class, reached through the
+                        # containment path. (A weight core cannot use cannot
+                        # arrive here: `attrition` above gates the same mapping
+                        # through `kish_effective_n`, outside any `try`.)
+                        step_summary = summarize_step(
+                            collapsed, counts, beside_n=beside_n, weights=weights
+                        )
                         # What the parent block dropped, every stratum of it
                         # drops too. A level's table carries the same columns as
                         # the whole one, so the collision that raised above
@@ -1240,6 +1311,13 @@ def command_run(config_path: Path) -> int:
                                 step_name,
                                 cond.index,
                                 fold_members=fold_members,
+                                # Recomputed over the level's own units, which is
+                                # what makes it carryable at all: `technical_n`
+                                # below is withheld because it is a whole-roster
+                                # figure that would have to be COPIED down, and
+                                # Kish's size over this stratum is a different
+                                # number this call computes from scratch.
+                                weights=weights,
                             )
                             # Attrition happens during the run, so a level the
                             # roster-time `W-STATS-REPORTBY-THIN` counted as
@@ -1335,6 +1413,22 @@ def command_run(config_path: Path) -> int:
                             # The run's own resample seed, not one derived per
                             # level: a level resamples from its own key set,
                             # which is already what makes the draw its own.
+                            #
+                            # `weighted_beside`, not the parent's `beside_n`, and
+                            # the difference is the whole rule: `technical_n` is
+                            # `{min, max, median}` over the WHOLE roster, and a
+                            # stratum's own units may have collapsed a different
+                            # number of measurements each. Copying the parent's
+                            # figure onto a subset would state a spread nobody
+                            # computed over that subset, and `reference.md`
+                            # § Reporting strata documents a level block as the
+                            # aggregation repeated over the subset, not the
+                            # parent's numbers re-shown — the same reason a level
+                            # block carries no `repeat_spread`. `weighted_by`
+                            # names the declaration rather than reporting a
+                            # figure, and is as true of a stratum as of the whole
+                            # roster, so withholding it would leave a block whose
+                            # `n` carries `effective` with nothing saying why.
                             level_summary = summarize_step(
                                 level_collapsed,
                                 level_counts,
@@ -1342,6 +1436,14 @@ def command_run(config_path: Path) -> int:
                                 seed=resample_seed_value,
                                 resample=strata_resample,
                                 draws=derived_metric_draws,
+                                beside_n=weighted_beside,
+                                # Same roster-wide mapping, filtered by the
+                                # level's own table exactly as it is filtered by
+                                # a ragged column's: a stratum's weighted mean
+                                # and its Kish size are its own, which is the
+                                # same reason `level_counts` is recomputed above
+                                # rather than copied down.
+                                weights=weights,
                             )
                             # At least one entry has to come from the level's own
                             # table. A block holding nothing but derived metrics

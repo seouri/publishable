@@ -104,6 +104,7 @@ def harness(
     max_failed_fraction=None,
     conditions=None,
     fold_members=None,
+    measurements=None,
 ):
     class P(BaseExperiment):
         pass
@@ -127,6 +128,7 @@ def harness(
         units=units,
         max_failed_fraction=max_failed_fraction,
         fold_members=fold_members,
+        measurements=measurements,
     )
     return run_dir, results, repeats
 
@@ -293,6 +295,76 @@ def test_attrition_reconciles_exactly(tmp_path: Path):
     _, results, _ = harness(tmp_path, [Partial], units=roster)
     counts = attrition(results, roster, "partial", condition_index=0)
     assert counts == {"resolved": 10, "completed": 7, "ineligible": 1, "failed": 2}
+    assert counts["resolved"] == counts["completed"] + counts["ineligible"] + counts["failed"]
+
+
+class Measures(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        for u in io.units:
+            io.record(u.key, {"v": 1.0}, measurement="r1")
+            io.record(u.key, {"v": 3.0}, measurement="r2")
+            io.record(u.key, {"v": 8.0}, measurement="r3")
+        return {}
+
+
+def test_a_real_step_may_measure_when_the_config_declares_measurements(tmp_path: Path):
+    """`data.units.measurements` must reach the `StepIO` the runner builds, or a
+    config that declares it is honoured at the input path and raises
+    `E-STEP-MEASUREMENT-UNDECLARED` at the step path. A directly-constructed
+    `StepIO` cannot catch that, which is how it went missing."""
+    roster = UnitList([Unit(key=f"p{i}") for i in range(3)])
+    _, results, _ = harness(
+        tmp_path,
+        [Measures],
+        units=roster,
+        measurements={"by": "read_id", "collapse": "mean"},
+    )
+    assert [r.status for r in results] == ["completed", "completed"]
+    # 1, 3, 8 rather than a symmetric pair: mean is 4.0 and median is 3.0, so this
+    # assertion fails if the collapse silently uses the wrong rule. Two symmetric
+    # values agree under both, which is how the step-path mutation this slice
+    # prescribed was unable to fail.
+    assert results[0].rows == tuple({"unit": f"p{i}", "v": 4.0} for i in range(3))
+
+
+def test_a_step_that_only_measures_is_refused_without_the_declaration(tmp_path: Path):
+    """Control for the previous test: the declaration is what makes it reachable,
+    so the same step under no declaration must still fail that execution."""
+    roster = UnitList([Unit(key=f"p{i}") for i in range(3)])
+    _, results, _ = harness(tmp_path, [Measures], units=roster)
+    assert [r.status for r in results] == ["failed", "failed"]
+    assert "E-STEP-MEASUREMENT-UNDECLARED" in (results[0].error or "")
+
+
+def test_attrition_reconciles_for_a_step_that_only_measures(tmp_path: Path):
+    """The measured unit must be `completed`, not `failed`. `completed` counts
+    distinct unit keys that reached `io.record` (`reference.md` § The unit table is
+    the inference base), and `failed` is the subtraction left over — so a unit
+    whose rows never collapse into `recorded_keys` is silently a failure while its
+    step succeeded and its measurements sit on disk."""
+    roster = UnitList([Unit(key=f"p{i}") for i in range(4)])
+
+    class MeasuresSome(BaseStep):
+        scope = "repeat"
+
+        def run(self, cfg, io):
+            for u in list(io.units)[:3]:
+                io.record(u.key, {"v": 1.0}, measurement="r1")
+                io.record(u.key, {"v": 3.0}, measurement="r2")
+                io.record(u.key, {"v": 8.0}, measurement="r3")
+            io.skip("p3", "by design")
+            return {}
+
+    _, results, _ = harness(
+        tmp_path,
+        [MeasuresSome],
+        units=roster,
+        measurements={"by": "read_id", "collapse": "mean"},
+    )
+    counts = attrition(results, roster, "measures_some", condition_index=0)
+    assert counts == {"resolved": 4, "completed": 3, "ineligible": 1, "failed": 0}
     assert counts["resolved"] == counts["completed"] + counts["ineligible"] + counts["failed"]
 
 
@@ -1203,3 +1275,88 @@ def test_io_conditions_is_ascending_by_index_whatever_the_plan_order(tmp_path: P
         digest="sha256:abc",
     )
     assert seen == [[(0, "a"), (1, "b"), (2, "c")]]
+
+
+# --- H3a task 9: `n` gains `effective` under `data.units.weight_by` ------------
+
+# Five units, weighted unevenly, four of them completed. The weights are `str`
+# because `units._from_table` builds every attribute through `csv.DictReader`,
+# which is the shape a real roster's weight column has — `stats.kish_effective_n`
+# gates and parses them itself.
+#
+# Kish over the COMPLETED four is (1+1+1+3)² / (1+1+1+9) = 36/12 = exactly 3.0,
+# with no float slack; over all five RESOLVED it is 16²/112 = 2.2857…, and over
+# the ineligible-included-but-heaviest-dropped set nothing else lands on 3.0. So
+# the number, not merely the key's presence, is what these tests assert.
+_WEIGHTS = {"p0": "1", "p1": "1", "p2": "1", "p3": "3", "p4": "10"}
+_KISH_COMPLETED = 3.0
+_KISH_RESOLVED = 256 / 112
+
+
+class RecordFourSkipOne(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        for u in list(io.units)[:4]:
+            io.record(u.key, {"v": 1.0})
+        io.skip("p4", "by design")
+        return {}
+
+
+def _weighted_harness(tmp_path: Path):
+    roster = UnitList([Unit(key=f"p{i}") for i in range(5)])
+    _, results, _ = harness(tmp_path, [RecordFourSkipOne], units=roster)
+    return roster, results
+
+
+def test_n_has_no_effective_key_without_weight_by(tmp_path: Path):
+    """The regression. `reference.md` § The three-part `n`: each part is "present
+    only when it applies so a design that never skips reads as it always did" —
+    so a run that never weights must produce an `n` of exactly the four parts it
+    always had, not one with a fifth key holding a stand-in value."""
+    roster, results = _weighted_harness(tmp_path)
+    counts = attrition(results, roster, "record_four_skip_one", condition_index=0)
+    assert counts == {"resolved": 5, "completed": 4, "ineligible": 1, "failed": 0}
+    assert "effective" not in counts
+
+
+def test_n_gains_effective_under_a_weighted_design(tmp_path: Path):
+    """Kish's effective size over the units the interval is computed from — the
+    COMPLETED ones, which is why the fixture's heaviest unit is ineligible: over
+    all five resolved units the answer would be 2.2857, and over four equal ones
+    4.0."""
+    roster, results = _weighted_harness(tmp_path)
+    counts = attrition(
+        results, roster, "record_four_skip_one", condition_index=0, weights=_WEIGHTS
+    )
+    assert counts["effective"] == pytest.approx(_KISH_COMPLETED)
+    assert counts["effective"] != pytest.approx(_KISH_RESOLVED)
+    # `effective` sits beside `completed` rather than replacing it: weights change
+    # what each unit contributes, not how many there were (§ Weighted samples).
+    assert counts["completed"] == 4
+    assert counts["resolved"] == counts["completed"] + counts["ineligible"] + counts["failed"]
+    # The other four parts stay `int`. `reference.md` § Weighted samples prints
+    # `{resolved: 240, completed: 228, failed: 12, effective: 191.4}` — three whole
+    # numbers and one fractional — and widening the mapping's annotation to
+    # `float` for `effective`'s sake must not turn `resolved` into `240.0` in
+    # `run.yaml`. `5 == 5.0`, so nothing else here can see the difference.
+    whole = ("resolved", "completed", "ineligible", "failed")
+    assert all(isinstance(counts[k], int) for k in whole)
+    assert isinstance(counts["effective"], float)
+
+
+def test_every_attrition_return_site_agrees_about_effective(tmp_path: Path):
+    """Three sites build `n` — no roster, no recording execution, and the
+    accumulating return — and a weighted design must read the same way at all
+    three. Two of the three report over an empty completed set, where Kish's size
+    is 0.0: a run that weights and completed nothing has an effective size, and it
+    is zero, not a missing key."""
+    roster, results = _weighted_harness(tmp_path)
+    no_roster = attrition(results, None, "record_four_skip_one", 0, weights=_WEIGHTS)
+    no_recording = attrition(results, roster, "never_ran", 0, weights=_WEIGHTS)
+    assert no_roster["effective"] == 0.0
+    assert no_recording["effective"] == 0.0
+    assert no_recording["failed"] == 5  # the site really is the no-recording one
+    # And the mirrored control: without weights, neither site grows the key.
+    assert "effective" not in attrition(results, None, "record_four_skip_one", 0)
+    assert "effective" not in attrition(results, roster, "never_ran", 0)

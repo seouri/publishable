@@ -30,6 +30,8 @@ def run_a_project(
     aggregate_returns: str | None = None,
     units: int = 10,
     unit_attributes: list[str] | None = None,
+    roster_csv: str | None = None,
+    units_overrides: dict[str, Any] | None = None,
     expect_exit: int = EXIT_OK,
     **overrides: Any,
 ) -> dict[str, Any]:
@@ -91,6 +93,13 @@ def run_a_project(
     are written unconditionally because an undeclared column is simply never
     read.
 
+    `roster_csv` replaces the whole `index.csv` the default roster writes, for a
+    caller whose design needs columns or a row shape the `patient_id,cohort,arm`
+    default cannot express — a table carrying several measurement rows per key,
+    say. `units_overrides` merges into `data.units`, which is how such a caller
+    declares the block that reads them (`measurements`); `unit_attributes` stays
+    the shorthand for the one sub-field every other caller needs.
+
     `expect_exit` is the exit code `main(["run", ...])` must return, `EXIT_OK`
     by default. A step whose `run` raises is *contained* — that execution lands
     `status: "failed"`, the rest of the plan still runs, and `run_status` turns
@@ -118,7 +127,9 @@ def run_a_project(
     patients = "\n".join(
         f"p{i},{'ab'[i % 2]},{'xy'[(i // 2) % 2]}" for i in range(1, units + 1)
     )
-    (data / "index.csv").write_text(f"patient_id,cohort,arm\n{patients}\n")
+    (data / "index.csv").write_text(
+        roster_csv if roster_csv is not None else f"patient_id,cohort,arm\n{patients}\n"
+    )
     assert main(["new", str(root)]) == EXIT_OK
     with pytest.MonkeyPatch.context() as mp:
         if aggregate_returns is not None:
@@ -155,6 +166,8 @@ def run_a_project(
         doc.update(overrides)
         if unit_attributes is not None:
             doc["data"]["units"]["attributes"] = list(unit_attributes)
+        if units_overrides is not None:
+            doc["data"]["units"].update(units_overrides)
         cfg.write_text(yaml.safe_dump(doc))
         for args in (
             ["add", "."],
@@ -4067,3 +4080,300 @@ def test_an_ablate_override_path_is_unreadable_at_run_scope(tmp_path: Path, caps
     ledger = (doc["run_dir"] / "executions.jsonl").read_text()
     assert '"status": "failed"' in ledger
     assert "E-STEP-SWEPT-PARAM" in doc["stdout"] + ledger
+
+
+# --- H3a task 6: `technical_n` reaches `run.yaml` beside every metric's `n` ----
+
+# Six patients, unevenly measured: two rows for p1/p4/p6 and three for p2/p3/p5,
+# so `technical_n` is {min: 2, max: 3, median: 2.5} — a shape a balanced table
+# could not produce, which is what makes the assertion below discriminating.
+# `depth` values differ within every key so a collapse rule swapped for another
+# would change the recorded numbers.
+_MEASURED_ROSTER = (
+    "patient_id,cohort,depth,read_id\n"
+    "p1,a,10,r1\np1,a,20,r2\n"
+    "p2,b,30,r1\np2,b,40,r2\np2,b,90,r3\n"
+    "p3,a,11,r1\np3,a,22,r2\np3,a,66,r3\n"
+    "p4,b,12,r1\np4,b,24,r2\n"
+    "p5,a,13,r1\np5,a,26,r2\np5,a,78,r3\n"
+    "p6,b,14,r1\np6,b,28,r2\n"
+)
+
+# `cohort` is constant within a key and takes `rule_for`'s `first` fallback, which
+# is what lets it survive a collapse and still name a `report_by` stratum.
+_MEASURED_UNITS = {
+    "attributes": ["cohort", "depth", "read_id"],
+    "measurements": {"by": "read_id", "collapse": {"depth": "mean"}},
+}
+
+
+def test_technical_n_reaches_run_yaml_beside_every_metrics_n(tmp_path: Path):
+    """`reference.md` § What isn't a repeat: `technical_n` "is reported for
+    transparency — as `{min, max, median}`". Read back from a real run's
+    `run.yaml`, not from a return value, and asserted on both metric shapes:
+    `pred` is a recorded column and `total` is derived by `aggregate`, which is
+    the shape the document's own example (`r`) has."""
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        aggregate_returns="total",
+        roster_csv=_MEASURED_ROSTER,
+        units_overrides=_MEASURED_UNITS,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    expected = {"min": 2, "max": 3, "median": 2.5}
+    assert aggregated["pred"]["technical_n"] == expected
+    assert aggregated["total"]["technical_n"] == expected
+    # Beside `n`, never inside it: the three-part `n` is a different claim.
+    assert set(aggregated["pred"]["n"]) == {"resolved", "completed", "ineligible", "failed"}
+    assert aggregated["pred"]["n"]["resolved"] == 6
+
+
+def test_no_technical_n_when_measurements_is_undeclared(tmp_path: Path):
+    """The control. Every other run must read exactly as it did before."""
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        aggregate_returns="total",
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert "technical_n" not in aggregated["pred"]
+    assert "technical_n" not in aggregated["total"]
+
+
+def test_no_all_ones_technical_n_when_the_input_merged_nothing(tmp_path: Path):
+    """A run whose STEP does the measuring declares `measurements` over an input
+    holding one row per unit. Reporting `{min: 1, max: 1, median: 1}` there would
+    be a false claim of no replication beside a `measurements.parquet` the step
+    filled, so nothing is reported instead — the step path's own counts are not
+    carried in this build (`docs/superpowers/spec-defects.md`)."""
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        aggregate_returns="total",
+        roster_csv="patient_id,depth\np1,10\np2,30\np3,50\np4,70\n",
+        units_overrides={
+            "attributes": ["depth"],
+            "measurements": {"by": "read_id", "collapse": {"depth": "mean"}},
+        },
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert "technical_n" not in aggregated["pred"]
+
+
+def test_a_report_by_level_block_carries_no_technical_n(tmp_path: Path):
+    """`technical_n` is `{min, max, median}` over the WHOLE roster, and a stratum's
+    own units may have collapsed a different number of measurements each. Copying
+    the parent's figure onto a subset would state a spread nobody computed over it
+    — the same reason a level block carries no `repeat_spread`."""
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        aggregate_returns="total",
+        roster_csv=_MEASURED_ROSTER,
+        units_overrides=_MEASURED_UNITS,
+        statistics={"correction": "holm", "report_by": ["cohort"]},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert "technical_n" in aggregated["pred"]
+    levels = aggregated["by"]["cohort"]
+    assert levels, aggregated
+    for block in levels.values():
+        for metric in block.values():
+            assert "technical_n" not in metric
+
+
+# --- H3a task 9: `n` gains `effective`, and the record carries `weighted_by` ---
+
+
+def test_an_unweighted_run_grows_no_effective_and_no_weighted_by(tmp_path: Path):
+    """The regression, read back from a real `run.yaml`. `reference.md` § The
+    three-part `n`: `effective` joins `n` "whenever `weight_by` makes Kish's size
+    the one the interval was computed at", "each present only when it applies so a
+    design that never skips reads as it always did". A run that declares no
+    `weight_by` must read exactly as it always did — four parts in `n`, and no
+    `weighted_by` beside it, on both metric shapes (a recorded column and a
+    derived one)."""
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        aggregate_returns="total",
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    for name in ("pred", "total"):
+        assert set(aggregated[name]["n"]) == {"resolved", "completed", "ineligible", "failed"}
+        assert "effective" not in aggregated[name]["n"]
+        assert "weighted_by" not in aggregated[name]
+    # The control that must report: the run really did produce metrics of both
+    # shapes with a populated `n`, so the assertions above are not passing off an
+    # empty block.
+    assert aggregated["pred"]["n"]["completed"] == 10
+    assert aggregated["total"]["value"] is not None
+
+
+def test_n_gains_effective_under_a_weighted_design(tmp_path: Path):
+    """§ Weighted samples prints exactly this shape: `weighted_by` beside the
+    value, `effective` inside `n` beside `completed`.
+
+    Four units weighted 1/1/1/3, all completing, so Kish's size is
+    (1+1+1+3)² / (1+1+1+9) = 36/12 = exactly 3.0 against a `completed` of 4 —
+    the two figures differ, which is the point of reporting both."""
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        aggregate_returns="total",
+        roster_csv="patient_id,sampling_weight\np1,1\np2,1\np3,1\np4,3\n",
+        units_overrides={
+            "attributes": ["sampling_weight"],
+            "weight_by": "sampling_weight",
+        },
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    # Both metric shapes: `pred` is a recorded column and `total` is derived by
+    # `aggregate`, which is the shape § Weighted samples' own example (`r`) has —
+    # and the derived branch builds its `n` from a separate literal.
+    for name in ("pred", "total"):
+        assert aggregated[name]["weighted_by"] == "sampling_weight"
+        assert aggregated[name]["n"]["effective"] == pytest.approx(3.0)
+        assert aggregated[name]["n"]["completed"] == 4
+    # And the arithmetic, not only the shape. `pred` is 0/1/2/3 under weights
+    # 1/1/1/3, so the unweighted mean is 1.5 and the weighted mean is 2.0. Without
+    # this line the whole test XPASSes the moment `E-DATA-WEIGHT-UNSUPPORTED`
+    # retires, whether or not anything ever wired `weighted_t_over_units` in —
+    # which would make this pin force a reader to *look* rather than to compute,
+    # the same defect as asserting an interval is "wider" when the wrong df is
+    # still wider. `pred` and not `total`: § Weighted samples has core weight a
+    # recorded column, while a derived value is handed to `aggregate` to weight
+    # itself, and which of those cases applies here is a decision this pin must
+    # not pre-empt.
+    assert aggregated["pred"]["value"] == pytest.approx(2.0)
+
+
+def test_the_weight_column_reaches_aggregate_so_a_derived_metric_can_weight_itself(
+    tmp_path, monkeypatch
+):
+    """The other half of § Weighted samples' sentence, and the positive form of a
+    decision task 10 made: core "computes weighted means for `basis: units`
+    column metrics, hands the column to `aggregate` like any other attribute so a
+    derived metric can weight itself". So core does **not** weight a derived
+    metric — `aggregate` returned one number for the whole table and there is no
+    per-unit vector to weight — and what makes that an arrangement rather than an
+    omission is that the weight column actually arrives.
+
+    Declared as an ordinary attribute and *not* as `weight_by`, so this runs
+    today rather than joining the xfail above: what is under test is the merge
+    `_attributed` performs, and `weight_by` names a declared attribute like any
+    other. `pred` is 0/1/2/3 under weights 1/1/1/3, so a template weighting
+    itself gets 12/6 = 2.0 against the 1.5 core would report unweighted."""
+    import publishable.generators.experiment as experiment_gen
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    def _weighted_by_hand(self, units, cfg):
+        rows = list(units)
+        total = sum(float(row["sampling_weight"]) for row in rows)
+        return {
+            "weighted_pred": sum(float(row["sampling_weight"]) * row["pred"] for row in rows)
+            / total
+        }
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    monkeypatch.setattr(GenericTemplate, "aggregate", _weighted_by_hand)
+    doc = run_a_project(
+        tmp_path,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        roster_csv="patient_id,sampling_weight\np1,1\np2,1\np3,1\np4,3\n",
+        units_overrides={"attributes": ["sampling_weight"]},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert aggregated["weighted_pred"]["value"] == pytest.approx(2.0)
+    # The control that must report: core's own figure for the recorded column is
+    # the unweighted 1.5, since this config declares no `weight_by` — so the 2.0
+    # above is the template's arithmetic over a column it really received.
+    assert aggregated["pred"]["value"] == pytest.approx(1.5)
+
+
+def test_the_collision_retry_keeps_the_weights_it_was_given(tmp_path, monkeypatch, capsys):
+    """A derived key colliding with a recorded column costs the `derived` mapping
+    and nothing else: `cli` retries `summarize_step` without it, and that retry
+    passes the same `weights`. Silently downgrading the recorded columns to
+    unweighted numbers over a badly chosen name would be this feature's own
+    failure class reached through the containment path — and nothing else in the
+    suite can see it, the retry being reachable only from a run.
+
+    Weights 1/1/1/3 over `pred` 0/1/2/3: the weighted mean is 2.0 and the
+    unweighted one 1.5, so the assertion discriminates rather than checking a
+    shape that survives either way."""
+    import publishable.generators.experiment as experiment_gen
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    monkeypatch.setattr(GenericTemplate, "aggregate", lambda self, units, cfg: {"pred": 1.0})
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        roster_csv="patient_id,sampling_weight\np1,1\np2,1\np3,1\np4,3\n",
+        units_overrides={
+            "attributes": ["sampling_weight"],
+            "weight_by": "sampling_weight",
+        },
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert aggregated["pred"]["value"] == pytest.approx(2.0)
+    assert aggregated["pred"]["n"]["effective"] == pytest.approx(3.0)
+    assert aggregated["pred"]["weighted_by"] == "sampling_weight"
+    # The control that must report: the retry really did happen, so the value
+    # above came from the second call rather than from a run where nothing
+    # collided.
+    assert "W-STATS-AGGREGATE-FAILED" in doc["stdout"]
+    assert "E-STEP-KEY-COLLISION" in doc["stdout"]
+    assert set(aggregated) == {"pred"}
+
+
+def test_a_reporting_stratum_is_weighted_by_its_own_units(tmp_path, monkeypatch, capsys):
+    """§ Reporting strata: a level block is the aggregation repeated over the
+    subset. Under a weight that means the subset's *own* weighted mean and its
+    own Kish size — the roster-wide mapping filtered by the level's table, the
+    same way a ragged column's is — not the parent's figures re-shown.
+
+    Cohort `a` is `pred` 0 and 1 under weights 1 and 3, so its weighted mean is
+    0.75 against an unweighted 0.5, and its effective size is 4² / (1 + 9) = 1.6
+    against a `completed` of 2. Cohort `b` is 2 and 3 under equal weights, where
+    weighting changes nothing — which is what makes the pair a check on the
+    filtering rather than on the weighting alone."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        roster_csv="patient_id,sampling_weight,cohort\np1,1,a\np2,3,a\np3,1,b\np4,1,b\n",
+        units_overrides={
+            "attributes": ["sampling_weight", "cohort"],
+            "weight_by": "sampling_weight",
+        },
+        statistics={"report_by": ["cohort"]},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    step_block = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    by = step_block["by"]["cohort"]
+    assert by["a"]["pred"]["value"] == pytest.approx(0.75)
+    assert by["a"]["pred"]["n"]["effective"] == pytest.approx(1.6)
+    assert by["a"]["pred"]["n"]["completed"] == 2
+    assert by["a"]["pred"]["weighted_by"] == "sampling_weight"
+    assert by["b"]["pred"]["value"] == pytest.approx(2.5)
+    assert by["b"]["pred"]["n"]["effective"] == pytest.approx(2.0)
+    # The control that must report: the whole-table block is the weighted mean
+    # over all four units, (0·1 + 1·3 + 2·1 + 3·1)/6 = 8/6, which is neither
+    # stratum's answer — so the two levels above are their own tables rather than
+    # the parent's numbers copied down.
+    assert step_block["pred"]["value"] == pytest.approx(8 / 6)

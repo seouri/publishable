@@ -13,6 +13,7 @@ from publishable.stats import (
     collapse_repeats,
     handed_to,
     interval_at,
+    kish_effective_n,
     mean_of,
     min_honest_draws,
     paired_delta_of_derived,
@@ -25,6 +26,7 @@ from publishable.stats import (
     resample_seed,
     summarize_step,
     t_over_units,
+    weighted_t_over_units,
 )
 
 
@@ -950,6 +952,323 @@ def test_zero_variance_yields_a_degenerate_but_real_interval():
     assert iv is not None and iv.low == iv.high == 5.0
 
 
+def test_a_weighted_interval_is_wider_than_the_unweighted_one():
+    """The point of Kish's size. A test asserting only that `weighted_by` was
+    recorded would pass against an implementation that stores the declaration and
+    computes the unweighted interval — which is the bug, not the fix.
+
+    The last unit carries eight units' worth of the population, so Kish's size is
+    3.17 against eight rows. The brief's own `20.0` puts it at 1.79, below the two
+    the construction needs, and returns `None` — pinned separately below.
+    """
+    values = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+    weights = [1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 8.0]
+    plain = t_over_units(values)
+    weighted = weighted_t_over_units(values, weights)
+    assert plain is not None and weighted is not None
+    assert weighted.method == "weighted_t_over_units"
+    assert (weighted.high - weighted.low) > (plain.high - plain.low)
+
+
+def test_the_weighted_interval_is_the_t_interval_at_kishs_effective_size():
+    """**The discriminating test**, and the one that pins df to Kish's size rather
+    than the row count. Widening alone does not: the weighted variance inflates
+    enough on its own that a df taken from `len(values)` still comes out wider
+    than the unweighted interval, so the headline test above passes under that
+    mutation.
+
+    The weights are chosen so Kish's size is an exact integer, which lets the
+    expectation be built from the already-trusted `t_over_units` rather than from
+    a second copy of the formula under test. Σw = 6 and Σw² = 12, so the effective
+    size is 36/12 = 3 exactly. The weighted mean is 24/6 = 4.0; Σw(v−m)² = 9 + 4 +
+    1 + 12 = 26 over a denominator of Σw − Σw²/Σw = 4, so the weighted variance is
+    6.5. Three points with mean 4.0 and sample variance 6.5 therefore have to give
+    back the same interval.
+
+    Every quantity here discriminates. Dropping the weights from the variance
+    gives 6.0 (unweighted, n − 1) or 4.5 (weighted numerator over the wrong
+    denominator) — never 6.5. Taking df from the row count gives t(3), not t(2).
+    Dividing the sem by √4 rather than √3 moves it again. None of the three is
+    hidden by a coincidence of the values, which `[10, 20]`-shaped data is where
+    this slice has been burned before.
+    """
+    values = [1.0, 2.0, 3.0, 6.0]
+    weights = [1.0, 1.0, 1.0, 3.0]
+    assert kish_effective_n(weights) == pytest.approx(3.0)
+    spread = math.sqrt(6.5)
+    equivalent = t_over_units([4.0 - spread, 4.0, 4.0 + spread])
+    got = weighted_t_over_units(values, weights)
+    assert equivalent is not None and got is not None
+    assert got.low == pytest.approx(equivalent.low)
+    assert got.high == pytest.approx(equivalent.high)
+
+
+def test_the_weights_are_in_the_variance_and_not_only_in_the_mean():
+    """The mutation the equal-weights boundary cannot see: weights kept in the
+    mean and dropped from the variance leaves the point estimate right and the
+    interval wrong, which is the failure that survives an eyeball.
+
+    Two weightings over the *same* values with the *same* Kish size, so df and the
+    sem's divisor are identical and the variance is the only thing left that can
+    differ. Weighting the two extremes makes the spread about the weighted mean
+    larger than weighting the two central values does; with the weights out of the
+    variance both reduce to the same unweighted sum of squares about a mean that
+    is 3.5 either way, and the two intervals come out identical.
+    """
+    values = [1.0, 2.0, 5.0, 6.0]
+    at_the_edges = weighted_t_over_units(values, [3.0, 1.0, 1.0, 3.0])
+    at_the_centre = weighted_t_over_units(values, [1.0, 3.0, 3.0, 1.0])
+    assert at_the_edges is not None and at_the_centre is not None
+    assert kish_effective_n([3.0, 1.0, 1.0, 3.0]) == kish_effective_n([1.0, 3.0, 3.0, 1.0])
+    assert (at_the_edges.high - at_the_edges.low) > (at_the_centre.high - at_the_centre.low)
+
+
+def test_equal_weights_reproduce_the_unweighted_interval():
+    """The boundary that proves the construction is a generalization, not a
+    different statistic wearing the same name."""
+    values = [1.0, 2.0, 3.0, 4.0, 5.0]
+    weighted = weighted_t_over_units(values, [1.0] * 5)
+    plain = t_over_units(values)
+    assert weighted is not None and plain is not None
+    assert weighted.low == pytest.approx(plain.low)
+    assert weighted.high == pytest.approx(plain.high)
+
+
+def test_rescaling_every_weight_changes_nothing():
+    """A weight is how much of the population a unit stands for, and survey
+    weights routinely sum to a population size rather than to the row count. An
+    estimator that moved when every weight was multiplied by the same constant
+    would make the interval depend on that convention."""
+    values = [1.0, 2.0, 3.0, 6.0]
+    small = weighted_t_over_units(values, [1.0, 1.0, 1.0, 3.0])
+    large = weighted_t_over_units(values, [1000.0, 1000.0, 1000.0, 3000.0])
+    assert small is not None and large is not None
+    assert large.low == pytest.approx(small.low)
+    assert large.high == pytest.approx(small.high)
+
+
+def test_kish_effective_n_of_equal_weights_is_the_count():
+    assert kish_effective_n([2.0, 2.0, 2.0, 2.0]) == pytest.approx(4.0)
+
+
+def test_kish_effective_n_falls_as_the_weights_spread():
+    """The property the df rests on, over a case where the count is unchanged."""
+    assert kish_effective_n([1.0, 1.0, 1.0, 9.0]) < kish_effective_n([1.0, 1.0, 1.0, 3.0]) < 4.0
+
+
+def test_kish_effective_n_of_no_weights_is_zero():
+    """The `Σw² == 0` guard's only reachable input once the gate is in front of
+    it: no weight that passes `usable_weight` is zero, but an empty sequence is a
+    real call rather than an error."""
+    assert kish_effective_n([]) == 0.0
+
+
+def test_kish_effective_n_reads_a_table_sourced_column():
+    """**The case task 9 will actually hit.** It wires this onto the roster's
+    weight column, and `units._from_table` builds every attribute from
+    `csv.DictReader`, so every weight arrives as `str`. Ungated this raised a bare
+    `TypeError` from `sum`, with no `code` for a diagnostic to print."""
+    assert kish_effective_n(["1", "1.0", "1", "3"]) == pytest.approx(3.0)
+
+
+@pytest.mark.parametrize(
+    ("label", "weights"),
+    [
+        ("negative", [-1.0, 1.0]),
+        ("nan", [float("nan"), 1.0]),
+        ("inf", [float("inf"), 1.0]),
+        ("zeros", [0.0, 0.0]),
+        ("non-numeric", ["site-3", 1.0]),
+        ("bool", [True, 1.0]),
+    ],
+)
+def test_kish_effective_n_refuses_a_weight_it_cannot_use(label, weights):
+    """The gate belongs *inside* this function, not at its call site.
+
+    It is public, it returns a number that reaches `run.yaml` as `n.effective`,
+    and a caller that has to remember to pre-validate is a caller that eventually
+    forgets. Ungated, every one of these answered rather than raising: `nan` and
+    `inf` gave `nan`, the negative and the zeros gave `0.0`. A plausible-looking
+    number with no error is the failure class the weight checks exist to prevent,
+    and it is strictly worse than the `TypeError` the string case gave, because
+    nothing downstream can tell it apart from a real answer.
+    """
+    with pytest.raises(ContractError) as exc:
+        kish_effective_n(weights)
+    assert exc.value.code == "E-DATA-WEIGHT-INVALID"
+
+
+def test_the_weighted_interval_honours_its_confidence():
+    """`confidence` reaches `_t_critical` on the weighted path too. Hardcoding
+    0.95 there passed every other test in this file — the unweighted path is
+    where the existing confidence test looks."""
+    values, weights = [1.0, 2.0, 3.0, 6.0], [1.0, 1.0, 1.0, 3.0]
+    narrow = weighted_t_over_units(values, weights, confidence=0.80)
+    wide = weighted_t_over_units(values, weights, confidence=0.99)
+    assert narrow is not None and wide is not None
+    assert (wide.high - wide.low) > (narrow.high - narrow.low)
+    assert narrow.low == pytest.approx(1.2244, abs=1e-3)
+    assert wide.low == pytest.approx(-10.6086, abs=1e-3)
+
+
+@pytest.mark.parametrize("values", [[], [3.0]])
+def test_a_weighted_interval_needs_two_values(values):
+    assert weighted_t_over_units(values, [1.0] * len(values)) is None
+
+
+def test_an_effective_size_below_two_has_no_interval():
+    """Kish's size is the df's basis, so a weighting that concentrates eight rows
+    onto fewer than two effective units has no dispersion the df can describe —
+    the same refusal `t_over_units` makes at one row, arriving by the weights."""
+    weights = [1.0] * 7 + [20.0]
+    assert kish_effective_n(weights) < 2
+    assert weighted_t_over_units([float(i) for i in range(1, 9)], weights) is None
+
+
+def test_a_table_sourced_weight_is_read_as_the_number_it_holds():
+    """`units.usable_weight` is the gate here and in `validate`, and this is what
+    the sharing buys: `csv.DictReader` yields `str` for every column whatever it
+    holds, so an `isinstance(v, (int, float))` gate would refuse every real weight
+    a `weight_by` config can produce — after `validate` had approved it."""
+    values = [1.0, 2.0, 3.0, 6.0]
+    from_table = weighted_t_over_units(values, ["1", "1.0", "1", "3"])
+    native = weighted_t_over_units(values, [1.0, 1.0, 1.0, 3.0])
+    assert from_table is not None and native is not None
+    assert from_table.low == pytest.approx(native.low)
+    assert from_table.high == pytest.approx(native.high)
+
+
+@pytest.mark.parametrize("bad", [0.0, -1.0, float("nan"), float("inf"), "site-3", True, None])
+def test_a_weight_validate_would_refuse_is_refused_here_too(bad):
+    """The single-authority claim, from the other side. `validate` reports
+    `E-DATA-WEIGHT-INVALID` for exactly these; reaching a weighted mean with one
+    of them still in hand is the validate-clean-then-crash gap, so it is refused
+    under the same identifier rather than by a bare `TypeError` or a `nan`."""
+    with pytest.raises(ContractError) as exc:
+        weighted_t_over_units([1.0, 2.0, 3.0, 6.0], [1.0, 1.0, 1.0, bad])
+    assert exc.value.code == "E-DATA-WEIGHT-INVALID"
+
+
+# --- H3a task 10: the weighted estimator, wired into `summarize_step` ---------
+#
+# One roster serves the whole group, and it is built so a misaligned weight
+# vector cannot pass. Five units carry weights, four of them completed (so four
+# rows in `collapsed`), and only three of those four recorded `pred`. The three
+# candidate weight vectors therefore give three different answers:
+#
+#   pred's own carriers  u1, u2, u4 → w = [1, 1, 3] → 10/5  = 2.0     ← correct
+#   every collapsed unit u1..u4     → w = [1, 1, 1, 3]      (a strict zip raises;
+#                                     a lenient one pairs [1,1,1] → 4/3 ≈ 1.333)
+#   every weighted unit  u1..u5     → w = [1, 1, 1, 3, 9]   (as above, or worse)
+#
+# and `other`, recorded by all four, is the control that must report beside it.
+_WEIGHTED_COLLAPSED = {
+    "u1": {"pred": 0.0, "other": 1.0},
+    "u2": {"pred": 1.0, "other": 1.0},
+    "u3": {"other": 2.0},
+    "u4": {"pred": 3.0, "other": 1.0},
+}
+_WEIGHTED_COUNTS = {"resolved": 5.0, "completed": 4.0, "ineligible": 1.0, "failed": 0.0}
+# `u5` never completed, so it is in the roster's weights and in no row: the
+# mapping `cli.py` builds is roster-wide, and `summarize_step` must filter it.
+_WEIGHTS = {"u1": 1.0, "u2": 1.0, "u3": 1.0, "u4": 3.0, "u5": 9.0}
+
+
+def test_the_recorded_column_value_is_the_weighted_mean_not_the_plain_one():
+    """`reference.md` § Weighted samples: core "computes weighted means for
+    `basis: units` column metrics". Wiring only the interval would leave the
+    point estimate answering the sample's question rather than the population's,
+    and would pass any test that looked only at `ci95`.
+
+    `pred` is 0/1/3 over weights 1/1/3, so the weighted mean is 10/5 = 2.0
+    exactly against an unweighted 4/3 — two literals, not a direction."""
+    out = summarize_step(_WEIGHTED_COLLAPSED, _WEIGHTED_COUNTS, weights=_WEIGHTS)
+    assert out["pred"]["value"] == pytest.approx(2.0)
+    assert out["pred"]["value"] != pytest.approx(4 / 3)
+    # The control that must report: `other` is 1/1/2/1 over weights 1/1/1/3, so
+    # its weighted mean is 7/6 against an unweighted 1.25 — a column whose
+    # weighting moves it in the other direction, computed in the same call.
+    assert out["other"]["value"] == pytest.approx(7 / 6)
+
+
+def test_the_weights_are_aligned_to_the_units_the_column_came_from():
+    """`raw` is the units that carry the column, not every unit in the table and
+    not every unit in the roster, so the weight vector must be filtered and
+    ordered the same way. A misalignment weights the wrong unit and produces a
+    plausible number rather than an error — which is why the fixture's three
+    candidate vectors give three different answers (see above).
+
+    Asserted against `weighted_t_over_units` called with the correctly aligned
+    vector written out by hand: that function is pinned to literals of its own
+    elsewhere in this file, and what is under test here is which weights reach
+    it, not the arithmetic it does with them."""
+    out = summarize_step(_WEIGHTED_COLLAPSED, _WEIGHTED_COUNTS, weights=_WEIGHTS)
+    expected = weighted_t_over_units([0.0, 1.0, 3.0], [1.0, 1.0, 3.0])
+    assert expected is not None
+    assert out["pred"]["method"] == "weighted_t_over_units"
+    assert out["pred"]["ci95"] == [pytest.approx(expected.low), pytest.approx(expected.high)]
+    # And the literals, so the pin does not rest on a second call to the same
+    # function: Σw = 5, Σw² = 11, weighted mean 2.0, Kish's size 25/11 = 2.2727,
+    # so df = 1.2727 and the interval is far wider than the unweighted one.
+    assert out["pred"]["ci95"] == [
+        pytest.approx(-6.720708691694632),
+        pytest.approx(10.720708691694632),
+    ]
+
+
+def test_effective_is_recomputed_over_the_units_the_column_actually_has():
+    """§ Weighted samples calls `effective` the size the interval "was computed
+    at", and `summarize_step` already argues the same case for `completed`:
+    reporting the condition-wide figure beside a ragged column's interval "would
+    be a lie about how many observations went into it". `runner.attrition`
+    computes one `effective` per condition over every completed unit, so a
+    ragged column would otherwise print a small `completed` beside an
+    `effective` drawn from a larger set, and the df it names would be one no
+    interval used.
+
+    `pred`'s three carriers weigh 1/1/3 → 25/11 = 2.2727; the condition's four
+    completed units weigh 1/1/1/3 → 36/12 = 3.0, which is what the full column
+    `other` must still report.
+
+    **`counts` carries a deliberately impossible 99.0** rather than the 3.0
+    `runner.attrition` would really pass. With the true value there, `other`'s
+    recomputed size is *also* 3.0, so both of its assertions pass unchanged
+    against an implementation that inherits `effective` from `counts` instead of
+    setting it — leaving `pred` to carry the whole test alone. 99.0 is what makes
+    `other` discriminate: it can only read 3.0 if this column computed it."""
+    counts = dict(_WEIGHTED_COUNTS, effective=99.0)
+    out = summarize_step(_WEIGHTED_COLLAPSED, counts, weights=_WEIGHTS)
+    assert out["pred"]["n"]["completed"] == 3
+    assert out["pred"]["n"]["effective"] == pytest.approx(25 / 11)
+    assert out["other"]["n"]["completed"] == 4
+    assert out["other"]["n"]["effective"] == pytest.approx(3.0)
+
+
+def test_an_unweighted_summary_is_untouched_to_the_last_digit():
+    """The regression the whole wiring must not move: with no `weights` the same
+    table gives the same floats it gave before this feature existed. Literals
+    captured from the implementation ahead of the change — a suite that only
+    compared two runs of the new code to each other could not see a drift."""
+    out = summarize_step(_WEIGHTED_COLLAPSED, _WEIGHTED_COUNTS)
+    assert out["pred"]["value"] == 1.3333333333333333
+    assert out["pred"]["ci95"] == [-2.4612497002634264, 5.127916366930093]
+    assert out["pred"]["method"] == "t_over_units"
+    assert "effective" not in out["pred"]["n"]
+    assert out["other"]["value"] == 1.25
+    assert out["other"]["ci95"] == [0.45438842367907306, 2.045611576320927]
+
+
+def test_a_weight_summarize_step_cannot_use_is_refused_under_the_shared_code():
+    """`units.usable_weight` stays the single authority all the way to the
+    record: a weight that reached here unusable is refused with the identifier
+    `validate` reports, not absorbed into a plausible mean."""
+    with pytest.raises(ContractError) as exc:
+        summarize_step(
+            _WEIGHTED_COLLAPSED, _WEIGHTED_COUNTS, weights={**_WEIGHTS, "u4": "site-3"}
+        )
+    assert exc.value.code == "E-DATA-WEIGHT-INVALID"
+
+
 def test_mean_of_is_none_for_an_empty_sequence():
     assert mean_of([]) is None
     assert mean_of([1.0, 2.0]) == 1.5
@@ -1141,6 +1460,99 @@ def test_percentile_over_units_refuses_a_pool_below_the_honest_floor():
     values = [float(i) for i in range(60)]
     assert percentile_over_units(values, seed=7, draws=10) is None
     assert percentile_over_units(values, seed=7, draws=2000) is not None
+
+
+def test_an_unweighted_percentile_interval_is_untouched_to_the_last_digit():
+    """The regression the weighted path must not move. Literals captured from the
+    implementation before `weights` existed: every other test in this section
+    compares one call to another, so a drift that moved both would pass them
+    all."""
+    values = [float(i) for i in range(50)]
+    assert percentile_over_units(values, seed=7) == Interval(
+        low=20.4, high=28.54, method="percentile_over_units"
+    )
+
+
+def test_a_percentile_draw_is_unweighted_while_its_statistic_is_not():
+    """`reference.md` § Weighted samples: a percentile interval "draws units as
+    usual and recomputes the weighted statistic on each draw, so the weights are
+    in the estimate rather than in the drawing". Weighting the draw is a
+    different estimator, and the difference is observable in the output.
+
+    21 units: twenty at 1.0, one at 100.0 carrying almost all the weight.
+    Drawing UNWEIGHTED, the heavy unit is absent from about a third of the draws
+    — (20/21)²¹ ≈ 0.36 — and such a draw has a weighted mean of exactly 1.0, so
+    the interval's low bound sits at 1.0. Drawing WEIGHTED, the heavy unit would
+    fill nearly every slot of every draw, every weighted mean would be ≈ 100 and
+    the interval would collapse to a point up there. The low bound is what
+    separates the two estimators; the high bound is what says the statistic is
+    still weighted."""
+    values = [1.0] * 20 + [100.0]
+    weights = [1.0] * 20 + [500.0]
+    result = percentile_over_units(values, weights=weights, draws=2000, seed=7)
+    assert result is not None
+    assert result.low == 1.0  # a draw-weighted implementation cannot reach here
+    assert result.high > 50.0  # ...while the statistic is still weighted
+    # The control that must report: the same pool drawn the same way with the
+    # weights dropped is an ordinary bootstrap of a mean near 5.7, so the high
+    # bound above is the weighting and not the data's own spread.
+    unweighted = percentile_over_units(values, draws=2000, seed=7)
+    assert unweighted is not None and unweighted.high < 30.0
+
+
+def test_a_weighted_percentile_keeps_each_value_with_its_own_weight():
+    """`percentile_over_units` sorts its pool so the draw depends on the multiset
+    rather than on row order. Sorting the values and the weights *separately*
+    preserves that invariance and silently re-pairs them, which the equal-weights
+    boundary cannot see and which an ascending fixture cannot either — both
+    sequences ascending re-pair to themselves.
+
+    So the heavy weight goes on the *smallest* value: twenty units at 100.0 and
+    one at 0.0 carrying 500. Paired correctly, a draw containing the heavy unit
+    is dragged to near zero and the interval reaches down there; re-paired by a
+    separate sort the 500 lands on a 100.0 and every draw's mean is ≈ 100.
+
+    The low bound is asserted against the closed form rather than a captured
+    float: a draw holding k copies of the heavy unit has weighted mean
+    100·(21−k) / ((21−k) + 500k), and the interval's endpoint must be exactly one
+    of those — no value a re-pairing produces is."""
+    values = [0.0] + [100.0] * 20
+    weights = [500.0] + [1.0] * 20
+    result = percentile_over_units(values, weights=weights, draws=2000, seed=7)
+    assert result is not None
+    achievable = [100 * (21 - k) / ((21 - k) + 500 * k) for k in range(22)]
+    assert min(abs(result.low - a) for a in achievable) < 1e-9
+    assert result.low < 5.0
+    # The all-100.0 draw is the largest weighted mean there is, and it happens in
+    # about a third of the draws, so the upper endpoint is exactly 100.0.
+    assert result.high == 100.0
+    # And row order still cannot matter: the pairs travel together through the
+    # sort, so a shuffled roster gives the identical interval.
+    order = [3, 0, 17, 9, 1, 20, 5, 2, 4, 6, 7, 8, 10, 11, 12, 13, 14, 15, 16, 18, 19]
+    assert result == percentile_over_units(
+        [values[i] for i in order],
+        weights=[weights[i] for i in order],
+        draws=2000,
+        seed=7,
+    )
+
+
+def test_equal_weights_reproduce_the_unweighted_percentile_exactly():
+    """The boundary, digit for digit: at equal weights the weighted mean of a
+    draw *is* its plain mean, and the draw itself never depended on the weights,
+    so the two constructions must not merely agree closely."""
+    values = [float(i) for i in range(50)]
+    assert percentile_over_units(values, weights=[2.0] * 50, seed=7) == percentile_over_units(
+        values, seed=7
+    )
+
+
+def test_a_weight_the_percentile_path_cannot_use_is_refused_before_any_draw():
+    """The same single authority, on the resampling path: `units.usable_weight`
+    via `checked_weights`, under the identifier `validate` reports."""
+    with pytest.raises(ContractError) as exc:
+        percentile_over_units([float(i) for i in range(50)], weights=[1.0] * 49 + [0.0], seed=7)
+    assert exc.value.code == "E-DATA-WEIGHT-INVALID"
 
 
 def test_resample_seed_depends_on_the_digest():
@@ -1454,3 +1866,44 @@ def test_a_declining_compute_yields_no_delta_on_either_side():
     assert paired_delta_of_derived(of, of, keys, _mean_m, gives_none) is None
     assert paired_delta_of_derived(of, of, keys, raises, _mean_m) is None
     assert paired_delta_of_derived(of, of, keys, _mean_m, raises) is None
+
+
+def test_beside_n_cannot_shadow_a_computed_metric_key():
+    """`beside_n` is core-supplied context copied into every metric block, and the
+    computed keys are merged last so it can never overwrite one. Without that
+    ordering a caller could replace `n` — the block's own inference base — with
+    whatever it happened to name."""
+    collapsed = {"u1": {"score": 1.0}, "u2": {"score": 3.0}}
+    counts = {"resolved": 2, "completed": 2, "ineligible": 0, "failed": 0}
+    out = summarize_step(
+        collapsed,
+        counts,
+        beside_n={"technical_n": {"min": 2, "max": 3, "median": 3}, "n": "clobbered"},
+    )
+    assert out["score"]["n"] == counts
+    assert out["score"]["technical_n"] == {"min": 2, "max": 3, "median": 3}
+
+
+def test_a_fractional_effective_rides_counts_into_every_metrics_n():
+    """`effective` JOINS `n`, so it travels in `counts` and needs no carrier of
+    its own — and it must survive as the fractional number `runner.attrition`
+    computed. `reference.md` § Weighted samples prints `effective: 191.4` beside
+    a `completed` of 228: rounding it to an `int` would name a size no interval
+    was computed at, which is why `counts` is `dict[str, float]`.
+
+    Asserted on both metric shapes. The document's own example is `r`, which
+    `aggregate` derives, and the derived branch builds its `n` from a separate
+    literal — so a change made in only the recorded-column loop reads correctly
+    for `pred` and drops `effective` for `r`."""
+    collapsed = {"u1": {"score": 1.0}, "u2": {"score": 3.0}}
+    counts = {"resolved": 3, "completed": 2, "ineligible": 1, "failed": 0, "effective": 1.6}
+    out = summarize_step(collapsed, counts, derived={"total": 4.0})
+    for name in ("score", "total"):
+        assert out[name]["n"]["effective"] == pytest.approx(1.6)
+        # Beside `completed`, not replacing it: weights change what each unit
+        # contributes, not how many there were.
+        assert out[name]["n"]["completed"] == 2
+    # The control: `completed` is still recomputed per column rather than taken
+    # from `counts`, so this is not passing off a verbatim copy of the mapping.
+    ragged = summarize_step({"u1": {"score": 1.0}}, counts)
+    assert ragged["score"]["n"] == {**counts, "completed": 1}
