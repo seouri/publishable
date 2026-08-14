@@ -2140,6 +2140,39 @@ def test_a_group_axis_name_that_renders_blank_is_a_shape_fault(write_config):
     )
 
 
+def test_the_blank_axis_name_rule_is_an_allowlist_not_a_denylist(write_config):
+    """The predicate is `sweep.NAMEABLE_CHAR` — at least one of the class
+    `SWEPT_VALUE_PATTERN` is built from — rather than an enumeration of what is
+    forbidden, and the invisible codepoints are what force that shape.
+
+    Three spellings of one fault reached a run: `""` and `" "` were caught by a
+    `.strip()` predicate, `"arm."` was not (it renders to nothing after the last
+    `.`), and a zero-width space is not caught by `.strip()` either — `'\\u200b'
+    .isspace()` is False — so `by: "\\u200b"` validated clean and named
+    directories `00_\\u200b=control`. A denylist loses this race by construction:
+    there is an unbounded supply of invisible codepoints and one alphabet of
+    legal ones.
+
+    So this test asserts the *class*, over four invisibles no `.strip()` sees,
+    each also in its post-`.` form. The controls are the reason the rule is "at
+    least one" rather than `SWEPT_VALUE_PATTERN`'s full match: `study arm` and
+    `arm\\xa0` both render, resolve and narrow correctly, and refusing them would
+    be a separate rule about label hygiene that nobody has argued for."""
+    for ch in ("​", "‌", "﻿", "⁠"):
+        for by in (ch, f"arm.{ch}", f"{ch}.{ch}"):
+            assert by.rsplit(".", 1)[-1].strip() != "", (
+                f"{by!r} is caught by strip(), so it does not discriminate the "
+                "allowlist from the denylist it replaced"
+            )
+            assert "E-CONFIG-SHAPE" in codes(
+                write_config({"sweep": {"groups": [{"by": by, "levels": ["a", "b"]}]}})
+            ), f"a `by` of {by!r} has no nameable character and was accepted"
+    for by in ("arm", "study arm", "arm\xa0", "a", "0", "_x"):
+        assert "E-CONFIG-SHAPE" not in codes(
+            write_config({"sweep": {"groups": [{"by": by, "levels": ["a", "b"]}]}})
+        ), f"a `by` of {by!r} names something and must not be refused"
+
+
 def test_a_group_axis_repeating_a_level_is_refused(write_config):
     """`E-SWEEP-LEVEL-DUPLICATE` — the one route to § Mistakes core prevents'
     *two identical measurements reported as two arms* that the row's other three
@@ -2158,9 +2191,14 @@ def test_a_group_axis_repeating_a_level_is_refused(write_config):
     the row verbatim.
 
     The two controls matter for different reasons: a distinct pair must not
-    report, and a *parameter* axis repeating a value must not either — that has
-    the same shape and is deliberately left alone, since there it costs a wasted
-    execution rather than inventing an arm."""
+    report, and a *parameter* axis repeating a value must not either. That
+    second one is a deliberate gap, and **not because its consequence is
+    milder** — crossed with a group axis it reproduces this outcome exactly,
+    `00_arm=control__method=pearson` and `01_arm=control__method=pearson`
+    identical at every artifact on exit 0, with duplicated arm-bearing label
+    bodies that are selectors. The line is about what a duplicate *means*: a
+    group level is a claim about which units, a parameter value is not.
+    `E-SWEEP-LEVEL-DUPLICATE`'s registry row records the gap."""
     found = messages_by_code(
         write_config({"sweep": {"groups": [{"by": "arm", "levels": ["c", "t", "c"]}]}})
     )
@@ -2172,6 +2210,20 @@ def test_a_group_axis_repeating_a_level_is_refused(write_config):
     )
     assert "E-SWEEP-LEVEL-DUPLICATE" not in codes(
         write_config({"sweep": {"grid": {"analysis.method": ["pearson", "pearson"]}}})
+    )
+    # And the crossed case stays unrefused too — pinned so the recorded gap is
+    # visible in the suite rather than only in prose. If a later slice closes
+    # the parameter-axis duplicate, this assertion is the one that must change,
+    # and its failure is the reminder that the registry row says so.
+    assert "E-SWEEP-LEVEL-DUPLICATE" not in codes(
+        write_config(
+            {
+                "sweep": {
+                    "groups": [{"by": "arm", "levels": ["control", "treatment"]}],
+                    "grid": {"analysis.method": ["pearson", "pearson"]},
+                }
+            }
+        )
     )
     # The scope control: `seen` resets per entry, so two DIFFERENT axes sharing a
     # level name is ordinary and must not report. `sex=f × arm=f` is silly but

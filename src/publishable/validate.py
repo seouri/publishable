@@ -20,6 +20,7 @@ from publishable.replication import resolve_repeats
 from publishable.scope import step_name as _step_name
 from publishable.strata import levels_for
 from publishable.sweep import (
+    NAMEABLE_CHAR,
     SWEEP_MODES,
     check_swept_value,
     expand,
@@ -331,17 +332,39 @@ def _check_shape(doc: dict[str, Any], c: Collector) -> bool:
                 by = entry.get("by")
                 if by is not None and not isinstance(by, str):
                     _bad(f"sweep.groups[{i}].by", by, "string")
-                elif isinstance(by, str) and not by.rsplit(".", 1)[-1].strip():
+                elif isinstance(by, str) and not re.search(
+                    NAMEABLE_CHAR, by.rsplit(".", 1)[-1]
+                ):
                     # Checked on the axis name **as `label_for` renders it** —
-                    # `path.rsplit('.', 1)[-1]` — not on `by` whole. A first
-                    # version tested `by.strip()` and left `by: "arm."` open,
-                    # which renders to nothing and reaches the exact outcome
-                    # this refusal exists to prevent: driven end to end with a
-                    # matching `assign` block it produced labels `=control`/
-                    # `=treatment`, directories `00_=control`/`01_=treatment`,
-                    # and exit 0 with nothing reported. The rendered name is
-                    # what a reader sees and what a directory carries, so it is
-                    # what the rule is about.
+                    # `path.rsplit('.', 1)[-1]` — not on `by` whole. Testing
+                    # `by` whole left `by: "arm."` open, which renders to
+                    # nothing and reaches the exact outcome this refusal exists
+                    # to prevent: end to end with a matching `assign` block it
+                    # produced labels `=control`/`=treatment`, directories
+                    # `00_=control`/`01_=treatment`, and exit 0 with nothing
+                    # reported. The rendered name is what a reader sees and
+                    # what a directory carries, so it is what the rule is about.
+                    #
+                    # **An allowlist, not a denylist**, and reusing
+                    # `sweep.NAMEABLE_CHAR` — the class `SWEPT_VALUE_PATTERN` is
+                    # built from, which § How artifacts are organized already
+                    # states as what may be rendered into a label. Two earlier
+                    # spellings of one fault got through a denylist: `""` and
+                    # `" "` were caught by `strip()`, `"arm."` was not, and a
+                    # zero-width space is not caught by `strip()` either
+                    # (`'​'.isspace()` is False), so it validated clean and
+                    # named directories `00_​=control`. Enumerating what is
+                    # forbidden loses that race by construction — there is an
+                    # unbounded supply of invisible codepoints and one alphabet
+                    # of legal ones. Requiring at least one legal character
+                    # closes every spelling, present and future, in one line.
+                    #
+                    # Deliberately *at least one* rather than
+                    # `SWEPT_VALUE_PATTERN`'s full match: a name like
+                    # `study arm` renders, resolves, and narrows correctly, and
+                    # refusing it is a separate rule about label hygiene that
+                    # nobody has argued for. This rule is only about a name with
+                    # nothing in it.
                     #
                     # A blank axis name is where `selector_paths` and
                     # `cli._resolved_group_axes` disagree, and the one shape where
@@ -373,9 +396,11 @@ def _check_shape(doc: dict[str, Any], c: Collector) -> bool:
                     c.error(
                         "E-CONFIG-SHAPE",
                         f"sweep.groups[{i}].by",
-                        f"renders to a blank axis name (`{by!r}`); expected one — it "
-                        "names the conditions this axis expands into, the directories "
-                        "they get, and the `data.units.assign` block that fills them",
+                        f"renders to an axis name with no nameable character (`{by!r}`); "
+                        f"expected at least one matching {NAMEABLE_CHAR} — the name "
+                        "labels the conditions this axis expands into, names the "
+                        "directories they get, and names the `data.units.assign` block "
+                        "that fills them",
                     )
                 levels = entry.get("levels")
                 if levels is not None and not isinstance(levels, list):
@@ -2720,12 +2745,23 @@ def _check_sweep(
         #
         # `E-SWEEP-PATH-DUPLICATE` is the sibling and does not reach this:
         # it compares axis *names* across entries, never values within one
-        # entry's `levels`. The same hole exists on a parameter axis
-        # (`grid: {analysis.method: [pearson, pearson]}` expands to two
-        # identical conditions) and is left alone deliberately — there it is
-        # wasted compute, here it is the named prevented mistake, because a
-        # group level is a claim about *which units* rather than a setting.
-        # § Errors `validate` reports says so on this row.
+        # entry's `levels`.
+        #
+        # The same hole exists on a parameter axis
+        # (`grid: {analysis.method: [pearson, pearson]}`) and is left alone
+        # deliberately — but **not because its consequence is milder**, which is
+        # what an earlier version of this comment and its registry row both
+        # claimed. Crossed with a group axis it reproduces this outcome exactly:
+        # `groups: [{by: arm, levels: [control, treatment]}] × grid:
+        # {analysis.method: [pearson, pearson]}` runs to exit 0 with
+        # `00_arm=control__method=pearson` and `01_arm=control__method=pearson`
+        # identical at every artifact, and those duplicated label bodies carry
+        # the arm, so they are selectors — a contrast naming one resolves to the
+        # later of the pair silently. The line drawn here is about what a
+        # duplicate *means*, not what it costs: a group level is a claim about
+        # which units, a parameter value is not. The parameter-axis duplicate is
+        # a known gap, recorded on this code's row in § Errors `validate`
+        # reports rather than closed.
         seen: dict[str, int] = {}
         for j, level in enumerate(entry["levels"]):
             if not isinstance(level, str):

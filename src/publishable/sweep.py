@@ -82,7 +82,18 @@ class Condition:
         object.__setattr__(self, "selectors", frozenset(self.selectors))
 
 
-SWEPT_VALUE_PATTERN = r"^[A-Za-z0-9._+-]+$"
+NAMEABLE_CHAR = r"[A-Za-z0-9._+-]"
+"""The one character class this project will render into a condition label.
+
+Factored out of `SWEPT_VALUE_PATTERN` below so the two rules that need it read
+the same set rather than two copies of it: `check_swept_value` requires a swept
+*value* to be made **entirely** of these, and `validate._check_shape` requires a
+group axis's rendered *name* to contain **at least one**. Different strictness,
+one alphabet — a character admitted here becomes legal in both at once, which is
+the point of naming it.
+"""
+
+SWEPT_VALUE_PATTERN = rf"^{NAMEABLE_CHAR}+$"
 
 
 def render_value(value: Any) -> str:
