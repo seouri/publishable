@@ -1,3 +1,4 @@
+import sys
 from pathlib import Path
 
 from publishable import BaseTemplate, Param
@@ -120,6 +121,100 @@ def test_per_call_merge_does_not_leak_between_two_roots(tmp_path: Path):
 
     assert get_template("alpha", root_a) is not None
     assert get_template("alpha", root_b) is None
+
+
+def _two_repos_each_holding_my_assay(tmp_path: Path) -> tuple[Path, Path]:
+    """Repo A and repo B, both with `templates/my_assay.py` registering `my_assay`.
+
+    Each file imports a helper from its own `templates/support/` package. The
+    helper is a *package*, not a sibling `.py`, on purpose: every `templates/*.py`
+    is itself imported by discovery, so a sibling module would be re-imported
+    per repo by accident and the leak would not show.
+    """
+    roots = []
+    for tag in ("a", "b"):
+        root = tmp_path / tag
+        (root / "templates" / "support").mkdir(parents=True)
+        (root / "templates" / "support" / "__init__.py").write_text(f'ORIGIN = "{tag.upper()}"\n')
+        (root / "templates" / "my_assay.py").write_text(
+            "import support\n"
+            "from publishable import BaseTemplate, register_template\n\n\n"
+            '@register_template("my_assay")\n'
+            "class MyAssay(BaseTemplate):\n"
+            f'    """{tag.upper()}\'s"""\n\n'
+            "    origin = support.ORIGIN\n"
+        )
+        roots.append(root)
+    return roots[0], roots[1]
+
+
+def test_two_repos_in_one_process_do_not_cross_contaminate(tmp_path: Path):
+    """Both repos hold `templates/my_assay.py`, registering the same name but
+    different classes. Resolving from repo A then repo B must give B's class —
+    asserted by class identity (`__doc__`, and `origin` carried from the repo's
+    own helper), never by the name, which is identical either way and so proves
+    nothing.
+
+    `origin` is the assertion that fails today: repo B's `import support` is
+    served repo A's package from `sys.modules`, so B's class silently carries
+    A's data. The `__module__` inequality is the second claim — that the two
+    files are not one `sys.modules` entry — and it is what dies if the
+    synthetic module name is keyed on the file stem alone."""
+    repo_a, repo_b = _two_repos_each_holding_my_assay(tmp_path)
+
+    a = get_template("my_assay", repo_a)
+    b = get_template("my_assay", repo_b)
+
+    assert a is not None and b is not None
+    assert type(a).__doc__ == "A's"
+    assert type(b).__doc__ == "B's"
+    assert type(a).origin == "A"
+    assert type(b).origin == "B"
+    assert type(a) is not type(b)
+    assert type(a).__module__ != type(b).__module__
+
+
+def test_a_repos_own_templates_are_reachable_from_a_second_call(tmp_path: Path):
+    """THE CONTROL for the test above: naming a module per repo must not make a
+    repo resolvable only once. Nothing is cached, so the same root asked twice
+    re-imports and answers identically — with the same class *identity*, since
+    two separate imports of one file give two unequal classes."""
+    repo_a, _ = _two_repos_each_holding_my_assay(tmp_path)
+
+    first = get_template("my_assay", repo_a)
+    second = get_template("my_assay", repo_a)
+
+    assert first is not None and second is not None
+    assert type(first).__doc__ == type(second).__doc__ == "A's"
+    assert type(first).origin == type(second).origin == "A"
+
+
+def test_a_template_named_for_a_stdlib_module_does_not_import_itself(tmp_path: Path):
+    """`templates/json.py` whose own top level says `import json`. Bound as
+    `json` in `sys.modules` it gets *itself* back — deterministically, on every
+    call, single-threaded — and the stdlib `json` is evicted from the process
+    for good afterwards. `publishable` itself imports `io`, so `templates/io.py`
+    carries the same hazard; it is named here rather than tested, because
+    clobbering `sys.modules["io"]` mid-suite is worse than the bug.
+
+    THE CONTROL is `saw_stdlib_json`: a fix that merely skipped files named
+    after a stdlib module would leave the template unresolved and fail it."""
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "json.py").write_text(
+        "import json\n"
+        "from publishable import BaseTemplate, register_template\n\n\n"
+        '@register_template("jsonish")\n'
+        "class Jsonish(BaseTemplate):\n"
+        "    saw_stdlib_json = hasattr(json, 'loads')\n"
+    )
+
+    resolved = get_template("jsonish", tmp_path)
+
+    assert resolved is not None
+    assert type(resolved).__name__ == "Jsonish"
+    assert type(resolved).saw_stdlib_json is True
+    assert hasattr(sys.modules["json"], "loads")
 
 
 def test_validate_defaults_to_no_cross_field_rules():
