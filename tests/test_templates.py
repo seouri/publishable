@@ -43,7 +43,9 @@ def test_a_local_template_resolves_by_name(tmp_path: Path):
         "    pass\n"
     )
 
-    assert get_template("my_assay", tmp_path) is not None
+    resolved = get_template("my_assay", tmp_path)
+    assert resolved is not None
+    assert type(resolved).__name__ == "MyAssay"
     assert get_template("generic", tmp_path) is not None
 
 

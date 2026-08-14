@@ -4,8 +4,14 @@ once a repo root is given.
 The merged mapping is built fresh on every call — never cached module-globally
 — because two projects resolved in one process must never see each other's
 `templates/`. Merge order is `{**locals, **_BUILTIN}`: core wins on a name
-collision, so a local file that names itself `generic` cannot shadow the
-built-in — it is resolved by name, never by load order.
+collision, so a local file that names itself `generic` cannot silently change
+what a config naming `generic` means.
+
+This is an interim behaviour, not the designed policy: `reference.md` §
+Creating a plugin requires a collision or a shadow of a core name to fail at
+load, naming both providers, and gives "resolved by name, never by load
+order" as the *reason for refusing* the shadow — not as license to resolve it
+silently. Task 7 replaces this merge order with that refusal.
 """
 
 from pathlib import Path
