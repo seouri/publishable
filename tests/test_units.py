@@ -1615,27 +1615,133 @@ def test_a_stratum_no_resolved_unit_carries_is_not_drawn_as_one_stratum():
     """A `stratify_by` naming a `sweep.groups` axis is legal against § Validation's
     *Allocation strata exist* — the row admits an axis name — but an axis's
     membership is *realized* by an earlier draw rather than carried as a column,
-    which this build does not yet resolve (task 13). Drawing it as a single
-    "no value" stratum would be an unstratified draw wearing a stratified
-    record: every unit in one group, `strata` recording a balance that never
-    happened.
+    so it can only be read out of that axis's plan. With no such plan in
+    `resolved`, drawing it as a single "no value" stratum would be an
+    unstratified draw wearing a stratified record: every unit in one group,
+    `strata` recording a balance that never happened.
 
-    So the assertion is the raise, and it names task 13 rather than task 12 —
-    the message is what tells a reader which build resolves it. The control that
-    this is not simply "any name raises" is every stratified test above, whose
-    `site` draws."""
+    So the assertion is the raise, and the message names the two declarations
+    that reach it by their codes — a later axis
+    (`E-DATA-ASSIGN-STRATIFY-FORWARD`) and a name nothing declares
+    (`E-DATA-ASSIGN-STRATIFY-UNKNOWN`) — because the raise cannot tell them
+    apart from its own arguments. Both empty and non-empty `resolved` are
+    exercised: an axis this draw comes *before* is absent from the snapshot it
+    is handed, which is the whole of what "forward-only" means at this level.
+    The control that this is not simply "any name raises" is every stratified
+    test above, whose `site` draws, and
+    `test_an_axis_may_stratify_on_an_earlier_axis` below, whose `sex` does."""
     roster = _stratum_roster()
+    later = assignment_for(roster, "sex", {"method": "random", "seed": 3}, ["f", "m"], "d")
     for method in ("random", "blocked"):
-        with pytest.raises(NotImplementedError) as e:
-            assignment_for(
-                roster,
-                "arm",
-                {"method": method, "seed": 11, "stratify_by": ["sex"]},
-                ["control", "treatment"],
-                "digest",
-            )
-        assert "'sex'" in str(e.value)
-        assert "task 13" in str(e.value)
+        for resolved in (None, {}, {"cohort": later}):
+            with pytest.raises(NotImplementedError) as e:
+                assignment_for(
+                    roster,
+                    "arm",
+                    {"method": method, "seed": 11, "stratify_by": ["sex"]},
+                    ["control", "treatment"],
+                    "digest",
+                    None,
+                    resolved,
+                )
+            assert "'sex'" in str(e.value)
+            assert "E-DATA-ASSIGN-STRATIFY-FORWARD" in str(e.value)
+            assert "E-DATA-ASSIGN-STRATIFY-UNKNOWN" in str(e.value)
+
+
+def _sex_plan() -> ArmPlan:
+    """The earlier axis, drawn — six `f` and six `m` over the 12-unit fixture,
+    with no `sex` column anywhere in the roster. That absence is the point: a
+    drawn axis leaves nothing to read, so a second axis stratifying on it has
+    only this plan to balance within."""
+    return assignment_for(
+        _stratum_roster(), "sex", {"method": "random", "seed": 7}, ["f", "m"], "digest"
+    )
+
+
+def test_an_axis_may_stratify_on_an_earlier_axis():
+    """`experimental-designs.md` § Between-subjects factorial: "Axes resolve in
+    declaration order and `stratify_by` may name an earlier axis" — the both-
+    randomized row of `reference.md` § Expansion modes' table, two `random` axes
+    with the second stratifying on the first.
+
+    **`arm` is balanced WITHIN each `sex` arm**, and neither `sex` nor any
+    stand-in for it is a unit attribute here, so the balance can only have come
+    from the earlier plan's realized membership. A draw that ignored `resolved`
+    would raise (the test above); one that read a column would find none.
+
+    **Membership at a pinned seed, not only counts**, for the reason task 12's
+    surviving mutation established: `_apportion` FORCES 3/3 inside each stratum
+    of six, so every count assertion here is satisfied by a draw that never
+    shuffled, ignored its seed, or split the strata the wrong way round. The
+    exact keys, and the seed-12 half that must differ from them, are what make
+    the RNG load-bearing on this path specifically."""
+    sex = _sex_plan()
+    levels = ("control", "treatment")
+    plan = assignment_for(
+        _stratum_roster(),
+        "arm",
+        {"method": "random", "seed": 11, "stratify_by": ["sex"]},
+        levels,
+        "digest",
+        None,
+        {"sex": sex},
+    )
+    assert plan.strata == ("sex",)
+
+    for arm in sex.members.values():
+        # Six units in each `sex` arm, apportioned 3/3 within it — the balance
+        # `stratify_by` declares. Asserted per `sex` arm rather than over the
+        # roster, whose 6/6 total an unstratified draw also produces.
+        assert len(set(arm) & set(plan.members["control"])) == 3
+        assert len(set(arm) & set(plan.members["treatment"])) == 3
+
+    assert plan.members["control"] == ("u02", "u00", "u01", "u11", "u03", "u07")
+    assert plan.members["treatment"] == ("u09", "u06", "u05", "u08", "u10", "u04")
+
+    other = assignment_for(
+        _stratum_roster(),
+        "arm",
+        {"method": "random", "seed": 12, "stratify_by": ["sex"]},
+        levels,
+        "digest",
+        None,
+        {"sex": sex},
+    )
+    assert set(other.members["control"]) != set(plan.members["control"])
+
+
+def test_a_stratum_the_roster_carries_is_an_attribute_before_it_is_an_axis():
+    """**The precedence, pinned in the one place it can diverge.** `validate`
+    exempts a `stratify_by` name found in `data.units.attributes` before it asks
+    whether the name is a group axis; this function decides the same order from
+    the other side, off the resolved units. So a name that is both — `site`,
+    carried by every unit here AND handed in as a drawn axis — must balance on
+    the column, or the two sides would answer differently for one declaration
+    and no forward-only finding would correspond to what the draw did.
+
+    The two answers are made distinguishable on purpose: the `site` plan handed
+    in is a two-level 6/6 split that cuts ACROSS the three sites, so balancing
+    on it gives A 3/3, B 2/2, C 1/1 only if the column won. The membership pin
+    is `test_a_stratified_draw_balances_arms_within_every_stratum`'s own,
+    unchanged — the same declaration with no `resolved` at all — so this test
+    asserts bit-identity with the column draw rather than merely a plausible
+    balance."""
+    crossing = assignment_for(
+        _stratum_roster(), "site", {"method": "random", "seed": 5}, ["f", "m"], "digest"
+    )
+    levels = ("control", "treatment")
+    plan = assignment_for(
+        _stratum_roster(),
+        "arm",
+        {"method": "random", "seed": 11, "stratify_by": ["site"]},
+        levels,
+        "digest",
+        None,
+        {"site": crossing},
+    )
+    assert _per_stratum(plan, levels) == {"A": (3, 3), "B": (2, 2), "C": (1, 1)}
+    assert plan.members["control"] == ("u04", "u00", "u02", "u01", "u11", "u09")
 
 
 def test_a_unit_carrying_no_value_for_the_stratum_is_its_own_stratum():

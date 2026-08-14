@@ -9141,6 +9141,100 @@ def test_a_stratum_naming_a_group_axis_is_not_refused(write_config):
     assert "E-DATA-ASSIGN-STRATIFY-UNKNOWN" not in found
 
 
+def _crossed(first: str, second: str, stratify_by: list) -> dict:
+    """Two group axes, `first` then `second`, with `second` stratifying on
+    whatever `stratify_by` names. `sex` is deliberately NOT a declared attribute,
+    so the name resolves as an axis and not as a column."""
+    return _between(
+        {
+            "sex": {"method": "random", "seed": 7},
+            "arm": {"method": "random", "seed": 11, "stratify_by": stratify_by},
+        },
+        axes=[
+            {"by": first, "levels": ["f", "m"] if first == "sex" else ["control", "treatment"]},
+            {
+                "by": second,
+                "levels": ["f", "m"] if second == "sex" else ["control", "treatment"],
+            },
+        ],
+    )
+
+
+@pytest.mark.parametrize(
+    "first,second,stratify_by",
+    [
+        ("arm", "sex", ["sex"]),
+        ("arm", "sex", "sex"),
+        ("sex", "arm", ["arm"]),
+    ],
+    ids=["later-axis", "later-axis-bare-string", "itself"],
+)
+def test_stratifying_on_a_later_axis_is_refused(write_config, first, second, stratify_by):
+    """§ Validation, *Stratification is forward-only*: "`assign.sex.stratify_by:
+    [arm]`, but `arm` is declared after `sex`; an axis may only stratify on one
+    already resolved". `E-DATA-ASSIGN-STRATIFY-FORWARD`.
+
+    A drawn axis leaves no column, so the balance is over the earlier axis's
+    realized membership — which does not exist when the stratifying axis is drawn
+    first. Unrefused, `cli._resolved_group_axes` raises mid-run on a config that
+    validated clean, the validate-clean-then-fail class this slice keeps closing.
+
+    `itself` is the third case and not a fourth row: an axis is not resolved
+    while it is being drawn, so `arm.stratify_by: [arm]` is the same fault at
+    distance zero — and it is what a check written `<=` the wrong way round, or
+    one comparing the wrong pair of names, gets wrong.
+
+    The assertion is membership rather than an exact set: `E-DATA-ASSIGN-DRAWN`
+    still refuses both `random` blocks in this build (task 14 retires it), and
+    `E-DATA-ASSIGN-STRATIFY-UNKNOWN` must NOT fire — the name IS a declared axis,
+    and existence is the other row's question."""
+    found = _error_codes(write_config(_crossed(first, second, stratify_by)))
+    assert "E-DATA-ASSIGN-STRATIFY-FORWARD" in found
+    assert "E-DATA-ASSIGN-STRATIFY-UNKNOWN" not in found
+
+
+def test_stratifying_on_an_earlier_axis_is_not_refused(write_config):
+    """**The control, and the same pair declared the other way round** — the one
+    difference between it and the `later-axis` case above is the order of the two
+    `sweep.groups` entries, so a check that reported the code unconditionally
+    (or that read the two names in either order indifferently) passes that test
+    and fails this one.
+
+    This is `reference.md` § Expansion modes' both-randomized row: "two `random`
+    axes, the second stratifying on the first"."""
+    found = _error_codes(write_config(_crossed("sex", "arm", ["sex"])))
+    assert "E-DATA-ASSIGN-STRATIFY-FORWARD" not in found
+    assert "E-DATA-ASSIGN-STRATIFY-UNKNOWN" not in found
+
+
+def test_a_declared_attribute_shadowing_a_later_axis_is_not_forward_only(write_config):
+    """**The precedence, from `validate`'s side.** A `stratify_by` name that is
+    both a declared unit attribute and a group axis is an ATTRIBUTE here — the
+    *Allocation strata exist* branch exempts it before the order question is
+    asked — and `units._stratum_groups` decides the same order from the resolved
+    units. So a name the roster carries is balanced on the column and no
+    forward-only finding is owed, even though the axis of that name is declared
+    after the stratifying one. Reported otherwise, `validate` would refuse a
+    design the draw performs without complaint."""
+    found = _error_codes(
+        write_config(
+            _between(
+                {
+                    "arm": {"method": "random", "seed": 11, "stratify_by": ["sex"]},
+                    "sex": {"method": "random", "seed": 7},
+                },
+                axes=[
+                    {"by": "arm", "levels": ["control", "treatment"]},
+                    {"by": "sex", "levels": ["f", "m"]},
+                ],
+                attributes=["sex"],
+            )
+        )
+    )
+    assert "E-DATA-ASSIGN-STRATIFY-FORWARD" not in found
+    assert "E-DATA-ASSIGN-STRATIFY-UNKNOWN" not in found
+
+
 def test_an_empty_stratify_by_under_a_draw_is_not_refused(write_config):
     """`stratify_by: []` is what `init` writes and what most designs carry: it
     names no balance, so there is no name to resolve. A check written as "the key

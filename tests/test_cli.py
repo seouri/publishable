@@ -526,6 +526,54 @@ def test_resolved_group_axes_draws_a_blocked_allocation():
     assert plans["arm"].members["treatment"] == ("u02", "u03", "u06", "u07", "u09", "u10", "u12")
 
 
+def test_the_draw_order_is_the_declaration_order_by_contract():
+    """**The sequencing itself, pinned.** `reference.md` § Expansion modes: "axes
+    resolve in declaration order, and `stratify_by` may name a group axis
+    declared before it". This loop's dict was in declaration order by accident of
+    construction before; what makes the order a contract now is that each axis is
+    handed the plans of the axes drawn SO FAR, so `arm.stratify_by: [sex]`
+    balances `arm` within the `sex` arms this same loop just drew.
+
+    Two `random` axes, so `sex` leaves no column and the balance below can only
+    have come from its plan. The forward pair resolves and is balanced; the SAME
+    two axes declared the other way round raise, because `sex` is not in the
+    snapshot `arm` is drawn against.
+
+    **That raise is what pins the order**, and it is the only thing that can:
+    `units.assign_seed_for` keys on the axis NAME, not on position, so two axes
+    neither of which stratifies on the other draw bit-identical plans whichever
+    order the loop takes. Reordering is observable only here. A refactor of this
+    function into an unordered mapping — or one that drew every axis against the
+    finished set — fails this test rather than silently reordering draws."""
+    from publishable.units import Unit, UnitList
+
+    roster = UnitList([Unit(key=f"u{i:02d}", paths=(), attributes={}) for i in range(12)])
+    forward = [
+        {"by": "sex", "levels": ["f", "m"]},
+        {"by": "arm", "levels": ["control", "treatment"]},
+    ]
+    units_decl = {
+        "assign": {
+            "sex": {"method": "random", "seed": 7},
+            "arm": {"method": "random", "seed": 11, "stratify_by": ["sex"]},
+        }
+    }
+    plans = _resolved_group_axes(units_decl, {"groups": forward}, roster, "digest")
+
+    assert list(plans) == ["sex", "arm"]
+    assert plans["arm"].strata == ("sex",)
+    for sex_arm in plans["sex"].members.values():
+        assert len(set(sex_arm) & set(plans["arm"].members["control"])) == 3
+        assert len(set(sex_arm) & set(plans["arm"].members["treatment"])) == 3
+
+    with pytest.raises(NotImplementedError) as e:
+        _resolved_group_axes(
+            units_decl, {"groups": list(reversed(forward))}, roster, "digest"
+        )
+    assert "'sex'" in str(e.value)
+    assert "E-DATA-ASSIGN-STRATIFY-FORWARD" in str(e.value)
+
+
 def test_non_string_levels_make_arm_members_raise_rather_than_skip_narrowing():
     """`sweep.selector_paths` — the same function `expand` uses to decide which
     paths are group cells — accepts a `levels` list of any element type, but

@@ -1467,6 +1467,18 @@ def _check_assign(
     same function the draw balances on, so a bare `stratify_by: site` cannot be
     one name to the draw and a character sequence here.
 
+    *Stratification is forward-only* — `E-DATA-ASSIGN-STRATIFY-FORWARD`, the
+    order half of the row above and a separate code because a row and a code are
+    the same check seen from two ends: a stratum naming a `sweep.groups` axis
+    this one is drawn *before*, or naming this axis itself. A drawn axis leaves
+    no column, so the balance is over the earlier axis's **realized** membership,
+    which `cli._resolved_group_axes` supplies by handing each draw the plans
+    already drawn — making this a sequencing requirement rather than a check on
+    one, and the reason a cycle is unrepresentable rather than something to
+    detect. Order comes from `sweep.selector_paths`, the same declaration order
+    that loop walks. A stratum resolving to a declared attribute is exempt before
+    this runs, matching `units._stratum_groups`' own precedence.
+
     *Allocation strata survive clustering* — `E-DATA-ASSIGN-STRATIFY-VARIES`,
     the second row here needing a roster: a declared stratum whose value is not
     constant across one cluster, under a declared `cluster_by`. A cluster is
@@ -1810,7 +1822,37 @@ def _check_assign(
                     resolvable_strata.append(name)
                     continue
                 if isinstance(name, str) and name in axes:
-                    continue  # a group axis is a legal target; its order is row 3's
+                    # *Stratification is forward-only* — the order half, and its
+                    # own code. An axis may only stratify on one **already
+                    # resolved**, because the stratum is that axis's realized
+                    # membership rather than a column: `units.assignment_for` is
+                    # handed the plans drawn so far, so a stratum naming an axis
+                    # this one is drawn before, or naming this one itself, names
+                    # membership that does not exist yet. `sweep.selector_paths`
+                    # is the declaration order both sides read — the same list
+                    # `cli._resolved_group_axes` walks — so the position this
+                    # compares is the position the draw actually happens at.
+                    #
+                    # Skipped when this axis is not itself a `sweep.groups` axis:
+                    # nothing draws it, so it has no position to be forward of,
+                    # and a finding about the order of a block no draw reaches
+                    # would be derived from a different fault (*Every assignment
+                    # names an axis*) rather than reported on its own terms.
+                    if axis not in axes or axes.index(name) < axes.index(axis):
+                        continue
+                    itself = " itself" if name == axis else ""
+                    c.error(
+                        "E-DATA-ASSIGN-STRATIFY-FORWARD",
+                        f"data.units.assign.{axis}.stratify_by",
+                        f"names {name!r}, the axis{itself} rather than one declared "
+                        f"before it — `sweep.groups` declares "
+                        f"{', '.join(axes)} in that order, and an axis may only "
+                        f"stratify on one already resolved. A drawn axis leaves no "
+                        f"column, so the balance is over the earlier axis's realized "
+                        f"membership, and {name!r} has none when {axis!r} is drawn. "
+                        f"Declare {name!r} first, or stratify on a unit attribute",
+                    )
+                    continue
                 c.error(
                     "E-DATA-ASSIGN-STRATIFY-UNKNOWN",
                     f"data.units.assign.{axis}.stratify_by",

@@ -276,6 +276,29 @@ def _resolved_group_axes(
     here as well as there; two resolutions of one declaration is a smaller
     instance of the defect this slice closes, so there is now exactly one.
 
+    **Axes are drawn in declaration order, and that order is a contract this
+    function keeps rather than a property of how its dict happens to be
+    built.** `reference.md` § Expansion modes: "axes resolve in declaration
+    order, and `stratify_by` may name a group axis declared before it". Each
+    axis is handed the plans of the axes already drawn, so an axis stratifying
+    on an earlier one is balanced on that axis's **realized** membership —
+    there is no column for a drawn axis to leave. What makes the ordering
+    load-bearing rather than incidental is that the same argument is what
+    fails: a refactor that reordered this loop (or built the result unordered
+    and drew from it) would hand a stratifying axis a snapshot its stratum is
+    not in, and `units.assignment_for` raises there rather than drawing a
+    different allocation quietly. `validate` refuses the declaration that
+    reaches that raise, as `E-DATA-ASSIGN-STRATIFY-FORWARD`.
+
+    **One shape can still reach the raise through a clean `validate`**, and it
+    is the same disagreement this function's `levels` skip already has with
+    `sweep.selector_paths` (below): `validate` reads the axis order from
+    `selector_paths`, which admits an axis whose `levels` this function skips,
+    so an earlier axis this function did not realize is an earlier axis
+    `validate` saw. Deliberately surfaced as a raise — `arm_members`'s own
+    `KeyError` is the precedent, a caller bug to see rather than one to absorb
+    by drawing an allocation nothing balanced.
+
     Realized **once per run**, and the result is what both `units.arm_members`
     and `artifacts.build_allocation_document` are handed — neither recomputes
     it. Under `by_attribute` a recomputation would agree; under a draw a second
@@ -354,8 +377,22 @@ def _resolved_group_axes(
         # apply now lives. `from` "means nothing" under `random`/`blocked` for
         # the reason `units._assign_constant_columns` states, and neither method
         # reads a column there — it raises.
+        # `dict(axes)` — the axes drawn SO FAR, and the reason this loop's order
+        # is a contract rather than an accident of construction. An axis whose
+        # `stratify_by` names an earlier one is balanced on that axis's realized
+        # membership, which exists only in its plan, so reordering the loop does
+        # not silently draw a different allocation: the later axis is simply
+        # absent from this snapshot and `assignment_for` raises. A copy rather
+        # than the live dict, so the snapshot is what the axis was drawn against
+        # and cannot be read as "every axis, eventually".
         axes[axis] = assignment_for(
-            roster, axis, block if isinstance(block, dict) else None, levels, digest, clusters
+            roster,
+            axis,
+            block if isinstance(block, dict) else None,
+            levels,
+            digest,
+            clusters,
+            dict(axes),
         )
     return axes
 

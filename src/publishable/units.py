@@ -1144,7 +1144,10 @@ def stratum_names(stratify_by: Any) -> tuple[str, ...]:
 
 
 def _stratum_groups(
-    units: list[Unit], names: Sequence[Any], axis: str
+    units: list[Unit],
+    names: Sequence[Any],
+    axis: str,
+    resolved: Mapping[str, ArmPlan] | None = None,
 ) -> dict[tuple[str, ...], list[Unit]]:
     """The roster split into strata — one entry per distinct combination of the
     declared `stratify_by` values, each holding its units in roster order.
@@ -1163,32 +1166,77 @@ def _stratum_groups(
     so the two agree about what a unit with no value is rather than one treating
     it as a stratum and the other as a fault.
 
-    **A name no unit in the roster carries at all raises `NotImplementedError`**,
-    which separates that case from the per-unit absence above: a name the whole
-    roster is missing is not a stratum with unusual membership, it is a stratum
-    this build cannot read. Two declarations reach it, and the message names
-    both routes because the raise cannot tell them apart from the roster alone —
-    a `sweep.groups` axis name, which is legal against
-    `reference.md` § Validation's *Allocation strata exist* and needs the
-    earlier axis's **realized** membership rather than a column (task 13's
-    per-axis draw ordering), and a name nothing declares, which `validate`
-    refuses as `E-DATA-ASSIGN-STRATIFY-UNKNOWN` before a run reaches here.
+    **A name may also be an earlier `sweep.groups` axis, and `resolved` is what
+    reads it** — the mapping of the axes whose plans are *already drawn*, keyed
+    by axis name, which is `reference.md` § Expansion modes' "axes resolve in
+    declaration order, and `stratify_by` may name a group axis declared before
+    it" realized rather than merely permitted. Such a stratum is that axis's
+    **realized membership**: a unit's value is the level of `resolved[name]`
+    whose members hold it, so `assign.arm.stratify_by: [sex]` balances `arm`
+    *within each `sex` arm that was just drawn*. There is no column to read —
+    a drawn axis leaves none — which is exactly why the earlier axis's plan has
+    to arrive here, and why the sequencing is the feature rather than a check on
+    one.
+
+    **Precedence: a name the roster carries as an attribute is an attribute**,
+    even when a `sweep.groups` axis shares the name, and `validate`'s *Allocation
+    strata exist* row exempts a declared attribute in the same order. The two
+    read the same declaration from opposite sides — this one from the resolved
+    units, that one from `data.units.attributes` — so the one corner where they
+    could disagree is a name declared as an attribute that no resolved unit
+    carries: a roster already broken, which this function then reads as the axis
+    if one is resolved and refuses below if none is.
+
+    **Every other name raises `NotImplementedError`** — a stratum this build
+    cannot read, which is a different thing from the per-unit absence above and
+    must not be drawn as one "no value" stratum. Both declarations that reach it
+    are refused by `validate` first, and the message names both because the
+    raise cannot tell them apart from its arguments alone: a name nothing
+    declares (`E-DATA-ASSIGN-STRATIFY-UNKNOWN`) and an axis declared *after*
+    this one, so not yet drawn and not in `resolved`
+    (`E-DATA-ASSIGN-STRATIFY-FORWARD`). It stays a bare `NotImplementedError`
+    rather than a coded `ContractError` for that reason: a code here would have
+    to name one of the two faults and would be wrong for the other, which is the
+    same "one code answering to two § Validation rows" the two codes were split
+    to avoid.
+
+    **A caller whose `resolved` plan was built from a different roster** — a unit
+    no level of it holds — renders as `no value`, the attribute path's own
+    convention for the same absence. Unreachable through `assignment_for`'s two
+    producers, which both partition the whole roster they are given.
     """
+    plans = resolved or {}
+    sources: list[Mapping[str, str] | None] = []
     for name in names:
-        if not any(isinstance(name, str) and name in unit.attributes for unit in units):
-            raise NotImplementedError(
-                f"`data.units.assign.{axis}.stratify_by` names {name!r}, which no resolved "
-                "unit carries as an attribute — a stratum is read per unit when the draw is "
-                "balanced. A stratum naming an earlier `sweep.groups` axis is balanced on "
-                "that axis's realized membership rather than on a column, which this build "
-                "does not yet resolve (task 13); a stratum naming nothing at all is refused "
-                "by `validate` as `E-DATA-ASSIGN-STRATIFY-UNKNOWN`"
+        if any(isinstance(name, str) and name in unit.attributes for unit in units):
+            sources.append(None)  # read per unit, off the attribute
+            continue
+        if isinstance(name, str) and name in plans:
+            plan = plans[name]
+            sources.append(
+                {key: level for level, keys in plan.members.items() for key in keys}
             )
+            continue
+        raise NotImplementedError(
+            f"`data.units.assign.{axis}.stratify_by` names {name!r}, which no resolved "
+            "unit carries as an attribute and no already-drawn `sweep.groups` axis "
+            "resolves — a stratum is read per unit when the draw is balanced. A stratum "
+            "naming an axis declared AFTER this one names membership no draw has "
+            "realized yet, and `validate` refuses it as "
+            "`E-DATA-ASSIGN-STRATIFY-FORWARD`; a stratum naming nothing at all is "
+            "refused as `E-DATA-ASSIGN-STRATIFY-UNKNOWN`"
+        )
+
+    def value(unit: Unit, name: Any, source: Mapping[str, str] | None) -> str:
+        if source is not None:
+            return source.get(unit.key, "no value")
+        raw = unit.attributes.get(name)
+        return "no value" if raw is None else str(raw)
+
     groups: dict[tuple[str, ...], list[Unit]] = {}
     for unit in units:
         key = tuple(
-            "no value" if unit.attributes.get(name) is None else str(unit.attributes[name])
-            for name in names
+            value(unit, name, source) for name, source in zip(names, sources, strict=True)
         )
         groups.setdefault(key, []).append(unit)
     return groups
@@ -1236,6 +1284,7 @@ def assignment_for(
     levels: Sequence[str],
     digest: str,
     clusters: Mapping[str, str] | None = None,
+    resolved: Mapping[str, ArmPlan] | None = None,
 ) -> ArmPlan:
     """One axis's allocation, realized — **the single producer** of an `ArmPlan`,
     and the seam this whole slice turns on.
@@ -1281,8 +1330,10 @@ def assignment_for(
     either raise `E-DATA-ASSIGN-LEVELS` about a column nobody declared or,
     worse, partition on an unrelated one.
 
-    `digest` and `clusters` are unread on the `by_attribute` path and are
-    parameters anyway: `digest` is what `random` draws its seed with
+    `digest`, `clusters` and `resolved` are unread on the `by_attribute` path
+    and are parameters anyway: `resolved` is how a stratum naming an earlier
+    group axis reads that axis's realized membership (below), `digest` is what
+    `random` draws its seed with
     (`assign_seed_for(block, axis, digest, roster)`, below), and `clusters`
     is what `random`'s clustered draw allocates whole clusters with instead
     of individual units — a caller that already has to hold both cannot then
@@ -1358,13 +1409,37 @@ def assignment_for(
     `E-DATA-ASSIGN-LEVELS`. So a stratified draw can no more return an empty
     arm than an unstratified one can.
 
-    **A stratum name no resolved unit carries raises `NotImplementedError`**
-    rather than being drawn as a single "no value" stratum — see
-    `_stratum_groups`, which distinguishes that from a unit here or there
-    carrying no value, and names the two declarations that reach it: an
-    earlier `sweep.groups` axis, whose realized membership this build does
-    not yet resolve as a stratum (task 13), and a name nothing declares,
-    which `validate` refuses as `E-DATA-ASSIGN-STRATIFY-UNKNOWN`.
+    **A stratum may name an earlier `sweep.groups` axis, and `resolved` is
+    the only way to read one** — the mapping of axis name to the plan
+    *already drawn* for it, which `cli._resolved_group_axes` accumulates as
+    it walks the declared axes in order. A drawn axis leaves no column, so
+    balancing on it means balancing on its realized membership, and that
+    membership can only come from the plan: `assign.arm.stratify_by: [sex]`
+    puts each unit in the `sex` arm the earlier draw actually gave it and
+    apportions `arm` inside each. **This is a sequencing requirement rather
+    than a check** — `reference.md` § Expansion modes' "axes resolve in
+    declaration order, and `stratify_by` may name a group axis declared
+    before it" — and what makes the order load-bearing rather than
+    incidental is that an axis whose stratum is not yet in `resolved` cannot
+    be drawn at all: it raises here, where a caller that reordered the axes
+    would otherwise have silently drawn a different allocation.
+
+    **A stratum name that is neither carried by a resolved unit nor an
+    already-drawn axis raises `NotImplementedError`** rather than being
+    drawn as a single "no value" stratum — see `_stratum_groups`, which
+    distinguishes that from a unit here or there carrying no value, names
+    the two declarations that reach it (a later axis,
+    `E-DATA-ASSIGN-STRATIFY-FORWARD`; a name nothing declares,
+    `E-DATA-ASSIGN-STRATIFY-UNKNOWN`, both refused by `validate` first) and
+    says why it carries neither code itself.
+
+    **No `E-DATA-ASSIGN-STRATIFY-VARIES` question arises for an axis-name
+    stratum under a declared `cluster_by`**, and no check is owed for one:
+    the earlier axis's own `random` draw allocated whole clusters, so its
+    realized membership is constant within every cluster by construction,
+    where a *column* can disagree inside one. That is why `validate`'s
+    constancy row reads only the strata that resolved to declared
+    attributes.
 
     **`blocked` is realized here too, and is what reads the roster's order
     as data** (`reference.md` § Where units come from): the resolved roster
@@ -1418,7 +1493,7 @@ def assignment_for(
             # each stratum in isolation.
             stratified_rng = random.Random(seed)
             stratified: dict[str, list[str]] = {level: [] for level in levels}
-            groups = _stratum_groups(list(roster), strata, axis)
+            groups = _stratum_groups(list(roster), strata, axis, resolved)
             for stratum_units in groups.values():
                 if clusters is not None:
                     # The same whole-cluster rule the unstratified clustered
@@ -1551,7 +1626,7 @@ def assignment_for(
             # stratum, which is what a stratified block design is. Cutting the
             # whole roster into blocks and balancing each block's strata
             # instead would be a different design and a second blocking rule.
-            for stratum_units in _stratum_groups(list(roster), strata, axis).values():
+            for stratum_units in _stratum_groups(list(roster), strata, axis, resolved).values():
                 _blocked_draw(
                     [unit.key for unit in stratum_units],
                     levels,
@@ -1567,7 +1642,7 @@ def assignment_for(
         empty = [level for level in levels if not drawn[level]]
         if empty:
             within = (
-                f" within each of the {len(_stratum_groups(list(roster), strata, axis))} "
+                f" within each of the {len(_stratum_groups(list(roster), strata, axis, resolved))} "
                 f"strata of {', '.join(str(name) for name in strata)}"
                 if strata
                 else ""
