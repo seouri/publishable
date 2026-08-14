@@ -500,7 +500,17 @@ def validate_config(
         # skipped rather than reported here — `generic` still resolves as a
         # core template regardless.
         repo_root = None
-    template = get_template(name, repo_root)
+    try:
+        template = get_template(name, repo_root)
+    except ContractError as exc:
+        # The load-time refusals resolving a template can make — one today,
+        # `E-TEMPLATE-COLLISION`. Reported under the code the raise carries
+        # rather than a code chosen here, so the two surfaces stay one fault,
+        # and reported at all because `validate` is contracted never to raise.
+        # Nothing later can run: which template a name means is exactly what a
+        # collision leaves unanswered.
+        c.error(exc.code, "experiment_type", str(exc))
+        return None
     if template is None:
         c.error(
             "E-TEMPLATE-UNKNOWN",

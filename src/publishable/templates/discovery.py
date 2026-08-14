@@ -8,7 +8,10 @@ reference to `X`.
 The pending list is module-level, but it is only a staging buffer: task 6's
 requirement is that two projects in one process never see each other's
 templates, so nothing here keeps a persistent name→class mapping. Discovery
-drains this list into whatever scoped registry it builds per run.
+drains this list into whatever scoped registry it builds per run, and a name
+two registrations claim is refused there rather than by the decorator: the
+buffer records what a file said, and only the drained set knows what the rest
+of the repo said.
 """
 
 import hashlib
@@ -16,8 +19,27 @@ import importlib.util
 import sys
 from collections.abc import Callable
 from pathlib import Path
+from typing import NamedTuple
 
+from publishable.errors import ContractError
 from publishable.templates.base import BaseTemplate
+
+
+class LocalTemplate(NamedTuple):
+    """One registration a `templates/*.py` made, and who made it.
+
+    The provider string is built here rather than recovered later because it
+    cannot be recovered later: the `sys.modules` restore in `_import_file`
+    deletes the module object, and `inspect.getfile` on the surviving class
+    then raises `TypeError`. It is also the *pair* `path::ClassName` rather
+    than a path alone, because two `@register_template` calls in one file are
+    as much a collision as two files are, and a message built from paths alone
+    would print one path twice and name no second provider at all.
+    """
+
+    cls: type[BaseTemplate]
+    provider: str
+
 
 _pending: list[tuple[str, type[BaseTemplate]]] = []
 
@@ -127,12 +149,12 @@ def _under(path: Path, directory: Path) -> bool:
     return root == here or root in here.parents
 
 
-def discover_local(repo_root: Path) -> dict[str, type[BaseTemplate]]:
+def discover_local(repo_root: Path) -> dict[str, LocalTemplate]:
     """Import every `templates/*.py` under `repo_root` and return what it registered.
 
     Eager rather than lazy — every file is imported, not only the one a config
-    names — because a collision between two local templates (task 7) can only
-    be detected between files a config never mentions. Import order therefore
+    names — because a collision between two local templates can only be
+    detected between files a config never mentions. Import order therefore
     never decides which template wins; both are found and the collision is
     named. See `reference.md` § Creating a plugin.
 
@@ -152,17 +174,42 @@ def discover_local(repo_root: Path) -> dict[str, type[BaseTemplate]]:
     Discards whatever the pending buffer already held before this call — the
     return value is what *these files* registered, not a leftover from an
     earlier `@register_template` in the same process.
+
+    Two local registrations of one name raise `ContractError` ·
+    `E-TEMPLATE-COLLISION` naming every provider that claimed it. A local name
+    core itself registers is the *other* refusal that code covers, and it is
+    not made here: this function knows what a repo declares and not what core
+    does, so the shadow is refused where the two are merged — see
+    `registry._merged`.
     """
     templates_dir = repo_root / "templates"
     if not templates_dir.is_dir():
         return {}
 
     drain_pending()  # discard anything queued before this call — not ours to return
-    found: dict[str, type[BaseTemplate]] = {}
+    found: dict[str, LocalTemplate] = {}
+    claims: dict[str, list[str]] = {}
     for path in sorted(templates_dir.glob("*.py")):
         if path.stem.startswith("__"):
             continue
         _import_file(path, _module_name(repo_root.resolve(), path.stem), templates_dir)
         for name, cls in drain_pending():
-            found[name] = cls
+            provider = f"{path}::{cls.__name__}"
+            claims.setdefault(name, []).append(provider)
+            found.setdefault(name, LocalTemplate(cls, provider))
+    # Every file is imported before any collision is raised, and a colliding
+    # name is reported in name order rather than in the order the files
+    # happened to be read: the whole point of the refusal is that import order
+    # is a property of a machine, so it may not decide which fault is reported
+    # either.
+    for name in sorted(claims):
+        providers = claims[name]
+        if len(providers) > 1:
+            raise ContractError(
+                f"the project-local template name `{name}` is claimed more than once: "
+                f"{' and '.join(providers)} — install order and import order are the "
+                "only tie-breaks available, and both are properties of a machine "
+                "rather than of a design. Rename one.",
+                code="E-TEMPLATE-COLLISION",
+            )
     return found

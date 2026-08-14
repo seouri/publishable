@@ -1,10 +1,15 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 from publishable import BaseTemplate, Param
+from publishable.diagnostics import Collector
+from publishable.errors import ContractError
 from publishable.stats import UnitTable
 from publishable.templates.discovery import discover_local
 from publishable.templates.registry import get_template, template_names
+from publishable.validate import validate_config
 
 
 def test_generic_is_registered_and_declares_its_conventions():
@@ -402,10 +407,10 @@ def test_discovery_imports_every_file_not_only_the_named_one(tmp_path: Path):
     found = discover_local(tmp_path)
 
     assert sorted(found) == ["alpha", "beta"]
-    assert found["alpha"].__name__ == "Alpha"
-    assert found["beta"].__name__ == "Beta"
-    assert issubclass(found["alpha"], BaseTemplate)
-    assert issubclass(found["beta"], BaseTemplate)
+    assert found["alpha"].cls.__name__ == "Alpha"
+    assert found["beta"].cls.__name__ == "Beta"
+    assert issubclass(found["alpha"].cls, BaseTemplate)
+    assert issubclass(found["beta"].cls, BaseTemplate)
 
 
 def test_discovery_ignores_non_python_and_dunder_files(tmp_path: Path):
@@ -428,7 +433,7 @@ def test_discovery_ignores_non_python_and_dunder_files(tmp_path: Path):
     found = discover_local(tmp_path)
 
     assert sorted(found) == ["real_one"]
-    assert found["real_one"].__name__ == "RealOne"
+    assert found["real_one"].cls.__name__ == "RealOne"
 
 
 def test_discovery_with_no_templates_directory_is_empty_not_an_error(tmp_path: Path):
@@ -455,3 +460,158 @@ def test_discovery_leaves_no_stale_pending_registration_behind(tmp_path: Path):
 
     assert sorted(found) == ["alpha"]
     assert drain_pending() == []
+
+
+CLAIMS_DUPLICATED_A = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("duplicated")
+class FirstClaimant(BaseTemplate):
+    pass
+"""
+
+CLAIMS_DUPLICATED_B = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("duplicated")
+class SecondClaimant(BaseTemplate):
+    pass
+"""
+
+CLAIMS_GENERIC = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("generic")
+class LocalGeneric(BaseTemplate):
+    pass
+"""
+
+CLAIMS_TWICE_IN_ONE_FILE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("duplicated")
+class FirstClaimant(BaseTemplate):
+    pass
+
+
+@register_template("duplicated")
+class SecondClaimant(BaseTemplate):
+    pass
+"""
+
+
+def test_two_local_files_claiming_one_name_are_refused_naming_both(tmp_path: Path):
+    """`reference.md` § Creating a plugin: a collision "fails at load, naming
+    both providers", because import order is a property of a machine.
+
+    The third file is what makes the naming assertions mean something: an
+    implementation that dumped every file it globbed into the message would
+    satisfy "both paths appear" while naming a file that claims nothing. The
+    control this test needs — two files claiming *different* names resolving
+    cleanly — is `test_discovery_imports_every_file_not_only_the_named_one`
+    above, which a refusal firing on any two files would break.
+    """
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "one.py").write_text(CLAIMS_DUPLICATED_A)
+    (templates / "two.py").write_text(CLAIMS_DUPLICATED_B)
+    (templates / "three.py").write_text(BETA_TEMPLATE)
+
+    with pytest.raises(ContractError) as excinfo:
+        discover_local(tmp_path)
+
+    assert excinfo.value.code == "E-TEMPLATE-COLLISION"
+    message = str(excinfo.value)
+    assert "duplicated" in message
+    assert f"{templates / 'one.py'}::FirstClaimant" in message
+    assert f"{templates / 'two.py'}::SecondClaimant" in message
+    assert str(templates / "three.py") not in message
+
+
+def test_one_file_claiming_one_name_twice_names_both_classes(tmp_path: Path):
+    """The degenerate collision: both providers are the same file, so a message
+    built from paths alone would print one path twice and name no second
+    provider at all. The class is the other half of a provider's identity, and
+    it is what distinguishes the two here."""
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "one.py").write_text(CLAIMS_TWICE_IN_ONE_FILE)
+
+    with pytest.raises(ContractError) as excinfo:
+        discover_local(tmp_path)
+
+    assert excinfo.value.code == "E-TEMPLATE-COLLISION"
+    message = str(excinfo.value)
+    assert f"{templates / 'one.py'}::FirstClaimant" in message
+    assert f"{templates / 'one.py'}::SecondClaimant" in message
+
+
+def test_a_local_template_may_not_shadow_a_core_name(tmp_path: Path):
+    """"A plugin that could redefine `generic` could change what a config means
+    without changing the config." Refused at the merge, and the second provider
+    named is core's own class — the thing a user cannot rename."""
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "mine.py").write_text(CLAIMS_GENERIC)
+
+    with pytest.raises(ContractError) as excinfo:
+        get_template("generic", tmp_path)
+
+    assert excinfo.value.code == "E-TEMPLATE-COLLISION"
+    message = str(excinfo.value)
+    assert "generic" in message
+    assert f"{templates / 'mine.py'}::LocalGeneric" in message
+    assert "publishable.templates.builtin.generic.GenericTemplate" in message
+
+
+def test_the_shadow_is_refused_however_the_registry_is_asked(tmp_path: Path):
+    """The refusal is of the *repo*, not of one lookup: a config naming some
+    other template, or a `template_names` listing, must not resolve past a
+    `templates/` core cannot merge. Discovery alone accepts the file — the name
+    is core's to know about, and `discover_local` is not where core's names
+    live."""
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "mine.py").write_text(CLAIMS_GENERIC)
+
+    with pytest.raises(ContractError) as excinfo:
+        template_names(tmp_path)
+    assert excinfo.value.code == "E-TEMPLATE-COLLISION"
+
+    with pytest.raises(ContractError) as other:
+        get_template("something_else", tmp_path)
+    assert other.value.code == "E-TEMPLATE-COLLISION"
+
+    assert sorted(discover_local(tmp_path)) == ["generic"]
+
+
+def test_validate_reports_a_collision_rather_than_raising(tmp_path: Path):
+    """`validate` collects findings and never raises, so the load-time refusal
+    reaches it as a finding. THE CONTROL: the same config in the same repo
+    without the colliding file validates past `experiment_type` — reporting
+    neither this code nor `E-TEMPLATE-UNKNOWN`."""
+    repo = tmp_path / "repo"
+    (repo / "templates").mkdir(parents=True)
+    (repo / ".git").mkdir()
+    (repo / "configs" / "cohort-pilot").mkdir(parents=True)
+    config = repo / "configs" / "cohort-pilot" / "config.yaml"
+    config.write_text(
+        "experiment_type: generic\nentrypoint: cohort_pilot.experiment:experiment\n"
+    )
+
+    clean = Collector()
+    validate_config(config, clean)
+    assert "E-TEMPLATE-COLLISION" not in clean.render()
+    assert "E-TEMPLATE-UNKNOWN" not in clean.render()
+
+    (repo / "templates" / "mine.py").write_text(CLAIMS_GENERIC)
+    reported = Collector()
+    validate_config(config, reported)
+    rendered = reported.render()
+    assert "E-TEMPLATE-COLLISION" in rendered
+    assert "E-TEMPLATE-UNKNOWN" not in rendered
+    assert str(repo / "templates" / "mine.py") in rendered
