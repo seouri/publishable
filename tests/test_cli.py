@@ -6163,6 +6163,13 @@ def test_reference_cli_tables_are_parsed_at_all():
 
     assert {n for n, s in tables["Command"] if s == "NOT BUILT"} == set(NOT_BUILT_COMMANDS)
     assert {n for n, s in tables["Generator"] if s == "NOT BUILT"} == set(NOT_BUILT_GENERATORS)
+    # The `generate` row spells its kinds inline as well, because the enum-comment
+    # rule wants that list total over what § Generators defines. Nothing else
+    # parses that cell, so the annotation there would outlive the slice that
+    # retires it — this is what keeps the two spellings of one fact together.
+    text = REFERENCE_MD.read_text()
+    for kind, status in tables["Generator"]:
+        assert (f"`{kind}` (NOT BUILT)" in text) == (status == "NOT BUILT"), kind
 
 
 @pytest.mark.parametrize("column", ["Command", "Generator"])

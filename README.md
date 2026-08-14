@@ -76,7 +76,7 @@ publishable reproduce <path-to-run.yaml>
 
 clones the exact commit, restores the locked environment, writes the config back out, and prints what's left to fill in. Neither data nor credentials travel, so the last step is yours — and `run` then verifies the input against the recorded manifest before spending anything.
 
-> **v0.x — the design is settled, interfaces may still shift before 1.0.** Issues and design feedback are very welcome.
+> **v0.x — the design is settled, interfaces may still shift before 1.0, and not every command described here dispatches yet.** [CLI reference](docs/reference.md#cli-reference) marks which ones do; the rest say so when you invoke them. Issues and design feedback are very welcome.
 
 ---
 
