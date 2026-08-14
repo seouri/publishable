@@ -8,7 +8,7 @@ import pytest
 
 from publishable import ArtifactError, ArtifactExistsError, ContractError
 from publishable.artifacts import StepIO, allocation_hash, build_allocation_document, write_atomic
-from publishable.units import Unit, UnitList
+from publishable.units import Unit, UnitList, assignment_for
 
 
 def _u(key: str) -> Unit:
@@ -1256,12 +1256,21 @@ def _mixed_arm_roster():
     return UnitList(units), control_keys, treatment_keys
 
 
+def _plans_for(roster):
+    """The one `arm` axis of `_mixed_arm_roster`, realized through
+    `units.assignment_for` — the single producer of an `ArmPlan`, and the only
+    route by which membership reaches `build_allocation_document` now that it
+    takes no roster and derives nothing. `block=None` takes `assignment_for`'s
+    `by_attribute` path and resolves the column to the axis name, which is
+    what this fixture's units carry."""
+    return {"arm": assignment_for(roster, "arm", None, ["control", "treatment"], "digest")}
+
+
 def test_build_allocation_document_returns_none_with_no_group_axes():
     """`group_axes` empty — no arm assignment resolved for this run — is the
     absent half of 'present when either is declared', and `command_run` reads
     `None` here as "write nothing.\""""
-    roster, _, _ = _mixed_arm_roster()
-    assert build_allocation_document(roster, {}) is None
+    assert build_allocation_document({}) is None
 
 
 def test_build_allocation_document_maps_axis_to_level_to_unit_keys_in_roster_order():
@@ -1272,11 +1281,15 @@ def test_build_allocation_document_maps_axis_to_level_to_unit_keys_in_roster_ord
     `strata` are asserted `{}` — the addendum's finding that a writer
     emitting a seed under `by_attribute` (nothing was drawn) looks correct
     against a fixture nobody checked the seed of — and `holdout` is asserted
-    absent, since this build never declares one."""
+    absent, since this build never declares one. Empty here because this
+    document's only axis reads a column;
+    `test_a_drawn_axis_records_its_seed_and_strata_and_a_read_one_records_neither`
+    is the mixed document where one axis appears in both keys and the other in
+    neither."""
     roster, control_keys, treatment_keys = _mixed_arm_roster()
-    group_axes = {"arm": ("arm", ["control", "treatment"])}
+    group_axes = _plans_for(roster)
 
-    doc = build_allocation_document(roster, group_axes)
+    doc = build_allocation_document(group_axes)
 
     assert doc is not None
     assert set(doc.keys()) == {"seed", "arms", "strata"}
@@ -1288,17 +1301,70 @@ def test_build_allocation_document_maps_axis_to_level_to_unit_keys_in_roster_ord
     assert "holdout" not in doc
 
 
+def test_a_drawn_axis_records_its_seed_and_strata_and_a_read_one_records_neither():
+    """**The mixed case — one `by_attribute` axis beside one `random` axis, in
+    one document.** § `allocation.json` prints `seed` and `strata` keyed by
+    axis, and says a `by_attribute` axis "is left out of both": the record has
+    to distinguish the two axes, not merely have the keys.
+
+    A test with a drawn axis alone would pass with the `plan.seed is not None`
+    and `plan.strata` filters deleted, since every axis in it qualifies; a test
+    with a read axis alone is the one already above, which passes with the
+    per-axis entries replaced by `{}`. Only the two together fail both
+    mutations, so the assertions are exact mappings rather than membership.
+
+    `cohort` is drawn nothing and reads a column; `arm` draws with a pinned
+    `seed: 11` — pinned so the recorded value is a fact the test states rather
+    than one it copies from the code that computed it — and stratifies on
+    `site`, which is a declared attribute of every unit."""
+    units = [
+        Unit(
+            key=f"u{i}",
+            attributes={
+                "cohort": "derivation" if i < 3 else "validation",
+                "site": "S1" if i % 2 else "S2",
+            },
+        )
+        for i in range(6)
+    ]
+    roster = UnitList(units)
+    group_axes = {
+        "cohort": assignment_for(
+            roster, "cohort", {"method": "by_attribute"}, ["derivation", "validation"], "d"
+        ),
+        "arm": assignment_for(
+            roster,
+            "arm",
+            {"method": "random", "seed": 11, "stratify_by": ["site"]},
+            ["control", "treatment"],
+            "d",
+        ),
+    }
+
+    doc = build_allocation_document(group_axes)
+
+    assert doc is not None
+    assert doc["seed"] == {"arm": 11}
+    assert doc["strata"] == {"arm": ["site"]}
+    assert set(doc["arms"]) == {"cohort", "arm"}
+    # The read axis is left out of both, and the drawn one is in both — stated
+    # separately from the mappings above so a reader sees the claim § Manifest
+    # makes, not only the shape.
+    assert "cohort" not in doc["seed"]
+    assert "cohort" not in doc["strata"]
+
+
 def test_allocation_hash_is_deterministic_and_content_sensitive():
     """Mirrors `manifest.manifest_hash`'s own contract: same document, same
     hash; a document that differs by one unit key hashes differently — the
     property `provenance.allocation_hash` rests on to say a copy edited
     after the run no longer matches what that run reported."""
     roster, _, _ = _mixed_arm_roster()
-    group_axes = {"arm": ("arm", ["control", "treatment"])}
-    doc = build_allocation_document(roster, group_axes)
+    group_axes = _plans_for(roster)
+    doc = build_allocation_document(group_axes)
 
     h1 = allocation_hash(doc)
-    h2 = allocation_hash(build_allocation_document(roster, group_axes))
+    h2 = allocation_hash(build_allocation_document(group_axes))
     assert h1 == h2
     assert h1.startswith("sha256:")
 
@@ -1336,8 +1402,7 @@ def test_allocation_hash_changes_when_two_units_swap_arms_and_nothing_else_moves
     sits in which arm moved.
     """
     roster, control_keys, treatment_keys = _mixed_arm_roster()
-    group_axes = {"arm": ("arm", ["control", "treatment"])}
-    doc = build_allocation_document(roster, group_axes)
+    doc = build_allocation_document(_plans_for(roster))
     h1 = allocation_hash(doc)
     assert h1 == "sha256:bf077b6dceea21f680dc12c7b050f04af5ee405be7326afe81c920c3e605d7d6"
 
@@ -1359,7 +1424,7 @@ def test_allocation_hash_changes_when_two_units_swap_arms_and_nothing_else_moves
     assert len(swapped_treatment) == len(treatment_keys) == 9
     assert swapped_control | swapped_treatment == set(control_keys) | set(treatment_keys)
 
-    swapped_doc = build_allocation_document(swapped_roster, group_axes)
+    swapped_doc = build_allocation_document(_plans_for(swapped_roster))
     h2 = allocation_hash(swapped_doc)
 
     assert set(swapped_doc["arms"]["arm"]["control"]) == swapped_control

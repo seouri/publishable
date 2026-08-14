@@ -7,7 +7,7 @@ from tests.conftest import write_experiment_module
 
 from publishable.diagnostics import Collector
 from publishable.sweep import expand
-from publishable.units import Unit, UnitList
+from publishable.units import Unit, UnitList, assignment_for
 from publishable.validate import (
     _check_assign,
     _check_cluster_by,
@@ -15,6 +15,7 @@ from publishable.validate import (
     _check_fold_stratify_by,
     _check_measurements,
     _check_weight_by,
+    _warn_undeclared_cluster,
     validate_config,
 )
 
@@ -8030,6 +8031,22 @@ def test_a_baseline_may_not_fix_a_group_level_while_ablate_is_declared(write_con
 _ARM_AXIS = [{"by": "arm", "levels": ["control", "treatment"]}]
 
 
+def _wide_roster(tmp_path, n: int = 8) -> None:
+    """Overwrite `write_config`'s one-unit `index.csv` with `n` units.
+
+    `write_config`'s roster is a single patient, which is a *broken* roster for
+    a two-arm draw and not merely a small one: *Every arm draws units*
+    apportions one unit across two levels, gives the second none, and reports
+    `E-DATA-ASSIGN-LEVELS` — correctly, and over every drawn block, which would
+    bury the fault each test below is actually about. Every test whose subject
+    is a drawn block that should validate *clean* calls this first; a test whose
+    subject is a declaration fault does not need it, since that finding suppresses
+    the draw.
+    """
+    rows = "\n".join(f"p{i}" for i in range(1, n + 1))
+    (tmp_path / "input" / "index.csv").write_text(f"patient_id\n{rows}\n")
+
+
 def _between(assign, axes=None, **extra) -> dict:
     """A `between` design with a group axis, for `write_config`'s dotted overrides."""
     units = {"from": "index.csv", "key": "patient_id", "allocation": "between", **extra}
@@ -8166,8 +8183,7 @@ def test_between_allocation_with_a_group_axis_draws_neither_arms_row(write_confi
 
 def test_by_attribute_assignment_is_accepted(write_config, tmp_path):
     """`by_attribute` is the one method that executes in this build, so it earns
-    neither `E-DATA-ASSIGN-METHOD` (absent or out-of-enum) nor
-    `E-DATA-ASSIGN-DRAWN` (in-enum but drawn) — the control for both. A
+    no `E-DATA-ASSIGN-METHOD` (absent or out-of-enum) — the control for it. A
     well-formed `groups` + `allocation: between` + `assign` config now
     validates fully clean — task 17 retired the three `-UNSUPPORTED` refusals
     that used to be the only findings a config this well-formed carried, and
@@ -8184,7 +8200,6 @@ def test_by_attribute_assignment_is_accepted(write_config, tmp_path):
         write_config(_between({"arm": {"method": "by_attribute"}}, attributes=["arm"]))
     )
     assert found == set()
-    assert "E-DATA-ASSIGN-DRAWN" not in found
     assert "E-DATA-ASSIGN-METHOD" not in found
     assert "E-DATA-ASSIGN-UNKNOWN" not in found
     assert "E-DATA-ASSIGN-LEVELS" not in found
@@ -8390,30 +8405,1552 @@ def test_assign_levels_refused_when_a_declared_level_holds_no_unit():
 
 
 @pytest.mark.parametrize("method", ["random", "blocked"])
-def test_a_drawn_assignment_method_is_refused(write_config, method):
-    """`random` and `blocked` are both in `ASSIGN_METHODS`, so neither earns
-    `E-DATA-ASSIGN-METHOD`; both draw an arm rather than reading one already
-    assigned, which is what `E-DATA-ASSIGN-DRAWN` refuses. Parametrized rather
-    than one test for both values, per the mutation requirement: narrowing the
-    refused set to just one of them must fail exactly one of these two runs."""
+def test_a_drawn_assignment_method_validates_and_draws(write_config, tmp_path, method):
+    """**The retirement, from both ends.** `random` and `blocked` are in
+    `ASSIGN_METHODS`, so neither ever earned `E-DATA-ASSIGN-METHOD`; each used to
+    earn `E-DATA-ASSIGN-DRAWN` instead, and that refusal is gone.
+
+    A clean `validate` is half a claim, and on its own it is indistinguishable
+    from a `_check_assign` whose drawn branch was deleted outright. So the same
+    declaration is put through `units.assignment_for` — the single producer the
+    runner uses — and the partition it realizes is asserted: every unit placed,
+    each in exactly one arm, and neither arm empty. Parametrized so narrowing
+    the executable set to one method fails exactly one of these two runs."""
+    _wide_roster(tmp_path)
     found = _error_codes(write_config(_between({"arm": {"method": method}})))
-    assert found == {
-        "E-DATA-ASSIGN-DRAWN",
-    }
-    assert "E-DATA-ASSIGN-METHOD" not in found
+    assert found == set()
+
+    plan = assignment_for(
+        UnitList([Unit(key=f"p{i}", paths=(), attributes={}) for i in range(1, 9)]),
+        "arm",
+        {"method": method},
+        ["control", "treatment"],
+        "d",
+    )
+    assert set(plan.members) == {"control", "treatment"}
+    placed = [key for level in plan.levels for key in plan.members[level]]
+    assert sorted(placed) == [f"p{i}" for i in range(1, 9)]
+    assert len(placed) == 8  # no unit in two arms
+    assert all(plan.members[level] for level in plan.levels)
+
+
+def test_a_partial_ratio_is_refused(write_config):
+    """§ Allocation: "a partial mapping is rejected rather than defaulted, since
+    'one entry per level' is checkable and 'the levels I left out get the
+    average' is a rule nobody should have to infer." Two levels, one entry.
+
+    `ratio` only means anything for a method that draws, so this is checked
+    under `random`/`blocked`. The exact-set assertion is what keeps this test's
+    teeth now that the retired `E-DATA-ASSIGN-DRAWN` no longer fires beside it
+    and the set is `E-DATA-ASSIGN-RATIO` alone — including against *Every arm
+    draws units*, which a malformed `ratio` suppresses rather than compounds."""
+    found = _error_codes(
+        write_config(_between({"arm": {"method": "random", "ratio": {"control": 1}}}))
+    )
+    assert found == {"E-DATA-ASSIGN-RATIO"}
 
     c = Collector()
-    _check_assign({}, {"assign": {"arm": {"method": method}}}, None, c)
-    assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-DRAWN"]
-    assert c.findings[0].path == "data.units.assign.arm.method"
-    # The wording, not just the code: `E-DATA-ASSIGN-METHOD`'s out-of-enum branch
-    # also formats `is {method!r}, which is not...`, so a test asserting the code
-    # alone would pass with the `elif method in DRAWN_ASSIGN_METHODS` branch
-    # deleted and the out-of-enum branch mutated to swallow it. `by_attribute`,
-    # the supported alternative, is what discriminates this message from that
-    # one.
+    _check_assign(
+        {"sweep": {"groups": _ARM_AXIS}},
+        {
+            "allocation": "between",
+            "assign": {"arm": {"method": "random", "ratio": {"control": 1}}},
+        },
+        None,
+        c,
+    )
+    assert {f.code for f in c.findings} == {"E-DATA-ASSIGN-RATIO"}
+    ratio_finding = next(f for f in c.findings if f.code == "E-DATA-ASSIGN-RATIO")
+    assert ratio_finding.path == "data.units.assign.arm.ratio"
+    # "has key 'control'", not "keys" and not the declared-levels pair — the
+    # declared `ratio` has one entry, and a mutation swapping its keys for the
+    # axis's `levels` in the message would still contain 'control' and 'arm',
+    # so the singular-key substring is what discriminates the two.
+    assert "has key 'control';" in ratio_finding.message
+    assert "'arm'" in ratio_finding.message
+    assert "'treatment'" in ratio_finding.message
+
+
+def test_a_ratio_naming_an_undeclared_level_is_refused(write_config):
+    """`ratio: {control: 1, f: 2}` against levels [control, treatment]."""
+    found = _error_codes(
+        write_config(
+            _between({"arm": {"method": "blocked", "ratio": {"control": 1, "f": 2}}})
+        )
+    )
+    assert found == {"E-DATA-ASSIGN-RATIO"}
+
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": _ARM_AXIS}},
+        {
+            "allocation": "between",
+            "assign": {"arm": {"method": "blocked", "ratio": {"control": 1, "f": 2}}},
+        },
+        None,
+        c,
+    )
+    assert {f.code for f in c.findings} == {"E-DATA-ASSIGN-RATIO"}
+    ratio_finding = next(f for f in c.findings if f.code == "E-DATA-ASSIGN-RATIO")
+    assert ratio_finding.path == "data.units.assign.arm.ratio"
+    assert "'f'" in ratio_finding.message
+
+
+def test_a_ratio_with_every_level_plus_an_extra_key_is_refused(write_config):
+    """The set-inequality direction `test_a_ratio_naming_an_undeclared_level_is_refused`
+    cannot isolate on its own: `{control: 1, f: 2}` is simultaneously missing
+    `treatment` *and* naming an undeclared key, so a check reading only "every
+    declared level has an entry" (`not set(levels) <= set(ratio)`, missing the
+    other half of the promised set-equality) passes that test just as well as
+    the real `set(ratio) != set(levels)` does. `{control: 1, treatment: 1, f: 2}`
+    is a strict superset of the declared levels — every level present, plus one
+    that isn't — so it isolates the direction the other two tests can't: refused
+    only if the check also catches an extra key beside a complete level set."""
+    found = _error_codes(
+        write_config(
+            _between(
+                {
+                    "arm": {
+                        "method": "random",
+                        "ratio": {"control": 1, "treatment": 1, "f": 2},
+                    }
+                }
+            )
+        )
+    )
+    assert found == {"E-DATA-ASSIGN-RATIO"}
+
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": _ARM_AXIS}},
+        {
+            "allocation": "between",
+            "assign": {
+                "arm": {
+                    "method": "random",
+                    "ratio": {"control": 1, "treatment": 1, "f": 2},
+                }
+            },
+        },
+        None,
+        c,
+    )
+    assert {f.code for f in c.findings} == {"E-DATA-ASSIGN-RATIO"}
+    ratio_finding = next(f for f in c.findings if f.code == "E-DATA-ASSIGN-RATIO")
+    assert ratio_finding.path == "data.units.assign.arm.ratio"
+    assert "'f'" in ratio_finding.message
+
+
+def test_a_ratio_that_is_not_a_mapping_at_all_is_refused(write_config):
+    """`ratio: 3` — the shape that used to validate clean and then **silently
+    draw equal allocation**, because both `validate` and `units.assignment_for`
+    gated on the same `isinstance(ratio, dict) and ratio`. A bare scalar is not
+    an `envelope.py` `LEAF_TYPES` leaf (an axis name is no fixed dotted path),
+    so nothing reports `E-CONFIG-TYPE` for it either: without this branch the
+    declaration disappears.
+
+    3 is deliberately not 1 and not 0: a reader who meant "3:1" and typed the
+    numerator alone gets a finding rather than an equal split. The message must
+    name the type, since `E-DATA-ASSIGN-RATIO`'s other two branches format keys
+    and values and neither would say `int`."""
+    found = _error_codes(write_config(_between({"arm": {"method": "random", "ratio": 3}})))
+    assert found == {"E-DATA-ASSIGN-RATIO"}
+
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": _ARM_AXIS}},
+        {"allocation": "between", "assign": {"arm": {"method": "random", "ratio": 3}}},
+        None,
+        c,
+    )
+    assert {f.code for f in c.findings} == {"E-DATA-ASSIGN-RATIO"}
+    ratio_finding = next(f for f in c.findings if f.code == "E-DATA-ASSIGN-RATIO")
+    assert ratio_finding.path == "data.units.assign.arm.ratio"
+    assert "is 3, a int, not a mapping" in ratio_finding.message
+    assert "'control'" in ratio_finding.message
+    assert "'treatment'" in ratio_finding.message
+
+
+@pytest.mark.parametrize(
+    ("ratio", "bad"),
+    [
+        ({"control": 0, "treatment": 0}, "'control', 'treatment'"),
+        ({"control": -1, "treatment": 2}, "'control'"),
+        ({"control": float("nan"), "treatment": 2}, "'control'"),
+        ({"control": float("inf"), "treatment": 2}, "'control'"),
+        ({"control": "1", "treatment": 2}, "'control'"),
+    ],
+    ids=["all-zero", "negative", "nan", "inf", "numeric-string"],
+)
+def test_a_ratio_whose_values_are_not_usable_shares_is_refused(write_config, ratio, bad):
+    """The keys are exactly the declared levels in every case here — so the
+    set-equality branch above passes each one, and only a check of the *values*
+    reports them. Each is a distinct downstream failure `units._apportion` has
+    no guard of its own for:
+
+    - `{0, 0}` summed to a total of 0 and raised `ZeroDivisionError`;
+    - `{-1, 2}` apportioned silently to `control: 0` — a drawn arm with no
+      units, from a config that validated clean;
+    - `.nan` passes a check written as the *bad* test (`nan <= 0` is `False`,
+      so a value-is-bad-if test admits it) and reaches `int(nan)`, a
+      `ValueError` from inside the draw. `_usable_ratio_share` asks the
+      question the other way round — `nan > 0` is `False` — so the polarity is
+      what catches it, and this case pins that polarity;
+    - `.inf` is what `math.isfinite` catches and positivity cannot: `inf > 0`
+      is `True`, and `10 * inf / inf` is `nan`, so an infinite share reaches
+      the same `int(nan)` by the arithmetic instead of by the value;
+    - `"1"` is the case that discriminates it from `units.usable_weight`, which
+      would accept the string (a weight arrives from `csv.DictReader` and a
+      ratio never does) and hand `sum` a `str`.
+
+    The offending keys are asserted, not just the code: a mutation reporting
+    every key rather than the unusable ones passes a code-only assertion, and
+    the negative case — where exactly one of two entries is bad — is what
+    catches it."""
+    found = _error_codes(write_config(_between({"arm": {"method": "random", "ratio": ratio}})))
+    assert found == {"E-DATA-ASSIGN-RATIO"}
+
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": _ARM_AXIS}},
+        {"allocation": "between", "assign": {"arm": {"method": "random", "ratio": ratio}}},
+        None,
+        c,
+    )
+    assert {f.code for f in c.findings} == {"E-DATA-ASSIGN-RATIO"}
+    ratio_finding = next(f for f in c.findings if f.code == "E-DATA-ASSIGN-RATIO")
+    assert ratio_finding.path == "data.units.assign.arm.ratio"
+    assert "share of the roster" in ratio_finding.message
+    assert bad in ratio_finding.message
+
+
+def test_a_well_formed_ratio_reports_nothing_of_its_own(write_config, tmp_path):
+    """**The control the three tests above need.** `{control: 1, treatment: 2}`
+    names every declared level exactly once and every value is a finite
+    positive number, so nothing is reported at all — a mutation that reported
+    every non-empty `ratio` would pass all three refusal tests and fail only
+    this one.
+
+    1 and 2, not 1 and 1: an unequal ratio is the case a check confusing "the
+    values differ" with "a value is unusable" would report. Eight units, not
+    `write_config`'s one: 1:2 over eight apportions 3 and 5, where over one
+    unit it would apportion `control` nothing and *Every arm draws units*
+    would report a true fault about a roster this test is not about."""
+    _wide_roster(tmp_path)
+    found = _error_codes(
+        write_config(
+            _between({"arm": {"method": "random", "ratio": {"control": 1, "treatment": 2}}})
+        )
+    )
+    assert found == set()
+
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": _ARM_AXIS}},
+        {
+            "allocation": "between",
+            "assign": {
+                "arm": {"method": "random", "ratio": {"control": 1, "treatment": 2}}
+            },
+        },
+        None,
+        c,
+    )
+    # No roster is handed in, so *Every arm draws units* is skipped and the
+    # declaration-only rows are the whole of what could fire.
+    assert [f.code for f in c.findings] == []
+
+
+def test_a_non_empty_ratio_under_by_attribute_is_refused():
+    """The draw didn't happen, so the proportion describes nothing. § Allocation:
+    "Under `method: by_attribute` a `ratio` describes a draw that didn't happen,
+    so `validate` rejects a non-empty one instead of recording a proportion the
+    data may not honour." A full, correctly-keyed ratio still earns this — the
+    fault is presence under this method, not shape."""
+    c = Collector()
+    _check_assign(
+        {},
+        {
+            "attributes": ["arm"],
+            "assign": {
+                "arm": {
+                    "method": "by_attribute",
+                    "ratio": {"control": 1, "treatment": 1},
+                }
+            },
+        },
+        None,
+        c,
+    )
+    assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-NO-DRAW"]
+    assert c.findings[0].path == "data.units.assign.arm.ratio"
     assert "by_attribute" in c.findings[0].message
-    assert method in c.findings[0].message
+
+
+def test_an_empty_ratio_is_equal_allocation_and_is_accepted():
+    """The control, and it must report: `{}` is what `init` writes and what most
+    designs carry, so a check that refused it would fire on the common case.
+    Assert the exact finding set, not an absence."""
+    c = Collector()
+    _check_assign(
+        {},
+        {
+            "attributes": ["arm"],
+            "assign": {"arm": {"method": "by_attribute", "ratio": {}}},
+        },
+        None,
+        c,
+    )
+    assert [f.code for f in c.findings] == []
+
+
+def test_a_full_ratio_under_a_drawn_method_is_accepted():
+    """The second control. A correctly-keyed `ratio` under a drawn method is
+    the accept path of every row in that branch, and with no roster handed in
+    *Every arm draws units* is skipped too, so the finding list is empty."""
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": _ARM_AXIS}},
+        {
+            "allocation": "between",
+            "assign": {
+                "arm": {"method": "random", "ratio": {"control": 1, "treatment": 1}}
+            },
+        },
+        None,
+        c,
+    )
+    assert [f.code for f in c.findings] == []
+
+
+def test_an_explicit_block_size_must_be_a_whole_multiple_of_the_ratio_sum(
+    write_config, tmp_path
+):
+    """*Block size fills the arms*: `block_size: 3` with `ratio: {control: 1,
+    treatment: 1}` (sum 2) "can't hold each arm's share" — 3 does not divide
+    into two equal-share slices. **The control is 4**, which can (twice the
+    sum, the value `auto` itself would pick) — it must report nothing at all,
+    which is what gives this test teeth in both directions rather than only
+    against a check that never fires. Eight units, so the accepted block also
+    draws two non-empty arms and *Every arm draws units* stays quiet."""
+    _wide_roster(tmp_path)
+    ratio = {"control": 1, "treatment": 1}
+    found = _error_codes(
+        write_config(_between({"arm": {"method": "blocked", "ratio": ratio, "block_size": 3}}))
+    )
+    assert found == {"E-DATA-ASSIGN-BLOCK-SIZE"}
+
+    found_ok = _error_codes(
+        write_config(_between({"arm": {"method": "blocked", "ratio": ratio, "block_size": 4}}))
+    )
+    assert found_ok == set()
+
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": _ARM_AXIS}},
+        {
+            "allocation": "between",
+            "assign": {"arm": {"method": "blocked", "ratio": ratio, "block_size": 3}},
+        },
+        None,
+        c,
+    )
+    assert {f.code for f in c.findings} == {"E-DATA-ASSIGN-BLOCK-SIZE"}
+    finding = next(f for f in c.findings if f.code == "E-DATA-ASSIGN-BLOCK-SIZE")
+    assert finding.path == "data.units.assign.arm.block_size"
+    assert "is 3" in finding.message
+    assert "'2'" in finding.message or "2" in finding.message
+
+
+@pytest.mark.parametrize(
+    ("ratio", "block_size"),
+    [
+        ({"control": 0.5, "treatment": 0.5}, 1),
+        ({"control": 1.5, "treatment": 2.5}, 4),
+    ],
+    ids=["sum-1-block-1", "sum-4-block-4"],
+)
+def test_the_whole_multiple_rule_checks_each_levels_own_share_not_just_the_sum(
+    write_config, ratio, block_size
+):
+    """**Controller ruling, caught by review — and the two checks turn out to
+    be unordered in *either* direction, not merely "sum passes, per-level
+    fails."** `ratio: {control: 0.5, treatment: 0.5}` sums to 1, and
+    `block_size: 1` is trivially "a whole multiple of 1" — the old check's
+    own words — yet every block apportions `[1, 0]`: `treatment` is starved
+    in *every* block, which dies at `units.assignment_for`'s
+    `E-DATA-ASSIGN-LEVELS` instead of being refused here, under the wrong
+    code, exactly the validate-clean-then-fail shape this row's own
+    `block_size: 0` guard exists to close. `{control: 1.5, treatment: 2.5}`
+    sums to 4, and `block_size: 4` is "a whole multiple of 4" too — 1 whole
+    multiple, in fact — yet `control`'s own per-block share, `4 x 1.5 / 4 =
+    1.5`, is not a whole number either. Neither of these would have been
+    caught by a check that only asked whether `ratio`'s *sum* divides
+    `block_size`; both are caught by asking whether *each level's own share*
+    of a block is whole. **The sibling test below,
+    `test_a_block_size_the_sum_rule_would_wrongly_refuse_is_accepted`, is the
+    other direction** — a case the old check refused and the real rule
+    accepts — without which "per-level" could be mistaken for merely a
+    tighter version of "sum," rather than a genuinely different test."""
+    found = _error_codes(
+        write_config(
+            _between({"arm": {"method": "blocked", "ratio": ratio, "block_size": block_size}})
+        )
+    )
+    assert found == {"E-DATA-ASSIGN-BLOCK-SIZE"}
+
+
+def test_a_block_size_the_sum_rule_would_wrongly_refuse_is_accepted(write_config, tmp_path):
+    """**The direction none of the refusal tests cover, per review: the two
+    rules are not ordered, so a case the sum rule refuses and the per-level
+    rule accepts is needed too, or "per-level" reads as a strict tightening
+    of "sum" rather than a genuinely different test.** `ratio: {control: 2,
+    treatment: 2}` sums to 4; `block_size: 2` is *not* a whole multiple of 4
+    — the old, retired check would have refused this outright — but each
+    level's own per-block share, `2 x 2 / 4 = 1`, is whole, and
+    `units._apportion(2, [2, 2]) == [1, 1]` fills it exactly. Must report
+    nothing at all, and in particular no `E-DATA-ASSIGN-BLOCK-SIZE` — a
+    mutation reinstating the sum check fails exactly this test."""
+    _wide_roster(tmp_path)
+    found = _error_codes(
+        write_config(
+            _between(
+                {
+                    "arm": {
+                        "method": "blocked",
+                        "ratio": {"control": 2, "treatment": 2},
+                        "block_size": 2,
+                    }
+                }
+            )
+        )
+    )
+    assert found == set()
+
+
+@pytest.mark.parametrize("bad_block_size", [0, -2, 2.5, "four", None, True])
+def test_a_non_positive_or_non_int_block_size_is_refused(write_config, bad_block_size):
+    """`units.assignment_for` cuts the roster with `range(0, len(keys), block_size)`:
+    `0` raises a bare `ValueError` (not a diagnostic — `main` would print a
+    traceback where every other refusal prints a code), a negative step
+    silently walks the range backwards from 0 and produces no blocks at all,
+    and anything that is neither `"auto"` nor an `int` (`2.5`, `"four"`,
+    `null`) would otherwise be treated as `auto` with no report at all — the
+    same validate-clean-then-crash/silently-ignore shape `E-DATA-ASSIGN-RATIO`
+    closes for a non-mapping or non-positive `ratio`. One code covers the
+    whole family, folded in beside the whole-multiple check rather than left
+    for `units.py` to discover.
+
+    `True` is included deliberately: it is `!= "auto"` (so it reaches this
+    branch at all) and `isinstance(True, int)` is also true in Python, so a
+    guard that stopped at that check alone would treat it as the legal value
+    `1` — 1 does not divide the fixture's ratio sum of 2 either, but for the
+    wrong reason, and `bool` is excluded explicitly for the same reason
+    `_usable_ratio_share` excludes it from `ratio`."""
+    found = _error_codes(
+        write_config(
+            _between(
+                {
+                    "arm": {
+                        "method": "blocked",
+                        "ratio": {"control": 1, "treatment": 1},
+                        "block_size": bad_block_size,
+                    }
+                }
+            )
+        )
+    )
+    assert found == {"E-DATA-ASSIGN-BLOCK-SIZE"}
+
+
+def test_a_bool_block_size_is_refused_by_the_type_check_not_by_coincidence(write_config):
+    """`True`'s underlying value, `1`, would fail *this* fixture's per-level
+    share check anyway (`ratio: {control: 1, treatment: 1}`, sum 2 — a block
+    of 1 can't give either level a whole share), so the exact-code-set
+    assertion `test_a_non_positive_or_non_int_block_size_is_refused[True]`
+    can't tell "refused because it's a `bool`" from "refused because `1`
+    doesn't divide 2 either" — and after the per-level tightening (§
+    Allocation's per-level-share ruling) there is no *legal* two-level ratio
+    for which `int(True) == 1` is ever a valid `block_size` at all, since two
+    positive shares can never both be whole multiples of a sum of 1. The
+    message text is what isolates it instead of the fixture: the type/
+    positivity branch's wording ("not a positive whole number of units")
+    fires for `True`, not the per-level branch's ("does not fill ... levels
+    ... exactly") — proving `bool` is excluded explicitly rather than merely
+    failing the arithmetic it happens to also fail here."""
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": _ARM_AXIS}},
+        {
+            "allocation": "between",
+            "assign": {
+                "arm": {
+                    "method": "blocked",
+                    "ratio": {"control": 1, "treatment": 1},
+                    "block_size": True,
+                }
+            },
+        },
+        None,
+        c,
+    )
+    finding = next(f for f in c.findings if f.code == "E-DATA-ASSIGN-BLOCK-SIZE")
+    assert "not a positive whole number of units" in finding.message
+    assert "does not fill" not in finding.message
+
+
+def test_an_auto_block_size_is_not_exempt_from_the_type_check_but_usually_passes_the_share_one(
+    write_config, tmp_path
+):
+    """`block_size: "auto"` — the literal string `init` writes — is exempt
+    from the *type/positivity* half of this check (it is never itself a
+    malformed value; `test_a_non_positive_or_non_int_block_size_is_refused`
+    covers every genuinely malformed non-`int`), but **not** from the
+    whole-share arithmetic: an earlier version of this check exempted
+    `"auto"` from both, on the (false, corrected after review) theory that
+    `units.auto_block_size`'s `2 × ratio_sum` formula always gives every
+    level a whole share. `ratio: {control: 1, treatment: 1}` is the ordinary
+    case where it does — resolved `auto` is 4, each level's own share is `4 x
+    1 / 2 = 2`, whole — so this fixture passes, but
+    `test_an_auto_block_size_can_still_be_refused_for_a_percentage_ratio`
+    below is the sibling proving it isn't exempted, just usually lucky."""
+    _wide_roster(tmp_path)
+    found = _error_codes(
+        write_config(
+            _between(
+                {
+                    "arm": {
+                        "method": "blocked",
+                        "ratio": {"control": 1, "treatment": 1},
+                        "block_size": "auto",
+                    }
+                }
+            )
+        )
+    )
+    assert found == set()
+
+
+def test_an_auto_block_size_can_still_be_refused_for_a_percentage_ratio(write_config):
+    """**Caught by review: the first fix round exempted `"auto"` from the
+    whole-share check entirely, and a plain percentage-style ratio shows why
+    that's wrong.** `ratio: {a: 0.33, b: 0.33, c: 0.34}` sums to 1, so
+    resolved `auto` is `max(1, round(2)) == 2` — and none of the three
+    levels' own per-block shares (`0.66`, `0.66`, `0.68`) are whole. Left
+    unchecked, this would validate clean and then die at
+    `units.assignment_for`'s `E-DATA-ASSIGN-LEVELS` (a block that can never
+    give `b` a single whole unit starves it in every block) — the same
+    validate-clean-then-fail shape this whole row exists to close, reached
+    through the derived value instead of a declared one."""
+    found = _error_codes(
+        write_config(
+            _between(
+                {
+                    "arm": {
+                        "method": "blocked",
+                        "ratio": {"a": 0.33, "b": 0.33, "c": 0.34},
+                        "block_size": "auto",
+                    }
+                },
+                axes=[{"by": "arm", "levels": ["a", "b", "c"]}],
+            )
+        )
+    )
+    assert found == {"E-DATA-ASSIGN-BLOCK-SIZE"}
+
+
+# --- `blocked` beside a declared `cluster_by` is refused outright -----------
+#
+# Task 11's ruling: § Where units come from makes `blocked` the one method
+# that reads roster order as data, and § Clustered units already computes a
+# partition core keeps whole. A block fills to an exact unit count and a
+# cluster is indivisible, so no block size honours both — `random` has no such
+# conflict, since it draws whole clusters instead of filling to a size, and
+# `by_attribute` draws nothing at all. The two controls below are the point of
+# the task: each must report clean of `E-DATA-ASSIGN-BLOCKED-CLUSTER`, and each
+# is mutated on its own so a check that fires on the wrong branch — every
+# `blocked` block regardless of `cluster_by`, or every clustered block
+# regardless of method — fails exactly one of the two rather than neither.
+
+
+def test_blocked_beside_a_declared_cluster_by_is_refused(write_config, tmp_path):
+    """The refusal itself: `method: blocked` beside a non-empty
+    `data.units.cluster_by` earns `E-DATA-ASSIGN-BLOCKED-CLUSTER`, and it is the
+    only finding: the block is otherwise well formed, so nothing else in this
+    `elif` chain has anything to say about it.
+    `units.assignment_for`'s own `blocked` branch raises `NotImplementedError`
+    for the identical combination; this is the check that keeps a config
+    naming it from ever reaching that raise, so the two layers agree on the
+    same refusal rather than one validating clean and the other dying."""
+    (tmp_path / "input" / "index.csv").write_text("patient_id,site\np1,S1\np2,S2\n")
+    found = _error_codes(
+        write_config(
+            _between(
+                {"arm": {"method": "blocked"}},
+                attributes=["site"],
+                cluster_by="site",
+            )
+        )
+    )
+    assert found == {"E-DATA-ASSIGN-BLOCKED-CLUSTER"}
+
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": _ARM_AXIS}},
+        {
+            "allocation": "between",
+            "cluster_by": "site",
+            "assign": {"arm": {"method": "blocked"}},
+        },
+        None,
+        c,
+    )
+    assert {f.code for f in c.findings} == {"E-DATA-ASSIGN-BLOCKED-CLUSTER"}
+    finding = next(f for f in c.findings if f.code == "E-DATA-ASSIGN-BLOCKED-CLUSTER")
+    assert finding.path == "data.units.assign.arm.method"
+    # The wording, not just the code: both honest routes named, so a mutation
+    # that drops either from the message — or swaps in only one — still leaves
+    # the code assertion above passing.
+    assert "'site'" in finding.message
+    assert "random" in finding.message
+    assert "by_attribute" in finding.message
+
+
+def test_random_beside_a_declared_cluster_by_is_not_blocked_clustered(write_config, tmp_path):
+    """The first control: `random` beside a declared `cluster_by` is legal —
+    task 9 built exactly this, drawing whole clusters — so it must not also
+    earn `E-DATA-ASSIGN-BLOCKED-CLUSTER`. The can-fail sibling of the refusal
+    test above: a mutation that fires the new code for *any* drawn method
+    beside a declared `cluster_by`, rather than `blocked` specifically, passes
+    that test (which never inspects `random`) and fails this one instead.
+
+    Two units in two clusters, so the draw this now validates against also
+    resolves: one cluster to each arm."""
+    (tmp_path / "input" / "index.csv").write_text("patient_id,site\np1,S1\np2,S2\n")
+    found = _error_codes(
+        write_config(
+            _between(
+                {"arm": {"method": "random"}},
+                attributes=["site"],
+                cluster_by="site",
+            )
+        )
+    )
+    assert found == set()
+
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": _ARM_AXIS}},
+        {
+            "allocation": "between",
+            "cluster_by": "site",
+            "assign": {"arm": {"method": "random"}},
+        },
+        None,
+        c,
+    )
+    assert [f.code for f in c.findings] == []
+
+
+def test_blocked_with_no_cluster_by_is_not_blocked_clustered(write_config, tmp_path):
+    """The second control: `blocked` with no declared `cluster_by` is legal —
+    task 10 built exactly this, permuting blocks over an unclustered roster —
+    so `blocked` alone must not earn `E-DATA-ASSIGN-BLOCKED-CLUSTER`; the row's
+    fault is the combination, not the method by itself. The can-fail sibling
+    the refusal test's `cluster_by` half needs: a mutation that fires the new
+    code for *every* `blocked` block, dropping the `usable_cluster is not
+    None` guard entirely, passes the refusal test above (which never inspects
+    a `blocked` block with no `cluster_by`) and fails this one instead."""
+    _wide_roster(tmp_path)
+    found = _error_codes(write_config(_between({"arm": {"method": "blocked"}})))
+    assert found == set()
+
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": _ARM_AXIS}},
+        {"allocation": "between", "assign": {"arm": {"method": "blocked"}}},
+        None,
+        c,
+    )
+    assert [f.code for f in c.findings] == []
+
+
+# --- *Assignment seed is auto or pinned* ---
+#
+# `E-DATA-ASSIGN-SEED`. The fault is silent by construction:
+# `units.assign_seed_for` returns a pinned `int` literally and derives from the
+# digest for everything else, so a wrongly-typed pin draws a *derived*
+# allocation and `allocation.json` records that derived number under the axis
+# whose seed the config wrote deliberately. Nothing later disagrees, which is
+# why the refusal has to be here.
+
+
+@pytest.mark.parametrize("seed", ["1234", 1.5, True, False, [11], {"n": 11}])
+def test_a_wrongly_typed_assign_seed_is_refused(write_config, tmp_path, seed):
+    """Every shape that is neither `auto` nor a pinned integer, including both
+    booleans: `assign_seed_for` excludes `bool` explicitly, so `seed: true`
+    would derive rather than pin `1` — and a reader of `allocation.json` would
+    see a number they never wrote.
+
+    `_wide_roster` first, so the block is otherwise clean and the assertion can
+    be an exact set: a `seed` fault must not suppress *Every arm draws units*
+    by accident, nor be reported alongside a second, derived finding."""
+    _wide_roster(tmp_path)
+    assert _error_codes(
+        write_config(_between({"arm": {"method": "random", "seed": seed}}))
+    ) == {"E-DATA-ASSIGN-SEED"}
+
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": _ARM_AXIS}},
+        {"allocation": "between", "assign": {"arm": {"method": "random", "seed": seed}}},
+        None,
+        c,
+    )
+    assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-SEED"]
+    finding = c.findings[0]
+    assert finding.path == "data.units.assign.arm.seed"
+    assert "neither `auto` nor a pinned integer" in finding.message
+
+
+def test_a_wrongly_typed_assign_seed_is_refused_under_blocked_too(write_config, tmp_path):
+    """The other drawn method reaches the same row — the check sits in the
+    branch both take, not in `random`'s own."""
+    _wide_roster(tmp_path)
+    assert _error_codes(
+        write_config(_between({"arm": {"method": "blocked", "seed": "1234"}}))
+    ) == {"E-DATA-ASSIGN-SEED"}
+
+
+@pytest.mark.parametrize("block", [
+    {"method": "random"},
+    {"method": "random", "seed": "auto"},
+    {"method": "random", "seed": None},
+    {"method": "random", "seed": 11},
+    {"method": "random", "seed": 0},
+    {"method": "blocked", "seed": 11},
+])
+def test_an_auto_or_pinned_assign_seed_reports_nothing(write_config, tmp_path, block):
+    """The can-fail control. An absent key, an explicit `auto`, an explicit
+    `null` (absent, the module's convention), and a pinned integer — `0`
+    included, since a falsy-but-legal pin is what a truthiness test would
+    reject — all validate clean. A mutation reporting the code for every drawn
+    block, or one reading the seed truthily, passes the refusal tests above and
+    fails here."""
+    _wide_roster(tmp_path)
+    assert _error_codes(write_config(_between({"arm": block}))) == set()
+
+
+def test_a_wrongly_typed_seed_under_by_attribute_is_not_this_row(write_config, tmp_path):
+    """Scope, stated rather than left to be discovered: `by_attribute` consults
+    no seed at all, so this row does not run there. The `seed` key is in
+    `envelope.ASSIGN_AXIS_KEYS`, so it earns no `E-CONFIG-KEY-UNKNOWN` either —
+    a `seed` declared beside a read assignment is accepted and ignored, the one
+    adjacent gap this row deliberately leaves open (a *present* `seed` under
+    `by_attribute` is the shape *Ratio and strata need a draw* covers for
+    `ratio`/`stratify_by`, and extending that row to `seed` is a separate
+    decision, not this one)."""
+    _wide_roster(tmp_path)
+    found = _error_codes(
+        write_config(
+            _between(
+                {"arm": {"method": "by_attribute", "from": "arm", "seed": "1234"}},
+                attributes=["arm"],
+            )
+        )
+    )
+    assert "E-DATA-ASSIGN-SEED" not in found
+
+
+# --- *Allocation strata exist* and *Allocation strata survive clustering* ---
+#
+# `assign.<axis>.stratify_by` under a method that DRAWS. The two rows split the
+# way their `fold` counterparts do: one asks whether the name resolves at all,
+# the other whether it survives the clustering that decides what a draw cannot
+# divide. The controls below are the point — a declared attribute and a group
+# axis are both legal targets here, unlike a `fold`'s stratum, which admits only
+# the first.
+
+
+@pytest.mark.parametrize(
+    "stratify_by",
+    [["site"], "site", ["arm", "site"], [3], [""]],
+    ids=["list", "bare-string", "second-of-two", "non-string", "empty-string"],
+)
+def test_an_unknown_stratum_attribute_is_refused(write_config, stratify_by):
+    """§ Validation, *Allocation strata exist*: "`assign.arm.stratify_by: [site]`
+    but `site` is neither a unit attribute nor a group axis."
+
+    `_between` declares no `data.units.attributes` at all, so `site` names
+    nothing — while `arm`, the declared group axis, is a legal target and must
+    NOT be reported, which is what the `second-of-two` case pins: exactly one
+    finding from a two-name declaration, so a check that reported per
+    *declaration* rather than per *name* fails here even though it reports the
+    same code.
+
+    A bare string and a non-string entry are absorbed under the same code rather
+    than left silent: `stratify_by` is no `envelope.py` `LEAF_TYPES` leaf, so
+    nothing else in this build would report either — and a bare `site` read as a
+    sequence of characters instead of one name would report four findings, not
+    one, which the exact count below catches."""
+    path = write_config(
+        _between({"arm": {"method": "random", "stratify_by": stratify_by}})
+    )
+    c = Collector()
+    validate_config(path, c)
+    strata = [f for f in c.findings if f.code == "E-DATA-ASSIGN-STRATIFY-UNKNOWN"]
+    assert len(strata) == 1
+    assert strata[0].path == "data.units.assign.arm.stratify_by"
+    assert "E-DATA-ASSIGN-NO-DRAW" not in {f.code for f in c.findings}
+
+
+@pytest.mark.parametrize("method", ["random", "blocked"])
+def test_a_declared_stratum_attribute_is_not_refused(write_config, tmp_path, method):
+    """**The control**, and the reason this row is not simply "any `stratify_by`
+    under a draw is refused": `site` declared in `data.units.attributes` is
+    exactly what § Allocation's own example stratifies on, so it must report
+    nothing. A mutation that reported the code unconditionally passes the test
+    above and fails this one.
+
+    Parametrized over both drawing methods because the row names both — a check
+    reachable under `random` alone would leave a `blocked` design's misspelled
+    stratum reported by nothing."""
+    (tmp_path / "input" / "index.csv").write_text("patient_id,site\np1,S1\np2,S2\n")
+    found = _error_codes(
+        write_config(
+            _between(
+                {"arm": {"method": method, "stratify_by": ["site"]}},
+                attributes=["site"],
+            )
+        )
+    )
+    assert found == set()
+
+
+def test_a_stratum_naming_a_group_axis_is_not_refused(write_config):
+    """The second control, and the half that distinguishes this row from
+    *Stratification attribute exists*: an axis name is a legal stratum target
+    here — § Expansion modes' "`stratify_by` may name a group axis declared
+    before it" — and only a `fold`'s or `holdout`'s stratum is restricted to a
+    unit attribute. A check that read `data.units.attributes` alone would refuse
+    the crossed design § Expansion modes writes out.
+
+    `sex` is deliberately **not** declared in `data.units.attributes` here: with
+    both declared, the attribute branch would exempt the name first and the axis
+    branch would never run, leaving this test passing for a reason its own name
+    denies. The unrelated `E-DATA-ASSIGN-UNKNOWN` that absence earns is harmless
+    — the assertion names one code and is a `not in`."""
+    found = _error_codes(
+        write_config(
+            _between(
+                {
+                    "sex": {"method": "by_attribute", "from": "sex"},
+                    "arm": {"method": "random", "stratify_by": ["sex"]},
+                },
+                axes=[
+                    {"by": "sex", "levels": ["f", "m"]},
+                    {"by": "arm", "levels": ["control", "treatment"]},
+                ],
+            )
+        )
+    )
+    assert "E-DATA-ASSIGN-STRATIFY-UNKNOWN" not in found
+
+
+def _crossed(first: str, second: str, stratify_by: list) -> dict:
+    """Two group axes, `first` then `second`, with `second` stratifying on
+    whatever `stratify_by` names. `sex` is deliberately NOT a declared attribute,
+    so the name resolves as an axis and not as a column."""
+    return _between(
+        {
+            "sex": {"method": "random", "seed": 7},
+            "arm": {"method": "random", "seed": 11, "stratify_by": stratify_by},
+        },
+        axes=[
+            {"by": first, "levels": ["f", "m"] if first == "sex" else ["control", "treatment"]},
+            {
+                "by": second,
+                "levels": ["f", "m"] if second == "sex" else ["control", "treatment"],
+            },
+        ],
+    )
+
+
+@pytest.mark.parametrize(
+    "first,second,stratify_by",
+    [
+        ("arm", "sex", ["sex"]),
+        ("arm", "sex", "sex"),
+        ("sex", "arm", ["arm"]),
+    ],
+    ids=["later-axis", "later-axis-bare-string", "itself"],
+)
+def test_stratifying_on_a_later_axis_is_refused(write_config, first, second, stratify_by):
+    """§ Validation, *Stratification is forward-only*: "`assign.sex.stratify_by:
+    [arm]`, but `arm` is declared after `sex`; an axis may only stratify on one
+    already resolved". `E-DATA-ASSIGN-STRATIFY-FORWARD`.
+
+    A drawn axis leaves no column, so the balance is over the earlier axis's
+    realized membership — which does not exist when the stratifying axis is drawn
+    first. Unrefused, `cli._resolved_group_axes` raises mid-run on a config that
+    validated clean, the validate-clean-then-fail class this slice keeps closing.
+
+    `itself` is the third case and not a fourth row: an axis is not resolved
+    while it is being drawn, so `arm.stratify_by: [arm]` is the same fault at
+    distance zero — and it is what a check written `<=` the wrong way round, or
+    one comparing the wrong pair of names, gets wrong.
+
+    The assertion is membership rather than an exact set: the one-unit roster
+    these two `random` blocks are drawn over also earns *Every arm draws units*,
+    which is a true finding about the fixture and not this row's subject, while
+    `E-DATA-ASSIGN-STRATIFY-UNKNOWN` must NOT fire — the name IS a declared axis,
+    and existence is the other row's question."""
+    found = _error_codes(write_config(_crossed(first, second, stratify_by)))
+    assert "E-DATA-ASSIGN-STRATIFY-FORWARD" in found
+    assert "E-DATA-ASSIGN-STRATIFY-UNKNOWN" not in found
+
+
+def test_stratifying_on_an_earlier_axis_is_not_refused(write_config):
+    """**The control, and the same pair declared the other way round** — the one
+    difference between it and the `later-axis` case above is the order of the two
+    `sweep.groups` entries, so a check that reported the code unconditionally
+    (or that read the two names in either order indifferently) passes that test
+    and fails this one.
+
+    This is `reference.md` § Expansion modes' both-randomized row: "two `random`
+    axes, the second stratifying on the first"."""
+    found = _error_codes(write_config(_crossed("sex", "arm", ["sex"])))
+    assert "E-DATA-ASSIGN-STRATIFY-FORWARD" not in found
+    assert "E-DATA-ASSIGN-STRATIFY-UNKNOWN" not in found
+
+
+def test_a_block_whose_axis_is_not_declared_is_not_ordered_against_anything(
+    write_config, tmp_path
+):
+    """**The `axis not in axes` guard, asserted rather than merely documented.**
+    `assign.ghost` names an axis `sweep.groups` does not declare, so nothing
+    draws it and it has no position for a stratum to be forward of. The row is
+    skipped: a finding about the order of a block no draw reaches would be
+    derived from a different fault (*Every assignment names an axis*).
+
+    Reachable and fatal unmutated-in-reverse: without the guard, the position
+    lookup raises `ValueError: 'ghost' is not in list` **out of `validate`** — a
+    traceback where a diagnostic belongs, from a module contracted to collect
+    findings and never raise. The assertion is therefore the exact set: this
+    config is otherwise clean — the exact set is empty — and a set assertion
+    catches a spurious ordering finding as well as a crash. Eight units, so
+    *Every arm draws units* has two non-empty arms to find on the one block
+    with no stratification of its own."""
+    _wide_roster(tmp_path)
+    found = _error_codes(
+        write_config(
+            _between(
+                {
+                    "arm": {"method": "random", "seed": 11},
+                    "ghost": {"method": "random", "seed": 7, "stratify_by": ["arm"]},
+                }
+            )
+        )
+    )
+    assert found == set()
+
+
+def test_a_declared_attribute_shadowing_a_later_axis_is_not_forward_only(write_config):
+    """**The precedence, from `validate`'s side.** A `stratify_by` name that is
+    both a declared unit attribute and a group axis is an ATTRIBUTE here — the
+    *Allocation strata exist* branch exempts it before the order question is
+    asked — and `units._stratum_groups` decides the same order from the resolved
+    units. So a name the roster carries is balanced on the column and no
+    forward-only finding is owed, even though the axis of that name is declared
+    after the stratifying one. Reported otherwise, `validate` would refuse a
+    design the draw performs without complaint."""
+    found = _error_codes(
+        write_config(
+            _between(
+                {
+                    "arm": {"method": "random", "seed": 11, "stratify_by": ["sex"]},
+                    "sex": {"method": "random", "seed": 7},
+                },
+                axes=[
+                    {"by": "arm", "levels": ["control", "treatment"]},
+                    {"by": "sex", "levels": ["f", "m"]},
+                ],
+                attributes=["sex"],
+            )
+        )
+    )
+    assert "E-DATA-ASSIGN-STRATIFY-FORWARD" not in found
+    assert "E-DATA-ASSIGN-STRATIFY-UNKNOWN" not in found
+
+
+def test_an_empty_stratify_by_under_a_draw_is_not_refused(write_config, tmp_path):
+    """`stratify_by: []` is what `init` writes and what most designs carry: it
+    names no balance, so there is no name to resolve. A check written as "the key
+    is present" rather than "a name is declared" would report every generated
+    config that also declares a drawn method."""
+    _wide_roster(tmp_path)
+    found = _error_codes(
+        write_config(_between({"arm": {"method": "random", "stratify_by": []}}))
+    )
+    assert found == set()
+
+
+def _plain_roster(n: int) -> UnitList:
+    """`n` units carrying no attributes at all — a roster to apportion, nothing
+    to read."""
+    return UnitList([Unit(key=f"u{i}", paths=(), attributes={}) for i in range(n)])
+
+
+def test_a_ratio_that_starves_an_arm_over_this_roster_is_refused():
+    """**The validate-clean-then-disagree gap the retirement opened, closed.**
+    `ratio: {control: 1, treatment: 1000}` names every declared level exactly
+    once and every share is finite and positive, so *Ratio names levels*
+    accepts it and no other declaration-only row has anything to say. Over ten
+    units it apportions `control` **zero**, and `units.assignment_for` raises
+    `E-DATA-ASSIGN-LEVELS` at the draw — on a config `validate` had approved.
+
+    The fault is the proportion against a roster *size*, which is why the check
+    is the draw itself and why it needs a roster: the same declaration over
+    2000 units draws `control` two and is a perfectly good design. Both halves
+    are here, so a check that refused the ratio outright fails the second."""
+    decl = {
+        "allocation": "between",
+        "assign": {
+            "arm": {"method": "random", "ratio": {"control": 1, "treatment": 1000}}
+        },
+    }
+    c = Collector()
+    _check_assign({"sweep": {"groups": _ARM_AXIS}}, decl, _plain_roster(10), c)
+    assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-LEVELS"]
+    assert c.findings[0].path == "data.units.assign.arm.ratio"
+    assert "'control'" in c.findings[0].message
+
+    c = Collector()
+    _check_assign({"sweep": {"groups": _ARM_AXIS}}, decl, _plain_roster(2000), c)
+    assert [f.code for f in c.findings] == []
+
+
+def test_the_draw_check_is_skipped_for_a_block_already_reported():
+    """A `ratio` this build cannot apportion is reported on its own terms, and
+    the draw is not attempted over it: `{control: 1}` is one entry short, so
+    `_apportion` would either be handed the equal-share fallback — reporting a
+    fault about a ratio nobody declared — or reach a `KeyError`. The exact
+    single-code assertion is what says the second finding is absent rather than
+    merely unlikely."""
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": _ARM_AXIS}},
+        {
+            "allocation": "between",
+            "assign": {"arm": {"method": "random", "ratio": {"control": 1}}},
+        },
+        _plain_roster(10),
+        c,
+    )
+    assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-RATIO"]
+
+
+def test_the_skip_is_per_block_and_not_per_config():
+    """The guard *Every arm draws units* reads is the count of findings **this
+    block** earned, not whether the config earned any. Two axes: `sex` declares
+    a one-entry `ratio` (its own fault, and its own draw suppressed), and `arm`
+    is a well-formed block whose ratio starves an arm over this roster. Both
+    codes must appear.
+
+    A guard comparing against zero rather than against the count at the branch's
+    own entry passes every single-axis test in this file and silently stops
+    checking the second axis of every config whose first axis was wrong — which
+    is the shape of config a reader is most likely to be holding."""
+    c = Collector()
+    _check_assign(
+        {
+            "sweep": {
+                "groups": [
+                    {"by": "sex", "levels": ["f", "m"]},
+                    {"by": "arm", "levels": ["control", "treatment"]},
+                ]
+            }
+        },
+        {
+            "allocation": "between",
+            "assign": {
+                "sex": {"method": "random", "ratio": {"f": 1}},
+                "arm": {
+                    "method": "random",
+                    "ratio": {"control": 1, "treatment": 1000},
+                },
+            },
+        },
+        _plain_roster(10),
+        c,
+    )
+    assert {f.code for f in c.findings} == {
+        "E-DATA-ASSIGN-RATIO",
+        "E-DATA-ASSIGN-LEVELS",
+    }
+
+
+def test_a_drawn_block_whose_levels_do_not_resolve_draws_nothing(write_config, tmp_path):
+    """**The `levels` guard, asserted rather than merely present.** *Every arm
+    draws units* needs a level list to apportion across, and `_declared_levels`
+    returns `None` for an axis whose `sweep.groups` entry declares an empty (or
+    absent, or non-`str`) `levels` — `sweep.groups`'s own shape fault, reported
+    on its own terms and not this row's to restate.
+
+    Dropping that guard is not equivalent: `units.assignment_for` would be
+    handed `None` and raise `TypeError: object of type 'NoneType' has no len()`
+    **out of `validate`**, a traceback where a diagnostic belongs, from a module
+    contracted to collect findings and never raise. The assertion is the exact
+    set, so the crash and a spurious extra finding both fail it: an axis with no
+    levels expands into no conditions, which `E-SWEEP-EXPANDS-EMPTY` is the
+    backstop for."""
+    _wide_roster(tmp_path)
+    found = _error_codes(
+        write_config(
+            _between(
+                {"arm": {"method": "random"}},
+                axes=[{"by": "arm", "levels": []}],
+            )
+        )
+    )
+    assert found == {"E-SWEEP-EXPANDS-EMPTY"}
+
+
+def test_a_blocked_draw_that_starves_an_arm_over_this_roster_is_refused():
+    """The same row under the other drawing method, which reaches it by a
+    different route: `blocked` apportions per block rather than over the whole
+    roster, and a level empty in *every* block is what raises. `block_size: 4`
+    with `{control: 1, treatment: 3}` gives each block `[1, 3]` — fine — so the
+    fixture that starves an arm is the ratio, not the block size, and this test
+    would pass with the check reachable under `random` alone deleted only if
+    the two methods shared a code path, which they do not."""
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": _ARM_AXIS}},
+        {
+            "allocation": "between",
+            "assign": {
+                "arm": {
+                    "method": "blocked",
+                    "ratio": {"control": 1, "treatment": 1000},
+                    "block_size": 1001,
+                }
+            },
+        },
+        _plain_roster(10),
+        c,
+    )
+    assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-LEVELS"]
+
+
+def test_the_draw_check_does_not_reach_a_stratified_or_clustered_block():
+    """**The gate, and the residue it leaves — three draws, two reasons —
+    pinned rather than described.**
+
+    *Every arm draws units* realizes the draw with a placeholder digest, which
+    is sound only where the realized sizes do not depend on the seed: with no
+    strata and no clusters they are a function of the roster size and the ratio
+    alone. `_assign_whole_clusters_by_ratio` shuffles the cluster order before
+    its size sort, so which arm is left empty there IS seed-dependent.
+
+    **The stratified halves are excluded for a different reason, and the
+    attribute one is deliberately here to say so.** An attribute-stratified
+    draw is seed-*independent* — `_stratum_groups` groups by the column's
+    values in roster order and `_apportion` runs inside each group, so the
+    fixture below raises `E-DATA-ASSIGN-LEVELS` at the draw at every seed. It
+    is excluded because `_stratum_groups` raises `NotImplementedError` for a
+    declared attribute no resolved unit carries — a broken roster *Allocation
+    strata exist* passes, since that row reads the declaration — and `validate`
+    is contracted to collect findings rather than raise. A stratum naming an
+    earlier axis is excluded for the reason the digest cannot cover: it needs a
+    membership only the run's own ordered draw produces.
+
+    So all three validate clean and can still raise at the draw. That is the
+    recorded limit of this row (`reference.md` § Errors `validate` reports), and
+    this test is what keeps it from being widened by accident — widening it
+    correctly means changing this test, not discovering it passes anyway."""
+    stratified = {
+        "attributes": ["site"],
+        "allocation": "between",
+        "assign": {
+            "arm": {
+                "method": "random",
+                "ratio": {"control": 1, "treatment": 1000},
+                "stratify_by": ["site"],
+            }
+        },
+    }
+    roster = UnitList(
+        [
+            Unit(key=f"u{i}", paths=(), attributes={"site": f"S{i % 2}"})
+            for i in range(10)
+        ]
+    )
+    c = Collector()
+    _check_assign({"sweep": {"groups": _ARM_AXIS}}, stratified, roster, c)
+    assert [f.code for f in c.findings] == []
+    # The other half of the claim: this exact declaration DOES starve an arm,
+    # at every seed — two strata of five, `[0, 5]` in each — so the silence
+    # above is a check declining to run, not a config that is fine.
+    from publishable.errors import ContractError
+
+    for seed in range(5):
+        with pytest.raises(ContractError) as exc:
+            assignment_for(
+                roster,
+                "arm",
+                {**stratified["assign"]["arm"], "seed": seed},
+                ["control", "treatment"],
+                "d",
+            )
+        assert exc.value.code == "E-DATA-ASSIGN-LEVELS"
+
+    clustered = {
+        "attributes": ["site"],
+        "allocation": "between",
+        "cluster_by": "site",
+        "assign": {
+            "arm": {"method": "random", "ratio": {"control": 1, "treatment": 1000}}
+        },
+    }
+    c = Collector()
+    _check_assign({"sweep": {"groups": _ARM_AXIS}}, clustered, roster, c)
+    assert [f.code for f in c.findings] == []
+
+
+def _clustered_stratum_roster(varying: bool) -> UnitList:
+    """Four units in two clusters. Under `varying`, cluster `A3` carries two
+    `label` values; otherwise every cluster agrees with itself."""
+    return UnitList(
+        [
+            Unit(key="c0", paths=(), attributes={"animal_id": "A3", "label": "tumor"}),
+            Unit(
+                key="c1",
+                paths=(),
+                attributes={
+                    "animal_id": "A3",
+                    "label": "normal" if varying else "tumor",
+                },
+            ),
+            Unit(key="c2", paths=(), attributes={"animal_id": "A4", "label": "normal"}),
+            Unit(key="c3", paths=(), attributes={"animal_id": "A4", "label": "normal"}),
+        ]
+    )
+
+
+def test_a_stratum_that_varies_within_a_cluster_is_refused():
+    """§ Clustered units: a stratum that varies inside an indivisible cluster is
+    unsatisfiable, so `validate` "rejects it instead of silently prioritizing one
+    constraint" — `E-DATA-ASSIGN-STRATIFY-VARIES`, the arm half of the rule
+    `E-REPL-FOLD-STRATIFY-VARIES` carries for folds, reusing
+    `units.stratum_varies_within_cluster` rather than a second constancy test.
+
+    The message names the offending cluster and both values it carries, not just
+    the attribute: a reader has to be told which animal to look at, and a check
+    that found *some* variation somewhere would otherwise be indistinguishable
+    from one that found this one."""
+    decl = {
+        "attributes": ["animal_id", "label"],
+        "allocation": "between",
+        "cluster_by": "animal_id",
+        "assign": {"arm": {"method": "random", "stratify_by": ["label"]}},
+    }
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": _ARM_AXIS}}, decl, _clustered_stratum_roster(True), c
+    )
+    varies = [f for f in c.findings if f.code == "E-DATA-ASSIGN-STRATIFY-VARIES"]
+    assert len(varies) == 1
+    assert varies[0].path == "data.units.assign.arm.stratify_by"
+    assert "A3" in varies[0].message
+    assert "normal" in varies[0].message and "tumor" in varies[0].message
+
+    # **The control**, in the same test so the fixture pair cannot drift apart:
+    # the identical design over a roster whose clusters each agree about `label`
+    # is exactly what a cluster-respecting stratified draw can satisfy, so it
+    # earns nothing. A check that fired whenever a `stratify_by` and a
+    # `cluster_by` were declared together passes the half above and fails here.
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": _ARM_AXIS}}, decl, _clustered_stratum_roster(False), c
+    )
+    assert "E-DATA-ASSIGN-STRATIFY-VARIES" not in {f.code for f in c.findings}
+
+
+def _straddling_cluster_roster(varying: bool) -> UnitList:
+    """Four units in two families. Under `varying`, family `F1` holds one `f`
+    and one `m` — the shape that splits a cluster between the `sex` axis's own
+    arms — otherwise each family agrees with itself.
+
+    `patient_sex`, deliberately not `sex`: a `from` equal to the axis name
+    resolves as a declared attribute on `validate`'s side and reaches the
+    attribute half of the constancy check, so only a `from` that differs from
+    the axis name reaches the axis half at all."""
+    def unit(key: str, family: str, sex: str) -> Unit:
+        return Unit(
+            key=key, paths=(), attributes={"family_id": family, "patient_sex": sex}
+        )
+
+    return UnitList(
+        [
+            unit("u0", "F1", "f"),
+            unit("u1", "F1", "m" if varying else "f"),
+            unit("u2", "F2", "m"),
+            unit("u3", "F2", "m"),
+        ]
+    )
+
+
+_STRADDLE_AXES = [
+    {"by": "sex", "levels": ["f", "m"]},
+    {"by": "arm", "levels": ["control", "treatment"]},
+]
+
+
+def _straddle_decl(sex_block: dict) -> dict:
+    return {
+        "attributes": ["family_id", "patient_sex"],
+        "allocation": "between",
+        "cluster_by": "family_id",
+        "assign": {
+            "sex": sex_block,
+            "arm": {"method": "random", "stratify_by": ["sex"]},
+        },
+    }
+
+
+def test_a_stratum_naming_an_axis_that_splits_a_cluster_is_refused():
+    """**The cluster-straddle defect, closed.** `arm` stratifies on `sex`, an
+    axis drawn before it, and `sex` is `by_attribute` on a column that varies
+    *within* a family. `arms_of` reads that column and respects nothing about
+    clusters, so `sex` splits family `F1` between its own arms; the two halves
+    then land in different `arm` strata, `_assign_whole_clusters_by_ratio`
+    allocates each stratum independently, and the family straddles both arms —
+    contradicting § Clustered units' "core computed the partition, so core
+    keeps it indivisible."
+
+    Measured on a fixture rather than argued: before this row reached an
+    axis-name stratum, a cluster straddled both arms at nearly every seed. It
+    is the same rule and the same code an attribute stratum earns, reaching one
+    more way for a stratum to be non-constant, which is why there is no second
+    code — the name and the column it reads are both in the message, since a
+    reader told only `'sex'` would go looking for a column no block spells."""
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": _STRADDLE_AXES}},
+        _straddle_decl({"method": "by_attribute", "from": "patient_sex"}),
+        _straddling_cluster_roster(True),
+        c,
+    )
+    varies = [f for f in c.findings if f.code == "E-DATA-ASSIGN-STRATIFY-VARIES"]
+    assert len(varies) == 1
+    assert varies[0].path == "data.units.assign.arm.stratify_by"
+    assert "'sex'" in varies[0].message
+    assert "'patient_sex'" in varies[0].message
+    assert "F1" in varies[0].message
+    assert "f" in varies[0].message and "m" in varies[0].message
+
+
+def test_a_stratum_naming_an_axis_constant_within_every_cluster_is_not_refused():
+    """The first control: the same declaration over a roster whose families
+    each agree about `patient_sex`. `sex` then splits no cluster, so `arm`'s
+    strata are unions of whole clusters and the draw satisfies both
+    constraints. A check that fired for every axis-name stratum beside a
+    `cluster_by` passes the test above and fails this one."""
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": _STRADDLE_AXES}},
+        _straddle_decl({"method": "by_attribute", "from": "patient_sex"}),
+        _straddling_cluster_roster(False),
+        c,
+    )
+    assert "E-DATA-ASSIGN-STRATIFY-VARIES" not in {f.code for f in c.findings}
+
+
+def test_a_stratum_naming_an_axis_that_draws_is_not_refused():
+    """The second control, and the one that says *why* the first half reads the
+    earlier axis's method at all: a `sex` that **draws** allocates whole
+    clusters, so its realized membership is constant within every family by
+    construction and there is nothing left to refuse — over the same varying
+    roster that earns the finding above. A check reading only "this stratum
+    names an earlier axis, and some column varies" would refuse a design core
+    performs correctly.
+
+    **The `from` is declared and must be ignored**, which is what makes this a
+    control rather than a fixture that happens to find no column: `from` means
+    nothing under `random` — the draw never reads it — so a check deciding
+    "does this axis read a column" by looking for a resolvable column instead
+    of at the method would find `patient_sex` here, see it vary within `F1`,
+    and refuse a cluster-randomized `sex` that keeps every family whole."""
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": _STRADDLE_AXES}},
+        _straddle_decl({"method": "random", "seed": 7, "from": "patient_sex"}),
+        _straddling_cluster_roster(True),
+        c,
+    )
+    assert "E-DATA-ASSIGN-STRATIFY-VARIES" not in {f.code for f in c.findings}
+
+
+def test_a_varying_stratum_is_not_reported_a_second_time_under_blocked():
+    """`blocked` beside any `cluster_by` is refused outright as
+    `E-DATA-ASSIGN-BLOCKED-CLUSTER`, so a stratum's constancy inside that
+    combination is a question about a design already refused — reporting it too
+    would send a reader to fix a stratum in a design they have to rewrite
+    anyway. The `random` half above is what keeps this from being a check that
+    never runs."""
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": _ARM_AXIS}},
+        {
+            "attributes": ["animal_id", "label"],
+            "allocation": "between",
+            "cluster_by": "animal_id",
+            "assign": {"arm": {"method": "blocked", "stratify_by": ["label"]}},
+        },
+        _clustered_stratum_roster(True),
+        c,
+    )
+    assert {f.code for f in c.findings} == {"E-DATA-ASSIGN-BLOCKED-CLUSTER"}
+
+
+def test_an_undeclared_stratum_is_not_also_reported_as_varying():
+    """A name `data.units.attributes` does not declare is reported once, by the
+    existence row: the constancy check reads only the names that resolved, so a
+    reader is not handed a second finding derived from the first — the noise
+    `_check_cluster_by` argues against. `stratum_varies_within_cluster` would
+    raise nothing for such a name either, it would report every cluster as
+    agreeing on `no value`, which is the silent-wrong version of this."""
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": _ARM_AXIS}},
+        {
+            "attributes": ["animal_id"],
+            "allocation": "between",
+            "cluster_by": "animal_id",
+            "assign": {"arm": {"method": "random", "stratify_by": ["label"]}},
+        },
+        _clustered_stratum_roster(True),
+        c,
+    )
+    assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-STRATIFY-UNKNOWN"]
+
+
+def test_an_assign_stratum_is_excluded_from_the_undeclared_cluster_warning():
+    """`W-DATA-CLUSTER-UNDECLARED`'s row excludes "any `stratify_by`, which must
+    be constant within a cluster and so is coarser than one" — and under a draw
+    there is no `assign.from` to account for the column instead, which is the
+    case that makes this worth a test rather than an inspection.
+
+    `site` here has the exact shape the warning hunts for: three repeated
+    non-numeric labels over six units, no `cluster_by` declared. The control is
+    the same roster with the `stratify_by` removed, which must warn — otherwise
+    this test would pass against a warning that had simply stopped firing."""
+    roster = UnitList(
+        [
+            Unit(key=f"u{i}", paths=(), attributes={"site": "ABC"[i % 3]})
+            for i in range(6)
+        ]
+    )
+    doc = {
+        "data": {
+            "units": {
+                "attributes": ["site"],
+                "allocation": "between",
+                "assign": {"arm": {"method": "random", "stratify_by": ["site"]}},
+            }
+        },
+        "sweep": {"groups": _ARM_AXIS},
+    }
+    c = Collector()
+    _warn_undeclared_cluster(doc, doc["data"]["units"], roster, c)
+    assert not c.findings
+
+    bare = {
+        "data": {"units": {"attributes": ["site"]}},
+        "sweep": {"groups": _ARM_AXIS},
+    }
+    c = Collector()
+    _warn_undeclared_cluster(bare, bare["data"]["units"], roster, c)
+    assert [f.code for f in c.findings] == ["W-DATA-CLUSTER-UNDECLARED"]
+
+
+def test_a_non_empty_stratify_by_under_by_attribute_is_refused():
+    """§ Allocation: "The same is true of `assign.<axis>.stratify_by`: under
+    `method: by_attribute` it would describe how a draw was balanced when none
+    was — the same fault — so `validate` rejects a non-empty one there too."
+    Task 3's ruling: this task owns both halves of that sentence, not just
+    `ratio`."""
+    c = Collector()
+    _check_assign(
+        {},
+        {
+            "attributes": ["arm"],
+            "assign": {"arm": {"method": "by_attribute", "stratify_by": ["site"]}},
+        },
+        None,
+        c,
+    )
+    assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-NO-DRAW"]
+    assert c.findings[0].path == "data.units.assign.arm.stratify_by"
+    assert "by_attribute" in c.findings[0].message
+
+
+def test_an_empty_stratify_by_under_by_attribute_is_accepted():
+    """The control for the `stratify_by` half: an empty list changes no
+    behavior and must not be refused."""
+    c = Collector()
+    _check_assign(
+        {},
+        {
+            "attributes": ["arm"],
+            "assign": {"arm": {"method": "by_attribute", "stratify_by": []}},
+        },
+        None,
+        c,
+    )
+    assert [f.code for f in c.findings] == []
+
+
+def test_a_wrong_typed_ratio_under_by_attribute_is_refused():
+    """`ratio` is not an `envelope.py` `LEAF_TYPES` leaf and task 4's key-closure
+    check closes axis-block *names*, not the *types* of their values, so a bare
+    `ratio: 3` — a routine YAML slip for a mapping — is read by nothing else in
+    `src/`. `E-DATA-ASSIGN-NO-DRAW`'s fault is presence, not shape, so this is
+    absorbed under the same code as a well-formed non-empty `ratio` rather than
+    left silent or given a code of its own."""
+    c = Collector()
+    _check_assign(
+        {},
+        {
+            "attributes": ["arm"],
+            "assign": {"arm": {"method": "by_attribute", "ratio": 3}},
+        },
+        None,
+        c,
+    )
+    assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-NO-DRAW"]
+    assert c.findings[0].path == "data.units.assign.arm.ratio"
+    assert "3" in c.findings[0].message
+
+
+def test_a_wrong_typed_stratify_by_under_by_attribute_is_refused():
+    """The `stratify_by` half of the same absorption: a bare `stratify_by: site`
+    — the list form left off — where nothing else in `src/` reads
+    `assign.<axis>.stratify_by` at all, wrong-typed or not."""
+    c = Collector()
+    _check_assign(
+        {},
+        {
+            "attributes": ["arm"],
+            "assign": {"arm": {"method": "by_attribute", "stratify_by": "site"}},
+        },
+        None,
+        c,
+    )
+    assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-NO-DRAW"]
+    assert c.findings[0].path == "data.units.assign.arm.stratify_by"
+    assert "site" in c.findings[0].message
 
 
 def test_an_assignment_declaring_no_method_is_refused(write_config):
@@ -8450,6 +9987,55 @@ def test_an_assignment_method_outside_the_enum_is_refused(write_config):
     _check_assign({}, {"assign": {"arm": {"method": "by_column"}}}, None, c)
     assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-METHOD"]
     assert "by_column" in c.findings[0].message
+
+
+def test_a_misspelled_key_inside_an_assign_block_is_reported(write_config):
+    """`stratifyy_by` is silently ignored today: `envelope.py` types
+    `data.units.assign` a bare `dict` and none of its children, so nothing
+    closes an axis block. The control is the correctly spelled key, which must
+    NOT be reported — an allowlist that rejects everything passes the first
+    assertion and fails the design."""
+    units = {
+        "allocation": "between",
+        "assign": {"arm": {"method": "by_attribute", "stratifyy_by": ["site"]}},
+    }
+    assert "E-CONFIG-KEY-UNKNOWN" in codes(write_config({"data.units": units}))
+    ok = {
+        "allocation": "between",
+        "assign": {"arm": {"method": "by_attribute", "from": "arm"}},
+    }
+    assert "E-CONFIG-KEY-UNKNOWN" not in codes(write_config({"data.units": ok}))
+
+
+@pytest.mark.parametrize(
+    "key,value,typo",
+    [
+        ("method", "by_attribute", "methdo"),
+        ("from", "arm", "form"),
+        ("ratio", {"treatment": 1, "control": 1}, "ratios"),
+        ("block_size", "auto", "blocksize"),
+        ("stratify_by", ["site"], "stratifyy_by"),
+        ("seed", "auto", "seeds"),
+    ],
+)
+def test_each_assign_axis_key_is_closed_key_by_key(write_config, key, value, typo):
+    """`ASSIGN_AXIS_KEYS` is a closed *set*, not a list with some decorative
+    entries — a key removed from it silently by a future edit would only be
+    caught if some test pins that exact key down. `stratify_by` above is one
+    such case, but the other five had no case of their own before this test:
+    coverage for them rested on incidental hits in unrelated tests (`ratio`,
+    `block_size`, `seed`) or on nothing at all. Mirrors the enum-style
+    parametrization `ASSIGN_METHODS`/`ALLOCATION_MODES` get elsewhere in this
+    file — one case per legal value, correctly spelled and misspelled."""
+    ok = {"allocation": "between", "assign": {"arm": {key: value}}}
+    assert "E-CONFIG-KEY-UNKNOWN" not in codes(write_config({"data.units": ok}))
+
+    bad = {"allocation": "between", "assign": {"arm": {typo: value}}}
+    bad_path = write_config({"data.units": bad})
+    c = Collector()
+    validate_config(bad_path, c)
+    fields = [f.path for f in c.findings if f.code == "E-CONFIG-KEY-UNKNOWN"]
+    assert f"data.units.assign.arm.{typo}" in fields
 
 
 @pytest.mark.parametrize(

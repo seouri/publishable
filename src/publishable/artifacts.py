@@ -7,7 +7,7 @@ import io as _io
 import json
 import os
 import tempfile
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -16,10 +16,9 @@ import yaml
 from publishable.coercion import coerce_scalars
 from publishable.errors import ArtifactError, ArtifactExistsError, ContractError
 from publishable.sweep import condition_dir_name
-from publishable.units import arms_of
 
 if TYPE_CHECKING:
-    from publishable.units import UnitList
+    from publishable.units import ArmPlan, UnitList
 
 SCOPE_ORDER = {"run": 0, "condition": 1, "repeat": 2, "summary": 3}
 
@@ -170,9 +169,7 @@ def _suffix_for(name: str) -> str | None:
     return best
 
 
-def build_allocation_document(
-    roster: "UnitList", group_axes: Mapping[str, tuple[str, Sequence[str]]]
-) -> dict[str, Any] | None:
+def build_allocation_document(group_axes: Mapping[str, "ArmPlan"]) -> dict[str, Any] | None:
     """`allocation.json`'s payload — `reference.md` § `allocation.json` — who
     went where prints it in full: four top-level keys, `arms`/`seed`/`strata`
     keyed by axis name, `holdout` sharing the file because both are
@@ -183,31 +180,52 @@ def build_allocation_document(
     declared": the caller writes nothing in that case rather than an empty
     file.
 
-    **`arms`** maps each axis to `units.arms_of`'s own partition, restated as
-    unit keys in roster order — `arms_of` is the single authority task 10
-    built for arm membership, read here directly rather than reduced through
-    `units.arm_members` (built for a *condition's* intersection across axes,
-    the wrong shape for "every level of every axis"), and rather than a
-    third derivation of membership from the roster. Unit keys, never row
-    numbers, because a roster that gains a unit renumbers rows and would
-    silently repoint every membership claim; roster order because `arms_of`
-    already promises it and re-sorting here would silently contradict a
-    `blocked` design that reads that order as data (once `blocked` itself is
-    built).
+    **This function recomputes nothing — it is handed the plans and records
+    them.** It used to take `(roster, (column, levels))` per axis and call
+    `units.arms_of` a *second* time, after `cli.command_run` had already
+    called it to narrow each condition's roster. Under `by_attribute` that
+    second call is harmless, since reading the same column of the same
+    roster twice gives the same partition. **Under a draw it is not**: a
+    second draw is a second allocation, and "provably identical" is not
+    something two calls can be made to promise — only not calling twice
+    can. So the decision is *compute once and pass*:
+    `cli._resolved_group_axes` realizes one `units.ArmPlan` per axis,
+    `units.arm_members` narrows with those plans, and this function records
+    those same plan objects. The partition the runner ran and the partition
+    `allocation.json` claims are therefore the same object, not two answers
+    that happen to agree. This function takes **no roster** for that reason:
+    with nothing to read membership from, it cannot become a second producer
+    of it.
 
-    **`seed` and `strata` are always empty in this build.** This build's
-    only reachable `assign.method` is `by_attribute` (`E-DATA-ASSIGN-DRAWN`
-    refuses `random` and `blocked`, the two methods that draw), and
-    `by_attribute` reads an arm a trial system already assigned rather than
-    drawing one — recording a `seed` would be a false record of a draw that
-    never happened, the same fault § Allocation names for a non-empty
-    `ratio` under `by_attribute`. `assign.stratify_by` names how a draw was
-    *balanced*; with no draw there is nothing it describes, so the axis is
-    left out of `strata` for the same reason. Both keys stay present as
-    empty mappings — `seed`/`strata` are `{}`, not omitted — because the
-    shape is "keyed by axis name" whether or not any axis qualifies, and an
-    omitted key would read as "this build never has a seed or strata block
-    at all" rather than "no axis drew or stratified this run."
+    **`arms`** maps each axis to its plan's `members`, level → unit keys.
+    Unit keys, never row numbers, because a roster that gains a unit
+    renumbers rows and would silently repoint every membership claim. The
+    order is the plan's own — roster order under `by_attribute`, which
+    `units.arms_of` promises — and is recorded rather than re-sorted here,
+    because a `blocked` design reads that order as data (once `blocked`
+    itself is built).
+
+    **`seed` and `strata` carry whatever the plans realized, per axis.** An
+    axis appears under `seed` only when its plan has one, and under `strata`
+    only when its plan's `strata` is non-empty — so a `random` or `blocked`
+    axis appears under `seed`, and under `strata` too when it declared a
+    non-empty `stratify_by`, while a `by_attribute` axis is **left out of
+    both**. That omission is the record being truthful rather than a shape
+    this build has not filled in yet: `units.assignment_for` realizes
+    `seed=None`, `strata=()` for `by_attribute`, which reads an arm a trial
+    system already assigned rather than drawing one, so recording a `seed`
+    would be a false record of a draw that never happened — the same fault
+    § Allocation names for a non-empty `ratio` under `by_attribute` — and
+    `assign.stratify_by` names how a draw was *balanced*, which with no draw
+    describes nothing. A drawn axis that declared no `stratify_by` is left
+    out of `strata` for the same reason and not for a different one: `()` is
+    the truthful record of a draw balanced on nothing but its ratio.
+    Both keys stay present as mappings, empty or not — `seed`/`strata` are
+    `{}` rather than omitted when no axis qualifies — because the shape is
+    "keyed by axis name" whether or not any axis does, and an omitted key
+    would read as "this document has no seed or strata block at all" rather
+    than "no axis drew or stratified this run." `reference.md`
+    § `allocation.json` prints a document of each shape.
 
     **`holdout` is never written here.** `E-DATA-HOLDOUT-UNSUPPORTED`
     refuses every `data.units.holdout` declaration in this build, so there
@@ -228,6 +246,14 @@ def build_allocation_document(
     contract a future `resume` must honour — read the existing file rather
     than calling `build_allocation_document` again — not a description of
     behavior this build has or tests.
+
+    **That gap stopped being harmless when the draw was built.** While
+    `by_attribute` was the only method that executed, a `resume` that
+    re-derived the allocation would have re-read the same column of the same
+    roster and got the same partition, so the missing reader cost nothing. A
+    drawn axis has no column: a second draw is a second allocation, and while
+    `assign_seed_for` makes it *likely* to agree, "likely" is the wrong
+    property for the record of which patient was in which arm.
     """
     # Gated on `group_axes` truthiness, which `cli._resolved_group_axes`'s own
     # docstring warns a caller against in general: an axis whose declared
@@ -246,11 +272,13 @@ def build_allocation_document(
     # upstream call already having succeeded.
     if not group_axes:
         return None
-    arms: dict[str, dict[str, list[str]]] = {}
-    for axis, (column, levels) in group_axes.items():
-        partition = arms_of(roster, column, levels)
-        arms[axis] = {level: [u.key for u in units] for level, units in partition.items()}
-    return {"seed": {}, "arms": arms, "strata": {}}
+    arms = {
+        axis: {level: list(keys) for level, keys in plan.members.items()}
+        for axis, plan in group_axes.items()
+    }
+    seed = {axis: plan.seed for axis, plan in group_axes.items() if plan.seed is not None}
+    strata = {axis: list(plan.strata) for axis, plan in group_axes.items() if plan.strata}
+    return {"seed": seed, "arms": arms, "strata": strata}
 
 
 def allocation_hash(document: dict[str, Any]) -> str:

@@ -6,11 +6,16 @@ import pytest
 
 from publishable import ContractError
 from publishable.units import (
+    DRAWN_ASSIGN_METHODS,
+    ArmPlan,
     Unit,
     UnitList,
+    _apportion,
     apply_rule,
     arm_members,
     arms_of,
+    assign_seed_for,
+    assignment_for,
     cluster_count,
     clusters_of,
     collapse_measurements,
@@ -213,6 +218,67 @@ def test_units_hash_follows_order_and_content(input_dir: Path):
 
 def _roster(n: int) -> UnitList:
     return UnitList([Unit(key=f"u{i:03d}", paths=(), attributes={}) for i in range(n)])
+
+
+def test_a_pinned_assign_seed_is_returned_literally():
+    """§ What `auto` derives from: 'pinning an integer is the deliberate act,
+    and the one to take for anything you intend to cite', so a pinned seed must
+    survive a roster change. Same block, two different rosters, same answer."""
+    block = {"method": "blocked", "seed": 42}
+    assert assign_seed_for(block, "arm", "sha256:d", _roster(10)) == 42
+    assert assign_seed_for(block, "arm", "sha256:d", _roster(11)) == 42
+
+
+def test_a_boolean_seed_is_not_a_pin_and_derives():
+    """`bool` is a subclass of `int`, so `seed: true` would otherwise pin every
+    drawn axis to `1` and `seed: false` to `0` — a number nobody wrote, recorded
+    in `allocation.json` as the axis's own seed. `assign_seed_for` excludes it
+    explicitly, and this is what pins that exclusion: dropping the
+    `not isinstance(seed, bool)` guard makes both assertions below read `1`/`0`.
+
+    `validate` refuses the declaration outright (`E-DATA-ASSIGN-SEED`), so this
+    is the second line rather than the only one — but a raise-free fallback in
+    the function `validate` itself calls is worth keeping honest."""
+    roster = _roster(10)
+    derived = assign_seed_for({"method": "random"}, "arm", "sha256:d", roster)
+    for pinned in (True, False):
+        block = {"method": "random", "seed": pinned}
+        assert assign_seed_for(block, "arm", "sha256:d", roster) == derived
+    assert derived not in (0, 1)
+
+
+def test_the_derived_seed_moves_with_the_roster():
+    """'the roster changes, or any axis is added or edited'. Two rosters
+    differing by one unit -> different seeds. THE CONTROL: the same roster in a
+    different ORDER must also differ, because `units_hash` covers order and
+    § Where units come from says two runs that resolved the same units in a
+    different sequence did not allocate the same trial."""
+    block = {"method": "blocked"}
+    base = assign_seed_for(block, "arm", "sha256:d", _roster(10))
+
+    grown = _roster(11)
+    assert assign_seed_for(block, "arm", "sha256:d", grown) != base
+
+    reordered = UnitList(list(reversed(list(_roster(10)))))
+    assert assign_seed_for(block, "arm", "sha256:d", reordered) != base
+
+
+def test_the_derived_seed_moves_with_the_axis_name():
+    """Two axes over one roster and one digest draw differently, or a crossed
+    design assigns both axes identically."""
+    block = {"method": "blocked"}
+    roster = _roster(10)
+    arm_seed = assign_seed_for(block, "arm", "sha256:d", roster)
+    sex_seed = assign_seed_for(block, "sex", "sha256:d", roster)
+    assert arm_seed != sex_seed
+
+
+def test_the_derived_seed_moves_with_the_digest():
+    block = {"method": "blocked"}
+    roster = _roster(10)
+    one = assign_seed_for(block, "arm", "sha256:d", roster)
+    other = assign_seed_for(block, "arm", "sha256:e", roster)
+    assert one != other
 
 
 def test_every_unit_appears_in_exactly_one_partition():
@@ -1088,6 +1154,1221 @@ def test_arms_refuse_a_declared_level_with_no_unit():
     assert "treatment" in str(e.value)
 
 
+def _arm_roster12():
+    """12 units, 7 `control` and 5 `treatment` — `tests/test_runner.py`'s
+    `_arm_roster12`, restated here so this module's arm tests run against the
+    same uneven split: neither half is 6, so an arm cannot be confused with
+    the other arm, with half the roster, or with the whole roster by size
+    alone."""
+    return UnitList(
+        [Unit(key=f"c{i}", attributes={"arm": "control"}) for i in range(7)]
+        + [Unit(key=f"t{i}", attributes={"arm": "treatment"}) for i in range(5)]
+    )
+
+
+def _arm_plans(roster):
+    return {"arm": assignment_for(roster, "arm", None, ["control", "treatment"], "digest")}
+
+
+def test_assignment_for_by_attribute_realizes_arms_of_with_no_seed_and_no_strata():
+    """Step 1 of the seam: `by_attribute` through `ArmPlan` gives exactly what
+    `arms_of` gives, and says so about the two fields a draw would fill.
+
+    Both arms' keys are written out literally rather than re-derived from the
+    fixture's own `arm` attribute: a test that rebuilds the expectation by
+    re-running the membership rule cannot tell a correct partition from a
+    wrongly recomputed one, since the same rule produces both.
+
+    `seed is None` and `strata == ()` are the load-bearing halves, not
+    decoration — `by_attribute` reads an arm a trial system already assigned,
+    so a realized seed here would be a false record of a draw that never
+    happened, and `artifacts.build_allocation_document` writes exactly what
+    these two fields say."""
+    roster = _arm_roster12()
+    plan = assignment_for(roster, "arm", {"method": "by_attribute"}, ["control", "treatment"], "d")
+
+    assert plan.levels == ("control", "treatment")
+    assert plan.members["control"] == ("c0", "c1", "c2", "c3", "c4", "c5", "c6")
+    assert plan.members["treatment"] == ("t0", "t1", "t2", "t3", "t4")
+    assert set(plan.members) == {"control", "treatment"}
+    assert plan.seed is None
+    assert plan.strata == ()
+
+    # The same partition `arms_of` returns, restated as keys — the plan is
+    # `arms_of`'s answer carried in a shape a draw can also fill, not a
+    # second reading of the column.
+    partition = arms_of(roster, "arm", ["control", "treatment"])
+    assert plan.members == {
+        level: tuple(u.key for u in units) for level, units in partition.items()
+    }
+
+
+def test_assignment_for_resolves_from_against_the_axis_name_and_reads_no_other_column():
+    """The `from`-or-axis-name default now lives in `assignment_for` alone —
+    `cli._resolved_group_axes` used to resolve it too, and two resolutions of
+    one declaration is the defect class this slice closes. A declared `from`
+    naming a column that is NOT the axis name is what discriminates: the
+    fixture's units carry `arm_column`, and nothing at all under `arm`, so a
+    resolution that fell back to the axis name would raise
+    `E-DATA-ASSIGN-LEVELS` instead of partitioning."""
+    roster = UnitList(
+        [
+            Unit(key="u0", attributes={"arm_column": "control"}),
+            Unit(key="u1", attributes={"arm_column": "treatment"}),
+        ]
+    )
+    block = {"method": "by_attribute", "from": "arm_column"}
+    plan = assignment_for(roster, "arm", block, ["control", "treatment"], "digest")
+    assert plan.members == {"control": ("u0",), "treatment": ("u1",)}
+
+    # The control that must report: with no `from`, the axis name is the
+    # column, and this fixture has no `arm` attribute to read.
+    with pytest.raises(ContractError) as e:
+        assignment_for(roster, "arm", None, ["control", "treatment"], "digest")
+    assert e.value.code == "E-DATA-ASSIGN-LEVELS"
+
+
+def test_assignment_for_refuses_a_method_it_has_never_heard_of():
+    """**Fail-closed, and this is the regression it prevents.** `assignment_for`
+    allows `by_attribute` and refuses everything else, rather than denying the
+    methods that happen to draw today. A fourth method added to
+    `validate.ASSIGN_METHODS` — and to nothing else — would otherwise validate
+    clean and then be silently partitioned by a column read, which is the
+    fallback the whole guard exists to prevent. `adaptive` stands in for that
+    method here: it is in no enum, and the fixture's units DO carry `arm`, so a
+    denylist would have returned a plausible-looking partition instead of
+    raising.
+
+    Reachable only through a core defect: `validate` refuses an out-of-enum
+    method as `E-DATA-ASSIGN-METHOD` and returns before `run` reaches this."""
+    roster = _arm_roster12()
+    with pytest.raises(NotImplementedError) as e:
+        assignment_for(roster, "arm", {"method": "adaptive"}, ["control", "treatment"], "d")
+    assert "adaptive" in str(e.value)
+    assert "by_attribute" in str(e.value)
+    assert "adaptive" not in DRAWN_ASSIGN_METHODS
+
+
+def test_assignment_for_takes_the_by_attribute_path_for_an_unnamed_method():
+    """An absent block, a non-mapping one, and a block with no `method` all
+    take the `by_attribute` path — the same default `validate._check_assign`
+    falls back to. Only `random` and `blocked` divert, so no method that
+    *draws* can reach a column read by falling through."""
+    roster = _arm_roster12()
+    expected = ("c0", "c1", "c2", "c3", "c4", "c5", "c6")
+    for block in (None, {}, {"from": "arm"}):
+        plan = assignment_for(roster, "arm", block, ["control", "treatment"], "digest")
+        assert plan.members["control"] == expected
+        assert plan.seed is None
+
+
+def _random_roster(n: int) -> UnitList:
+    """`n` units with no attributes at all — a drawn axis has no column to
+    read, so unlike `_arm_roster12` these carry nothing an `arm`-style
+    attribute could leak membership from."""
+    return UnitList([Unit(key=f"u{i:02d}", paths=(), attributes={}) for i in range(n)])
+
+
+def test_a_random_draw_honours_an_unequal_ratio():
+    """12 units, `ratio: {control: 1, treatment: 2}` -> 4 and 8. Deliberately
+    unequal AND not a half: 4/8 cannot be confused with 6/6, with 12, or with
+    each other — the fixture trap the plan's Global Constraints name, restated
+    for a draw rather than a read. Exact membership under a pinned seed is
+    asserted literally, not re-derived from the apportionment rule under
+    test."""
+    roster = _random_roster(12)
+    block = {"method": "random", "ratio": {"control": 1, "treatment": 2}, "seed": 7}
+    plan = assignment_for(roster, "arm", block, ["control", "treatment"], "digest")
+
+    assert plan.seed == 7
+    assert len(plan.members["control"]) == 4
+    assert len(plan.members["treatment"]) == 8
+    assert plan.members["control"] == ("u07", "u11", "u03", "u10")
+    assert plan.members["treatment"] == (
+        "u08",
+        "u04",
+        "u09",
+        "u01",
+        "u00",
+        "u06",
+        "u02",
+        "u05",
+    )
+
+
+def test_a_random_draw_is_a_partition():
+    """Every unit in exactly one arm — the coverage half of the property
+    `arms_of` guarantees for a read assignment, which a draw must too. Reuses
+    the 12-unit, `{control: 1, treatment: 2}` fixture from the ratio test
+    above: an equal split over a roster divisible by the arm count would make
+    a coverage bug (a duplicate, or a dropped unit) invisible by size alone.
+
+    The *non-emptiness* half is not asserted here and deliberately so: 12
+    units at 1:2 cannot floor either level to zero, so an assertion of it
+    against this fixture could never fail — it would document the property
+    rather than sense it.
+    `test_a_drawn_arm_the_ratio_apportions_no_unit_to_is_refused` below owns
+    that half, against a fixture where a size of 0 is reachable."""
+    roster = _random_roster(12)
+    block = {"method": "random", "ratio": {"control": 1, "treatment": 2}, "seed": 7}
+    plan = assignment_for(roster, "arm", block, ["control", "treatment"], "digest")
+
+    seen = plan.members["control"] + plan.members["treatment"]
+    assert len(seen) == len(set(seen)) == len(roster)
+    assert set(seen) == {unit.key for unit in roster}
+
+
+def test_the_same_seed_draws_the_same_arms():
+    """Two calls with the same pinned seed draw the same arms.
+
+    **The control**: a different pinned seed draws different arms. Without
+    it, an implementation that ignored the seed entirely — always shuffling
+    from an unseeded, or a constant, RNG state — would still pass the first
+    half by accident."""
+    roster = _random_roster(12)
+    levels = ["control", "treatment"]
+    first = assignment_for(roster, "arm", {"method": "random", "seed": 1}, levels, "digest")
+    again = assignment_for(roster, "arm", {"method": "random", "seed": 1}, levels, "digest")
+    assert first.members == again.members
+
+    different = assignment_for(roster, "arm", {"method": "random", "seed": 2}, levels, "digest")
+    assert different.members != first.members
+
+
+def test_a_ratio_that_does_not_divide_the_roster_is_reported_not_rounded_away():
+    """13 units at `ratio: {a: 1, b: 2}` — sum 3 does not divide 13, so there is
+    no exact solution. `_apportion` floors each level's exact share (4.333 ->
+    4, 8.667 -> 8, 12 of the 13 accounted for) and hands the 13th, leftover
+    unit to the largest fractional part rather than the largest level by
+    name: `b`'s 0.667 beats `a`'s 0.333, so that 13th unit — the last element
+    of `b`'s slice of the seed-3 shuffle — lands in `b`, giving 4 and 9. The
+    realized sizes are stated exactly rather than a false "even enough"
+    claim.
+
+    Membership is asserted literally beside the sizes, not sizes alone: this
+    is the one roster in this file whose remainder unit is *distributed* by
+    `_apportion` rather than falling out of an exact division, so it is the
+    one place a slicing bug that keeps the sizes right while cutting the
+    shuffle at the wrong offsets would show."""
+    roster = _random_roster(13)
+    block = {"method": "random", "ratio": {"a": 1, "b": 2}, "seed": 3}
+    plan = assignment_for(roster, "arm", block, ["a", "b"], "digest")
+
+    assert len(plan.members["a"]) == 4
+    assert len(plan.members["b"]) == 9
+    assert len(plan.members["a"]) + len(plan.members["b"]) == 13
+    assert plan.members["a"] == ("u12", "u11", "u01", "u06")
+    assert plan.members["b"] == (
+        "u00",
+        "u04",
+        "u10",
+        "u07",
+        "u05",
+        "u02",
+        "u08",
+        "u09",
+        "u03",
+    )
+
+
+def test_apportion_hands_the_remainder_to_the_largest_fraction():
+    """**`_apportion`'s rule, pinned directly.** Every fixture drawn through
+    `assignment_for` above happens to agree with the mutant that gives the
+    remainder to the *last* entries in reverse order — 13 units at 1:2 puts the
+    leftover in `b` either way — so the whole of Hamilton's rule was enforced
+    by nothing. These two cases each kill a different wrong rule:
+
+    - `(10, [1, 1, 1])` -> `[4, 3, 3]`. Every fraction is equal (0.333), so
+      this is the *tie-break* alone: declared order wins, and the reverse-order
+      mutant gives `[3, 3, 4]`.
+    - `(10, [3, 3, 1])` -> `[4, 4, 2]`. Here the largest fraction (0.429)
+      belongs to the *smallest* weight, so it discriminates "largest fractional
+      part" from every weight-magnitude heuristic at once: giving the remainder
+      to the largest weight, or to the first entry, both give `[5, 4, 1]`.
+
+    `(10, [1, 2, 4])` would have been the natural third case and is left out on
+    purpose — it coincides with the reverse-order mutant, the same accident that
+    let the mutant survive the suite in the first place."""
+    assert _apportion(10, [1, 1, 1]) == [4, 3, 3]
+    assert _apportion(10, [3, 3, 1]) == [4, 4, 2]
+    # The floors themselves, so a mutation that distributed the whole of `n`
+    # by fractions alone is not mistaken for the rule above.
+    assert _apportion(12, [1, 2]) == [4, 8]
+
+
+@pytest.mark.parametrize(
+    ("n", "ratio", "levels", "expected_empty"),
+    [
+        (10, {"a": 1, "b": 1000}, ["a", "b"], "a"),
+        (2, None, ["a", "b", "c"], "c"),
+    ],
+    ids=["skewed-ratio", "fewer-units-than-levels"],
+)
+def test_a_drawn_arm_the_ratio_apportions_no_unit_to_is_refused(n, ratio, levels, expected_empty):
+    """A drawn arm with no units is the same fault as a read one, and carries
+    the same code. `arms_of` refuses "a declared level no unit's value names —
+    that arm's condition would resolve zero units" as `E-DATA-ASSIGN-LEVELS`,
+    and `reference.md` § Allocation states it method-agnostically ("An arm no
+    unit resolves to is already refused, as `E-DATA-ASSIGN-LEVELS`") in the
+    very sentence that contrasts it with the thin-but-nonzero cell
+    `limits.min_units_per_cell` does not yet warn about. A hard refusal routed
+    into that warning-shaped gap is what this test exists to prevent.
+
+    Two routes to a size of 0, so no single wrong guard covers both:
+
+    - `{a: 1, b: 1000}` over 10 units floors `a` to 0 while `b` takes all ten.
+      **`validate` approves this ratio** — the keys are exactly the levels and
+      both values are finite positives — so it is the validate-clean-then-
+      disagree shape, caught only at the draw.
+    - 2 units over 3 levels leaves `c` empty under equal allocation, with no
+      `ratio` declared at all: a guard written as a check on the declared
+      ratio rather than on the realized sizes would miss it entirely.
+
+    The message names the empty level, so a raise that reported the wrong one
+    (or all of them) is not mistaken for this one."""
+    roster = _random_roster(n)
+    block = {"method": "random", "seed": 5}
+    if ratio is not None:
+        block["ratio"] = ratio
+    with pytest.raises(ContractError) as e:
+        assignment_for(roster, "arm", block, levels, "digest")
+    assert e.value.code == "E-DATA-ASSIGN-LEVELS"
+    assert expected_empty in str(e.value)
+    assert "resolves zero of them" in str(e.value)
+
+
+def test_a_drawn_arm_of_one_unit_is_not_refused():
+    """**The control the refusal above needs.** 3 units over 3 levels gives
+    every arm exactly one unit — the thinnest partition that is still a
+    partition — and must draw, not raise. A guard written against "an arm
+    smaller than the others" or "an arm below some floor" rather than against
+    an arm of *zero* would fail here, and `reference.md` § Allocation is
+    explicit that a single-unit arm "is not the uncovered case either"."""
+    roster = _random_roster(3)
+    plan = assignment_for(roster, "arm", {"method": "random", "seed": 5}, ["a", "b", "c"], "d")
+    assert [len(plan.members[level]) for level in ("a", "b", "c")] == [1, 1, 1]
+    assert sorted(k for arm in plan.members.values() for k in arm) == ["u00", "u01", "u02"]
+
+
+_STRATUM_SITES = ["A", "B", "A", "C", "A", "B", "A", "B", "A", "C", "A", "B"]
+"""12 units over three strata of DIFFERENT sizes — `site` A×6, B×4, C×2 — so an
+equal two-arm draw that balanced only overall (6/6) is not forced to leave any
+one stratum even, and C, at two units, is the stratum a whole-roster cut splits
+lopsidedly most easily. Interleaved rather than grouped by site so `blocked`'s
+own blocks, which read roster order, do not coincide with the strata: a fixture
+whose block boundaries fell on stratum boundaries would make an unstratified
+`blocked` draw stratified by accident."""
+
+
+def _stratum_roster() -> UnitList:
+    return UnitList(
+        [
+            Unit(key=f"u{i:02d}", paths=(), attributes={"site": site})
+            for i, site in enumerate(_STRATUM_SITES)
+        ]
+    )
+
+
+def _per_stratum(plan, levels: tuple[str, str]) -> dict[str, tuple[int, int]]:
+    """Each site's per-arm counts, `{site: (level0 count, level1 count)}`."""
+    counts = {site: [0, 0] for site in set(_STRATUM_SITES)}
+    for i, level in enumerate(levels):
+        for key in plan.members[level]:
+            counts[_STRATUM_SITES[int(key[1:])]][i] += 1
+    return {site: (pair[0], pair[1]) for site, pair in counts.items()}
+
+
+def test_an_unstratified_arm_draw_of_the_same_fixture_is_lopsided():
+    """**The oracle the two stratified tests below rest on, and the reason the
+    seed is 11 rather than any pinned number.** The mutation those tests exist to
+    catch is "ignore `stratify_by`, draw over the whole roster" — and against a
+    fixture whose strata happen to come out even under the unstratified draw,
+    that mutation passes them. It does not here: at seed 11 the unstratified
+    `random` draw gives A 5/1, B 1/3 and C 0/2, and the unstratified `blocked`
+    draw gives B 3/1 and C 0/2. Every one of those differs from the stratified
+    answer asserted below, so dropping stratification fails both tests rather
+    than a fraction of the time.
+
+    The seed was chosen by running exactly this draw over candidate seeds, not
+    by assuming a lopsided one; this test is that choice, written down and
+    re-checked on every run rather than left in a scratch script."""
+    roster = _stratum_roster()
+    levels = ("control", "treatment")
+
+    unstratified = assignment_for(roster, "arm", {"method": "random", "seed": 11}, levels, "d")
+    assert _per_stratum(unstratified, levels) == {"A": (5, 1), "B": (1, 3), "C": (0, 2)}
+
+    blocked = assignment_for(roster, "arm", {"method": "blocked", "seed": 11}, levels, "d")
+    assert _per_stratum(blocked, levels) == {"A": (3, 3), "B": (3, 1), "C": (0, 2)}
+
+
+@pytest.mark.parametrize("stratify_by", [["site"], "site"], ids=["list", "bare-string"])
+def test_a_stratified_draw_balances_arms_within_every_stratum(stratify_by):
+    """`reference.md` § Allocation's own example — `stratify_by: [site]`,
+    "balance arms on these" — over 12 units in sites A(6)/B(4)/C(2) at two equal
+    arms. Each stratum's own per-arm counts are asserted exactly: A 3/3, B 2/2,
+    C 1/1.
+
+    **Why these numbers discriminate**, rather than agreeing with the bug they
+    exist to catch: the sibling test above pins what the *same* roster and the
+    *same* seed give with no stratification — A 5/1, B 1/3, C 0/2 — so a draw
+    that ignored `stratify_by` and cut the shuffled roster 6/6 fails all three
+    assertions here, not just the small stratum's. The totals are 6/6 either
+    way, which is exactly why a whole-roster size assertion would prove nothing
+    and is not what this test makes.
+
+    A bare `stratify_by: site` balances the same way a list does: presence and
+    shape are read structurally, `validate`'s own convention for the field, so a
+    draw written against `isinstance(x, list)` would silently ignore the bare
+    form while `validate` reports it as non-empty."""
+    levels = ("control", "treatment")
+    plan = assignment_for(
+        _stratum_roster(),
+        "arm",
+        {"method": "random", "seed": 11, "stratify_by": stratify_by},
+        levels,
+        "digest",
+    )
+    assert _per_stratum(plan, levels) == {"A": (3, 3), "B": (2, 2), "C": (1, 1)}
+    assert plan.seed == 11
+    assert plan.strata == ("site",)
+    assert sorted(k for arm in plan.members.values() for k in arm) == [
+        f"u{i:02d}" for i in range(12)
+    ]
+
+    # **Membership, not only counts — and this is the half no count assertion
+    # can carry.** `_apportion` FORCES the counts above: each stratum's split is
+    # decided by its size and the ratio before any number is drawn, so a draw
+    # that never shuffled at all (arms decided by roster order) or that ignored
+    # the seed entirely would produce the identical 3/3, 2/2, 1/1 and pass every
+    # count assertion in this file. Exact keys at a pinned seed are what makes
+    # the shuffle and the seed load-bearing, and the seed-12 half below is what
+    # makes the SEED load-bearing rather than just some fixed permutation.
+    assert plan.members["control"] == ("u04", "u00", "u02", "u01", "u11", "u09")
+    assert plan.members["treatment"] == ("u10", "u08", "u06", "u07", "u05", "u03")
+
+    other = assignment_for(
+        _stratum_roster(),
+        "arm",
+        {"method": "random", "seed": 12, "stratify_by": stratify_by},
+        levels,
+        "digest",
+    )
+    assert _per_stratum(other, levels) == {"A": (3, 3), "B": (2, 2), "C": (1, 1)}
+    assert set(other.members["control"]) != set(plan.members["control"])
+
+
+def test_a_stratified_blocked_draw_balances_arms_within_every_stratum():
+    """The same balance under `blocked`, which is a stratified permuted-block
+    design: the block loop runs inside each stratum, over that stratum's units in
+    roster order, rather than over the whole roster.
+
+    A(6) at `block_size` 4 (`auto` over two equal levels) is one whole block and
+    a trailing 2, so 3/3; B(4) is one whole block, 2/2; C(2) is one trailing
+    block, 1/1. **Those counts are forced by the blocking rule rather than by the
+    seed**, which is the point — and the sibling test above is what keeps this
+    from being vacuous, pinning the unstratified `blocked` draw at the same seed
+    as B 3/1 and C 0/2. A mutant that cut the whole roster into blocks and
+    ignored the strata fails here on both.
+
+    The strata are interleaved in the roster, so a mutant that blocked the whole
+    roster does not reproduce the per-stratum blocks by accident: its first block
+    holds A, B, A, C."""
+    levels = ("control", "treatment")
+    plan = assignment_for(
+        _stratum_roster(),
+        "arm",
+        {"method": "blocked", "seed": 11, "stratify_by": ["site"]},
+        levels,
+        "digest",
+    )
+    assert _per_stratum(plan, levels) == {"A": (3, 3), "B": (2, 2), "C": (1, 1)}
+    assert plan.strata == ("site",)
+
+
+def test_a_stratified_draw_balances_within_each_combination_of_two_attributes():
+    """Two names in `stratify_by` are one stratum per *combination* of their
+    values, not one per name: 12 units crossing `site` A/B with `sex` f/m into
+    four groups of 3, drawn 2/1 by an unequal ratio inside each.
+
+    A draw that stratified on only the first name would give the four cells
+    counts summing correctly per site but free within it — 3/0 in one cell and
+    0/3 in another are both reachable — so asserting every cell at (2, 1) is
+    what distinguishes the composite key from either name alone."""
+    roster = UnitList(
+        [
+            Unit(
+                key=f"u{i:02d}",
+                paths=(),
+                attributes={"site": "AB"[i % 2], "sex": "fm"[(i // 2) % 2]},
+            )
+            for i in range(12)
+        ]
+    )
+    levels = ("control", "treatment")
+    plan = assignment_for(
+        roster,
+        "arm",
+        {
+            "method": "random",
+            "seed": 3,
+            "stratify_by": ["site", "sex"],
+            "ratio": {"control": 2, "treatment": 1},
+        },
+        levels,
+        "digest",
+    )
+    assert plan.strata == ("site", "sex")
+    cells: dict[tuple[str, str], list[int]] = {}
+    by_key = {unit.key: unit for unit in roster}
+    for i, level in enumerate(levels):
+        for key in plan.members[level]:
+            unit = by_key[key]
+            cells.setdefault((unit.attributes["site"], unit.attributes["sex"]), [0, 0])[i] += 1
+    assert sorted(cells) == [("A", "f"), ("A", "m"), ("B", "f"), ("B", "m")]
+    assert all(counts == [2, 1] for counts in cells.values())
+
+
+def test_a_stratum_no_resolved_unit_carries_is_not_drawn_as_one_stratum():
+    """A `stratify_by` naming a `sweep.groups` axis is legal against § Validation's
+    *Allocation strata exist* — the row admits an axis name — but an axis's
+    membership is *realized* by an earlier draw rather than carried as a column,
+    so it can only be read out of that axis's plan. With no such plan in
+    `resolved`, drawing it as a single "no value" stratum would be an
+    unstratified draw wearing a stratified record: every unit in one group,
+    `strata` recording a balance that never happened.
+
+    So the assertion is the raise, and the message names the two declarations
+    that reach it by their codes — a later axis
+    (`E-DATA-ASSIGN-STRATIFY-FORWARD`) and a name nothing declares
+    (`E-DATA-ASSIGN-STRATIFY-UNKNOWN`) — because the raise cannot tell them
+    apart from its own arguments. Both empty and non-empty `resolved` are
+    exercised: an axis this draw comes *before* is absent from the snapshot it
+    is handed, which is the whole of what "forward-only" means at this level.
+    The control that this is not simply "any name raises" is every stratified
+    test above, whose `site` draws, and
+    `test_an_axis_may_stratify_on_an_earlier_axis` below, whose `sex` does."""
+    roster = _stratum_roster()
+    later = assignment_for(roster, "sex", {"method": "random", "seed": 3}, ["f", "m"], "d")
+    for method in ("random", "blocked"):
+        for resolved in (None, {}, {"cohort": later}):
+            with pytest.raises(NotImplementedError) as e:
+                assignment_for(
+                    roster,
+                    "arm",
+                    {"method": method, "seed": 11, "stratify_by": ["sex"]},
+                    ["control", "treatment"],
+                    "digest",
+                    None,
+                    resolved,
+                )
+            assert "'sex'" in str(e.value)
+            assert "E-DATA-ASSIGN-STRATIFY-FORWARD" in str(e.value)
+            assert "E-DATA-ASSIGN-STRATIFY-UNKNOWN" in str(e.value)
+
+
+def _sex_plan() -> ArmPlan:
+    """The earlier axis, drawn — six `f` and six `m` over the 12-unit fixture,
+    with no `sex` column anywhere in the roster. That absence is the point: a
+    drawn axis leaves nothing to read, so a second axis stratifying on it has
+    only this plan to balance within."""
+    return assignment_for(
+        _stratum_roster(), "sex", {"method": "random", "seed": 7}, ["f", "m"], "digest"
+    )
+
+
+def test_an_axis_may_stratify_on_an_earlier_axis():
+    """`experimental-designs.md` § Between-subjects factorial: "Axes resolve in
+    declaration order and `stratify_by` may name an earlier axis" — the both-
+    randomized row of `reference.md` § Expansion modes' table, two `random` axes
+    with the second stratifying on the first.
+
+    **`arm` is balanced WITHIN each `sex` arm**, and neither `sex` nor any
+    stand-in for it is a unit attribute here, so the balance can only have come
+    from the earlier plan's realized membership. A draw that ignored `resolved`
+    would raise (the test above); one that read a column would find none.
+
+    **Membership at a pinned seed, not only counts**, for the reason task 12's
+    surviving mutation established: `_apportion` FORCES 3/3 inside each stratum
+    of six, so every count assertion here is satisfied by a draw that never
+    shuffled, ignored its seed, or split the strata the wrong way round. The
+    exact keys, and the seed-12 half that must differ from them, are what make
+    the RNG load-bearing on this path specifically."""
+    sex = _sex_plan()
+    levels = ("control", "treatment")
+    plan = assignment_for(
+        _stratum_roster(),
+        "arm",
+        {"method": "random", "seed": 11, "stratify_by": ["sex"]},
+        levels,
+        "digest",
+        None,
+        {"sex": sex},
+    )
+    assert plan.strata == ("sex",)
+
+    for arm in sex.members.values():
+        # Six units in each `sex` arm, apportioned 3/3 within it — the balance
+        # `stratify_by` declares. Asserted per `sex` arm rather than over the
+        # roster, whose 6/6 total an unstratified draw also produces.
+        assert len(set(arm) & set(plan.members["control"])) == 3
+        assert len(set(arm) & set(plan.members["treatment"])) == 3
+
+    assert plan.members["control"] == ("u02", "u00", "u01", "u11", "u03", "u07")
+    assert plan.members["treatment"] == ("u09", "u06", "u05", "u08", "u10", "u04")
+
+    other = assignment_for(
+        _stratum_roster(),
+        "arm",
+        {"method": "random", "seed": 12, "stratify_by": ["sex"]},
+        levels,
+        "digest",
+        None,
+        {"sex": sex},
+    )
+    assert set(other.members["control"]) != set(plan.members["control"])
+
+
+def test_a_blocked_axis_may_stratify_on_an_earlier_axis():
+    """**`blocked`'s own success path on an axis-name stratum**, which nothing
+    else in this suite reaches.
+
+    `test_a_stratum_no_resolved_unit_carries_is_not_drawn_as_one_stratum` loops
+    both methods but asserts a **raise** for each, so it passes whether or not
+    `blocked` can read a plan at all: a parametrized test asserting a failure for
+    both arms proves nothing about either arm's success path. Reverting only the
+    `blocked` branch's `_stratum_groups` call sites to the pre-`resolved`
+    signature left the whole suite green because of that gap.
+
+    The block loop runs inside each `sex` arm, from the one carried generator, so
+    each arm is filled 3/3 — and the pinned membership differs from the
+    UNSTRATIFIED `blocked` draw of the same roster at the same seed
+    (`('u00', 'u01', 'u04', 'u05', 'u08', 'u11')`), which is what makes
+    "`stratify_by` was ignored" a failure here rather than a coincidence."""
+    sex = _sex_plan()
+    levels = ("control", "treatment")
+    plan = assignment_for(
+        _stratum_roster(),
+        "arm",
+        {"method": "blocked", "seed": 11, "stratify_by": ["sex"]},
+        levels,
+        "digest",
+        None,
+        {"sex": sex},
+    )
+    assert plan.strata == ("sex",)
+    for sex_arm in sex.members.values():
+        assert len(set(sex_arm) & set(plan.members["control"])) == 3
+        assert len(set(sex_arm) & set(plan.members["treatment"])) == 3
+
+    assert plan.members["control"] == ("u00", "u01", "u06", "u07", "u08", "u11")
+    assert plan.members["treatment"] == ("u02", "u05", "u09", "u03", "u04", "u10")
+
+    other = assignment_for(
+        _stratum_roster(),
+        "arm",
+        {"method": "blocked", "seed": 12, "stratify_by": ["sex"]},
+        levels,
+        "digest",
+        None,
+        {"sex": sex},
+    )
+    assert set(other.members["control"]) != set(plan.members["control"])
+
+
+def test_a_blocked_draw_on_an_axis_stratum_names_the_strata_when_an_arm_is_empty():
+    """**The `E-DATA-ASSIGN-LEVELS` message under an axis-name stratum**, and the
+    reason it needs its own test: `blocked`'s refusal builds its "within each of
+    the N strata" clause by calling `_stratum_groups` a second time, from inside
+    the message construction. A call site left on the pre-`resolved` signature
+    there raises `NotImplementedError` **while formatting a diagnostic** — the
+    worse half of the same mutation, since it turns a clean refusal into a
+    traceback.
+
+    Four units, an earlier axis splitting them 2/2, three equal arms: each
+    stratum is one partial block apportioned `[1, 1, 0]`, so `c` is empty across
+    every block of every stratum — the merged-coverage rule, reached through a
+    stratum no unit carries as a column."""
+    roster = UnitList([Unit(key=f"u{i:02d}", paths=(), attributes={}) for i in range(4)])
+    earlier = assignment_for(roster, "sex", {"method": "random", "seed": 3}, ["f", "m"], "d")
+    with pytest.raises(ContractError) as e:
+        assignment_for(
+            roster,
+            "arm",
+            {"method": "blocked", "seed": 11, "stratify_by": ["sex"]},
+            ["a", "b", "c"],
+            "digest",
+            None,
+            {"sex": earlier},
+        )
+    assert e.value.code == "E-DATA-ASSIGN-LEVELS"
+    assert "no unit in c" in str(e.value)
+    assert "within each of the 2 strata of sex" in str(e.value)
+
+
+def test_a_stratum_the_roster_carries_is_an_attribute_before_it_is_an_axis():
+    """**The precedence, pinned in the one place it can diverge.** `validate`
+    exempts a `stratify_by` name found in `data.units.attributes` before it asks
+    whether the name is a group axis; this function decides the same order from
+    the other side, off the resolved units. So a name that is both — `site`,
+    carried by every unit here AND handed in as a drawn axis — must balance on
+    the column, or the two sides would answer differently for one declaration
+    and no forward-only finding would correspond to what the draw did.
+
+    The two answers are made distinguishable on purpose: the `site` plan handed
+    in is a two-level 6/6 split that cuts ACROSS the three sites, so balancing
+    on it gives A 3/3, B 2/2, C 1/1 only if the column won. The membership pin
+    is `test_a_stratified_draw_balances_arms_within_every_stratum`'s own,
+    unchanged — the same declaration with no `resolved` at all — so this test
+    asserts bit-identity with the column draw rather than merely a plausible
+    balance."""
+    crossing = assignment_for(
+        _stratum_roster(), "site", {"method": "random", "seed": 5}, ["f", "m"], "digest"
+    )
+    levels = ("control", "treatment")
+    plan = assignment_for(
+        _stratum_roster(),
+        "arm",
+        {"method": "random", "seed": 11, "stratify_by": ["site"]},
+        levels,
+        "digest",
+        None,
+        {"site": crossing},
+    )
+    assert _per_stratum(plan, levels) == {"A": (3, 3), "B": (2, 2), "C": (1, 1)}
+    assert plan.members["control"] == ("u04", "u00", "u02", "u01", "u11", "u09")
+
+
+def test_a_unit_carrying_no_value_for_the_stratum_is_its_own_stratum():
+    """A name *some* units carry is a stratum; the units carrying none are
+    balanced together as `no value`, `stratum_varies_within_cluster`'s own
+    rendering of the same absence — so the two agree about what a missing value
+    is rather than one treating it as a stratum and the other as a fault. Only a
+    name **no** unit carries is the raise above.
+
+    Six units carry `site: A` and six carry nothing, two equal arms: both groups
+    come out 3/3, which a draw that raised on the first missing value could not
+    produce and a draw that lumped every unit into one group would not be forced
+    to."""
+    roster = UnitList(
+        [
+            Unit(key=f"u{i:02d}", paths=(), attributes={"site": "A"} if i < 6 else {})
+            for i in range(12)
+        ]
+    )
+    plan = assignment_for(
+        roster,
+        "arm",
+        {"method": "random", "seed": 11, "stratify_by": ["site"]},
+        ["control", "treatment"],
+        "digest",
+    )
+    carried = {f"u{i:02d}" for i in range(6)}
+    assert len(carried & set(plan.members["control"])) == 3
+    assert len(carried & set(plan.members["treatment"])) == 3
+    assert len(plan.members["control"]) == 6
+
+
+def test_a_level_empty_in_one_stratum_is_fine_if_another_stratum_covers_it():
+    """Coverage is checked over the MERGED draw, never per stratum — `blocked`'s
+    own rule for the same question one construction over. Three arms over strata
+    of 6 and 2: the two-unit stratum apportions `[1, 1, 0]`, giving the third arm
+    nothing, and the six-unit one gives it 2. A check written per stratum would
+    refuse this legal design.
+
+    Its mirror, `test_a_stratified_draw_leaving_an_arm_empty_is_refused` below,
+    is what keeps this from licensing an empty arm."""
+    roster = UnitList(
+        [
+            Unit(key=f"u{i:02d}", paths=(), attributes={"site": "A" if i < 6 else "B"})
+            for i in range(8)
+        ]
+    )
+    plan = assignment_for(
+        roster,
+        "arm",
+        {"method": "random", "seed": 11, "stratify_by": ["site"]},
+        ["a", "b", "c"],
+        "digest",
+    )
+    assert sorted(len(plan.members[level]) for level in ("a", "b", "c")) == [2, 3, 3]
+    assert all(plan.members[level] for level in ("a", "b", "c"))
+
+
+def test_a_stratified_draw_leaving_an_arm_empty_is_refused():
+    """The merged-coverage check has teeth: two strata of two units over three
+    equal arms apportion `[1, 1, 0]` in each, so the third arm is empty across
+    every stratum — `arms_of`'s own sentence, "that arm's condition would resolve
+    zero units", so `E-DATA-ASSIGN-LEVELS`, the same code both unstratified
+    draws refuse the same fault with.
+
+    The message names the strata rather than only the roster, since a reader
+    whose arms are empty *because* the strata are small needs to know that is
+    what happened."""
+    roster = UnitList(
+        [
+            Unit(key=f"u{i:02d}", paths=(), attributes={"site": "A" if i < 2 else "B"})
+            for i in range(4)
+        ]
+    )
+    with pytest.raises(ContractError) as e:
+        assignment_for(
+            roster,
+            "arm",
+            {"method": "random", "seed": 11, "stratify_by": ["site"]},
+            ["a", "b", "c"],
+            "digest",
+        )
+    assert e.value.code == "E-DATA-ASSIGN-LEVELS"
+    assert "no unit in c" in str(e.value)
+    assert "2 strata" in str(e.value)
+
+
+def test_a_clustered_stratified_draw_keeps_every_cluster_whole():
+    """Both constructions at once, which is a cluster-randomized trial stratified
+    by site: whole clusters go to one arm (§ Clustered units, "core computed the
+    partition, so core keeps it indivisible") *and* each stratum is balanced.
+
+    Eight clusters of 2, four in each site. The structural assertion is that no
+    cluster straddles two arms — a size check could not see a split cluster,
+    since 8/8 is reachable either way — and the per-stratum assertion is that
+    each site contributes 4 units to each arm, which a draw that dealt clusters
+    over the whole roster is not forced to produce.
+
+    This composition is sound only because a cluster carries one stratum value:
+    `validate` refuses the other case as `E-DATA-ASSIGN-STRATIFY-VARIES`, the
+    same dependence `partition_units` has on the fold half of that rule."""
+    units, clusters = [], {}
+    for c in range(8):
+        for m in range(2):
+            key = f"c{c}_{m}"
+            units.append(
+                Unit(key=key, paths=(), attributes={"site": "A" if c < 4 else "B"})
+            )
+            clusters[key] = f"c{c}"
+    roster = UnitList(units)
+    plan = assignment_for(
+        roster,
+        "arm",
+        {"method": "random", "seed": 11, "stratify_by": ["site"]},
+        ["control", "treatment"],
+        "digest",
+        clusters,
+    )
+    control = set(plan.members["control"])
+    for c in range(8):
+        members = {f"c{c}_0", f"c{c}_1"}
+        assert members <= control or not (members & control), f"c{c} straddles two arms"
+    assert len({k for k in control if k.startswith(("c0", "c1", "c2", "c3"))}) == 4
+    assert len(control) == 8
+
+    # The same membership pin the unclustered stratified test carries, and for
+    # the same reason: which four of each site's clusters go to `control` is the
+    # only thing the RNG decides here — the counts and the wholeness are forced
+    # by the ratio and by `_assign_whole_clusters_by_ratio` respectively — so a
+    # clustered draw that ignored its seed would satisfy both assertions above.
+    assert plan.members["control"] == (
+        "c0_0", "c0_1", "c2_0", "c2_1", "c5_0", "c5_1", "c6_0", "c6_1",
+    )
+    other = assignment_for(
+        roster,
+        "arm",
+        {"method": "random", "seed": 12, "stratify_by": ["site"]},
+        ["control", "treatment"],
+        "digest",
+        clusters,
+    )
+    assert set(other.members["control"]) != set(plan.members["control"])
+
+
+def test_an_empty_stratify_by_still_draws():
+    """**The control** for the refusal above: `stratify_by: []` is what `init`
+    writes and what most designs carry, and it declares no balance — so it
+    draws. A refusal written as "the key is present" rather than "the value is
+    non-empty" would refuse every generated config."""
+    roster = _random_roster(12)
+    block = {"method": "random", "seed": 5, "stratify_by": []}
+    plan = assignment_for(roster, "arm", block, ["a", "b"], "digest")
+    assert len(plan.members["a"]) == 6
+    assert len(plan.members["b"]) == 6
+    assert plan.strata == ()
+
+
+def _five_clusters() -> tuple[UnitList, dict[str, str]]:
+    """12 units in 5 clusters of 4/3/2/2/1 — `reference.md` § Clustered units'
+    "core computed the partition, so core keeps it indivisible" fixture,
+    shared by the two tests below. Irregular sizes on purpose: no two are
+    equal except the pair of 2s, so a mutation that dealt clusters out by
+    the wrong rule reaches a size combination none of the other rosters in
+    this file happen to share.
+
+    **Not a claim that a split-cluster mutation produces a size no correct
+    draw could** — it can, and does: `{c0, c3}` (4+2) and `{c1, c2, c4}`
+    (3+2+1) are both legitimate whole-cluster combinations summing to 6, so
+    a 6/6 split proves nothing about whether a cluster was divided to reach
+    it.
+    `test_a_clustered_random_draw_keeps_every_cluster_whole` below asserts
+    the structural property (every cluster's units land together) for
+    exactly this reason — a size-based assertion could not distinguish the
+    two."""
+    return _clustered({"c0": 4, "c1": 3, "c2": 2, "c3": 2, "c4": 1})
+
+
+def test_a_clustered_random_draw_keeps_every_cluster_whole():
+    """§ Clustered units: 'core computed the partition, so core keeps it
+    indivisible.' 12 units in 5 clusters of 4/3/2/2/1 drawn `random` over two
+    equal-weight arms. The assertion that matters is structural — every
+    cluster's units land together — because a mutation that *split* a
+    cluster (moved some of its units to the other arm) would still be
+    caught by no size check at all: legitimate whole-cluster combinations
+    here already reach a 6/6 split (`{c0, c3}` vs `{c1, c2, c4}`), so a
+    split-cluster bug could produce a same-sized, merely wrong-membership
+    result. Asserting per-cluster containment is what a size-only assertion
+    cannot do."""
+    roster, clusters = _five_clusters()
+    block = {"method": "random", "seed": 5}
+    plan = assignment_for(roster, "arm", block, ["a", "b"], "digest", clusters)
+
+    membership = {key: level for level, keys in plan.members.items() for key in keys}
+    for cluster_name in set(clusters.values()):
+        cluster_keys = [key for key, name in clusters.items() if name == cluster_name]
+        levels_seen = {membership[key] for key in cluster_keys}
+        assert len(levels_seen) == 1, (
+            f"cluster {cluster_name!r} split across arms: {levels_seen}"
+        )
+
+    # The realized split this seed happens to draw, pinned so the structural
+    # check above has a concrete shape to be checked against too.
+    assert plan.members["a"] == ("c0_0", "c0_1", "c0_2", "c0_3", "c2_0", "c2_1")
+    assert plan.members["b"] == ("c1_0", "c1_1", "c1_2", "c3_0", "c3_1", "c4_0")
+
+
+def test_a_clustered_draw_approaches_an_unequal_ratio_as_closely_as_clusters_allow():
+    """`ratio: {a: 1, b: 3}` over the same 12-unit, 5-cluster fixture targets
+    3 and 9 — `_apportion(12, [1, 3]) == [3, 9]` exactly, confirmed below as
+    the unclustered answer this is contrasted against. The realized sizes are
+    4 and 8, not 3 and 9: `c0` (size 4) is the largest cluster and is dealt
+    first — largest-first is `_assign_whole_clusters`'s own rule, inherited
+    here — landing on whichever arm is furthest below its target share, which
+    at the first cluster is a tie broken toward the earlier-declared level,
+    `a`. That single placement already puts `a` at 4, one past its target of
+    3, and every remaining cluster's smallest member is `c4` at size 1 — too
+    coarse to pull `a` back down to 3 without leaving it short instead. A
+    cluster is the smallest thing that can move, so one large cluster sets a
+    floor no assignment can get under; `partition_units`'s docstring makes
+    the identical argument for folds and refuses to claim the stronger,
+    exact-ratio thing. This is that argument checked numerically rather than
+    merely asserted."""
+    roster, clusters = _five_clusters()
+    block = {"method": "random", "seed": 5, "ratio": {"a": 1, "b": 3}}
+    plan = assignment_for(roster, "arm", block, ["a", "b"], "digest", clusters)
+
+    assert _apportion(12, [1, 3]) == [3, 9]
+    assert len(plan.members["a"]) == 4
+    assert len(plan.members["b"]) == 8
+    assert plan.members["a"] == ("c0_0", "c0_1", "c0_2", "c0_3")
+    assert plan.members["b"] == (
+        "c1_0",
+        "c1_1",
+        "c1_2",
+        "c3_0",
+        "c3_1",
+        "c2_0",
+        "c2_1",
+        "c4_0",
+    )
+
+
+def test_a_clustered_draw_the_ratio_apportions_no_whole_cluster_to_is_refused():
+    """The same refusal `test_a_drawn_arm_the_ratio_apportions_no_unit_to_is_refused`
+    pins for the unclustered path, over a fixture where a *cluster* rather
+    than a unit is the thing a level can be starved of: a single 5-unit
+    cluster over two arms leaves one arm no whole cluster to receive, since
+    the only thing that can move is the whole cluster and it can only move
+    to one side. A coarser unit of movement makes an empty arm *easier* to
+    reach than in the unclustered case, not exempt from the refusal —
+    `assignment_for`'s docstring states the same code applies for the
+    identical reason, "a coarser unit of movement makes it easier to reach,
+    not exempt from the refusal"."""
+    roster, clusters = _clustered({"c0": 5})
+    block = {"method": "random", "seed": 1}
+    with pytest.raises(ContractError) as e:
+        assignment_for(roster, "arm", block, ["a", "b"], "digest", clusters)
+    assert e.value.code == "E-DATA-ASSIGN-LEVELS"
+    assert "b" in str(e.value)
+    assert "resolves zero of them" in str(e.value)
+
+
+def test_a_clustered_draws_zero_weight_level_refuses_rather_than_dividing_by_zero():
+    """`ratio: {a: 0, b: 1}` reaches `_assign_whole_clusters_by_ratio`'s
+    `counts[i] / weights[i]` with a weight of 0 for `a`. `validate` refuses a
+    non-positive ratio value today (`E-DATA-ASSIGN-RATIO`), but
+    `assignment_for` is reachable directly — the same reachability gap task
+    8's report already flagged for the unclustered path — so a defensive
+    guard here is worth having regardless of that gate.
+
+    Every cluster's priority for `a` is `inf` rather than a raw
+    `ZeroDivisionError`, so `a` is never the argmin while `b`'s weight stays
+    positive: `b` claims every cluster and `a` ends up an empty bucket,
+    refused by the same `E-DATA-ASSIGN-LEVELS` code and "resolves zero of
+    them" message a starved level always gets — a `ContractError` the
+    caller asked for, not an arithmetic exception it didn't."""
+    roster, clusters = _five_clusters()
+    block = {"method": "random", "seed": 1, "ratio": {"a": 0, "b": 1}}
+    with pytest.raises(ContractError) as e:
+        assignment_for(roster, "arm", block, ["a", "b"], "digest", clusters)
+    assert e.value.code == "E-DATA-ASSIGN-LEVELS"
+    assert "a" in str(e.value)
+    assert "resolves zero of them" in str(e.value)
+
+
+def test_a_blocked_draw_balances_within_every_whole_block():
+    """14 units, ratio `{}` (equal allocation), `block_size: auto` = 4. 14 is
+    NOT a multiple of 4: three whole blocks of 4 and a trailing 2, so a draw
+    that balanced only *overall* — 7 control / 7 treatment, exactly what
+    `random` also gives this roster — would pass a size assertion on the
+    whole roster and still fail this one, which checks every block on its
+    own. Asserting each whole block holds exactly 2 and 2, and the trailing
+    partial block's actual composition, is what a mutant that shuffled the
+    full 14 and cut it into 7/7 (§ Global Constraints' 'balance overall
+    rather than per block') cannot pass: nothing forces its arbitrary cut to
+    land 2-2 in every four-unit window.
+
+    A pinned seed makes the exact membership — not just the counts —
+    checkable, which is what the mutation for `auto`'s formula (task's
+    Global Constraints: 'auto as the ratio sum rather than twice it') needs:
+    with `ratio: {}` over two levels `auto` is twice the level count, so 4
+    here rather than 2, and a wrong `block_size` changes how the seeded RNG
+    is consumed and so changes who lands where, verified in
+    `test_auto_block_size_is_twice_the_ratio_sum` below."""
+    roster = _random_roster(14)
+    block = {"method": "blocked", "seed": 11}
+    plan = assignment_for(roster, "arm", block, ["control", "treatment"], "digest")
+
+    assert plan.seed == 11
+    assert plan.members["control"] == ("u00", "u01", "u04", "u05", "u08", "u11", "u13")
+    assert plan.members["treatment"] == ("u02", "u03", "u06", "u07", "u09", "u10", "u12")
+
+    control = set(plan.members["control"])
+    treatment = set(plan.members["treatment"])
+    keys = [u.key for u in roster]
+    for block_start in (0, 4, 8):
+        chunk = set(keys[block_start : block_start + 4])
+        assert len(chunk & control) == 2, f"block at {block_start} is not 2 control"
+        assert len(chunk & treatment) == 2, f"block at {block_start} is not 2 treatment"
+
+    # The trailing partial block (positions 12-13, only 2 units): its actual
+    # composition, asserted rather than left unchecked because it is the one
+    # block a "whole blocks only" check would silently skip.
+    trailing = set(keys[12:14])
+    assert trailing & control == {"u13"}
+    assert trailing & treatment == {"u12"}
+
+
+def test_blocked_reads_the_roster_order_as_data():
+    """**What this test actually shows, corrected after review — not that
+    `blocked` is order-sensitive and `random` isn't.** At a pinned seed, both
+    `random` and `blocked` are pure functions of *position* → arm (verified:
+    200 random permutations leave each one's own position→arm vector
+    bit-identical across runs, and each is invariant under exactly 42 of the
+    91 pairwise position swaps at this seed) — they are **equally**
+    order-sensitive mechanically; only the *specific* position→arm map
+    differs between the two methods. What this test demonstrates is narrower
+    than the docstring this replaces claimed: `u00` and `u05` happen to sit
+    in the same arm under `random`'s map at seed 1 and in different arms
+    under `blocked`'s, so swapping them moves `blocked`'s output and not
+    `random`'s — which shows the two maps disagree on this one pair, not
+    that one method reads order and the other doesn't.
+
+    **The real demonstration of § Where units come from's claim — the
+    property specific to `blocked`, and what § Allocation's "site batches,
+    plate order" rationale is actually about — is
+    `test_a_blocked_draw_balances_within_every_whole_block` above**: local
+    balance in every consecutive window is a property `random` has at no
+    window smaller than the whole roster, and `blocked` has by construction.
+    This test is kept as a secondary, narrower check on that same swap, with
+    its `random` half serving as a control that must still report (both
+    orderings of a roster giving `random` the identical map is not
+    guaranteed for every pair — a full reversal at this seed does move units
+    across arms — but holds for this hand-picked one, `u00`/`u05`, because
+    both land in `random`'s same arm-slice).
+
+    **This test's own discriminating power against 'shuffle the roster
+    before blocking' is real but narrower than once claimed, too**: it fails
+    against a mutant that reuses the block-drawing `rng` instance to shuffle
+    the whole roster first (consuming its state before any block draw runs),
+    but *survives* a mutant that shuffles with a **separate**,
+    freshly-seeded `random.Random(seed)` first and leaves the block-drawing
+    `rng` untouched — verified: under that variant, `u00` and `u05` still
+    land in the same post-shuffle grouping and this test passes.
+    `test_a_blocked_draw_balances_within_every_whole_block` catches both
+    variants, which is why it, not this test, is the mutation-proved
+    demonstration of 'balance within every block'."""
+    roster = _random_roster(14)
+    keys = [u.key for u in roster]
+    swapped_keys = keys[:]
+    swapped_keys[0], swapped_keys[5] = swapped_keys[5], swapped_keys[0]
+    swapped = UnitList([Unit(key=k, paths=(), attributes={}) for k in swapped_keys])
+
+    levels = ["control", "treatment"]
+
+    random_block = {"method": "random", "seed": 1}
+    random_plan = assignment_for(roster, "arm", random_block, levels, "digest")
+    random_plan_swapped = assignment_for(swapped, "arm", random_block, levels, "digest")
+    random_map = {k: lvl for lvl, ks in random_plan.members.items() for k in ks}
+    random_map_swapped = {
+        k: lvl for lvl, ks in random_plan_swapped.members.items() for k in ks
+    }
+    assert random_map == random_map_swapped, (
+        "the control must report: random reads no order, so the same units "
+        "in a different order must land in the same arms"
+    )
+
+    blocked_block = {"method": "blocked", "seed": 1}
+    blocked_plan = assignment_for(roster, "arm", blocked_block, levels, "digest")
+    blocked_plan_swapped = assignment_for(swapped, "arm", blocked_block, levels, "digest")
+    blocked_map = {k: lvl for lvl, ks in blocked_plan.members.items() for k in ks}
+    blocked_map_swapped = {
+        k: lvl for lvl, ks in blocked_plan_swapped.members.items() for k in ks
+    }
+    assert blocked_map != blocked_map_swapped
+    assert blocked_map["u00"] == "treatment"
+    assert blocked_map["u05"] == "control"
+    assert blocked_map_swapped["u00"] == "control"
+    assert blocked_map_swapped["u05"] == "treatment"
+    # Every other unit is unmoved by the swap — it is exactly this pair the
+    # reorder touches, and both sit in different blocks (`u00` in the first,
+    # `u05` in the second), which is why `blocked`, and only `blocked`, feels
+    # the swap at all.
+    for key in keys:
+        if key not in ("u00", "u05"):
+            assert blocked_map[key] == blocked_map_swapped[key]
+
+
+def test_auto_block_size_is_twice_the_ratio_sum():
+    """`{control: 1, treatment: 2}` -> sum 3 -> `auto` 6. And with `ratio: {}`
+    over two levels -> `auto` 4, per § Allocation.
+
+    Both fixtures are chosen so `auto = 2 x sum` and the mutant `auto = sum`
+    disagree on *exact membership* at the same seed, not merely on size:
+    over a roster exactly one `auto`-block long, `_apportion`'s per-block
+    counts happen to sum to the identical totals under either reading (the
+    fixture trap the plan's Global Constraints name, restated for this
+    formula specifically), so only the precise unit-level draw — which
+    depends on whether the seeded shuffle consumes one block of `2 x sum`
+    positions or two of `sum` — tells them apart."""
+    roster = _random_roster(6)
+    block = {"method": "blocked", "ratio": {"control": 1, "treatment": 2}, "seed": 1}
+    plan = assignment_for(roster, "arm", block, ["control", "treatment"], "digest")
+    assert plan.members["control"] == ("u03", "u05")
+    assert plan.members["treatment"] == ("u00", "u01", "u02", "u04")
+
+    roster4 = _random_roster(4)
+    block2 = {"method": "blocked", "seed": 2}
+    plan2 = assignment_for(roster4, "arm", block2, ["a", "b"], "digest")
+    assert plan2.members["a"] == ("u00", "u03")
+    assert plan2.members["b"] == ("u01", "u02")
+
+
+def test_a_declared_block_size_is_honoured_rather_than_ignored_for_auto():
+    """**Caught by review: a mutation replacing the resolved `block_size` with
+    `2 * ratio_sum` unconditionally — always drawing at `auto` and silently
+    discarding whatever was declared — passed the entire suite.** Every other
+    test in this file either omits `block_size` (so `auto` is also the
+    correct answer) or picks a declared value that happens to equal `auto`.
+    This fixture doesn't: `ratio: {}` over two levels makes `auto` 4, and the
+    declared value is 6 — both are legal whole multiples of the ratio sum
+    (2), so neither is refused, and they draw against genuinely different
+    block boundaries (12 units: one block of 6 vs. three of 4), which the
+    same pinned seed's RNG consumes differently. Exact membership, not size,
+    discriminates them: `_apportion` gives 3/3 and 2/2/2 respectively, both
+    summing to 6/6 overall, so a size assertion could not tell `block_size:
+    6` from `auto` here either — the same fixture trap this task's brief
+    names, now applied to the declared value itself rather than to `auto`'s
+    formula."""
+    roster = _random_roster(12)
+    block = {"method": "blocked", "seed": 1, "block_size": 6}
+    plan = assignment_for(roster, "arm", block, ["control", "treatment"], "digest")
+    assert plan.members["control"] == ("u00", "u03", "u05", "u06", "u07", "u08")
+    assert plan.members["treatment"] == ("u01", "u02", "u04", "u09", "u10", "u11")
+
+    auto_block = {"method": "blocked", "seed": 1}
+    auto_plan = assignment_for(roster, "arm", auto_block, ["control", "treatment"], "digest")
+    assert auto_plan.members != plan.members, (
+        "the control must report: block_size 6 and auto (4) must draw "
+        "differently at this seed, or this test proves nothing"
+    )
+
+
+def test_auto_block_size_is_a_valid_int_even_for_a_fractional_ratio():
+    """**Caught by review: `auto = 2 * ratio_sum` is a bare `2 * 0.5 = 1.0`
+    for `ratio: {control: 0.5, treatment: 0.5}` — a `float` — and
+    `range(0, len(keys), block_size)` in the draw below raises a bare
+    `TypeError` on a `float` step. Reachable with no `block_size` declared
+    at all: a fractional `ratio` alone does it, and `validate`'s
+    `_usable_ratio_share` accepts any finite positive `float` share, so the
+    config that reaches this validates clean.** This does not raise, and
+    every unit resolves to exactly one arm — the property that matters here,
+    since a resolved `auto` is checked by the same whole-share rule an
+    explicit `block_size` is, and is not guaranteed to give every level a
+    whole per-block share
+    for an arbitrary `ratio` (§ Allocation states this explicitly): the
+    draw still has to complete via `_apportion`'s largest-remainder
+    tolerance rather than raise a type error root cause away."""
+    roster = _random_roster(14)
+    block = {"method": "blocked", "seed": 1, "ratio": {"control": 0.5, "treatment": 0.5}}
+    plan = assignment_for(roster, "arm", block, ["control", "treatment"], "digest")
+    assert sorted(plan.members["control"] + plan.members["treatment"]) == sorted(
+        u.key for u in roster
+    )
+
+
+def test_a_blocked_level_empty_in_one_block_is_fine_if_another_block_covers_it():
+    """**Caught by review: a mutation checking emptiness *per block* rather
+    than over the whole roster passed the entire suite.** `assignment_for`'s
+    own docstring commits to the opposite explicitly: "a level with at least
+    one unit in some block is fine even if another block apportioned it
+    none." The 14-unit, two-level fixture above can never reach this,
+    because with only two levels every whole block of 4 is forced to 2/2 and
+    the trailing block of 2 to 1/1 — no level is ever apportioned zero in any
+    block there.
+
+    Three levels, 7 units, equal ratio (`auto` = 6): one whole block of 6
+    (`_apportion(6, [1,1,1]) == [2,2,2]`, exact) plus a trailing block of 1.
+    `_apportion(1, [1,1,1])`'s three equal fractional parts tie-break to the
+    first-declared level deterministically (largest-remainder ties go to
+    declared order — `_apportion`'s own rule), so the trailing block always
+    apportions `[1, 0, 0]`: `b` and `c` get **zero units in that block**,
+    every seed, while `a` gets one. Both still resolve to a non-empty arm
+    overall, because each already has 2 units from the full block — exactly
+    the property a per-block check would refuse and the real, whole-roster
+    check does not."""
+    roster = _random_roster(7)
+    block = {"method": "blocked", "seed": 1}
+    plan = assignment_for(roster, "arm", block, ["a", "b", "c"], "digest")
+
+    keys = [u.key for u in roster]
+    full_block = set(keys[0:6])
+    trailing_block = set(keys[6:7])
+    assert trailing_block == {"u06"}
+
+    for level in ("a", "b", "c"):
+        assert len(full_block & set(plan.members[level])) == 2, (
+            f"the full block of 6 must apportion {level} exactly 2 units"
+        )
+    # The trailing block of 1: `a` claims it, `b` and `c` are empty *in this
+    # block specifically* — the situation a per-block check would refuse.
+    assert trailing_block & set(plan.members["a"]) == {"u06"}
+    assert trailing_block & set(plan.members["b"]) == set()
+    assert trailing_block & set(plan.members["c"]) == set()
+    # No raise reached this point, and every level resolves overall — `a` at
+    # 3 (2 + the trailing unit), `b` and `c` at 2 each from the full block
+    # alone.
+    assert len(plan.members["a"]) == 3
+    assert len(plan.members["b"]) == 2
+    assert len(plan.members["c"]) == 2
+
+
 def test_arm_members_reduces_arms_of_across_the_resolved_conditions():
     """`units.arm_members` is the reduction the runner's subset view is built
     from: one call into `arms_of` per declared axis, then a per-condition lookup
@@ -1107,36 +2388,40 @@ def test_arm_members_reduces_arms_of_across_the_resolved_conditions():
         Condition(index=1, label="treatment", values={"arm": "treatment"}, selectors=selectors),
         Condition(index=2, label="plain", values={}, selectors=frozenset()),
     ]
-    result = arm_members(roster, {"arm": ("arm", ["control", "treatment"])}, conditions)
+    result = arm_members(_arm_plans(roster), conditions)
     assert result[0] == frozenset(f"c{i}" for i in range(7))
     assert result[1] == frozenset(f"t{i}" for i in range(5))
     assert 2 not in result
     assert len(result[0]) + len(result[1]) == len(roster)
 
 
-def test_arm_members_calls_arms_of_once_per_axis_not_per_condition():
-    """The reduction, not a second partition: with three conditions selecting the
-    same single axis, `arms_of` must run exactly once for it, verified by
-    counting calls rather than by inspecting the result — the discriminator a
-    per-condition re-derivation would still pass on output alone."""
-    from unittest.mock import patch
-
+def test_arm_members_derives_no_membership_of_its_own_from_a_planted_plan():
+    """The property `test_arm_members_calls_arms_of_once_per_axis_not_per_condition`
+    used to pin, retargeted rather than dropped: `arm_members` no longer calls
+    `arms_of` at all — it is handed plans — so "once per axis, not once per
+    condition" is now `assignment_for`'s own property (pinned end-to-end in
+    `test_cli.py`), and what is left to pin here is stronger. The plan handed
+    in **contradicts** the roster attribute: `c0` carries `arm: control` but
+    the plan puts it in `treatment`, and `t0` the reverse. `arm_members`
+    must return the plan's answer, not the column's. A version that re-derived
+    membership from a roster — the second producer this slice exists to make
+    impossible — would return the swapped-back sets and fail both assertions."""
     from publishable.sweep import Condition
 
-    roster = UnitList(
-        [
-            Unit(key="c0", attributes={"arm": "control"}),
-            Unit(key="t0", attributes={"arm": "treatment"}),
-        ]
-    )
     selectors = frozenset({"arm"})
     conditions = [
         Condition(index=0, label="control", values={"arm": "control"}, selectors=selectors),
         Condition(index=1, label="treatment", values={"arm": "treatment"}, selectors=selectors),
     ]
-    with patch("publishable.units.arms_of", wraps=arms_of) as spy:
-        arm_members(roster, {"arm": ("arm", ["control", "treatment"])}, conditions)
-        assert spy.call_count == 1
+    planted = ArmPlan(
+        levels=("control", "treatment"),
+        members={"control": ("t0",), "treatment": ("c0",)},
+        seed=None,
+        strata=(),
+    )
+    result = arm_members({"arm": planted}, conditions)
+    assert result[0] == frozenset({"t0"})
+    assert result[1] == frozenset({"c0"})
 
 
 def test_arm_members_intersects_when_a_condition_selects_two_axes():
@@ -1160,8 +2445,10 @@ def test_arm_members_intersects_when_a_condition_selects_two_axes():
         ),
     ]
     result = arm_members(
-        roster,
-        {"arm": ("arm", ["control", "treatment"]), "sex": ("sex", ["f", "m"])},
+        {
+            "arm": assignment_for(roster, "arm", None, ["control", "treatment"], "digest"),
+            "sex": assignment_for(roster, "sex", None, ["f", "m"], "digest"),
+        },
         conditions,
     )
     assert result[0] == frozenset({"u0"})

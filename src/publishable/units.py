@@ -384,21 +384,22 @@ def _assign_constant_columns(assign_decl: Any) -> dict[str, str]:
     resolution has no path to report through.
 
     **Gated on `method == "by_attribute"`, matching `_check_assign`'s own
-    elif chain**, which reads `from` and `levels` only in that branch — "mean
-    nothing" under `random`/`blocked`, refused today as `E-DATA-ASSIGN-DRAWN`
-    before drawing is implemented, and under an absent or out-of-enum method,
-    refused as `E-DATA-ASSIGN-METHOD`. Without this gate, a `method: random`
+    elif chain**, which reads `from` and `levels` only in that branch — they
+    "mean nothing" under `random`/`blocked`, which draw an arm instead of
+    reading one, and under an absent or out-of-enum method, refused as
+    `E-DATA-ASSIGN-METHOD`. Without this gate, a `method: random`
     block whose axis-name default happens to match a column that varies within
     a unit's rows would raise `E-DATA-ASSIGN-VARIES` naming a `.from` path the
     declaration never wrote, over a column nothing under that method reads —
     the same validate-clean-then-crash gap this module's docstrings warn
     against elsewhere, in the opposite direction: a config no check approves
     yet, refused anyway by a rule that assumed a resolution `by_attribute`
-    alone performs. Every config that reaches `run` has `method:
-    by_attribute` regardless, since `random`/`blocked` and anything out of
-    the enum are refused at `validate` first — so this gate loses no coverage
-    a shipped run could reach, and narrows what an in-development `random`
-    config sees while `by_attribute` executes.
+    alone performs. **That gate went from redundant to load-bearing when the
+    draw was built**: `random`/`blocked` were refused at `validate` before it,
+    so no config carrying one could reach this function at all, and now every
+    drawn design does. This is the only thing standing between such a design
+    and an `E-DATA-ASSIGN-VARIES` over a column its declaration never named
+    and its draw never reads.
 
     Keyed `assign.<axis>.from`, the literal dotted path a reader would look for
     in `data.units` — not `assign` alone — because `assign` is one declaration
@@ -960,25 +961,762 @@ def arms_of(roster: UnitList, column: str, levels: Sequence[str]) -> dict[str, l
     return partition
 
 
-def arm_members(
+DRAWN_ASSIGN_METHODS = ("random", "blocked")
+"""The `validate.ASSIGN_METHODS` values that draw an arm rather than read one
+already assigned — **one tuple, defined here, read by `validate` alone now**.
+
+`validate` imported it to report `E-DATA-ASSIGN-DRAWN`, the refusal of a
+well-formed *value* this build could not yet realize. That refusal is retired,
+and the tuple is not: it is now what `validate._check_assign` **dispatches** on
+— which of a block's fields mean anything follows from whether the method draws
+(`ratio`, `block_size`, `stratify_by`) or reads (`from`) — a permanent question
+where the refusal was a temporary one. It lives here rather than in `validate`
+because `units.py` depends on nothing there, and because a second literal
+naming which methods draw would be pinned in agreement with this one by
+nothing.
+
+`assignment_for` below no longer reads it at all: task 8 realized `random`
+(unclustered, then task 9 beside a declared `cluster_by`) and task 10 realized
+`blocked` the same way, each in its own branch dispatched on `method` directly.
+The generic fallback below them no longer distinguishes a member of this tuple
+from any other unrecognized `method` string — every value that reaches it is,
+by construction, one neither branch above claimed, so there is nothing left for
+this tuple to pick a message for. It survives here as `validate`'s source of
+truth for the dispatch above, which outlives the refusal it was minted for.
+
+**It was never what made `assignment_for` fail closed**, and must not be
+mistaken for that even in memory: `assignment_for` allows `by_attribute`,
+`random`, and `blocked`, and refuses everything else, so a fourth drawing
+method added to the enum and to nothing else raises rather than reading a
+column, whether or not anyone remembers to add it here.
+"""
+
+
+@dataclass(frozen=True)
+class ArmPlan:
+    """One axis's **realized** membership: level → unit keys, in roster order.
+
+    The shape a drawn allocation and a read one both fit, and the reason this
+    type exists at all: `arms_of` reads an arm out of a *column*, and a drawn
+    axis (`method: random`, `method: blocked`) has no column to read. A caller
+    holding `(column, levels)` — `arm_members`' old input shape — cannot
+    express a draw, so the draw would have had to happen somewhere else, and
+    "somewhere else" is a second producer of arm membership: the
+    validate-clean-then-disagree gap `arms_of`'s own docstring is written to
+    prevent a third instance of. `assignment_for` below is the one producer,
+    and this is what it produces.
+
+    - `levels` is the axis's declared `sweep.groups` levels, in declared
+      order, and every one of them is a key of `members`.
+    - `members` maps each level to that arm's unit keys. **In roster order
+      under `by_attribute`**; under a draw, in whatever order the draw
+      realized — `artifacts.build_allocation_document` records the order it
+      is given rather than re-sorting, because a `blocked` design reads that
+      order as data.
+    - `seed` is the seed the draw was realized with (`units.assign_seed_for`),
+      and is `None` under `by_attribute` — a method that reads an arm a trial
+      system already assigned rather than drawing one, so recording a seed
+      would be a false record of a draw that never happened.
+    - `strata` is the realized `assign.<axis>.stratify_by` — the attribute
+      names the draw balanced each arm within, in declared order — and is
+      empty under `by_attribute` for the reason above: `stratify_by` names
+      how a draw was *balanced*, and with no draw there is nothing it
+      describes. It is empty under a draw too whenever the declaration was
+      empty, which is what `init` writes: an unstratified draw balances on
+      nothing but the ratio, and `()` is the truthful record of that. A
+      declared name that no resolved unit carries never reaches a plan at
+      all — `assignment_for` raises rather than recording a balance it did
+      not perform.
+
+    `frozen=True` blocks rebinding an attribute; it does **not** deep-freeze
+    `members`, whose values are tuples but whose mapping a determined caller
+    can still mutate in place if it is handed a `dict`. Treat it as read-only
+    — nothing in core writes through it — rather than as a guarantee this type
+    enforces.
+    """
+
+    levels: tuple[str, ...]
+    members: Mapping[str, tuple[str, ...]]
+    seed: int | None
+    strata: tuple[str, ...]
+
+
+def _apportion(n: int, weights: Sequence[float]) -> list[int]:
+    """`n` split across `weights`, largest-remainder (Hamilton) apportionment —
+    `assignment_for`'s `random` path uses it to turn `assign.<axis>.ratio` into
+    per-level sizes.
+
+    Each entry's exact share (`n * weight / sum(weights)`) floors, and the
+    remainder — `n` minus the sum of those floors — goes one at a time to the
+    largest fractional part, ties broken by the entry's position in `weights`
+    (so the first-declared level of an equal split wins any tie, deterministic
+    rather than left to dict or set order). Every size is within one of its
+    exact proportional share, which is the strongest claim a ratio that
+    doesn't divide `n` supports — `partition_units`'s docstring makes the same
+    argument for folds and refuses to claim the stronger, exact one.
+
+    **A size of 0 is possible here and is the caller's to refuse.** A ratio
+    skewed enough relative to `n` (a weight so small its floor is 0, with the
+    remainder exhausted by larger fractions first — `{a: 1, b: 1000}` over 10
+    units gives `[0, 10]`), or simply fewer units than levels, leaves an entry
+    at 0. Nothing here manufactures a unit for a level the ratio didn't earn
+    one for, and nothing here raises either: only `assignment_for` holds the
+    axis name, the declared `ratio`, and the roster the message has to name,
+    so the refusal lives there — as `E-DATA-ASSIGN-LEVELS`, the same code and
+    the same words `arms_of` refuses a read arm no unit resolves to with.
+    """
+    total = sum(weights)
+    quotas = [n * weight / total for weight in weights]
+    floors = [int(quota) for quota in quotas]
+    remainder = n - sum(floors)
+    fractions = [quota - floor for quota, floor in zip(quotas, floors, strict=True)]
+    order = sorted(range(len(weights)), key=lambda i: (-fractions[i], i))
+    sizes = list(floors)
+    for i in order[:remainder]:
+        sizes[i] += 1
+    return sizes
+
+
+def auto_block_size(weights: Sequence[float]) -> int:
+    """`block_size: "auto"`'s resolved value for `assign.<axis>.method: blocked` —
+    `reference.md` § Allocation: twice `ratio`'s sum, rounded to a whole number of
+    units.
+
+    **The single producer of this value, imported by `validate._check_assign`
+    rather than recomputed there** — the same reason `DRAWN_ASSIGN_METHODS` lives
+    in this module and not in `validate`: two independent copies of one formula
+    are pinned in agreement by nothing, and a run whose `validate` pass approved
+    a `block_size` its own draw then computes differently is exactly the
+    validate-clean-then-disagree gap this whole slice exists to close. Task 7's
+    `ArmPlan`/`assignment_for` seam makes the identical argument for "which units
+    are in this arm"; this is the same argument for one number inside that draw.
+
+    `round`, not a bare `2 * sum(weights)`: a fractional `ratio` (any finite
+    positive `float` is a "usable" share, `validate._usable_ratio_share`) makes
+    the sum, and so twice the sum, a `float` too — `assignment_for`'s
+    `range(0, len(keys), block_size)` requires an `int` step and raises a bare
+    `TypeError` on one. `max(1, ...)` keeps the result a legal, positive step
+    even for a sum under `0.5`, however implausible a config that draws one is.
+
+    **Does not guarantee every level's per-block share is whole** — no finite
+    `block_size` can, for shares that aren't commensurate rationals
+    (`{a: 0.33, b: 0.33, c: 0.34}` is `reference.md`'s own example: this
+    resolves to `2`, and none of the three levels' shares of `2` are whole).
+    `validate._check_assign` runs the same whole-share check against this
+    value that it runs against a declared one, so that case is refused before
+    a run reaches `assignment_for` at all; a caller that bypasses `validate`
+    and reaches the draw anyway gets `_apportion`'s ordinary largest-remainder
+    tolerance, the same one an unclustered `random` draw already gets for a
+    `ratio` that doesn't divide the roster evenly — up to and including a
+    level starved in every block, which still raises `E-DATA-ASSIGN-LEVELS`
+    rather than silently misallocating.
+    """
+    return max(1, round(2 * sum(weights)))
+
+
+def stratum_names(stratify_by: Any) -> tuple[str, ...]:
+    """`assign.<axis>.stratify_by`'s declared names, normalized to a tuple.
+
+    **Presence and shape are read structurally**, `validate`'s own convention for
+    this field and the one the refusal this replaces already used: a bare
+    `stratify_by: site` names one stratum exactly as `[site]` does, so a draw
+    written against `isinstance(x, list)` cannot silently ignore the bare form
+    while `validate` reports it as non-empty. An absent, `None`, or empty
+    declaration is `()`, which is what `init` writes and what sends a draw down
+    its unstratified path.
+
+    Entries are returned as declared, without a type test: a non-string entry
+    names no unit attribute, which is the one thing `_stratum_groups` below
+    checks, and folding it in there keeps one raise rather than two for the same
+    fault. `validate` refuses it before a run reaches here, as
+    `E-DATA-ASSIGN-STRATIFY-UNKNOWN`.
+
+    **Public, and imported by `validate._check_assign` rather than re-read
+    there** — `auto_block_size`'s own reason, one field over: `validate`'s
+    *Allocation strata exist* row checks the names this returns and the draw
+    balances on the names this returns, so two independent readings of the same
+    declaration would be pinned in agreement by nothing. A bare string read as
+    one name here and as a sequence of characters there is exactly the
+    validate-clean-then-disagree shape that costs.
+    """
+    if not stratify_by:
+        return ()
+    if isinstance(stratify_by, str):
+        return (stratify_by,)
+    if isinstance(stratify_by, (list, tuple)):
+        return tuple(stratify_by)
+    return (stratify_by,)
+
+
+def _stratum_groups(
+    units: list[Unit],
+    names: Sequence[Any],
+    axis: str,
+    resolved: Mapping[str, ArmPlan] | None = None,
+) -> dict[tuple[str, ...], list[Unit]]:
+    """The roster split into strata — one entry per distinct combination of the
+    declared `stratify_by` values, each holding its units in roster order.
+
+    Insertion order is roster order, `clusters_of`'s convention and for its
+    reason: the draw walks these groups in turn from one seeded generator, so the
+    order they come out in is part of what the seed determines. Deriving it a
+    second way — sorting the keys, say — would make the same seed draw a
+    different allocation for the same roster.
+
+    Values are stringified, again `clusters_of`'s reason: a stratum is a label
+    rather than a quantity, and a table yields `str` for every column while a
+    hand-built roster need not. A unit carrying no value for one of the names is
+    rendered `no value` and forms its own stratum with the other units that carry
+    none — `stratum_varies_within_cluster`'s own rendering for the same absence,
+    so the two agree about what a unit with no value is rather than one treating
+    it as a stratum and the other as a fault.
+
+    **A name may also be an earlier `sweep.groups` axis, and `resolved` is what
+    reads it** — the mapping of the axes whose plans are *already drawn*, keyed
+    by axis name, which is `reference.md` § Expansion modes' "axes resolve in
+    declaration order, and `stratify_by` may name a group axis declared before
+    it" realized rather than merely permitted. Such a stratum is that axis's
+    **realized membership**: a unit's value is the level of `resolved[name]`
+    whose members hold it, so `assign.arm.stratify_by: [sex]` balances `arm`
+    *within each `sex` arm that was just drawn*. There is no column to read —
+    a drawn axis leaves none — which is exactly why the earlier axis's plan has
+    to arrive here, and why the sequencing is the feature rather than a check on
+    one.
+
+    **Precedence: a name the roster carries as an attribute is an attribute**,
+    even when a `sweep.groups` axis shares the name, and `validate`'s *Allocation
+    strata exist* row exempts a declared attribute in the same order. The two
+    read the same declaration from opposite sides — this one from the resolved
+    units, that one from `data.units.attributes` — so the one corner where they
+    could disagree is a name declared as an attribute that no resolved unit
+    carries: a roster already broken, which this function then reads as the axis
+    if one is resolved and refuses below if none is.
+
+    **Every other name raises `NotImplementedError`** — a stratum this build
+    cannot read, which is a different thing from the per-unit absence above and
+    must not be drawn as one "no value" stratum. Both declarations that reach it
+    are refused by `validate` first, and the message names both because the
+    raise cannot tell them apart from its arguments alone: a name nothing
+    declares (`E-DATA-ASSIGN-STRATIFY-UNKNOWN`) and an axis declared *after*
+    this one, so not yet drawn and not in `resolved`
+    (`E-DATA-ASSIGN-STRATIFY-FORWARD`). It stays a bare `NotImplementedError`
+    rather than a coded `ContractError` for that reason: a code here would have
+    to name one of the two faults and would be wrong for the other, which is the
+    same "one code answering to two § Validation rows" the two codes were split
+    to avoid.
+
+    **A caller whose `resolved` plan was built from a different roster** — a unit
+    no level of it holds — renders as `no value`, the attribute path's own
+    convention for the same absence. Unreachable through `assignment_for`'s two
+    producers, which both partition the whole roster they are given.
+    """
+    plans = resolved or {}
+    sources: list[Mapping[str, str] | None] = []
+    for name in names:
+        if any(isinstance(name, str) and name in unit.attributes for unit in units):
+            sources.append(None)  # read per unit, off the attribute
+            continue
+        if isinstance(name, str) and name in plans:
+            plan = plans[name]
+            sources.append(
+                {key: level for level, keys in plan.members.items() for key in keys}
+            )
+            continue
+        raise NotImplementedError(
+            f"`data.units.assign.{axis}.stratify_by` names {name!r}, which no resolved "
+            "unit carries as an attribute and no already-drawn `sweep.groups` axis "
+            "resolves — a stratum is read per unit when the draw is balanced. A stratum "
+            "naming an axis declared AFTER this one names membership no draw has "
+            "realized yet, and `validate` refuses it as "
+            "`E-DATA-ASSIGN-STRATIFY-FORWARD`; a stratum naming nothing at all is "
+            "refused as `E-DATA-ASSIGN-STRATIFY-UNKNOWN`"
+        )
+
+    def value(unit: Unit, name: Any, source: Mapping[str, str] | None) -> str:
+        if source is not None:
+            return source.get(unit.key, "no value")
+        raw = unit.attributes.get(name)
+        return "no value" if raw is None else str(raw)
+
+    groups: dict[tuple[str, ...], list[Unit]] = {}
+    for unit in units:
+        key = tuple(
+            value(unit, name, source) for name, source in zip(names, sources, strict=True)
+        )
+        groups.setdefault(key, []).append(unit)
+    return groups
+
+
+def _blocked_draw(
+    keys: list[str],
+    levels: Sequence[str],
+    weights: Sequence[float],
+    block_size: int,
+    rng: random.Random,
+    drawn: dict[str, list[str]],
+) -> None:
+    """One list of unit keys cut into consecutive blocks of `block_size` and
+    dealt into `drawn`, each block apportioned by `weights` and permuted with
+    `rng`.
+
+    Extracted so the stratified draw is the **same** block loop run once per
+    stratum rather than a second implementation of blocking — the argument
+    `_assign_whole_clusters` makes for folds, one level down. `rng` is passed in
+    rather than seeded here for the same reason its own caller states: one
+    generator's state carries from block to block, and now from stratum to
+    stratum, so the seed determines every block's permutation together rather
+    than each in isolation.
+
+    Accumulates into `drawn` instead of returning a mapping, so the unstratified
+    path (one call) and the stratified one (one call per stratum) merge
+    identically, and the coverage check that follows reads one dict either way.
+    """
+    for start in range(0, len(keys), block_size):
+        chunk = keys[start : start + block_size]
+        counts = _apportion(len(chunk), weights)
+        block_labels: list[str] = []
+        for level, count in zip(levels, counts, strict=True):
+            block_labels.extend([level] * count)
+        rng.shuffle(block_labels)
+        for key, label in zip(chunk, block_labels, strict=True):
+            drawn[label].append(key)
+
+
+def assignment_for(
     roster: UnitList,
-    axes: Mapping[str, tuple[str, Sequence[str]]],
+    axis: str,
+    block: Mapping[str, Any] | None,
+    levels: Sequence[str],
+    digest: str,
+    clusters: Mapping[str, str] | None = None,
+    resolved: Mapping[str, ArmPlan] | None = None,
+) -> ArmPlan:
+    """One axis's allocation, realized — **the single producer** of an `ArmPlan`,
+    and the seam this whole slice turns on.
+
+    A **pure function of its arguments**, deliberately: `validate` has to ask
+    "which units are in this arm" of the same declaration `cli.command_run`
+    asks it of (the cell and stratum checks), so the draw cannot live in the
+    runner. Two callers, one answer, computed the same way from the same
+    inputs — the property that makes a `between` design `validate` approved
+    one core can actually build.
+
+    Dispatches on `block["method"]`, `reference.md` § Allocation's own enum:
+
+    - `by_attribute` (and an absent, non-mapping, or method-less block, which
+      `validate._check_assign` falls back to the same way) reads the arm out
+      of a column, through `arms_of` **unchanged** — that function stays the
+      authority for a column-read partition and this one does not re-derive
+      it. `from` is resolved here, once: the declared `from` when it is a
+      non-empty string, else the axis name.
+    - `random`, unstratified (no non-empty `stratify_by`), draws one — see
+      below, whole clusters when `clusters` is given and individual units
+      when it is `None`.
+    - `blocked`, unstratified and unclustered (`clusters is None`), draws one
+      too — see below. `blocked` beside a declared `cluster_by` raises
+      `NotImplementedError` rather than realizing it: a block fills to an
+      exact unit count and a cluster is indivisible, so no block size honours
+      both, and `validate` refuses the combination outright as
+      `E-DATA-ASSIGN-BLOCKED-CLUSTER` (task 11) — this build does not
+      implement the combination at all rather than silently picking one rule
+      over the other.
+    - **Every other value raises `NotImplementedError`** — an allowlist, not a
+      denylist of the methods that happen to draw today. Fail-closed costs
+      nothing here, because `validate` already refuses an
+      out-of-enum method outright (`E-DATA-ASSIGN-METHOD`) before `run` can
+      reach this — and it is what keeps a *fifth* method, added to
+      `validate.ASSIGN_METHODS` and to nothing else, from validating clean
+      and then silently partitioning on a column. A denylist would have
+      shipped exactly that regression, since the two literals naming which
+      methods draw would have been pinned in agreement by nothing.
+
+    An explicit hole, not a silent fallback to reading a column that need not
+    exist: a drawn axis's units carry no arm attribute, so a fallback would
+    either raise `E-DATA-ASSIGN-LEVELS` about a column nobody declared or,
+    worse, partition on an unrelated one.
+
+    `digest`, `clusters` and `resolved` are unread on the `by_attribute` path
+    and are parameters anyway: `resolved` is how a stratum naming an earlier
+    group axis reads that axis's realized membership (below), `digest` is what
+    `random` draws its seed with
+    (`assign_seed_for(block, axis, digest, roster)`, below), and `clusters`
+    is what `random`'s clustered draw allocates whole clusters with instead
+    of individual units — a caller that already has to hold both cannot then
+    be told the signature changed under it.
+
+    **`random`, unclustered (`clusters is None`), is realized here.**
+    `assign.<axis>.ratio` (`{}` meaning equal allocation, `reference.md` §
+    Allocation) is apportioned across `len(roster)` by `_apportion`, the
+    whole roster is shuffled once with `random.Random(assign_seed_for(...))`,
+    and the shuffled list is cut into consecutive slices sized by that
+    apportionment, in `levels`' declared order — so `members[level]` holds
+    that level's slice **in the order the shuffle realized**, exactly what
+    `ArmPlan.members` promises for a draw. Every declared level is a key of
+    `members`, and **every one of them is non-empty** — the `zip` below
+    walks `levels` itself, so `set(members) == set(levels)` unconditionally,
+    and an apportioned size of 0 raises `E-DATA-ASSIGN-LEVELS` rather than
+    returning an empty tuple. A caller therefore gets from a draw exactly the
+    partition `arms_of` promises for a read: both halves, coverage and
+    non-emptiness. **The same fault deserves the same code**: `arms_of`
+    refuses "a declared level no unit's value names — that arm's condition
+    would resolve zero units", and an arm the ratio apportioned zero units to
+    is that sentence, one line later. `reference.md` § Allocation states it
+    method-agnostically ("An arm no unit resolves to is already refused, as
+    `E-DATA-ASSIGN-LEVELS`"), in the sentence whose job is to contrast it
+    with the thin-but-nonzero cell `limits.min_units_per_cell` does not yet
+    warn about — a warning-shaped gap a hard refusal must not be routed into.
+
+    **`random`, clustered (`clusters is not None`), goes through
+    `_assign_whole_clusters_by_ratio` instead** — a sibling of the fold
+    primitive `_assign_whole_clusters`, not a parameterization of it, because
+    the two answer different questions: a fold deals whole clusters to the
+    *least-loaded* of `k` **equal** buckets, where an unequal
+    `assign.<axis>.ratio` needs the bucket **furthest below its own target
+    share**, which is the same rule only when every share is equal.
+    `reference.md` § Clustered units states the requirement this realizes:
+    "core computed the partition, so core keeps it indivisible" — a cluster
+    is drawn as a whole, so arms are balanced over clusters and no cluster
+    straddles two arms. The realized sizes are **not** the exact `ratio`:
+    a cluster is the smallest thing that can move, so one large cluster sets
+    a floor no assignment can get under, the same argument `partition_units`
+    makes for folds. An arm the draw allocates no whole cluster to is the
+    same fault as the unclustered path's zero-size arm and raises the same
+    code, `E-DATA-ASSIGN-LEVELS` — a coarser unit of movement makes it
+    *easier* to reach, not exempt from the refusal.
+
+    **A non-empty `assign.<axis>.stratify_by` is realized under both drawing
+    methods**, whether or not `clusters` is given: the roster is split into
+    strata by `_stratum_groups` — one group per distinct combination of the
+    declared attributes' values, in roster order — and the method's own draw
+    runs **inside each group** from one carried generator, so each arm gets
+    its ratio's share of every stratum rather than only of the roster.
+    Presence and shape are read structurally, `validate`'s own convention for
+    this field: a bare `stratify_by: site` names one stratum exactly as
+    `[site]` does, and the empty `stratify_by: []` that `init` writes leaves
+    both draws on their unstratified paths unchanged, bit for bit. `strata`
+    on the returned plan is the declaration realized, in declared order.
+
+    **Arm sizes can therefore differ by more than one**, and the deviation is
+    bounded by the number of strata rather than by one unit — `_apportion`
+    runs once per stratum, its one-unit tolerance applies inside each, and the
+    floors add. Three strata of five units at an equal two-arm ratio give 3/2
+    in every stratum, so 9/6 overall where the unstratified draw of the same
+    roster gives 8/7, and the surplus lands on the first-declared level every
+    time, since that is how `_apportion` breaks a tie. `partition_units` states
+    the identical consequence for stratified folds; it is the prescribed rule's
+    arithmetic rather than a defect, and balancing the totals *across* strata is
+    what would unbalance the thing `stratify_by` was declared to balance.
+
+    **Coverage is checked over the merged draw, never per stratum** — the
+    rule `blocked` already applies per block, one construction over: a level
+    a small stratum apportioned no unit to is fine while another stratum
+    covered it, and only a level empty across every stratum raises
+    `E-DATA-ASSIGN-LEVELS`. So a stratified draw can no more return an empty
+    arm than an unstratified one can.
+
+    **A stratum may name an earlier `sweep.groups` axis, and `resolved` is
+    the only way to read one** — the mapping of axis name to the plan
+    *already drawn* for it, which `cli._resolved_group_axes` accumulates as
+    it walks the declared axes in order. A drawn axis leaves no column, so
+    balancing on it means balancing on its realized membership, and that
+    membership can only come from the plan: `assign.arm.stratify_by: [sex]`
+    puts each unit in the `sex` arm the earlier draw actually gave it and
+    apportions `arm` inside each. **This is a sequencing requirement rather
+    than a check** — `reference.md` § Expansion modes' "axes resolve in
+    declaration order, and `stratify_by` may name a group axis declared
+    before it" — and what makes the order load-bearing rather than
+    incidental is that an axis whose stratum is not yet in `resolved` cannot
+    be drawn at all: it raises here, where a caller that reordered the axes
+    would otherwise have silently drawn a different allocation.
+
+    **A stratum name that is neither carried by a resolved unit nor an
+    already-drawn axis raises `NotImplementedError`** rather than being
+    drawn as a single "no value" stratum — see `_stratum_groups`, which
+    distinguishes that from a unit here or there carrying no value, names
+    the two declarations that reach it (a later axis,
+    `E-DATA-ASSIGN-STRATIFY-FORWARD`; a name nothing declares,
+    `E-DATA-ASSIGN-STRATIFY-UNKNOWN`, both refused by `validate` first) and
+    says why it carries neither code itself.
+
+    **An axis-name stratum beside a declared `cluster_by` is refused where it
+    would split a cluster, and the refusal is `validate`'s.** When the earlier
+    axis *draws*, it allocated whole clusters, so its realized membership is
+    constant within every cluster by construction and there is nothing to
+    refuse. When the earlier axis is `by_attribute` with a `from` naming a
+    column that is **not** constant within a cluster, it splits that cluster
+    between its own arms — `arms_of` reads a column and respects nothing
+    about clusters — and the two halves would land in different strata here,
+    where `_assign_whole_clusters_by_ratio` would allocate each independently
+    and the cluster would straddle both arms of this axis too. That is a
+    measured outcome rather than a hypothetical, and it contradicts
+    `reference.md` § Clustered units' "core computed the partition, so core
+    keeps it indivisible", so `validate._check_assign` reads such a stratum
+    through the column its axis reads (`_read_axis_column`) and reports
+    `E-DATA-ASSIGN-STRATIFY-VARIES` — the same code, and the same row, an
+    attribute stratum earns. It needs a `from` differing from the axis name to
+    arise at all: with the default, the stratum resolves as a declared
+    attribute on both sides and the attribute half of that check covers it.
+
+    **`blocked` is realized here too, and is what reads the roster's order
+    as data** (`reference.md` § Where units come from): the resolved roster
+    is cut into consecutive chunks of `assign.<axis>.block_size` units —
+    `"auto"` (or any declared value that isn't a plain `int`) resolving to
+    twice `ratio`'s sum, `validate`'s own whole-multiple rule keeping an
+    explicit value a multiple of that sum so every *whole* block fills each
+    arm exactly. Each chunk, including a final one shorter than
+    `block_size` when the roster doesn't divide evenly, is apportioned by
+    the same `_apportion` `random` uses, turned into a label list (each
+    level repeated its apportioned count of times) and shuffled *in place*
+    with one `random.Random(assign_seed_for(...))` instance whose state
+    carries from block to block — so the seed determines every block's
+    permutation together, not each in isolation — then zipped onto the
+    chunk's units in roster order. Reordering the roster therefore changes
+    which units share a block and so changes the draw, where `random`'s
+    single whole-roster shuffle does not carry any such structure for a
+    reorder to disturb. Coverage and non-emptiness are checked the same way
+    across the *whole* roster, not per block: a level with at least one
+    unit in some block is fine even if another block apportioned it none,
+    and only a level with zero units in *every* block raises
+    `E-DATA-ASSIGN-LEVELS` — the same code and the same argument as
+    `random`'s zero-size arm, one whole roster later. A declared
+    `stratify_by` runs that same block loop once per stratum, `random`'s own
+    composition above; whole clusters stay unrealized under `blocked`,
+    refused for the reason given there.
+    """
+    # One narrowing of the block, read by every branch below: an absent or
+    # non-mapping block declares nothing, which is what `{}` says here — and
+    # what sends it down the `by_attribute` path, `validate._check_assign`'s
+    # own fallback. Bound once so no branch repeats the `isinstance` test as a
+    # guard that reads like a second condition on the method.
+    block_map: Mapping[str, Any] = block if isinstance(block, Mapping) else {}
+    method = block_map.get("method")
+    # The declared strata, normalized once for both drawing branches: an empty
+    # declaration is `()` and leaves each branch on the path it had before
+    # stratification existed, bit for bit.
+    strata = stratum_names(block_map.get("stratify_by"))
+    if method == "random":
+        ratio = block_map.get("ratio")
+        weights = (
+            [ratio[level] for level in levels]
+            if isinstance(ratio, dict) and ratio
+            else [1] * len(levels)
+        )
+        seed = assign_seed_for(block_map, axis, digest, roster)
+        if strata:
+            # One generator across every stratum, `blocked`'s own convention:
+            # the strata are drawn in roster order from one carried state, so
+            # the seed determines the whole allocation together rather than
+            # each stratum in isolation.
+            stratified_rng = random.Random(seed)
+            stratified: dict[str, list[str]] = {level: [] for level in levels}
+            groups = _stratum_groups(list(roster), strata, axis, resolved)
+            for stratum_units in groups.values():
+                if clusters is not None:
+                    # The same whole-cluster rule the unstratified clustered
+                    # draw uses, run inside each stratum. Sound only while
+                    # `stratum_varies_within_cluster` refuses the pair it
+                    # refuses — a cluster carrying two stratum values would
+                    # belong to two of these groups and be divided here —
+                    # which is the argument `partition_units` makes for the
+                    # identical composition over folds, and the reason
+                    # `reference.md` § Validation's *Allocation strata survive
+                    # clustering* row exists.
+                    for level, bucket in zip(
+                        levels,
+                        _assign_whole_clusters_by_ratio(
+                            stratum_units, weights, stratified_rng, clusters
+                        ),
+                        strict=True,
+                    ):
+                        stratified[level].extend(unit.key for unit in bucket)
+                else:
+                    stratum_keys = [unit.key for unit in stratum_units]
+                    stratified_rng.shuffle(stratum_keys)
+                    offset = 0
+                    for level, size in zip(
+                        levels, _apportion(len(stratum_units), weights), strict=True
+                    ):
+                        stratified[level].extend(stratum_keys[offset : offset + size])
+                        offset += size
+            # Coverage over the MERGED draw, not per stratum — `blocked`'s rule
+            # for the same question one construction over: a level a small
+            # stratum apportioned no unit to is fine while another stratum
+            # covered it, and only a level empty across every stratum leaves an
+            # arm resolving zero units. So an empty arm is refused here under
+            # the same code and the same words either draw refuses one with,
+            # and no plan this returns holds an empty level.
+            empty = [level for level in levels if not stratified[level]]
+            if empty:
+                raise ContractError(
+                    f"the drawn allocation for axis {axis!r} leaves no unit in "
+                    f"{', '.join(empty)} — {len(roster)} units in {len(groups)} strata of "
+                    f"{', '.join(str(name) for name in strata)}, apportioned within each "
+                    "stratum by "
+                    f"{dict(ratio) if isinstance(ratio, dict) and ratio else 'equal shares'}"
+                    ", gives that level no unit in any stratum. Every declared level needs "
+                    "at least one unit, or that arm's condition resolves zero of them; "
+                    "widen the ratio, stratify on fewer attributes, or resolve a larger "
+                    "roster",
+                    code="E-DATA-ASSIGN-LEVELS",
+                )
+            return ArmPlan(
+                levels=tuple(levels),
+                members={level: tuple(keys_) for level, keys_ in stratified.items()},
+                seed=seed,
+                strata=strata,
+            )
+        if clusters is not None:
+            rng = random.Random(seed)
+            buckets = _assign_whole_clusters_by_ratio(list(roster), weights, rng, clusters)
+            empty = [level for level, bucket in zip(levels, buckets, strict=True) if not bucket]
+            if empty:
+                cluster_total = len({clusters[unit.key] for unit in roster})
+                raise ContractError(
+                    f"the drawn allocation for axis {axis!r} leaves no unit in "
+                    f"{', '.join(empty)} — {cluster_total} whole clusters apportioned by "
+                    f"{dict(ratio) if isinstance(ratio, dict) and ratio else 'equal shares'} "
+                    "gives that level no whole cluster. Every declared level needs at least "
+                    "one unit, or that arm's condition resolves zero of them; widen the "
+                    "ratio, resolve more clusters, or read an arm already assigned",
+                    code="E-DATA-ASSIGN-LEVELS",
+                )
+            clustered_members: dict[str, tuple[str, ...]] = {
+                level: tuple(unit.key for unit in bucket)
+                for level, bucket in zip(levels, buckets, strict=True)
+            }
+            return ArmPlan(levels=tuple(levels), members=clustered_members, seed=seed, strata=())
+        sizes = _apportion(len(roster), weights)
+        empty = [level for level, size in zip(levels, sizes, strict=True) if size == 0]
+        if empty:
+            raise ContractError(
+                f"the drawn allocation for axis {axis!r} leaves no unit in "
+                f"{', '.join(empty)} — {len(roster)} units apportioned by "
+                f"{dict(ratio) if isinstance(ratio, dict) and ratio else 'equal shares'} "
+                "gives that level a share of zero. Every declared level needs at least "
+                "one unit, or that arm's condition resolves zero of them; widen the ratio "
+                "or resolve a larger roster",
+                code="E-DATA-ASSIGN-LEVELS",
+            )
+        shuffled = [unit.key for unit in roster]
+        random.Random(seed).shuffle(shuffled)
+        members: dict[str, tuple[str, ...]] = {}
+        start = 0
+        for level, size in zip(levels, sizes, strict=True):
+            members[level] = tuple(shuffled[start : start + size])
+            start += size
+        return ArmPlan(levels=tuple(levels), members=members, seed=seed, strata=())
+    if method == "blocked":
+        if clusters is not None:
+            raise NotImplementedError(
+                f"`data.units.assign.{axis}.method: blocked` beside a declared `cluster_by` "
+                "is not realized here — a block fills to an exact unit count and a cluster "
+                "is indivisible, so no block size honours both. `validate` refuses this "
+                "combination outright, as `E-DATA-ASSIGN-BLOCKED-CLUSTER`; use `random` for "
+                "a cluster-randomized design"
+            )
+        ratio = block_map.get("ratio")
+        weights = (
+            [ratio[level] for level in levels]
+            if isinstance(ratio, dict) and ratio
+            else [1] * len(levels)
+        )
+        declared_block_size = block_map.get("block_size", "auto")
+        block_size = (
+            declared_block_size
+            if isinstance(declared_block_size, int) and not isinstance(declared_block_size, bool)
+            # `auto_block_size`, not a second copy of its formula: `validate`
+            # imports the same function so the value it approves and the value
+            # this draw uses can never drift apart — see that function's own
+            # docstring for why a `ratio` that makes it unable to give every
+            # level a whole per-block share is refused there before a run
+            # reaches here at all, and what this module does when a caller
+            # bypasses `validate` and reaches it anyway.
+            else auto_block_size(weights)
+        )
+        seed = assign_seed_for(block_map, axis, digest, roster)
+        rng = random.Random(seed)
+        drawn: dict[str, list[str]] = {level: [] for level in levels}
+        if strata:
+            # The same block loop, run once per stratum in roster order and
+            # from the one carried generator — permuted blocks *within* each
+            # stratum, which is what a stratified block design is. Cutting the
+            # whole roster into blocks and balancing each block's strata
+            # instead would be a different design and a second blocking rule.
+            for stratum_units in _stratum_groups(list(roster), strata, axis, resolved).values():
+                _blocked_draw(
+                    [unit.key for unit in stratum_units],
+                    levels,
+                    weights,
+                    block_size,
+                    rng,
+                    drawn,
+                )
+        else:
+            _blocked_draw(
+                [unit.key for unit in roster], levels, weights, block_size, rng, drawn
+            )
+        empty = [level for level in levels if not drawn[level]]
+        if empty:
+            within = (
+                f" within each of the {len(_stratum_groups(list(roster), strata, axis, resolved))} "
+                f"strata of {', '.join(str(name) for name in strata)}"
+                if strata
+                else ""
+            )
+            raise ContractError(
+                f"the drawn allocation for axis {axis!r} leaves no unit in "
+                f"{', '.join(empty)} — {len(roster)} units, blocked in groups of "
+                f"{block_size}{within} and apportioned within each block by "
+                f"{dict(ratio) if isinstance(ratio, dict) and ratio else 'equal shares'}, "
+                "gives that level no unit across every block. Every declared level needs at "
+                "least one unit, or that arm's condition resolves zero of them; widen the "
+                "ratio, shrink the block, or resolve a larger roster",
+                code="E-DATA-ASSIGN-LEVELS",
+            )
+        blocked_members: dict[str, tuple[str, ...]] = {
+            level: tuple(keys_) for level, keys_ in drawn.items()
+        }
+        return ArmPlan(
+            levels=tuple(levels), members=blocked_members, seed=seed, strata=strata
+        )
+    if method is not None and method != "by_attribute":
+        # `method in DRAWN_ASSIGN_METHODS` is not checked here: both of that tuple's
+        # members (`random`, `blocked`) are handled in their own branches above, so
+        # nothing reaches this point already knowing which method it is — everything
+        # that does is a method this build has no branch for at all, `by_attribute`'s
+        # allowlist failing closed rather than falling back to a column read.
+        raise NotImplementedError(
+            f"`data.units.assign.{axis}.method: {method!r}` is not a method this build can "
+            "realize an allocation for; `by_attribute` is the one it reads a column for, and "
+            "no other method may fall back to reading one (`validate` refuses an out-of-enum "
+            "method as `E-DATA-ASSIGN-METHOD`)"
+        )
+    declared_from = block_map.get("from")
+    column = declared_from if isinstance(declared_from, str) and declared_from else axis
+    partition = arms_of(roster, column, levels)
+    return ArmPlan(
+        levels=tuple(levels),
+        members={level: tuple(u.key for u in units) for level, units in partition.items()},
+        seed=None,
+        strata=(),
+    )
+
+
+def arm_members(
+    axes: Mapping[str, ArmPlan],
     conditions: "Sequence[Any]",
 ) -> dict[int, frozenset[str]]:
-    """Which units each resolved condition's own arm holds, one call into
-    `arms_of` per declared group axis rather than one per condition — the
-    reduction the runner's subset view is built from, so a condition on a group
-    axis is handed a real subset of the shared roster and not a second
-    resolution of it.
+    """Which units each resolved condition's own arm holds — the reduction the
+    runner's subset view is built from, so a condition on a group axis is
+    handed a real subset of the shared roster and not a second resolution of
+    it.
 
-    `axes` maps a group axis name to `(the resolved `assign.<axis>.from`
-    attribute, that axis's declared `sweep.groups` levels)` — the caller's own
-    resolution of the declaration, mirroring `validate._check_assign`'s. This
-    function's job is narrower than that resolution: it calls `arms_of` — **the
-    single authority** for a single axis's partition — exactly once per axis in
-    `axes`, and then reduces that partition across every axis a condition
-    selects, never deriving membership from the roster a second time by any
-    other route.
+    `axes` maps a group axis name to that axis's realized `ArmPlan`, one plan
+    per declared axis, produced by `assignment_for` — **not** a roster and a
+    column. This function takes no roster at all, and that absence is the
+    point: with nothing to read membership *from*, no future edit here can
+    quietly become the second producer of it. Its whole job is to intersect
+    plans across the axes a condition selects.
 
     `conditions` is an iterable of objects carrying `.index`, `.values` and
     `.selectors` — `sweep.Condition`'s own shape, read structurally rather than
@@ -988,8 +1726,8 @@ def arm_members(
     selecting more than one axis gets the *intersection* of each axis's arm —
     § Validation's `sex × arm` cell — and a condition selecting none is absent
     from the returned mapping entirely, rather than mapped to the whole roster,
-    since "no arm" and "every unit" are different claims and only `arms_of`
-    itself is the authority for which units a real arm holds.
+    since "no arm" and "every unit" are different claims and only the plan
+    itself says which units a real arm holds.
 
     A caller passing a condition whose selected axis or level is not in `axes`
     — an inconsistency between the two arguments — raises a bare `KeyError`
@@ -999,22 +1737,21 @@ def arm_members(
     than one this function should absorb by handing back units nothing
     verified.
     """
-    partitions = {axis: arms_of(roster, column, levels) for axis, (column, levels) in axes.items()}
     result: dict[int, frozenset[str]] = {}
     for condition in conditions:
         if not condition.selectors:
             continue
         members: set[str] | None = None
-        # `partitions[axis]`, not `.get`, and `[level]`, not `.get`: `axes` is
+        # `axes[axis]`, not `.get`, and `.members[level]`, not `.get`: `axes` is
         # meant to cover every axis every condition selects, so a selected axis
-        # missing from it — or a level `arms_of` didn't partition — is the two
+        # missing from it — or a level the plan didn't realize — is the two
         # arguments disagreeing, a caller bug this function must not paper over
         # by silently dropping the axis from the intersection (which would hand
         # back a *larger*, wrong arm) or the condition from the result (which
         # would hand its execution the whole roster, one level up).
         for axis in condition.selectors:
             level = condition.values[axis]
-            keys = {u.key for u in partitions[axis][level]}
+            keys = set(axes[axis].members[level])
             members = keys if members is None else members & keys
         result[condition.index] = frozenset(members or set())
     return result
@@ -1166,6 +1903,81 @@ def _assign_whole_clusters(
     return folds
 
 
+def _assign_whole_clusters_by_ratio(
+    units: list[Unit], weights: Sequence[float], rng: random.Random, clusters: Mapping[str, str]
+) -> list[list[Unit]]:
+    """One list of units into `len(weights)` arms, each cluster whole, sized as
+    close to its own weight's target share as indivisible clusters allow.
+
+    **A sibling of `_assign_whole_clusters`, not a parameterization of it** —
+    spec decision 6, `reference.md` § Clustered units: "core computed the
+    partition, so core keeps it indivisible." That function deals whole
+    clusters to the *least-loaded* of `k` **equal** buckets; "least loaded"
+    and "furthest below its own target share" agree only because every
+    bucket's share there is identical. An unequal `assign.<axis>.ratio`
+    breaks the agreement: a bucket entitled to three times another's share is
+    still the one to prefer while it holds fewer than three times as many
+    units, not merely while it holds fewer units outright. So the rule here
+    is `counts[i] / weights[i]`, argmin, ties to the earlier-declared level —
+    a strict generalization that collapses to `_assign_whole_clusters`'s rule
+    when every weight is equal, but is a different comparison whenever they
+    are not, which is why it is a second function rather than that one
+    parameterized: changing the shared one to take weights risks a fold
+    regression for an arm feature, a bad trade `_assign_whole_clusters`'s own
+    bit-stability oracle exists to catch.
+
+    Dealt in the same order as `_assign_whole_clusters`, for the same
+    reasons: shuffled with `rng` to seed the tie between equal-sized
+    clusters (the only place it can still matter once the sort is stable),
+    then sorted largest-first so a big cluster is never stranded with only
+    already-unbalanced buckets left to go to.
+
+    Every realized size can differ from its exact target share (`n * weight
+    / sum(weights)`): a cluster is the smallest thing that can move, so a
+    bucket's share only ever changes in whole-cluster increments and nothing
+    here divides one to correct an overshoot or an undershoot. **No bound on
+    that deviation is promised** — `reference.md` § Clustered units makes
+    the identical non-promise for folds ("What is not promised is a bound on
+    how uneven the result may be"): one cluster larger than a bucket's whole
+    target share makes an uneven split unavoidable, in whichever direction
+    the greedy order happens to leave that bucket, and core reports the
+    realized sizes rather than pretending otherwise.
+
+    **A size of 0 is possible here and is the caller's to refuse**,
+    `_apportion`'s own convention: only `assignment_for` holds the axis
+    name, the declared `ratio`, and the roster a refusal's message has to
+    name, so this stays total rather than raising — **including for a
+    non-positive weight**, which `counts[i] / weights[i]` cannot be asked to
+    divide by. Such a level is never the argmin while any other level still
+    has a positive weight (`float("inf")` outranks every finite quotient),
+    so it is dealt no cluster and correctly ends up a size-0 bucket for the
+    caller to refuse, rather than a raised `ZeroDivisionError` for the
+    caller never to see.
+    """
+    members: dict[str, list[Unit]] = {}
+    for unit in units:
+        members.setdefault(clusters[unit.key], []).append(unit)
+    order = list(members)
+    rng.shuffle(order)
+    order.sort(key=lambda name: -len(members[name]))
+    counts = [0.0] * len(weights)
+    buckets: list[list[Unit]] = [[] for _ in weights]
+
+    def priority(i: int) -> tuple[float, int]:
+        # A non-positive weight has no target share to be "below" — `inf`
+        # keeps it out of the argmin (and out of a `ZeroDivisionError`)
+        # without raising, `_apportion`'s own convention of staying total
+        # and leaving the refusal to `assignment_for`.
+        share = counts[i] / weights[i] if weights[i] > 0 else float("inf")
+        return (share, i)
+
+    for name in order:
+        i = min(range(len(weights)), key=priority)
+        buckets[i].extend(members[name])
+        counts[i] += len(members[name])
+    return buckets
+
+
 def partition_units(
     roster: UnitList,
     k: int,
@@ -1282,6 +2094,33 @@ def partition_units(
 
 def _seed_from(digest: str) -> int:
     return int.from_bytes(hashlib.sha256(f"{digest}|folds".encode()).digest()[:4], "big")
+
+
+def assign_seed_for(block: Mapping[str, Any], axis: str, digest: str, roster: UnitList) -> int:
+    """The seed an `assign` axis draws its allocation with.
+
+    `reference.md` § What `auto` derives from: an axis's `assign.seed` mixes
+    "digest + the axis name + the resolved roster" — the digest and the axis
+    name because a crossed design (`arm`, `sex`, ...) must not assign every
+    axis identically, and `units_hash(roster)` because it covers the roster
+    **in resolved order**: two runs that resolved the same units in a
+    different sequence did not allocate the same trial (§ Where units come
+    from).
+
+    A pinned integer is returned literally, and — the load-bearing half,
+    copied from `sweep.sample_seed_for`'s own docstring — **the digest is not
+    consulted at all** on that path, only read out of `block`. "Pinning an
+    integer is the deliberate act, and the one to take for anything you
+    intend to cite," so a pinned assignment must survive a roster that grows,
+    shrinks, or reorders, and `hashes.design_digest` strips `assign.<axis>.seed`
+    per axis for the same reason: a pinned seed must not move the digest it
+    would otherwise be mixed with.
+    """
+    seed = block.get("seed", "auto")
+    if isinstance(seed, int) and not isinstance(seed, bool):
+        return seed
+    payload = f"{digest}|assign|{axis}|{units_hash(roster)}".encode()
+    return int.from_bytes(hashlib.sha256(payload).digest()[:4], "big")
 
 
 def units_hash(units: UnitList) -> str:

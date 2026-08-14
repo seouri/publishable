@@ -83,9 +83,11 @@ from publishable.sweep import (
 from publishable.templates.base import BaseTemplate
 from publishable.templates.registry import get_template
 from publishable.units import (
+    ArmPlan,
     Unit,
     UnitList,
     arm_members,
+    assignment_for,
     clusters_of,
     fold_basis,
     partition_units,
@@ -257,21 +259,82 @@ def _wide_swept_paths(sweep_block: dict[str, Any]) -> set[str]:
 
 
 def _resolved_group_axes(
-    units_decl: dict[str, Any] | None, sweep_block: dict[str, Any]
-) -> dict[str, tuple[str, list[str]]]:
-    """Every `sweep.groups` axis resolved to `(assign.<axis>.from, declared levels)`
-    — `units.arm_members`'s own input shape — read the same way
-    `validate._check_assign`'s `by_attribute` branch resolves the pair: the
-    declared `from` if it is a non-empty string, else the axis name itself.
+    units_decl: dict[str, Any] | None,
+    sweep_block: dict[str, Any],
+    roster: "UnitList | None",
+    digest: str,
+    clusters: dict[str, str] | None = None,
+) -> dict[str, ArmPlan]:
+    """Every `sweep.groups` axis **realized** — one `units.ArmPlan` per axis,
+    `units.arm_members`'s own input shape and `artifacts.build_allocation_document`'s.
+
+    This function resolves the *declaration* (which axes exist, and which
+    levels each declares) and hands each axis to `units.assignment_for`,
+    which is the single producer of a plan and which owns the resolution of
+    `assign.<axis>.from` against its default — the declared `from` if it is a
+    non-empty string, else the axis name itself. That resolution used to live
+    here as well as there; two resolutions of one declaration is a smaller
+    instance of the defect this slice closes, so there is now exactly one.
+
+    **Axes are drawn in declaration order, and that order is a contract this
+    function keeps rather than a property of how its dict happens to be
+    built.** `reference.md` § Expansion modes: "axes resolve in declaration
+    order, and `stratify_by` may name a group axis declared before it". Each
+    axis is handed the plans of the axes already drawn, so an axis stratifying
+    on an earlier one is balanced on that axis's **realized** membership —
+    there is no column for a drawn axis to leave. What makes the ordering
+    load-bearing rather than incidental is that the same argument is what
+    fails: a refactor that reordered this loop (or built the result unordered
+    and drew from it) would hand a stratifying axis a snapshot its stratum is
+    not in, and `units.assignment_for` raises there rather than drawing a
+    different allocation quietly. `validate` refuses the declaration that
+    reaches that raise, as `E-DATA-ASSIGN-STRATIFY-FORWARD`.
+
+    **One shape can still reach the raise through a clean `validate`**, and it
+    is the same disagreement this function's `levels` skip already has with
+    `sweep.selector_paths` (below): `validate` reads the axis order from
+    `selector_paths`, which admits an axis whose `levels` this function skips,
+    so an earlier axis this function did not realize is an earlier axis
+    `validate` saw. Deliberately surfaced as a raise — `arm_members`'s own
+    `KeyError` is the precedent, a caller bug to see rather than one to absorb
+    by drawing an allocation nothing balanced.
+
+    Realized **once per run**, and the result is what both `units.arm_members`
+    and `artifacts.build_allocation_document` are handed — neither recomputes
+    it. Under `by_attribute` a recomputation would agree; under a draw a second
+    call is a second allocation, so the plan is computed once and passed.
+
+    `roster` and `digest` are required rather than defaulted, `clusters` is
+    not: `digest` is unread on the `by_attribute` path today and task 8
+    threads it into `units.assign_seed_for`, so a defaulted one would become
+    a draw silently seeded from the empty string with every test still green
+    — exactly the class of silent-wrong-under-a-draw this seam exists to
+    close, sitting in the signature the draw will arrive through.
+
+    Returns `{}` when `roster is None`: an allocation is a partition of a
+    resolved roster, and there is nothing to partition without one. That is
+    the same gate `command_run` already applied before calling
+    `units.arm_members`, kept here rather than moved, so a design with no
+    `data.units` block still reaches `execute_plan` with no arm narrowing at
+    all rather than raising.
 
     Skips an axis whose `levels` does not resolve to a non-empty list of
     strings, matching `_check_assign`'s own skip for that shape — `sweep.groups`'s
     own shape check is `validate`'s to report, or not report at all in this
     build, and inventing a second notion of "resolved" here would not change
-    that. A malformed `assign` block (absent, non-mapping, or naming a method
-    other than `by_attribute`) resolves the axis to its own name, the same
-    default `_check_assign` falls back to before its own checks on the block
-    would have already reported the malformation as a finding.
+    that. A malformed `assign` block (absent, non-mapping, or naming no
+    method) reaches `assignment_for` as-is and takes its `by_attribute` path,
+    the same default `_check_assign` falls back to before its own checks on
+    the block would have already reported the malformation as a finding. A
+    block naming any other method raises `NotImplementedError` from there —
+    `assignment_for` allows `by_attribute` and refuses the rest rather than
+    denying a list of drawing methods — which for `random` and `blocked` is
+    the explicit hole tasks 8 and 10 filled — both now draw here, and the
+    raise is left for a method no branch claims. Unreachable through
+    `command_run`: `validate` refuses an out-of-enum method as
+    `E-DATA-ASSIGN-METHOD`, and `blocked` beside a declared `cluster_by` —
+    the one combination inside the enum that still raises — as
+    `E-DATA-ASSIGN-BLOCKED-CLUSTER`, and returns first.
 
     **That skip is narrower than `sweep.selector_paths`'s own idea of "a group
     axis exists"**, and the caller must not gate on this function's own
@@ -294,9 +357,11 @@ def _resolved_group_axes(
     `_wide_swept_paths` above is now reachable for the selector-path
     subtraction it depends on.
     """
+    if roster is None:
+        return {}
     assign = (units_decl or {}).get("assign")
     blocks = assign if isinstance(assign, dict) else {}
-    axes: dict[str, tuple[str, list[str]]] = {}
+    axes: dict[str, ArmPlan] = {}
     for entry in sweep_block.get("groups") or []:
         if not isinstance(entry, dict):
             continue
@@ -309,18 +374,29 @@ def _resolved_group_axes(
         ):
             continue
         block = blocks.get(axis)
-        # Gated on `method == "by_attribute"`, matching `_check_assign`'s own
-        # elif chain and `units._assign_constant_columns`'s own gate for the
-        # same reason: `from` "means nothing" under `random`/`blocked` or an
-        # absent/out-of-enum method, each already refused at `validate` before
-        # this line is ever reached (`E-DATA-ASSIGN-DRAWN`/`E-DATA-ASSIGN-METHOD`).
-        declared_from = (
-            block.get("from")
-            if isinstance(block, dict) and block.get("method") == "by_attribute"
-            else None
+        # The whole block, not a `from` this function resolved: `assignment_for`
+        # dispatches on `method` and resolves `from` on the branch where `from`
+        # means anything at all, which is where the gate this call site used to
+        # apply now lives. `from` "means nothing" under `random`/`blocked` for
+        # the reason `units._assign_constant_columns` states, and neither method
+        # reads a column there — it raises.
+        # `dict(axes)` — the axes drawn SO FAR, and the reason this loop's order
+        # is a contract rather than an accident of construction. An axis whose
+        # `stratify_by` names an earlier one is balanced on that axis's realized
+        # membership, which exists only in its plan, so reordering the loop does
+        # not silently draw a different allocation: the later axis is simply
+        # absent from this snapshot and `assignment_for` raises. A copy rather
+        # than the live dict, so the snapshot is what the axis was drawn against
+        # and cannot be read as "every axis, eventually".
+        axes[axis] = assignment_for(
+            roster,
+            axis,
+            block if isinstance(block, dict) else None,
+            levels,
+            digest,
+            clusters,
+            dict(axes),
         )
-        column = declared_from if isinstance(declared_from, str) and declared_from else axis
-        axes[axis] = (column, levels)
     return axes
 
 
@@ -1167,9 +1243,9 @@ def command_run(config_path: Path) -> int:
     # so a resolution gap surfaces as `arm_members`'s own `KeyError` — a
     # caller-disagreement bug to see, not a config to silently accept — rather
     # than as a silently unnarrowed run.
-    group_axes = _resolved_group_axes(units_decl, sweep_block)
+    group_axes = _resolved_group_axes(units_decl, sweep_block, roster, digest, clusters)
     arm_members_map = (
-        arm_members(roster, group_axes, conditions)
+        arm_members(group_axes, conditions)
         if selector_paths(sweep_block) and roster is not None
         else None
     )
@@ -1268,7 +1344,17 @@ def command_run(config_path: Path) -> int:
         # matching "present when either [an arm assignment or a holdout] is
         # declared"; `holdout` is never in this build's document at all
         # (`E-DATA-HOLDOUT-UNSUPPORTED` refuses every declaration of it).
-        alloc_doc = build_allocation_document(roster, group_axes) if roster is not None else None
+        #
+        # `group_axes` — the same object `arm_members` narrowed every
+        # condition's roster with above, not a second resolution of the same
+        # declaration. `build_allocation_document` used to be handed the roster
+        # and re-derive the partition through `arms_of`; under a drawn method
+        # that second derivation is a second draw, so the plans are realized
+        # once (`_resolved_group_axes`) and recorded as realized. No roster
+        # guard is needed here either: `_resolved_group_axes` already returns
+        # `{}` when none resolved, and the empty mapping is what makes this
+        # `None`.
+        alloc_doc = build_allocation_document(group_axes)
         alloc_hash: str | None = None
         if alloc_doc is not None:
             (run_dir / "allocation.json").write_text(json.dumps(alloc_doc, indent=2))

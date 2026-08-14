@@ -409,21 +409,55 @@ def test_a_group_path_gets_no_swept_away_marker():
     assert _wide_swept_paths({"baseline": {"arm": "control"}}) == {"arm"}
 
 
-def test_resolved_group_axes_defaults_from_and_skips_unresolvable_levels():
-    """`_resolved_group_axes` is `command_run`'s own resolution of `assign.<axis>.from`
-    against its default — the axis name — mirroring `validate._check_assign`'s
-    `by_attribute` branch, and `units.arm_members`'s own input shape.
+def _levels_roster():
+    """8 `control`, 3 `treatment`, 11 total — `tests/test_cli.py`'s own arm
+    sizes, distinct from `_arm_roster12`'s 7/5 and `test_artifacts.py`'s 4/9.
+
+    `cohort` **crosscuts** `arm_column` rather than tracking it: 5 of the 8
+    controls are `derivation` and 3 are `validation`, and the 3 treatments run
+    the other way (1 `derivation`, 2 `validation`). Two axes that partitioned
+    the roster identically could not tell "read the `cohort` column" from
+    "read whatever column the other axis resolved," and crosstalk between the
+    two resolutions would pass unseen — the coinciding-properties fixture
+    fault this project has already been bitten by. `arm_column` rather than
+    `arm`, so a `from` that resolved to the axis name instead of the
+    declaration would fail to partition at all."""
+    from publishable.units import Unit, UnitList
+
+    control_cohorts = ["derivation"] * 5 + ["validation"] * 3
+    treatment_cohorts = ["derivation", "validation", "validation"]
+    control = [
+        Unit(key=f"c{i}", attributes={"arm_column": "control", "cohort": cohort})
+        for i, cohort in enumerate(control_cohorts)
+    ]
+    treatment = [
+        Unit(key=f"t{i}", attributes={"arm_column": "treatment", "cohort": cohort})
+        for i, cohort in enumerate(treatment_cohorts)
+    ]
+    return UnitList(control + treatment)
+
+
+def test_resolved_group_axes_realizes_a_plan_per_axis_and_skips_unresolvable_levels():
+    """`_resolved_group_axes` is `command_run`'s own realization of every
+    declared group axis — one `units.ArmPlan` each, the shape both
+    `units.arm_members` and `artifacts.build_allocation_document` are handed.
+
+    The `from` default is resolved by `units.assignment_for`, not here, and
+    this test discriminates the two: `arm` declares `from: arm_column` while
+    `cohort` declares no block at all and must fall back to its own axis
+    name. Membership keys are written out literally rather than re-derived
+    from the fixture, so a wrongly recomputed partition cannot satisfy them.
 
     A focused unit test on the function itself, for the reason
     `test_a_group_path_gets_no_swept_away_marker` above states: it pins the
-    exact resolved `(column, levels)` pair per axis, including the
-    skipped-rather-than-defaulted `unresolvable` axis, more directly than an
-    end-to-end run's aggregated output would."""
+    exact realized plan per axis, including the skipped-rather-than-realized
+    `unresolvable` axis, more directly than an end-to-end run's aggregated
+    output would."""
     sweep_block = {
         "groups": [
             {"by": "arm", "levels": ["control", "treatment"]},
             {"by": "cohort", "levels": ["derivation", "validation"]},
-            {"by": "unresolvable"},  # no `levels` at all — skipped, not defaulted
+            {"by": "unresolvable"},  # no `levels` at all — skipped, not realized
         ],
     }
     units_decl = {
@@ -432,26 +466,112 @@ def test_resolved_group_axes_defaults_from_and_skips_unresolvable_levels():
             # `cohort` has no block at all: defaults to the axis name.
         },
     }
-    assert _resolved_group_axes(units_decl, sweep_block) == {
-        "arm": ("arm_column", ["control", "treatment"]),
-        "cohort": ("cohort", ["derivation", "validation"]),
-    }
+    roster = _levels_roster()
+    plans = _resolved_group_axes(units_decl, sweep_block, roster, "digest", None)
+
+    assert set(plans) == {"arm", "cohort"}
+    assert plans["arm"].levels == ("control", "treatment")
+    assert plans["arm"].members["control"] == ("c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7")
+    assert plans["arm"].members["treatment"] == ("t0", "t1", "t2")
+    assert plans["cohort"].levels == ("derivation", "validation")
+    # Crosscutting, so all four member tuples differ: neither axis's answer
+    # could have come from the other's column.
+    assert plans["cohort"].members["derivation"] == ("c0", "c1", "c2", "c3", "c4", "t0")
+    assert plans["cohort"].members["validation"] == ("c5", "c6", "c7", "t1", "t2")
+    assert all(p.seed is None and p.strata == () for p in plans.values())
 
 
 def test_resolved_group_axes_is_empty_with_no_groups_declared():
-    assert _resolved_group_axes({"assign": {"arm": {"from": "x"}}}, {}) == {}
+    assert _resolved_group_axes({"assign": {"arm": {"from": "x"}}}, {}, _levels_roster(), "d") == {}
 
 
-def test_resolved_group_axes_ignores_from_under_a_non_by_attribute_method():
-    """`from` "means nothing" under `random`/`blocked` — the same gate
-    `units._assign_constant_columns` applies and for the same reason: neither
-    method is executable (`E-DATA-ASSIGN-DRAWN`), so reading `from` under one
-    would resolve a column no method here actually consults."""
+def test_resolved_group_axes_is_empty_with_no_roster_to_partition():
+    """An allocation is a partition of a resolved roster, and a design
+    declaring no `data.units` has none — so every axis is dropped rather than
+    realized against nothing. The control that must report: the same
+    declaration WITH a roster realizes the axis, so this is the roster's
+    absence doing the work and not the declaration's shape."""
     sweep_block = {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}
-    units_decl = {"assign": {"arm": {"method": "random", "from": "arm_column"}}}
-    assert _resolved_group_axes(units_decl, sweep_block) == {
-        "arm": ("arm", ["control", "treatment"])
+    units_decl = {"assign": {"arm": {"method": "by_attribute", "from": "arm_column"}}}
+    assert _resolved_group_axes(units_decl, sweep_block, None, "digest") == {}
+    assert set(_resolved_group_axes(units_decl, sweep_block, _levels_roster(), "digest")) == {"arm"}
+
+
+def test_resolved_group_axes_draws_a_blocked_allocation():
+    """**Restores CLI-level coverage of a drawn allocation.** The only test at
+    this seam exercising `random`/`blocked` was
+    `test_resolved_group_axes_raises_rather_than_reading_a_column_under_a_drawn_method`,
+    deleted in task 10 because its premise — `blocked` still raises
+    `NotImplementedError` — became false the moment `blocked` started
+    drawing. Deleting it correctly closed a stale test, but left this seam
+    with **no** coverage of a drawn allocation at all, `random` included —
+    `_resolved_group_axes` hands the whole draw to `units.assignment_for`
+    without touching it further, so this is a thin integration check that
+    the seam still calls through and returns what it's given, not a second
+    unit test of the draw itself (`test_units.py` owns that in full — the
+    same 14-unit, pinned-seed fixture as
+    `test_a_blocked_draw_balances_within_every_whole_block` there, so a
+    result differing between the two call sites would be a real
+    divergence, not a second, independent computation of the same thing)."""
+    from publishable.units import Unit, UnitList
+
+    roster = UnitList([Unit(key=f"u{i:02d}", paths=(), attributes={}) for i in range(14)])
+    sweep_block = {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}
+    units_decl = {"assign": {"arm": {"method": "blocked", "seed": 11}}}
+    plans = _resolved_group_axes(units_decl, sweep_block, roster, "digest")
+
+    assert set(plans) == {"arm"}
+    assert plans["arm"].seed == 11
+    assert plans["arm"].members["control"] == ("u00", "u01", "u04", "u05", "u08", "u11", "u13")
+    assert plans["arm"].members["treatment"] == ("u02", "u03", "u06", "u07", "u09", "u10", "u12")
+
+
+def test_the_draw_order_is_the_declaration_order_by_contract():
+    """**The sequencing itself, pinned.** `reference.md` § Expansion modes: "axes
+    resolve in declaration order, and `stratify_by` may name a group axis
+    declared before it". This loop's dict was in declaration order by accident of
+    construction before; what makes the order a contract now is that each axis is
+    handed the plans of the axes drawn SO FAR, so `arm.stratify_by: [sex]`
+    balances `arm` within the `sex` arms this same loop just drew.
+
+    Two `random` axes, so `sex` leaves no column and the balance below can only
+    have come from its plan. The forward pair resolves and is balanced; the SAME
+    two axes declared the other way round raise, because `sex` is not in the
+    snapshot `arm` is drawn against.
+
+    **That raise is what pins the order**, and it is the only thing that can:
+    `units.assign_seed_for` keys on the axis NAME, not on position, so two axes
+    neither of which stratifies on the other draw bit-identical plans whichever
+    order the loop takes. Reordering is observable only here. A refactor of this
+    function into an unordered mapping — or one that drew every axis against the
+    finished set — fails this test rather than silently reordering draws."""
+    from publishable.units import Unit, UnitList
+
+    roster = UnitList([Unit(key=f"u{i:02d}", paths=(), attributes={}) for i in range(12)])
+    forward = [
+        {"by": "sex", "levels": ["f", "m"]},
+        {"by": "arm", "levels": ["control", "treatment"]},
+    ]
+    units_decl = {
+        "assign": {
+            "sex": {"method": "random", "seed": 7},
+            "arm": {"method": "random", "seed": 11, "stratify_by": ["sex"]},
+        }
     }
+    plans = _resolved_group_axes(units_decl, {"groups": forward}, roster, "digest")
+
+    assert list(plans) == ["sex", "arm"]
+    assert plans["arm"].strata == ("sex",)
+    for sex_arm in plans["sex"].members.values():
+        assert len(set(sex_arm) & set(plans["arm"].members["control"])) == 3
+        assert len(set(sex_arm) & set(plans["arm"].members["treatment"])) == 3
+
+    with pytest.raises(NotImplementedError) as e:
+        _resolved_group_axes(
+            units_decl, {"groups": list(reversed(forward))}, roster, "digest"
+        )
+    assert "'sex'" in str(e.value)
+    assert "E-DATA-ASSIGN-STRATIFY-FORWARD" in str(e.value)
 
 
 def test_non_string_levels_make_arm_members_raise_rather_than_skip_narrowing():
@@ -483,17 +603,17 @@ def test_non_string_levels_make_arm_members_raise_rather_than_skip_narrowing():
     conditions = expand(doc)
     assert all(c.selectors == frozenset({"arm"}) for c in conditions)
 
-    group_axes = _resolved_group_axes({}, sweep_block)
+    roster = UnitList(
+        [Unit(key="u0", attributes={"arm": "1"}), Unit(key="u1", attributes={"arm": "2"})]
+    )
+    group_axes = _resolved_group_axes({}, sweep_block, roster, "digest")
     assert group_axes == {}  # the shape fault `_resolved_group_axes` skips
 
     # The gate `command_run` uses: `selector_paths`, not `group_axes`.
     assert selector_paths(sweep_block)  # still true — `expand` agrees
 
-    roster = UnitList(
-        [Unit(key="u0", attributes={"arm": "1"}), Unit(key="u1", attributes={"arm": "2"})]
-    )
     with pytest.raises(KeyError):
-        arm_members(roster, group_axes, conditions)
+        arm_members(group_axes, conditions)
 
 
 _ARM_STEP = '''\
@@ -929,7 +1049,8 @@ def test_allocation_json_is_written_with_exact_arm_keys_when_declared(tmp_path: 
     }
     # `by_attribute` draws nothing and stratifies nothing — the addendum's own
     # finding that a writer emitting a seed anyway looks correct against a
-    # fixture nobody checked the seed of.
+    # fixture nobody checked the seed of. A drawn axis fills both keys instead;
+    # `test_artifacts.py`'s mixed-document test is where the two are told apart.
     assert alloc["seed"] == {}
     assert "arm" not in alloc["seed"]
     assert alloc["strata"] == {}
@@ -940,6 +1061,215 @@ def test_allocation_json_is_written_with_exact_arm_keys_when_declared(tmp_path: 
 
     assert run_yaml["provenance"]["allocation"] == "allocation.json"
     assert run_yaml["provenance"]["allocation_hash"] == allocation_hash(alloc)
+
+
+def test_a_drawn_axis_runs_end_to_end_and_records_its_seed(tmp_path: Path):
+    """**The retirement, end to end.** `assign.arm.method: random` used to be
+    refused by `validate`, which `command_run` runs first and returns on, so no
+    such config ever reached a run directory. This one does: it completes, and
+    the `allocation.json` it leaves carries the axis under `seed` — the key a
+    `by_attribute` run leaves empty, which
+    `test_allocation_json_is_written_with_exact_arm_keys_when_declared` above
+    asserts on the same code path.
+
+    The roster carries no `arm` column at all, which is the point rather than
+    an economy: a drawn axis leaves no column, and a run that quietly fell back
+    to reading one would report `E-DATA-ASSIGN-UNKNOWN` instead of finishing.
+    The seed is pinned, so the recorded value is checkable rather than
+    whatever the digest happened to mix; membership is asserted as a partition
+    of the roster rather than as literal keys, since the shuffle is
+    `units.assignment_for`'s to pin and `tests/test_units.py` pins it."""
+    keys = [f"p{i}" for i in range(8)]
+    roster_csv = "patient_id\n" + "\n".join(keys) + "\n"
+
+    doc = run_a_project(
+        tmp_path,
+        roster_csv=roster_csv,
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "random", "seed": 11}},
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+    )
+
+    run_yaml = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run_yaml["status"] == "completed"
+
+    alloc = json.loads((doc["run_dir"] / "allocation.json").read_text())
+    assert alloc["seed"] == {"arm": 11}
+    assert alloc["strata"] == {}  # nothing was declared to balance on
+    placed = alloc["arms"]["arm"]["control"] + alloc["arms"]["arm"]["treatment"]
+    assert sorted(placed) == sorted(keys)
+    assert len(alloc["arms"]["arm"]["control"]) == 4
+    assert len(alloc["arms"]["arm"]["treatment"]) == 4
+
+
+_DRAWN_CLUSTER_SITES = ["A", "B", "C", "D"]
+
+
+def test_a_clustered_drawn_axis_keeps_every_cluster_whole_end_to_end(tmp_path: Path):
+    """**The clustered draw, end to end** — the wiring `cli._resolved_group_axes`'s
+    `clusters` argument exists for, and the only assertion that reads it.
+
+    `experimental-designs.md` § Mistakes core prevents promises that a declared
+    `cluster_by` makes clusters indivisible in *every* partition core computes,
+    and `reference.md` § Clustered units states it as "core computed the
+    partition, so core keeps it indivisible". Two documents, one wire: the
+    `clusters` map `command_run` builds and hands to `_resolved_group_axes`,
+    which passes it to `units.assignment_for`, which takes
+    `_assign_whole_clusters_by_ratio` instead of a per-unit shuffle. **The only
+    other end-to-end `groups × cluster_by` test uses `method: by_attribute`**
+    (`test_groups_and_cluster_by_execute_with_per_arm_cluster_counting` above),
+    where the arm is read from a column and `clusters` is never read at all —
+    so before this test, passing `None` there left the whole suite green.
+
+    Mutation-verified: `clusters` → `None` at `command_run`'s
+    `_resolved_group_axes` call splits all four sites across both arms and this
+    test fails; reverted, it passes. Applied, run, `__pycache__` cleared,
+    reverted, re-run.
+
+    **`random` rather than `blocked` is not a choice**: `blocked` beside any
+    `cluster_by` is refused outright, as `E-DATA-ASSIGN-BLOCKED-CLUSTER`, so
+    `random` is the one drawn method that reaches this path.
+
+    24 units in 4 equal clusters of 6, which makes the two failure modes
+    distinguishable: an equal-share apportionment of *whole clusters* gives 2
+    clusters (12 units) per arm, and a per-unit shuffle of the same roster
+    gives 12 units per arm as well — so a size assertion alone proves nothing
+    and the wholeness assertion is what discriminates. Membership is asserted
+    as *every cluster lands entirely in one arm*, not as literal arm labels:
+    which site draws which arm is `units.assignment_for`'s to pin (and
+    `tests/test_units.py` pins it), while an arm-label assertion here would
+    only be a second, weaker copy of that pin. Both arms are asserted non-empty
+    so the wholeness check cannot pass vacuously on an allocation that put
+    everything on one side.
+    """
+    keys = [f"p{i:02d}" for i in range(24)]
+    site_of = {key: _DRAWN_CLUSTER_SITES[i // 6] for i, key in enumerate(keys)}
+    roster_csv = "patient_id,site\n" + "".join(f"{k},{site_of[k]}\n" for k in keys)
+
+    doc = run_a_project(
+        tmp_path,
+        roster_csv=roster_csv,
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "random", "seed": 7}},
+            "attributes": ["site"],
+            "cluster_by": "site",
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+    )
+
+    run_yaml = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run_yaml["status"] == "completed"
+
+    alloc = json.loads((doc["run_dir"] / "allocation.json").read_text())
+    arms = alloc["arms"]["arm"]
+    assert sorted(arms["control"] + arms["treatment"]) == sorted(keys)
+
+    arm_of_site: dict[str, set[str]] = {site: set() for site in _DRAWN_CLUSTER_SITES}
+    for arm, members in arms.items():
+        for key in members:
+            arm_of_site[site_of[key]].add(arm)
+    # Every declared cluster is present, and each is in exactly one arm — the
+    # indivisibility both documents promise. Under the `clusters=None` mutation
+    # each of the four carries both arms instead.
+    split = {site: sorted(a) for site, a in arm_of_site.items() if len(a) != 1}
+    assert split == {}, f"clusters divided between arms: {split}"
+    assert set(arm_of_site) == set(_DRAWN_CLUSTER_SITES)
+    # Non-vacuous: both arms drew whole clusters, 12 units each.
+    assert len(arms["control"]) == 12
+    assert len(arms["treatment"]) == 12
+
+
+def test_one_plan_per_axis_is_realized_once_and_both_consumers_get_that_same_plan(
+    tmp_path: Path, monkeypatch
+):
+    """**The seam this slice turns on, asserted end to end.**
+
+    `artifacts.build_allocation_document` used to call `units.arms_of` a
+    *second* time on the same axes, after `units.arm_members` had already
+    narrowed every condition with the first call. Under `by_attribute` the two
+    calls agree, so nothing observable distinguished them. Under a drawn method
+    they do not: a second draw is a second allocation, and two calls cannot be
+    made to promise they agree — only not calling twice can. The decision is
+    *compute once and pass*, and this is what pins it.
+
+    Three assertions, each with a mutation that breaks it and nothing else:
+
+    - `units.assignment_for` runs **exactly once** — one axis, one plan, for a
+      whole run. Calling `_resolved_group_axes` a second time before
+      `build_allocation_document` (the shape of the recomputation this task
+      removed) takes the count to 2. Mutation-verified.
+    - `allocation.json`'s `arms` is the **same plan object's** membership the
+      runner narrowed with, compared against the plan this spy captured on the
+      way through, not against a re-derivation.
+    - the arms actually narrowed: 4 and 9 resolved units, the fixture's own
+      uneven split, so a plan that reached the file but not the runner (or the
+      reverse) fails here.
+
+    The literal key lists are the control against a plan that is realized once
+    but realized *wrongly*: making `assignment_for` return a fresh partition —
+    each level's keys reversed — leaves the identity assertion satisfied (both
+    consumers still get the one plan) and fails these. Mutation-verified.
+    """
+    control_keys = ["c3", "c0", "c2", "c1"]
+    treatment_keys = ["t5", "t1", "t8", "t0", "t3", "t7", "t2", "t6", "t4"]
+    control_rows = "\n".join(f"{k},control" for k in control_keys)
+    treatment_rows = "\n".join(f"{k},treatment" for k in treatment_keys)
+    roster_csv = f"patient_id,arm\n{control_rows}\n{treatment_rows}\n"
+
+    from publishable import cli as cli_module
+
+    realized: list[Any] = []
+    real_assignment_for = cli_module.assignment_for
+
+    def spy(*args: Any, **kwargs: Any) -> Any:
+        plan = real_assignment_for(*args, **kwargs)
+        realized.append(plan)
+        return plan
+
+    monkeypatch.setattr(cli_module, "assignment_for", spy)
+
+    doc = run_a_project(
+        tmp_path,
+        aggregate_returns="total",
+        roster_csv=roster_csv,
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+            "attributes": ["arm"],
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+    )
+
+    # One axis, one plan, one realization — for the run's whole lifetime.
+    assert len(realized) == 1
+    plan = realized[0]
+    assert plan.levels == ("control", "treatment")
+    assert plan.members["control"] == tuple(control_keys)
+    assert plan.members["treatment"] == tuple(treatment_keys)
+
+    alloc = json.loads((doc["run_dir"] / "allocation.json").read_text())
+    # What the file records IS what the one plan says, key for key and in
+    # order — not a second answer that happens to agree.
+    assert alloc["arms"]["arm"] == {
+        level: list(keys) for level, keys in plan.members.items()
+    }
+    assert alloc["arms"]["arm"]["control"] == control_keys
+    assert alloc["arms"]["arm"]["treatment"] == treatment_keys
+
+    # And the same plan is what the runner narrowed with: 4 and 9, the
+    # fixture's uneven split, so neither arm can be confused with the other
+    # or with the 13-unit roster by size.
+    run_yaml = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    conditions = run_yaml["results"]["conditions"]
+    assert [c["label"] for c in conditions] == ["arm=control", "arm=treatment"]
+    ns = [c["aggregated"]["step01_summarize_units"]["pred"]["n"] for c in conditions]
+    assert ns[0]["resolved"] == 4
+    assert ns[0]["completed"] == 4
+    assert ns[1]["resolved"] == 9
+    assert ns[1]["completed"] == 9
 
 
 def test_allocation_json_is_absent_without_a_declared_arm(tmp_path: Path):
