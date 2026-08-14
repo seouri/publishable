@@ -1519,14 +1519,17 @@ def test_ablate_times_groups_gives_one_baseline_and_its_ablations_per_level(writ
     row**, which numbers this exact example `00_cohort=derivation__baseline` and
     `03_cohort=validation__baseline` (each cell's baseline at its own head).
     `expand`'s own docstring records why: it emits every baseline row as one
-    leading block (indices `0`-`1` here) and every ablation after it (`2`-`5`),
-    because "the head of each cell" is undefined once a second axis makes a
-    cell's rows non-contiguous — a known, already-recorded divergence
-    (`docs/superpowers/spec-defects.md` § Per-cell baseline numbering, "Owner:
-    the groups slice", left as a document decision rather than a code change
-    taken in passing). This test pins the actual index order rather than
-    re-asserting the document's, since asserting the document's own numbering
-    here would just fail for a reason this task did not open."""
+    leading block, then every ablation after it, because "the head of each
+    cell" is undefined once a second axis makes a cell's rows non-contiguous —
+    a known, already-recorded divergence (`docs/superpowers/spec-defects.md` §
+    Per-cell baseline numbering, "Owner: the groups slice", left as a document
+    decision rather than a code change taken in passing). Left unasserted here
+    on purpose, per review: pinning the leading-block order would entrench a
+    divergence from a normative document for no gain this task's own
+    assertions don't already cover — "one baseline per level, not per run" is
+    carried by the label set above and by `derivation_baseline.index !=
+    validation_baseline.index` below, neither of which depends on which index
+    order produced them."""
     doc = {
         "sweep": {
             "groups": [{"by": "cohort", "levels": ["derivation", "validation"]}],
@@ -1544,13 +1547,6 @@ def test_ablate_times_groups_gives_one_baseline_and_its_ablations_per_level(writ
         "cohort=validation__labs=false",
         "cohort=validation__notes=false",
     }
-    # The leading-block order the spec-defect entry describes: both baselines
-    # before any ablation, one per level, in declared level order.
-    assert [c.label for c in conditions[:2]] == [
-        "cohort=derivation__baseline",
-        "cohort=validation__baseline",
-    ]
-
     # § Expansion modes' next two claims, pinned beside the count so a change to
     # either doesn't only surface as a stray label somewhere in the six above.
     derivation_baseline = next(

@@ -699,6 +699,72 @@ def test_groups_between_and_by_attribute_reach_all_three_narrowed_call_sites(
     assert "technical_n" not in treatment["score"]
 
 
+# `groups × cluster_by`, end to end — task 19 Step 3's review addition. Step 3
+# itself stayed at `validate` level (correctly: the addendum's correction
+# forces no `baseline`/`statistics.contrasts` beside the axis, since either
+# would draw `E-DATA-CLUSTER-CONTRAST`/`E-DATA-ALLOCATION-CONTRAST` instead of
+# validating), but validating clean is exactly what lets the same combination
+# execute — nothing before this pinned that it actually does. Same fixture as
+# `tests/test_validate.py`'s `_groups_cluster_doc` (7 `control`/5 `treatment`
+# over 3 sites, every site spanning both arms, `control` alone touching all
+# three), reused here rather than re-invented so the two tests are provably
+# about the same design.
+_GROUPS_CLUSTER_CONTROL = ["c0", "c1", "c2", "c3", "c4", "c5", "c6"]
+_GROUPS_CLUSTER_TREATMENT = ["t0", "t1", "t2", "t3", "t4"]
+_GROUPS_CLUSTER_SITE = {
+    "c0": "A", "c1": "A", "c2": "B", "c3": "B", "c4": "C", "c5": "C", "c6": "C",
+    "t0": "A", "t1": "B", "t2": "B", "t3": "C", "t4": "C",
+}
+
+
+def _groups_cluster_roster_csv() -> str:
+    rows = ["patient_id,arm,site"]
+    for k in _GROUPS_CLUSTER_CONTROL:
+        rows.append(f"{k},control,{_GROUPS_CLUSTER_SITE[k]}")
+    for k in _GROUPS_CLUSTER_TREATMENT:
+        rows.append(f"{k},treatment,{_GROUPS_CLUSTER_SITE[k]}")
+    return "\n".join(rows) + "\n"
+
+
+def test_groups_and_cluster_by_execute_with_per_arm_cluster_counting(tmp_path: Path):
+    """`n` gains `clusters` (task 8) under a declared `cluster_by`, and this
+    proves it does so PER ARM once a `groups` axis narrows each condition's own
+    roster — not merely that the combination runs without raising. `control`
+    (7 units) and `treatment` (5 units) each resolve their own 3 clusters (every
+    site spans both arms by construction), and each condition's interval uses
+    `t_over_units_clustered`, the cluster-robust construction § Statistical
+    reporting names for a declared `cluster_by` — proving per-arm cluster
+    counting is wired all the way to a real `run.yaml`, not just to `attrition`
+    called directly."""
+    doc = run_a_project(
+        tmp_path,
+        aggregate_returns="total",
+        roster_csv=_groups_cluster_roster_csv(),
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+            "attributes": ["arm", "site"],
+            "cluster_by": "site",
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    conditions = run["results"]["conditions"]
+    assert [c["label"] for c in conditions] == ["arm=control", "arm=treatment"]
+
+    control = conditions[0]["aggregated"]["step01_summarize_units"]["pred"]
+    treatment = conditions[1]["aggregated"]["step01_summarize_units"]["pred"]
+
+    assert control["n"] == {
+        "resolved": 7, "completed": 7, "ineligible": 0, "failed": 0, "clusters": 3,
+    }
+    assert treatment["n"] == {
+        "resolved": 5, "completed": 5, "ineligible": 0, "failed": 0, "clusters": 3,
+    }
+    assert control["method"] == "t_over_units_clustered"
+    assert treatment["method"] == "t_over_units_clustered"
+
+
 def test_allocation_json_is_written_with_exact_arm_keys_when_declared(tmp_path: Path):
     """Task 14: a real `sweep.groups` + `allocation: between` + `assign` config,
     run all the way to a real `allocation.json`, with no `validate` patch

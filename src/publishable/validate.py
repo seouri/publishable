@@ -2598,39 +2598,48 @@ def _check_sweep(
     # `expand` marked the path a selector and skipped it: `cfg.parameters.<path>`
     # stays at the base config's value on every condition while the label claims
     # otherwise, indistinguishable from a real grid axis's label to a reader who
-    # has not opened `sweep.yaml`'s `values`. Checked before the swept-collision
-    # loop below reads `named_by`, so a path that is BOTH swept and declared
-    # reports once, from whichever loop runs first — swept, since that is the
-    # sharper, already-shipped finding.
+    # has not opened `sweep.yaml`'s `values`.
+    #
+    # **Checked AFTER the swept-collision case below, not before** — a path
+    # that is both swept (`named_by`) and declared (`spec`) is the swept
+    # case's to report: that message names the OTHER axis that silently loses
+    # its value, which is the sharper of the two harms and the one a reader
+    # needs first. Checking `spec` first would report the weaker, unswept
+    # message for a config the swept branch was written for — reachable only
+    # when the check order is wrong, which is exactly the bug a review caught
+    # here: `spec`-first left the swept message reachable only when the swept
+    # path was *undeclared* (`E-SWEEP-PATH-UNKNOWN` territory, a config
+    # already broken by a misspelling), which is why the pre-existing test
+    # for the swept case never noticed the branch order was backwards.
     group_axes = selector_paths(sweep)
     for path in group_axes:
-        if path in spec:
+        if path in named_by:
+            where = ", ".join(f"`{w}`" for _, w in named_by[path])
             c.error(
                 "E-SWEEP-PATH-DUPLICATE",
                 f"sweep.groups.{path}",
-                f"names {path!r}, which this template declares as a parameter — but a "
-                "group axis varies *units* rather than a parameter, so every condition "
-                "marks that path a selector and `resolve_condition_cfg` plants nothing "
-                f"there: every condition's `parameters.{path}` stays at the base config's "
-                "value while the condition's own label and directory claim the group "
-                "level's value instead, indistinguishable from a real swept parameter to "
-                "a reader who has not opened `sweep.yaml`'s `values`. Rename one of the "
-                "two — a group axis's name is the label's key and need not be a "
-                "parameter path at all",
+                f"names a path {where} also writes — but a group axis varies *units* "
+                "rather than a parameter, so every condition marks that path a selector "
+                "and no scope plants the parameter: the parameter axis would claim to "
+                f"sweep `parameters.{path}` while every condition ran its base value. "
+                "Rename one of the two — a group axis's name is the label's key and "
+                "need not be a parameter path at all",
             )
             continue
-        if path not in named_by:
+        if path not in spec:
             continue
-        where = ", ".join(f"`{w}`" for _, w in named_by[path])
         c.error(
             "E-SWEEP-PATH-DUPLICATE",
             f"sweep.groups.{path}",
-            f"names a path {where} also writes — but a group axis varies *units* "
-            "rather than a parameter, so every condition marks that path a selector "
-            "and no scope plants the parameter: the parameter axis would claim to "
-            f"sweep `parameters.{path}` while every condition ran its base value. "
-            "Rename one of the two — a group axis's name is the label's key and "
-            "need not be a parameter path at all",
+            f"names {path!r}, which this template declares as a parameter — but a "
+            "group axis varies *units* rather than a parameter, so every condition "
+            "marks that path a selector and `resolve_condition_cfg` plants nothing "
+            f"there: every condition's `parameters.{path}` stays at the base config's "
+            "value while the condition's own label and directory claim the group "
+            "level's value instead, indistinguishable from a real swept parameter to "
+            "a reader who has not opened `sweep.yaml`'s `values`. Rename one of the "
+            "two — a group axis's name is the label's key and need not be a "
+            "parameter path at all",
         )
 
     # Every level of every group axis, through the label check alone. A group
