@@ -15,6 +15,7 @@ from publishable.validate import (
     _check_fold_stratify_by,
     _check_measurements,
     _check_weight_by,
+    _warn_undeclared_cluster,
     validate_config,
 )
 
@@ -9043,6 +9044,255 @@ def test_blocked_with_no_cluster_by_is_not_blocked_clustered(write_config):
         c,
     )
     assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-DRAWN"]
+
+
+# --- *Allocation strata exist* and *Allocation strata survive clustering* ---
+#
+# `assign.<axis>.stratify_by` under a method that DRAWS. The two rows split the
+# way their `fold` counterparts do: one asks whether the name resolves at all,
+# the other whether it survives the clustering that decides what a draw cannot
+# divide. The controls below are the point — a declared attribute and a group
+# axis are both legal targets here, unlike a `fold`'s stratum, which admits only
+# the first.
+
+
+@pytest.mark.parametrize(
+    "stratify_by",
+    [["site"], "site", ["arm", "site"], [3], [""]],
+    ids=["list", "bare-string", "second-of-two", "non-string", "empty-string"],
+)
+def test_an_unknown_stratum_attribute_is_refused(write_config, stratify_by):
+    """§ Validation, *Allocation strata exist*: "`assign.arm.stratify_by: [site]`
+    but `site` is neither a unit attribute nor a group axis."
+
+    `_between` declares no `data.units.attributes` at all, so `site` names
+    nothing — while `arm`, the declared group axis, is a legal target and must
+    NOT be reported, which is what the `second-of-two` case pins: exactly one
+    finding from a two-name declaration, so a check that reported per
+    *declaration* rather than per *name* fails here even though it reports the
+    same code.
+
+    A bare string and a non-string entry are absorbed under the same code rather
+    than left silent: `stratify_by` is no `envelope.py` `LEAF_TYPES` leaf, so
+    nothing else in this build would report either — and a bare `site` read as a
+    sequence of characters instead of one name would report four findings, not
+    one, which the exact count below catches."""
+    path = write_config(
+        _between({"arm": {"method": "random", "stratify_by": stratify_by}})
+    )
+    c = Collector()
+    validate_config(path, c)
+    strata = [f for f in c.findings if f.code == "E-DATA-ASSIGN-STRATIFY-UNKNOWN"]
+    assert len(strata) == 1
+    assert strata[0].path == "data.units.assign.arm.stratify_by"
+    assert "E-DATA-ASSIGN-NO-DRAW" not in {f.code for f in c.findings}
+
+
+@pytest.mark.parametrize("method", ["random", "blocked"])
+def test_a_declared_stratum_attribute_is_not_refused(write_config, tmp_path, method):
+    """**The control**, and the reason this row is not simply "any `stratify_by`
+    under a draw is refused": `site` declared in `data.units.attributes` is
+    exactly what § Allocation's own example stratifies on, so it must report
+    nothing. A mutation that reported the code unconditionally passes the test
+    above and fails this one.
+
+    Parametrized over both drawing methods because the row names both — a check
+    reachable under `random` alone would leave a `blocked` design's misspelled
+    stratum reported by nothing."""
+    (tmp_path / "input" / "index.csv").write_text("patient_id,site\np1,S1\np2,S2\n")
+    found = _error_codes(
+        write_config(
+            _between(
+                {"arm": {"method": method, "stratify_by": ["site"]}},
+                attributes=["site"],
+            )
+        )
+    )
+    assert found == {"E-DATA-ASSIGN-DRAWN"}
+
+
+def test_a_stratum_naming_a_group_axis_is_not_refused(write_config):
+    """The second control, and the half that distinguishes this row from
+    *Stratification attribute exists*: an axis name is a legal stratum target
+    here — § Expansion modes' "`stratify_by` may name a group axis declared
+    before it" — and only a `fold`'s or `holdout`'s stratum is restricted to a
+    unit attribute. A check that read `data.units.attributes` alone would refuse
+    the crossed design § Expansion modes writes out."""
+    found = _error_codes(
+        write_config(
+            _between(
+                {
+                    "sex": {"method": "by_attribute", "from": "sex"},
+                    "arm": {"method": "random", "stratify_by": ["sex"]},
+                },
+                axes=[
+                    {"by": "sex", "levels": ["f", "m"]},
+                    {"by": "arm", "levels": ["control", "treatment"]},
+                ],
+                attributes=["sex"],
+            )
+        )
+    )
+    assert "E-DATA-ASSIGN-STRATIFY-UNKNOWN" not in found
+
+
+def test_an_empty_stratify_by_under_a_draw_is_not_refused(write_config):
+    """`stratify_by: []` is what `init` writes and what most designs carry: it
+    names no balance, so there is no name to resolve. A check written as "the key
+    is present" rather than "a name is declared" would report every generated
+    config that also declares a drawn method."""
+    found = _error_codes(
+        write_config(_between({"arm": {"method": "random", "stratify_by": []}}))
+    )
+    assert found == {"E-DATA-ASSIGN-DRAWN"}
+
+
+def _clustered_stratum_roster(varying: bool) -> UnitList:
+    """Four units in two clusters. Under `varying`, cluster `A3` carries two
+    `label` values; otherwise every cluster agrees with itself."""
+    return UnitList(
+        [
+            Unit(key="c0", paths=(), attributes={"animal_id": "A3", "label": "tumor"}),
+            Unit(
+                key="c1",
+                paths=(),
+                attributes={
+                    "animal_id": "A3",
+                    "label": "normal" if varying else "tumor",
+                },
+            ),
+            Unit(key="c2", paths=(), attributes={"animal_id": "A4", "label": "normal"}),
+            Unit(key="c3", paths=(), attributes={"animal_id": "A4", "label": "normal"}),
+        ]
+    )
+
+
+def test_a_stratum_that_varies_within_a_cluster_is_refused():
+    """§ Clustered units: a stratum that varies inside an indivisible cluster is
+    unsatisfiable, so `validate` "rejects it instead of silently prioritizing one
+    constraint" — `E-DATA-ASSIGN-STRATIFY-VARIES`, the arm half of the rule
+    `E-REPL-FOLD-STRATIFY-VARIES` carries for folds, reusing
+    `units.stratum_varies_within_cluster` rather than a second constancy test.
+
+    The message names the offending cluster and both values it carries, not just
+    the attribute: a reader has to be told which animal to look at, and a check
+    that found *some* variation somewhere would otherwise be indistinguishable
+    from one that found this one."""
+    decl = {
+        "attributes": ["animal_id", "label"],
+        "allocation": "between",
+        "cluster_by": "animal_id",
+        "assign": {"arm": {"method": "random", "stratify_by": ["label"]}},
+    }
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": _ARM_AXIS}}, decl, _clustered_stratum_roster(True), c
+    )
+    varies = [f for f in c.findings if f.code == "E-DATA-ASSIGN-STRATIFY-VARIES"]
+    assert len(varies) == 1
+    assert varies[0].path == "data.units.assign.arm.stratify_by"
+    assert "A3" in varies[0].message
+    assert "normal" in varies[0].message and "tumor" in varies[0].message
+
+    # **The control**, in the same test so the fixture pair cannot drift apart:
+    # the identical design over a roster whose clusters each agree about `label`
+    # is exactly what a cluster-respecting stratified draw can satisfy, so it
+    # earns nothing. A check that fired whenever a `stratify_by` and a
+    # `cluster_by` were declared together passes the half above and fails here.
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": _ARM_AXIS}}, decl, _clustered_stratum_roster(False), c
+    )
+    assert "E-DATA-ASSIGN-STRATIFY-VARIES" not in {f.code for f in c.findings}
+
+
+def test_a_varying_stratum_is_not_reported_a_second_time_under_blocked():
+    """`blocked` beside any `cluster_by` is refused outright as
+    `E-DATA-ASSIGN-BLOCKED-CLUSTER`, so a stratum's constancy inside that
+    combination is a question about a design already refused — reporting it too
+    would send a reader to fix a stratum in a design they have to rewrite
+    anyway. The `random` half above is what keeps this from being a check that
+    never runs."""
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": _ARM_AXIS}},
+        {
+            "attributes": ["animal_id", "label"],
+            "allocation": "between",
+            "cluster_by": "animal_id",
+            "assign": {"arm": {"method": "blocked", "stratify_by": ["label"]}},
+        },
+        _clustered_stratum_roster(True),
+        c,
+    )
+    assert {f.code for f in c.findings} == {
+        "E-DATA-ASSIGN-DRAWN",
+        "E-DATA-ASSIGN-BLOCKED-CLUSTER",
+    }
+
+
+def test_an_undeclared_stratum_is_not_also_reported_as_varying():
+    """A name `data.units.attributes` does not declare is reported once, by the
+    existence row: the constancy check reads only the names that resolved, so a
+    reader is not handed a second finding derived from the first — the noise
+    `_check_cluster_by` argues against. `stratum_varies_within_cluster` would
+    raise nothing for such a name either, it would report every cluster as
+    agreeing on `no value`, which is the silent-wrong version of this."""
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": _ARM_AXIS}},
+        {
+            "attributes": ["animal_id"],
+            "allocation": "between",
+            "cluster_by": "animal_id",
+            "assign": {"arm": {"method": "random", "stratify_by": ["label"]}},
+        },
+        _clustered_stratum_roster(True),
+        c,
+    )
+    assert [f.code for f in c.findings] == [
+        "E-DATA-ASSIGN-DRAWN",
+        "E-DATA-ASSIGN-STRATIFY-UNKNOWN",
+    ]
+
+
+def test_an_assign_stratum_is_excluded_from_the_undeclared_cluster_warning():
+    """`W-DATA-CLUSTER-UNDECLARED`'s row excludes "any `stratify_by`, which must
+    be constant within a cluster and so is coarser than one" — and under a draw
+    there is no `assign.from` to account for the column instead, which is the
+    case that makes this worth a test rather than an inspection.
+
+    `site` here has the exact shape the warning hunts for: three repeated
+    non-numeric labels over six units, no `cluster_by` declared. The control is
+    the same roster with the `stratify_by` removed, which must warn — otherwise
+    this test would pass against a warning that had simply stopped firing."""
+    roster = UnitList(
+        [
+            Unit(key=f"u{i}", paths=(), attributes={"site": "ABC"[i % 3]})
+            for i in range(6)
+        ]
+    )
+    doc = {
+        "data": {
+            "units": {
+                "attributes": ["site"],
+                "allocation": "between",
+                "assign": {"arm": {"method": "random", "stratify_by": ["site"]}},
+            }
+        },
+        "sweep": {"groups": _ARM_AXIS},
+    }
+    c = Collector()
+    _warn_undeclared_cluster(doc, doc["data"]["units"], roster, c)
+    assert not c.findings
+
+    bare = {
+        "data": {"units": {"attributes": ["site"]}},
+        "sweep": {"groups": _ARM_AXIS},
+    }
+    c = Collector()
+    _warn_undeclared_cluster(bare, bare["data"]["units"], roster, c)
+    assert [f.code for f in c.findings] == ["W-DATA-CLUSTER-UNDECLARED"]
 
 
 def test_a_non_empty_stratify_by_under_by_attribute_is_refused():

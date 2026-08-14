@@ -38,12 +38,13 @@ from publishable.units import (
     DRAWN_ASSIGN_METHODS,
     NUMERIC_COLLAPSE_RULES,
     UnitList,
-    arms_of,
+    assignment_for,
     auto_block_size,
     fold_basis,
     is_measurement_numeric,
     resolve_units,
     rule_for,
+    stratum_names,
     stratum_varies_within_cluster,
     usable_weight,
 )
@@ -1392,9 +1393,9 @@ def _check_assign(
     doc: dict[str, Any], units: dict[str, Any], roster: UnitList | None, c: Collector
 ) -> None:
     """`data.units.allocation` and `data.units.assign` against each other and against
-    `sweep.groups` — eleven § Validation rows, all but one read from declarations
+    `sweep.groups` — thirteen § Validation rows, all but two read from declarations
     alone, so each reports whether or not a roster resolved; only *Attribute
-    assignment resolves* needs the roster.
+    assignment resolves* and *Allocation strata survive clustering* need the roster.
 
     *Allocation is a known value* — `allocation` present and not one of
     `ALLOCATION_MODES` (`within`, `between`). Checked first, and both branches below
@@ -1452,6 +1453,28 @@ def _check_assign(
     when the axis's declared `levels` don't resolve to a non-empty list of
     strings, `sweep.groups`'s own shape fault — except the not-a-mapping case,
     which needs no `levels` to detect.
+
+    *Allocation strata exist* — checked in the same branch and for the same
+    reason `ratio` is: `stratify_by` names how a draw is *balanced*, so it means
+    something only where a draw happens (`by_attribute`'s non-empty one is
+    *Ratio and strata need a draw* instead). `E-DATA-ASSIGN-STRATIFY-UNKNOWN`
+    for a name that is neither in `data.units.attributes` nor a `sweep.groups`
+    axis — **existence only**, an axis declared *after* this one being
+    *Stratification is forward-only*'s row and its own code. One finding per
+    offending name. The declaration is read through `units.stratum_names`, the
+    same function the draw balances on, so a bare `stratify_by: site` cannot be
+    one name to the draw and a character sequence here.
+
+    *Allocation strata survive clustering* — `E-DATA-ASSIGN-STRATIFY-VARIES`,
+    the second row here needing a roster: a declared stratum whose value is not
+    constant across one cluster, under a declared `cluster_by`. A cluster is
+    drawn whole, so an arm cannot be balanced on a stratum that cluster carries
+    two of, and core refuses the pair rather than prioritizing one constraint —
+    the argument `partition_units` makes for the identical composition over
+    folds, which is why `units.stratum_varies_within_cluster` is shared with
+    `_check_fold_stratify_by` rather than reimplemented. Skipped for a name
+    already reported above, and under `blocked`, whose combination with any
+    `cluster_by` *Blocked draw excludes clustering* refuses outright.
 
     *Blocked draw excludes clustering* — `method: blocked` beside a declared,
     non-empty `data.units.cluster_by`, refused as `E-DATA-ASSIGN-BLOCKED-CLUSTER`
@@ -1533,11 +1556,13 @@ def _check_assign(
     *Attribute assignment resolves* — the resolved attribute's values, over the
     resolved roster, are not exactly the axis's declared `sweep.groups` levels —
     **set equality, in either direction, one code**: a value naming no declared
-    level, or a declared level no unit's value names. `units.arms_of` is the
-    single authority, the same construction `units.clusters_of` is for
-    `cluster_by`; its `ContractError` is caught here and reported under its own
-    code, `E-DATA-ASSIGN-LEVELS`, the same reuse `_check_units` already makes of
-    `resolve_units`'s raise. Skipped when the roster did not resolve, when the
+    level, or a declared level no unit's value names. `units.assignment_for` is
+    the single producer of a realized allocation and is what this asks — not
+    `units.arms_of` beneath it, which would be `validate` resolving membership
+    by a route the runner does not take, the second producer that seam exists to
+    prevent, one level up. Its `ContractError` is caught here and reported under
+    its own code, `E-DATA-ASSIGN-LEVELS`, the same reuse `_check_units` already
+    makes of `resolve_units`'s raise. Skipped when the roster did not resolve, when the
     axis's declared `levels` did not resolve to a non-empty list of strings —
     `sweep.groups`'s own shape fault, reported elsewhere or not at all in this
     build — or when the attribute name above did not resolve, there being nothing
@@ -1741,6 +1766,97 @@ def _check_assign(
                         f"share of the roster, and a share of zero or less draws no "
                         f"units for that level",
                     )
+
+            # *Allocation strata exist* — `assign.<axis>.stratify_by` under a
+            # method that draws, checked beside `E-DATA-ASSIGN-DRAWN` rather
+            # than instead of it, the pairing every sibling row in this branch
+            # makes. **Existence only**: a target naming an axis declared
+            # *after* this one is a different row, *Stratification is
+            # forward-only*, and its own code — order is not this row's
+            # question.
+            #
+            # The reference sets are `data.units.attributes` and
+            # `sweep.groups`, not the roster's realized columns, for the reason
+            # `E-DATA-CLUSTER-UNKNOWN` reads the first: a stratum is read per
+            # unit when the assignment is drawn, so it has to survive
+            # resolution as an attribute — or resolve as an axis, the one
+            # target this row admits that a `fold`'s or `holdout`'s
+            # `stratify_by` does not. Read from the declarations alone, so it
+            # reports whether or not a roster resolved.
+            #
+            # `units.stratum_names` reads the declaration, rather than a second
+            # `isinstance` chain here: the draw balances on the names that
+            # function returns, so a bare `stratify_by: site` read as one name
+            # there and as a sequence of characters here would be the
+            # validate-clean-then-disagree gap this slice exists to close. A
+            # non-string or empty entry names neither an attribute nor an axis
+            # and is absorbed under this code rather than left silent — the
+            # same absorption `E-DATA-ASSIGN-UNKNOWN` performs for a non-`str`
+            # `from`, and for its reason: `stratify_by` is no `envelope.py`
+            # `LEAF_TYPES` leaf, so there is no `E-CONFIG-TYPE` backstop.
+            # One finding per offending name, so a reader fixing the first is
+            # not sent back for the second.
+            declared_attrs = units.get("attributes") or []
+            attribute_names = (
+                {a for a in declared_attrs if isinstance(a, str)}
+                if isinstance(declared_attrs, list)
+                else set()
+            )
+            resolvable_strata: list[str] = []
+            for name in stratum_names(block.get("stratify_by")):
+                if isinstance(name, str) and name in attribute_names:
+                    resolvable_strata.append(name)
+                    continue
+                if isinstance(name, str) and name in axes:
+                    continue  # a group axis is a legal target; its order is row 3's
+                c.error(
+                    "E-DATA-ASSIGN-STRATIFY-UNKNOWN",
+                    f"data.units.assign.{axis}.stratify_by",
+                    f"names {name!r}, which is neither a unit attribute nor a group "
+                    f"axis — a stratum is read per unit when the arm is drawn, so it "
+                    f"has to survive resolution as an attribute, or name an axis whose "
+                    f"arms are already drawn. `data.units.attributes` declares "
+                    f"{', '.join(sorted(attribute_names)) or 'none'}, and `sweep.groups` "
+                    f"declares {', '.join(axes) or 'none'}",
+                )
+
+            # *Allocation strata survive clustering* — a stratum a cluster
+            # carries two values of cannot be balanced across a draw that
+            # cannot divide that cluster, so core refuses the pair rather than
+            # silently prioritizing one of the two constraints (§ Clustered
+            # units). `units.stratum_varies_within_cluster` is the constancy
+            # test, shared with the `fold` half rather than reimplemented, and
+            # it reads membership from `units.clusters_of`.
+            #
+            # Only the names above that resolved to a declared attribute: a
+            # name this build cannot read has already been reported, and a
+            # second finding derived from the first is the noise
+            # `_check_cluster_by` argues against. **Not reached under
+            # `blocked`** either — `blocked` beside any `cluster_by` is refused
+            # outright by *Blocked draw excludes clustering* below, which makes
+            # a stratum's constancy inside that combination a question about a
+            # design already refused.
+            if roster is not None and usable_cluster is not None and method == "random":
+                for name in resolvable_strata:
+                    try:
+                        offender = stratum_varies_within_cluster(roster, usable_cluster, name)
+                    except ContractError:
+                        # `clusters_of` refuses a unit carrying no cluster value
+                        # (`E-DATA-CLUSTER-UNKNOWN`), already reported beside this by
+                        # `_check_cluster_by`. This module collects rather than raises.
+                        break
+                    if offender is not None:
+                        cluster, values = offender
+                        c.error(
+                            "E-DATA-ASSIGN-STRATIFY-VARIES",
+                            f"data.units.assign.{axis}.stratify_by",
+                            f"names {name!r}, which varies within `{usable_cluster}` "
+                            f"{cluster} — it carries {', '.join(values)}. A cluster is "
+                            "drawn whole, so an arm cannot be balanced on a stratum the "
+                            "cluster carrying both values would have to be split for; "
+                            "stratify on an attribute that is constant within a cluster, "
+                            "or drop the stratification",
+                        )
 
             # *Block size fills the arms* — `block_size` means something only for
             # `blocked` (`from`'s own reason: the discriminator decides which of a
@@ -2026,7 +2142,26 @@ def _check_assign(
             if levels is None:
                 continue  # `sweep.groups`'s own shape fault, not this row's to report
             try:
-                arms_of(roster, resolved_from, levels)
+                # `assignment_for`, not `arms_of`: the runner resolves this
+                # axis's membership through the one producer, so `validate` has
+                # to ask the same question of the same declaration or the
+                # second membership producer that seam exists to prevent
+                # reappears one level up — here, in the check whose whole job
+                # is to prove the runner's partition resolves. The block is
+                # passed whole rather than as the `from` this branch already
+                # resolved, so the resolution is that function's single copy of
+                # it too.
+                #
+                # **The digest is a placeholder**, `_check_replication`'s own
+                # convention where it hands `resolve_repeats` a literal
+                # `"validate"`: a digest is what a *draw* seeds from, and this
+                # call sits inside the `by_attribute` branch, where the
+                # parameter is provably unread. It is not defaulted in the
+                # signature for exactly that reason — a draw silently seeded
+                # from a placeholder is the failure that would be invisible —
+                # so a future edit hoisting this call above the method dispatch
+                # has to confront the value rather than inherit it.
+                assignment_for(roster, axis, block, levels, "validate")
             except ContractError as exc:
                 c.error(exc.code, f"data.units.assign.{axis}.from", str(exc))
 

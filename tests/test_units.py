@@ -1432,28 +1432,313 @@ def test_a_drawn_arm_of_one_unit_is_not_refused():
     assert sorted(k for arm in plan.members.values() for k in arm) == ["u00", "u01", "u02"]
 
 
+_STRATUM_SITES = ["A", "B", "A", "C", "A", "B", "A", "B", "A", "C", "A", "B"]
+"""12 units over three strata of DIFFERENT sizes — `site` A×6, B×4, C×2 — so an
+equal two-arm draw that balanced only overall (6/6) is not forced to leave any
+one stratum even, and C, at two units, is the stratum a whole-roster cut splits
+lopsidedly most easily. Interleaved rather than grouped by site so `blocked`'s
+own blocks, which read roster order, do not coincide with the strata: a fixture
+whose block boundaries fell on stratum boundaries would make an unstratified
+`blocked` draw stratified by accident."""
+
+
+def _stratum_roster() -> UnitList:
+    return UnitList(
+        [
+            Unit(key=f"u{i:02d}", paths=(), attributes={"site": site})
+            for i, site in enumerate(_STRATUM_SITES)
+        ]
+    )
+
+
+def _per_stratum(plan, levels: tuple[str, str]) -> dict[str, tuple[int, int]]:
+    """Each site's per-arm counts, `{site: (level0 count, level1 count)}`."""
+    counts = {site: [0, 0] for site in set(_STRATUM_SITES)}
+    for i, level in enumerate(levels):
+        for key in plan.members[level]:
+            counts[_STRATUM_SITES[int(key[1:])]][i] += 1
+    return {site: (pair[0], pair[1]) for site, pair in counts.items()}
+
+
+def test_an_unstratified_arm_draw_of_the_same_fixture_is_lopsided():
+    """**The oracle the two stratified tests below rest on, and the reason the
+    seed is 11 rather than any pinned number.** The mutation those tests exist to
+    catch is "ignore `stratify_by`, draw over the whole roster" — and against a
+    fixture whose strata happen to come out even under the unstratified draw,
+    that mutation passes them. It does not here: at seed 11 the unstratified
+    `random` draw gives A 5/1, B 1/3 and C 0/2, and the unstratified `blocked`
+    draw gives B 3/1 and C 0/2. Every one of those differs from the stratified
+    answer asserted below, so dropping stratification fails both tests rather
+    than a fraction of the time.
+
+    The seed was chosen by running exactly this draw over candidate seeds, not
+    by assuming a lopsided one; this test is that choice, written down and
+    re-checked on every run rather than left in a scratch script."""
+    roster = _stratum_roster()
+    levels = ("control", "treatment")
+
+    unstratified = assignment_for(roster, "arm", {"method": "random", "seed": 11}, levels, "d")
+    assert _per_stratum(unstratified, levels) == {"A": (5, 1), "B": (1, 3), "C": (0, 2)}
+
+    blocked = assignment_for(roster, "arm", {"method": "blocked", "seed": 11}, levels, "d")
+    assert _per_stratum(blocked, levels) == {"A": (3, 3), "B": (3, 1), "C": (0, 2)}
+
+
 @pytest.mark.parametrize("stratify_by", [["site"], "site"], ids=["list", "bare-string"])
-def test_a_random_draw_refuses_a_declared_stratify_by(stratify_by):
-    """This build's `random` draw shuffles the whole roster and cuts it, so it
-    balances on nothing. Drawing anyway while recording `strata=()` would
-    silently ignore a declared field — the same argument the `clusters` raise
-    in this same function is made from, and the reason both refuse rather than
-    fall back.
+def test_a_stratified_draw_balances_arms_within_every_stratum(stratify_by):
+    """`reference.md` § Allocation's own example — `stratify_by: [site]`,
+    "balance arms on these" — over 12 units in sites A(6)/B(4)/C(2) at two equal
+    arms. Each stratum's own per-arm counts are asserted exactly: A 3/3, B 2/2,
+    C 1/1.
 
-    A bare `stratify_by: site` is refused as well as a list: presence is read
-    structurally, `validate`'s own convention for this field, so a wrong-typed
-    declaration cannot slip past a check written as `isinstance(x, list) and
-    x`.
+    **Why these numbers discriminate**, rather than agreeing with the bug they
+    exist to catch: the sibling test above pins what the *same* roster and the
+    *same* seed give with no stratification — A 5/1, B 1/3, C 0/2 — so a draw
+    that ignored `stratify_by` and cut the shuffled roster 6/6 fails all three
+    assertions here, not just the small stratum's. The totals are 6/6 either
+    way, which is exactly why a whole-roster size assertion would prove nothing
+    and is not what this test makes.
 
-    The fixture's units carry no attributes at all, so a draw that ignored
-    `stratify_by` would succeed here rather than fail on a missing column —
-    which is why the assertion is the raise itself."""
-    roster = _random_roster(12)
-    block = {"method": "random", "seed": 5, "stratify_by": stratify_by}
-    with pytest.raises(NotImplementedError) as e:
-        assignment_for(roster, "arm", block, ["a", "b"], "digest")
-    assert "stratify_by" in str(e.value)
-    assert "task 12" in str(e.value)
+    A bare `stratify_by: site` balances the same way a list does: presence and
+    shape are read structurally, `validate`'s own convention for the field, so a
+    draw written against `isinstance(x, list)` would silently ignore the bare
+    form while `validate` reports it as non-empty."""
+    levels = ("control", "treatment")
+    plan = assignment_for(
+        _stratum_roster(),
+        "arm",
+        {"method": "random", "seed": 11, "stratify_by": stratify_by},
+        levels,
+        "digest",
+    )
+    assert _per_stratum(plan, levels) == {"A": (3, 3), "B": (2, 2), "C": (1, 1)}
+    assert plan.seed == 11
+    assert plan.strata == ("site",)
+    assert sorted(k for arm in plan.members.values() for k in arm) == [
+        f"u{i:02d}" for i in range(12)
+    ]
+
+
+def test_a_stratified_blocked_draw_balances_arms_within_every_stratum():
+    """The same balance under `blocked`, which is a stratified permuted-block
+    design: the block loop runs inside each stratum, over that stratum's units in
+    roster order, rather than over the whole roster.
+
+    A(6) at `block_size` 4 (`auto` over two equal levels) is one whole block and
+    a trailing 2, so 3/3; B(4) is one whole block, 2/2; C(2) is one trailing
+    block, 1/1. **Those counts are forced by the blocking rule rather than by the
+    seed**, which is the point — and the sibling test above is what keeps this
+    from being vacuous, pinning the unstratified `blocked` draw at the same seed
+    as B 3/1 and C 0/2. A mutant that cut the whole roster into blocks and
+    ignored the strata fails here on both.
+
+    The strata are interleaved in the roster, so a mutant that blocked the whole
+    roster does not reproduce the per-stratum blocks by accident: its first block
+    holds A, B, A, C."""
+    levels = ("control", "treatment")
+    plan = assignment_for(
+        _stratum_roster(),
+        "arm",
+        {"method": "blocked", "seed": 11, "stratify_by": ["site"]},
+        levels,
+        "digest",
+    )
+    assert _per_stratum(plan, levels) == {"A": (3, 3), "B": (2, 2), "C": (1, 1)}
+    assert plan.strata == ("site",)
+
+
+def test_a_stratified_draw_balances_within_each_combination_of_two_attributes():
+    """Two names in `stratify_by` are one stratum per *combination* of their
+    values, not one per name: 12 units crossing `site` A/B with `sex` f/m into
+    four groups of 3, drawn 2/1 by an unequal ratio inside each.
+
+    A draw that stratified on only the first name would give the four cells
+    counts summing correctly per site but free within it — 3/0 in one cell and
+    0/3 in another are both reachable — so asserting every cell at (2, 1) is
+    what distinguishes the composite key from either name alone."""
+    roster = UnitList(
+        [
+            Unit(
+                key=f"u{i:02d}",
+                paths=(),
+                attributes={"site": "AB"[i % 2], "sex": "fm"[(i // 2) % 2]},
+            )
+            for i in range(12)
+        ]
+    )
+    levels = ("control", "treatment")
+    plan = assignment_for(
+        roster,
+        "arm",
+        {
+            "method": "random",
+            "seed": 3,
+            "stratify_by": ["site", "sex"],
+            "ratio": {"control": 2, "treatment": 1},
+        },
+        levels,
+        "digest",
+    )
+    assert plan.strata == ("site", "sex")
+    cells: dict[tuple[str, str], list[int]] = {}
+    by_key = {unit.key: unit for unit in roster}
+    for i, level in enumerate(levels):
+        for key in plan.members[level]:
+            unit = by_key[key]
+            cells.setdefault((unit.attributes["site"], unit.attributes["sex"]), [0, 0])[i] += 1
+    assert sorted(cells) == [("A", "f"), ("A", "m"), ("B", "f"), ("B", "m")]
+    assert all(counts == [2, 1] for counts in cells.values())
+
+
+def test_a_stratum_no_resolved_unit_carries_is_not_drawn_as_one_stratum():
+    """A `stratify_by` naming a `sweep.groups` axis is legal against § Validation's
+    *Allocation strata exist* — the row admits an axis name — but an axis's
+    membership is *realized* by an earlier draw rather than carried as a column,
+    which this build does not yet resolve (task 13). Drawing it as a single
+    "no value" stratum would be an unstratified draw wearing a stratified
+    record: every unit in one group, `strata` recording a balance that never
+    happened.
+
+    So the assertion is the raise, and it names task 13 rather than task 12 —
+    the message is what tells a reader which build resolves it. The control that
+    this is not simply "any name raises" is every stratified test above, whose
+    `site` draws."""
+    roster = _stratum_roster()
+    for method in ("random", "blocked"):
+        with pytest.raises(NotImplementedError) as e:
+            assignment_for(
+                roster,
+                "arm",
+                {"method": method, "seed": 11, "stratify_by": ["sex"]},
+                ["control", "treatment"],
+                "digest",
+            )
+        assert "'sex'" in str(e.value)
+        assert "task 13" in str(e.value)
+
+
+def test_a_unit_carrying_no_value_for_the_stratum_is_its_own_stratum():
+    """A name *some* units carry is a stratum; the units carrying none are
+    balanced together as `no value`, `stratum_varies_within_cluster`'s own
+    rendering of the same absence — so the two agree about what a missing value
+    is rather than one treating it as a stratum and the other as a fault. Only a
+    name **no** unit carries is the raise above.
+
+    Six units carry `site: A` and six carry nothing, two equal arms: both groups
+    come out 3/3, which a draw that raised on the first missing value could not
+    produce and a draw that lumped every unit into one group would not be forced
+    to."""
+    roster = UnitList(
+        [
+            Unit(key=f"u{i:02d}", paths=(), attributes={"site": "A"} if i < 6 else {})
+            for i in range(12)
+        ]
+    )
+    plan = assignment_for(
+        roster,
+        "arm",
+        {"method": "random", "seed": 11, "stratify_by": ["site"]},
+        ["control", "treatment"],
+        "digest",
+    )
+    carried = {f"u{i:02d}" for i in range(6)}
+    assert len(carried & set(plan.members["control"])) == 3
+    assert len(carried & set(plan.members["treatment"])) == 3
+    assert len(plan.members["control"]) == 6
+
+
+def test_a_level_empty_in_one_stratum_is_fine_if_another_stratum_covers_it():
+    """Coverage is checked over the MERGED draw, never per stratum — `blocked`'s
+    own rule for the same question one construction over. Three arms over strata
+    of 6 and 2: the two-unit stratum apportions `[1, 1, 0]`, giving the third arm
+    nothing, and the six-unit one gives it 2. A check written per stratum would
+    refuse this legal design.
+
+    Its mirror, `test_a_stratified_draw_leaving_an_arm_empty_is_refused` below,
+    is what keeps this from licensing an empty arm."""
+    roster = UnitList(
+        [
+            Unit(key=f"u{i:02d}", paths=(), attributes={"site": "A" if i < 6 else "B"})
+            for i in range(8)
+        ]
+    )
+    plan = assignment_for(
+        roster,
+        "arm",
+        {"method": "random", "seed": 11, "stratify_by": ["site"]},
+        ["a", "b", "c"],
+        "digest",
+    )
+    assert sorted(len(plan.members[level]) for level in ("a", "b", "c")) == [2, 3, 3]
+    assert all(plan.members[level] for level in ("a", "b", "c"))
+
+
+def test_a_stratified_draw_leaving_an_arm_empty_is_refused():
+    """The merged-coverage check has teeth: two strata of two units over three
+    equal arms apportion `[1, 1, 0]` in each, so the third arm is empty across
+    every stratum — `arms_of`'s own sentence, "that arm's condition would resolve
+    zero units", so `E-DATA-ASSIGN-LEVELS`, the same code both unstratified
+    draws refuse the same fault with.
+
+    The message names the strata rather than only the roster, since a reader
+    whose arms are empty *because* the strata are small needs to know that is
+    what happened."""
+    roster = UnitList(
+        [
+            Unit(key=f"u{i:02d}", paths=(), attributes={"site": "A" if i < 2 else "B"})
+            for i in range(4)
+        ]
+    )
+    with pytest.raises(ContractError) as e:
+        assignment_for(
+            roster,
+            "arm",
+            {"method": "random", "seed": 11, "stratify_by": ["site"]},
+            ["a", "b", "c"],
+            "digest",
+        )
+    assert e.value.code == "E-DATA-ASSIGN-LEVELS"
+    assert "no unit in c" in str(e.value)
+    assert "2 strata" in str(e.value)
+
+
+def test_a_clustered_stratified_draw_keeps_every_cluster_whole():
+    """Both constructions at once, which is a cluster-randomized trial stratified
+    by site: whole clusters go to one arm (§ Clustered units, "core computed the
+    partition, so core keeps it indivisible") *and* each stratum is balanced.
+
+    Eight clusters of 2, four in each site. The structural assertion is that no
+    cluster straddles two arms — a size check could not see a split cluster,
+    since 8/8 is reachable either way — and the per-stratum assertion is that
+    each site contributes 4 units to each arm, which a draw that dealt clusters
+    over the whole roster is not forced to produce.
+
+    This composition is sound only because a cluster carries one stratum value:
+    `validate` refuses the other case as `E-DATA-ASSIGN-STRATIFY-VARIES`, the
+    same dependence `partition_units` has on the fold half of that rule."""
+    units, clusters = [], {}
+    for c in range(8):
+        for m in range(2):
+            key = f"c{c}_{m}"
+            units.append(
+                Unit(key=key, paths=(), attributes={"site": "A" if c < 4 else "B"})
+            )
+            clusters[key] = f"c{c}"
+    roster = UnitList(units)
+    plan = assignment_for(
+        roster,
+        "arm",
+        {"method": "random", "seed": 11, "stratify_by": ["site"]},
+        ["control", "treatment"],
+        "digest",
+        clusters,
+    )
+    control = set(plan.members["control"])
+    for c in range(8):
+        members = {f"c{c}_0", f"c{c}_1"}
+        assert members <= control or not (members & control), f"c{c} straddles two arms"
+    assert len({k for k in control if k.startswith(("c0", "c1", "c2", "c3"))}) == 4
+    assert len(control) == 8
 
 
 def test_an_empty_stratify_by_still_draws():
@@ -1467,28 +1752,6 @@ def test_an_empty_stratify_by_still_draws():
     assert len(plan.members["a"]) == 6
     assert len(plan.members["b"]) == 6
     assert plan.strata == ()
-
-
-def test_a_random_draw_with_clusters_still_refuses_a_declared_stratify_by():
-    """Allocating whole clusters (task 9) and balancing a stratum on top of
-    them (task 12) are different constructions, and only the first is built.
-    The refusal here is the same `stratify_by` guard the unclustered path
-    raises — unmoved by `clusters` being given alongside it, and naming
-    `stratify_by` rather than `cluster_by`: a caller reading the message
-    must be told which declaration this build cannot yet honour.
-
-    **The control**: the identical call with no `stratify_by` draws —
-    `test_a_clustered_random_draw_keeps_every_cluster_whole` and
-    `test_a_clustered_draw_approaches_an_unequal_ratio_as_closely_as_clusters_allow`
-    below own that half in full; this asserts only that adding `clusters`
-    does not also silence the `stratify_by` guard."""
-    roster = _random_roster(12)
-    clusters = {unit.key: f"c{i % 3}" for i, unit in enumerate(roster)}
-    block = {"method": "random", "seed": 5, "stratify_by": ["site"]}
-    with pytest.raises(NotImplementedError) as e:
-        assignment_for(roster, "arm", block, ["a", "b"], "digest", clusters)
-    assert "stratify_by" in str(e.value)
-    assert "task 12" in str(e.value)
 
 
 def _five_clusters() -> tuple[UnitList, dict[str, str]]:

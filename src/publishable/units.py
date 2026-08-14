@@ -1012,15 +1012,16 @@ class ArmPlan:
       and is `None` under `by_attribute` — a method that reads an arm a trial
       system already assigned rather than drawing one, so recording a seed
       would be a false record of a draw that never happened.
-    - `strata` is the realized `assign.<axis>.stratify_by`, empty under
-      `by_attribute` for the reason above: `stratify_by` names how a draw was
-      *balanced*, and with no draw there is nothing it describes. It is also
-      empty under `random` today, and truthfully rather than by omission:
-      this build's draw balances on nothing, so `assignment_for` **refuses**
-      a non-empty `assign.<axis>.stratify_by` outright rather than drawing
-      unbalanced and recording `()` for a declaration it ignored. The only
-      `stratify_by` that reaches a plan is an empty one, which describes no
-      strata.
+    - `strata` is the realized `assign.<axis>.stratify_by` — the attribute
+      names the draw balanced each arm within, in declared order — and is
+      empty under `by_attribute` for the reason above: `stratify_by` names
+      how a draw was *balanced*, and with no draw there is nothing it
+      describes. It is empty under a draw too whenever the declaration was
+      empty, which is what `init` writes: an unstratified draw balances on
+      nothing but the ratio, and `()` is the truthful record of that. A
+      declared name that no resolved unit carries never reaches a plan at
+      all — `assignment_for` raises rather than recording a balance it did
+      not perform.
 
     `frozen=True` blocks rebinding an attribute; it does **not** deep-freeze
     `members`, whose values are tuples but whose mapping a determined caller
@@ -1106,6 +1107,126 @@ def auto_block_size(weights: Sequence[float]) -> int:
     rather than silently misallocating.
     """
     return max(1, round(2 * sum(weights)))
+
+
+def stratum_names(stratify_by: Any) -> tuple[str, ...]:
+    """`assign.<axis>.stratify_by`'s declared names, normalized to a tuple.
+
+    **Presence and shape are read structurally**, `validate`'s own convention for
+    this field and the one the refusal this replaces already used: a bare
+    `stratify_by: site` names one stratum exactly as `[site]` does, so a draw
+    written against `isinstance(x, list)` cannot silently ignore the bare form
+    while `validate` reports it as non-empty. An absent, `None`, or empty
+    declaration is `()`, which is what `init` writes and what sends a draw down
+    its unstratified path.
+
+    Entries are returned as declared, without a type test: a non-string entry
+    names no unit attribute, which is the one thing `_stratum_groups` below
+    checks, and folding it in there keeps one raise rather than two for the same
+    fault. `validate` refuses it before a run reaches here, as
+    `E-DATA-ASSIGN-STRATIFY-UNKNOWN`.
+
+    **Public, and imported by `validate._check_assign` rather than re-read
+    there** — `auto_block_size`'s own reason, one field over: `validate`'s
+    *Allocation strata exist* row checks the names this returns and the draw
+    balances on the names this returns, so two independent readings of the same
+    declaration would be pinned in agreement by nothing. A bare string read as
+    one name here and as a sequence of characters there is exactly the
+    validate-clean-then-disagree shape that costs.
+    """
+    if not stratify_by:
+        return ()
+    if isinstance(stratify_by, str):
+        return (stratify_by,)
+    if isinstance(stratify_by, (list, tuple)):
+        return tuple(stratify_by)
+    return (stratify_by,)
+
+
+def _stratum_groups(
+    units: list[Unit], names: Sequence[Any], axis: str
+) -> dict[tuple[str, ...], list[Unit]]:
+    """The roster split into strata — one entry per distinct combination of the
+    declared `stratify_by` values, each holding its units in roster order.
+
+    Insertion order is roster order, `clusters_of`'s convention and for its
+    reason: the draw walks these groups in turn from one seeded generator, so the
+    order they come out in is part of what the seed determines. Deriving it a
+    second way — sorting the keys, say — would make the same seed draw a
+    different allocation for the same roster.
+
+    Values are stringified, again `clusters_of`'s reason: a stratum is a label
+    rather than a quantity, and a table yields `str` for every column while a
+    hand-built roster need not. A unit carrying no value for one of the names is
+    rendered `no value` and forms its own stratum with the other units that carry
+    none — `stratum_varies_within_cluster`'s own rendering for the same absence,
+    so the two agree about what a unit with no value is rather than one treating
+    it as a stratum and the other as a fault.
+
+    **A name no unit in the roster carries at all raises `NotImplementedError`**,
+    which separates that case from the per-unit absence above: a name the whole
+    roster is missing is not a stratum with unusual membership, it is a stratum
+    this build cannot read. Two declarations reach it, and the message names
+    both routes because the raise cannot tell them apart from the roster alone —
+    a `sweep.groups` axis name, which is legal against
+    `reference.md` § Validation's *Allocation strata exist* and needs the
+    earlier axis's **realized** membership rather than a column (task 13's
+    per-axis draw ordering), and a name nothing declares, which `validate`
+    refuses as `E-DATA-ASSIGN-STRATIFY-UNKNOWN` before a run reaches here.
+    """
+    for name in names:
+        if not any(isinstance(name, str) and name in unit.attributes for unit in units):
+            raise NotImplementedError(
+                f"`data.units.assign.{axis}.stratify_by` names {name!r}, which no resolved "
+                "unit carries as an attribute — a stratum is read per unit when the draw is "
+                "balanced. A stratum naming an earlier `sweep.groups` axis is balanced on "
+                "that axis's realized membership rather than on a column, which this build "
+                "does not yet resolve (task 13); a stratum naming nothing at all is refused "
+                "by `validate` as `E-DATA-ASSIGN-STRATIFY-UNKNOWN`"
+            )
+    groups: dict[tuple[str, ...], list[Unit]] = {}
+    for unit in units:
+        key = tuple(
+            "no value" if unit.attributes.get(name) is None else str(unit.attributes[name])
+            for name in names
+        )
+        groups.setdefault(key, []).append(unit)
+    return groups
+
+
+def _blocked_draw(
+    keys: list[str],
+    levels: Sequence[str],
+    weights: Sequence[float],
+    block_size: int,
+    rng: random.Random,
+    drawn: dict[str, list[str]],
+) -> None:
+    """One list of unit keys cut into consecutive blocks of `block_size` and
+    dealt into `drawn`, each block apportioned by `weights` and permuted with
+    `rng`.
+
+    Extracted so the stratified draw is the **same** block loop run once per
+    stratum rather than a second implementation of blocking — the argument
+    `_assign_whole_clusters` makes for folds, one level down. `rng` is passed in
+    rather than seeded here for the same reason its own caller states: one
+    generator's state carries from block to block, and now from stratum to
+    stratum, so the seed determines every block's permutation together rather
+    than each in isolation.
+
+    Accumulates into `drawn` instead of returning a mapping, so the unstratified
+    path (one call) and the stratified one (one call per stratum) merge
+    identically, and the coverage check that follows reads one dict either way.
+    """
+    for start in range(0, len(keys), block_size):
+        chunk = keys[start : start + block_size]
+        counts = _apportion(len(chunk), weights)
+        block_labels: list[str] = []
+        for level, count in zip(levels, counts, strict=True):
+            block_labels.extend([level] * count)
+        rng.shuffle(block_labels)
+        for key, label in zip(chunk, block_labels, strict=True):
+            drawn[label].append(key)
 
 
 def assignment_for(
@@ -1207,16 +1328,32 @@ def assignment_for(
     code, `E-DATA-ASSIGN-LEVELS` — a coarser unit of movement makes it
     *easier* to reach, not exempt from the refusal.
 
-    **A non-empty `assign.<axis>.stratify_by` raises here too**, whether or
-    not `clusters` is given: this build's `random` draw balances on nothing
-    beside the cluster indivisibility above, so honoring a declared balance
-    is task 12's, and drawing unbalanced while recording `strata=()` would
-    silently ignore a declared field rather than refuse it. Presence is read
-    structurally, `validate`'s own convention for this field — a bare
-    `stratify_by: site` is as non-empty as a list — so the empty
-    `stratify_by: []` `init` writes stays on the draw path. `strata` is
-    therefore `()` on every plan this returns, and truthfully: the only
-    declaration it could record is one that no longer reaches the draw.
+    **A non-empty `assign.<axis>.stratify_by` is realized under both drawing
+    methods**, whether or not `clusters` is given: the roster is split into
+    strata by `_stratum_groups` — one group per distinct combination of the
+    declared attributes' values, in roster order — and the method's own draw
+    runs **inside each group** from one carried generator, so each arm gets
+    its ratio's share of every stratum rather than only of the roster.
+    Presence and shape are read structurally, `validate`'s own convention for
+    this field: a bare `stratify_by: site` names one stratum exactly as
+    `[site]` does, and the empty `stratify_by: []` that `init` writes leaves
+    both draws on their unstratified paths unchanged, bit for bit. `strata`
+    on the returned plan is the declaration realized, in declared order.
+
+    **Coverage is checked over the merged draw, never per stratum** — the
+    rule `blocked` already applies per block, one construction over: a level
+    a small stratum apportioned no unit to is fine while another stratum
+    covered it, and only a level empty across every stratum raises
+    `E-DATA-ASSIGN-LEVELS`. So a stratified draw can no more return an empty
+    arm than an unstratified one can.
+
+    **A stratum name no resolved unit carries raises `NotImplementedError`**
+    rather than being drawn as a single "no value" stratum — see
+    `_stratum_groups`, which distinguishes that from a unit here or there
+    carrying no value, and names the two declarations that reach it: an
+    earlier `sweep.groups` axis, whose realized membership this build does
+    not yet resolve as a stratum (task 13), and a name nothing declares,
+    which `validate` refuses as `E-DATA-ASSIGN-STRATIFY-UNKNOWN`.
 
     **`blocked` is realized here too, and is what reads the roster's order
     as data** (`reference.md` § Where units come from): the resolved roster
@@ -1239,9 +1376,10 @@ def assignment_for(
     unit in some block is fine even if another block apportioned it none,
     and only a level with zero units in *every* block raises
     `E-DATA-ASSIGN-LEVELS` — the same code and the same argument as
-    `random`'s zero-size arm, one whole roster later. Whole clusters and a
-    declared `stratify_by` are both unrealized under `blocked`, refused the
-    same way and for the same reasons `random`'s are above.
+    `random`'s zero-size arm, one whole roster later. A declared
+    `stratify_by` runs that same block loop once per stratum, `random`'s own
+    composition above; whole clusters stay unrealized under `blocked`,
+    refused for the reason given there.
     """
     # One narrowing of the block, read by every branch below: an absent or
     # non-mapping block declares nothing, which is what `{}` says here — and
@@ -1250,16 +1388,11 @@ def assignment_for(
     # guard that reads like a second condition on the method.
     block_map: Mapping[str, Any] = block if isinstance(block, Mapping) else {}
     method = block_map.get("method")
+    # The declared strata, normalized once for both drawing branches: an empty
+    # declaration is `()` and leaves each branch on the path it had before
+    # stratification existed, bit for bit.
+    strata = stratum_names(block_map.get("stratify_by"))
     if method == "random":
-        if block_map.get("stratify_by"):
-            raise NotImplementedError(
-                f"`data.units.assign.{axis}.stratify_by` names a balance this build's "
-                "`random` draw does not perform — it shuffles the whole roster and cuts it, "
-                "so the arms are balanced on nothing — and drawing it unbalanced while "
-                "recording no strata would silently ignore the declaration rather than "
-                "raise about it. Stratified drawing is task 12; until then, draw without "
-                "`stratify_by` or read an arm a trial system already assigned"
-            )
         ratio = block_map.get("ratio")
         weights = (
             [ratio[level] for level in levels]
@@ -1267,6 +1400,69 @@ def assignment_for(
             else [1] * len(levels)
         )
         seed = assign_seed_for(block_map, axis, digest, roster)
+        if strata:
+            # One generator across every stratum, `blocked`'s own convention:
+            # the strata are drawn in roster order from one carried state, so
+            # the seed determines the whole allocation together rather than
+            # each stratum in isolation.
+            stratified_rng = random.Random(seed)
+            stratified: dict[str, list[str]] = {level: [] for level in levels}
+            groups = _stratum_groups(list(roster), strata, axis)
+            for stratum_units in groups.values():
+                if clusters is not None:
+                    # The same whole-cluster rule the unstratified clustered
+                    # draw uses, run inside each stratum. Sound only while
+                    # `stratum_varies_within_cluster` refuses the pair it
+                    # refuses — a cluster carrying two stratum values would
+                    # belong to two of these groups and be divided here —
+                    # which is the argument `partition_units` makes for the
+                    # identical composition over folds, and the reason
+                    # `reference.md` § Validation's *Allocation strata survive
+                    # clustering* row exists.
+                    for level, bucket in zip(
+                        levels,
+                        _assign_whole_clusters_by_ratio(
+                            stratum_units, weights, stratified_rng, clusters
+                        ),
+                        strict=True,
+                    ):
+                        stratified[level].extend(unit.key for unit in bucket)
+                else:
+                    stratum_keys = [unit.key for unit in stratum_units]
+                    stratified_rng.shuffle(stratum_keys)
+                    offset = 0
+                    for level, size in zip(
+                        levels, _apportion(len(stratum_units), weights), strict=True
+                    ):
+                        stratified[level].extend(stratum_keys[offset : offset + size])
+                        offset += size
+            # Coverage over the MERGED draw, not per stratum — `blocked`'s rule
+            # for the same question one construction over: a level a small
+            # stratum apportioned no unit to is fine while another stratum
+            # covered it, and only a level empty across every stratum leaves an
+            # arm resolving zero units. So an empty arm is refused here under
+            # the same code and the same words either draw refuses one with,
+            # and no plan this returns holds an empty level.
+            empty = [level for level in levels if not stratified[level]]
+            if empty:
+                raise ContractError(
+                    f"the drawn allocation for axis {axis!r} leaves no unit in "
+                    f"{', '.join(empty)} — {len(roster)} units in {len(groups)} strata of "
+                    f"{', '.join(str(name) for name in strata)}, apportioned within each "
+                    "stratum by "
+                    f"{dict(ratio) if isinstance(ratio, dict) and ratio else 'equal shares'}"
+                    ", gives that level no unit in any stratum. Every declared level needs "
+                    "at least one unit, or that arm's condition resolves zero of them; "
+                    "widen the ratio, stratify on fewer attributes, or resolve a larger "
+                    "roster",
+                    code="E-DATA-ASSIGN-LEVELS",
+                )
+            return ArmPlan(
+                levels=tuple(levels),
+                members={level: tuple(keys_) for level, keys_ in stratified.items()},
+                seed=seed,
+                strata=strata,
+            )
         if clusters is not None:
             rng = random.Random(seed)
             buckets = _assign_whole_clusters_by_ratio(list(roster), weights, rng, clusters)
@@ -1316,13 +1512,6 @@ def assignment_for(
                 "combination outright, as `E-DATA-ASSIGN-BLOCKED-CLUSTER`; use `random` for "
                 "a cluster-randomized design"
             )
-        if block_map.get("stratify_by"):
-            raise NotImplementedError(
-                f"`data.units.assign.{axis}.stratify_by` names a balance this build's "
-                "`blocked` draw does not perform beside its own within-block balance — "
-                "stratified drawing is task 12; until then, draw without `stratify_by` or "
-                "read an arm a trial system already assigned"
-            )
         ratio = block_map.get("ratio")
         weights = (
             [ratio[level] for level in levels]
@@ -1344,23 +1533,38 @@ def assignment_for(
         )
         seed = assign_seed_for(block_map, axis, digest, roster)
         rng = random.Random(seed)
-        keys = [unit.key for unit in roster]
         drawn: dict[str, list[str]] = {level: [] for level in levels}
-        for start in range(0, len(keys), block_size):
-            chunk = keys[start : start + block_size]
-            counts = _apportion(len(chunk), weights)
-            block_labels: list[str] = []
-            for level, count in zip(levels, counts, strict=True):
-                block_labels.extend([level] * count)
-            rng.shuffle(block_labels)
-            for key, label in zip(chunk, block_labels, strict=True):
-                drawn[label].append(key)
+        if strata:
+            # The same block loop, run once per stratum in roster order and
+            # from the one carried generator — permuted blocks *within* each
+            # stratum, which is what a stratified block design is. Cutting the
+            # whole roster into blocks and balancing each block's strata
+            # instead would be a different design and a second blocking rule.
+            for stratum_units in _stratum_groups(list(roster), strata, axis).values():
+                _blocked_draw(
+                    [unit.key for unit in stratum_units],
+                    levels,
+                    weights,
+                    block_size,
+                    rng,
+                    drawn,
+                )
+        else:
+            _blocked_draw(
+                [unit.key for unit in roster], levels, weights, block_size, rng, drawn
+            )
         empty = [level for level in levels if not drawn[level]]
         if empty:
+            within = (
+                f" within each of the {len(_stratum_groups(list(roster), strata, axis))} "
+                f"strata of {', '.join(str(name) for name in strata)}"
+                if strata
+                else ""
+            )
             raise ContractError(
                 f"the drawn allocation for axis {axis!r} leaves no unit in "
                 f"{', '.join(empty)} — {len(roster)} units, blocked in groups of "
-                f"{block_size} and apportioned within each block by "
+                f"{block_size}{within} and apportioned within each block by "
                 f"{dict(ratio) if isinstance(ratio, dict) and ratio else 'equal shares'}, "
                 "gives that level no unit across every block. Every declared level needs at "
                 "least one unit, or that arm's condition resolves zero of them; widen the "
@@ -1370,7 +1574,9 @@ def assignment_for(
         blocked_members: dict[str, tuple[str, ...]] = {
             level: tuple(keys_) for level, keys_ in drawn.items()
         }
-        return ArmPlan(levels=tuple(levels), members=blocked_members, seed=seed, strata=())
+        return ArmPlan(
+            levels=tuple(levels), members=blocked_members, seed=seed, strata=strata
+        )
     if method is not None and method != "by_attribute":
         # `method in DRAWN_ASSIGN_METHODS` is not checked here: both of that tuple's
         # members (`random`, `blocked`) are handled in their own branches above, so
