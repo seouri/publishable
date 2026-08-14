@@ -9,6 +9,8 @@ from publishable.units import (
     Unit,
     UnitList,
     apply_rule,
+    arm_members,
+    arms_of,
     cluster_count,
     clusters_of,
     collapse_measurements,
@@ -1002,6 +1004,169 @@ def test_cluster_count_reads_the_same_authority():
         cluster_count(UnitList([Unit(key="u0", paths=(), attributes={})]), "site")
 
 
+def test_arms_partition_units_by_declared_level_in_roster_order():
+    """`reference.md` § Allocation: `from` names "a unit attribute whose values are
+    exactly the declared levels". Uneven on purpose — 2 units in `control`, 1 in
+    `treatment` — so a caller reading `partition["control"]` back gets a list, not
+    a single unit, and roster order survives inside each bucket (`u2` before `u0`
+    within `control`, matching insertion order rather than being resorted)."""
+    roster = UnitList(
+        [
+            Unit(key="u2", paths=(), attributes={"arm": "control"}),
+            Unit(key="u1", paths=(), attributes={"arm": "treatment"}),
+            Unit(key="u0", paths=(), attributes={"arm": "control"}),
+        ]
+    )
+    partition = arms_of(roster, "arm", ["control", "treatment"])
+    assert [u.key for u in partition["control"]] == ["u2", "u0"]
+    assert [u.key for u in partition["treatment"]] == ["u1"]
+    # Every unit in the roster appears in exactly one bucket.
+    assert sum(len(units) for units in partition.values()) == len(roster)
+
+
+def test_arms_stringify_values_before_comparison():
+    """`clusters_of`'s own reason: a table yields `str` for every column, but a
+    hand-built roster need not, and an arm id is a label rather than a quantity.
+    `{'arm': 1}` (an `int`) has to resolve against levels declared as strings."""
+    roster = UnitList(
+        [
+            Unit(key="u0", paths=(), attributes={"arm": 1}),
+            Unit(key="u1", paths=(), attributes={"arm": 2}),
+        ]
+    )
+    partition = arms_of(roster, "arm", ["1", "2"])
+    assert [u.key for u in partition["1"]] == ["u0"]
+    assert [u.key for u in partition["2"]] == ["u1"]
+
+
+def test_arms_refuse_a_value_naming_no_declared_level():
+    """§ Allocation opens `between` with "each unit belongs to exactly one arm" —
+    a value naming none of the declared levels leaves that unit in none."""
+    roster = UnitList(
+        [
+            Unit(key="u0", paths=(), attributes={"arm": "control"}),
+            Unit(key="u1", paths=(), attributes={"arm": "unknown_arm"}),
+        ]
+    )
+    with pytest.raises(ContractError) as e:
+        arms_of(roster, "arm", ["control", "treatment"])
+    assert e.value.code == "E-DATA-ASSIGN-LEVELS"
+    assert "u1" in str(e.value)
+    assert "unknown_arm" in str(e.value)
+
+
+def test_arms_refuse_a_unit_with_no_value_at_all():
+    """The same violation `clusters_of` recognizes for a unit missing its
+    attribute entirely — folded into the same code and message as a value naming
+    the wrong level, rather than a distinct fault."""
+    roster = UnitList(
+        [
+            Unit(key="u0", paths=(), attributes={"arm": "control"}),
+            Unit(key="u1", paths=(), attributes={}),
+        ]
+    )
+    with pytest.raises(ContractError) as e:
+        arms_of(roster, "arm", ["control", "treatment"])
+    assert e.value.code == "E-DATA-ASSIGN-LEVELS"
+    assert "u1" in str(e.value)
+    assert "carries no value" in str(e.value)
+
+
+def test_arms_refuse_a_declared_level_with_no_unit():
+    """The other direction of set equality: every unit resolves to a declared
+    level, but `treatment` holds none of them, so that arm's condition would
+    resolve zero units."""
+    roster = UnitList(
+        [
+            Unit(key="u0", paths=(), attributes={"arm": "control"}),
+            Unit(key="u1", paths=(), attributes={"arm": "control"}),
+        ]
+    )
+    with pytest.raises(ContractError) as e:
+        arms_of(roster, "arm", ["control", "treatment"])
+    assert e.value.code == "E-DATA-ASSIGN-LEVELS"
+    assert "treatment" in str(e.value)
+
+
+def test_arm_members_reduces_arms_of_across_the_resolved_conditions():
+    """`units.arm_members` is the reduction the runner's subset view is built
+    from: one call into `arms_of` per declared axis, then a per-condition lookup
+    against `.selectors`/`.values` — never a second derivation of membership.
+    7 control, 5 treatment, deliberately uneven per the H3c fixture rule, plus a
+    third condition selecting no axis at all, which must be absent from the
+    result entirely rather than mapped to the whole roster."""
+    from publishable.sweep import Condition
+
+    roster = UnitList(
+        [Unit(key=f"c{i}", attributes={"arm": "control"}) for i in range(7)]
+        + [Unit(key=f"t{i}", attributes={"arm": "treatment"}) for i in range(5)]
+    )
+    selectors = frozenset({"arm"})
+    conditions = [
+        Condition(index=0, label="control", values={"arm": "control"}, selectors=selectors),
+        Condition(index=1, label="treatment", values={"arm": "treatment"}, selectors=selectors),
+        Condition(index=2, label="plain", values={}, selectors=frozenset()),
+    ]
+    result = arm_members(roster, {"arm": ("arm", ["control", "treatment"])}, conditions)
+    assert result[0] == frozenset(f"c{i}" for i in range(7))
+    assert result[1] == frozenset(f"t{i}" for i in range(5))
+    assert 2 not in result
+    assert len(result[0]) + len(result[1]) == len(roster)
+
+
+def test_arm_members_calls_arms_of_once_per_axis_not_per_condition():
+    """The reduction, not a second partition: with three conditions selecting the
+    same single axis, `arms_of` must run exactly once for it, verified by
+    counting calls rather than by inspecting the result — the discriminator a
+    per-condition re-derivation would still pass on output alone."""
+    from unittest.mock import patch
+
+    from publishable.sweep import Condition
+
+    roster = UnitList(
+        [
+            Unit(key="c0", attributes={"arm": "control"}),
+            Unit(key="t0", attributes={"arm": "treatment"}),
+        ]
+    )
+    selectors = frozenset({"arm"})
+    conditions = [
+        Condition(index=0, label="control", values={"arm": "control"}, selectors=selectors),
+        Condition(index=1, label="treatment", values={"arm": "treatment"}, selectors=selectors),
+    ]
+    with patch("publishable.units.arms_of", wraps=arms_of) as spy:
+        arm_members(roster, {"arm": ("arm", ["control", "treatment"])}, conditions)
+        assert spy.call_count == 1
+
+
+def test_arm_members_intersects_when_a_condition_selects_two_axes():
+    """§ Validation's `sex × arm` cell: a condition selecting more than one axis
+    gets the intersection of each axis's arm, not either one alone."""
+    from publishable.sweep import Condition
+
+    roster = UnitList(
+        [
+            Unit(key="u0", attributes={"arm": "control", "sex": "f"}),
+            Unit(key="u1", attributes={"arm": "control", "sex": "m"}),
+            Unit(key="u2", attributes={"arm": "treatment", "sex": "f"}),
+        ]
+    )
+    conditions = [
+        Condition(
+            index=0,
+            label="cell",
+            values={"arm": "control", "sex": "f"},
+            selectors=frozenset({"arm", "sex"}),
+        ),
+    ]
+    result = arm_members(
+        roster,
+        {"arm": ("arm", ["control", "treatment"]), "sex": ("sex", ["f", "m"])},
+        conditions,
+    )
+    assert result[0] == frozenset({"u0"})
+
+
 def test_the_fold_basis_is_the_cluster_count_when_the_units_are_clustered():
     """`reference.md` § Validation, *Folds fit inside the clusters*: a cluster is
     indivisible, so what a fold may be drawn from is the cluster count.
@@ -1231,6 +1396,235 @@ def test_both_declarations_over_one_column_each_check_their_own(input_dir: Path)
     roster, technical_n, _ = resolve_units(decl, input_dir)
     assert clusters_of(roster, "site") == {"p1": "S1", "p2": "S3"}
     assert technical_n == {"min": 1, "max": 2, "median": 1.5}
+
+
+# --- an arm must not vary within a unit's measurement rows -------------------
+#
+# H3b named this by number: `CONSTANT_COLUMN_RULES` reached only a flat,
+# string-valued key of `data.units`, and its own comment named `assign.<axis>.from`
+# as one of the next two declarations that would want the rule. Worse than the
+# cluster/weight pair above: a mis-collapsed arm decides which *condition* the
+# unit is measured in, not merely which side of a split it lands on or how much
+# it counts for. No fixture below declares `cluster_by` at all, so a varying
+# `arm` cannot be mistaken for a varying cluster.
+
+
+def test_an_arm_varying_within_a_units_measurement_rows_is_refused(input_dir: Path):
+    """p1's replicate rows say control and treatment. Silently keeping one
+    would put the unit in an arm no row declared — worse than a mis-collapsed
+    cluster or weight, because it changes which condition p1 counts toward."""
+    _write_reads(
+        input_dir,
+        "patient_id,read_id,arm\np1,r1,control\np1,r2,treatment\np2,r3,control\n",
+    )
+    decl = {
+        "from": "reads.csv",
+        "key": "patient_id",
+        "attributes": ["arm", "read_id"],
+        "assign": {"arm": {"method": "by_attribute"}},
+        "measurements": {"by": "read_id", "collapse": "first"},
+    }
+    with pytest.raises(ContractError) as e:
+        resolve_units(decl, input_dir)
+    assert e.value.code == "E-DATA-ASSIGN-VARIES"
+    assert "p1" in str(e.value) and "arm" in str(e.value)
+
+
+def test_an_arm_constant_within_a_units_rows_is_accepted(input_dir: Path):
+    """The control: same shape, agreeing rows, must NOT raise. Asserting only
+    that nothing raised would also pass for a roster the collapse never
+    reached, so this also asserts two positive facts about the resolved
+    roster: the collapsed unit's `arm` is the value both rows agreed on, and
+    `technical_n`'s `max` of 2 (over a `min` of 1) proves p1's two rows were
+    actually collapsed into one unit rather than the check trivially passing
+    over an unmeasured roster."""
+    _write_reads(
+        input_dir,
+        "patient_id,read_id,arm\np1,r1,control\np1,r2,control\np2,r3,control\n",
+    )
+    decl = {
+        "from": "reads.csv",
+        "key": "patient_id",
+        "attributes": ["arm", "read_id"],
+        "assign": {"arm": {"method": "by_attribute"}},
+        "measurements": {"by": "read_id", "collapse": "first"},
+    }
+    roster, technical_n, _ = resolve_units(decl, input_dir)
+    by_key = {u.key: u for u in roster}
+    assert by_key["p1"].arm == "control"
+    assert technical_n == {"min": 1, "max": 2, "median": 1.5}
+
+
+def test_a_constant_arm_survives_collapse_and_reaches_the_right_condition(input_dir: Path):
+    """Task 19 Step 4 — the loop task 11 opened and this closes: the constancy
+    check above refuses a *varying* arm, but nothing before this proved a
+    *constant* one actually reaches the right condition once collapsed. Three
+    assertions, not two: the resolved unit's own `arm` attribute (survived
+    collapse), `technical_n` showing the rows that were actually collapsed
+    (uneven — 2 for `p1`, 3 for `p2`, 2 for `p3` — so a roster collapse that
+    silently used only the first row per key cannot pass by coincidence), and —
+    the one that makes this end to end rather than the constancy test and
+    `test_two_arms_get_different_rosters_and_neither_is_the_whole_roster`'s
+    `arms_of` check run side by side — `units.arms_of` over THIS resolved
+    roster, proving `p1` and `p3` (both `control`) land in the same partition
+    and `p2` (`treatment`) lands in the other, using the exact roster
+    `resolve_units` produced rather than a hand-built stand-in."""
+    _write_reads(
+        input_dir,
+        "patient_id,read_id,arm,depth\n"
+        "p1,r1,control,10\np1,r2,control,20\n"
+        "p2,r1,treatment,30\np2,r2,treatment,40\np2,r3,treatment,90\n"
+        "p3,r1,control,11\np3,r2,control,22\n",
+    )
+    decl = {
+        "from": "reads.csv",
+        "key": "patient_id",
+        "attributes": ["arm", "depth", "read_id"],
+        "assign": {"arm": {"method": "by_attribute"}},
+        "measurements": {"by": "read_id", "collapse": {"depth": "mean"}},
+    }
+    roster, technical_n, _ = resolve_units(decl, input_dir)
+    by_key = {u.key: u for u in roster}
+    assert by_key["p1"].arm == "control"
+    assert by_key["p2"].arm == "treatment"
+    assert by_key["p3"].arm == "control"
+    assert technical_n == {"min": 2, "max": 3, "median": 2}
+
+    partition = arms_of(roster, "arm", ["control", "treatment"])
+    assert {u.key for u in partition["control"]} == {"p1", "p3"}
+    assert {u.key for u in partition["treatment"]} == {"p2"}
+
+
+def test_a_varying_arm_under_a_drawn_method_is_not_checked(input_dir: Path):
+    """`_check_assign` reads `from`/`levels` only under `method: by_attribute` —
+    "mean nothing" under `random`/`blocked` — so this accessor gates the same
+    way. Without the gate, `arm`'s axis-name default would still resolve to a
+    real column, and a `random`-method block over these same varying rows would
+    raise a fault naming a `.from` path this declaration never asked to have
+    read. Must NOT raise: the positive control for the gate itself, since the
+    rows are exactly `test_an_arm_varying_within_a_units_measurement_rows_is_refused`'s."""
+    _write_reads(
+        input_dir,
+        "patient_id,read_id,arm\np1,r1,control\np1,r2,treatment\np2,r3,control\n",
+    )
+    decl = {
+        "from": "reads.csv",
+        "key": "patient_id",
+        "attributes": ["arm", "read_id"],
+        "assign": {"arm": {"method": "random"}},
+        "measurements": {"by": "read_id", "collapse": "first"},
+    }
+    roster, _, _ = resolve_units(decl, input_dir)
+    assert {u.key for u in roster} == {"p1", "p2"}
+
+
+def test_an_arm_varying_on_a_column_that_is_not_the_cluster_column_is_reported_as_assign(
+    input_dir: Path,
+):
+    """`site` is declared as `cluster_by` and is constant across p1's rows;
+    `arm` is the one that varies. A check that attributed the wrong code here
+    would send a reader to fix clustering when the real fault is which
+    condition p1 is measured in."""
+    _write_reads(
+        input_dir,
+        "patient_id,read_id,site,arm\np1,r1,S1,control\np1,r2,S1,treatment\np2,r3,S1,control\n",
+    )
+    decl = {
+        "from": "reads.csv",
+        "key": "patient_id",
+        "attributes": ["site", "arm", "read_id"],
+        "cluster_by": "site",
+        "assign": {"arm": {"method": "by_attribute"}},
+        "measurements": {"by": "read_id", "collapse": "first"},
+    }
+    with pytest.raises(ContractError) as e:
+        resolve_units(decl, input_dir)
+    assert e.value.code == "E-DATA-ASSIGN-VARIES"
+
+
+def test_the_three_codes_are_not_one_code_and_none_excludes_another():
+    """The converse of the row above: one column named by all three
+    declarations at once still raises each declaration's own code when that
+    declaration is the one checked — `CONSTANT_COLUMN_RULES`'s docstring says a
+    config naming one column under two declarations is checked once for each
+    rather than one silently dropping under a precedence rule nothing in the
+    documents states, and this is the proof neither the registry lookup nor the
+    collapse itself builds mutual exclusion between `assign` and its siblings."""
+    rows = [
+        Unit(key="p1", paths=(), attributes={"read": "r1", "col": "a"}),
+        Unit(key="p1", paths=(), attributes={"read": "r2", "col": "b"}),
+    ]
+    codes = set()
+    for declaration in ("cluster_by", "weight_by", "assign.arm.from"):
+        with pytest.raises(ContractError) as e:
+            collapse_measurements(
+                rows, by="read", collapse="first", constant={declaration: "col"}
+            )
+        codes.add(e.value.code)
+    assert codes == {"E-DATA-CLUSTER-VARIES", "E-DATA-WEIGHT-VARIES", "E-DATA-ASSIGN-VARIES"}
+
+
+def test_one_column_named_by_both_cluster_and_arm_reports_exactly_one_code(input_dir: Path):
+    """A brief claim checked by observation rather than trusted: a column named
+    as both `cluster_by` and an axis's `assign.<axis>.from`, on a unit that
+    violates both at once, does **not** raise both codes from one
+    `resolve_units` call — `collapse_measurements` raises the first
+    `ContractError` its per-unit loop finds and stops, so exactly one code
+    comes back. It is `E-DATA-ASSIGN-VARIES`, not `E-DATA-CLUSTER-VARIES`:
+    `_assign_constant_columns`'s entries are built into `constant` *before*
+    the flat pair's, deliberately, so the severity order § Allocation states
+    (arm worse than cluster worse than weight) is also the order
+    `collapse_measurements` checks in for a unit that violates more than one.
+    What survives from the brief's claim is the weaker, true half — each
+    declaration considered on its own still raises: see
+    `test_the_three_codes_are_not_one_code_and_none_excludes_another` above,
+    which checks each declaration in a separate call rather than one config
+    naming a column under two of them at once."""
+    _write_reads(
+        input_dir,
+        "patient_id,read_id,arm\np1,r1,control\np1,r2,treatment\np2,r3,control\n",
+    )
+    decl = {
+        "from": "reads.csv",
+        "key": "patient_id",
+        "attributes": ["arm", "read_id"],
+        "cluster_by": "arm",
+        "assign": {"arm": {"method": "by_attribute"}},
+        "measurements": {"by": "read_id", "collapse": "first"},
+    }
+    with pytest.raises(ContractError) as e:
+        resolve_units(decl, input_dir)
+    assert e.value.code == "E-DATA-ASSIGN-VARIES"
+
+
+def test_roster_order_not_severity_decides_when_different_units_violate_different_declarations(
+    input_dir: Path,
+):
+    """The qualifier the "assign checked first" claim needs: that ordering only
+    ever gets tested on a unit that violates *both* declarations at once. Here
+    p1 varies only in `site` (its `arm` agrees) and p2 varies only in `arm`
+    (its `site` agrees) — `collapse_measurements`'s outer loop is per unit, in
+    roster order, and stops at its first raise, so p1's own single violation
+    (`E-DATA-CLUSTER-VARIES`) is reported before p2's is ever reached, even
+    though `assign` is checked first *within* whichever unit's turn it is."""
+    _write_reads(
+        input_dir,
+        "patient_id,read_id,site,arm\n"
+        "p1,r1,S1,control\np1,r2,S2,control\n"
+        "p2,r3,S3,control\np2,r4,S3,treatment\n",
+    )
+    decl = {
+        "from": "reads.csv",
+        "key": "patient_id",
+        "attributes": ["site", "arm", "read_id"],
+        "cluster_by": "site",
+        "assign": {"arm": {"method": "by_attribute"}},
+        "measurements": {"by": "read_id", "collapse": "first"},
+    }
+    with pytest.raises(ContractError) as e:
+        resolve_units(decl, input_dir)
+    assert e.value.code == "E-DATA-CLUSTER-VARIES"
+    assert "p1" in str(e.value)
 
 
 def test_a_non_string_declaration_is_left_to_the_envelope(input_dir: Path):

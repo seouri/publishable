@@ -7,14 +7,23 @@ from typing import Any
 
 import pytest
 import yaml
+from tests.test_stats import _repeat_result
 
 from publishable import BaseStep
-from publishable.cli import _apply_execution_order, main
+from publishable.cli import (
+    _apply_execution_order,
+    _cond_roster,
+    _condition_counts,
+    _resolved_group_axes,
+    _wide_swept_paths,
+    main,
+)
 from publishable.diagnostics import EXIT_INVOCATION, EXIT_OK, EXIT_PARTIAL, EXIT_WRONG
 from publishable.errors import ContractError
 from publishable.generators.experiment import generate_experiment
 from publishable.generators.step import generate_step
 from publishable.replication import LABEL_JOIN
+from publishable.runner import attrition
 from publishable.scope import Execution
 
 Ran = namedtuple("Ran", ["condition_index", "repeat_label"])
@@ -362,6 +371,847 @@ def test_a_plan_pair_missing_from_execution_order_is_a_core_bug():
     with pytest.raises(ContractError) as excinfo:
         _apply_execution_order(plan, [(0, "seedA")])  # "seedB" has no home
     assert excinfo.value.code == "E-RUN-ORDER-MISMATCH"
+
+
+def test_a_group_path_gets_no_swept_away_marker():
+    """`_wide_swept_paths` marks parameters, and a group cell is not one.
+
+    A group axis's path reaches the union through `_swept_paths` in every design
+    that declares one — and a `SweptAway` marker at
+    `parameters.arm` would be the same phantom parameter `resolve_condition_cfg`
+    refuses, one scope over: a `run`-scoped step reading `cfg.parameters.arm`
+    would get "this is varied by `sweep`" for a parameter no template declares.
+
+    A focused unit test on the function itself, kept beside the end-to-end
+    coverage `test_a_group_axis_actually_narrows_end_to_end` provides: this one
+    pins the exact set `_wide_swept_paths` returns for a hand-built `sweep`
+    block, which discriminates the subtraction rule directly rather than
+    through a whole `run`'s aggregated output.
+
+    The block below also fixes the group level in its `baseline`, a declaration
+    `validate` refuses (`E-SWEEP-BASELINE-GROUP`) and `command_run` therefore
+    never resolves. It is kept because `_wide_swept_paths` is a pure function
+    over whatever block it is handed, and the property under test is that the
+    subtraction does not depend on which term of the union a group path arrived
+    by — asserting it from two terms at once is what pins that.
+    """
+    block = {
+        "groups": [{"by": "arm", "levels": ["control", "treatment"]}],
+        "grid": {"analysis.method": ["pearson", "spearman"]},
+        "baseline": {"arm": "control", "analysis.min_samples": 30},
+    }
+    # `analysis.min_samples` is the control that must report: a baseline-only
+    # parameter path, on the same term of the union the group path arrives by,
+    # so a subtraction that took the whole `baseline` would fail here.
+    assert _wide_swept_paths(block) == {"analysis.method", "analysis.min_samples"}
+    # And with no `groups` declared, a baseline path named `arm` is an ordinary
+    # parameter the wide config must still mark.
+    assert _wide_swept_paths({"baseline": {"arm": "control"}}) == {"arm"}
+
+
+def test_resolved_group_axes_defaults_from_and_skips_unresolvable_levels():
+    """`_resolved_group_axes` is `command_run`'s own resolution of `assign.<axis>.from`
+    against its default — the axis name — mirroring `validate._check_assign`'s
+    `by_attribute` branch, and `units.arm_members`'s own input shape.
+
+    A focused unit test on the function itself, for the reason
+    `test_a_group_path_gets_no_swept_away_marker` above states: it pins the
+    exact resolved `(column, levels)` pair per axis, including the
+    skipped-rather-than-defaulted `unresolvable` axis, more directly than an
+    end-to-end run's aggregated output would."""
+    sweep_block = {
+        "groups": [
+            {"by": "arm", "levels": ["control", "treatment"]},
+            {"by": "cohort", "levels": ["derivation", "validation"]},
+            {"by": "unresolvable"},  # no `levels` at all — skipped, not defaulted
+        ],
+    }
+    units_decl = {
+        "assign": {
+            "arm": {"method": "by_attribute", "from": "arm_column"},
+            # `cohort` has no block at all: defaults to the axis name.
+        },
+    }
+    assert _resolved_group_axes(units_decl, sweep_block) == {
+        "arm": ("arm_column", ["control", "treatment"]),
+        "cohort": ("cohort", ["derivation", "validation"]),
+    }
+
+
+def test_resolved_group_axes_is_empty_with_no_groups_declared():
+    assert _resolved_group_axes({"assign": {"arm": {"from": "x"}}}, {}) == {}
+
+
+def test_resolved_group_axes_ignores_from_under_a_non_by_attribute_method():
+    """`from` "means nothing" under `random`/`blocked` — the same gate
+    `units._assign_constant_columns` applies and for the same reason: neither
+    method is executable (`E-DATA-ASSIGN-DRAWN`), so reading `from` under one
+    would resolve a column no method here actually consults."""
+    sweep_block = {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}
+    units_decl = {"assign": {"arm": {"method": "random", "from": "arm_column"}}}
+    assert _resolved_group_axes(units_decl, sweep_block) == {
+        "arm": ("arm", ["control", "treatment"])
+    }
+
+
+def test_non_string_levels_make_arm_members_raise_rather_than_skip_narrowing():
+    """`sweep.selector_paths` — the same function `expand` uses to decide which
+    paths are group cells — accepts a `levels` list of any element type, but
+    `_resolved_group_axes` requires every level to be a `str`, matching
+    `validate._check_assign`'s own stricter skip. `groups: [{by: arm, levels:
+    [1, 2]}]` is exactly this disagreement: `expand` treats `arm` as a real
+    selector axis (every condition's `.selectors == {"arm"}`), while
+    `_resolved_group_axes` drops it entirely (`{}`).
+
+    Gating the `arm_members` call on `group_axes` itself (its own truthiness)
+    would silently skip narrowing altogether here — every condition getting the
+    whole roster, the exact "two identical measurements reported as two arms"
+    outcome arms exist to make impossible. Gating on `selector_paths` instead
+    (what `command_run` does) means `arm_members` is still called, and it must
+    raise — a caller-disagreement bug to see — rather than silently return
+    `{}` or drop the mismatched condition."""
+    from publishable.sweep import expand, selector_paths
+    from publishable.units import Unit, UnitList, arm_members
+
+    doc = {
+        "sweep": {
+            "groups": [{"by": "arm", "levels": [1, 2]}],
+            "baseline": {},
+        }
+    }
+    sweep_block = doc["sweep"]
+    conditions = expand(doc)
+    assert all(c.selectors == frozenset({"arm"}) for c in conditions)
+
+    group_axes = _resolved_group_axes({}, sweep_block)
+    assert group_axes == {}  # the shape fault `_resolved_group_axes` skips
+
+    # The gate `command_run` uses: `selector_paths`, not `group_axes`.
+    assert selector_paths(sweep_block)  # still true — `expand` agrees
+
+    roster = UnitList(
+        [Unit(key="u0", attributes={"arm": "1"}), Unit(key="u1", attributes={"arm": "2"})]
+    )
+    with pytest.raises(KeyError):
+        arm_members(roster, group_axes, conditions)
+
+
+_ARM_STEP = '''\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        for unit in io.units:
+            if unit.key == "c0":
+                # Ineligible, not failed — proves `control`'s `ineligible: 1`.
+                io.skip(unit.key, "deliberately ineligible")
+                continue
+            if unit.key == "t0":
+                # Neither recorded nor skipped — proves `treatment`'s `failed: 1`.
+                continue
+            io.record(unit.key, {{"score": 1.0}})
+        return {{}}
+'''
+
+
+def test_a_group_axis_actually_narrows_end_to_end(tmp_path: Path, monkeypatch):
+    """Task 13's finding 1, closed rather than mitigated: a real `sweep.groups`
+    + `allocation: between` + `assign` config, run all the way through
+    `main(["run", ...])` to a real `run.yaml`, proving `_condition_counts` is
+    actually wired into `command_run` — not merely present and correct in
+    isolation, which is what every test above this one can show and no more.
+
+    **No `validate` patch, unlike before task 17.** A real `sweep.groups` +
+    `allocation: between` + `assign` declaration used to draw
+    `E-SWEEP-GROUPS-UNSUPPORTED` from `validate._check_unimplemented` alone —
+    a single, isolated module-level function, not threaded through
+    `_check_assign` (which does the REAL arm-resolution work this test
+    exercises) — so monkeypatching only that one function to a no-op was
+    sufficient to reach `command_run` with this shape. Task 17 retired that
+    refusal, so this config now validates on its own merits: `_check_assign`'s
+    real rules (`E-DATA-ASSIGN-LEVELS` among them) still run against the
+    resolved roster and still refuse a genuinely malformed assignment — this
+    fixture just isn't one.
+
+    **Fixture numbers, chosen to discriminate.** 8 `control` units and 3
+    `treatment` units, 11 total: every number in play — 8, 3, 11 — is
+    distinct from every other, unlike a 6/6 split (equal arms can't be told
+    apart by size) or task 13's own 7/5 fixture (whose sum, 12, is a number
+    this test doesn't otherwise use). `c0` (`control`) is `io.skip`-ped —
+    proving `ineligible: 1` for that arm specifically — and `t0` (`treatment`)
+    is left unsettled — proving `failed: 1` for that one. A regression to
+    counting the whole roster reports `resolved: 11` for BOTH arms and
+    `failed: {2, 8}` or similar wrong counts for each — never 8 and 3."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _ARM_STEP)
+
+    control_rows = "\n".join(f"c{i},control" for i in range(8))
+    treatment_rows = "\n".join(f"t{i},treatment" for i in range(3))
+    roster_csv = f"patient_id,arm\n{control_rows}\n{treatment_rows}\n"
+
+    doc = run_a_project(
+        tmp_path,
+        roster_csv=roster_csv,
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+            "attributes": ["arm"],
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+    )
+
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    conditions = run["results"]["conditions"]
+    assert [c["label"] for c in conditions] == ["arm=control", "arm=treatment"]
+    control_n = conditions[0]["aggregated"]["step01_summarize_units"]["score"]["n"]
+    treatment_n = conditions[1]["aggregated"]["step01_summarize_units"]["score"]["n"]
+
+    assert control_n == {"resolved": 8, "completed": 7, "ineligible": 1, "failed": 0}
+    assert treatment_n == {"resolved": 3, "completed": 2, "ineligible": 0, "failed": 1}
+
+
+def test_a_group_axis_repeating_a_level_never_reaches_a_run(tmp_path: Path, monkeypatch):
+    """Task 20's Critical, pinned end to end rather than at `validate` alone.
+
+    `levels: [control, treatment, control]` over the 8/3 roster above used to run
+    to exit 0, and conditions `00_arm=control` and `02_arm=control` came out
+    byte-identical at every artifact — same units, same label, same recorded
+    values, across all five seed repeats. That is § Mistakes core prevents' *two
+    identical measurements reported as two arms* verbatim, and none of that row's
+    other three codes reaches it: allocation is correct, the axis is real, and
+    `arms_of`'s set equality is satisfied because `{control} == {control}`.
+
+    The unit test in `test_validate.py` pins the finding; this one pins that no
+    run directory is created at all, which is the property that matters — a
+    refusal `command_run` did not honor would still ship the identical trees.
+
+    **This test is only meaningful against a roster holding BOTH values.** With
+    an all-`control` roster the same config is also refused, but by
+    `E-DATA-ASSIGN-LEVELS` — `treatment` names no unit — which is a fact about
+    the data rather than the design. Task 20's original adversary sweep ran every
+    case against one roster and mistook exactly that kind of refusal for a
+    structural one."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _ARM_STEP)
+
+    control_rows = "\n".join(f"c{i},control" for i in range(8))
+    treatment_rows = "\n".join(f"t{i},treatment" for i in range(3))
+    doc = run_a_project(
+        tmp_path,
+        roster_csv=f"patient_id,arm\n{control_rows}\n{treatment_rows}\n",
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+            "attributes": ["arm"],
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment", "control"]}]},
+        expect_exit=EXIT_WRONG,
+    )
+    assert doc["run_dir"] is None
+    assert list(doc["results_dir"].glob("run_*")) == []
+
+
+_GROUPS_MEASURED_STEP = '''\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        for unit in io.units:
+            if unit.key == "c1":
+                # Ineligible, not failed — proves `control`'s `ineligible: 1`.
+                io.skip(unit.key, "deliberately ineligible")
+                continue
+            if unit.key == "t1":
+                # Neither recorded nor skipped — proves `treatment`'s `failed: 1`.
+                continue
+            io.record(unit.key, {{"score": 1.0}})
+        return {{}}
+'''
+
+# `arm` (control/treatment) and `cohort` (a/b) are DIFFERENT partitions that
+# genuinely cross — `cohort=a` holds c1, c3 (control) and t1, t3 (treatment);
+# `cohort=b` holds c2, c4 (control) and t2 (treatment) — so `report_by:
+# [cohort]`'s per-level counts change under arm-narrowing rather than merely
+# adding levels, which is what makes this fixture discriminate call site 2
+# (`_condition_report_by_levels`) rather than merely exercise it. `measurements`
+# (`read_id`, uneven row counts per patient) reaches call site 3
+# (`_condition_beside_n`/`technical_n`). control (4 units) and treatment (3
+# units), 7 total: distinct from task 13's 7/5 (12), this module's own 8/3 (11)
+# and 4/9 (13) fixtures above, and `test_runner.py`'s 5-unit/3-cluster harness —
+# no arm fixture here shares a boundary with another.
+_GROUPS_MEASURED_ROSTER = (
+    "patient_id,arm,cohort,depth,read_id\n"
+    "c1,control,a,10,r1\nc1,control,a,20,r2\n"
+    "c2,control,b,30,r1\nc2,control,b,40,r2\nc2,control,b,90,r3\n"
+    "c3,control,a,11,r1\nc3,control,a,22,r2\n"
+    "c4,control,b,12,r1\nc4,control,b,24,r2\n"
+    "t1,treatment,a,13,r1\nt1,treatment,a,26,r2\n"
+    "t2,treatment,b,14,r1\nt2,treatment,b,28,r2\n"
+    "t3,treatment,a,15,r1\nt3,treatment,a,30,r2\nt3,treatment,a,45,r3\n"
+)
+
+
+def test_groups_between_and_by_attribute_reach_all_three_narrowed_call_sites(
+    tmp_path: Path, monkeypatch
+):
+    """Task 19 Step 6 — the end-to-end counting test task 13 could not write.
+
+    Task 13 narrowed `attrition`, `report_by`'s strata, and `beside_n` to a
+    condition's own arm, and disclosed that its own Step 5 mutation — reverting
+    all three of `command_run`'s call sites to the whole roster — passed green,
+    because `command_run`'s aggregation loop was unreachable end to end while
+    `E-SWEEP-GROUPS-UNSUPPORTED` stood. Task 17 retired that refusal, so the
+    route task 13 lacked now exists: a real `groups` + `between` +
+    `by_attribute` + `measurements` + `report_by` config, validating clean, run
+    through `command_run` to a real `run.yaml`.
+
+    Unlike `test_a_group_axis_actually_narrows_end_to_end` above (which reaches
+    only call site 1, `_condition_counts`), this fixture also declares
+    `data.units.measurements` and `statistics.report_by`, so all three call
+    sites `command_run` makes are exercised in one run: `_condition_counts`
+    (the per-condition `n`), `_condition_report_by_levels` (the `by.cohort`
+    strata), and `_condition_beside_n` (whether `technical_n` survives).
+
+    `technical_n` is asserted ABSENT from both conditions' `score` metric —
+    the correct behavior once a group axis narrows the roster
+    (`_cond_beside_n` withholds it whenever the roster handed to a condition is
+    not the identical whole-roster object) — which is itself a discriminating
+    assertion for call site 3: reverting to the whole roster makes `cond_roster
+    is roster` true again and `technical_n` would reappear.
+    """
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _GROUPS_MEASURED_STEP)
+
+    doc = run_a_project(
+        tmp_path,
+        roster_csv=_GROUPS_MEASURED_ROSTER,
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+            "attributes": ["arm", "cohort", "depth", "read_id"],
+            "measurements": {"by": "read_id", "collapse": {"depth": "mean"}},
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+        statistics={"report_by": ["cohort"]},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    conditions = run["results"]["conditions"]
+    assert [c["label"] for c in conditions] == ["arm=control", "arm=treatment"]
+
+    control = conditions[0]["aggregated"]["step01_summarize_units"]
+    treatment = conditions[1]["aggregated"]["step01_summarize_units"]
+
+    # Call site 1: `_condition_counts`, narrowed to each condition's own arm.
+    control_n = control["score"]["n"]
+    treatment_n = treatment["score"]["n"]
+    assert control_n == {"resolved": 4, "completed": 3, "ineligible": 1, "failed": 0}
+    assert treatment_n == {"resolved": 3, "completed": 2, "ineligible": 0, "failed": 1}
+    for n in (control_n, treatment_n):
+        assert n["resolved"] == n["completed"] + n["ineligible"] + n["failed"]
+    # At least one arm attrites on each side of the ledger — neither
+    # `ineligible` nor `failed` is zero across the whole run.
+    assert control_n["ineligible"] + treatment_n["failed"] > 0
+
+    # Call site 2: `_condition_report_by_levels`, narrowed the same way —
+    # `cohort=a`/`cohort=b` each hold different units (and different counts)
+    # in `control` than in `treatment`, since the two partitions cross.
+    control_by_cohort = control["by"]["cohort"]
+    treatment_by_cohort = treatment["by"]["cohort"]
+    assert control_by_cohort["a"]["score"]["n"] == {
+        "resolved": 2, "completed": 1, "ineligible": 1, "failed": 0,
+    }
+    assert control_by_cohort["b"]["score"]["n"] == {
+        "resolved": 2, "completed": 2, "ineligible": 0, "failed": 0,
+    }
+    assert treatment_by_cohort["a"]["score"]["n"] == {
+        "resolved": 2, "completed": 1, "ineligible": 0, "failed": 1,
+    }
+    assert treatment_by_cohort["b"]["score"]["n"] == {
+        "resolved": 1, "completed": 1, "ineligible": 0, "failed": 0,
+    }
+
+    # Call site 3: `_condition_beside_n` — `technical_n` is withheld from BOTH
+    # conditions, because each was handed a narrowed (arm) roster rather than
+    # the whole one.
+    assert "technical_n" not in control["score"]
+    assert "technical_n" not in treatment["score"]
+
+
+# `groups × cluster_by`, end to end — task 19 Step 3's review addition. Step 3
+# itself stayed at `validate` level (correctly: the addendum's correction
+# forces no `baseline`/`statistics.contrasts` beside the axis, since either
+# would draw `E-DATA-CLUSTER-CONTRAST`/`E-DATA-ALLOCATION-CONTRAST` instead of
+# validating), but validating clean is exactly what lets the same combination
+# execute — nothing before this pinned that it actually does.
+#
+# **Fixture, corrected after review found the first draft could not fail.**
+# The original mapping put every site in both arms, so the arm-scoped and the
+# whole-roster cluster count were both 3 for both arms — no mutation anywhere
+# could be told apart. Sites `C` and `D` are now arm-exclusive (`C` only in
+# `control`, `D` only in `treatment`), while `A` and `B` still span both arms —
+# the legal shape § Clustered units documents for `by_attribute` ("a cluster
+# may span both arms") stays represented, it is just no longer the ONLY shape.
+# Whole-roster distinct sites = {A, B, C, D} = 4; each arm's own distinct sites
+# = {A, B, C} = 3 for `control`, {A, B, D} = 3 for `treatment` — so a count
+# computed over the whole roster (4) now differs from either arm's correct
+# count (3), which is the number this test needs to fail a wrong computation.
+# Same site names as `tests/test_validate.py`'s `_GROUPS_CLUSTER_SITES` (kept
+# in sync there too), so the two tests are provably about the same design.
+_GROUPS_CLUSTER_CONTROL = ["c0", "c1", "c2", "c3", "c4", "c5", "c6"]
+_GROUPS_CLUSTER_TREATMENT = ["t0", "t1", "t2", "t3", "t4"]
+_GROUPS_CLUSTER_SITE = {
+    "c0": "A", "c1": "A", "c2": "B", "c3": "B", "c4": "C", "c5": "C", "c6": "C",
+    "t0": "A", "t1": "B", "t2": "B", "t3": "D", "t4": "D",
+}
+
+
+def _groups_cluster_roster_csv() -> str:
+    rows = ["patient_id,arm,site"]
+    for k in _GROUPS_CLUSTER_CONTROL:
+        rows.append(f"{k},control,{_GROUPS_CLUSTER_SITE[k]}")
+    for k in _GROUPS_CLUSTER_TREATMENT:
+        rows.append(f"{k},treatment,{_GROUPS_CLUSTER_SITE[k]}")
+    return "\n".join(rows) + "\n"
+
+
+def test_groups_and_cluster_by_execute_with_per_arm_cluster_counting(tmp_path: Path):
+    """`n` gains `clusters` (task 8) under a declared `cluster_by`, and this
+    proves the figure `run.yaml` actually prints for each arm is the arm's own
+    cluster count (3 — sites A, B, and one arm-exclusive site each) rather
+    than the whole roster's (4 — A, B, C, D together), now that the fixture
+    puts a genuinely arm-exclusive site on each side.
+
+    **What this number is actually computed from, corrected after review.**
+    An earlier version of this docstring claimed the figure was "wired all the
+    way to a real `run.yaml`, not just to `attrition` called directly" — false:
+    for a RECORDED column (`pred` here), `stats.summarize_step` recomputes
+    `clusters` itself, per column, from that column's own carrier keys
+    (`stats.py`'s `column_keys` — the keys that actually carried a value for
+    this metric), and OVERWRITES whatever `runner.attrition`/`_counts`
+    computed. `attrition`'s own `cluster_count_of(clusters, completed)` call
+    never reaches `run.yaml` unmodified for a recorded metric — confirmed by
+    direct experiment: mutating THAT line (`runner.py`) to count over the
+    whole roster instead of the arm-scoped `completed` set left this test's
+    numbers **unchanged** (still 3/3), even with this corrected, discriminating
+    fixture.
+
+    `stats.py`'s DERIVED-metric block (`aggregate`'s return, not a recorded
+    column) IS a live consumer of `attrition`'s own figure — `"n": {**counts,
+    "completed": len(collapsed)}` passes it straight through, unlike the
+    recorded-column path above. What keeps that path unreached here is a
+    narrower, run-time fact, not an unconditional refusal: `stats.py`'s gate
+    is `if clusters is not None and seed is not None:`, plus a non-empty
+    `drawable` (a per-key resample closure whose `statistics.resample` name
+    matches). `command_run` always supplies both — `resample_seed(digest)`
+    returns a real `int`, never `None`, and it builds a resample closure for
+    every derived key regardless of whether `statistics.resample` names it —
+    so the gate closes on every config `command_run` can produce today
+    (`E-DATA-CLUSTER-DERIVED`, confirmed by probe and pinned by
+    `test_a_clustered_derived_metric_is_refused_rather_than_drawn`), not
+    because the combination cannot exist in the code. A fourth call site
+    that omitted `seed` or built no `resample` closure would publish
+    `attrition`'s figure unmodified, and this claim would need re-checking
+    against it.
+
+    **This "no config reaches `run.yaml` with `attrition`'s own clusters
+    figure" is therefore scoped to today's build, not a permanent property**:
+    `reference.md` marks `E-DATA-CLUSTER-DERIVED` *Temporary*, twice, both
+    saying H4 lifts it — once H4 lands, a derived metric under `cluster_by`
+    may again reach `run.yaml`, carrying `attrition`'s figure straight
+    through, and this test's own discriminating mutation site may need
+    revisiting then. `attrition`'s own arithmetic is not unpinned by any of
+    this — `tests/test_runner.py`'s
+    `test_n_gains_clusters_under_a_clustered_design`,
+    `test_every_attrition_return_site_agrees_about_clusters`, and
+    `test_clusters_and_effective_are_independent_parts_of_n` each call it
+    directly and DO catch that mutation — it is simply not observable through
+    any `command_run`-produced `run.yaml` today. **This test's own
+    discriminating mutation is therefore in `stats.py`, not `runner.py`**:
+    changing line ~1360's `cluster_count_of(clusters, column_keys)` to
+    `cluster_count_of(clusters, clusters.keys())` moves both arms' printed
+    figure from 3 to 4 (whole-roster count), which this test's exact-value
+    assertions below catch. Mutation-verified: applied, confirmed FAIL (both
+    arms report `clusters: 4`), `__pycache__` cleared, reverted, confirmed
+    PASS.
+
+    Each condition's interval also uses `t_over_units_clustered`, the
+    cluster-robust construction § Statistical reporting names for a declared
+    `cluster_by` — proving the construction itself, not only the count, is
+    selected correctly per arm."""
+    doc = run_a_project(
+        tmp_path,
+        aggregate_returns="total",
+        roster_csv=_groups_cluster_roster_csv(),
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+            "attributes": ["arm", "site"],
+            "cluster_by": "site",
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    conditions = run["results"]["conditions"]
+    assert [c["label"] for c in conditions] == ["arm=control", "arm=treatment"]
+
+    control = conditions[0]["aggregated"]["step01_summarize_units"]["pred"]
+    treatment = conditions[1]["aggregated"]["step01_summarize_units"]["pred"]
+
+    assert control["n"] == {
+        "resolved": 7, "completed": 7, "ineligible": 0, "failed": 0, "clusters": 3,
+    }
+    assert treatment["n"] == {
+        "resolved": 5, "completed": 5, "ineligible": 0, "failed": 0, "clusters": 3,
+    }
+    assert control["method"] == "t_over_units_clustered"
+    assert treatment["method"] == "t_over_units_clustered"
+
+
+def test_allocation_json_is_written_with_exact_arm_keys_when_declared(tmp_path: Path):
+    """Task 14: a real `sweep.groups` + `allocation: between` + `assign` config,
+    run all the way to a real `allocation.json`, with no `validate` patch
+    needed since task 17 retired `E-SWEEP-GROUPS-UNSUPPORTED` — the config
+    validates on its own merits, the same simplification
+    `test_a_group_axis_actually_narrows_end_to_end` above got.
+
+    **Fixture numbers, chosen to discriminate.** 4 `control` and 9 `treatment`,
+    13 total: 4, 9, and 13 are each distinct from one another, from this
+    module's own 8/3/11 fixture above, and from `test_runner.py`'s 7/5/12 arm
+    fixture — no arm fixture shares a boundary with another. The keys within
+    each arm are listed out of both alphabetical and roster order (`c3, c0,
+    c2, c1`; a shuffled 9-key treatment list) so the assertion below can tell
+    "the roster's own resolved order" from "sorted" — the mutation the brief
+    names (row indices instead of keys) fails on the exact key strings *and*
+    on their order, not merely on length or set membership.
+    """
+    control_keys = ["c3", "c0", "c2", "c1"]
+    treatment_keys = ["t5", "t1", "t8", "t0", "t3", "t7", "t2", "t6", "t4"]
+    control_rows = "\n".join(f"{k},control" for k in control_keys)
+    treatment_rows = "\n".join(f"{k},treatment" for k in treatment_keys)
+    roster_csv = f"patient_id,arm\n{control_rows}\n{treatment_rows}\n"
+
+    doc = run_a_project(
+        tmp_path,
+        roster_csv=roster_csv,
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+            "attributes": ["arm"],
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+    )
+
+    run_yaml = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    # The positive control the addendum asks for, paired with the file's own
+    # existence below: a run directory that died before writing anything
+    # would have no `run.yaml` at all, so this discriminates "the run
+    # completed and wrote allocation.json" from "nothing ran."
+    assert run_yaml["status"] == "completed"
+
+    alloc_path = doc["run_dir"] / "allocation.json"
+    assert alloc_path.exists()
+    alloc = json.loads(alloc_path.read_text())
+
+    assert set(alloc.keys()) == {"arms", "seed", "strata"}
+    assert alloc["arms"] == {
+        "arm": {"control": control_keys, "treatment": treatment_keys}
+    }
+    # `by_attribute` draws nothing and stratifies nothing — the addendum's own
+    # finding that a writer emitting a seed anyway looks correct against a
+    # fixture nobody checked the seed of.
+    assert alloc["seed"] == {}
+    assert "arm" not in alloc["seed"]
+    assert alloc["strata"] == {}
+    assert "arm" not in alloc["strata"]
+    assert "holdout" not in alloc
+
+    from publishable.artifacts import allocation_hash
+
+    assert run_yaml["provenance"]["allocation"] == "allocation.json"
+    assert run_yaml["provenance"]["allocation_hash"] == allocation_hash(alloc)
+
+
+def test_allocation_json_is_absent_without_a_declared_arm(tmp_path: Path):
+    """The absent half of 'present when either is declared' — and the addendum's
+    warning that this half is the one that passes vacuously. Paired with a
+    positive assertion on the very same run (`run.yaml` exists and completed),
+    so this cannot pass for a run that failed before writing anything, a wrong
+    `run_dir`, or a typo in the filename — the four verification probes this
+    project has already caught reporting nothing for every input."""
+    doc = run_a_project(tmp_path)
+
+    run_yaml = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run_yaml["status"] == "completed"
+    assert (doc["run_dir"] / "sweep.yaml").exists()
+
+    assert not (doc["run_dir"] / "allocation.json").exists()
+    assert run_yaml["provenance"]["allocation"] is None
+    assert run_yaml["provenance"]["allocation_hash"] is None
+
+
+def test_cond_roster_narrows_each_condition_to_its_own_arm_size():
+    """`_cond_roster` is the read side of the narrowing `execute_plan` already
+    applies to what a condition's own executions run over — task 12's 7/5
+    fixture, reused rather than a fresh one (no arm fixture may share a
+    boundary with a cluster fixture, and this fixture already states why its
+    counts discriminate).
+
+    Exact sizes, not a reconciliation: this and
+    `test_cond_roster_covers_the_roster_exactly_once_per_unit` are kept as two
+    separate assertions on purpose, each able to fail on its own — a "sum to
+    the roster" combination (7 + 5 == 12) would be arithmetically implied the
+    moment 7 and 5 are already pinned here, which is the addendum's own
+    corrected finding about its first draft."""
+    from tests.test_runner import _arm_members12, _arm_roster12
+
+    roster = _arm_roster12()
+    arm_members_map = _arm_members12()
+
+    assert len(_cond_roster(roster, 0, arm_members_map)) == 7
+    assert len(_cond_roster(roster, 1, arm_members_map)) == 5
+
+
+def test_cond_roster_covers_the_roster_exactly_once_per_unit():
+    """Coverage, not a sum: `E-DATA-ASSIGN-LEVELS` (task 10) is what makes this
+    meaningful — no unit belongs to no arm, and no declared level is empty —
+    and it fails for reasons the pinned 7/5 counts above do not. Kept in its
+    own test, with no size assertion in it, so mutating "count the whole
+    roster per condition" is caught here independently of the sizes test
+    above rather than only inferred from it dying too."""
+    from tests.test_runner import _arm_members12, _arm_roster12
+
+    roster = _arm_roster12()
+    arm_members_map = _arm_members12()
+
+    control_keys = {u.key for u in _cond_roster(roster, 0, arm_members_map)}
+    treatment_keys = {u.key for u in _cond_roster(roster, 1, arm_members_map)}
+    assert control_keys | treatment_keys == {u.key for u in roster}
+    assert control_keys & treatment_keys == set()
+
+
+def test_cond_roster_is_the_same_object_with_no_group_axis():
+    """`roster is roster` (identity, not equality) is what `_cond_beside_n`
+    reads to decide whether `technical_n` survives — matching `execute_plan`'s
+    own `scoped_units = units` no-op when a run declares no group axis."""
+    from tests.test_runner import _arm_roster12
+
+    roster = _arm_roster12()
+    assert _cond_roster(roster, 0, None) is roster
+
+
+def test_attrition_reconciles_per_arm_over_the_uneven_7_5_fixture():
+    """`attrition` itself needs no change — it is roster-agnostic and always
+    was — so this pins the LOW-LEVEL claim: given `_cond_roster`'s own
+    per-arm answer, `attrition` reconciles to the exact per-arm counts.
+    `test_condition_counts_reconciles_per_arm_over_the_uneven_7_5_fixture`
+    below pins the composed call `command_run` actually makes; this one
+    isolates `attrition`'s own arithmetic from the narrowing that feeds it.
+
+    One unit ineligible in `control` (`c0`, `io.skip`) and one failed in
+    `treatment` (`t0`, recorded nowhere) — matching the addendum's "make at
+    least one arm attrit": two clean arms would leave `ineligible`/`failed`
+    zero everywhere and the reconciliation would hold trivially for reasons
+    that don't discriminate this fix from the bug it fixes. `c0`'s absence
+    from BOTH `recorded` and `skipped` would make it `failed`; declaring it
+    `skipped` explicitly is what makes it `ineligible` instead — the
+    distinction `ineligible: 1` on `control` and `failed: 1` on `treatment`
+    each prove one arm's own kind of attrition, not the other's."""
+    from tests.test_runner import _arm_members12, _arm_roster12
+
+    roster = _arm_roster12()
+    arm_members_map = _arm_members12()
+    control_roster = _cond_roster(roster, 0, arm_members_map)
+    treatment_roster = _cond_roster(roster, 1, arm_members_map)
+
+    control_rows = {f"c{i}": {"r": 0.5} for i in range(1, 7)}  # c0 skipped
+    treatment_rows = {f"t{i}": {"r": 0.5} for i in range(1, 5)}  # t0 unsettled
+    results = [
+        _repeat_result("measure", "seed01", 0, control_rows, skipped=frozenset({"c0"})),
+        _repeat_result("measure", "seed01", 1, treatment_rows),
+    ]
+
+    control_counts = attrition(results, control_roster, "measure", 0)
+    treatment_counts = attrition(results, treatment_roster, "measure", 1)
+
+    # Exact numbers, not the reconciliation alone: `12 == 12 + 0 + 0` satisfies
+    # `resolved == completed + ineligible + failed` too, so asserting only the
+    # arithmetic is a check that cannot fail (the addendum's own first draft
+    # made exactly this mistake with "sum to the roster").
+    assert control_counts == {"resolved": 7, "completed": 6, "ineligible": 1, "failed": 0}
+    assert treatment_counts == {"resolved": 5, "completed": 4, "ineligible": 0, "failed": 1}
+    assert (
+        control_counts["resolved"]
+        == control_counts["completed"] + control_counts["ineligible"] + control_counts["failed"]
+    )
+    assert (
+        treatment_counts["resolved"]
+        == treatment_counts["completed"]
+        + treatment_counts["ineligible"]
+        + treatment_counts["failed"]
+    )
+
+
+def test_condition_counts_reconciles_per_arm_over_the_uneven_7_5_fixture():
+    """The composed call `command_run` actually makes for a condition's
+    counts — `_condition_counts(results, roster, step_name, cond_index,
+    arm_members_map, ...)` — given the WHOLE `roster` and this task's own
+    `arm_members_map`, with no separate narrowing step in this test at all.
+
+    This is what a review caught the previous per-arm tests missing: they
+    called `_cond_roster` and `attrition` separately, so a `command_run` that
+    computed a `cond_roster` and then quietly kept calling `attrition(...,
+    roster, ...)` a few lines later — the actual shape the original bug
+    took — would leave every one of those tests green. Calling the single
+    composed function `command_run` calls removes that seam: there is no
+    place left for a computed-but-unused narrowing to hide."""
+    from tests.test_runner import _arm_members12, _arm_roster12
+
+    roster = _arm_roster12()
+    arm_members_map = _arm_members12()
+    control_rows = {f"c{i}": {"r": 0.5} for i in range(1, 7)}  # c0 skipped
+    treatment_rows = {f"t{i}": {"r": 0.5} for i in range(1, 5)}  # t0 unsettled
+    results = [
+        _repeat_result("measure", "seed01", 0, control_rows, skipped=frozenset({"c0"})),
+        _repeat_result("measure", "seed01", 1, treatment_rows),
+    ]
+
+    control_counts = _condition_counts(results, roster, "measure", 0, arm_members_map)
+    treatment_counts = _condition_counts(results, roster, "measure", 1, arm_members_map)
+
+    assert control_counts == {"resolved": 7, "completed": 6, "ineligible": 1, "failed": 0}
+    assert treatment_counts == {"resolved": 5, "completed": 4, "ineligible": 0, "failed": 1}
+
+
+def _crossing_stratum_fixture():
+    """A roster whose `site` attribute crosses both arms — `north` is 4 of 7
+    `control` units and 2 of 5 `treatment` units, 6 total — so narrowing to
+    one arm actually removes units from a level, rather than a stratum
+    confined to one arm, which wouldn't discriminate the fix from the bug it
+    fixes. `north`'s total (6) is deliberately neither arm's own size (7, 5),
+    so a later size-based assertion against this fixture can't coincidentally
+    pass by matching the wrong count — task 13's own review caught an earlier
+    3/2 split whose `north` (7) coincided with `control`'s `resolved`.
+    Distinct from `_arm_roster12`: a second attribute on the same units, not
+    a shared boundary with any cluster fixture."""
+    from publishable.units import Unit, UnitList
+
+    control = [
+        Unit(key=f"c{i}", attributes={"arm": "control", "site": "north" if i < 4 else "south"})
+        for i in range(7)
+    ]
+    treatment = [
+        Unit(
+            key=f"t{i}",
+            attributes={"arm": "treatment", "site": "north" if i < 2 else "south"},
+        )
+        for i in range(5)
+    ]
+    roster = UnitList(control + treatment)
+    arm_members_map = {
+        0: frozenset(u.key for u in roster if u.attributes["arm"] == "control"),
+        1: frozenset(u.key for u in roster if u.attributes["arm"] == "treatment"),
+    }
+    return roster, arm_members_map
+
+
+def test_report_by_levels_narrows_a_crossing_stratum_to_the_given_roster():
+    """`_report_by_levels` is the piece `command_run`'s `report_by` block calls
+    against `_cond_roster`'s answer, extracted specifically so this is
+    testable at all: the inline loop it replaces lives inside `command_run`'s
+    per-condition, per-step loop, and no end-to-end test in this module
+    combines a group axis with a declared `statistics.report_by` — extraction
+    is what makes the narrowing a function with one roster parameter, testable
+    directly, rather than an inline read of an enclosing-scope name that only
+    a full `report_by` + `groups` run would exercise.
+
+    Calling the SAME function with the whole roster reproduces the bug this
+    fix removes — the other arm's units join a level that also exists in
+    this one — which is what makes this test able to fail: reverting the
+    call site inside `command_run` back to `roster` would revert to exactly
+    this."""
+    from publishable.cli import _report_by_levels
+
+    roster, arm_members_map = _crossing_stratum_fixture()
+    control_roster = _cond_roster(roster, 0, arm_members_map)
+
+    whole_keys, _whole_roster = _report_by_levels(roster, "site")["north"]
+    assert whole_keys == {"c0", "c1", "c2", "c3", "t0", "t1"}
+
+    arm_keys, arm_roster = _report_by_levels(control_roster, "site")["north"]
+    assert arm_keys == {"c0", "c1", "c2", "c3"}
+    assert {u.key for u in arm_roster} == arm_keys
+    assert arm_keys < whole_keys  # the narrowing actually removes units
+
+
+def test_condition_report_by_levels_narrows_a_crossing_stratum_to_the_condition_arm():
+    """The composed call `command_run` actually makes for `report_by`'s
+    per-level table — `_condition_report_by_levels(roster, cond_index,
+    arm_members_map, attribute)` — given the WHOLE `roster`, with no separate
+    `_cond_roster` call in this test. Mirrors
+    `test_condition_counts_reconciles_per_arm_over_the_uneven_7_5_fixture`'s
+    reasoning: the primitive-level test above calls `_cond_roster` and
+    `_report_by_levels` separately and so cannot tell "wired into
+    `command_run`" apart from "unused"; this one calls what `command_run`
+    calls."""
+    from publishable.cli import _condition_report_by_levels
+
+    roster, arm_members_map = _crossing_stratum_fixture()
+
+    arm_keys, arm_roster = _condition_report_by_levels(
+        roster, 0, arm_members_map, "site"
+    )["north"]
+    assert arm_keys == {"c0", "c1", "c2", "c3"}
+    assert {u.key for u in arm_roster} == arm_keys
+
+
+def test_cond_beside_n_withholds_technical_n_under_an_arm_only():
+    """Addendum item #5: `technical_n` beside a per-arm `n` needs a decision,
+    and the codebase already litigated this one level down — `report_by`'s
+    own level block withholds it rather than copying a whole-roster figure
+    onto a subset (`weighted_beside`, not `beside_n`, at that call site).
+    `_cond_beside_n` applies the same rule one level up, gated on
+    `_cond_roster`'s own identity signal for "no group axis narrowed this
+    condition"."""
+    from tests.test_runner import _arm_members12, _arm_roster12
+
+    from publishable.cli import _cond_beside_n
+
+    roster = _arm_roster12()
+    arm_members_map = _arm_members12()
+    beside_n = {"technical_n": {"min": 1, "max": 3, "median": 2}, "weighted_by": "w"}
+
+    control_roster = _cond_roster(roster, 0, arm_members_map)
+    assert _cond_beside_n(beside_n, control_roster, roster) == {"weighted_by": "w"}
+    # No group axis: `cond_roster is roster`, and nothing is withheld.
+    assert _cond_beside_n(beside_n, roster, roster) == beside_n
+
+
+def test_condition_beside_n_withholds_technical_n_under_an_arm_only():
+    """The composed call `command_run` actually makes to decide whether
+    `technical_n` survives — `_condition_beside_n(beside_n, roster,
+    cond_index, arm_members_map)` — given the WHOLE `roster`, with no
+    separate `_cond_roster` call in this test."""
+    from tests.test_runner import _arm_members12, _arm_roster12
+
+    from publishable.cli import _condition_beside_n
+
+    roster = _arm_roster12()
+    arm_members_map = _arm_members12()
+    beside_n = {"technical_n": {"min": 1, "max": 3, "median": 2}, "weighted_by": "w"}
+
+    assert _condition_beside_n(beside_n, roster, 0, arm_members_map) == {"weighted_by": "w"}
+    assert _condition_beside_n(beside_n, roster, 0, None) == beside_n
 
 
 def test_the_recorded_order_is_the_order_that_ran(tmp_path: Path):
@@ -1095,8 +1945,8 @@ def test_a_baseline_only_axis_still_counts_toward_confounded(tmp_path, capsys, m
     genuinely differ on two axes — one swept (`analysis.method`), one fixed only
     in `sweep.baseline` (`analysis.confidence`, default `0.95`, pinned here to
     `0.99`) — even though the grid condition's own `Condition.values` never
-    mentions the second axis at all. `_differing_axes` has to walk the union of
-    both sides' keys to see it; a one-directional walk over the grid
+    mentions the second axis at all. `contrasts.differing_axes` has to walk the
+    union of both sides' keys to see it; a one-directional walk over the grid
     condition's keys alone would silently drop it, since that axis is absent
     from `values` on that side, not merely equal.
     """

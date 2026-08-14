@@ -109,3 +109,114 @@ def test_design_digest_covers_units_and_groups_only():
     assert design_digest(base) == design_digest(edited), "editing a parameter must not redraw"
     roster = {**base, "data": {"units": {"key": "sample_id"}}}
     assert design_digest(base) != design_digest(roster)
+
+
+def _units_with_arm(seed=1, method="blocked", from_="site", stratify_by="age_band"):
+    return {
+        "data": {
+            "units": {
+                "key": "patient_id",
+                "assign": {
+                    "arm": {
+                        "method": method,
+                        "seed": seed,
+                        "from": from_,
+                        "stratify_by": stratify_by,
+                    }
+                },
+            }
+        },
+    }
+
+
+def test_design_digest_excludes_assign_seed_with_a_control():
+    base = _units_with_arm(seed=1)
+    reseeded = _units_with_arm(seed=2)
+    assert design_digest(base) == design_digest(reseeded), (
+        "assign.seed must not move the digest"
+    )
+
+    # Control: a different key must still move it, proving the exclusion is
+    # not "the whole config is ignored".
+    key_changed = {
+        **base,
+        "data": {**base["data"], "units": {**base["data"]["units"], "key": "sample_id"}},
+    }
+    assert design_digest(base) != design_digest(key_changed)
+
+
+def test_design_digest_exclusion_is_surgical_not_the_whole_assign_block():
+    base = _units_with_arm()
+
+    from_changed = _units_with_arm(from_="clinic")
+    assert design_digest(base) != design_digest(from_changed), (
+        "assign.arm.from is a different partition and must move the digest"
+    )
+
+    stratify_changed = _units_with_arm(stratify_by="sex")
+    assert design_digest(base) != design_digest(stratify_changed), (
+        "assign.arm.stratify_by is a different balancing draw and must move the digest"
+    )
+
+    second_axis = {
+        **base,
+        "data": {
+            **base["data"],
+            "units": {
+                **base["data"]["units"],
+                "assign": {
+                    **base["data"]["units"]["assign"],
+                    "sex": {"method": "blocked", "seed": 5},
+                },
+            },
+        },
+    }
+    assert design_digest(base) != design_digest(second_axis), (
+        "adding a second axis to assign must move the digest"
+    )
+
+
+def test_design_digest_exclusion_is_per_axis_not_first_found():
+    two_axes = {
+        "data": {
+            "units": {
+                "key": "patient_id",
+                "assign": {
+                    "arm": {"method": "blocked", "seed": 1, "from": "site"},
+                    "sex": {"method": "blocked", "seed": 5},
+                },
+            }
+        },
+    }
+    reseeded_second_axis = {
+        "data": {
+            "units": {
+                "key": "patient_id",
+                "assign": {
+                    "arm": {"method": "blocked", "seed": 1, "from": "site"},
+                    "sex": {"method": "blocked", "seed": 99},
+                },
+            }
+        },
+    }
+    assert design_digest(two_axes) == design_digest(reseeded_second_axis), (
+        "the second axis's own seed must be excluded too, not just the first axis found"
+    )
+
+
+def test_design_digest_does_not_raise_on_malformed_assign_shapes():
+    non_mapping_assign = {"data": {"units": {"key": "patient_id", "assign": "not-a-mapping"}}}
+    non_mapping_block = {
+        "data": {"units": {"key": "patient_id", "assign": {"arm": "not-a-mapping"}}}
+    }
+    non_mapping_units = {"data": {"units": "not-a-mapping"}}
+    none_seed = {
+        "data": {
+            "units": {
+                "key": "patient_id",
+                "assign": {"arm": {"seed": None, "method": "blocked"}},
+            }
+        }
+    }
+    for config in (non_mapping_assign, non_mapping_block, non_mapping_units, none_seed):
+        design_digest(config)  # must not raise

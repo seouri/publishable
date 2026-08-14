@@ -2,10 +2,12 @@
 """Scope-aware, atomic, append-only artifacts. docs/reference.md § Steps and artifacts."""
 
 import csv
+import hashlib
 import io as _io
 import json
 import os
 import tempfile
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -14,6 +16,7 @@ import yaml
 from publishable.coercion import coerce_scalars
 from publishable.errors import ArtifactError, ArtifactExistsError, ContractError
 from publishable.sweep import condition_dir_name
+from publishable.units import arms_of
 
 if TYPE_CHECKING:
     from publishable.units import UnitList
@@ -165,6 +168,123 @@ def _suffix_for(name: str) -> str | None:
         if last.endswith(suffix) and (best is None or len(suffix) > len(best)):
             best = suffix
     return best
+
+
+def build_allocation_document(
+    roster: "UnitList", group_axes: Mapping[str, tuple[str, Sequence[str]]]
+) -> dict[str, Any] | None:
+    """`allocation.json`'s payload — `reference.md` § `allocation.json` — who
+    went where prints it in full: four top-level keys, `arms`/`seed`/`strata`
+    keyed by axis name, `holdout` sharing the file because both are
+    partitions of one roster drawn once.
+
+    Returns `None` when `group_axes` is empty — no arm assignment resolved,
+    matching § The other files a run writes' "present when either is
+    declared": the caller writes nothing in that case rather than an empty
+    file.
+
+    **`arms`** maps each axis to `units.arms_of`'s own partition, restated as
+    unit keys in roster order — `arms_of` is the single authority task 10
+    built for arm membership, read here directly rather than reduced through
+    `units.arm_members` (built for a *condition's* intersection across axes,
+    the wrong shape for "every level of every axis"), and rather than a
+    third derivation of membership from the roster. Unit keys, never row
+    numbers, because a roster that gains a unit renumbers rows and would
+    silently repoint every membership claim; roster order because `arms_of`
+    already promises it and re-sorting here would silently contradict a
+    `blocked` design that reads that order as data (once `blocked` itself is
+    built).
+
+    **`seed` and `strata` are always empty in this build.** This build's
+    only reachable `assign.method` is `by_attribute` (`E-DATA-ASSIGN-DRAWN`
+    refuses `random` and `blocked`, the two methods that draw), and
+    `by_attribute` reads an arm a trial system already assigned rather than
+    drawing one — recording a `seed` would be a false record of a draw that
+    never happened, the same fault § Allocation names for a non-empty
+    `ratio` under `by_attribute`. `assign.stratify_by` names how a draw was
+    *balanced*; with no draw there is nothing it describes, so the axis is
+    left out of `strata` for the same reason. Both keys stay present as
+    empty mappings — `seed`/`strata` are `{}`, not omitted — because the
+    shape is "keyed by axis name" whether or not any axis qualifies, and an
+    omitted key would read as "this build never has a seed or strata block
+    at all" rather than "no axis drew or stratified this run."
+
+    **`holdout` is never written here.** `E-DATA-HOLDOUT-UNSUPPORTED`
+    refuses every `data.units.holdout` declaration in this build, so there
+    is never a holdout partition to record; the key is omitted entirely
+    rather than written `null`, matching `manifest/input.json`'s own
+    "absent rather than null, so 'not hashed' can't be misread as 'hashed
+    to nothing'" — here, "no holdout key" rather than "a holdout of
+    nothing." H3d adds the key once that refusal lifts.
+
+    **This is the file `resume` must read rather than re-draw.**
+    `reference.md` § Allocation and § Resuming both say `allocation.json` is
+    "read rather than re-drawn" on resume — a fact about which units landed
+    in which arm should not be re-computable to a different answer just
+    because the run is being continued. **That rule has no reader in this
+    build**: `OPERATION_COMMANDS = {"validate", "run"}` in `cli.py`, there is
+    no `resume` command yet, so nothing here calls this function a second
+    time against an existing `allocation.json`. This paragraph is the
+    contract a future `resume` must honour — read the existing file rather
+    than calling `build_allocation_document` again — not a description of
+    behavior this build has or tests.
+    """
+    # Gated on `group_axes` truthiness, which `cli._resolved_group_axes`'s own
+    # docstring warns a caller against in general: an axis whose declared
+    # `levels` aren't all `str` is silently dropped from `group_axes`, so
+    # `bool(group_axes)` alone cannot tell "no axis was declared" from "an
+    # axis was declared but shaped wrong." That silent-skip case cannot reach
+    # here, though — not because of anything local to this function, but
+    # because `cli.command_run` calls `units.arm_members` on the very same
+    # `group_axes` earlier, before any run directory exists, and
+    # `arm_members` raises `KeyError` the moment a condition selects an axis
+    # or level missing from it (`units.arm_members`'s own docstring: "a
+    # caller passing a condition whose selected axis or level is not in
+    # `axes` ... raises a bare `KeyError`"). So a malformed axis never
+    # reaches this call at all; this gate would need reconsidering only if a
+    # future caller ever invoked `build_allocation_document` without that
+    # upstream call already having succeeded.
+    if not group_axes:
+        return None
+    arms: dict[str, dict[str, list[str]]] = {}
+    for axis, (column, levels) in group_axes.items():
+        partition = arms_of(roster, column, levels)
+        arms[axis] = {level: [u.key for u in units] for level, units in partition.items()}
+    return {"seed": {}, "arms": arms, "strata": {}}
+
+
+def allocation_hash(document: dict[str, Any]) -> str:
+    """`provenance.allocation_hash` — a hash of the *document*, not of the file's
+    bytes on disk, the same split `manifest.manifest_hash` makes for the input
+    manifest: canonical JSON (`sort_keys=True`, compact separators) over the
+    same dict `build_allocation_document` returned, which is **not** what
+    `allocation.json` is written as (that call uses `indent=2` and insertion
+    order — `seed`, `arms`, `strata` — for a human reader). The two encodings
+    hash to different digests for the same document. A reader reproducing
+    this by hand must re-canonicalize `allocation.json`'s parsed content
+    (`json.dumps(json.load(...), sort_keys=True, separators=(",", ":"))`)
+    rather than hash the file's bytes directly.
+
+    **Why this lives here rather than as a fourth entry in `hashes.py`.**
+    `hashes.py` holds `code_hash`, `parameters_hash`, and `design_digest` —
+    all three hash something the caller already has lying around (the repo
+    tree, the config), not something this module built for them.
+    `manifest_hash` sits in `manifest.py`, next to `build_manifest`, for the
+    matching reason: it hashes the exact document its own module just
+    constructed, so the construction and the hash of what it constructs stay
+    one property of one artifact rather than two modules that have to agree
+    on a shape from a distance. `allocation_hash` follows `manifest_hash`'s
+    placement, not `hashes.py`'s: it hashes `build_allocation_document`'s
+    own return value, and that function lives in `artifacts.py` because
+    `allocation.json` is an artifact `cli.command_run` writes alongside the
+    others this module already handles. A future reader adding H3d's
+    `holdout` half should draw the same conclusion: `holdout_hash` (if one
+    is ever needed) belongs beside whatever builds the holdout partition's
+    document, not in `hashes.py` either — the module boundary here is "hashes
+    a document this file assembles," not "is a hash."
+    """
+    payload = json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
 
 
 class StepIO:

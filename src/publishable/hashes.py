@@ -66,8 +66,48 @@ def parameters_hash(config: dict[str, Any]) -> str:
     return _prefixed(hashlib.sha256(_canonical(covered)).hexdigest())
 
 
+def _units_excluding_assign_seed(units: Any) -> Any:
+    """`data.units` with `assign.<axis>.seed` dropped from every axis block.
+
+    `assign` is a mapping of axis name -> block, so the exclusion is per-axis:
+    an axis's own `seed` is dropped from its own block only, never the whole
+    `assign` subtree and never a sibling axis's `seed`. See docs/reference.md
+    § What `auto` derives from: an axis's `assign.seed` "mixes digest + the
+    axis name + the resolved roster" — a seed that is itself inside the
+    digest it is mixed with would make the derivation self-referential.
+
+    `design_digest` runs at run time on a validated config, but `validate`
+    reaches it too (indirectly, via `expand` -> the `sample` seed derivation),
+    so a malformed config can arrive here first. This function never raises:
+    a non-mapping `units`, a non-mapping `assign`, or a non-mapping axis block
+    is left exactly as given rather than unpacked, so the caller's canonical
+    JSON encoding still runs over *something* instead of crashing on a shape
+    it did not expect.
+    """
+    if not isinstance(units, dict):
+        return units
+    assign = units.get("assign")
+    if not isinstance(assign, dict):
+        return units
+    new_assign = {}
+    changed = False
+    for axis, block in assign.items():
+        if isinstance(block, dict) and "seed" in block:
+            new_assign[axis] = {k: v for k, v in block.items() if k != "seed"}
+            changed = True
+        else:
+            new_assign[axis] = block
+    if not changed:
+        return units
+    return {**units, "assign": new_assign}
+
+
 def design_digest(config: dict[str, Any]) -> str:
-    """`data.units` and `sweep.groups` only, so a parameter edit redraws nothing."""
-    units = (config.get("data") or {}).get("units")
+    """`data.units` (every field except `assign.seed` itself) and `sweep.groups`.
+
+    A parameter edit redraws nothing, and neither does pinning or changing an
+    axis's `assign.seed` — see `_units_excluding_assign_seed`.
+    """
+    units = _units_excluding_assign_seed((config.get("data") or {}).get("units"))
     groups = (config.get("sweep") or {}).get("groups")
     return _prefixed(hashlib.sha256(_canonical({"units": units, "groups": groups})).hexdigest())

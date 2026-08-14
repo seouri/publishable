@@ -82,7 +82,7 @@ def test_the_generated_config_declares_a_unit_roster():
 def test_the_generated_units_block_carries_its_comments():
     text = rendered()
     assert '# index.csv | {glob: "*.dcm"}' in text
-    assert "# within  (between: later slice)" in text
+    assert "# within | between" in text
 
 
 _MARKED_LATER_SLICE = re.compile(
@@ -90,13 +90,18 @@ _MARKED_LATER_SLICE = re.compile(
 )
 
 # Where a marked field lives in the parsed doc, and how to ask core whether a
-# given value there is refused. `allocation`/`order` are refused by
-# `validate_config`; `kind` is only refused at `resolve_repeats` (it is not
-# read by `validate_config` at all), so it gets its own probe.
-_MARKED_FIELD_PATHS: dict[str, tuple[object, ...]] = {
-    "allocation": ("data", "units", "allocation"),
-    "kind": ("replication", "repeats", 0, "kind"),
-}
+# given value there is refused. `kind` is only refused at `resolve_repeats` (it
+# is not read by `validate_config` at all), so it gets its own probe.
+# `allocation` was here until task 17 retired `E-DATA-ALLOCATION-UNSUPPORTED`:
+# `between` is built and runs end to end, so `init`'s comment no longer marks
+# it, and this dict no longer carries a path for it. `kind` left for the same
+# reason at task 20: `replication.SUPPORTED_KINDS` is `seed`, `batch`, `fold`,
+# all three built, so `init`'s `(fold: later slice)` was a marking core no
+# longer honors — it now writes the enum § The one config file shows,
+# `seed | batch | fold`. The registry is empty rather than deleted: the loop
+# below still refuses a marking with no path registered here, which is what
+# keeps the next one honest.
+_MARKED_FIELD_PATHS: dict[str, tuple[object, ...]] = {}
 
 
 def _refusal_codes(key: str, doc: dict, config_path: Path) -> list[str]:

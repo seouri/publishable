@@ -13,7 +13,7 @@ import math
 import random
 import statistics
 from collections import Counter
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -299,27 +299,47 @@ def resolve_units(
     measurements = units_decl.get("measurements")
     if measurements:
         by = _measurement_axis(measurements)
-        # The two declarations whose column is a fact about the unit rather than
-        # about the measurement, read straight off the declaration this function
-        # already holds — no new plumbing, and no second place that could come to
-        # disagree with `units_decl` about which column is the cluster. The
+        # The two flat declarations whose column is a fact about the unit rather
+        # than about the measurement, read straight off the declaration this
+        # function already holds — no new plumbing, and no second place that could
+        # come to disagree with `units_decl` about which column is the cluster. The
         # `isinstance` filter is load-bearing rather than defensive: a list-valued
         # `cluster_by` is `E-CONFIG-TYPE`'s finding, and using one as a mapping key
         # is a `TypeError` escaping `validate`, which never raises.
-        # **A registry key must be a flat, string-valued key of `data.units`.**
-        # This indexes `units_decl` by the key itself, so it reaches `cluster_by`
-        # and `weight_by` and nothing nested. `assign.<axis>.from` and
-        # `holdout.from` are the next two columns that will want this rule and
-        # **neither is reachable this way** — adding either name to the registry
-        # no-ops silently, and so does spelling it as a dotted path. Verified by
-        # probe, not assumed. Whichever slice needs one owes an accessor here;
-        # the failure it would otherwise ship is the leak this check exists to
-        # close, arriving through a sibling declaration.
-        constant = {
-            declaration: units_decl[declaration]
-            for declaration in CONSTANT_COLUMN_RULES
-            if isinstance(units_decl.get(declaration), str) and units_decl[declaration]
-        }
+        # **A flat registry entry reaches only a flat, string-valued key of
+        # `data.units`.** This indexes `units_decl` by the key itself, so on its
+        # own it reaches `cluster_by` and `weight_by` and nothing nested —
+        # `assign.<axis>.from` and `holdout.from` are the next two columns that
+        # want this rule, and neither is a flat string: `assign` is a mapping of
+        # axis blocks and `holdout` is a mapping with its own `from`. Task 11 adds
+        # `_assign_constant_columns` below as `assign`'s accessor, so that one is
+        # now reachable; **`holdout.from` still is not** — its shape is a single
+        # key under a fixed mapping, not one-per-declared-axis, and needs its own
+        # accessor rather than this one's `axis` loop. Verified by probe, not
+        # assumed: adding `"assign"` to `CONSTANT_COLUMN_RULES` alone changed
+        # nothing, because this comprehension's `isinstance(..., str)` filter
+        # drops a mapping before the registry is even consulted.
+        #
+        # **`assign`'s entries are built first, deliberately** — `constant`'s
+        # iteration order is the order `collapse_measurements` checks
+        # declarations in, and it stops at the first that raises, so whichever
+        # comes first in this dict wins a unit that violates more than one at
+        # once. `assign` is documented as the worst of the three (§ Allocation:
+        # a mis-collapsed arm decides which condition a unit is measured in,
+        # where cluster/weight only decide which side of a split it lands on
+        # or what it stands for), so it has to be checked before the flat pair
+        # or that severity ordering would be undermined by an accident of
+        # dict-building order — the "precedence rule nothing in the documents
+        # states" `CONSTANT_COLUMN_RULES` warns against, now stated in both
+        # places rather than left implicit.
+        constant = _assign_constant_columns(units_decl.get("assign"))
+        constant.update(
+            {
+                declaration: units_decl[declaration]
+                for declaration in CONSTANT_COLUMN_RULES
+                if isinstance(units_decl.get(declaration), str) and units_decl[declaration]
+            }
+        )
         units, counts = collapse_measurements(
             units, by, measurements.get("collapse", "first"), constant
         )
@@ -343,6 +363,70 @@ def resolve_units(
             )
         seen[u.key] = 1
     return UnitList(units), technical_n, columns
+
+
+def _assign_constant_columns(assign_decl: Any) -> dict[str, str]:
+    """`assign.<axis>.from`, resolved against its default, for every axis
+    `data.units.assign` declares a mapping block for — `resolve_units`'s
+    accessor for the one declaration `CONSTANT_COLUMN_RULES` cannot reach as a
+    flat string.
+
+    Resolution mirrors `validate._check_assign`'s own — `from` if it is a
+    non-empty string, else the axis name when the key is entirely absent — but
+    stays narrower on purpose: this function's only job is deciding which
+    column, if any, this axis's constancy has to hold, not reporting a
+    malformed declaration. A non-mapping axis block, an explicit `from: ""`,
+    and a non-`str` `from` are three shapes `_check_assign` reports and this
+    function is silent on, each because it resolves to no column to check:
+    `E-DATA-ASSIGN-METHOD` (a stray value in place of a block) and
+    `E-DATA-ASSIGN-UNKNOWN` (the empty-string and wrong-type halves) are
+    `validate`'s findings to raise, not a `ContractError` from a run that
+    resolution has no path to report through.
+
+    **Gated on `method == "by_attribute"`, matching `_check_assign`'s own
+    elif chain**, which reads `from` and `levels` only in that branch — "mean
+    nothing" under `random`/`blocked`, refused today as `E-DATA-ASSIGN-DRAWN`
+    before drawing is implemented, and under an absent or out-of-enum method,
+    refused as `E-DATA-ASSIGN-METHOD`. Without this gate, a `method: random`
+    block whose axis-name default happens to match a column that varies within
+    a unit's rows would raise `E-DATA-ASSIGN-VARIES` naming a `.from` path the
+    declaration never wrote, over a column nothing under that method reads —
+    the same validate-clean-then-crash gap this module's docstrings warn
+    against elsewhere, in the opposite direction: a config no check approves
+    yet, refused anyway by a rule that assumed a resolution `by_attribute`
+    alone performs. Every config that reaches `run` has `method:
+    by_attribute` regardless, since `random`/`blocked` and anything out of
+    the enum are refused at `validate` first — so this gate loses no coverage
+    a shipped run could reach, and narrows what an in-development `random`
+    config sees while `by_attribute` executes.
+
+    Keyed `assign.<axis>.from`, the literal dotted path a reader would look for
+    in `data.units` — not `assign` alone — because `assign` is one declaration
+    yielding as many columns as there are axes, and `collapse_measurements`'s
+    error message names the column through this key. `CONSTANT_COLUMN_RULES`
+    still holds one entry for it, under the bare word `assign`: the lookup in
+    `collapse_measurements` strips back to the segment before the first `.`,
+    so `cluster_by`/`weight_by` (no dot, no-op strip) and every
+    `assign.<axis>.from` key resolve to their rule through the one mechanism.
+    """
+    if not isinstance(assign_decl, dict):
+        return {}
+    resolved: dict[str, str] = {}
+    for axis, block in assign_decl.items():
+        if not isinstance(block, dict) or not isinstance(axis, str):
+            continue
+        if block.get("method") != "by_attribute":
+            continue
+        declared_from = block.get("from")
+        if declared_from is None:
+            resolved_from: str | None = axis
+        elif isinstance(declared_from, str) and declared_from:
+            resolved_from = declared_from
+        else:
+            resolved_from = None
+        if resolved_from:
+            resolved[f"assign.{axis}.from"] = resolved_from
+    return resolved
 
 
 def _measurement_axis(measurements: Any) -> str:
@@ -567,19 +651,83 @@ CONSTANT_COLUMN_RULES: dict[str, tuple[str, str]] = {
         "whichever arrived first under the default rule. A weight is a fact "
         "about the unit, not about the measurement",
     ),
+    "assign": (
+        "E-DATA-ASSIGN-VARIES",
+        "An arm decides which condition the unit is measured in — not merely "
+        "which side of a split it lands on, which is the worst a mis-collapsed "
+        "cluster does, and not merely what size it stands for, which is the "
+        "worst a mis-collapsed weight does. Collapsing disagreeing rows would "
+        "leave that decision to the order the rows happen to be in. An arm is "
+        "a fact about the unit, not about the measurement",
+    ),
 }
 """The declarations whose column may not vary within a unit's measurement rows.
 
-**Two codes, not one**, deliberately: `reference.md` § Clustered units and
-§ Weighted samples state the same rule about two different columns, and they say
-different things about what breaks — a mis-collapsed weight mis-sizes what one
-unit stands for, while a mis-collapsed cluster decides which side of a split that
-unit lands on. One identifier for both would send the reader to the section that
-does not describe the damage.
+**Three codes, not one**, deliberately: `reference.md` § Clustered units,
+§ Weighted samples and § Allocation state the same rule about three different
+columns, and each says a different thing about what breaks — a mis-collapsed
+weight mis-sizes what one unit stands for, a mis-collapsed cluster decides which
+side of a split that unit lands on, and a mis-collapsed arm decides which
+*condition* the unit is measured in, the worst of the three because it changes
+what the run claims to have compared rather than how confidently it says so. One
+identifier for any pair of them would send the reader to a section that does not
+describe the damage.
 
 Keyed by the *declaration* rather than by the column, so a config naming one
-column in both places is checked once for each rather than silently dropping one
-under a precedence rule nothing in the documents states.
+column under two declarations is checked once for each **declaration considered
+on its own**: each is checked on its own and still raises its own code when it
+is the only one declared — a config declaring only `cluster_by: arm` over rows
+where `arm` varies raises `E-DATA-CLUSTER-VARIES`, and the same rows under only
+`assign: {arm: {method: by_attribute}}` raise `E-DATA-ASSIGN-VARIES` — rather
+than silently dropping one under a precedence rule nothing in the documents
+states. **This is not a claim that one `resolve_units` call reports both at
+once, and it is only ever tested one unit at a time**: `collapse_measurements`
+raises the first `ContractError` its per-unit loop finds and stops, so a single
+config naming the same varying column under both `cluster_by` and an axis's
+`assign.<axis>.from` gets exactly one code from one call — and only a unit that
+violates *both* declarations at once puts that choice to the test at all; a
+roster where one unit varies only in `cluster_by`'s column and a different unit
+varies only in `assign`'s still raises `E-DATA-CLUSTER-VARIES`, because that
+unit is first in roster order and its own single violation is all `resolve_units`
+ever sees before raising. For a unit that violates both, `constant`'s iteration
+order decides: `assign`'s entries are built before the flat pair's (see
+`resolve_units`), so `E-DATA-ASSIGN-VARIES` wins today, matching the severity
+order this docstring states — the once-unstated "precedence rule" is now this
+one, spelled out rather than left to whichever order a dict comprehension
+happened to build. What "deliberately, nothing here builds mutual exclusion"
+means is narrower than "reports both" and still true: neither check is skipped
+*because* the other declaration also names the column — remove the
+higher-priority declaration and the same config still raises the other's code,
+which a real precedence *rule* (a check disabled outright by a sibling's
+presence) would not do.
+
+**`assign` is keyed by the bare declaration name, not by `assign.<axis>.from`**,
+which is the design choice this registry had to make and the one the alternative
+loses: `resolve_units` cannot expand this dict per axis ahead of time, because
+the axes are declared in the config, not known when this module is loaded — so
+either the registry carries the code and message directly inside the `constant`
+mapping `resolve_units` builds (the code/message travel with each axis's entry,
+built fresh per axis), or the registry stays keyed by declaration name and the
+*lookup* strips a dotted key back to that name. The first would duplicate the
+same `(code, message)` pair once per declared axis instead of once, and would
+scatter this docstring's reasoning across every call site that builds a
+`constant` mapping rather than leaving it in the one place a reader checking
+"why this code" would look. So `_assign_constant_columns` below builds
+`constant` entries keyed `assign.<axis>.from` — the literal dotted path, for the
+error message — and `collapse_measurements`'s lookup strips back to the segment
+before the first `.`, which is a no-op for `cluster_by`/`weight_by` and finds
+`assign` for every axis alike. **`holdout.from` is not reachable through this
+registry today** — it is a single key under a fixed mapping, not one per
+declared axis, so it needs its own accessor the same shape `_assign_constant_columns`
+is for `assign`, and nothing in this task builds one.
+
+**Every key in this dict must itself contain no `.`.** `collapse_measurements`'s
+lookup strips a `constant` key back to the segment before its first `.` before
+indexing this registry with it, so a future bare key spelled with a dot would
+be unreachable by exactly the same stripping that makes `assign.<axis>.from`
+reachable, and a `constant` key whose prefix names no registry entry raises a
+bare `KeyError` — which, unlike a `ContractError`, is not caught by `validate`'s
+`except ContractError` around `resolve_units` and would escape it.
 """
 
 
@@ -588,12 +736,16 @@ def collapse_measurements(
 ) -> tuple[list[Unit], list[int]]:
     """Collapse rows sharing a `key` into one unit, in first-seen order.
 
-    `constant` maps a declaration in `CONSTANT_COLUMN_RULES` to the column it
-    names, and those columns are refused where they vary within one unit's rows
-    rather than being collapsed like any other attribute. **`validate` cannot host
-    that check**: `resolve_units` collapses internally, so a validate-time check
-    sees the post-collapse roster and the disagreeing values are already gone.
-    This function groups the rows by key and is the one place holding them.
+    `constant` maps a declaration to the column it names, and those columns are
+    refused where they vary within one unit's rows rather than being collapsed
+    like any other attribute. A key is either a bare entry of `CONSTANT_COLUMN_RULES`
+    (`cluster_by`, `weight_by`) or a dotted `assign.<axis>.from` — one per declared
+    axis, built by `_assign_constant_columns` — and the lookup below strips either
+    back to the segment before its first `.` to find the rule, so `assign`'s one
+    registry entry covers every axis alike. **`validate` cannot host that check**:
+    `resolve_units` collapses internally, so a validate-time check sees the
+    post-collapse roster and the disagreeing values are already gone. This
+    function groups the rows by key and is the one place holding them.
 
     Nothing else needs a second constancy check: this is the only path that merges
     rows into a unit, so under no `measurements` declaration there is one row per
@@ -638,7 +790,13 @@ def collapse_measurements(
             # being total here over a sparse column is what keeps this off its
             # escape path.
             if any(v != values[0] for v in values):
-                code, why = CONSTANT_COLUMN_RULES[declaration]
+                # `declaration.partition(".")[0]` is a no-op for `cluster_by`/
+                # `weight_by` — neither carries a `.` — and strips
+                # `assign.<axis>.from` back to `assign`, the one entry
+                # `CONSTANT_COLUMN_RULES` carries for every axis alike; see
+                # that registry's docstring for why the dotted key is not
+                # expanded into the registry itself.
+                code, why = CONSTANT_COLUMN_RULES[declaration.partition(".")[0]]
                 seen_values = list(dict.fromkeys(str(v) for v in values))
                 raise ContractError(
                     f"`data.units.{declaration}` names {column!r}, which unit "
@@ -718,6 +876,148 @@ def clusters_of(roster: UnitList, cluster_by: str) -> dict[str, str]:
             )
         membership[unit.key] = str(unit.attributes[cluster_by])
     return membership
+
+
+def arms_of(roster: UnitList, column: str, levels: Sequence[str]) -> dict[str, list[Unit]]:
+    """Which arm each unit belongs to, partitioned by declared level, in roster order.
+
+    **The single authority** for arm membership, beside `clusters_of` and for the
+    same reason: `validate` and the runner both have to ask "which units are in
+    this arm" of the same declaration, and a second notion of it is the
+    validate-clean-then-disagree gap in a new shape — here it would mean a
+    `between` design `validate` approved whose conditions core cannot actually
+    build, because the partition it draws at run time is not the one `validate`
+    checked. `validate` calls this to turn a mismatch into
+    `E-DATA-ASSIGN-LEVELS`; the subset view a `between` condition's roster is
+    built from, and the per-arm `n` a report counts, both have to read the same
+    partition rather than re-deriving arm membership from the roster on their
+    own — which is the defect class this docstring is written to prevent a third
+    instance of.
+
+    `column` names a **declared attribute** — `assign.<axis>.from`, already
+    resolved against its default by the caller — not a source column, the same
+    side of the line `weight_by` and `cluster_by` fall on: an arm is read per
+    unit when a `between` condition's roster is drawn, so it has to survive
+    resolution as an attribute. `levels` is `sweep.groups`' declared list for
+    that axis, in its own order.
+
+    **Set equality, not subset tolerance, in either direction** —
+    `reference.md` § Allocation states it twice: the `by_attribute` example
+    annotates `from` as naming "a unit attribute whose values are exactly the
+    declared levels", and `allocation: between` opens "each unit belongs to
+    exactly one arm". So this raises `E-DATA-ASSIGN-LEVELS` for either
+    violation, one code because a caller only needs to know the partition is
+    unusable and the message is what says which:
+
+    - a unit's value names none of `levels` — that unit would belong to no
+      arm, and there is no fourth part of `n` for it;
+    - a declared level no unit's value names — that arm's condition would
+      resolve zero units.
+
+    A unit carrying no value for `column` at all is folded into the first
+    violation rather than raising a distinct fault — `clusters_of`'s convention
+    for the same situation: it, too, names no declared level, for the same
+    reason a value outside `levels` does not.
+
+    Values are stringified before comparison, `clusters_of`'s reason: a table
+    yields `str` for every column, and an arm id is a label rather than a
+    quantity nothing downstream does arithmetic on.
+
+    A caller may rely on every returned level's list being non-empty and on
+    every unit in `roster` appearing in exactly one of them — the exact
+    partition set equality promises once this returns without raising.
+    """
+    declared = list(levels)
+    declared_set = set(declared)
+    partition: dict[str, list[Unit]] = {level: [] for level in declared}
+    unmatched: list[tuple[str, str | None]] = []
+    for unit in roster:
+        value = str(unit.attributes[column]) if column in unit.attributes else None
+        if value is None or value not in declared_set:
+            unmatched.append((unit.key, value))
+            continue
+        partition[value].append(unit)
+    if unmatched:
+        key, value = unmatched[0]
+        holds = "carries no value for it" if value is None else f"holds {value!r}"
+        raise ContractError(
+            f"the arm attribute {column!r} does not resolve to the declared levels "
+            f"({', '.join(declared)}) — unit {key!r} {holds}, naming none of them. "
+            "Every unit belongs to exactly one arm, so a value naming none of the "
+            f"declared levels leaves that unit in none of them "
+            f"({len(unmatched)} of {len(roster)} units affected)",
+            code="E-DATA-ASSIGN-LEVELS",
+        )
+    empty = [level for level in declared if not partition[level]]
+    if empty:
+        raise ContractError(
+            f"the arm attribute {column!r} does not resolve to the declared levels "
+            f"— no unit's value names {', '.join(empty)}. Every declared level "
+            "needs at least one unit, or that arm's condition resolves zero of "
+            "them",
+            code="E-DATA-ASSIGN-LEVELS",
+        )
+    return partition
+
+
+def arm_members(
+    roster: UnitList,
+    axes: Mapping[str, tuple[str, Sequence[str]]],
+    conditions: "Sequence[Any]",
+) -> dict[int, frozenset[str]]:
+    """Which units each resolved condition's own arm holds, one call into
+    `arms_of` per declared group axis rather than one per condition — the
+    reduction the runner's subset view is built from, so a condition on a group
+    axis is handed a real subset of the shared roster and not a second
+    resolution of it.
+
+    `axes` maps a group axis name to `(the resolved `assign.<axis>.from`
+    attribute, that axis's declared `sweep.groups` levels)` — the caller's own
+    resolution of the declaration, mirroring `validate._check_assign`'s. This
+    function's job is narrower than that resolution: it calls `arms_of` — **the
+    single authority** for a single axis's partition — exactly once per axis in
+    `axes`, and then reduces that partition across every axis a condition
+    selects, never deriving membership from the roster a second time by any
+    other route.
+
+    `conditions` is an iterable of objects carrying `.index`, `.values` and
+    `.selectors` — `sweep.Condition`'s own shape, read structurally rather than
+    imported, since `sweep.py` and `units.py` share no dependency edge today and
+    a caller building a lightweight stand-in for a test loses nothing by it.
+    `.selectors` names which of `.values`' paths are group cells; a condition
+    selecting more than one axis gets the *intersection* of each axis's arm —
+    § Validation's `sex × arm` cell — and a condition selecting none is absent
+    from the returned mapping entirely, rather than mapped to the whole roster,
+    since "no arm" and "every unit" are different claims and only `arms_of`
+    itself is the authority for which units a real arm holds.
+
+    A caller passing a condition whose selected axis or level is not in `axes`
+    — an inconsistency between the two arguments — raises a bare `KeyError`
+    rather than falling back to the whole roster: `axes` is meant to cover
+    every axis every condition selects, built from the same declarations that
+    built the conditions, so a gap here is the caller's own bug to see rather
+    than one this function should absorb by handing back units nothing
+    verified.
+    """
+    partitions = {axis: arms_of(roster, column, levels) for axis, (column, levels) in axes.items()}
+    result: dict[int, frozenset[str]] = {}
+    for condition in conditions:
+        if not condition.selectors:
+            continue
+        members: set[str] | None = None
+        # `partitions[axis]`, not `.get`, and `[level]`, not `.get`: `axes` is
+        # meant to cover every axis every condition selects, so a selected axis
+        # missing from it — or a level `arms_of` didn't partition — is the two
+        # arguments disagreeing, a caller bug this function must not paper over
+        # by silently dropping the axis from the intersection (which would hand
+        # back a *larger*, wrong arm) or the condition from the result (which
+        # would hand its execution the whole roster, one level up).
+        for axis in condition.selectors:
+            level = condition.values[axis]
+            keys = {u.key for u in partitions[axis][level]}
+            members = keys if members is None else members & keys
+        result[condition.index] = frozenset(members or set())
+    return result
 
 
 def cluster_count_of(membership: Mapping[str, str], keys: Iterable[str]) -> int:

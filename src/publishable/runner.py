@@ -15,7 +15,7 @@ from publishable.errors import ContractError
 from publishable.replication import LABEL_JOIN, Repeat
 from publishable.scope import Execution
 from publishable.stats import handed_to, kish_effective_n
-from publishable.sweep import condition_dir_name
+from publishable.sweep import Condition, condition_dir_name
 from publishable.units import UnitList, cluster_count_of
 
 
@@ -73,6 +73,16 @@ def _counts(
     and a reader comparing it against `completed` would be comparing two different
     unit sets. It stays an `int`, unlike `effective`: a cluster count is a count of
     whole things, and § Clustered units' own example prints `clusters: 10`.
+
+    **For a RECORDED column, this figure is not what `run.yaml` ends up printing.**
+    `stats.summarize_step` recomputes `clusters` again, per column, from that
+    column's own carrier keys ("`clusters` is recomputed per column" — that
+    function's own docstring) — identical to this one for a full column, and
+    correctly narrower for a ragged one — and that recompute is what reaches the
+    record, overwriting this figure rather than reading it. This value survives
+    unread here only for a DERIVED metric, where `summarize_step` has no
+    per-column carrier set to recompute over and passes `**counts` through
+    untouched.
 
     Listed ahead of `effective` because § The three-part `n` names the joiners in
     that order, and this dict's insertion order is what `run.yaml` renders.
@@ -140,17 +150,26 @@ def attrition(
     skipped or missing within its own group is `ineligible` or `failed`.
 
     `resolved` counts what was handed out across this condition, not the cohort:
-    without a fold that is the full roster, since every execution receives it
-    whole. With a fold it is the union over every *declared* fold's members
-    intersected with the roster — which the partitions cover exactly, so it is
-    the full roster again, whether or not each fold's execution ran. That is the
-    right answer at this scope: the counts a condition reports are against the
-    cohort the condition was run over, and a fold whose execution is missing
-    leaves its units genuinely unsettled, so they land in `failed` rather than
-    vanishing from the denominator. The smaller-than-roster figure is a fact
-    about one *execution* — `reference.md` § Repeat kinds states it at that
-    level, "`n: {resolved: 1, completed: 1}` per execution" under `k: all` — and
-    this function is per-condition, so it is not the number to expect here. No
+    without a fold that is `roster` itself, since every execution receives it
+    whole. `roster` is not always the whole shared roster — under a group axis
+    (`reference.md` § Expansion modes) the caller has already narrowed it to
+    this condition's own arm (`cli.py`'s `_cond_roster`, built from
+    `units.arm_members`), the read-side counterpart of the narrowing
+    `execute_plan` applies to what this condition's executions actually ran
+    over. `attrition` does not re-derive that narrowing itself, and must not:
+    it takes whichever `roster` the call site resolved, arm or whole, exactly
+    once, the same single-authority reason `weights` and `clusters` arrive
+    pre-resolved rather than rebuilt here. With a fold it is the union over
+    every *declared* fold's members intersected with `roster` — which the
+    partitions cover exactly, so it comes back to `roster` again, whether or
+    not each fold's execution ran. That is the right answer at this scope: the
+    counts a condition reports are against the cohort (or arm) the condition
+    was run over, and a fold whose execution is missing leaves its units
+    genuinely unsettled, so they land in `failed` rather than vanishing from
+    the denominator. The smaller-than-roster figure is a fact about one
+    *execution* — `reference.md` § Repeat kinds states it at that level, "`n:
+    {resolved: 1, completed: 1}` per execution" under `k: all` — and this
+    function is per-condition, so it is not the number to expect here. No
     per-execution `n` is written in this build: `run.yaml`'s `per_repeat` stays
     verbatim what each step returned (see `run_record.assemble_run_yaml`).
 
@@ -241,6 +260,34 @@ def attrition(
     )
 
 
+def _arm_keys(
+    condition_index: int,
+    keys: set[str],
+    arm_members: "dict[int, frozenset[str]] | None",
+) -> set[str]:
+    """The units a condition's execution was actually given, when the design
+    declares group axes — the arm counterpart to `_handed_keys`'s fold narrowing,
+    and the piece that makes the subset view real rather than merely avoided.
+
+    Indexed, not `.get`-ed: `arm_members` is built once, from the same resolved
+    conditions the plan itself was built from (`cli.command_run`), so a
+    condition index missing from it is the plan and the resolved arms
+    disagreeing — a core defect, not a condition with no arm. A `.get` default
+    would silently hand that condition the whole roster, which is exactly the
+    outcome two arms are declared to prevent, and is why this raises rather than
+    falling back the way `_handed_keys` does for the fold case it mirrors.
+    """
+    if arm_members is None:
+        return keys
+    if condition_index not in arm_members:
+        raise ContractError(
+            f"condition {condition_index} has no arm among arm_members "
+            f"({sorted(arm_members)!r}); the plan and the resolved arms disagree",
+            code="E-RUN-ARM-UNRESOLVED",
+        )
+    return set(arm_members[condition_index]) & keys
+
+
 def _handed_keys(
     repeat_label: str, keys: set[str], fold_members: dict[str, frozenset[str]] | None
 ) -> set[str]:
@@ -278,6 +325,7 @@ def _units_failed_anywhere(
     results: list[ExecutionResult],
     roster: "UnitList",
     fold_members: dict[str, frozenset[str]] | None = None,
+    arm_members: "dict[int, frozenset[str]] | None" = None,
 ) -> set[str]:
     """Units with no settled answer — neither recorded nor skipped — in at least
     one execution of a step that records units, across the whole run.
@@ -305,6 +353,12 @@ def _units_failed_anywhere(
     skipped units are checked against: `_handed_keys` scopes it to the partition
     that execution was actually given, not the entire resolved roster — the other
     k−1 partitions were never handed to it and so cannot count as failures of it.
+    `arm_members`, when a group axis is declared, narrows the same way for the
+    same reason — a unit of the other arm was never handed to this condition's
+    execution either, and counting it as failed would trip `max_failed_fraction`
+    on an arm this run never touched. `_arm_keys` applies before `_handed_keys`,
+    the same order `execute_plan`'s own narrowing uses, so a fold's complement is
+    computed within the arm rather than across it.
     """
     keys = {u.key for u in roster}
     recording_steps = {
@@ -314,7 +368,10 @@ def _units_failed_anywhere(
     for r in results:
         if r.execution.scope != "repeat" or r.execution.step_name not in recording_steps:
             continue
-        handed = _handed_keys(r.execution.repeat_label or "", keys, fold_members)
+        scoped = keys
+        if r.execution.condition_index is not None:
+            scoped = _arm_keys(r.execution.condition_index, keys, arm_members)
+        handed = _handed_keys(r.execution.repeat_label or "", scoped, fold_members)
         failed |= handed - (r.recorded | r.skipped)
     return failed
 
@@ -335,16 +392,32 @@ def step_dir_for(run_dir: Path, execution: Execution, collapse_repeats: bool) ->
     return base / execution.step_name
 
 
-def resolve_condition_cfg(base: dict[str, Any], values: dict[str, Any]) -> Config:
-    """Overlay this condition's swept values onto the base config.
+def resolve_condition_cfg(base: dict[str, Any], condition: Condition) -> Config:
+    """Overlay this condition's swept *parameter* values onto the base config.
 
-    Each dotted path in `values` names a leaf under `parameters`; the overlay
-    walks (creating intermediate mappings as needed) to that leaf and sets it,
-    so a `condition`- or `repeat`-scoped step reads exactly this condition's
-    value without ever mentioning the sweep that produced it.
+    A condition's `values` holds two kinds of dotted path, and only one of them
+    names a leaf under `parameters`. A parameter path — from `grid`, `paired`,
+    `sample`, `ablate`, or a parameter `baseline` — is overlaid: the walk creates
+    intermediate mappings as needed and sets the leaf, so a `condition`- or
+    `repeat`-scoped step reads exactly this condition's value without ever
+    mentioning the sweep that produced it. A **selector** path — a group cell —
+    is skipped, because `reference.md` § Expansion modes says "a group level is a
+    *set of units*": `{arm: control}` names no parameter at all, and laying it
+    over `parameters` would invent an `arm` no template's `parameter_spec`
+    declares, which a step could then read as `cfg.parameters.arm`. That is the
+    opposite of what a group axis claims — "same code, same parameters,
+    different units" — and two conditions on a group axis are supposed to
+    resolve to the *same* parameters.
+
+    Takes the `Condition` rather than its `values` mapping so the two fields
+    cannot arrive out of step: `expand` is the only place that knows which mode
+    produced a cell, and a `values`-plus-`selectors` pair is something a caller
+    can mismatch or forget. `Condition.selectors` is the answer, computed once.
     """
     doc = copy.deepcopy(base)
-    for path, value in values.items():
+    for path, value in condition.values.items():
+        if path in condition.selectors:
+            continue
         node = doc.setdefault("parameters", {})
         *heads, leaf = path.split(".")
         for head in heads:
@@ -393,6 +466,7 @@ def execute_plan(
     units: UnitList | None = None,
     max_failed_fraction: float | None = None,
     fold_members: dict[str, frozenset[str]] | None = None,
+    arm_members: "dict[int, frozenset[str]] | None" = None,
     measurements: dict[str, Any] | None = None,
 ) -> list[ExecutionResult]:
     """Run every execution in the plan, in order, one at a time.
@@ -404,6 +478,22 @@ def execute_plan(
     the roster that has failed in at least one execution crosses the threshold, no
     later execution can bring it back, and spending the remaining compute to
     confirm that is waste.
+
+    `arm_members` is `units.arm_members`'s answer, one frozenset of keys per
+    resolved condition that selects a group axis — `None` for a design that
+    declares none. An arm is a **subset view of the one roster resolved for the
+    whole run, never a re-resolution**: `Unit` is frozen and hashable by key
+    exactly because one roster is shared across every condition, and narrowing to
+    an arm here filters that same roster rather than reading the units a second
+    time. Narrowed exactly when `execution.condition_index is not None` — a `run`-
+    or `summary`-scoped execution belongs to no condition and so to no arm, and
+    keeps the whole roster unconditionally, the same way a `fold` repeat already
+    leaves those two scopes alone. The narrowing happens **before** the fold
+    branch below reads `units`, not after: a `fold` repeat's `train` is built as
+    "the roster minus what this execution was handed", and computing that
+    complement across the *whole* roster rather than within the arm would leak
+    the other arm's units into `.train` — the same class of leak
+    `units.partition_units` exists to prevent for a cluster, one level up.
     """
     collapse = len(repeats) <= 1
     seeds = {r.label: r.seed for r in repeats}
@@ -459,28 +549,38 @@ def execute_plan(
             digest=digest,
             seed=seed,
         )
+        # Arm narrowing first, before the fold branch below reads the roster: a
+        # `run`- or `summary`-scoped execution has no condition and so no arm
+        # (`execution.condition_index is None`) and keeps the whole roster,
+        # exactly the units the outer `units` variable still names — narrowing
+        # is a plain reassignment of the *local* `scoped_units`, so `units`
+        # itself stays untouched for `attrition`/`_units_failed_anywhere` below,
+        # the same reason the fold narrowing already left it alone.
+        scoped_units = units
+        if arm_members is not None and units is not None and execution.condition_index is not None:
+            arm_keys = _arm_keys(execution.condition_index, {u.key for u in units}, arm_members)
+            scoped_units = UnitList([u for u in units if u.key in arm_keys])
         # A fold repeat puts the units out of reach of the wider scopes: there is
         # no fold at "run" or "condition" scope, since folds are repeats and
         # repeats haven't happened yet, so a step fitting there would fit on units
         # later folds test on. By "summary" scope every fold has already run, so
         # there is nothing left to leak, and it keeps the whole roster like the
-        # no-fold case. `units` (the full roster, from the outer scope) stays
-        # untouched for `attrition`/`_units_failed_anywhere` below — only this
-        # execution's own `step_units` narrows.
-        if fold_members is None or units is None:
-            step_units = units
+        # no-fold case — the arm-narrowed roster, when a group axis is declared,
+        # since arm narrowing already ran above.
+        if fold_members is None or scoped_units is None:
+            step_units = scoped_units
         elif execution.scope in ("run", "condition"):
             step_units = None  # no fold exists yet at these scopes
         elif execution.scope == "repeat":
             handed = _handed_keys(
-                execution.repeat_label or "", {u.key for u in units}, fold_members
+                execution.repeat_label or "", {u.key for u in scoped_units}, fold_members
             )
             step_units = UnitList(
-                [u for u in units if u.key in handed],
-                train=UnitList([u for u in units if u.key not in handed]),
+                [u for u in scoped_units if u.key in handed],
+                train=UnitList([u for u in scoped_units if u.key not in handed]),
             )
         else:
-            step_units = units  # "summary": every fold has already run
+            step_units = scoped_units  # "summary": every fold has already run
         io = StepIO(
             step_dir=step_dir_for(run_dir, execution, collapse),
             input_dir=input_dir,
@@ -571,7 +671,7 @@ def execute_plan(
 
         if max_failed_fraction is not None and units is not None:
             resolved = len(units)
-            failed = _units_failed_anywhere(results, units, fold_members)
+            failed = _units_failed_anywhere(results, units, fold_members, arm_members)
             if resolved and len(failed) / resolved > max_failed_fraction:
                 break
     return results

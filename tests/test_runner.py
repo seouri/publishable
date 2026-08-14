@@ -8,6 +8,7 @@ from tests.test_stats import _repeat_result
 from publishable import BaseExperiment, BaseStep
 from publishable.config import Config
 from publishable.errors import ContractError
+from publishable.hashes import parameters_hash
 from publishable.replication import Repeat
 from publishable.run_record import assemble_run_yaml, run_status
 from publishable.runner import (
@@ -20,7 +21,8 @@ from publishable.runner import (
     step_dir_for,
 )
 from publishable.scope import Execution, build_plan
-from publishable.units import Unit, UnitList
+from publishable.sweep import Condition, expand
+from publishable.units import Unit, UnitList, units_hash
 
 
 class Load(BaseStep):
@@ -104,6 +106,7 @@ def harness(
     max_failed_fraction=None,
     conditions=None,
     fold_members=None,
+    arm_members=None,
     measurements=None,
 ):
     class P(BaseExperiment):
@@ -118,16 +121,22 @@ def harness(
     run_dir = tmp_path / "run"
     run_dir.mkdir(parents=True, exist_ok=True)
     (tmp_path / "input").mkdir(parents=True, exist_ok=True)
+    # One `Config` per condition index the caller declared, plus the `-1` wide
+    # slot every run resolves regardless — a fixed `{0: ..., -1: ...}` left every
+    # multi-condition (arm) test with no `cfg` for condition 1 and `E-RUN-CFG-MISSING`.
+    cfgs = {index: Config({"parameters": {}}) for index, _label in conditions}
+    cfgs[-1] = Config({"parameters": {}})
     results = execute_plan(
         plan=plan,
         run_dir=run_dir,
         input_dir=tmp_path / "input",
-        cfgs={0: Config({"parameters": {}}), -1: Config({"parameters": {}})},
+        cfgs=cfgs,
         repeats=repeats,
         digest="sha256:abc",
         units=units,
         max_failed_fraction=max_failed_fraction,
         fold_members=fold_members,
+        arm_members=arm_members,
         measurements=measurements,
     )
     return run_dir, results, repeats
@@ -790,6 +799,232 @@ def test_a_summary_step_under_a_fold_still_gets_the_full_roster(tmp_path: Path):
     assert results[0].returned == {"keys": "u1,u2,u3,u4"}
 
 
+def _arm_roster12():
+    """12 units, 7 `control` and 5 `treatment` — deliberately uneven, and neither
+    half is 6, so an arm can't be confused with the other arm, with half the
+    roster, or with the whole roster by size alone. No `cluster_by` is declared
+    and the fixture carries no attribute a cluster test would key on, so this
+    can't double as a cluster fixture — arm-aware and cluster-aware behaviour
+    would be indistinguishable if it did."""
+    control = [Unit(key=f"c{i}", attributes={"arm": "control"}) for i in range(7)]
+    treatment = [Unit(key=f"t{i}", attributes={"arm": "treatment"}) for i in range(5)]
+    return UnitList(control + treatment)
+
+
+def _arm_members12():
+    roster = _arm_roster12()
+    return {
+        0: frozenset(u.key for u in roster if u.attributes["arm"] == "control"),
+        1: frozenset(u.key for u in roster if u.attributes["arm"] == "treatment"),
+    }
+
+
+def test_two_arms_get_different_rosters_and_neither_is_the_whole_roster(tmp_path: Path):
+    """The bar H2 set: 'a groups axis that expanded conditions while handing each
+    the same roster would report two identical measurements as two arms'. 12
+    units, 7 control and 5 treatment — deliberately uneven, so the two arms
+    cannot be confused with each other or with the roster by size alone.
+
+    `units_hash` over the FULL roster is unaffected by narrowing (asserted
+    below), because narrowing filters a view rather than re-resolving — but that
+    assertion alone does not discriminate re-resolution from the real thing,
+    since a re-resolution producing the same keys and attributes hashes
+    identically. `same_objects` is what actually discriminates: an arm is a
+    subset view, so every unit a condition-scoped step sees must be the exact
+    same `Unit` object the roster holds, not a freshly built one with an equal
+    key."""
+    roster = _arm_roster12()
+    before = units_hash(roster)
+    arm_members = _arm_members12()
+
+    class SeeYourArm(BaseStep):
+        scope = "condition"
+
+        def run(self, cfg, io):
+            return {
+                "n": len(io.units),
+                "same_objects": all(any(u is r for r in roster) for u in io.units),
+            }
+
+    _, results, _ = harness(
+        tmp_path,
+        [SeeYourArm],
+        units=roster,
+        conditions=[(0, "control"), (1, "treatment")],
+        arm_members=arm_members,
+    )
+    by_index = {r.execution.condition_index: r for r in results}
+    sizes = {by_index[0].returned["n"], by_index[1].returned["n"]}
+    assert sizes == {7, 5}
+    assert 12 not in sizes
+    assert by_index[0].returned["same_objects"] is True
+    assert by_index[1].returned["same_objects"] is True
+    assert units_hash(roster) == before
+
+
+def test_run_and_summary_scope_keep_the_whole_roster_under_arms(tmp_path: Path):
+    """A `run`-scope step runs once for the whole run and a `summary`-scope step
+    runs once after every condition — neither belongs to an arm, so both must
+    see all 12 units. This is the pair that discriminates a correct
+    `execution.condition_index is not None` predicate from an implementation
+    that narrows at all four scopes, which would still pass the size assertion
+    above."""
+    roster = _arm_roster12()
+    arm_members = _arm_members12()
+
+    class TouchesAtRun(BaseStep):
+        scope = "run"
+
+        def run(self, cfg, io):
+            return {"n": len(io.units)}
+
+    class TouchesAtSummary(BaseStep):
+        scope = "summary"
+
+        def run(self, cfg, io):
+            return {"n": len(io.units)}
+
+    _, results, _ = harness(
+        tmp_path,
+        [TouchesAtRun, TouchesAtSummary],
+        units=roster,
+        conditions=[(0, "control"), (1, "treatment")],
+        arm_members=arm_members,
+    )
+    by_step = {r.execution.step_name: r for r in results}
+    assert by_step["touches_at_run"].returned == {"n": 12}
+    assert by_step["touches_at_summary"].returned == {"n": 12}
+
+
+def test_a_fold_repeat_composes_with_arms_without_leaking_the_other_arm(tmp_path: Path):
+    """`groups` + `fold` is not refused: each unit is still in exactly one fold,
+    and cross-validation happens within the arm. `fold01`/`fold02` are drawn
+    across the WHOLE 12-unit roster, spanning both arms — the realistic shape,
+    since `partition_units` in `cli.py` partitions the roster before arms narrow
+    anything. Narrowing to the arm before the fold branch reads `units` is what
+    keeps `.train` from holding units of the OTHER arm: if the arm narrowing ran
+    after the fold branch instead, `train` would be computed as the complement
+    over the whole roster and leak the other arm in, the same class of fault
+    `partition_units` exists to prevent for a cluster."""
+    roster = _arm_roster12()
+    arm_members = _arm_members12()
+    fold_members = {
+        "fold01": frozenset({"c0", "c1", "c2", "c3", "t0", "t1"}),
+        "fold02": frozenset({"c4", "c5", "c6", "t2", "t3", "t4"}),
+    }
+    control_keys = arm_members[0]
+    treatment_keys = arm_members[1]
+
+    class SeeFoldWithinArm(BaseStep):
+        scope = "repeat"
+
+        def run(self, cfg, io):
+            return {
+                "test_keys": ",".join(sorted(u.key for u in io.units)),
+                "train_keys": ",".join(sorted(u.key for u in io.units.train)),
+            }
+
+    _, results, _ = harness(
+        tmp_path,
+        [SeeFoldWithinArm],
+        units=roster,
+        conditions=[(0, "control"), (1, "treatment")],
+        repeats=[Repeat("fold", "fold01", 0), Repeat("fold", "fold02", 0)],
+        fold_members=fold_members,
+        arm_members=arm_members,
+    )
+    for r in results:
+        arm_keys = control_keys if r.execution.condition_index == 0 else treatment_keys
+        test_str, train_str = r.returned["test_keys"], r.returned["train_keys"]
+        test_keys = frozenset(test_str.split(",")) if test_str else frozenset()
+        train_keys = frozenset(train_str.split(",")) if train_str else frozenset()
+        # Every unit this execution sees, and every unit in its complement,
+        # belongs to this condition's own arm — never the other one.
+        assert test_keys <= arm_keys
+        assert train_keys <= arm_keys
+        assert test_keys | train_keys == arm_keys
+    by_pair = {(r.execution.condition_index, r.execution.repeat_label): r for r in results}
+    assert by_pair[(0, "fold01")].returned["test_keys"] == "c0,c1,c2,c3"
+    assert by_pair[(1, "fold01")].returned["test_keys"] == "t0,t1"
+
+
+def test_a_missing_arm_entry_is_a_core_defect_not_a_whole_roster_fallback(tmp_path: Path):
+    """Indexed, not `.get`-ed: a condition index absent from `arm_members` means
+    the plan and the resolved arms disagree, which is a core bug — handing that
+    condition the whole roster instead (a `.get` default) is exactly the outcome
+    two declared arms exist to make impossible, so this raises loud, outside the
+    per-execution `try`, the same treatment `E-RUN-CFG-MISSING` gets for the
+    analogous plan/cfgs disagreement — rather than being absorbed as one
+    execution's own failure."""
+    roster = _arm_roster12()
+
+    class SeeYourArm(BaseStep):
+        scope = "condition"
+
+        def run(self, cfg, io):
+            return {"n": len(io.units)}
+
+    with pytest.raises(ContractError) as excinfo:
+        harness(
+            tmp_path,
+            [SeeYourArm],
+            units=roster,
+            conditions=[(0, "control"), (1, "treatment")],
+            arm_members={0: frozenset({"c0"})},  # condition 1 missing on purpose
+        )
+    assert excinfo.value.code == "E-RUN-ARM-UNRESOLVED"
+
+
+def test_units_failed_anywhere_does_not_blame_the_other_arm():
+    """A unit that never belonged to this condition's arm was never handed to
+    its executions, so its absence from `recorded`/`skipped` must not count as
+    a failure — the arm counterpart of `test_without_folds_the_union_is_unchanged`
+    for the analogous fold guarantee. 4 units split 2/2 into two arms, the same
+    partition `test_a_fold_reports_its_partition_as_resolved_not_the_cohort`
+    (above) uses for two *folds* — harmless here rather than a shared-boundary
+    violation, since `fold_members=None` in every assertion below, so no path
+    through this test ever reads that partition as a fold's. Any cross-arm leak
+    into `_units_failed_anywhere` shows up as a spurious member of the returned
+    set."""
+    roster = _roster4()
+    arm_members = {0: frozenset({"u1", "u2"}), 1: frozenset({"u3", "u4"})}
+    results = [
+        _repeat_result("analyze", "seed01", 0, {"u1": {}, "u2": {}}),
+        _repeat_result("analyze", "seed01", 1, {"u3": {}}),  # u4 never settled
+    ]
+    assert _units_failed_anywhere(results, roster, None, arm_members) == {"u4"}
+
+
+def test_attrition_and_units_failed_anywhere_agree_on_which_unit_failed():
+    """Task 13's side-by-side check the addendum asked for and the report
+    initially left unbuilt: over the SAME 7/5 fixture and the SAME two
+    results `attrition`'s own reconciliation test uses (`c0` `io.skip`-ped in
+    `control`, `t0` unsettled in `treatment`), does `_units_failed_anywhere`
+    (task 12, run-level, cross-step union) name the same unit `attrition`
+    (per-condition, per-step intersection) calls `failed`?
+
+    Yes: `_units_failed_anywhere` given the correct `arm_members` returns
+    exactly `{"t0"}` — agreeing with `attrition`'s `treatment` block
+    (`failed: 1`) and its `control` block (`failed: 0`; `c0` is `ineligible`,
+    not failed, in both). Given `arm_members=None` instead — the arm-blind
+    reading task 12 fixed `_units_failed_anywhere` out of — it returns all
+    12 units: `control`'s execution, scoped to the whole roster, sees every
+    `treatment` unit as unsettled, and `treatment`'s execution symmetrically
+    blames every `control` unit, so the union covers the roster. That is the
+    number the addendum asked for, not the reasoning."""
+    roster = _arm_roster12()
+    arm_members = _arm_members12()
+    control_rows = {f"c{i}": {} for i in range(1, 7)}  # c0 skipped
+    treatment_rows = {f"t{i}": {} for i in range(1, 5)}  # t0 unsettled
+    results = [
+        _repeat_result("measure", "seed01", 0, control_rows, skipped=frozenset({"c0"})),
+        _repeat_result("measure", "seed01", 1, treatment_rows),
+    ]
+
+    assert _units_failed_anywhere(results, roster, None, arm_members) == {"t0"}
+    assert _units_failed_anywhere(results, roster, None, None) == {u.key for u in roster}
+
+
 def test_a_single_repeat_skip_is_still_ineligible(tmp_path: Path):
     """With one repeat, intersection over a single set is that set — unchanged behavior."""
     roster = UnitList([Unit(key="p0"), Unit(key="p1")])
@@ -1074,6 +1309,17 @@ def test_attrition_requires_condition_index():
 BASE_PARAMS = {"parameters": {"analysis": {"method": "pearson", "min_samples": 30}}}
 
 
+def _condition(
+    index: int, values: dict[str, object], selectors: frozenset[str] = frozenset()
+) -> Condition:
+    """A `Condition` carrying just what `resolve_condition_cfg` reads.
+
+    It takes the condition rather than a bare `values` mapping, so a group
+    cell's path arrives already marked as selecting units. Everything else on
+    the dataclass is irrelevant here and left at its default."""
+    return Condition(index=index, label=None, values=values, selectors=selectors)
+
+
 def run_two_conditions(tmp_path: Path, step_cls):
     """Two conditions sweeping `analysis.method` over pearson/spearman, each with
     its own `Config` built by `resolve_condition_cfg`, plus the wide `Config`
@@ -1090,8 +1336,8 @@ def run_two_conditions(tmp_path: Path, step_cls):
     run_dir.mkdir(parents=True, exist_ok=True)
     (tmp_path / "input").mkdir(parents=True, exist_ok=True)
     cfgs = {
-        0: resolve_condition_cfg(BASE_PARAMS, {"analysis.method": "pearson"}),
-        1: resolve_condition_cfg(BASE_PARAMS, {"analysis.method": "spearman"}),
+        0: resolve_condition_cfg(BASE_PARAMS, _condition(0, {"analysis.method": "pearson"})),
+        1: resolve_condition_cfg(BASE_PARAMS, _condition(1, {"analysis.method": "spearman"})),
         -1: resolve_wide_cfg(BASE_PARAMS, {"analysis.method"}),
     }
     return execute_plan(
@@ -1178,13 +1424,96 @@ def test_per_condition_cfgs_are_not_the_same_object(tmp_path: Path):
     in this project first showed itself. Assert the deep-copy actually happened,
     and that the shared `BASE_PARAMS` fixture survives both calls untouched."""
     before = copy.deepcopy(BASE_PARAMS)
-    cfg0 = resolve_condition_cfg(BASE_PARAMS, {"analysis.method": "pearson"})
-    cfg1 = resolve_condition_cfg(BASE_PARAMS, {"analysis.method": "spearman"})
+    cfg0 = resolve_condition_cfg(BASE_PARAMS, _condition(0, {"analysis.method": "pearson"}))
+    cfg1 = resolve_condition_cfg(BASE_PARAMS, _condition(1, {"analysis.method": "spearman"}))
     assert cfg0 is not cfg1
     assert cfg0.raw["parameters"]["analysis"] is not cfg1.raw["parameters"]["analysis"]
     assert cfg0.parameters.analysis.method == "pearson"
     assert cfg1.parameters.analysis.method == "spearman"
     assert BASE_PARAMS == before
+
+
+def test_a_group_cell_adds_no_parameter() -> None:
+    """`parameters` gains no `arm` key, and the resolved config's
+    `parameters_hash` matches the same design without the group axis.
+
+    Every other test in this slice passes whether or not the phantom parameter
+    appears, which is why this one is first. § Expansion modes: "two conditions
+    on a group axis can share a `parameters_hash` — and that's correct … same
+    code, same parameters, different units". A group cell laid over `parameters`
+    invents an `arm` no `parameter_spec` declares, which a `condition`-scoped
+    step then reads as `cfg.parameters.arm`.
+
+    Built through `expand` rather than by hand, over a sweep whose baseline fixes
+    the group level (rows 0 and 1) beside the arm axis crossed with the parameter
+    axis (rows 2 to 5). That baseline is a declaration `validate` refuses
+    (`E-SWEEP-BASELINE-GROUP`); it is kept here because `expand` is permissive by
+    design and the six rows it yields are the widest set of shapes
+    `resolve_condition_cfg` has to be right about. Rows 2 and 4 are the two arms
+    of one design, so the claim is asserted between them directly.
+    """
+    conditions = expand(
+        {
+            "sweep": {
+                "groups": [{"by": "arm", "levels": ["control", "treatment"]}],
+                "grid": {"analysis.method": ["pearson", "spearman"]},
+                "baseline": {"arm": "control"},
+            }
+        }
+    )
+    # Pinned, so this test reports a design change in `expand` rather than
+    # silently probing rows that are no longer the ones described above.
+    assert [dict(c.values) for c in conditions] == [
+        {"analysis.method": "pearson", "arm": "control"},
+        {"analysis.method": "spearman", "arm": "control"},
+        {"arm": "control", "analysis.method": "pearson"},
+        {"arm": "control", "analysis.method": "spearman"},
+        {"arm": "treatment", "analysis.method": "pearson"},
+        {"arm": "treatment", "analysis.method": "spearman"},
+    ]
+    resolved = [resolve_condition_cfg(BASE_PARAMS, c) for c in conditions]
+
+    assert all("arm" not in cfg.raw["parameters"] for cfg in resolved)
+    for cfg in resolved:
+        with pytest.raises(ContractError) as excinfo:
+            _ = cfg.parameters.arm
+        assert excinfo.value.code == "E-STEP-PARAM-UNKNOWN"
+
+    # The claim itself: the arm-fixing row and the arm-free row at the same
+    # method are the same parameters, byte for byte and by hash. Asserted
+    # directly rather than by inspecting the mapping — a phantom key nested one
+    # level down would pass the `not in` above and fail here.
+    assert resolved[0].raw == resolved[2].raw
+    assert parameters_hash(resolved[0].raw) == parameters_hash(resolved[2].raw)
+    assert parameters_hash(resolved[1].raw) == parameters_hash(resolved[3].raw)
+    # § Expansion modes' sentence itself, now that the axis expands: the control
+    # arm and the treatment arm at one method are "same code, same parameters,
+    # different units".
+    assert resolved[2].raw == resolved[4].raw
+    assert parameters_hash(resolved[2].raw) == parameters_hash(resolved[4].raw)
+    # And a group axis is not a way to make two arms look alike: the two
+    # *methods* still resolve to different parameters.
+    assert parameters_hash(resolved[0].raw) != parameters_hash(resolved[1].raw)
+
+    # The control for the whole distinction: with no `groups` declared, a swept
+    # path named `arm` is an ordinary parameter and must still be planted.
+    plain = expand({"sweep": {"grid": {"arm": ["control", "treatment"]}}})
+    plain_cfg = resolve_condition_cfg(BASE_PARAMS, plain[0])
+    assert plain_cfg.raw["parameters"]["arm"] == "control"
+
+
+def test_an_existing_condition_resolves_byte_identically() -> None:
+    """The worked example declares no `groups`, and nothing about it may move.
+
+    A condition whose `selectors` is empty resolves to exactly the document it
+    resolved to before selectors existed — pinned as a literal rather than
+    compared against a second call, which would agree with itself whatever both
+    calls did."""
+    condition = expand({"sweep": {"grid": {"analysis.method": ["pearson", "spearman"]}}})[1]
+    assert condition.selectors == frozenset()
+    assert resolve_condition_cfg(BASE_PARAMS, condition).raw == {
+        "parameters": {"analysis": {"method": "spearman", "min_samples": 30}}
+    }
 
 
 def test_resolve_wide_cfg_plants_the_marker_even_when_the_parent_is_absent(tmp_path: Path):

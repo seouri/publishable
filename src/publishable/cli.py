@@ -15,10 +15,11 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
+from publishable.artifacts import allocation_hash, build_allocation_document
 from publishable.base_experiment import BaseExperiment, load_experiment
 from publishable.coercion import coerce_scalars
 from publishable.config import Config
-from publishable.contrasts import resolve_contrasts, units_matching
+from publishable.contrasts import differing_axes, resolve_contrasts, units_matching
 from publishable.correction import Member, corrected_fields
 from publishable.diagnostics import (
     EXIT_FAILED,
@@ -45,7 +46,13 @@ from publishable.replication import (
 )
 from publishable.run_identity import RunLock, allocate_run_dir, point_latest
 from publishable.run_record import assemble_run_yaml, run_status, summary_values
-from publishable.runner import attrition, execute_plan, resolve_condition_cfg, resolve_wide_cfg
+from publishable.runner import (
+    _arm_keys,
+    attrition,
+    execute_plan,
+    resolve_condition_cfg,
+    resolve_wide_cfg,
+)
 from publishable.scaffold import scaffold_project
 from publishable.scope import Execution, build_plan
 from publishable.stats import (
@@ -70,6 +77,7 @@ from publishable.sweep import (
     condition_dir_name,
     expand,
     sample_seed_for,
+    selector_paths,
     sweep_document,
 )
 from publishable.templates.base import BaseTemplate
@@ -77,6 +85,7 @@ from publishable.templates.registry import get_template
 from publishable.units import (
     Unit,
     UnitList,
+    arm_members,
     clusters_of,
     fold_basis,
     partition_units,
@@ -88,6 +97,7 @@ from publishable.validate import load_document, validate_config
 
 if TYPE_CHECKING:
     from publishable.contrasts import Comparison
+    from publishable.runner import ExecutionResult
     from publishable.sweep import Condition
 
 OPERATION_COMMANDS = {"validate", "run"}
@@ -197,32 +207,265 @@ def _declared_comparisons(doc: dict[str, Any], conditions: "list[Condition]") ->
     return [comp for comp in resolve_contrasts(doc, conditions) if comp.declared]
 
 
-_MISSING = object()
+def _wide_swept_paths(sweep_block: dict[str, Any]) -> set[str]:
+    """Every `parameters` path a condition fixes, for `resolve_wide_cfg` to mark unreadable.
 
+    Every path any condition fixes, not just the grid's axes. A path
+    `sweep.baseline` fixes varies across conditions by definition — condition
+    `00` uses the baseline's value and every other condition uses the base
+    config's — so it is exactly as unreadable at `run`/`summary` scope as a
+    grid axis is. Reading the grid alone left a baseline-only path resolving
+    to the base value, which is a value no condition in the run used.
 
-def _differing_axes(of: "Condition", against: "Condition") -> list[str]:
-    """The axes two conditions disagree on, in the order the sweep declares them.
+    `_swept_paths` rather than `grid` alone: every axis-shaped mode's paths vary
+    across conditions, and `paired`'s and `sample`'s did not reach here when each
+    became a real axis — a sampled path stayed readable at `run`/`summary` scope
+    and resolved to the base config's value, which is exactly the "a value no
+    condition in the run used" failure the baseline half of this union exists to
+    prevent, reached through a mode added after it was written.
+    `ablated_paths` is unioned in for the same reason and by the same rule,
+    from the other side of the axis/non-axis split: an ablated path varies
+    across conditions too. Most are already covered by the `baseline` term —
+    a removed path is one the baseline fixes — but an `override` path the
+    baseline leaves alone is not, and it is exactly the residue this union has
+    now been widened for three times.
 
-    `Condition.values` is built by `sweep.expand` from `grid.items()`, so
-    iterating `of.values` first gives declaration order — which is what
-    makes `differs_on` stable across runs rather than set-ordered. But the
-    two sides' key sets are not guaranteed equal, and since
-    `E-SWEEP-BASELINE-PARTIAL` was retired they can differ in *both*
-    directions: a baseline may fix an axis the grid never sweeps (present in
-    the baseline condition's `values`, absent from every grid condition's),
-    and a grid axis need no longer be fixed in the baseline at all, which is
-    what per-cell expansion made legal. Iterating only `of.values` would
-    silently skip an axis of the first kind whenever it differs from that
-    axis's own parameter default, so this walks the union of both sides' keys
-    — required rather than merely defensive — comparing with `.get` against
-    a sentinel (not `None`, which a real swept value could legitimately be)
-    so a key present on one side and absent on the other always counts as
-    differing rather than being skipped.
+    **`selector_paths` is subtracted**, and it is the one term that narrows
+    rather than widens. Every `groups` axis's path arrives through the
+    `_swept_paths` term above, in every design that declares one, and a group
+    path names no parameter, so planting a `SweptAway` marker at `parameters.arm`
+    would invent the same
+    phantom parameter `resolve_condition_cfg` now refuses to invent, one scope
+    over: a `run`- or `summary`-scoped step reading `cfg.parameters.arm` would
+    get `E-STEP-SWEPT-PARAM` — "this is swept, you cannot read it here" — for a
+    parameter that does not exist in any scope. Subtracting leaves the honest
+    refusal, `E-STEP-PARAM-UNKNOWN` from `Node.__getattr__`.
+
+    A function rather than the inline union it was, so the subtraction is
+    testable directly: `tests/test_cli.py`'s
+    `test_a_group_path_gets_no_swept_away_marker` pins the exact set for a
+    hand-built `sweep` block, and `test_a_group_axis_actually_narrows_end_to_end`
+    reaches this line for real through `command_run`, now that `validate` no
+    longer refuses a declared `groups` axis outright.
     """
-    ordered_keys = list(of.values) + [k for k in against.values if k not in of.values]
-    return [
-        k for k in ordered_keys if of.values.get(k, _MISSING) != against.values.get(k, _MISSING)
-    ]
+    selectors = set(selector_paths(sweep_block))
+    return (
+        set(_swept_paths(sweep_block))
+        | set(ablated_paths(sweep_block))
+        | set(sweep_block.get("baseline") or {})
+    ) - selectors
+
+
+def _resolved_group_axes(
+    units_decl: dict[str, Any] | None, sweep_block: dict[str, Any]
+) -> dict[str, tuple[str, list[str]]]:
+    """Every `sweep.groups` axis resolved to `(assign.<axis>.from, declared levels)`
+    — `units.arm_members`'s own input shape — read the same way
+    `validate._check_assign`'s `by_attribute` branch resolves the pair: the
+    declared `from` if it is a non-empty string, else the axis name itself.
+
+    Skips an axis whose `levels` does not resolve to a non-empty list of
+    strings, matching `_check_assign`'s own skip for that shape — `sweep.groups`'s
+    own shape check is `validate`'s to report, or not report at all in this
+    build, and inventing a second notion of "resolved" here would not change
+    that. A malformed `assign` block (absent, non-mapping, or naming a method
+    other than `by_attribute`) resolves the axis to its own name, the same
+    default `_check_assign` falls back to before its own checks on the block
+    would have already reported the malformation as a finding.
+
+    **That skip is narrower than `sweep.selector_paths`'s own idea of "a group
+    axis exists"**, and the caller must not gate on this function's own
+    truthiness for that reason: `selector_paths` — the same function `expand`
+    uses to decide which paths are group cells — accepts a `levels` list of any
+    element type, so a config with e.g. `levels: [1, 2]` still expands into
+    conditions carrying `Condition.selectors == {"that axis"}`, while this
+    function silently omits the axis from its result. `command_run` gates
+    calling `units.arm_members` on `selector_paths(sweep_block)`, not on this
+    function's result, exactly so that disagreement surfaces as `arm_members`'s
+    own `KeyError` — a caller bug to see — rather than as a silently
+    empty `group_axes` that skips arm narrowing for every condition on that
+    axis.
+
+    Reachable from `command_run` now that task 17 retired
+    `E-SWEEP-GROUPS-UNSUPPORTED`: `tests/test_cli.py`'s
+    `test_a_group_axis_actually_narrows_end_to_end` and
+    `test_allocation_json_is_written_with_exact_arm_keys_when_declared` reach
+    this line for real, through a passing `command_run`, the same way
+    `_wide_swept_paths` above is now reachable for the selector-path
+    subtraction it depends on.
+    """
+    assign = (units_decl or {}).get("assign")
+    blocks = assign if isinstance(assign, dict) else {}
+    axes: dict[str, tuple[str, list[str]]] = {}
+    for entry in sweep_block.get("groups") or []:
+        if not isinstance(entry, dict):
+            continue
+        axis = entry.get("by")
+        if not isinstance(axis, str) or not axis:
+            continue
+        levels = entry.get("levels")
+        if not (
+            isinstance(levels, list) and levels and all(isinstance(v, str) for v in levels)
+        ):
+            continue
+        block = blocks.get(axis)
+        # Gated on `method == "by_attribute"`, matching `_check_assign`'s own
+        # elif chain and `units._assign_constant_columns`'s own gate for the
+        # same reason: `from` "means nothing" under `random`/`blocked` or an
+        # absent/out-of-enum method, each already refused at `validate` before
+        # this line is ever reached (`E-DATA-ASSIGN-DRAWN`/`E-DATA-ASSIGN-METHOD`).
+        declared_from = (
+            block.get("from")
+            if isinstance(block, dict) and block.get("method") == "by_attribute"
+            else None
+        )
+        column = declared_from if isinstance(declared_from, str) and declared_from else axis
+        axes[axis] = (column, levels)
+    return axes
+
+
+def _cond_roster(
+    roster: "UnitList",
+    cond_index: int,
+    arm_members_map: "dict[int, frozenset[str]] | None",
+) -> "UnitList":
+    """The units condition `cond_index` counts against — its own arm's subset
+    of the shared roster when a group axis selects one, and the whole roster
+    (the same object, not a copy) otherwise.
+
+    This is the read side of the same narrowing `execute_plan` already applies
+    to the units a condition's steps EXECUTE against (`runner.py`'s own
+    `scoped_units`): `attrition` and `statistics.report_by`'s per-level table
+    both count units for a condition, and until this function existed they
+    counted the whole roster while the run itself executed only the arm —
+    `resolved: 12` reported beside 5 units the condition's own executions
+    never touched, with the other arm's 7 silently landing in `failed`
+    (`reference.md` § What isn't a repeat: "Under a group axis it doesn't
+    reconcile, and shouldn't — each arm's interval is over that arm's units").
+
+    Built on `runner._arm_keys`, not `units.arms_of` or a fresh comprehension
+    over `roster`: `arm_members_map` is `units.arm_members`'s answer, already
+    resolved once from the same conditions the plan itself was built from, and
+    `_arm_keys` is the guard `execute_plan` already raises through
+    (`E-RUN-ARM-UNRESOLVED`) for a condition index the resolved arms disagree
+    with the plan about. A fourth derivation of arm membership here — reaching
+    back into `units.arms_of` and re-reducing across axes per condition — is
+    exactly the defect the single-authority pattern (`arms_of`, then
+    `arm_members`, then this) exists to prevent a third instance of.
+    """
+    if arm_members_map is None:
+        return roster
+    keys = _arm_keys(cond_index, {u.key for u in roster}, arm_members_map)
+    return UnitList([u for u in roster if u.key in keys])
+
+
+def _cond_beside_n(
+    beside_n: dict[str, Any], cond_roster: "UnitList", roster: "UnitList"
+) -> dict[str, Any]:
+    """`beside_n` with `technical_n` withheld when `cond_roster` is an arm
+    rather than the whole roster.
+
+    `technical_n` is `{min, max, median}` over the WHOLE roster's measurement
+    counts (`command_run`'s own comment above where it is built) — the same
+    reason `report_by`'s per-level `summarize_step` call passes
+    `weighted_beside` rather than `beside_n`: copying a whole-roster figure
+    onto a subset states a spread nobody computed over that subset. Under a
+    group axis `cond_roster` IS such a subset, one level up from a
+    `report_by` level, so the same withholding applies here rather than
+    leaving a per-arm `n` sitting beside a figure describing units this
+    condition's own table does not hold.
+
+    `cond_roster is roster` (identity, not equality) is `_cond_roster`'s own
+    signal that no group axis narrowed this condition — the same check that
+    function documents for its no-narrowing return.
+    """
+    if cond_roster is roster:
+        return beside_n
+    return {k: v for k, v in beside_n.items() if k != "technical_n"}
+
+
+def _report_by_levels(
+    roster: "UnitList", attribute: str
+) -> dict[str, tuple[set[str], "UnitList"]]:
+    """Each level of `attribute` over `roster`, paired with the roster VIEW
+    `attrition` must count that level against — `report_by`'s per-level loop,
+    extracted so the narrowing is a function with one roster parameter rather
+    than an inline block reading a name from the enclosing scope.
+
+    Passing the whole roster here instead of a condition's own arm
+    (`_cond_roster`'s answer) is the S4b-Critical-shaped defect one level up:
+    the same comment at the call site below states it, "one key set decides
+    BOTH the table and the counts — a number reported against a denominator
+    computed over other units." Extracting this loop is what makes that
+    defect representable as a unit test at all: the inline block it replaces
+    lives inside `command_run`'s per-condition, per-step loop, and no
+    end-to-end test in this build combines a group axis with a declared
+    `statistics.report_by` — extraction is what makes the narrowing testable
+    directly rather than only through such a run.
+    """
+    out: dict[str, tuple[set[str], UnitList]] = {}
+    for level, keys in sorted(levels_for(roster, attribute).items()):
+        out[level] = (keys, UnitList([u for u in roster if u.key in keys]))
+    return out
+
+
+def _condition_counts(
+    results: "list[ExecutionResult]",
+    roster: "UnitList",
+    step_name: str,
+    cond_index: int,
+    arm_members_map: "dict[int, frozenset[str]] | None",
+    fold_members: dict[str, frozenset[str]] | None = None,
+    weights: dict[str, Any] | None = None,
+    clusters: dict[str, str] | None = None,
+) -> dict[str, float]:
+    """`attrition`'s counts for one condition, narrowed to that condition's own
+    arm first — the exact composition `command_run`'s per-condition loop
+    calls for a step's counts, and the ONLY thing it calls for them.
+
+    Extracted (after review) because `_cond_roster` and `attrition` tested
+    separately cannot tell "the fix is wired into `command_run`" apart from
+    "the fix exists and is unused" — which is precisely the shape the bug
+    this task fixes took: a narrowed roster computed and then not passed to
+    `attrition`. Collapsing narrowing-then-counting into one call removes
+    that seam at its root: there is no longer a place in `command_run` where
+    a computed `cond_roster` sits beside a stale `attrition(..., roster,
+    ...)` a few lines down.
+    """
+    return attrition(
+        results,
+        _cond_roster(roster, cond_index, arm_members_map),
+        step_name,
+        cond_index,
+        fold_members=fold_members,
+        weights=weights,
+        clusters=clusters,
+    )
+
+
+def _condition_report_by_levels(
+    roster: "UnitList",
+    cond_index: int,
+    arm_members_map: "dict[int, frozenset[str]] | None",
+    attribute: str,
+) -> dict[str, tuple[set[str], "UnitList"]]:
+    """`_report_by_levels`, narrowed to one condition's own arm first — the
+    exact composition `command_run`'s `report_by` block calls, for the same
+    reason `_condition_counts` exists beside `attrition`."""
+    return _report_by_levels(_cond_roster(roster, cond_index, arm_members_map), attribute)
+
+
+def _condition_beside_n(
+    beside_n: dict[str, Any],
+    roster: "UnitList",
+    cond_index: int,
+    arm_members_map: "dict[int, frozenset[str]] | None",
+) -> dict[str, Any]:
+    """`_cond_beside_n`, narrowed to one condition's own arm first — the exact
+    composition `command_run` calls to decide whether `technical_n` survives
+    for this condition, for the same reason `_condition_counts` exists beside
+    `attrition`."""
+    return _cond_beside_n(beside_n, _cond_roster(roster, cond_index, arm_members_map), roster)
 
 
 def _attributed(table: UnitTable, attributes: dict[str, dict[str, Any]]) -> UnitTable:
@@ -355,11 +598,23 @@ def _comparison_step_blocks(
     rather than reported as if it were clean. Both keys are absent, not
     `False`/`[]`, when only one axis differs. `paired` stays hard `True`
     here: the crossed-*group*-axis case `reference.md` shows with
-    `paired: false` and `unpaired_*` needs a group axis or
-    `allocation: between`, both refused (`E-SWEEP-GROUPS-UNSUPPORTED`,
-    `E-DATA-ALLOCATION-UNSUPPORTED`), so it is unreachable in this build.
+    `paired: false` and `unpaired_*` is the one `validate` refuses at
+    config time — `E-DATA-ALLOCATION-CONTRAST` reads the resolved comparison
+    family and rejects any comparison whose two sides differ on a declared
+    `sweep.groups` axis, which is what makes the two sides disjoint sets of
+    units regardless of what `allocation` itself is declared as, and no
+    construction here computes an unpaired interval. `cli` always validates
+    before running, so every comparison that reaches this function is
+    genuinely paired rather than merely one this build happens not to
+    construct — `True` is a true claim about what survived validation, not a
+    placeholder for a case nothing can reach. **That claim expires with
+    `E-DATA-ALLOCATION-CONTRAST`**: the slice that builds the unpaired
+    estimator family and lifts the refusal must also make `paired` here a
+    derived value — `contrasts.differing_axes(...) ∩ (of.selectors | against.selectors)`
+    non-empty, the same test the refusal runs today — rather than leaving
+    `True` hard-coded against a comparison validation no longer rejects.
     """
-    differs_on = _differing_axes(
+    differs_on = differing_axes(
         conditions_by_index[comp.of], conditions_by_index[comp.against]
     )
     confounded = len(differs_on) > 1
@@ -885,29 +1140,38 @@ def command_run(config_path: Path) -> int:
     fold_members = fold_members_for(levels, partitions) if partitions is not None else None
 
     conditions = expand(doc)
-    # Every path any condition fixes, not just the grid's axes. A path
-    # `sweep.baseline` fixes varies across conditions by definition — condition
-    # `00` uses the baseline's value and every other condition uses the base
-    # config's — so it is exactly as unreadable at `run`/`summary` scope as a
-    # grid axis is. Reading the grid alone left a baseline-only path resolving
-    # to the base value, which is a value no condition in the run used.
     sweep_block = doc.get("sweep") or {}
-    # `_swept_paths` rather than `grid` alone: every axis-shaped mode's paths vary
-    # across conditions, and `paired`'s and `sample`'s did not reach here when each
-    # became a real axis — a sampled path stayed readable at `run`/`summary` scope
-    # and resolved to the base config's value, which is exactly the "a value no
-    # condition in the run used" failure the baseline half of this line exists to
-    # prevent, reached through a mode added after it was written.
-    # `ablated_paths` is unioned in for the same reason and by the same rule,
-    # from the other side of the axis/non-axis split: an ablated path varies
-    # across conditions too. Most are already covered by the `baseline` term —
-    # a removed path is one the baseline fixes — but an `override` path the
-    # baseline leaves alone is not, and it is exactly the residue this line has
-    # now been widened for three times.
-    swept_paths = (
-        set(_swept_paths(sweep_block))
-        | set(ablated_paths(sweep_block))
-        | set(sweep_block.get("baseline") or {})
+    swept_paths = _wide_swept_paths(sweep_block)
+    # One frozenset of unit keys per condition that selects a group axis — `None`
+    # for a design declaring none. Reachable now that task 17 retired
+    # `E-SWEEP-GROUPS-UNSUPPORTED`: `tests/test_cli.py`'s
+    # `test_a_group_axis_actually_narrows_end_to_end` exercises `execute_plan`'s
+    # subset view through a real `command_run`.
+    #
+    # Gated on `selector_paths(sweep_block)`, not on `group_axes` itself: `expand`
+    # already used `selector_paths` to decide which paths are group cells, so
+    # `conditions` below carries `Condition.selectors` naming every axis
+    # `selector_paths` names — regardless of whether that axis's `levels` also
+    # satisfy `_resolved_group_axes`'s stricter all-`str` requirement, the same
+    # requirement `validate._check_assign`'s own `by_attribute` branch applies
+    # before it ever calls `arms_of`. Gating on `group_axes` instead would let an
+    # axis this function skips but `selector_paths`/`expand` still treat as one
+    # silently skip arm narrowing entirely. `by: ""` is the live case:
+    # `isinstance(by, str)` accepts it, so `selector_paths` names `""` an axis
+    # and `expand` renders conditions under it (`Condition.selectors == {""}`,
+    # labels `=a`/`=b`), but this function's own `not axis` check (an empty
+    # string is falsy) skips it — every condition on that axis would then get
+    # the whole roster, exactly the outcome two declared arms exist to make
+    # impossible. Gating on `selector_paths` instead means `arm_members` is
+    # still called whenever `expand` treated the config as having a group axis,
+    # so a resolution gap surfaces as `arm_members`'s own `KeyError` — a
+    # caller-disagreement bug to see, not a config to silently accept — rather
+    # than as a silently unnarrowed run.
+    group_axes = _resolved_group_axes(units_decl, sweep_block)
+    arm_members_map = (
+        arm_members(roster, group_axes, conditions)
+        if selector_paths(sweep_block) and roster is not None
+        else None
     )
     plan = build_plan(  # phase 4
         experiment,
@@ -915,7 +1179,11 @@ def command_run(config_path: Path) -> int:
         repeat_labels=labels,
     )
     cfgs: dict[int, Config] = {
-        c.index: resolve_condition_cfg(doc, dict(c.values)) for c in conditions
+        # The whole `Condition`, not `dict(c.values)`: a group cell's path names
+        # units rather than a parameter, and `c.selectors` is which — the answer
+        # `expand` computed once, travelling with the values it qualifies.
+        c.index: resolve_condition_cfg(doc, c)
+        for c in conditions
     }
     cfgs[-1] = resolve_wide_cfg(doc, swept_paths)
 
@@ -993,6 +1261,19 @@ def command_run(config_path: Path) -> int:
             )
         )
 
+        # `allocation.json` — settled beside `sweep.yaml`, before the first
+        # execution and never touched again, per § The other files a run
+        # writes: both are partitions of one roster drawn once. `None` when
+        # `group_axes` is empty — no arm assignment resolved for this run —
+        # matching "present when either [an arm assignment or a holdout] is
+        # declared"; `holdout` is never in this build's document at all
+        # (`E-DATA-HOLDOUT-UNSUPPORTED` refuses every declaration of it).
+        alloc_doc = build_allocation_document(roster, group_axes) if roster is not None else None
+        alloc_hash: str | None = None
+        if alloc_doc is not None:
+            (run_dir / "allocation.json").write_text(json.dumps(alloc_doc, indent=2))
+            alloc_hash = allocation_hash(alloc_doc)
+
         results = execute_plan(  # phase 7
             plan=plan,
             run_dir=run_dir,
@@ -1003,6 +1284,7 @@ def command_run(config_path: Path) -> int:
             units=roster,
             max_failed_fraction=(doc.get("limits") or {}).get("max_failed_fraction"),
             fold_members=fold_members,
+            arm_members=arm_members_map,
             measurements=(units_decl or {}).get("measurements"),
         )
 
@@ -1120,15 +1402,25 @@ def command_run(config_path: Path) -> int:
                     and r.rows
                 }
                 aggregated[cond.index] = {}
+                # `_condition_beside_n` narrows to this condition's own arm
+                # before deciding whether `technical_n` survives — the read
+                # side of the same narrowing `execute_plan` already applies to
+                # what this condition's executions were actually handed. Kept
+                # as ONE call, not a `cond_roster` computed here and consumed
+                # a few lines down: that two-step shape is exactly how the bug
+                # this task fixes happened — a narrowed roster computed and
+                # then not passed to `attrition`.
+                cond_beside_n = _condition_beside_n(beside_n, roster, cond.index, arm_members_map)
                 for step_name in sorted(recording_steps):
                     collapsed = collapse_repeats(
                         results, step_name, cond.index, fold_members=fold_members
                     )
-                    counts = attrition(
+                    counts = _condition_counts(
                         results,
                         roster,
                         step_name,
                         cond.index,
+                        arm_members_map,
                         fold_members=fold_members,
                         weights=weights,
                         clusters=clusters,
@@ -1253,7 +1545,7 @@ def command_run(config_path: Path) -> int:
                             seed=resample_seed_value,
                             resample=resample_fns,
                             draws=derived_metric_draws,
-                            beside_n=beside_n,
+                            beside_n=cond_beside_n,
                             weights=weights,
                             clusters=clusters,
                         )
@@ -1277,7 +1569,7 @@ def command_run(config_path: Path) -> int:
                         step_summary = summarize_step(
                             collapsed,
                             counts,
-                            beside_n=beside_n,
+                            beside_n=cond_beside_n,
                             weights=weights,
                             clusters=clusters,
                         )
@@ -1410,7 +1702,18 @@ def command_run(config_path: Path) -> int:
                         # repeat levels, which `repeat_spread` above reads on
                         # every later pass of this loop.
                         levels_block: dict[str, dict[str, Any]] = {}
-                        for level, keys in sorted(levels_for(roster, attribute).items()):
+                        # `_condition_report_by_levels`, not `_report_by_levels`
+                        # bare: under a group axis a level's key set must not
+                        # reach past this condition's own arm into the other
+                        # one — the same defect `_condition_counts` exists to
+                        # fix for `attrition` above, one level in. Passing
+                        # `roster` here directly (bypassing the arm narrowing)
+                        # would let a level of `attribute` that happens to span
+                        # both arms hand `attrition` units the other arm's
+                        # executions never touched.
+                        for level, (keys, level_roster) in _condition_report_by_levels(
+                            roster, cond.index, arm_members_map, attribute
+                        ).items():
                             # One key set decides BOTH the table and the counts.
                             # Taking the level's rows beside the condition's `n`
                             # is the S4b Critical's shape — a number reported
@@ -1418,7 +1721,6 @@ def command_run(config_path: Path) -> int:
                             level_collapsed = {
                                 k: v for k, v in collapsed.items() if k in keys
                             }
-                            level_roster = UnitList([u for u in roster if u.key in keys])
                             level_counts = attrition(
                                 results,
                                 level_roster,
@@ -1754,6 +2056,12 @@ def command_run(config_path: Path) -> int:
                 else None
             ),
             "units_hash": units_hash(roster) if roster is not None else None,
+            # "allocation.json" and its hash, when an arm assignment or a
+            # holdout is declared — `None`/`None` together exactly when
+            # `alloc_doc` was never written, the same pairing `units`/
+            # `units_hash` already use above.
+            "allocation": "allocation.json" if alloc_doc is not None else None,
+            "allocation_hash": alloc_hash,
         }
         doc_out = assemble_run_yaml(  # phase 9: assemble and write
             run_id=run_dir.name,
