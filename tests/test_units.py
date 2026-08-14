@@ -6,12 +6,14 @@ import pytest
 
 from publishable import ContractError
 from publishable.units import (
+    ArmPlan,
     Unit,
     UnitList,
     apply_rule,
     arm_members,
     arms_of,
     assign_seed_for,
+    assignment_for,
     cluster_count,
     clusters_of,
     collapse_measurements,
@@ -1132,6 +1134,107 @@ def test_arms_refuse_a_declared_level_with_no_unit():
     assert "treatment" in str(e.value)
 
 
+def _arm_roster12():
+    """12 units, 7 `control` and 5 `treatment` — `tests/test_runner.py`'s
+    `_arm_roster12`, restated here so this module's arm tests run against the
+    same uneven split: neither half is 6, so an arm cannot be confused with
+    the other arm, with half the roster, or with the whole roster by size
+    alone."""
+    return UnitList(
+        [Unit(key=f"c{i}", attributes={"arm": "control"}) for i in range(7)]
+        + [Unit(key=f"t{i}", attributes={"arm": "treatment"}) for i in range(5)]
+    )
+
+
+def _arm_plans(roster):
+    return {"arm": assignment_for(roster, "arm", None, ["control", "treatment"], "digest")}
+
+
+def test_assignment_for_by_attribute_realizes_arms_of_with_no_seed_and_no_strata():
+    """Step 1 of the seam: `by_attribute` through `ArmPlan` gives exactly what
+    `arms_of` gives, and says so about the two fields a draw would fill.
+
+    Both arms' keys are written out literally rather than re-derived from the
+    fixture's own `arm` attribute: a test that rebuilds the expectation by
+    re-running the membership rule cannot tell a correct partition from a
+    wrongly recomputed one, since the same rule produces both.
+
+    `seed is None` and `strata == ()` are the load-bearing halves, not
+    decoration — `by_attribute` reads an arm a trial system already assigned,
+    so a realized seed here would be a false record of a draw that never
+    happened, and `artifacts.build_allocation_document` writes exactly what
+    these two fields say."""
+    roster = _arm_roster12()
+    plan = assignment_for(roster, "arm", {"method": "by_attribute"}, ["control", "treatment"], "d")
+
+    assert plan.levels == ("control", "treatment")
+    assert plan.members["control"] == ("c0", "c1", "c2", "c3", "c4", "c5", "c6")
+    assert plan.members["treatment"] == ("t0", "t1", "t2", "t3", "t4")
+    assert set(plan.members) == {"control", "treatment"}
+    assert plan.seed is None
+    assert plan.strata == ()
+
+    # The same partition `arms_of` returns, restated as keys — the plan is
+    # `arms_of`'s answer carried in a shape a draw can also fill, not a
+    # second reading of the column.
+    partition = arms_of(roster, "arm", ["control", "treatment"])
+    assert plan.members == {
+        level: tuple(u.key for u in units) for level, units in partition.items()
+    }
+
+
+def test_assignment_for_resolves_from_against_the_axis_name_and_reads_no_other_column():
+    """The `from`-or-axis-name default now lives in `assignment_for` alone —
+    `cli._resolved_group_axes` used to resolve it too, and two resolutions of
+    one declaration is the defect class this slice closes. A declared `from`
+    naming a column that is NOT the axis name is what discriminates: the
+    fixture's units carry `arm_column`, and nothing at all under `arm`, so a
+    resolution that fell back to the axis name would raise
+    `E-DATA-ASSIGN-LEVELS` instead of partitioning."""
+    roster = UnitList(
+        [
+            Unit(key="u0", attributes={"arm_column": "control"}),
+            Unit(key="u1", attributes={"arm_column": "treatment"}),
+        ]
+    )
+    block = {"method": "by_attribute", "from": "arm_column"}
+    plan = assignment_for(roster, "arm", block, ["control", "treatment"], "digest")
+    assert plan.members == {"control": ("u0",), "treatment": ("u1",)}
+
+    # The control that must report: with no `from`, the axis name is the
+    # column, and this fixture has no `arm` attribute to read.
+    with pytest.raises(ContractError) as e:
+        assignment_for(roster, "arm", None, ["control", "treatment"], "digest")
+    assert e.value.code == "E-DATA-ASSIGN-LEVELS"
+
+
+@pytest.mark.parametrize("method", ["random", "blocked"])
+def test_assignment_for_refuses_a_drawn_method_rather_than_reading_a_column(method: str):
+    """An explicit hole until tasks 8 and 10, not a silent fallback: a drawn
+    axis's units carry no arm attribute, so falling back to `arms_of` would
+    either raise about a column nobody declared or partition on an unrelated
+    one. The fixture's units DO carry `arm`, so a fallback would succeed
+    silently here — which is exactly why the assertion is `NotImplementedError`
+    and not a `ContractError` about a missing column."""
+    roster = _arm_roster12()
+    with pytest.raises(NotImplementedError) as e:
+        assignment_for(roster, "arm", {"method": method}, ["control", "treatment"], "digest")
+    assert method in str(e.value)
+
+
+def test_assignment_for_takes_the_by_attribute_path_for_an_unnamed_method():
+    """An absent block, a non-mapping one, and a block with no `method` all
+    take the `by_attribute` path — the same default `validate._check_assign`
+    falls back to. Only `random` and `blocked` divert, so no method that
+    *draws* can reach a column read by falling through."""
+    roster = _arm_roster12()
+    expected = ("c0", "c1", "c2", "c3", "c4", "c5", "c6")
+    for block in (None, {}, {"from": "arm"}):
+        plan = assignment_for(roster, "arm", block, ["control", "treatment"], "digest")
+        assert plan.members["control"] == expected
+        assert plan.seed is None
+
+
 def test_arm_members_reduces_arms_of_across_the_resolved_conditions():
     """`units.arm_members` is the reduction the runner's subset view is built
     from: one call into `arms_of` per declared axis, then a per-condition lookup
@@ -1151,36 +1254,40 @@ def test_arm_members_reduces_arms_of_across_the_resolved_conditions():
         Condition(index=1, label="treatment", values={"arm": "treatment"}, selectors=selectors),
         Condition(index=2, label="plain", values={}, selectors=frozenset()),
     ]
-    result = arm_members(roster, {"arm": ("arm", ["control", "treatment"])}, conditions)
+    result = arm_members(_arm_plans(roster), conditions)
     assert result[0] == frozenset(f"c{i}" for i in range(7))
     assert result[1] == frozenset(f"t{i}" for i in range(5))
     assert 2 not in result
     assert len(result[0]) + len(result[1]) == len(roster)
 
 
-def test_arm_members_calls_arms_of_once_per_axis_not_per_condition():
-    """The reduction, not a second partition: with three conditions selecting the
-    same single axis, `arms_of` must run exactly once for it, verified by
-    counting calls rather than by inspecting the result — the discriminator a
-    per-condition re-derivation would still pass on output alone."""
-    from unittest.mock import patch
-
+def test_arm_members_derives_no_membership_of_its_own_from_a_planted_plan():
+    """The property `test_arm_members_calls_arms_of_once_per_axis_not_per_condition`
+    used to pin, retargeted rather than dropped: `arm_members` no longer calls
+    `arms_of` at all — it is handed plans — so "once per axis, not once per
+    condition" is now `assignment_for`'s own property (pinned end-to-end in
+    `test_cli.py`), and what is left to pin here is stronger. The plan handed
+    in **contradicts** the roster attribute: `c0` carries `arm: control` but
+    the plan puts it in `treatment`, and `t0` the reverse. `arm_members`
+    must return the plan's answer, not the column's. A version that re-derived
+    membership from a roster — the second producer this slice exists to make
+    impossible — would return the swapped-back sets and fail both assertions."""
     from publishable.sweep import Condition
 
-    roster = UnitList(
-        [
-            Unit(key="c0", attributes={"arm": "control"}),
-            Unit(key="t0", attributes={"arm": "treatment"}),
-        ]
-    )
     selectors = frozenset({"arm"})
     conditions = [
         Condition(index=0, label="control", values={"arm": "control"}, selectors=selectors),
         Condition(index=1, label="treatment", values={"arm": "treatment"}, selectors=selectors),
     ]
-    with patch("publishable.units.arms_of", wraps=arms_of) as spy:
-        arm_members(roster, {"arm": ("arm", ["control", "treatment"])}, conditions)
-        assert spy.call_count == 1
+    planted = ArmPlan(
+        levels=("control", "treatment"),
+        members={"control": ("t0",), "treatment": ("c0",)},
+        seed=None,
+        strata=(),
+    )
+    result = arm_members({"arm": planted}, conditions)
+    assert result[0] == frozenset({"t0"})
+    assert result[1] == frozenset({"c0"})
 
 
 def test_arm_members_intersects_when_a_condition_selects_two_axes():
@@ -1204,8 +1311,10 @@ def test_arm_members_intersects_when_a_condition_selects_two_axes():
         ),
     ]
     result = arm_members(
-        roster,
-        {"arm": ("arm", ["control", "treatment"]), "sex": ("sex", ["f", "m"])},
+        {
+            "arm": assignment_for(roster, "arm", None, ["control", "treatment"], "digest"),
+            "sex": assignment_for(roster, "sex", None, ["f", "m"], "digest"),
+        },
         conditions,
     )
     assert result[0] == frozenset({"u0"})

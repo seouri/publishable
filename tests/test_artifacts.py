@@ -8,7 +8,7 @@ import pytest
 
 from publishable import ArtifactError, ArtifactExistsError, ContractError
 from publishable.artifacts import StepIO, allocation_hash, build_allocation_document, write_atomic
-from publishable.units import Unit, UnitList
+from publishable.units import Unit, UnitList, assignment_for
 
 
 def _u(key: str) -> Unit:
@@ -1256,12 +1256,21 @@ def _mixed_arm_roster():
     return UnitList(units), control_keys, treatment_keys
 
 
+def _plans_for(roster):
+    """The one `arm` axis of `_mixed_arm_roster`, realized through
+    `units.assignment_for` — the single producer of an `ArmPlan`, and the only
+    route by which membership reaches `build_allocation_document` now that it
+    takes no roster and derives nothing. `block=None` takes `assignment_for`'s
+    `by_attribute` path and resolves the column to the axis name, which is
+    what this fixture's units carry."""
+    return {"arm": assignment_for(roster, "arm", None, ["control", "treatment"], "digest")}
+
+
 def test_build_allocation_document_returns_none_with_no_group_axes():
     """`group_axes` empty — no arm assignment resolved for this run — is the
     absent half of 'present when either is declared', and `command_run` reads
     `None` here as "write nothing.\""""
-    roster, _, _ = _mixed_arm_roster()
-    assert build_allocation_document(roster, {}) is None
+    assert build_allocation_document({}) is None
 
 
 def test_build_allocation_document_maps_axis_to_level_to_unit_keys_in_roster_order():
@@ -1274,9 +1283,9 @@ def test_build_allocation_document_maps_axis_to_level_to_unit_keys_in_roster_ord
     against a fixture nobody checked the seed of — and `holdout` is asserted
     absent, since this build never declares one."""
     roster, control_keys, treatment_keys = _mixed_arm_roster()
-    group_axes = {"arm": ("arm", ["control", "treatment"])}
+    group_axes = _plans_for(roster)
 
-    doc = build_allocation_document(roster, group_axes)
+    doc = build_allocation_document(group_axes)
 
     assert doc is not None
     assert set(doc.keys()) == {"seed", "arms", "strata"}
@@ -1294,11 +1303,11 @@ def test_allocation_hash_is_deterministic_and_content_sensitive():
     property `provenance.allocation_hash` rests on to say a copy edited
     after the run no longer matches what that run reported."""
     roster, _, _ = _mixed_arm_roster()
-    group_axes = {"arm": ("arm", ["control", "treatment"])}
-    doc = build_allocation_document(roster, group_axes)
+    group_axes = _plans_for(roster)
+    doc = build_allocation_document(group_axes)
 
     h1 = allocation_hash(doc)
-    h2 = allocation_hash(build_allocation_document(roster, group_axes))
+    h2 = allocation_hash(build_allocation_document(group_axes))
     assert h1 == h2
     assert h1.startswith("sha256:")
 
@@ -1336,8 +1345,7 @@ def test_allocation_hash_changes_when_two_units_swap_arms_and_nothing_else_moves
     sits in which arm moved.
     """
     roster, control_keys, treatment_keys = _mixed_arm_roster()
-    group_axes = {"arm": ("arm", ["control", "treatment"])}
-    doc = build_allocation_document(roster, group_axes)
+    doc = build_allocation_document(_plans_for(roster))
     h1 = allocation_hash(doc)
     assert h1 == "sha256:bf077b6dceea21f680dc12c7b050f04af5ee405be7326afe81c920c3e605d7d6"
 
@@ -1359,7 +1367,7 @@ def test_allocation_hash_changes_when_two_units_swap_arms_and_nothing_else_moves
     assert len(swapped_treatment) == len(treatment_keys) == 9
     assert swapped_control | swapped_treatment == set(control_keys) | set(treatment_keys)
 
-    swapped_doc = build_allocation_document(swapped_roster, group_axes)
+    swapped_doc = build_allocation_document(_plans_for(swapped_roster))
     h2 = allocation_hash(swapped_doc)
 
     assert set(swapped_doc["arms"]["arm"]["control"]) == swapped_control

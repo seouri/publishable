@@ -960,25 +960,124 @@ def arms_of(roster: UnitList, column: str, levels: Sequence[str]) -> dict[str, l
     return partition
 
 
-def arm_members(
+@dataclass(frozen=True)
+class ArmPlan:
+    """One axis's **realized** membership: level → unit keys, in roster order.
+
+    The shape a drawn allocation and a read one both fit, and the reason this
+    type exists at all: `arms_of` reads an arm out of a *column*, and a drawn
+    axis (`method: random`, `method: blocked`) has no column to read. A caller
+    holding `(column, levels)` — `arm_members`' old input shape — cannot
+    express a draw, so the draw would have had to happen somewhere else, and
+    "somewhere else" is a second producer of arm membership: the
+    validate-clean-then-disagree gap `arms_of`'s own docstring is written to
+    prevent a third instance of. `assignment_for` below is the one producer,
+    and this is what it produces.
+
+    - `levels` is the axis's declared `sweep.groups` levels, in declared
+      order, and every one of them is a key of `members`.
+    - `members` maps each level to that arm's unit keys. **In roster order
+      under `by_attribute`**; under a draw, in whatever order the draw
+      realized — `artifacts.build_allocation_document` records the order it
+      is given rather than re-sorting, because a `blocked` design reads that
+      order as data.
+    - `seed` is the seed the draw was realized with (`units.assign_seed_for`),
+      and is `None` under `by_attribute` — a method that reads an arm a trial
+      system already assigned rather than drawing one, so recording a seed
+      would be a false record of a draw that never happened.
+    - `strata` is the realized `assign.<axis>.stratify_by`, empty under
+      `by_attribute` for the same reason: `stratify_by` names how a draw was
+      *balanced*, and with no draw there is nothing it describes.
+
+    `frozen=True` blocks rebinding an attribute; it does **not** deep-freeze
+    `members`, whose values are tuples but whose mapping a determined caller
+    can still mutate in place if it is handed a `dict`. Treat it as read-only
+    — nothing in core writes through it — rather than as a guarantee this type
+    enforces.
+    """
+
+    levels: tuple[str, ...]
+    members: Mapping[str, tuple[str, ...]]
+    seed: int | None
+    strata: tuple[str, ...]
+
+
+def assignment_for(
     roster: UnitList,
-    axes: Mapping[str, tuple[str, Sequence[str]]],
+    axis: str,
+    block: Mapping[str, Any] | None,
+    levels: Sequence[str],
+    digest: str,
+    clusters: Mapping[str, str] | None = None,
+) -> ArmPlan:
+    """One axis's allocation, realized — **the single producer** of an `ArmPlan`,
+    and the seam this whole slice turns on.
+
+    A **pure function of its arguments**, deliberately: `validate` has to ask
+    "which units are in this arm" of the same declaration `cli.command_run`
+    asks it of (the cell and stratum checks), so the draw cannot live in the
+    runner. Two callers, one answer, computed the same way from the same
+    inputs — the property that makes a `between` design `validate` approved
+    one core can actually build.
+
+    Dispatches on `block["method"]`, `reference.md` § Allocation's own enum:
+
+    - `by_attribute` (and an absent, non-mapping, or method-less block, which
+      `validate._check_assign` falls back to the same way) reads the arm out
+      of a column, through `arms_of` **unchanged** — that function stays the
+      authority for a column-read partition and this one does not re-derive
+      it. `from` is resolved here, once: the declared `from` when it is a
+      non-empty string, else the axis name.
+    - `random` and `blocked` raise `NotImplementedError` until tasks 8 and 10
+      build them. An explicit hole, not a silent fallback to reading a column
+      that need not exist: a drawn axis's units carry no arm attribute, so a
+      fallback would either raise `E-DATA-ASSIGN-LEVELS` about a column
+      nobody declared or, worse, partition on an unrelated one.
+    - Any other `method` string takes the `by_attribute` path rather than a
+      fourth behaviour: `validate` refuses an out-of-enum method outright
+      (`E-DATA-ASSIGN-METHOD`) before `run` reaches this, and the two methods
+      that *draw* are named explicitly above, so no drawing method can reach
+      a column read by falling through.
+
+    `digest` and `clusters` are unread on the `by_attribute` path and are
+    parameters anyway: they are what tasks 8 and 10 draw with —
+    `assign_seed_for(block, axis, digest, roster)` for the seed, `clusters`
+    because a cluster is indivisible and a draw must allocate whole clusters
+    — and a caller that already has to hold them cannot then be told the
+    signature changed under it.
+    """
+    method = block.get("method") if isinstance(block, Mapping) else None
+    if method in ("random", "blocked"):
+        raise NotImplementedError(
+            f"`data.units.assign.{axis}.method: {method}` draws its allocation, and this "
+            "build does not draw one yet (`validate` refuses it as `E-DATA-ASSIGN-DRAWN`)"
+        )
+    declared_from = block.get("from") if isinstance(block, Mapping) else None
+    column = declared_from if isinstance(declared_from, str) and declared_from else axis
+    partition = arms_of(roster, column, levels)
+    return ArmPlan(
+        levels=tuple(levels),
+        members={level: tuple(u.key for u in units) for level, units in partition.items()},
+        seed=None,
+        strata=(),
+    )
+
+
+def arm_members(
+    axes: Mapping[str, ArmPlan],
     conditions: "Sequence[Any]",
 ) -> dict[int, frozenset[str]]:
-    """Which units each resolved condition's own arm holds, one call into
-    `arms_of` per declared group axis rather than one per condition — the
-    reduction the runner's subset view is built from, so a condition on a group
-    axis is handed a real subset of the shared roster and not a second
-    resolution of it.
+    """Which units each resolved condition's own arm holds — the reduction the
+    runner's subset view is built from, so a condition on a group axis is
+    handed a real subset of the shared roster and not a second resolution of
+    it.
 
-    `axes` maps a group axis name to `(the resolved `assign.<axis>.from`
-    attribute, that axis's declared `sweep.groups` levels)` — the caller's own
-    resolution of the declaration, mirroring `validate._check_assign`'s. This
-    function's job is narrower than that resolution: it calls `arms_of` — **the
-    single authority** for a single axis's partition — exactly once per axis in
-    `axes`, and then reduces that partition across every axis a condition
-    selects, never deriving membership from the roster a second time by any
-    other route.
+    `axes` maps a group axis name to that axis's realized `ArmPlan`, one plan
+    per declared axis, produced by `assignment_for` — **not** a roster and a
+    column. This function takes no roster at all, and that absence is the
+    point: with nothing to read membership *from*, no future edit here can
+    quietly become the second producer of it. Its whole job is to intersect
+    plans across the axes a condition selects.
 
     `conditions` is an iterable of objects carrying `.index`, `.values` and
     `.selectors` — `sweep.Condition`'s own shape, read structurally rather than
@@ -988,8 +1087,8 @@ def arm_members(
     selecting more than one axis gets the *intersection* of each axis's arm —
     § Validation's `sex × arm` cell — and a condition selecting none is absent
     from the returned mapping entirely, rather than mapped to the whole roster,
-    since "no arm" and "every unit" are different claims and only `arms_of`
-    itself is the authority for which units a real arm holds.
+    since "no arm" and "every unit" are different claims and only the plan
+    itself says which units a real arm holds.
 
     A caller passing a condition whose selected axis or level is not in `axes`
     — an inconsistency between the two arguments — raises a bare `KeyError`
@@ -999,22 +1098,21 @@ def arm_members(
     than one this function should absorb by handing back units nothing
     verified.
     """
-    partitions = {axis: arms_of(roster, column, levels) for axis, (column, levels) in axes.items()}
     result: dict[int, frozenset[str]] = {}
     for condition in conditions:
         if not condition.selectors:
             continue
         members: set[str] | None = None
-        # `partitions[axis]`, not `.get`, and `[level]`, not `.get`: `axes` is
+        # `axes[axis]`, not `.get`, and `.members[level]`, not `.get`: `axes` is
         # meant to cover every axis every condition selects, so a selected axis
-        # missing from it — or a level `arms_of` didn't partition — is the two
+        # missing from it — or a level the plan didn't realize — is the two
         # arguments disagreeing, a caller bug this function must not paper over
         # by silently dropping the axis from the intersection (which would hand
         # back a *larger*, wrong arm) or the condition from the result (which
         # would hand its execution the whole roster, one level up).
         for axis in condition.selectors:
             level = condition.values[axis]
-            keys = {u.key for u in partitions[axis][level]}
+            keys = set(axes[axis].members[level])
             members = keys if members is None else members & keys
         result[condition.index] = frozenset(members or set())
     return result

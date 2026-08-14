@@ -409,21 +409,46 @@ def test_a_group_path_gets_no_swept_away_marker():
     assert _wide_swept_paths({"baseline": {"arm": "control"}}) == {"arm"}
 
 
-def test_resolved_group_axes_defaults_from_and_skips_unresolvable_levels():
-    """`_resolved_group_axes` is `command_run`'s own resolution of `assign.<axis>.from`
-    against its default — the axis name — mirroring `validate._check_assign`'s
-    `by_attribute` branch, and `units.arm_members`'s own input shape.
+def _levels_roster():
+    """8 `control`, 3 `treatment`, 11 total — `tests/test_cli.py`'s own arm
+    sizes, distinct from `_arm_roster12`'s 7/5 and `test_artifacts.py`'s 4/9 —
+    and each unit also carries a `cohort` value, since these tests declare two
+    axes at once. `arm_column` rather than `arm`, so a `from` that resolved to
+    the axis name instead of the declaration would fail to partition."""
+    from publishable.units import Unit, UnitList
+
+    control = [
+        Unit(key=f"c{i}", attributes={"arm_column": "control", "cohort": "derivation"})
+        for i in range(8)
+    ]
+    treatment = [
+        Unit(key=f"t{i}", attributes={"arm_column": "treatment", "cohort": "validation"})
+        for i in range(3)
+    ]
+    return UnitList(control + treatment)
+
+
+def test_resolved_group_axes_realizes_a_plan_per_axis_and_skips_unresolvable_levels():
+    """`_resolved_group_axes` is `command_run`'s own realization of every
+    declared group axis — one `units.ArmPlan` each, the shape both
+    `units.arm_members` and `artifacts.build_allocation_document` are handed.
+
+    The `from` default is resolved by `units.assignment_for`, not here, and
+    this test discriminates the two: `arm` declares `from: arm_column` while
+    `cohort` declares no block at all and must fall back to its own axis
+    name. Membership keys are written out literally rather than re-derived
+    from the fixture, so a wrongly recomputed partition cannot satisfy them.
 
     A focused unit test on the function itself, for the reason
     `test_a_group_path_gets_no_swept_away_marker` above states: it pins the
-    exact resolved `(column, levels)` pair per axis, including the
-    skipped-rather-than-defaulted `unresolvable` axis, more directly than an
-    end-to-end run's aggregated output would."""
+    exact realized plan per axis, including the skipped-rather-than-realized
+    `unresolvable` axis, more directly than an end-to-end run's aggregated
+    output would."""
     sweep_block = {
         "groups": [
             {"by": "arm", "levels": ["control", "treatment"]},
             {"by": "cohort", "levels": ["derivation", "validation"]},
-            {"by": "unresolvable"},  # no `levels` at all — skipped, not defaulted
+            {"by": "unresolvable"},  # no `levels` at all — skipped, not realized
         ],
     }
     units_decl = {
@@ -432,26 +457,50 @@ def test_resolved_group_axes_defaults_from_and_skips_unresolvable_levels():
             # `cohort` has no block at all: defaults to the axis name.
         },
     }
-    assert _resolved_group_axes(units_decl, sweep_block) == {
-        "arm": ("arm_column", ["control", "treatment"]),
-        "cohort": ("cohort", ["derivation", "validation"]),
-    }
+    roster = _levels_roster()
+    plans = _resolved_group_axes(units_decl, sweep_block, roster, "digest", None)
+
+    assert set(plans) == {"arm", "cohort"}
+    assert plans["arm"].levels == ("control", "treatment")
+    assert plans["arm"].members["control"] == ("c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7")
+    assert plans["arm"].members["treatment"] == ("t0", "t1", "t2")
+    assert plans["cohort"].levels == ("derivation", "validation")
+    assert plans["cohort"].members["derivation"] == (
+        "c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7",
+    )
+    assert plans["cohort"].members["validation"] == ("t0", "t1", "t2")
+    assert all(p.seed is None and p.strata == () for p in plans.values())
 
 
 def test_resolved_group_axes_is_empty_with_no_groups_declared():
-    assert _resolved_group_axes({"assign": {"arm": {"from": "x"}}}, {}) == {}
+    assert _resolved_group_axes({"assign": {"arm": {"from": "x"}}}, {}, _levels_roster()) == {}
 
 
-def test_resolved_group_axes_ignores_from_under_a_non_by_attribute_method():
-    """`from` "means nothing" under `random`/`blocked` — the same gate
-    `units._assign_constant_columns` applies and for the same reason: neither
-    method is executable (`E-DATA-ASSIGN-DRAWN`), so reading `from` under one
-    would resolve a column no method here actually consults."""
+def test_resolved_group_axes_is_empty_with_no_roster_to_partition():
+    """An allocation is a partition of a resolved roster, and a design
+    declaring no `data.units` has none — so every axis is dropped rather than
+    realized against nothing. The control that must report: the same
+    declaration WITH a roster realizes the axis, so this is the roster's
+    absence doing the work and not the declaration's shape."""
+    sweep_block = {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}
+    units_decl = {"assign": {"arm": {"method": "by_attribute", "from": "arm_column"}}}
+    assert _resolved_group_axes(units_decl, sweep_block, None, "digest") == {}
+    assert set(_resolved_group_axes(units_decl, sweep_block, _levels_roster(), "digest")) == {"arm"}
+
+
+def test_resolved_group_axes_raises_rather_than_reading_a_column_under_a_drawn_method():
+    """`from` "means nothing" under `random`/`blocked` — but this build does not
+    quietly read the axis name instead, which is what this function used to
+    resolve to. `units.assignment_for` raises `NotImplementedError` until tasks
+    8 and 10, an explicit hole; the fixture's units carry an arm attribute, so
+    a fallback to a column read would have succeeded silently here.
+
+    Unreachable through `command_run`: `validate` refuses both methods as
+    `E-DATA-ASSIGN-DRAWN` and returns before any of this runs."""
     sweep_block = {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}
     units_decl = {"assign": {"arm": {"method": "random", "from": "arm_column"}}}
-    assert _resolved_group_axes(units_decl, sweep_block) == {
-        "arm": ("arm", ["control", "treatment"])
-    }
+    with pytest.raises(NotImplementedError):
+        _resolved_group_axes(units_decl, sweep_block, _levels_roster(), "digest")
 
 
 def test_non_string_levels_make_arm_members_raise_rather_than_skip_narrowing():
@@ -483,17 +532,17 @@ def test_non_string_levels_make_arm_members_raise_rather_than_skip_narrowing():
     conditions = expand(doc)
     assert all(c.selectors == frozenset({"arm"}) for c in conditions)
 
-    group_axes = _resolved_group_axes({}, sweep_block)
+    roster = UnitList(
+        [Unit(key="u0", attributes={"arm": "1"}), Unit(key="u1", attributes={"arm": "2"})]
+    )
+    group_axes = _resolved_group_axes({}, sweep_block, roster, "digest")
     assert group_axes == {}  # the shape fault `_resolved_group_axes` skips
 
     # The gate `command_run` uses: `selector_paths`, not `group_axes`.
     assert selector_paths(sweep_block)  # still true — `expand` agrees
 
-    roster = UnitList(
-        [Unit(key="u0", attributes={"arm": "1"}), Unit(key="u1", attributes={"arm": "2"})]
-    )
     with pytest.raises(KeyError):
-        arm_members(roster, group_axes, conditions)
+        arm_members(group_axes, conditions)
 
 
 _ARM_STEP = '''\
@@ -940,6 +989,96 @@ def test_allocation_json_is_written_with_exact_arm_keys_when_declared(tmp_path: 
 
     assert run_yaml["provenance"]["allocation"] == "allocation.json"
     assert run_yaml["provenance"]["allocation_hash"] == allocation_hash(alloc)
+
+
+def test_one_plan_per_axis_is_realized_once_and_both_consumers_get_that_same_plan(
+    tmp_path: Path, monkeypatch
+):
+    """**The seam this slice turns on, asserted end to end.**
+
+    `artifacts.build_allocation_document` used to call `units.arms_of` a
+    *second* time on the same axes, after `units.arm_members` had already
+    narrowed every condition with the first call. Under `by_attribute` the two
+    calls agree, so nothing observable distinguished them. Under a drawn method
+    they do not: a second draw is a second allocation, and two calls cannot be
+    made to promise they agree — only not calling twice can. The decision is
+    *compute once and pass*, and this is what pins it.
+
+    Three assertions, each with a mutation that breaks it and nothing else:
+
+    - `units.assignment_for` runs **exactly once** — one axis, one plan, for a
+      whole run. Calling `_resolved_group_axes` a second time before
+      `build_allocation_document` (the shape of the recomputation this task
+      removed) takes the count to 2. Mutation-verified.
+    - `allocation.json`'s `arms` is the **same plan object's** membership the
+      runner narrowed with, compared against the plan this spy captured on the
+      way through, not against a re-derivation.
+    - the arms actually narrowed: 4 and 9 resolved units, the fixture's own
+      uneven split, so a plan that reached the file but not the runner (or the
+      reverse) fails here.
+
+    The literal key lists are the control against a plan that is realized once
+    but realized *wrongly*: making `assignment_for` return a fresh partition —
+    each level's keys reversed — leaves the identity assertion satisfied (both
+    consumers still get the one plan) and fails these. Mutation-verified.
+    """
+    control_keys = ["c3", "c0", "c2", "c1"]
+    treatment_keys = ["t5", "t1", "t8", "t0", "t3", "t7", "t2", "t6", "t4"]
+    control_rows = "\n".join(f"{k},control" for k in control_keys)
+    treatment_rows = "\n".join(f"{k},treatment" for k in treatment_keys)
+    roster_csv = f"patient_id,arm\n{control_rows}\n{treatment_rows}\n"
+
+    from publishable import cli as cli_module
+
+    realized: list[Any] = []
+    real_assignment_for = cli_module.assignment_for
+
+    def spy(*args: Any, **kwargs: Any) -> Any:
+        plan = real_assignment_for(*args, **kwargs)
+        realized.append(plan)
+        return plan
+
+    monkeypatch.setattr(cli_module, "assignment_for", spy)
+
+    doc = run_a_project(
+        tmp_path,
+        aggregate_returns="total",
+        roster_csv=roster_csv,
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+            "attributes": ["arm"],
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+    )
+
+    # One axis, one plan, one realization — for the run's whole lifetime.
+    assert len(realized) == 1
+    plan = realized[0]
+    assert plan.levels == ("control", "treatment")
+    assert plan.members["control"] == tuple(control_keys)
+    assert plan.members["treatment"] == tuple(treatment_keys)
+
+    alloc = json.loads((doc["run_dir"] / "allocation.json").read_text())
+    # What the file records IS what the one plan says, key for key and in
+    # order — not a second answer that happens to agree.
+    assert alloc["arms"]["arm"] == {
+        level: list(keys) for level, keys in plan.members.items()
+    }
+    assert alloc["arms"]["arm"]["control"] == control_keys
+    assert alloc["arms"]["arm"]["treatment"] == treatment_keys
+
+    # And the same plan is what the runner narrowed with: 4 and 9, the
+    # fixture's uneven split, so neither arm can be confused with the other
+    # or with the 13-unit roster by size.
+    run_yaml = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    conditions = run_yaml["results"]["conditions"]
+    assert [c["label"] for c in conditions] == ["arm=control", "arm=treatment"]
+    ns = [c["aggregated"]["step01_summarize_units"]["pred"]["n"] for c in conditions]
+    assert ns[0]["resolved"] == 4
+    assert ns[0]["completed"] == 4
+    assert ns[1]["resolved"] == 9
+    assert ns[1]["completed"] == 9
 
 
 def test_allocation_json_is_absent_without_a_declared_arm(tmp_path: Path):
