@@ -302,11 +302,13 @@ def _resolved_group_axes(
     that. A malformed `assign` block (absent, non-mapping, or naming no
     method) reaches `assignment_for` as-is and takes its `by_attribute` path,
     the same default `_check_assign` falls back to before its own checks on
-    the block would have already reported the malformation as a finding; a
-    block naming `random` or `blocked` raises `NotImplementedError` from
-    there, the explicit hole tasks 8 and 10 fill, unreachable through
-    `command_run` because `validate` refuses both as `E-DATA-ASSIGN-DRAWN`
-    and returns first.
+    the block would have already reported the malformation as a finding. A
+    block naming any other method raises `NotImplementedError` from there —
+    `assignment_for` allows `by_attribute` and refuses the rest rather than
+    denying a list of drawing methods — which for `random` and `blocked` is
+    the explicit hole tasks 8 and 10 fill. Unreachable through `command_run`:
+    `validate` refuses those two as `E-DATA-ASSIGN-DRAWN` and anything
+    out-of-enum as `E-DATA-ASSIGN-METHOD`, and returns first.
 
     **That skip is narrower than `sweep.selector_paths`'s own idea of "a group
     axis exists"**, and the caller must not gate on this function's own

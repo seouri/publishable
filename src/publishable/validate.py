@@ -34,6 +34,7 @@ from publishable.templates.base import BaseTemplate
 from publishable.templates.registry import get_template, template_names
 from publishable.units import (
     COLLAPSE_RULES,
+    DRAWN_ASSIGN_METHODS,
     NUMERIC_COLLAPSE_RULES,
     UnitList,
     arms_of,
@@ -1321,15 +1322,14 @@ unimplemented draw, which is a refusal of a different kind reported under its ow
 code, `E-DATA-ASSIGN-DRAWN`.
 """
 
-DRAWN_ASSIGN_METHODS = ("random", "blocked")
-"""The two `ASSIGN_METHODS` values that draw an arm rather than read one already
-assigned. Both are well-formed and in the enum; neither executes in this build,
-which is what `E-DATA-ASSIGN-DRAWN` refuses — a refusal of a *value*, distinct
-from `E-DATA-ASSIGN-METHOD`'s refusal of an absent or out-of-enum one. The two
-checks read the same `method` value in an `elif` chain in `_check_assign`, so
-that mutual exclusion is a property of the code: a value this tuple names is by
-construction inside `ASSIGN_METHODS`, so it can never also be out-of-enum.
-"""
+# `DRAWN_ASSIGN_METHODS` is imported from `units` rather than declared here, and
+# the direction is deliberate. Two literals naming which methods draw — one here,
+# one in `units.assignment_for` — would be pinned in agreement by nothing, and a
+# fourth drawing method added to `ASSIGN_METHODS` on this side alone would pass
+# `validate` and then partition on a column. `units` is the right home for the
+# one copy: the dependency edge already runs that way (`units.py` imports
+# nothing from here), and this module's *use* of the tuple is temporary — task 14
+# retires `E-DATA-ASSIGN-DRAWN` — while the draw's own use of it is permanent.
 
 
 def _declared_levels(sweep: Any, axis: str) -> list[str] | None:

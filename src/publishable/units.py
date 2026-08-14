@@ -960,6 +960,25 @@ def arms_of(roster: UnitList, column: str, levels: Sequence[str]) -> dict[str, l
     return partition
 
 
+DRAWN_ASSIGN_METHODS = ("random", "blocked")
+"""The `validate.ASSIGN_METHODS` values that draw an arm rather than read one
+already assigned — **one tuple, read by both the refusal and the draw**.
+
+`validate` imports it to report `E-DATA-ASSIGN-DRAWN` (a refusal of a *value*,
+distinct from `E-DATA-ASSIGN-METHOD`'s refusal of an absent or out-of-enum one),
+and `assignment_for` below reads it to say which of its two refusals a method
+earns. It lives here rather than in `validate` because `units.py` depends on
+nothing there, and because `validate`'s use of it is temporary — task 14 retires
+`E-DATA-ASSIGN-DRAWN` — while realizing a draw is permanent.
+
+**It is not what makes `assignment_for` fail closed**, and must not be mistaken
+for that: `assignment_for` allows `by_attribute` and refuses everything else, so
+a fourth drawing method added to the enum and to nothing else raises rather than
+reading a column, whether or not anyone remembers to add it here. This tuple
+only picks which message that raise carries.
+"""
+
+
 @dataclass(frozen=True)
 class ArmPlan:
     """One axis's **realized** membership: level → unit keys, in roster order.
@@ -1028,16 +1047,23 @@ def assignment_for(
       authority for a column-read partition and this one does not re-derive
       it. `from` is resolved here, once: the declared `from` when it is a
       non-empty string, else the axis name.
-    - `random` and `blocked` raise `NotImplementedError` until tasks 8 and 10
-      build them. An explicit hole, not a silent fallback to reading a column
-      that need not exist: a drawn axis's units carry no arm attribute, so a
-      fallback would either raise `E-DATA-ASSIGN-LEVELS` about a column
-      nobody declared or, worse, partition on an unrelated one.
-    - Any other `method` string takes the `by_attribute` path rather than a
-      fourth behaviour: `validate` refuses an out-of-enum method outright
-      (`E-DATA-ASSIGN-METHOD`) before `run` reaches this, and the two methods
-      that *draw* are named explicitly above, so no drawing method can reach
-      a column read by falling through.
+    - **Every other value raises `NotImplementedError`** — an allowlist, not a
+      denylist of the methods that happen to draw today. `random` and
+      `blocked` raise the message `DRAWN_ASSIGN_METHODS` selects, until tasks
+      8 and 10 build them; any other string raises as a method this build
+      cannot realize. Fail-closed costs nothing here, because `validate`
+      already refuses an out-of-enum method outright
+      (`E-DATA-ASSIGN-METHOD`) before `run` can reach this — and it is what
+      keeps a *fifth* method, added to `validate.ASSIGN_METHODS` and to
+      nothing else, from validating clean and then silently partitioning on
+      a column. A denylist would have shipped exactly that regression, since
+      the two literals naming which methods draw would have been pinned in
+      agreement by nothing.
+
+    An explicit hole, not a silent fallback to reading a column that need not
+    exist: a drawn axis's units carry no arm attribute, so a fallback would
+    either raise `E-DATA-ASSIGN-LEVELS` about a column nobody declared or,
+    worse, partition on an unrelated one.
 
     `digest` and `clusters` are unread on the `by_attribute` path and are
     parameters anyway: they are what tasks 8 and 10 draw with —
@@ -1047,10 +1073,17 @@ def assignment_for(
     signature changed under it.
     """
     method = block.get("method") if isinstance(block, Mapping) else None
-    if method in ("random", "blocked"):
+    if method is not None and method != "by_attribute":
+        if method in DRAWN_ASSIGN_METHODS:
+            raise NotImplementedError(
+                f"`data.units.assign.{axis}.method: {method}` draws its allocation, and this "
+                "build does not draw one yet (`validate` refuses it as `E-DATA-ASSIGN-DRAWN`)"
+            )
         raise NotImplementedError(
-            f"`data.units.assign.{axis}.method: {method}` draws its allocation, and this "
-            "build does not draw one yet (`validate` refuses it as `E-DATA-ASSIGN-DRAWN`)"
+            f"`data.units.assign.{axis}.method: {method!r}` is not a method this build can "
+            "realize an allocation for; `by_attribute` is the one it reads a column for, and "
+            "no other method may fall back to reading one (`validate` refuses an out-of-enum "
+            "method as `E-DATA-ASSIGN-METHOD`)"
         )
     declared_from = block.get("from") if isinstance(block, Mapping) else None
     column = declared_from if isinstance(declared_from, str) and declared_from else axis

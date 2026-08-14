@@ -6,6 +6,7 @@ import pytest
 
 from publishable import ContractError
 from publishable.units import (
+    DRAWN_ASSIGN_METHODS,
     ArmPlan,
     Unit,
     UnitList,
@@ -1208,18 +1209,45 @@ def test_assignment_for_resolves_from_against_the_axis_name_and_reads_no_other_c
     assert e.value.code == "E-DATA-ASSIGN-LEVELS"
 
 
-@pytest.mark.parametrize("method", ["random", "blocked"])
+@pytest.mark.parametrize("method", DRAWN_ASSIGN_METHODS)
 def test_assignment_for_refuses_a_drawn_method_rather_than_reading_a_column(method: str):
     """An explicit hole until tasks 8 and 10, not a silent fallback: a drawn
     axis's units carry no arm attribute, so falling back to `arms_of` would
     either raise about a column nobody declared or partition on an unrelated
     one. The fixture's units DO carry `arm`, so a fallback would succeed
     silently here — which is exactly why the assertion is `NotImplementedError`
-    and not a `ContractError` about a missing column."""
+    and not a `ContractError` about a missing column.
+
+    Parametrized over `DRAWN_ASSIGN_METHODS` itself, not over a literal pair:
+    `validate` reports `E-DATA-ASSIGN-DRAWN` from that same tuple, and two
+    independently written pairs are two sources of truth pinned in agreement
+    by nothing."""
     roster = _arm_roster12()
     with pytest.raises(NotImplementedError) as e:
         assignment_for(roster, "arm", {"method": method}, ["control", "treatment"], "digest")
     assert method in str(e.value)
+    assert "draws its allocation" in str(e.value)
+
+
+def test_assignment_for_refuses_a_method_it_has_never_heard_of():
+    """**Fail-closed, and this is the regression it prevents.** `assignment_for`
+    allows `by_attribute` and refuses everything else, rather than denying the
+    methods that happen to draw today. A fourth method added to
+    `validate.ASSIGN_METHODS` — and to nothing else — would otherwise validate
+    clean and then be silently partitioned by a column read, which is the
+    fallback the whole guard exists to prevent. `adaptive` stands in for that
+    method here: it is in no enum, and the fixture's units DO carry `arm`, so a
+    denylist would have returned a plausible-looking partition instead of
+    raising.
+
+    Reachable only through a core defect: `validate` refuses an out-of-enum
+    method as `E-DATA-ASSIGN-METHOD` and returns before `run` reaches this."""
+    roster = _arm_roster12()
+    with pytest.raises(NotImplementedError) as e:
+        assignment_for(roster, "arm", {"method": "adaptive"}, ["control", "treatment"], "d")
+    assert "adaptive" in str(e.value)
+    assert "by_attribute" in str(e.value)
+    assert "adaptive" not in DRAWN_ASSIGN_METHODS
 
 
 def test_assignment_for_takes_the_by_attribute_path_for_an_unnamed_method():
