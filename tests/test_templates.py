@@ -480,6 +480,16 @@ class SecondClaimant(BaseTemplate):
     pass
 """
 
+CLAIMS_TWICE_ON_ONE_CLASS = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("duplicated")
+@register_template("duplicated")
+class OnlyClaimant(BaseTemplate):
+    pass
+"""
+
 CLAIMS_GENERIC = """\
 from publishable import BaseTemplate, register_template
 
@@ -548,6 +558,28 @@ def test_one_file_claiming_one_name_twice_names_both_classes(tmp_path: Path):
     message = str(excinfo.value)
     assert f"{templates / 'one.py'}::FirstClaimant" in message
     assert f"{templates / 'one.py'}::SecondClaimant" in message
+
+
+def test_stacked_decorators_are_refused_without_naming_one_provider_twice(tmp_path: Path):
+    """Two decorators on **one class** is the case `<path>::<ClassName>` cannot
+    tell apart, both claims having the same provider. Still refused — a name
+    claimed twice is refused however it was claimed — but the message says the
+    one thing that is true of it, and the remedy is to delete a line rather
+    than to rename anything."""
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "one.py").write_text(CLAIMS_TWICE_ON_ONE_CLASS)
+
+    with pytest.raises(ContractError) as excinfo:
+        discover_local(tmp_path)
+
+    assert excinfo.value.code == "E-TEMPLATE-COLLISION"
+    message = str(excinfo.value)
+    provider = f"{templates / 'one.py'}::OnlyClaimant"
+    assert message.count(provider) == 1
+    assert "same class" in message
+    assert "Remove one." in message
+    assert "Rename one." not in message
 
 
 def test_a_local_template_may_not_shadow_a_core_name(tmp_path: Path):

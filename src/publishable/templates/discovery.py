@@ -32,9 +32,11 @@ class LocalTemplate(NamedTuple):
     cannot be recovered later: the `sys.modules` restore in `_import_file`
     deletes the module object, and `inspect.getfile` on the surviving class
     then raises `TypeError`. It is also the *pair* `path::ClassName` rather
-    than a path alone, because two `@register_template` calls in one file are
-    as much a collision as two files are, and a message built from paths alone
-    would print one path twice and name no second provider at all.
+    than a path alone, because two classes in one file are as much a collision
+    as two files are, and a message built from paths alone would print one path
+    twice and name no second provider at all. Two decorators stacked on one
+    class are the residue that pair cannot separate, and `discover_local` says
+    so rather than printing the same provider twice.
     """
 
     cls: type[BaseTemplate]
@@ -205,11 +207,22 @@ def discover_local(repo_root: Path) -> dict[str, LocalTemplate]:
     for name in sorted(claims):
         providers = claims[name]
         if len(providers) > 1:
+            # Distinct providers, because stacked decorators on one class make
+            # two claims a `path::ClassName` cannot tell apart: printing that
+            # one string twice would name no second provider, which is the
+            # thing the class suffix exists to prevent. Refused either way — a
+            # name claimed twice is refused however it was claimed — but only
+            # the honest half is said, and the remedy differs with it.
+            distinct = list(dict.fromkeys(providers))
+            if len(distinct) > 1:
+                who, remedy = " and ".join(distinct), "Rename one."
+            else:
+                who, remedy = f"{distinct[0]}, twice by the same class", "Remove one."
             raise ContractError(
                 f"the project-local template name `{name}` is claimed more than once: "
-                f"{' and '.join(providers)} — install order and import order are the "
+                f"{who} — install order and import order are the "
                 "only tie-breaks available, and both are properties of a machine "
-                "rather than of a design. Rename one.",
+                f"rather than of a design. {remedy}",
                 code="E-TEMPLATE-COLLISION",
             )
     return found
