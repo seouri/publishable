@@ -1332,12 +1332,41 @@ construction inside `ASSIGN_METHODS`, so it can never also be out-of-enum.
 """
 
 
+def _declared_levels(sweep: Any, axis: str) -> list[str] | None:
+    """`sweep.groups`'s declared `levels` for `axis`, or `None` when the axis
+    isn't declared there, or is, but its `levels` don't resolve to a non-empty
+    list of strings — `sweep.groups`'s own shape fault, reported elsewhere or
+    not at all in this build, and not this function's to report a second time.
+
+    Shared by `_check_assign`'s `by_attribute` branch (`arms_of` needs the same
+    list to partition a resolved roster against) and its `random`/`blocked`
+    branch (*Ratio names levels* needs it to check a declared `ratio`'s keys),
+    reading `sweep.groups` the same second way `_check_assign`'s own docstring
+    already describes: entry by entry, since `levels` is not a `by`-path
+    `selector_paths` collects.
+    """
+    if not isinstance(sweep, dict):
+        return None
+    for entry in sweep.get("groups") or []:
+        if isinstance(entry, dict) and entry.get("by") == axis:
+            candidate = entry.get("levels")
+            if (
+                isinstance(candidate, list)
+                and candidate
+                and all(isinstance(v, str) for v in candidate)
+            ):
+                return candidate
+            return None
+    return None
+
+
 def _check_assign(
     doc: dict[str, Any], units: dict[str, Any], roster: UnitList | None, c: Collector
 ) -> None:
     """`data.units.allocation` and `data.units.assign` against each other and against
-    `sweep.groups` — eight § Validation rows, most read from declarations alone, so
-    each reports whether or not a roster resolved; the last two need the roster.
+    `sweep.groups` — ten § Validation rows, all but one read from declarations
+    alone, so each reports whether or not a roster resolved; only *Attribute
+    assignment resolves* needs the roster.
 
     *Allocation is a known value* — `allocation` present and not one of
     `ALLOCATION_MODES` (`within`, `between`). Checked first, and both branches below
@@ -1378,10 +1407,34 @@ def _check_assign(
     method* is, so the two are mutually exclusive by construction rather than by
     convention.
 
-    **`method: by_attribute`'s two new rows, checked only in that branch of the
-    same `elif` chain** — `from` and `levels` mean nothing under `random`/`blocked`,
-    which *Assignment method isn't drawn* already refuses, or under an
-    absent/out-of-enum method, which *Assignment names a method* already refuses:
+    *Ratio names levels* — checked beside *Assignment method isn't drawn* in the
+    same branch, not instead of it: `ratio` only means anything for a method that
+    draws, so a well-formed `random`/`blocked` block still earns `E-DATA-ASSIGN-DRAWN`
+    for the method and, independently, `E-DATA-ASSIGN-RATIO` when a non-empty
+    `ratio`'s keys don't equal the axis's declared `sweep.groups` levels exactly —
+    a partial mapping (§ Allocation: "the levels I left out get the average" is a
+    rule nobody should have to infer) or a key naming no declared level, one code
+    for either. An empty `ratio` is equal allocation and earns nothing, matching
+    every other row here. Skipped when the axis's declared `levels` don't resolve
+    to a non-empty list of strings, `sweep.groups`'s own shape fault.
+
+    **`method: by_attribute`'s four rows, checked only in that branch of the
+    same `elif` chain** — `from`, `levels`, `ratio`, and `stratify_by` all mean
+    something different under `random`/`blocked`, which *Assignment method isn't
+    drawn* already refuses, or nothing at all under an absent/out-of-enum method,
+    which *Assignment names a method* already refuses:
+
+    *Ratio and strata need a draw* — `by_attribute` reads an arm already assigned
+    rather than drawing one, so a non-empty `ratio` describes a proportion no draw
+    produced and a non-empty `stratify_by` describes a balance no draw performed.
+    § Allocation calls the two "the same fault," so both are reported under the
+    one code, `E-DATA-ASSIGN-NO-DRAW`, distinguished only by which field's path
+    the finding names — one finding per offending field, so a block declaring
+    both earns two findings rather than one that only names the first. An empty
+    `ratio: {}` or `stratify_by: []` — what `init` writes and what most designs
+    carry — changes no behavior and earns neither; nor does a non-mapping `ratio`
+    or non-list `stratify_by`, which carries no meaningful key set to report on
+    and is left to whatever else might catch it.
 
     *Assignment attribute exists* — `assign.<axis>.from`, declared or **defaulted
     to the axis name** (§ The one config file: "`from` is `by_attribute` only, and
@@ -1549,10 +1602,68 @@ def _check_assign(
                 f"system or the data already assigned, which is what a real trial does "
                 f"regardless. This value will be honored once drawing is built",
             )
+            # *Ratio names levels* — `ratio` only means anything for a method that
+            # draws, so it is checked here rather than in the `by_attribute` branch
+            # below, beside `E-DATA-ASSIGN-DRAWN` rather than instead of it: the two
+            # report different things about the same block (a well-formed-but-drawn
+            # method, and a ratio whose keys don't match the axis's declared levels),
+            # so both fire together. An empty `ratio` is equal allocation and earns
+            # no finding, and neither does one whose keys already equal the axis's
+            # declared `levels` set exactly — the accept path this row shares with
+            # every other in this function.
+            ratio = block.get("ratio")
+            if isinstance(ratio, dict) and ratio:
+                levels = _declared_levels(sweep, axis)
+                if levels is not None and set(ratio) != set(levels):
+                    declared_keys = sorted(str(k) for k in ratio)
+                    noun = "key" if len(declared_keys) == 1 else "keys"
+                    keys_repr = ", ".join(repr(k) for k in declared_keys)
+                    levels_repr = ", ".join(repr(level) for level in levels)
+                    c.error(
+                        "E-DATA-ASSIGN-RATIO",
+                        f"data.units.assign.{axis}.ratio",
+                        f"has {noun} {keys_repr}; expected one entry per level of "
+                        f"axis {axis!r} ({levels_repr})",
+                    )
         else:
             # `method == "by_attribute"`, the one value neither elif above caught —
             # the branch where `from` and the axis's declared `levels` mean anything
             # at all.
+
+            # *Ratio and strata need a draw* — `by_attribute` reads an arm already
+            # assigned rather than drawing one, so a `ratio` describes a proportion
+            # no draw produced and a `stratify_by` describes a balance no draw
+            # performed. § Allocation calls the two "the same fault", so both are
+            # reported under the one code, `E-DATA-ASSIGN-NO-DRAW`, distinguished
+            # only by which field's path the finding names. An empty `ratio`/`{}`
+            # or an empty `stratify_by`/`[]` — what `init` writes and what most
+            # designs carry — changes no behavior and is not this row's concern;
+            # neither is a non-mapping `ratio` or non-list `stratify_by`, which
+            # carries no meaningful key set to report on and is left to whatever
+            # else might catch it.
+            ratio = block.get("ratio")
+            if isinstance(ratio, dict) and ratio:
+                c.error(
+                    "E-DATA-ASSIGN-NO-DRAW",
+                    f"data.units.assign.{axis}.ratio",
+                    f"is {ratio!r}, which describes a draw that didn't happen — "
+                    f"`method: by_attribute` reads an arm already assigned rather "
+                    f"than drawing one, so a `ratio` would record a proportion the "
+                    f"data may not honour. Remove it, or use `method: random`/"
+                    f"`blocked`",
+                )
+            stratify_by = block.get("stratify_by")
+            if isinstance(stratify_by, list) and stratify_by:
+                c.error(
+                    "E-DATA-ASSIGN-NO-DRAW",
+                    f"data.units.assign.{axis}.stratify_by",
+                    f"is {stratify_by!r}, which describes how a draw was balanced "
+                    f"when none was — `method: by_attribute` reads an arm already "
+                    f"assigned rather than drawing one, so a `stratify_by` would "
+                    f"record a balance the data may not honour. Remove it, or use "
+                    f"`method: random`/`blocked`",
+                )
+
             declared_from = block.get("from")
             if declared_from is not None and not isinstance(declared_from, str):
                 # No `E-CONFIG-TYPE` backstop exists for this leaf (see docstring):
@@ -1605,18 +1716,7 @@ def _check_assign(
                 continue
             if roster is None:
                 continue
-            levels: list[str] | None = None
-            if isinstance(sweep, dict):
-                for entry in sweep.get("groups") or []:
-                    if isinstance(entry, dict) and entry.get("by") == axis:
-                        candidate = entry.get("levels")
-                        if (
-                            isinstance(candidate, list)
-                            and candidate
-                            and all(isinstance(v, str) for v in candidate)
-                        ):
-                            levels = candidate
-                        break
+            levels = _declared_levels(sweep, axis)
             if levels is None:
                 continue  # `sweep.groups`'s own shape fault, not this row's to report
             try:

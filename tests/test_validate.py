@@ -8416,6 +8416,166 @@ def test_a_drawn_assignment_method_is_refused(write_config, method):
     assert method in c.findings[0].message
 
 
+def test_a_partial_ratio_is_refused(write_config):
+    """§ Allocation: "a partial mapping is rejected rather than defaulted, since
+    'one entry per level' is checkable and 'the levels I left out get the
+    average' is a rule nobody should have to infer." Two levels, one entry.
+
+    `ratio` only means anything for a method that draws, so this is checked
+    under `random`/`blocked` — `E-DATA-ASSIGN-DRAWN` fires beside it, and the
+    exact-set assertion is what keeps this test's teeth once task 14 retires
+    that code and the set shrinks to just `E-DATA-ASSIGN-RATIO`."""
+    found = _error_codes(
+        write_config(_between({"arm": {"method": "random", "ratio": {"control": 1}}}))
+    )
+    assert found == {"E-DATA-ASSIGN-DRAWN", "E-DATA-ASSIGN-RATIO"}
+
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": _ARM_AXIS}},
+        {
+            "allocation": "between",
+            "assign": {"arm": {"method": "random", "ratio": {"control": 1}}},
+        },
+        None,
+        c,
+    )
+    assert {f.code for f in c.findings} == {"E-DATA-ASSIGN-DRAWN", "E-DATA-ASSIGN-RATIO"}
+    ratio_finding = next(f for f in c.findings if f.code == "E-DATA-ASSIGN-RATIO")
+    assert ratio_finding.path == "data.units.assign.arm.ratio"
+    # "has key 'control'", not "keys" and not the declared-levels pair — the
+    # declared `ratio` has one entry, and a mutation swapping its keys for the
+    # axis's `levels` in the message would still contain 'control' and 'arm',
+    # so the singular-key substring is what discriminates the two.
+    assert "has key 'control';" in ratio_finding.message
+    assert "'arm'" in ratio_finding.message
+    assert "'treatment'" in ratio_finding.message
+
+
+def test_a_ratio_naming_an_undeclared_level_is_refused(write_config):
+    """`ratio: {control: 1, f: 2}` against levels [control, treatment]."""
+    found = _error_codes(
+        write_config(
+            _between({"arm": {"method": "blocked", "ratio": {"control": 1, "f": 2}}})
+        )
+    )
+    assert found == {"E-DATA-ASSIGN-DRAWN", "E-DATA-ASSIGN-RATIO"}
+
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": _ARM_AXIS}},
+        {
+            "allocation": "between",
+            "assign": {"arm": {"method": "blocked", "ratio": {"control": 1, "f": 2}}},
+        },
+        None,
+        c,
+    )
+    assert {f.code for f in c.findings} == {"E-DATA-ASSIGN-DRAWN", "E-DATA-ASSIGN-RATIO"}
+    ratio_finding = next(f for f in c.findings if f.code == "E-DATA-ASSIGN-RATIO")
+    assert ratio_finding.path == "data.units.assign.arm.ratio"
+    assert "'f'" in ratio_finding.message
+
+
+def test_a_non_empty_ratio_under_by_attribute_is_refused():
+    """The draw didn't happen, so the proportion describes nothing. § Allocation:
+    "Under `method: by_attribute` a `ratio` describes a draw that didn't happen,
+    so `validate` rejects a non-empty one instead of recording a proportion the
+    data may not honour." A full, correctly-keyed ratio still earns this — the
+    fault is presence under this method, not shape."""
+    c = Collector()
+    _check_assign(
+        {},
+        {
+            "attributes": ["arm"],
+            "assign": {
+                "arm": {
+                    "method": "by_attribute",
+                    "ratio": {"control": 1, "treatment": 1},
+                }
+            },
+        },
+        None,
+        c,
+    )
+    assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-NO-DRAW"]
+    assert c.findings[0].path == "data.units.assign.arm.ratio"
+    assert "by_attribute" in c.findings[0].message
+
+
+def test_an_empty_ratio_is_equal_allocation_and_is_accepted():
+    """The control, and it must report: `{}` is what `init` writes and what most
+    designs carry, so a check that refused it would fire on the common case.
+    Assert the exact finding set, not an absence."""
+    c = Collector()
+    _check_assign(
+        {},
+        {
+            "attributes": ["arm"],
+            "assign": {"arm": {"method": "by_attribute", "ratio": {}}},
+        },
+        None,
+        c,
+    )
+    assert [f.code for f in c.findings] == []
+
+
+def test_a_full_ratio_under_a_drawn_method_is_accepted():
+    """The second control. Under this build the config still reports
+    `E-DATA-ASSIGN-DRAWN` — assert that exact set, so the test keeps its teeth
+    when task 14 retires that code and the set becomes empty."""
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": _ARM_AXIS}},
+        {
+            "allocation": "between",
+            "assign": {
+                "arm": {"method": "random", "ratio": {"control": 1, "treatment": 1}}
+            },
+        },
+        None,
+        c,
+    )
+    assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-DRAWN"]
+
+
+def test_a_non_empty_stratify_by_under_by_attribute_is_refused():
+    """§ Allocation: "The same is true of `assign.<axis>.stratify_by`: under
+    `method: by_attribute` it would describe how a draw was balanced when none
+    was — the same fault — so `validate` rejects a non-empty one there too."
+    Task 3's ruling: this task owns both halves of that sentence, not just
+    `ratio`."""
+    c = Collector()
+    _check_assign(
+        {},
+        {
+            "attributes": ["arm"],
+            "assign": {"arm": {"method": "by_attribute", "stratify_by": ["site"]}},
+        },
+        None,
+        c,
+    )
+    assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-NO-DRAW"]
+    assert c.findings[0].path == "data.units.assign.arm.stratify_by"
+    assert "by_attribute" in c.findings[0].message
+
+
+def test_an_empty_stratify_by_under_by_attribute_is_accepted():
+    """The control for the `stratify_by` half: an empty list changes no
+    behavior and must not be refused."""
+    c = Collector()
+    _check_assign(
+        {},
+        {
+            "attributes": ["arm"],
+            "assign": {"arm": {"method": "by_attribute", "stratify_by": []}},
+        },
+        None,
+        c,
+    )
+    assert [f.code for f in c.findings] == []
+
+
 def test_an_assignment_declaring_no_method_is_refused(write_config):
     """§ Validation's example exactly: a block declaring `stratify_by` and no
     `method`. Which of the block's other fields are read follows from the
