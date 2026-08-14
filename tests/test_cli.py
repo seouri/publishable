@@ -376,8 +376,8 @@ def test_a_plan_pair_missing_from_execution_order_is_a_core_bug():
 def test_a_group_path_gets_no_swept_away_marker():
     """`_wide_swept_paths` marks parameters, and a group cell is not one.
 
-    A `baseline` may fix a group level (§ Expansion modes), so `{arm: control}`
-    reaches the `baseline` term of the union — and a `SweptAway` marker at
+    A group axis's path reaches the union through `_swept_paths` in every design
+    that declares one — and a `SweptAway` marker at
     `parameters.arm` would be the same phantom parameter `resolve_condition_cfg`
     refuses, one scope over: a `run`-scoped step reading `cfg.parameters.arm`
     would get "this is varied by `sweep`" for a parameter no template declares.
@@ -387,6 +387,13 @@ def test_a_group_path_gets_no_swept_away_marker():
     pins the exact set `_wide_swept_paths` returns for a hand-built `sweep`
     block, which discriminates the subtraction rule directly rather than
     through a whole `run`'s aggregated output.
+
+    The block below also fixes the group level in its `baseline`, a declaration
+    `validate` refuses (`E-SWEEP-BASELINE-GROUP`) and `command_run` therefore
+    never resolves. It is kept because `_wide_swept_paths` is a pure function
+    over whatever block it is handed, and the property under test is that the
+    subtraction does not depend on which term of the union a group path arrived
+    by — asserting it from two terms at once is what pins that.
     """
     block = {
         "groups": [{"by": "arm", "levels": ["control", "treatment"]}],

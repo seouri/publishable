@@ -231,10 +231,10 @@ def _wide_swept_paths(sweep_block: dict[str, Any]) -> set[str]:
     now been widened for three times.
 
     **`selector_paths` is subtracted**, and it is the one term that narrows
-    rather than widens. A `baseline` may fix a group level (§ Expansion modes:
-    it "accepts group levels as well as parameter paths"), so `{arm: control}`
-    reaches the `baseline` term above — but a group path names no parameter,
-    so planting a `SweptAway` marker at `parameters.arm` would invent the same
+    rather than widens. Every `groups` axis's path arrives through the
+    `_swept_paths` term above, in every design that declares one, and a group
+    path names no parameter, so planting a `SweptAway` marker at `parameters.arm`
+    would invent the same
     phantom parameter `resolve_condition_cfg` now refuses to invent, one scope
     over: a `run`- or `summary`-scoped step reading `cfg.parameters.arm` would
     get `E-STEP-SWEPT-PARAM` — "this is swept, you cannot read it here" — for a

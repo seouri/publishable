@@ -2174,9 +2174,10 @@ def test_the_blank_axis_name_rule_is_an_allowlist_not_a_denylist(write_config):
 
 
 def test_a_group_axis_repeating_a_level_is_refused(write_config):
-    """`E-SWEEP-LEVEL-DUPLICATE` — the one route to § Mistakes core prevents'
-    *two identical measurements reported as two arms* that the row's other three
-    codes do not close.
+    """`E-SWEEP-LEVEL-DUPLICATE` — a route to § Mistakes core prevents' *two
+    identical measurements reported as two arms* that no allocation code closes.
+    (`E-SWEEP-BASELINE-GROUP` closes the other one, a baseline fixing a level of
+    the axis; neither reaches the other's shape.)
 
     `E-DATA-ALLOCATION-NO-ARMS` and `E-DATA-ALLOCATION-WITHIN-ARMS` both read the
     `within`-versus-arms question, and a config with `allocation: between` and a
@@ -6703,7 +6704,13 @@ def test_a_generated_cross_arm_comparison_is_refused_and_the_within_arm_one_is_n
 ):
     """The third control, and the one the guard exists for: a `groups × grid`
     design whose baseline fixes the group axis to one arm (`control`) rather
-    than per-cell. `sweep.expand` then renders one baseline row and
+    than per-cell. That baseline is itself refused (`E-SWEEP-BASELINE-GROUP`),
+    and deliberately so — it is the *only* declaration that makes a generated
+    `vs_baseline` cross arms, since every other baseline expands over the group
+    axis and targets each condition's own cell. `validate` collects rather than
+    stops, so the per-comparison guard still runs here and is what this test
+    reads; the route that carries this code alone is the declared contrast in
+    the test below. `sweep.expand` then renders one baseline row and
     `contrasts.resolve_contrasts` compares every other condition against it —
     including the `treatment` ones, which is what makes the baseline-generated
     route (not just a declared `statistics.contrasts` entry) produce a
@@ -7592,46 +7599,120 @@ def test_a_fold_stratify_by_reports_before_an_oversized_k(write_config, tmp_path
     assert found == {"E-REPL-FOLD-K-TOO-LARGE", "W-DATA-CLUSTER-UNDECLARED"}
 
 
-def test_a_baseline_may_fix_a_group_level(write_config):
-    """§ Expansion modes: `sweep.baseline` "accepts group levels as well as
-    parameter paths, so `{arm: control}` designates the control arm". A group
-    level is not a parameter path, so `_path_resolves` must not ask
-    `parameter_spec` about it — the shared check `grid` and `baseline` use is
-    right for every other key and wrong for this one.
+def test_the_one_level_control_arm_baseline_reports_where_it_once_validated_clean(
+    write_config, tmp_path
+):
+    """The defect end to end, on the config that carried it: a well-formed
+    `between` + `by_attribute` design over one `control` level, whose baseline
+    designates that arm the way § Group axes used to tell a reader to.
 
-    Two controls, both of which must report, and each closes one direction:
-    with no `groups` axis declaring `arm`, the same baseline key *is* an unknown
-    parameter path and stays `E-SWEEP-PATH-UNKNOWN` (which is also the answer to
-    task 3's open question — nothing else refuses a baseline fixing a group path
-    no axis declares); and a misspelled parameter path alongside a real group
-    axis is still reported, so the exemption is the declared axis name and not
-    the `groups` block's presence.
+    Driven before this refusal existed, `validate` reported **zero findings** and
+    `run` exited 0 while `conditions/00_baseline` and `conditions/01_arm=control`
+    came out byte-identical at every file — the same 8 units handed to both, on
+    all five seed repeats. Nothing else in the suite reaches that config: at two
+    levels `E-DATA-ALLOCATION-CONTRAST` masks it, and at one level there is no
+    cross-arm comparison for that code to read.
 
-    `E-DATA-ALLOCATION-WITHIN-ARMS` is expected beside the ones under test
+    `test_by_attribute_assignment_is_accepted` is the control that must stay
+    silent — the same fixture without the baseline, whose finding set is empty —
+    so an exact set of exactly one code here separates "the refusal fired" from
+    "this config was never clean anyway"."""
+    rows = "".join(f"p{i},control\n" for i in range(8))
+    (tmp_path / "input" / "index.csv").write_text(f"patient_id,arm\n{rows}")
+    design = _between({"arm": {"method": "by_attribute"}}, attributes=["arm"])
+    design["sweep"] = {
+        "groups": [{"by": "arm", "levels": ["control"]}],
+        "baseline": {"arm": "control"},
+    }
+    assert _error_codes(write_config(design)) == {"E-SWEEP-BASELINE-GROUP"}
+
+
+def test_a_baseline_may_not_fix_a_group_level(write_config):
+    """`E-SWEEP-BASELINE-GROUP` — § Expansion modes: "the arms of a group axis
+    are peers, and `sweep.baseline` may not fix one of them".
+
+    Unrefused, `_baseline_cells` reads the fixed axis as fixed and expands over
+    nothing while `_axes` still emits that level as a product row, so the level
+    is rendered **twice**. Driven end to end over a roster of 8 `control` units,
+    `conditions/00_baseline` and `conditions/01_arm=control` came out
+    byte-identical at every file, across all five seed repeats, with `validate`
+    reporting zero findings and `run` exiting 0 — `experimental-designs.md`
+    § Mistakes core prevents' *two identical measurements reported as two arms*,
+    verbatim. At two or more levels `E-DATA-ALLOCATION-CONTRAST` fires beside
+    it, which is why the one-level shape below is asserted as its own exact set:
+    that refusal is temporary (it lifts with the unpaired estimator family) and
+    at one level it reaches nothing.
+
+    A group level is still not a parameter path, so `_path_resolves` must not
+    ask `parameter_spec` about it — this reports the level, never
+    `E-SWEEP-PATH-UNKNOWN`, and `_value_checks` is never handed a path
+    `spec[path]` would `KeyError` on.
+
+    Four controls, each of which must report something different:
+
+    * a baseline fixing only a *parameter* path beside a group axis is the legal
+      shape § Expansion modes tells a reader to write, and stays legal — it
+      expands over the axis, one reference per arm;
+    * with no `groups` axis declaring `arm`, the same baseline key *is* an
+      unknown parameter path and stays `E-SWEEP-PATH-UNKNOWN`, so the gate is
+      the declared axis name rather than the `groups` block's presence;
+    * a misspelled parameter path beside a real group axis is still reported;
+    * and `ablate` takes the sibling code instead, never both, since what goes
+      wrong there is that the other levels execute nowhere rather than that this
+      one executes twice (`expand`'s `crossed` branch emits no product rows).
+      Crossed with a *parameter* axis, `crossed` is False and the level is
+      duplicated after all — that shape carries `E-SWEEP-ABLATE-CROSSED` for its
+      own reason, and its three-code set is pinned here so the co-report is not
+      something a later reader has to re-derive.
+
+    `E-DATA-ALLOCATION-WITHIN-ARMS` is expected beside the codes under test
     rather than filtered away: `validate` collects rather than stops, and none
-    of these three configs declares `allocation`, which defaults to `within`,
-    beside the declared `arm` axis.
-
-    A baseline fixing the group axis to one arm (`{arm: control}`) is also the
-    shape `E-DATA-ALLOCATION-CONTRAST` refuses: with no `grid` beside it,
-    `sweep.expand` still crosses the bare `arm` axis into the product, so
-    `arm=treatment` is a real condition and `resolve_contrasts` compares it
-    against the single `control` baseline — a cross-arm, disjoint-units
-    comparison. It fires in the first and third configs below and not the
-    second, which declares no `groups` axis at all and so generates no
-    `arm=treatment` condition to compare."""
+    of these configs declares `allocation`, which defaults to `within`, beside a
+    declared group axis."""
     axis = [{"by": "arm", "levels": ["control", "treatment"]}]
+    one_level = [{"by": "arm", "levels": ["control"]}]
+
+    # The defect itself, at the one-level shape nothing else touches.
+    assert _error_codes(
+        write_config({"sweep": {"groups": one_level, "baseline": {"arm": "control"}}})
+    ) == {
+        "E-SWEEP-BASELINE-GROUP",
+        "E-DATA-ALLOCATION-WITHIN-ARMS",
+    }
+    message = messages_by_code(
+        write_config({"sweep": {"groups": one_level, "baseline": {"arm": "control"}}})
+    )["E-SWEEP-BASELINE-GROUP"]
+    assert "arm" in message
+    assert "twice" in message
+
+    # And at two levels, where the temporary cross-arm refusal fires beside it.
     assert _error_codes(
         write_config({"sweep": {"groups": axis, "baseline": {"arm": "control"}}})
     ) == {
+        "E-SWEEP-BASELINE-GROUP",
         "E-DATA-ALLOCATION-WITHIN-ARMS",
         "E-DATA-ALLOCATION-CONTRAST",
     }
 
+    # Control 1: a parameter-path baseline beside the same axis is legal.
+    assert _error_codes(
+        write_config(
+            {
+                "sweep": {
+                    "groups": axis,
+                    "grid": {"analysis.method": ["spearman", "kendall"]},
+                    "baseline": {"analysis.method": "pearson"},
+                }
+            }
+        )
+    ) == {"E-DATA-ALLOCATION-WITHIN-ARMS"}
+
+    # Control 2: no axis declares `arm`, so the key is an unknown parameter path.
     assert _error_codes(write_config({"sweep": {"baseline": {"arm": "control"}}})) == {
         "E-SWEEP-PATH-UNKNOWN"
     }
 
+    # Control 3: a misspelled parameter path beside a real axis is still checked.
     assert _error_codes(
         write_config(
             {
@@ -7642,9 +7723,45 @@ def test_a_baseline_may_fix_a_group_level(write_config):
             }
         )
     ) == {
+        "E-SWEEP-BASELINE-GROUP",
         "E-SWEEP-PATH-UNKNOWN",
         "E-DATA-ALLOCATION-WITHIN-ARMS",
         "E-DATA-ALLOCATION-CONTRAST",
+    }
+
+    # Control 4: `ablate` takes the sibling code alone, and the parameter-axis
+    # cross takes it beside `E-SWEEP-ABLATE-CROSSED`.
+    assert _error_codes(
+        write_config(
+            {
+                "sweep": {
+                    "groups": axis,
+                    "baseline": {"arm": "control", "analysis.drop_missing": True},
+                    "ablate": {"remove": ["analysis.drop_missing"]},
+                }
+            }
+        )
+    ) == {
+        "E-SWEEP-ABLATE-BASELINE-GROUP",
+        "E-DATA-ALLOCATION-WITHIN-ARMS",
+    }
+
+    assert _error_codes(
+        write_config(
+            {
+                "sweep": {
+                    "groups": axis,
+                    "grid": {"analysis.method": ["spearman", "kendall"]},
+                    "baseline": {"arm": "control", "analysis.drop_missing": True},
+                    "ablate": {"remove": ["analysis.drop_missing"]},
+                }
+            }
+        )
+    ) == {
+        "E-SWEEP-ABLATE-BASELINE-GROUP",
+        "E-SWEEP-ABLATE-CROSSED",
+        "E-DATA-ALLOCATION-CONTRAST",
+        "E-DATA-ALLOCATION-WITHIN-ARMS",
     }
 
 
@@ -7819,13 +7936,17 @@ def test_a_group_level_must_render_into_a_condition_label(write_config):
 
 
 def test_a_baseline_may_not_fix_a_group_level_while_ablate_is_declared(write_config):
-    """§ Expansion modes states this twice: "`sweep.baseline` may not name the
-    group axis for this reason — the arms are peers, and `validate` rejects a
-    baseline that fixes a level while `ablate` is declared", and "`ablate ×
+    """§ Expansion modes states this twice: "`sweep.baseline` may not fix a level
+    of the group axis, here or anywhere else — the arms are peers — and this
+    composition is the shape where the refusal bites hardest", and "`ablate ×
     groups` always lands in the second row, since `validate` rejects a baseline
-    that fixes a group level while `ablate` is declared: an ablation is one
-    change from *its own cell's* full model, and there is no single reference
-    condition when the reference cohort differs".
+    that fixes a group level: an ablation is one change from *its own cell's*
+    full model, and there is no single reference condition when the reference
+    cohort differs".
+
+    The sibling code `E-SWEEP-BASELINE-GROUP` refuses the same declaration
+    without `ablate`, and the two guards are mutually exclusive — every config
+    here carries exactly one of them, which is what the exact sets pin.
 
     Unrefused, the declaration does not merely mis-number — **a declared level
     disappears from the run**. The baseline fixes the group axis, so it expands
@@ -7836,20 +7957,21 @@ def test_a_baseline_may_not_fix_a_group_level_while_ablate_is_declared(write_con
     Two controls, both of which must report: an ablation whose baseline fixes a
     *parameter* beside the same group axis is the legal composition and carries
     *Arms need allocation* alone (it is also
-    `test_ablate_composes_with_a_group_axis`, untouched), and the same baseline
-    without `ablate` is the ordinary per-cell design § Expansion modes' second
-    table row describes. None of the three declares `allocation`, which
-    defaults to `within`, beside the declared `cohort` axis, so
-    `E-DATA-ALLOCATION-WITHIN-ARMS` fires alongside every one of them.
+    `test_ablate_composes_with_a_group_axis`, untouched), and the same fixed
+    level *without* `ablate` takes `E-SWEEP-BASELINE-GROUP` rather than this
+    code. None of the three declares `allocation`, which defaults to `within`,
+    beside the declared `cohort` axis, so `E-DATA-ALLOCATION-WITHIN-ARMS` fires
+    alongside every one of them.
 
     The second control also carries `E-DATA-ALLOCATION-CONTRAST`: its baseline
     fixes `cohort` to `derivation` and leaves `analysis.method` free, so
     `sweep.expand` renders one per-cell baseline per method value **within
     `derivation` alone** — `validation`'s two conditions have no baseline of
     their own and are compared against `derivation`'s, a cross-cohort,
-    disjoint-units comparison for each. This is the same "a baseline fixing the
-    group axis to one arm" shape the first control carries, reached here
-    through a per-cell baseline rather than a fully-fixed one."""
+    disjoint-units comparison for each. That is the generated route to that
+    code, and it is reachable only from a baseline fixing a group level, which
+    is exactly why it is co-reported with the sibling refusal here rather than
+    standing alone."""
     axis = [{"by": "cohort", "levels": ["derivation", "validation"]}]
     assert _error_codes(
         write_config(
@@ -7889,6 +8011,7 @@ def test_a_baseline_may_not_fix_a_group_level_while_ablate_is_declared(write_con
             }
         )
     ) == {
+        "E-SWEEP-BASELINE-GROUP",
         "E-DATA-ALLOCATION-WITHIN-ARMS",
         "E-DATA-ALLOCATION-CONTRAST",
     }

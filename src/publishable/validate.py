@@ -2100,9 +2100,13 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     a `remove` on a parameter that can hold neither `false` nor `null`
     (`E-SWEEP-ABLATE-TARGET`), `ablate` without a `baseline`
     (`E-SWEEP-ABLATE-BASELINE-MISSING`), and `ablate` crossed with a parameter
-    axis (`E-SWEEP-ABLATE-CROSSED`). The one § Validation row still open is
-    "Ablation baseline isn't a group level", which needs a group axis to have a
-    level for a baseline to fix. `sweep.groups` is no longer refused here, and
+    axis (`E-SWEEP-ABLATE-CROSSED`). § Validation's "Ablation baseline isn't a
+    group level" needed a group axis to have a level for a baseline to fix, and
+    is checked here too, beside its sibling "Baseline isn't a group level"
+    (`E-SWEEP-ABLATE-BASELINE-GROUP` and `E-SWEEP-BASELINE-GROUP`) — one rule
+    under two codes, guarded exclusively, because the same declaration duplicates
+    a level under the plain product and hides every other level under `ablate`.
+    `sweep.groups` is no longer refused here, and
     neither is `data.units.allocation: between` nor `data.units.assign`: `expand`
     crosses a group axis into the condition product, `_check_assign` checks
     `allocation` and `assign` against each other and against `sweep.groups` for
@@ -2790,9 +2794,10 @@ def _check_sweep(
     # config under a label claiming otherwise and the run reported success.
     #
     # **A group level is the one baseline key that is not a parameter path**, and
-    # it is skipped before `_path_resolves` rather than after: § Expansion modes
-    # says a baseline "accepts group levels as well as parameter paths, so
-    # `{arm: control}` designates the control arm", and `_value_checks` indexes
+    # it is skipped before `_path_resolves` rather than after: it is refused by
+    # `E-SWEEP-BASELINE-GROUP`/`E-SWEEP-ABLATE-BASELINE-GROUP` below rather than
+    # as an unknown parameter — § Expansion modes says "`sweep.baseline` may not
+    # fix a level of a group axis" and names why — and `_value_checks` indexes
     # `spec[path]` unguarded, so suppressing only the error would move the
     # `KeyError` one line down inside a function contracted never to raise. The
     # gate is the declared axis names, never the presence of a `groups` block: a
@@ -2861,18 +2866,37 @@ def _check_sweep(
     # every condition is still exactly one parameter change from its own arm's
     # baseline — legal beside `ablate`, and no longer refused for its own reason
     # the way it was before this row's own family of checks landed for real.
-    # § Expansion modes, twice: "`sweep.baseline` may not name the group axis for
-    # this reason — the arms are peers, and `validate` rejects a baseline that
-    # fixes a level while `ablate` is declared", because "an ablation is one
-    # change from *its own cell's* full model, and there is no single reference
-    # condition when the reference cohort differs".
+    # § Expansion modes: "`sweep.baseline` may not fix a level of a group axis —
+    # the arms are peers". **One rule, two codes**, because the same declaration
+    # breaks two different ways and a message naming the wrong one is a message
+    # a reader cannot act on. `expand`'s `crossed` branch is the discriminator:
+    # under `ablate` over group axes alone it suppresses the bare product rows,
+    # so the fixed level is *not* duplicated and what goes wrong is that every
+    # other level executes nowhere; without `ablate` the product rows are emitted
+    # and the fixed level is rendered twice. The guards below are mutually
+    # exclusive so that no config collects both, and each states what its own
+    # shape actually does.
     #
-    # The consequence is worse than a mis-numbering, which is why it is an error
-    # rather than a warning: a fixed group axis is a *fixed* axis to
-    # `_baseline_cells`, so it expands over nothing, the crossed ablation has one
-    # empty cell to repeat over, and every level but the fixed one is executed
-    # nowhere while the run reports success — a record describing an experiment
-    # nobody performed.
+    # `ablate`'s branch, § Expansion modes twice over: "an ablation is one change
+    # from *its own cell's* full model, and there is no single reference
+    # condition when the reference cohort differs". The consequence is worse than
+    # a mis-numbering, which is why it is an error rather than a warning: a fixed
+    # group axis is a *fixed* axis to `_baseline_cells`, so it expands over
+    # nothing, the crossed ablation has one empty cell to repeat over, and every
+    # level but the fixed one is executed nowhere while the run reports success —
+    # a record describing an experiment nobody performed.
+    #
+    # **That "executed nowhere" reading holds for the composition § Expansion
+    # modes permits — `ablate` over group axes and nothing else — and is scoped
+    # to it deliberately.** `expand`'s `crossed` requires *every* axis to be a
+    # group axis, so `ablate` beside a parameter axis takes the other branch of
+    # `expand` and duplicates the level as well. That shape is refused for its
+    # own reason by `E-SWEEP-ABLATE-CROSSED` beside this code — the document
+    # gives it no reading at all — and the message says "would be executed by no
+    # condition at all" of the composition it names rather than of every config
+    # that reaches this line. `test_a_baseline_may_not_fix_a_group_level` pins
+    # the three-code finding set for the crossed shape so the co-report is not
+    # something a later reader has to re-derive.
     fixed_levels = [path for path in (sweep.get("baseline") or {}) if path in group_axes]
     if ablate and fixed_levels:
         c.error(
@@ -2881,9 +2905,40 @@ def _check_sweep(
             f"fixes the `sweep.groups` axis `{fixed_levels[0]}` while `sweep.ablate` is "
             "declared — an ablation is one change from its own cell's full model, and "
             "there is no single reference condition when the reference cohort differs. "
-            "A fixed group axis also expands over nothing, so every other level of it "
-            "would be executed by no condition at all. Drop the level from the "
-            "baseline: `ablate × groups` gives one baseline and its ablations per level",
+            "Crossed with the group axes alone, a fixed group axis also expands over "
+            "nothing, so every other level of it would be executed by no condition at "
+            "all. Drop the level from the baseline: `ablate × groups` gives one baseline "
+            "and its ablations per level",
+        )
+    elif fixed_levels:
+        # The plain product case, which nothing refused until this check: the
+        # baseline row and the axis's own product row are the same cell. Over the
+        # roster the level names they resolve to the same parameters, the same
+        # units, and two condition directories identical at every artifact —
+        # `experimental-designs.md` § Mistakes core prevents' *two identical
+        # measurements reported as two arms*, verbatim. At two or more levels
+        # `E-DATA-ALLOCATION-CONTRAST` fires beside it (the other levels' product
+        # rows cross the single baseline), but that refusal is temporary and
+        # reaches nothing at all at one level, where the run is green.
+        #
+        # The duplicate is stated for the case that produces it — a value naming
+        # a level the axis declares. A baseline fixing a group path to something
+        # no level names expands over no units instead, and is refused by this
+        # same rule rather than by that consequence.
+        c.error(
+            "E-SWEEP-BASELINE-GROUP",
+            f"sweep.baseline.{fixed_levels[0]}",
+            f"fixes the `sweep.groups` axis `{fixed_levels[0]}` — the arms of a group "
+            "axis are peers, and a baseline designating one of them is not a reference "
+            "the expansion can give: the fixed level is rendered twice, once as the "
+            "baseline row and once as the product row its own axis emits, so two "
+            "conditions hold the same units and the same parameters and their "
+            "directories are identical at every artifact. Drop the level from the "
+            "baseline, which then expands over the axis and gives every arm its own "
+            "reference; a named comparison between two arms is a "
+            "`statistics.contrasts` entry, whose delta this build refuses "
+            "(`E-DATA-ALLOCATION-CONTRAST`) until the unpaired estimators exist — "
+            "until then, a `summary`-step `Estimate` or two runs joined in a `study`",
         )
 
     crossed_modes = parameter_axis_modes_present(sweep) if ablate else []

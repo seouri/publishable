@@ -905,8 +905,7 @@ def test_the_mode_vocabulary_is_partitioned_and_parameter_axes_are_a_subset() ->
 
 def test_a_group_path_is_marked_a_selector_and_a_parameter_path_is_not() -> None:
     """§ Expansion modes: "a group level is a *set of units*", and a baseline
-    "accepts group levels as well as parameter paths, so `{arm: control}`
-    designates the control arm". So a condition's `values` can hold two kinds of
+    fixes parameter paths. So a condition's `values` can hold two kinds of
     path, and `runner.resolve_condition_cfg`'s reading — every path names a leaf
     under `parameters` — is true of one of them. `Condition.selectors` is which,
     answered once by `expand` rather than re-derived by each reader.
@@ -917,7 +916,10 @@ def test_a_group_path_is_marked_a_selector_and_a_parameter_path_is_not() -> None
 
     One `expand` call carries both halves: the two baseline rows, which fix
     `arm` because the baseline names it, and the four product rows, which carry
-    the group axis's own cells. **The probe is not the row count but the
+    the group axis's own cells. That baseline is a declaration `validate`
+    refuses (`E-SWEEP-BASELINE-GROUP`) — `expand` is deliberately permissive and
+    stays total over it, and the two kinds of path in one `values` mapping is
+    what this test is about. **The probe is not the row count but the
     marking** — every row here holds `arm`, and each must mark it a selector
     while marking `analysis.method` nothing. The control is the grid-only sweep
     below, whose axis is *named* `arm` and marks nothing, so the discriminator
@@ -1292,15 +1294,19 @@ def test_two_group_axes_cross_each_other() -> None:
 
 def test_a_baseline_expands_over_a_free_group_axis_and_is_fixed_by_one_it_names() -> None:
     """§ Expansion modes: "the baseline expands over whichever axes it doesn't fix
-    — group axes and parameter axes alike", and it "accepts group levels as well
-    as parameter paths, so `{arm: control}` designates the control arm". The two
-    rows of that table, over one design, in one direction each:
+    — group axes and parameter axes alike". Fixedness is read off the cells'
+    paths, and this pins that it reads a group axis's path the same way it reads
+    a parameter's, over one design in one direction each:
 
     a baseline fixing the *parameter* leaves the group axis free, giving one
-    reference per arm; a baseline fixing the *group level* leaves the parameter
-    axis free, giving one reference per method. Each is the other's control —
-    the same six conditions under a rule that read only one kind of axis would
-    produce one of these shapes for both configs."""
+    reference per arm — the shape a design writes; and a baseline fixing the
+    *group level* leaves the parameter axis free, giving one reference per
+    method. The second is a declaration `validate` refuses
+    (`E-SWEEP-BASELINE-GROUP`) precisely because of what it renders here — the
+    two `arm=control` rows below are the same cell twice — and `expand` stays
+    permissive and total over it, which is what makes each config the other's
+    control: a rule that read only one kind of axis would produce one of these
+    shapes for both."""
     free_group = expand(
         {
             "sweep": {

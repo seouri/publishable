@@ -1444,10 +1444,13 @@ def test_a_group_cell_adds_no_parameter() -> None:
     invents an `arm` no `parameter_spec` declares, which a `condition`-scoped
     step then reads as `cfg.parameters.arm`.
 
-    Built through `expand` rather than by hand, over the design § Expansion modes
-    makes that claim about: a baseline fixing the group level (rows 0 and 1) and
-    the arm axis crossed with the parameter axis (rows 2 to 5). Rows 2 and 4 are
-    the two arms of one design, so the claim is asserted between them directly.
+    Built through `expand` rather than by hand, over a sweep whose baseline fixes
+    the group level (rows 0 and 1) beside the arm axis crossed with the parameter
+    axis (rows 2 to 5). That baseline is a declaration `validate` refuses
+    (`E-SWEEP-BASELINE-GROUP`); it is kept here because `expand` is permissive by
+    design and the six rows it yields are the widest set of shapes
+    `resolve_condition_cfg` has to be right about. Rows 2 and 4 are the two arms
+    of one design, so the claim is asserted between them directly.
     """
     conditions = expand(
         {
