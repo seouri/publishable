@@ -1518,6 +1518,27 @@ def test_a_stratified_draw_balances_arms_within_every_stratum(stratify_by):
         f"u{i:02d}" for i in range(12)
     ]
 
+    # **Membership, not only counts — and this is the half no count assertion
+    # can carry.** `_apportion` FORCES the counts above: each stratum's split is
+    # decided by its size and the ratio before any number is drawn, so a draw
+    # that never shuffled at all (arms decided by roster order) or that ignored
+    # the seed entirely would produce the identical 3/3, 2/2, 1/1 and pass every
+    # count assertion in this file. Exact keys at a pinned seed are what makes
+    # the shuffle and the seed load-bearing, and the seed-12 half below is what
+    # makes the SEED load-bearing rather than just some fixed permutation.
+    assert plan.members["control"] == ("u04", "u00", "u02", "u01", "u11", "u09")
+    assert plan.members["treatment"] == ("u10", "u08", "u06", "u07", "u05", "u03")
+
+    other = assignment_for(
+        _stratum_roster(),
+        "arm",
+        {"method": "random", "seed": 12, "stratify_by": stratify_by},
+        levels,
+        "digest",
+    )
+    assert _per_stratum(other, levels) == {"A": (3, 3), "B": (2, 2), "C": (1, 1)}
+    assert set(other.members["control"]) != set(plan.members["control"])
+
 
 def test_a_stratified_blocked_draw_balances_arms_within_every_stratum():
     """The same balance under `blocked`, which is a stratified permuted-block
@@ -1739,6 +1760,24 @@ def test_a_clustered_stratified_draw_keeps_every_cluster_whole():
         assert members <= control or not (members & control), f"c{c} straddles two arms"
     assert len({k for k in control if k.startswith(("c0", "c1", "c2", "c3"))}) == 4
     assert len(control) == 8
+
+    # The same membership pin the unclustered stratified test carries, and for
+    # the same reason: which four of each site's clusters go to `control` is the
+    # only thing the RNG decides here — the counts and the wholeness are forced
+    # by the ratio and by `_assign_whole_clusters_by_ratio` respectively — so a
+    # clustered draw that ignored its seed would satisfy both assertions above.
+    assert plan.members["control"] == (
+        "c0_0", "c0_1", "c2_0", "c2_1", "c5_0", "c5_1", "c6_0", "c6_1",
+    )
+    other = assignment_for(
+        roster,
+        "arm",
+        {"method": "random", "seed": 12, "stratify_by": ["site"]},
+        ["control", "treatment"],
+        "digest",
+        clusters,
+    )
+    assert set(other.members["control"]) != set(plan.members["control"])
 
 
 def test_an_empty_stratify_by_still_draws():

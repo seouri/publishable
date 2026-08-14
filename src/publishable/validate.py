@@ -1393,9 +1393,11 @@ def _check_assign(
     doc: dict[str, Any], units: dict[str, Any], roster: UnitList | None, c: Collector
 ) -> None:
     """`data.units.allocation` and `data.units.assign` against each other and against
-    `sweep.groups` — thirteen § Validation rows, all but two read from declarations
+    `sweep.groups` — fourteen § Validation rows, all but two read from declarations
     alone, so each reports whether or not a roster resolved; only *Attribute
     assignment resolves* and *Allocation strata survive clustering* need the roster.
+    (The count was already one short at "eleven" before this slice: *Block size
+    fills the arms* was implemented here and never counted.)
 
     *Allocation is a known value* — `allocation` present and not one of
     `ALLOCATION_MODES` (`within`, `between`). Checked first, and both branches below
