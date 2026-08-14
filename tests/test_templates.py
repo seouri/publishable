@@ -49,3 +49,21 @@ def test_a_subclass_can_derive_from_the_table():
     assert T().aggregate(UnitTable({"u1": {"pred": 1.0}, "u2": {"pred": 2.0}}), None) == {
         "total": 3.0
     }
+
+
+def test_register_template_returns_the_class_and_records_the_name():
+    """§ Creating a plugin: a local template's `@register_template` argument
+    "is therefore the whole of its registration". The decorator must return the
+    class unchanged — a decorator that returned the registration record would
+    break `class X(BaseTemplate)` for every later reference to X."""
+    from publishable import register_template
+    from publishable.templates.discovery import drain_pending
+
+    @register_template("my_assay")
+    class MyAssay(BaseTemplate):
+        pass
+
+    assert MyAssay.__name__ == "MyAssay"          # returned unchanged
+    assert issubclass(MyAssay, BaseTemplate)
+    assert drain_pending() == [("my_assay", MyAssay)]
+    assert drain_pending() == []                  # draining empties it
