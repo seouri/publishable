@@ -384,10 +384,10 @@ def _assign_constant_columns(assign_decl: Any) -> dict[str, str]:
     resolution has no path to report through.
 
     **Gated on `method == "by_attribute"`, matching `_check_assign`'s own
-    elif chain**, which reads `from` and `levels` only in that branch — "mean
-    nothing" under `random`/`blocked`, refused today as `E-DATA-ASSIGN-DRAWN`
-    before drawing is implemented, and under an absent or out-of-enum method,
-    refused as `E-DATA-ASSIGN-METHOD`. Without this gate, a `method: random`
+    elif chain**, which reads `from` and `levels` only in that branch — they
+    "mean nothing" under `random`/`blocked`, which draw an arm instead of
+    reading one, and under an absent or out-of-enum method, refused as
+    `E-DATA-ASSIGN-METHOD`. Without this gate, a `method: random`
     block whose axis-name default happens to match a column that varies within
     a unit's rows would raise `E-DATA-ASSIGN-VARIES` naming a `.from` path the
     declaration never wrote, over a column nothing under that method reads —
@@ -964,11 +964,15 @@ DRAWN_ASSIGN_METHODS = ("random", "blocked")
 """The `validate.ASSIGN_METHODS` values that draw an arm rather than read one
 already assigned — **one tuple, defined here, read by `validate` alone now**.
 
-`validate` imports it to report `E-DATA-ASSIGN-DRAWN` (a refusal of a *value*,
-distinct from `E-DATA-ASSIGN-METHOD`'s refusal of an absent or out-of-enum one).
-It lives here rather than in `validate` because `units.py` depends on nothing
-there, and because `validate`'s use of it is temporary — task 14 retires
-`E-DATA-ASSIGN-DRAWN` — while realizing a draw is permanent.
+`validate` imported it to report `E-DATA-ASSIGN-DRAWN`, the refusal of a
+well-formed *value* this build could not yet realize. That refusal is retired,
+and the tuple is not: it is now what `validate._check_assign` **dispatches** on
+— which of a block's fields mean anything follows from whether the method draws
+(`ratio`, `block_size`, `stratify_by`) or reads (`from`) — a permanent question
+where the refusal was a temporary one. It lives here rather than in `validate`
+because `units.py` depends on nothing there, and because a second literal
+naming which methods draw would be pinned in agreement with this one by
+nothing.
 
 `assignment_for` below no longer reads it at all: task 8 realized `random`
 (unclustered, then task 9 beside a declared `cluster_by`) and task 10 realized
@@ -976,8 +980,8 @@ there, and because `validate`'s use of it is temporary — task 14 retires
 The generic fallback below them no longer distinguishes a member of this tuple
 from any other unrecognized `method` string — every value that reaches it is,
 by construction, one neither branch above claimed, so there is nothing left for
-this tuple to pick a message for. It survives here **only** as `validate`'s
-source of truth, and only until task 14 retires the code it names.
+this tuple to pick a message for. It survives here as `validate`'s source of
+truth for the dispatch above, which outlives the refusal it was minted for.
 
 **It was never what made `assignment_for` fail closed**, and must not be
 mistaken for that even in memory: `assignment_for` allows `by_attribute`,
@@ -1433,23 +1437,24 @@ def assignment_for(
     `E-DATA-ASSIGN-STRATIFY-UNKNOWN`, both refused by `validate` first) and
     says why it carries neither code itself.
 
-    **An axis-name stratum and a declared `cluster_by` is covered in one
-    direction and not the other, and the uncovered one is recorded rather
-    than silently relied on.** When the earlier axis *draws*, it allocated
-    whole clusters, so its realized membership is constant within every
-    cluster by construction and no `E-DATA-ASSIGN-STRATIFY-VARIES` question
-    arises. When the earlier axis is `by_attribute` with a `from` naming a
+    **An axis-name stratum beside a declared `cluster_by` is refused where it
+    would split a cluster, and the refusal is `validate`'s.** When the earlier
+    axis *draws*, it allocated whole clusters, so its realized membership is
+    constant within every cluster by construction and there is nothing to
+    refuse. When the earlier axis is `by_attribute` with a `from` naming a
     column that is **not** constant within a cluster, it splits that cluster
     between its own arms — `arms_of` reads a column and respects nothing
-    about clusters — and the two halves then land in different strata here,
-    where `_assign_whole_clusters_by_ratio` allocates each independently and
-    the cluster can straddle both arms. `validate`'s constancy row does not
-    reach it: that loop reads only the strata that resolved to declared
-    attributes, and an axis name is not one. Unreachable in this build
-    (`E-DATA-ASSIGN-DRAWN` still refuses this axis's `random`), and it needs
-    a `from` differing from the axis name — with the default, the stratum
-    resolves as a declared attribute on both sides and the existing check
-    covers it.
+    about clusters — and the two halves would land in different strata here,
+    where `_assign_whole_clusters_by_ratio` would allocate each independently
+    and the cluster would straddle both arms of this axis too. That is a
+    measured outcome rather than a hypothetical, and it contradicts
+    `reference.md` § Clustered units' "core computed the partition, so core
+    keeps it indivisible", so `validate._check_assign` reads such a stratum
+    through the column its axis reads (`_read_axis_column`) and reports
+    `E-DATA-ASSIGN-STRATIFY-VARIES` — the same code, and the same row, an
+    attribute stratum earns. It needs a `from` differing from the axis name to
+    arise at all: with the default, the stratum resolves as a declared
+    attribute on both sides and the attribute half of that check covers it.
 
     **`blocked` is realized here too, and is what reads the roster's order
     as data** (`reference.md` § Where units come from): the resolved roster

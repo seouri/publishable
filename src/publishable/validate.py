@@ -1318,11 +1318,13 @@ block's other fields are read follows from which one it is — `from` is
 absent or misspelled describes no assignment at all, which is what
 `E-DATA-ASSIGN-METHOD` refuses.
 
-**All three are in the enum and only `by_attribute` is executable in this build.**
-That split is deliberate and stays: a value outside the enum is a malformed
-declaration, and `random`/`blocked` are well-formed declarations of an
-unimplemented draw, which is a refusal of a different kind reported under its own
-code, `E-DATA-ASSIGN-DRAWN`.
+**All three execute.** `random` and `blocked` draw an arm and `by_attribute`
+reads one, which is why the enum's members are not interchangeable to any row
+below: `units.DRAWN_ASSIGN_METHODS` splits this tuple into the two that draw and
+the one that reads, and that split is what decides which of a block's other
+fields mean anything. A value *outside* the enum is a different thing again — a
+malformed declaration, `E-DATA-ASSIGN-METHOD` — and no row here reads it as a
+method at all.
 """
 
 # `DRAWN_ASSIGN_METHODS` is imported from `units` rather than declared here, and
@@ -1331,8 +1333,9 @@ code, `E-DATA-ASSIGN-DRAWN`.
 # fourth drawing method added to `ASSIGN_METHODS` on this side alone would pass
 # `validate` and then partition on a column. `units` is the right home for the
 # one copy: the dependency edge already runs that way (`units.py` imports
-# nothing from here), and this module's *use* of the tuple is temporary — task 14
-# retires `E-DATA-ASSIGN-DRAWN` — while the draw's own use of it is permanent.
+# nothing from here). This module's use of the tuple outlived the refusal it was
+# minted for: it named the methods `E-DATA-ASSIGN-DRAWN` refused, and now names
+# the branch a drawn method takes through `_check_assign`.
 
 
 def _declared_levels(sweep: Any, axis: str) -> list[str] | None:
@@ -1389,6 +1392,44 @@ def _usable_ratio_share(value: Any) -> bool:
     return math.isfinite(value) and value > 0
 
 
+def _read_axis_column(block: Any, axis: str, attribute_names: set[str]) -> str | None:
+    """The unit attribute an axis's arm is **read** out of, or `None` when the
+    axis draws instead, or names no attribute this build can resolve.
+
+    One question, asked of a *neighbouring* axis rather than of the block being
+    checked: *Allocation strata survive clustering* needs it for a
+    `stratify_by` naming an earlier group axis, where the stratum's value per
+    unit is that axis's realized membership. Under `by_attribute` that
+    membership is a column and this returns its name; under `random` or
+    `blocked` it is a draw, which allocates whole clusters and so is constant
+    within every cluster with nothing to check. Any other `method` value is
+    out of the enum and reads nothing at all.
+
+    The `from` resolution is `units.assignment_for`'s own — the declared `from`
+    when it is a non-empty string, else the axis name — deliberately *not* a
+    second copy of the rule but the same sentence, and the reason this returns
+    a column rather than a `bool`: a caller that had to re-resolve `from`
+    itself would be the second resolution `assignment_for`'s docstring exists
+    to prevent. An absent, non-mapping, or method-less block reads a column
+    too, the same fallback `_check_assign` and `assignment_for` both take.
+
+    `None` for a name outside `attribute_names`: `E-DATA-ASSIGN-UNKNOWN` is
+    that axis's own block's fault to report, and a constancy finding derived
+    from a column nothing declares would be a second finding about the first's
+    subject.
+    """
+    block_map = block if isinstance(block, dict) else {}
+    if block_map.get("method") not in (None, "by_attribute"):
+        # A drawn method, and — for a value outside the enum entirely —
+        # `E-DATA-ASSIGN-METHOD`'s own fault to report, which no draw of that
+        # axis ever gets past (`assignment_for` allows `by_attribute` and
+        # refuses the rest). Neither reads a column, so neither has one here.
+        return None
+    declared_from = block_map.get("from")
+    column = declared_from if isinstance(declared_from, str) and declared_from else axis
+    return column if column in attribute_names else None
+
+
 def _check_assign(
     doc: dict[str, Any], units: dict[str, Any], roster: UnitList | None, c: Collector
 ) -> None:
@@ -1432,16 +1473,17 @@ def _check_assign(
     check on the block, not on the pair, and an `assign` block naming no method
     describes no assignment wherever it was declared.
 
-    *Assignment method isn't drawn* — a `method` in the enum but not yet
-    executable (`random`, `blocked`), refused as `E-DATA-ASSIGN-DRAWN` rather than
-    `E-DATA-ASSIGN-METHOD`. Read from the same `elif` chain *Assignment names a
-    method* is, so the two are mutually exclusive by construction rather than by
-    convention.
+    **A drawn method (`random`, `blocked`) takes the middle branch of the same
+    `elif` chain *Assignment names a method* reads**, where every row about a
+    field only a draw gives meaning to lives. That branch carried
+    `E-DATA-ASSIGN-DRAWN` — "in the enum, but not built" — until the slice that
+    built drawing retired it; what the branch is *for* is unchanged, since which
+    of a block's other fields are read still follows from whether the method
+    draws or reads.
 
-    *Ratio names levels* — checked beside *Assignment method isn't drawn* in the
-    same branch, not instead of it: `ratio` only means anything for a method that
-    draws, so a well-formed `random`/`blocked` block still earns `E-DATA-ASSIGN-DRAWN`
-    for the method and, independently, `E-DATA-ASSIGN-RATIO` for a non-empty
+    *Ratio names levels* — checked in that branch: `ratio` only means anything
+    for a method that draws, so a `random`/`blocked` block earns
+    `E-DATA-ASSIGN-RATIO` for a non-empty
     `ratio` this build cannot apportion — one code over the whole malformed-value
     family, not one per shape: not a mapping at all (`ratio: 3`); a mapping whose
     keys don't equal the axis's declared `sweep.groups` levels exactly (a partial
@@ -1477,16 +1519,20 @@ def _check_assign(
     one, and the reason a cycle is unrepresentable rather than something to
     detect. Order comes from `sweep.selector_paths`, the same declaration order
     that loop walks. A stratum resolving to a declared attribute is exempt before
-    this runs, matching `units._stratum_groups`' own precedence — which is also
-    why *Allocation strata survive clustering* never sees an axis-name stratum,
-    a gap `units.assignment_for`'s docstring records for the one direction where
-    it bites (an earlier `by_attribute` axis whose `from` varies within a
-    cluster, splitting that cluster before this axis's draw allocates the halves
-    independently).
+    this runs, matching `units._stratum_groups`' own precedence. An axis-name
+    stratum that passes this row is handed on to *Allocation strata survive
+    clustering*, which reads it through the column its axis reads — see
+    `_read_axis_column`.
 
     *Allocation strata survive clustering* — `E-DATA-ASSIGN-STRATIFY-VARIES`,
-    the second row here needing a roster: a declared stratum whose value is not
-    constant across one cluster, under a declared `cluster_by`. A cluster is
+    one of the two rows here needing a roster: a declared stratum whose value is
+    not constant across one cluster, under a declared `cluster_by`. **A stratum
+    naming an earlier group axis is read through that axis's own column** when
+    it has one — an axis drawn `by_attribute` has membership that *is* a
+    column's value, and a column varying within a cluster is a membership that
+    does, which splits the cluster between this axis's arms even though core
+    computed the partition. An earlier axis that draws needs no check: it
+    allocated whole clusters. A cluster is
     drawn whole, so an arm cannot be balanced on a stratum that cluster carries
     two of, and core refuses the pair rather than prioritizing one constraint —
     the argument `partition_units` makes for the identical composition over
@@ -1496,10 +1542,8 @@ def _check_assign(
     `cluster_by` *Blocked draw excludes clustering* refuses outright.
 
     *Blocked draw excludes clustering* — `method: blocked` beside a declared,
-    non-empty `data.units.cluster_by`, refused as `E-DATA-ASSIGN-BLOCKED-CLUSTER`
-    beside `E-DATA-ASSIGN-DRAWN` rather than instead of it, the same "two things
-    about the same block" pairing *Ratio names levels* and *Block size fills the
-    arms* already make. A block fills to an exact unit count and a cluster is
+    non-empty `data.units.cluster_by`, refused as
+    `E-DATA-ASSIGN-BLOCKED-CLUSTER`. A block fills to an exact unit count and a cluster is
     indivisible, so no `block_size` — declared or `auto` — honours both;
     `units.assignment_for`'s own `blocked` branch raises `NotImplementedError`
     for the identical combination rather than realizing one rule over the
@@ -1515,6 +1559,24 @@ def _check_assign(
     and the check runs first inside the `blocked` branch, ahead of *Block size
     fills the arms*: once it fires, every check that branch would otherwise run
     is moot rather than merely redundant, and the loop moves to the next axis.
+
+    *Every arm draws units* — `E-DATA-ASSIGN-LEVELS`, the other roster-needing
+    row and the last thing the drawn branch does: `units.assignment_for` is
+    called on a block every row above accepted, and the `ContractError` it
+    raises for a level the apportionment gave no unit becomes the finding. The
+    fault is a proportion against a *roster size* rather than a declaration —
+    `ratio: {a: 1, b: 1000}` over ten units names every level and carries only
+    positive shares — so no declaration-only row can reach it, which is why it
+    sits beside `E-DATA-ASSIGN-LEVELS`'s other roster-resolved check in the
+    `by_attribute` branch below rather than in the `ratio` family. The draw is
+    the check rather than a second emptiness rule, and its plan is discarded:
+    two producers of membership is the disagreement this whole seam exists to
+    prevent. **Restricted to the unstratified, unclustered draw**, where every
+    level's realized size is a function of the roster size and the ratio alone
+    and the placeholder digest cannot change the answer; the residue is
+    recorded in `reference.md` § Errors `validate` reports rather than left
+    unstated. Skipped for a block already reported, whose fault the draw would
+    only restate or crash on.
 
     **`method: by_attribute`'s three rows, checked only in that branch of the
     same `elif` chain** — `from`, `levels`, `ratio`, and `stratify_by` all mean
@@ -1714,20 +1776,21 @@ def _check_assign(
                 f"{', '.join(ASSIGN_METHODS)}",
             )
         elif method in DRAWN_ASSIGN_METHODS:
-            c.error(
-                "E-DATA-ASSIGN-DRAWN",
-                where,
-                f"is {method!r}, which draws an arm rather than reading one already "
-                f"assigned; drawing is specified but not implemented in this build. "
-                f"`by_attribute` is the supported method — it reads an arm a trial "
-                f"system or the data already assigned, which is what a real trial does "
-                f"regardless. This value will be honored once drawing is built",
-            )
+            # The branch a *drawn* method takes — `random` and `blocked`, the two
+            # `units.assignment_for` realizes. It carried `E-DATA-ASSIGN-DRAWN`
+            # until the slice that built the draw retired it, and the tuple stayed:
+            # what it discriminates is which of a block's fields mean anything
+            # (`ratio`, `block_size`, `stratify_by` here; `from` in the
+            # `by_attribute` branch below), which is a permanent question, not the
+            # temporary refusal it used to gate.
+            #
+            # The count of findings this branch started with, read once at the
+            # end by *Every arm draws units*: that row realizes the draw, and a
+            # draw is only worth realizing over a block every row below accepted.
+            findings_before_block = len(c.findings)
             # *Ratio names levels* — `ratio` only means anything for a method that
             # draws, so it is checked here rather than in the `by_attribute` branch
-            # below, beside `E-DATA-ASSIGN-DRAWN` rather than instead of it: the two
-            # report different things about the same block (a well-formed-but-drawn
-            # method, and a malformed `ratio`), so both fire together. An empty
+            # below. An empty
             # `ratio` (or an absent one) is equal allocation and earns no finding,
             # and neither does a mapping whose keys already equal the axis's
             # declared `levels` set exactly and whose values are all positive
@@ -1787,9 +1850,7 @@ def _check_assign(
                     )
 
             # *Allocation strata exist* — `assign.<axis>.stratify_by` under a
-            # method that draws, checked beside `E-DATA-ASSIGN-DRAWN` rather
-            # than instead of it, the pairing every sibling row in this branch
-            # makes. **Existence only**: a target naming an axis declared
+            # method that draws. **Existence only**: a target naming an axis declared
             # *after* this one is a different row, *Stratification is
             # forward-only*, and its own code — order is not this row's
             # question.
@@ -1822,6 +1883,7 @@ def _check_assign(
                 else set()
             )
             resolvable_strata: list[str] = []
+            axis_strata: list[tuple[str, str]] = []
             for name in stratum_names(block.get("stratify_by")):
                 if isinstance(name, str) and name in attribute_names:
                     resolvable_strata.append(name)
@@ -1844,6 +1906,14 @@ def _check_assign(
                     # would be derived from a different fault (*Every assignment
                     # names an axis*) rather than reported on its own terms.
                     if axis not in axes or axes.index(name) < axes.index(axis):
+                        # A legal stratum: an axis drawn before this one. Its
+                        # *column*, when it has one, is what *Allocation strata
+                        # survive clustering* below reads — see
+                        # `_read_axis_column`, and the paragraph on this branch
+                        # in the docstring.
+                        column = _read_axis_column(blocks.get(name), name, attribute_names)
+                        if column is not None:
+                            axis_strata.append((name, column))
                         continue
                     itself = " itself" if name == axis else ""
                     c.error(
@@ -1877,18 +1947,39 @@ def _check_assign(
             # test, shared with the `fold` half rather than reimplemented, and
             # it reads membership from `units.clusters_of`.
             #
-            # Only the names above that resolved to a declared attribute: a
-            # name this build cannot read has already been reported, and a
-            # second finding derived from the first is the noise
-            # `_check_cluster_by` argues against. **Not reached under
-            # `blocked`** either — `blocked` beside any `cluster_by` is refused
-            # outright by *Blocked draw excludes clustering* below, which makes
-            # a stratum's constancy inside that combination a question about a
-            # design already refused.
+            # Only the names above that resolved to a declared attribute, or
+            # that resolved to an earlier axis **reading a column** — a name
+            # this build cannot read has already been reported, and a second
+            # finding derived from the first is the noise `_check_cluster_by`
+            # argues against. **Not reached under `blocked`** either —
+            # `blocked` beside any `cluster_by` is refused outright by *Blocked
+            # draw excludes clustering* below, which makes a stratum's
+            # constancy inside that combination a question about a design
+            # already refused.
+            #
+            # **An axis-name stratum is read through the column its axis
+            # reads**, and that is the whole of the second half's construction.
+            # `_read_axis_column` returns one only for an earlier axis whose
+            # own method is `by_attribute`, where the realized membership *is*
+            # the column's value, so a column that varies within a cluster is a
+            # membership that does. An earlier axis that **draws** needs no
+            # check and gets none: it allocated whole clusters, so its
+            # membership is constant within every cluster by construction.
+            # Before this, an axis-name stratum reached no constancy check at
+            # all, and the consequence was measurable rather than theoretical —
+            # an earlier `by_attribute` axis whose `from` varies within a
+            # cluster splits that cluster between its *own* arms, the halves
+            # land in different strata here, and
+            # `_assign_whole_clusters_by_ratio` allocates each independently,
+            # so the cluster straddles both arms of this axis too. That
+            # contradicts `reference.md` § Clustered units' "core computed the
+            # partition, so core keeps it indivisible", which is why this is
+            # the same rule reaching further rather than a new one: same code,
+            # same row, one more way for a stratum to be non-constant.
             if roster is not None and usable_cluster is not None and method == "random":
-                for name in resolvable_strata:
+                for name, column in [(n, n) for n in resolvable_strata] + axis_strata:
                     try:
-                        offender = stratum_varies_within_cluster(roster, usable_cluster, name)
+                        offender = stratum_varies_within_cluster(roster, usable_cluster, column)
                     except ContractError:
                         # `clusters_of` refuses a unit carrying no cluster value
                         # (`E-DATA-CLUSTER-UNKNOWN`), already reported beside this by
@@ -1896,10 +1987,21 @@ def _check_assign(
                         break
                     if offender is not None:
                         cluster, values = offender
+                        # An axis name and the column it reads are the same
+                        # sentence with one clause added, rather than a second
+                        # message: the fault is one a reader fixes in the same
+                        # place either way, and naming only the axis would send
+                        # them looking for a column that axis's block spells.
+                        lead = (
+                            f"names {name!r}, which"
+                            if column == name
+                            else f"names {name!r}, an axis drawn before this one whose "
+                            f"realized membership is the column {column!r} — which"
+                        )
                         c.error(
                             "E-DATA-ASSIGN-STRATIFY-VARIES",
                             f"data.units.assign.{axis}.stratify_by",
-                            f"names {name!r}, which varies within `{usable_cluster}` "
+                            f"{lead} varies within `{usable_cluster}` "
                             f"{cluster} — it carries {', '.join(values)}. A cluster is "
                             "drawn whole, so an arm cannot be balanced on a stratum the "
                             "cluster carrying both values would have to be split for; "
@@ -2084,6 +2186,62 @@ def _check_assign(
                             f"own share of it — its ratio weight times the block "
                             f"size, over {ratio_sum!r} — is a whole number",
                         )
+
+            # *Every arm draws units* — the roster-dependent half of the drawn
+            # branch, and the row that closes the gap the retirement of
+            # `E-DATA-ASSIGN-DRAWN` opened: `ratio: {a: 1, b: 1000}` over a
+            # ten-unit roster names every level, carries only positive shares
+            # and so passes every declaration-only row above, and then
+            # apportions `b` the whole roster and `a` nothing —
+            # `units.assignment_for` raising `E-DATA-ASSIGN-LEVELS` on a config
+            # `validate` had approved. The fault is a *proportion against a
+            # roster size*, not a declaration, so it belongs here beside
+            # `E-DATA-ASSIGN-LEVELS`'s existing roster-resolved check in the
+            # `by_attribute` branch below rather than in the `ratio` family.
+            #
+            # **The draw itself is the check**, the same single-producer
+            # argument that branch's own `assignment_for` call makes: an
+            # emptiness rule reimplemented here is a second answer to "does
+            # this arm resolve any units", which is the disagreement the whole
+            # seam exists to prevent. The returned plan is **discarded** — it is
+            # not a plan anything runs, and keeping it would make this function
+            # a second producer of membership inside the check written to close
+            # a gap.
+            #
+            # **Gated to the unstratified, unclustered draw, and the residue is
+            # recorded rather than silently skipped** (`reference.md` §
+            # Errors `validate` reports, this code's row). What the gate buys is
+            # digest-independence: with no strata and no clusters, every level's
+            # realized size is a function of `(len(roster), ratio)` alone —
+            # `_apportion` decides the sizes and the shuffle only decides which
+            # unit lands in which — so the placeholder digest below cannot make
+            # this check answer differently from the run's own draw. Neither
+            # other path has that property. `_assign_whole_clusters_by_ratio`
+            # shuffles the cluster order before its stable size sort, so which
+            # arm is left with no cluster is genuinely seed-dependent, and a
+            # placeholder-digest draw could be wrong in either direction. A
+            # stratum naming an earlier group axis needs that axis's realized
+            # membership, which only the run's own ordered draw produces.
+            # `"validate"` is `_check_replication`'s own placeholder convention
+            # for a digest, sound here only because of that gate.
+            #
+            # Skipped when this block already earned a finding: a `ratio` this
+            # build cannot apportion or a `block_size` it cannot honour is
+            # already reported on its own terms, and drawing against it would
+            # either raise a second, derived finding or crash inside
+            # `assignment_for` on a value the row above exists to refuse.
+            if (
+                len(c.findings) == findings_before_block
+                and roster is not None
+                and usable_cluster is None
+                and not stratum_names(block.get("stratify_by"))
+            ):
+                drawn_levels = _declared_levels(sweep, axis)
+                if drawn_levels is not None:
+                    try:
+                        assignment_for(roster, axis, block, drawn_levels, "validate")
+                    except ContractError as exc:
+                        c.error(exc.code, f"data.units.assign.{axis}.ratio", str(exc))
         else:
             # `method == "by_attribute"`, the one value neither elif above caught —
             # the branch where `from` and the axis's declared `levels` mean anything

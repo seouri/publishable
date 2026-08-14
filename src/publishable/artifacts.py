@@ -205,22 +205,27 @@ def build_allocation_document(group_axes: Mapping[str, "ArmPlan"]) -> dict[str, 
     because a `blocked` design reads that order as data (once `blocked`
     itself is built).
 
-    **`seed` and `strata` carry whatever the plans realized, which in this
-    build is nothing.** An axis appears under `seed` only when its plan has
-    one, and under `strata` only when its plan's `strata` is non-empty.
-    This build's only reachable `assign.method` is `by_attribute`
-    (`E-DATA-ASSIGN-DRAWN` refuses `random` and `blocked`, the two methods
-    that draw), and `units.assignment_for` realizes `seed=None`,
-    `strata=()` there: `by_attribute` reads an arm a trial system already
-    assigned rather than drawing one, so recording a `seed` would be a false
-    record of a draw that never happened, the same fault § Allocation names
-    for a non-empty `ratio` under `by_attribute`, and `assign.stratify_by`
-    names how a draw was *balanced*, which with no draw describes nothing.
-    Both keys stay present as empty mappings — `seed`/`strata` are `{}`, not
-    omitted — because the shape is "keyed by axis name" whether or not any
-    axis qualifies, and an omitted key would read as "this build never has a
-    seed or strata block at all" rather than "no axis drew or stratified
-    this run."
+    **`seed` and `strata` carry whatever the plans realized, per axis.** An
+    axis appears under `seed` only when its plan has one, and under `strata`
+    only when its plan's `strata` is non-empty — so a `random` or `blocked`
+    axis appears under `seed`, and under `strata` too when it declared a
+    non-empty `stratify_by`, while a `by_attribute` axis is **left out of
+    both**. That omission is the record being truthful rather than a shape
+    this build has not filled in yet: `units.assignment_for` realizes
+    `seed=None`, `strata=()` for `by_attribute`, which reads an arm a trial
+    system already assigned rather than drawing one, so recording a `seed`
+    would be a false record of a draw that never happened — the same fault
+    § Allocation names for a non-empty `ratio` under `by_attribute` — and
+    `assign.stratify_by` names how a draw was *balanced*, which with no draw
+    describes nothing. A drawn axis that declared no `stratify_by` is left
+    out of `strata` for the same reason and not for a different one: `()` is
+    the truthful record of a draw balanced on nothing but its ratio.
+    Both keys stay present as mappings, empty or not — `seed`/`strata` are
+    `{}` rather than omitted when no axis qualifies — because the shape is
+    "keyed by axis name" whether or not any axis does, and an omitted key
+    would read as "this document has no seed or strata block at all" rather
+    than "no axis drew or stratified this run." `reference.md`
+    § `allocation.json` prints a document of each shape.
 
     **`holdout` is never written here.** `E-DATA-HOLDOUT-UNSUPPORTED`
     refuses every `data.units.holdout` declaration in this build, so there
@@ -241,6 +246,14 @@ def build_allocation_document(group_axes: Mapping[str, "ArmPlan"]) -> dict[str, 
     contract a future `resume` must honour — read the existing file rather
     than calling `build_allocation_document` again — not a description of
     behavior this build has or tests.
+
+    **That gap stopped being harmless when the draw was built.** While
+    `by_attribute` was the only method that executed, a `resume` that
+    re-derived the allocation would have re-read the same column of the same
+    roster and got the same partition, so the missing reader cost nothing. A
+    drawn axis has no column: a second draw is a second allocation, and while
+    `assign_seed_for` makes it *likely* to agree, "likely" is the wrong
+    property for the record of which patient was in which arm.
     """
     # Gated on `group_axes` truthiness, which `cli._resolved_group_axes`'s own
     # docstring warns a caller against in general: an axis whose declared

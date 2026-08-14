@@ -1049,7 +1049,8 @@ def test_allocation_json_is_written_with_exact_arm_keys_when_declared(tmp_path: 
     }
     # `by_attribute` draws nothing and stratifies nothing — the addendum's own
     # finding that a writer emitting a seed anyway looks correct against a
-    # fixture nobody checked the seed of.
+    # fixture nobody checked the seed of. A drawn axis fills both keys instead;
+    # `test_artifacts.py`'s mixed-document test is where the two are told apart.
     assert alloc["seed"] == {}
     assert "arm" not in alloc["seed"]
     assert alloc["strata"] == {}
@@ -1060,6 +1061,47 @@ def test_allocation_json_is_written_with_exact_arm_keys_when_declared(tmp_path: 
 
     assert run_yaml["provenance"]["allocation"] == "allocation.json"
     assert run_yaml["provenance"]["allocation_hash"] == allocation_hash(alloc)
+
+
+def test_a_drawn_axis_runs_end_to_end_and_records_its_seed(tmp_path: Path):
+    """**The retirement, end to end.** `assign.arm.method: random` used to be
+    refused by `validate`, which `command_run` runs first and returns on, so no
+    such config ever reached a run directory. This one does: it completes, and
+    the `allocation.json` it leaves carries the axis under `seed` — the key a
+    `by_attribute` run leaves empty, which
+    `test_allocation_json_is_written_with_exact_arm_keys_when_declared` above
+    asserts on the same code path.
+
+    The roster carries no `arm` column at all, which is the point rather than
+    an economy: a drawn axis leaves no column, and a run that quietly fell back
+    to reading one would report `E-DATA-ASSIGN-UNKNOWN` instead of finishing.
+    The seed is pinned, so the recorded value is checkable rather than
+    whatever the digest happened to mix; membership is asserted as a partition
+    of the roster rather than as literal keys, since the shuffle is
+    `units.assignment_for`'s to pin and `tests/test_units.py` pins it."""
+    keys = [f"p{i}" for i in range(8)]
+    roster_csv = "patient_id\n" + "\n".join(keys) + "\n"
+
+    doc = run_a_project(
+        tmp_path,
+        roster_csv=roster_csv,
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "random", "seed": 11}},
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+    )
+
+    run_yaml = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run_yaml["status"] == "completed"
+
+    alloc = json.loads((doc["run_dir"] / "allocation.json").read_text())
+    assert alloc["seed"] == {"arm": 11}
+    assert alloc["strata"] == {}  # nothing was declared to balance on
+    placed = alloc["arms"]["arm"]["control"] + alloc["arms"]["arm"]["treatment"]
+    assert sorted(placed) == sorted(keys)
+    assert len(alloc["arms"]["arm"]["control"]) == 4
+    assert len(alloc["arms"]["arm"]["treatment"]) == 4
 
 
 def test_one_plan_per_axis_is_realized_once_and_both_consumers_get_that_same_plan(

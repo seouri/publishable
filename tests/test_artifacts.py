@@ -1281,7 +1281,11 @@ def test_build_allocation_document_maps_axis_to_level_to_unit_keys_in_roster_ord
     `strata` are asserted `{}` — the addendum's finding that a writer
     emitting a seed under `by_attribute` (nothing was drawn) looks correct
     against a fixture nobody checked the seed of — and `holdout` is asserted
-    absent, since this build never declares one."""
+    absent, since this build never declares one. Empty here because this
+    document's only axis reads a column;
+    `test_a_drawn_axis_records_its_seed_and_strata_and_a_read_one_records_neither`
+    is the mixed document where one axis appears in both keys and the other in
+    neither."""
     roster, control_keys, treatment_keys = _mixed_arm_roster()
     group_axes = _plans_for(roster)
 
@@ -1295,6 +1299,59 @@ def test_build_allocation_document_maps_axis_to_level_to_unit_keys_in_roster_ord
     assert doc["strata"] == {}
     assert "arm" not in doc["strata"]
     assert "holdout" not in doc
+
+
+def test_a_drawn_axis_records_its_seed_and_strata_and_a_read_one_records_neither():
+    """**The mixed case — one `by_attribute` axis beside one `random` axis, in
+    one document.** § `allocation.json` prints `seed` and `strata` keyed by
+    axis, and says a `by_attribute` axis "is left out of both": the record has
+    to distinguish the two axes, not merely have the keys.
+
+    A test with a drawn axis alone would pass with the `plan.seed is not None`
+    and `plan.strata` filters deleted, since every axis in it qualifies; a test
+    with a read axis alone is the one already above, which passes with the
+    per-axis entries replaced by `{}`. Only the two together fail both
+    mutations, so the assertions are exact mappings rather than membership.
+
+    `cohort` is drawn nothing and reads a column; `arm` draws with a pinned
+    `seed: 11` — pinned so the recorded value is a fact the test states rather
+    than one it copies from the code that computed it — and stratifies on
+    `site`, which is a declared attribute of every unit."""
+    units = [
+        Unit(
+            key=f"u{i}",
+            attributes={
+                "cohort": "derivation" if i < 3 else "validation",
+                "site": "S1" if i % 2 else "S2",
+            },
+        )
+        for i in range(6)
+    ]
+    roster = UnitList(units)
+    group_axes = {
+        "cohort": assignment_for(
+            roster, "cohort", {"method": "by_attribute"}, ["derivation", "validation"], "d"
+        ),
+        "arm": assignment_for(
+            roster,
+            "arm",
+            {"method": "random", "seed": 11, "stratify_by": ["site"]},
+            ["control", "treatment"],
+            "d",
+        ),
+    }
+
+    doc = build_allocation_document(group_axes)
+
+    assert doc is not None
+    assert doc["seed"] == {"arm": 11}
+    assert doc["strata"] == {"arm": ["site"]}
+    assert set(doc["arms"]) == {"cohort", "arm"}
+    # The read axis is left out of both, and the drawn one is in both — stated
+    # separately from the mappings above so a reader sees the claim § Manifest
+    # makes, not only the shape.
+    assert "cohort" not in doc["seed"]
+    assert "cohort" not in doc["strata"]
 
 
 def test_allocation_hash_is_deterministic_and_content_sensitive():

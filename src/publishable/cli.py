@@ -329,9 +329,12 @@ def _resolved_group_axes(
     block naming any other method raises `NotImplementedError` from there —
     `assignment_for` allows `by_attribute` and refuses the rest rather than
     denying a list of drawing methods — which for `random` and `blocked` is
-    the explicit hole tasks 8 and 10 fill. Unreachable through `command_run`:
-    `validate` refuses those two as `E-DATA-ASSIGN-DRAWN` and anything
-    out-of-enum as `E-DATA-ASSIGN-METHOD`, and returns first.
+    the explicit hole tasks 8 and 10 filled — both now draw here, and the
+    raise is left for a method no branch claims. Unreachable through
+    `command_run`: `validate` refuses an out-of-enum method as
+    `E-DATA-ASSIGN-METHOD`, and `blocked` beside a declared `cluster_by` —
+    the one combination inside the enum that still raises — as
+    `E-DATA-ASSIGN-BLOCKED-CLUSTER`, and returns first.
 
     **That skip is narrower than `sweep.selector_paths`'s own idea of "a group
     axis exists"**, and the caller must not gate on this function's own
