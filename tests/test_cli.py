@@ -6155,6 +6155,14 @@ def test_reference_cli_tables_are_parsed_at_all():
         assert statuses == {"built", "NOT BUILT"}, column
     assert ("dry-run", "NOT BUILT") in tables["Command"]
     assert ("validate", "built") in tables["Command"]
+    # Set equality against the CLI's own mapping, which the behavioural check
+    # below cannot see: a whole table losing its `Status` column, or a marked row
+    # being deleted, would quietly shrink what that check covers rather than fail
+    # it. This is the direction that catches a shrinking document.
+    from publishable.cli import NOT_BUILT_COMMANDS, NOT_BUILT_GENERATORS
+
+    assert {n for n, s in tables["Command"] if s == "NOT BUILT"} == set(NOT_BUILT_COMMANDS)
+    assert {n for n, s in tables["Generator"] if s == "NOT BUILT"} == set(NOT_BUILT_GENERATORS)
 
 
 @pytest.mark.parametrize("column", ["Command", "Generator"])
