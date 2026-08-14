@@ -9594,11 +9594,18 @@ def test_a_stratum_naming_an_axis_that_draws_is_not_refused():
     construction and there is nothing left to refuse — over the same varying
     roster that earns the finding above. A check reading only "this stratum
     names an earlier axis, and some column varies" would refuse a design core
-    performs correctly."""
+    performs correctly.
+
+    **The `from` is declared and must be ignored**, which is what makes this a
+    control rather than a fixture that happens to find no column: `from` means
+    nothing under `random` — the draw never reads it — so a check deciding
+    "does this axis read a column" by looking for a resolvable column instead
+    of at the method would find `patient_sex` here, see it vary within `F1`,
+    and refuse a cluster-randomized `sex` that keeps every family whole."""
     c = Collector()
     _check_assign(
         {"sweep": {"groups": _STRADDLE_AXES}},
-        _straddle_decl({"method": "random", "seed": 7}),
+        _straddle_decl({"method": "random", "seed": 7, "from": "patient_sex"}),
         _straddling_cluster_roster(True),
         c,
     )
