@@ -161,7 +161,9 @@ limits:
                                    #   Failures only — units a step declared ineligible are not
                                    #   attrition; see `io.skip`
   max_ineligible_fraction: 0.5     # `run` warns when a condition can be built for fewer units
-  min_units_per_cell: 20           # a smaller design cell under allocation: between should warn — specified, not built in this build
+  min_units_per_cell: 20           # a smaller design cell under allocation: between should warn — declared
+                                   #   and typed, read by nothing in this build; see "Allocation:
+                                   #   within-subjects or between-subjects"
   min_clusters: 10                 # `validate` warns when `resample` would draw fewer than this
   min_reported_n: 10               # `validate` warns for a stratum or `within` contrast this small;
                                    #   `study add` prompts on any metric reported over fewer
@@ -363,7 +365,7 @@ Each row states the condition, not the wording.
 | A family's size implies a corrected level (`correction_level`) smaller than the resample's surviving draws can support — the *corrected*, smaller level is the one that can't be met, so `ci95_corrected` is left `null` rather than reported too narrow | `W-STATS-CORRECTED-THIN` |
 | `statistics.correction: fdr_bh` is declared over a family with at least one comparison, but nothing in it will carry a p-value — `statistics.null_test` is undeclared, or a parameter-axis contrast, which can never supply one, accounts for every member — so every `ci95_corrected` will be `null` | `W-STATS-CORRECTION-INAPPLICABLE` |
 | A family of more than zero comparisons per metric exists and `statistics.correction` is `none` — every interval is reported uncorrected, and each records `correction: null` to say so | `W-STATS-FAMILY` |
-| A level of a [`statistics.report_by`](#reporting-strata) attribute would hold fewer units than `limits.min_reported_n`, checked at `validate` against the roster it can already see — the WHOLE roster, not a group axis's own arm, a gap [§ What isn't a repeat](#what-isnt-a-repeat) records and this build cannot yet construct | `W-STATS-REPORTBY-THIN` |
+| A level of a [`statistics.report_by`](#reporting-strata) attribute would hold fewer units than `limits.min_reported_n`, checked at `validate` against the roster it can already see — the WHOLE roster, not a group axis's own arm, a gap [§ What isn't a repeat](#what-isnt-a-repeat) records and, with a declared group axis no longer refused at `validate`, a live one rather than a latent one | `W-STATS-REPORTBY-THIN` |
 | A derived metric's resample produced fewer surviving draws than were requested, though not zero — the interval is still reported, but rests on less than it claims | `W-STATS-RESAMPLE-THIN` |
 | A step records a metric named `by` — the reserved key the reporting strata are attached under — so that column keeps its recorded value but is reported with no contrast delta, and no strata are reported for the step at all | `W-STATS-STRATUM-SHADOWED` |
 | A `statistics.report_by` level *completed* fewer units than `limits.min_reported_n`, checked at `run` time against what actually finished — the attrition between the roster `validate` saw and what a run completes is exactly what this catches beyond `W-STATS-REPORTBY-THIN` | `W-STATS-STRATUM-THIN` |
@@ -1042,6 +1044,8 @@ It reopens that run directory and skips every (condition, repeat, step) triple m
 
 **It takes the execution order from `sweep.yaml` rather than re-deriving it.** Under [`order: randomized`](#sweeps-and-repeats) a re-derivation would usually agree, since the shuffle is seeded from the design digest — but "usually" is the problem. The realized order is a fact about what happened, and a fact should not be re-computable to a different answer; that's the same reason [`allocation.json`](#allocation-within-subjects-or-between-subjects) is read rather than re-drawn. Reading it also keeps `run.yaml`'s record of the order true after a resume, which a fresh shuffle would quietly falsify.
 
+**That last claim has no reader in this build.** `cli.py`'s `OPERATION_COMMANDS = {"validate", "run"}` contains no `resume` command, so nothing calls `build_allocation_document` a second time against an existing `allocation.json`, and no test exercises the path. "Read rather than re-drawn" is the contract a future `resume` must honour, not behavior this build has or tests — `resume` itself is one of the commands a later slice still owes, per [§ Package layout](#package-layout).
+
 Under a [`batch`](#a-batch-says-when-not-what) level this is load-bearing rather than tidy. Batches are positions in time, so resume finishes the interrupted batch before opening the next one; a resume free to pick its own order could start batch 4 while batch 3 still had executions outstanding, and the separation the design declared would be gone from the middle of the run.
 
 #### Skipping work *inside* an execution is the step's job
@@ -1180,6 +1184,8 @@ data:
 ```
 
 The realized assignment is written to `allocation.json` in the run directory, and its hash lands in `provenance.allocation_hash` beside the path — so "which patients were in the treatment arm" is answerable from the run record alone, and a file edited after the run no longer matches what that run reported. Not from a script someone ran once.
+
+**`limits.min_units_per_cell` is declared, typed, and read by nothing in this build.** An arm no unit resolves to is already refused, as `E-DATA-ASSIGN-LEVELS` — but a two-arm design where one arm resolves to a single unit passes `validate` clean and reports a `basis: units` interval [computed](#the-unit-table-is-the-inference-base) from that one observation. Nothing warns. § Validation's *Cells are populated* and *Allocation is coherent* name the same gap, and so does this parameter's comment in [§ The one config file](#the-one-config-file).
 
 **`method: random` and `method: blocked` are refused in this build**, as `E-DATA-ASSIGN-DRAWN`: both are in the enum above and both describe a draw core does not yet execute. `by_attribute` — reading an arm a trial system or the data already assigned — is the one method that runs today, and it is what a real trial does regardless of which tool is doing the analysis. Temporary: the refusal lifts with the slice that implements drawing.
 
@@ -2933,6 +2939,8 @@ Everything host-identifying, not just the obvious paths:
 Each is replaced with a marker recording that a value existed and was removed, so a reader can distinguish "redacted" from "never captured." The corresponding *hashes* stay — `input_manifest_hash` survives even though the path doesn't, so data is still verifiable by anyone holding it without the record disclosing where it lives.
 
 None of this disturbs verification: `parameters_hash` [never covered the path fields](#three-hashes), and `code_hash` covers `src/**` and `templates/**` only.
+
+**This table redacts host identity, and says nothing about participant identity — `allocation.json` is where that gap shows.** It is the one run-directory artifact that is a list of unit identities — "which patients were in the treatment arm" — and this section, and the table above, have never named it. `study add` is [not yet built](#package-layout), so what follows is a reading of the shape this section already commits to, not a checked fact: § Building one's file tree shows a bundle holding only `*.run.yaml` files, and the CLI table above says `study add` "copies a run record" — singular, and named on the command line — rather than a run directory. On that shape, `allocation.json` never travels and there is nothing of it in the bundle for this table to scrub; `provenance.allocation` and `provenance.allocation_hash`, the two fields of it that do reach `run.yaml`, are a bare filename and a hash, neither disclosing membership. Whether a bundle should ever be allowed to carry `allocation.json` itself — for a reader who wants to verify the split, not just trust the hash — is a question this slice leaves open for whichever slice builds `study.py`.
 
 **One thing redaction can't do is judge your metrics.** Aggregates are usually safe, but a per-subgroup result over a handful of units can be disclosive in ways no automatic rule catches. `study add` prints any reported metric whose `n.completed` falls below `limits.min_reported_n` — or, for a [`basis: repeats`](#the-unit-table-is-the-inference-base) metric, its repeat count, and for a [reported `Estimate`](#estimate-carries-your-interval-without-core-claiming-it) the `n` it declared — and asks you to confirm — a prompt for your judgment, not a guarantee. An `Estimate` that declared no `n` is listed too: core has nothing to compare, and an interval without a denominator is the case the prompt exists for.
 
