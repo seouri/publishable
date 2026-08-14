@@ -1410,13 +1410,19 @@ def _check_assign(
     *Ratio names levels* — checked beside *Assignment method isn't drawn* in the
     same branch, not instead of it: `ratio` only means anything for a method that
     draws, so a well-formed `random`/`blocked` block still earns `E-DATA-ASSIGN-DRAWN`
-    for the method and, independently, `E-DATA-ASSIGN-RATIO` when a non-empty
-    `ratio`'s keys don't equal the axis's declared `sweep.groups` levels exactly —
-    a partial mapping (§ Allocation: "the levels I left out get the average" is a
-    rule nobody should have to infer) or a key naming no declared level, one code
-    for either. An empty `ratio` is equal allocation and earns nothing, matching
-    every other row here. Skipped when the axis's declared `levels` don't resolve
-    to a non-empty list of strings, `sweep.groups`'s own shape fault.
+    for the method and, independently, `E-DATA-ASSIGN-RATIO` for a non-empty
+    `ratio` this build cannot apportion — one code over the whole malformed-value
+    family, not one per shape: not a mapping at all (`ratio: 3`); a mapping whose
+    keys don't equal the axis's declared `sweep.groups` levels exactly (a partial
+    mapping — § Allocation: "the levels I left out get the average" is a rule
+    nobody should have to infer — or a key naming no declared level); or a mapping
+    with the right keys but a non-positive or non-numeric value (`{a: -1, b: 2}`,
+    `{a: "x", b: 2}`) — a share of zero or less draws no units for that level and
+    `units._apportion` has no check of its own to catch it. An empty `ratio` is
+    equal allocation and earns nothing, matching every other row here. Skipped
+    when the axis's declared `levels` don't resolve to a non-empty list of
+    strings, `sweep.groups`'s own shape fault — except the not-a-mapping case,
+    which needs no `levels` to detect.
 
     **`method: by_attribute`'s three rows, checked only in that branch of the
     same `elif` chain** — `from`, `levels`, `ratio`, and `stratify_by` all mean
@@ -1615,24 +1621,64 @@ def _check_assign(
             # draws, so it is checked here rather than in the `by_attribute` branch
             # below, beside `E-DATA-ASSIGN-DRAWN` rather than instead of it: the two
             # report different things about the same block (a well-formed-but-drawn
-            # method, and a ratio whose keys don't match the axis's declared levels),
-            # so both fire together. An empty `ratio` is equal allocation and earns
-            # no finding, and neither does one whose keys already equal the axis's
-            # declared `levels` set exactly — the accept path this row shares with
-            # every other in this function.
+            # method, and a malformed `ratio`), so both fire together. An empty
+            # `ratio` (or an absent one) is equal allocation and earns no finding,
+            # and neither does a mapping whose keys already equal the axis's
+            # declared `levels` set exactly and whose values are all positive
+            # numbers — the accept path this row shares with every other in this
+            # function.
+            #
+            # **One code covers the whole malformed-value family**, not one per
+            # shape: a non-mapping (`ratio: 3`), a mapping with the wrong keys, and
+            # a mapping with a non-positive or non-numeric value all mean "this
+            # `ratio` cannot be apportioned" to `units._apportion`, which has no
+            # backstop of its own for any of the three — a non-mapping falls
+            # through `assignment_for`'s own `isinstance(ratio, dict) and ratio`
+            # guard to equal allocation silently, and a non-positive weight (`{a:
+            # -1, b: 2}`) is silently floored to 0 rather than raising. Reported
+            # once per block, the first violation found, mirroring every other row
+            # here that reports one finding rather than every possible one.
             ratio = block.get("ratio")
-            if isinstance(ratio, dict) and ratio:
+            if ratio is not None and ratio != {}:
                 levels = _declared_levels(sweep, axis)
-                if levels is not None and set(ratio) != set(levels):
+                levels_repr = ", ".join(repr(level) for level in levels) if levels else ""
+                if not isinstance(ratio, dict):
+                    c.error(
+                        "E-DATA-ASSIGN-RATIO",
+                        f"data.units.assign.{axis}.ratio",
+                        f"is {ratio!r}, a {type(ratio).__name__}, not a mapping; "
+                        f"expected one entry per level of axis {axis!r}"
+                        + (f" ({levels_repr})" if levels_repr else ""),
+                    )
+                elif levels is not None and set(ratio) != set(levels):
                     declared_keys = sorted(str(k) for k in ratio)
                     noun = "key" if len(declared_keys) == 1 else "keys"
                     keys_repr = ", ".join(repr(k) for k in declared_keys)
-                    levels_repr = ", ".join(repr(level) for level in levels)
                     c.error(
                         "E-DATA-ASSIGN-RATIO",
                         f"data.units.assign.{axis}.ratio",
                         f"has {noun} {keys_repr}; expected one entry per level of "
                         f"axis {axis!r} ({levels_repr})",
+                    )
+                elif levels is not None and any(
+                    isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0
+                    for value in ratio.values()
+                ):
+                    bad_keys = sorted(
+                        str(key)
+                        for key, value in ratio.items()
+                        if isinstance(value, bool)
+                        or not isinstance(value, (int, float))
+                        or value <= 0
+                    )
+                    noun = "value" if len(bad_keys) == 1 else "values"
+                    c.error(
+                        "E-DATA-ASSIGN-RATIO",
+                        f"data.units.assign.{axis}.ratio",
+                        f"has a non-positive or non-numeric {noun} for "
+                        f"{', '.join(repr(k) for k in bad_keys)}; every entry is a "
+                        f"share of the roster, and a share of zero or less draws no "
+                        f"units for that level",
                     )
         else:
             # `method == "by_attribute"`, the one value neither elif above caught —
