@@ -167,11 +167,24 @@ def discover_local(repo_root: Path) -> dict[str, LocalTemplate]:
     `_module_name`), so no two projects share an entry; and `sys.modules` is
     put back as it was found after each file (see `_import_file`), so a helper
     a template imports from its own `templates/` cannot be served to the next
-    project from cache. `.gitkeep`,
-    `__init__.py`, and any non-`.py` file are skipped; a file that raises on
-    import is not caught here (task 8 owns that diagnostic), and any
-    registrations it made before raising are left in the pending buffer for
-    task 8 to reason about rather than silently discarded.
+    project from cache. `.gitkeep`, a dunder-stemmed file (`__init__.py`, or a
+    helper a template means to import as a sibling rather than have discovered
+    directly — the same `__`-prefix convention `__init__.py` already uses),
+    and any non-`.py` file are skipped.
+
+    A file that raises on import, imports cleanly but registers nothing, or
+    registers something that is not a `BaseTemplate` subclass is a fault named
+    `E-TEMPLATE-LOAD` — none of the three stops the loop: every later file is
+    still imported, so a genuinely well-formed template elsewhere in the same
+    directory still resolves into the fault this function raises, and a
+    collision among the files that *did* load cleanly is still found rather
+    than masked by the first file that didn't. Reported for the first such
+    file in sorted order once the whole directory has been walked, and ahead
+    of any collision: a collision verdict computed while a file failed to load
+    is computed over a partial set of claims — the file that didn't load might
+    have been a third claimant. Any registration a raising file made *before*
+    raising is drained and discarded rather than left for the next file's
+    `drain_pending()` to inherit and misattribute.
 
     Discards whatever the pending buffer already held before this call — the
     return value is what *these files* registered, not a leftover from an
@@ -191,14 +204,57 @@ def discover_local(repo_root: Path) -> dict[str, LocalTemplate]:
     drain_pending()  # discard anything queued before this call — not ours to return
     found: dict[str, LocalTemplate] = {}
     claims: dict[str, list[str]] = {}
+    load_faults: list[ContractError] = []
     for path in sorted(templates_dir.glob("*.py")):
         if path.stem.startswith("__"):
             continue
-        _import_file(path, _module_name(repo_root.resolve(), path.stem), templates_dir)
-        for name, cls in drain_pending():
+        try:
+            _import_file(path, _module_name(repo_root.resolve(), path.stem), templates_dir)
+        except Exception as exc:
+            drain_pending()  # discard a partial registration — not this path's to keep
+            load_faults.append(
+                ContractError(
+                    f"the project-local template `{path}` raised while importing and "
+                    f"registers nothing usable: {exc!r}",
+                    code="E-TEMPLATE-LOAD",
+                )
+            )
+            continue
+        registered = drain_pending()
+        if not registered:
+            load_faults.append(
+                ContractError(
+                    f"the project-local template `{path}` imported cleanly but called "
+                    "`@register_template` on nothing — every file under `templates/` "
+                    "that is not itself a template must be `__`-prefixed",
+                    code="E-TEMPLATE-LOAD",
+                )
+            )
+            continue
+        bad = next(
+            (
+                (name, cls)
+                for name, cls in registered
+                if not (isinstance(cls, type) and issubclass(cls, BaseTemplate))
+            ),
+            None,
+        )
+        if bad is not None:
+            name, cls = bad
+            load_faults.append(
+                ContractError(
+                    f"the project-local template `{path}` registered `{name}` as "
+                    f"{cls!r}, which is not a `BaseTemplate` subclass",
+                    code="E-TEMPLATE-LOAD",
+                )
+            )
+            continue
+        for name, cls in registered:
             provider = f"{path}::{cls.__name__}"
             claims.setdefault(name, []).append(provider)
             found.setdefault(name, LocalTemplate(cls, provider))
+    if load_faults:
+        raise load_faults[0]
     # Every file is imported before any collision is raised, and a colliding
     # name is reported in name order rather than in the order the files
     # happened to be read: the whole point of the refusal is that import order

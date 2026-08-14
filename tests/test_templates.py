@@ -261,17 +261,27 @@ def test_a_template_that_mutates_sys_path_does_not_leak_to_the_next_repo(tmp_pat
     is why each template here appends its *own* directory as well: `remove`
     takes the first occurrence, which is discovery's, and leaves the
     template's copy behind — same permanent entry, same leak. Only putting
-    `sys.path` back whole survives both."""
+    `sys.path` back whole survives both.
+
+    The helper is `__helperx.py` rather than `helperx.py`: task 8 makes a
+    non-dunder top-level `templates/*.py` that registers nothing an
+    `E-TEMPLATE-LOAD` fault, so a sibling helper that is not itself a template
+    must carry the same `__`-prefix `__init__.py` already does — and, being
+    `__`-prefixed, `discover_local`'s own loop no longer imports it directly.
+    This makes the `sys.modules` restore's job strictly harder than before:
+    the module reaches `sys.modules` only through `my_assay.py`'s own nested
+    `import`, the same route the helper *directory* case exercises, rather
+    than being popped a second time by discovery's own glob."""
     for tag in ("a", "b"):
         templates = tmp_path / tag / "templates"
         templates.mkdir(parents=True)
-        (templates / "helperx.py").write_text(f'ORIGIN = "{tag.upper()}"\n')
+        (templates / "__helperx.py").write_text(f'ORIGIN = "{tag.upper()}"\n')
         (templates / "my_assay.py").write_text(
             "import os\n"
             "import sys\n"
             "sys.path.insert(0, '/zzz')\n"
             "sys.path.append(os.path.dirname(__file__))\n"
-            "import helperx\n"
+            "import __helperx as helperx\n"
             "from publishable import BaseTemplate, register_template\n\n\n"
             '@register_template("my_assay")\n'
             "class MyAssay(BaseTemplate):\n"
@@ -647,3 +657,185 @@ def test_validate_reports_a_collision_rather_than_raising(tmp_path: Path):
     assert "E-TEMPLATE-COLLISION" in rendered
     assert "E-TEMPLATE-UNKNOWN" not in rendered
     assert str(repo / "templates" / "mine.py") in rendered
+
+
+RAISES_ON_IMPORT = "raise RuntimeError('kaboom')\n"
+
+REGISTERS_NOTHING = "x = 1\n"
+
+REGISTERS_A_NON_BASE_TEMPLATE = """\
+from publishable import register_template
+
+
+@register_template("impostor")
+class Impostor:
+    pass
+"""
+
+
+def test_a_file_that_raises_on_import_is_a_finding_not_a_traceback(tmp_path: Path):
+    """Shape 1 of 3. `discover_local` must not let the raise propagate — it is
+    user code, and `validate` is contracted never to raise. `sys.path` and
+    `sys.modules` are asserted unchanged for the same reason task 6's own
+    tests do: a diagnostic built by catching *inside* `_import_file` (around
+    `exec_module`) rather than *around* the call to it would skip task 6's own
+    `finally` restore, and this is the assertion that would catch it."""
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "broken.py").write_text(RAISES_ON_IMPORT)
+    before = list(sys.path)
+
+    with pytest.raises(ContractError) as excinfo:
+        discover_local(tmp_path)
+
+    assert excinfo.value.code == "E-TEMPLATE-LOAD"
+    assert str(templates / "broken.py") in str(excinfo.value)
+    assert sys.path == before
+    assert _modules_under(tmp_path) == []
+
+
+def test_a_file_that_registers_nothing_is_a_finding(tmp_path: Path):
+    """Shape 2 of 3. A well-formed, non-dunder `templates/*.py` is a
+    contribution to what this repo's `templates/` offers, so one that imports
+    cleanly and never calls `@register_template` at all is as much a fault as
+    one that raises — the escape hatch for a genuine helper file is the same
+    `__`-prefix `__init__.py` already uses, not silence."""
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "empty.py").write_text(REGISTERS_NOTHING)
+
+    with pytest.raises(ContractError) as excinfo:
+        discover_local(tmp_path)
+
+    assert excinfo.value.code == "E-TEMPLATE-LOAD"
+    assert str(templates / "empty.py") in str(excinfo.value)
+
+
+def test_a_file_that_registers_a_non_base_template_is_a_finding(tmp_path: Path):
+    """Shape 3 of 3. `@register_template`'s decorator records `(name, cls)`
+    without checking `cls` at all — the type hint is not enforced — so a class
+    that never subclasses `BaseTemplate` reaches `discover_local` with a name
+    and a class, neither of which is a `BaseTemplate` a template resolution
+    can use."""
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "impostor.py").write_text(REGISTERS_A_NON_BASE_TEMPLATE)
+
+    with pytest.raises(ContractError) as excinfo:
+        discover_local(tmp_path)
+
+    assert excinfo.value.code == "E-TEMPLATE-LOAD"
+    assert str(templates / "impostor.py") in str(excinfo.value)
+    assert "impostor" in str(excinfo.value)
+
+
+def test_a_broken_file_does_not_abandon_discovery_of_the_rest_of_the_directory(
+    tmp_path: Path,
+):
+    """THE CONTROL for all three shapes above: an earlier-sorting broken file
+    must not stop the loop from importing files after it, or a genuinely
+    well-formed template elsewhere in the same directory would never be
+    reached — and a collision among the files that *do* load would be masked
+    by whichever file happened to break first. Proved by a side effect the
+    broken file's own raise cannot fake: `zzz_good.py` writes a sentinel file
+    at import time, which exists only if its `exec_module` actually ran. A
+    loop that raises from inside the `except`, or that returns as soon as one
+    file breaks, both leave the sentinel missing."""
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    sentinel = tmp_path / "sentinel"
+    (templates / "aaa_broken.py").write_text(RAISES_ON_IMPORT)
+    (templates / "zzz_good.py").write_text(
+        f"from pathlib import Path\n"
+        f"Path({str(sentinel)!r}).write_text('ran')\n"
+        "from publishable import BaseTemplate, register_template\n\n\n"
+        '@register_template("good")\n'
+        "class Good(BaseTemplate):\n"
+        "    pass\n"
+    )
+
+    with pytest.raises(ContractError) as excinfo:
+        discover_local(tmp_path)
+
+    assert excinfo.value.code == "E-TEMPLATE-LOAD"
+    assert str(templates / "aaa_broken.py") in str(excinfo.value)
+    assert str(templates / "zzz_good.py") not in str(excinfo.value)
+    assert sentinel.exists()
+
+
+def test_a_partial_registration_before_a_raise_does_not_leak_into_the_buffer(
+    tmp_path: Path,
+):
+    """A file that registers a name and *then* raises leaves that name in the
+    pending buffer unless the exception handler drains it — and undrained, the
+    next file's own `drain_pending()` would inherit it and misattribute it to
+    the wrong provider, the exact identity/attribution class this slice has
+    shipped six times already. `partial` must not survive the raise it was
+    declared beside."""
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "broken.py").write_text(
+        "from publishable import BaseTemplate, register_template\n\n\n"
+        '@register_template("partial")\n'
+        "class Partial(BaseTemplate):\n"
+        "    pass\n\n\n"
+        "raise RuntimeError('boom')\n"
+    )
+
+    with pytest.raises(ContractError) as excinfo:
+        discover_local(tmp_path)
+
+    assert excinfo.value.code == "E-TEMPLATE-LOAD"
+    from publishable.templates.discovery import drain_pending
+
+    assert drain_pending() == []
+
+
+def test_a_load_failure_is_reported_before_a_collision_in_the_same_directory(
+    tmp_path: Path,
+):
+    """Both faults come out of `discover_local`, and `validate_config` reports
+    whichever `ContractError` it catches first — so precedence between the two
+    is a real decision. A collision verdict computed over a directory holding
+    a file that failed to load would be computed over a partial set of claims,
+    since the file that didn't load might have been a third claimant. LOAD
+    wins."""
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "aaa_broken.py").write_text(RAISES_ON_IMPORT)
+    (templates / "one.py").write_text(CLAIMS_DUPLICATED_A)
+    (templates / "two.py").write_text(CLAIMS_DUPLICATED_B)
+
+    with pytest.raises(ContractError) as excinfo:
+        discover_local(tmp_path)
+
+    assert excinfo.value.code == "E-TEMPLATE-LOAD"
+
+
+def test_validate_reports_a_load_failure_rather_than_raising(tmp_path: Path):
+    """`validate` collects findings and never raises, so this load-time
+    refusal reaches it as a finding, the same route `E-TEMPLATE-COLLISION`
+    takes. THE CONTROL: the same config in the same repo without the broken
+    file validates past `experiment_type` — reporting neither this code nor
+    `E-TEMPLATE-UNKNOWN`."""
+    repo = tmp_path / "repo"
+    (repo / "templates").mkdir(parents=True)
+    (repo / ".git").mkdir()
+    (repo / "configs" / "cohort-pilot").mkdir(parents=True)
+    config = repo / "configs" / "cohort-pilot" / "config.yaml"
+    config.write_text(
+        "experiment_type: generic\nentrypoint: cohort_pilot.experiment:experiment\n"
+    )
+
+    clean = Collector()
+    validate_config(config, clean)
+    assert "E-TEMPLATE-LOAD" not in clean.render()
+    assert "E-TEMPLATE-UNKNOWN" not in clean.render()
+
+    (repo / "templates" / "broken.py").write_text(RAISES_ON_IMPORT)
+    reported = Collector()
+    validate_config(config, reported)
+    rendered = reported.render()
+    assert "E-TEMPLATE-LOAD" in rendered
+    assert "E-TEMPLATE-UNKNOWN" not in rendered
+    assert str(repo / "templates" / "broken.py") in rendered
