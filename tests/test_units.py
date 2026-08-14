@@ -1490,33 +1490,123 @@ def test_an_empty_stratify_by_still_draws():
     assert plan.strata == ()
 
 
-def test_a_random_draw_refuses_a_declared_cluster_by():
-    """Allocating whole clusters is a different construction — task 9 — and a
-    caller that declared `cluster_by` must not be handed a per-unit split that
-    quietly ignores it. The same argument as `stratify_by` above, one field
-    over.
+def test_a_random_draw_with_clusters_still_refuses_a_declared_stratify_by():
+    """Allocating whole clusters (task 9) and balancing a stratum on top of
+    them (task 12) are different constructions, and only the first is built.
+    The refusal here is the same `stratify_by` guard the unclustered path
+    raises — unmoved by `clusters` being given alongside it, and naming
+    `stratify_by` rather than `cluster_by`: a caller reading the message
+    must be told which declaration this build cannot yet honour.
 
-    **The control**: the identical call with `clusters=None` draws. Without it,
-    a mutation that raised for every `random` draw would pass.
-
-    `clusters` and `stratify_by` declared together resolve deterministically to
-    the `clusters` message rather than to whichever guard happens to be first
-    after an edit."""
+    **The control**: the identical call with no `stratify_by` draws —
+    `test_a_clustered_random_draw_keeps_every_cluster_whole` and
+    `test_a_clustered_draw_approaches_an_unequal_ratio_as_closely_as_clusters_allow`
+    below own that half in full; this asserts only that adding `clusters`
+    does not also silence the `stratify_by` guard."""
     roster = _random_roster(12)
-    block = {"method": "random", "seed": 5}
     clusters = {unit.key: f"c{i % 3}" for i, unit in enumerate(roster)}
+    block = {"method": "random", "seed": 5, "stratify_by": ["site"]}
     with pytest.raises(NotImplementedError) as e:
         assignment_for(roster, "arm", block, ["a", "b"], "digest", clusters)
-    assert "cluster_by" in str(e.value)
-    assert "task 9" in str(e.value)
+    assert "stratify_by" in str(e.value)
+    assert "task 12" in str(e.value)
 
-    both = {"method": "random", "seed": 5, "stratify_by": ["site"]}
-    with pytest.raises(NotImplementedError) as e:
-        assignment_for(roster, "arm", both, ["a", "b"], "digest", clusters)
-    assert "cluster_by" in str(e.value)
 
-    plan = assignment_for(roster, "arm", block, ["a", "b"], "digest", None)
-    assert len(plan.members["a"]) == 6
+def _five_clusters() -> tuple[UnitList, dict[str, str]]:
+    """12 units in 5 clusters of 4/3/2/2/1 — `reference.md` § Clustered units'
+    "core computed the partition, so core keeps it indivisible" fixture,
+    shared by the two tests below. Irregular sizes on purpose: no two are
+    equal except the pair of 2s, so a mutation that dealt clusters out by
+    the wrong rule (or split one) lands on a size combination this exact
+    pair of fixtures does not otherwise produce — a roster of 12 equal-sized
+    clusters, or six pairs, would let several wrong rules agree with the
+    right one by chance."""
+    return _clustered({"c0": 4, "c1": 3, "c2": 2, "c3": 2, "c4": 1})
+
+
+def test_a_clustered_random_draw_keeps_every_cluster_whole():
+    """§ Clustered units: 'core computed the partition, so core keeps it
+    indivisible.' 12 units in 5 clusters of 4/3/2/2/1 drawn `random` over two
+    equal-weight arms. The assertion that matters is structural — every
+    cluster's units land together — because a mutation that *split* a
+    cluster (moved some of its units to the other arm) would still be
+    caught by no size check at all: legitimate whole-cluster combinations
+    here already reach a 6/6 split (`{c0, c3}` vs `{c1, c2, c4}`), so a
+    split-cluster bug could produce a same-sized, merely wrong-membership
+    result. Asserting per-cluster containment is what a size-only assertion
+    cannot do."""
+    roster, clusters = _five_clusters()
+    block = {"method": "random", "seed": 5}
+    plan = assignment_for(roster, "arm", block, ["a", "b"], "digest", clusters)
+
+    membership = {key: level for level, keys in plan.members.items() for key in keys}
+    for cluster_name in set(clusters.values()):
+        cluster_keys = [key for key, name in clusters.items() if name == cluster_name]
+        levels_seen = {membership[key] for key in cluster_keys}
+        assert len(levels_seen) == 1, (
+            f"cluster {cluster_name!r} split across arms: {levels_seen}"
+        )
+
+    # The realized split this seed happens to draw, pinned so the structural
+    # check above has a concrete shape to be checked against too.
+    assert plan.members["a"] == ("c0_0", "c0_1", "c0_2", "c0_3", "c2_0", "c2_1")
+    assert plan.members["b"] == ("c1_0", "c1_1", "c1_2", "c3_0", "c3_1", "c4_0")
+
+
+def test_a_clustered_draw_approaches_an_unequal_ratio_as_closely_as_clusters_allow():
+    """`ratio: {a: 1, b: 3}` over the same 12-unit, 5-cluster fixture targets
+    3 and 9 — `_apportion(12, [1, 3]) == [3, 9]` exactly, confirmed below as
+    the unclustered answer this is contrasted against. The realized sizes are
+    4 and 8, not 3 and 9: `c0` (size 4) is the largest cluster and is dealt
+    first — largest-first is `_assign_whole_clusters`'s own rule, inherited
+    here — landing on whichever arm is furthest below its target share, which
+    at the first cluster is a tie broken toward the earlier-declared level,
+    `a`. That single placement already puts `a` at 4, one past its target of
+    3, and every remaining cluster's smallest member is `c4` at size 1 — too
+    coarse to pull `a` back down to 3 without leaving it short instead. A
+    cluster is the smallest thing that can move, so one large cluster sets a
+    floor no assignment can get under; `partition_units`'s docstring makes
+    the identical argument for folds and refuses to claim the stronger,
+    exact-ratio thing. This is that argument checked numerically rather than
+    merely asserted."""
+    roster, clusters = _five_clusters()
+    block = {"method": "random", "seed": 5, "ratio": {"a": 1, "b": 3}}
+    plan = assignment_for(roster, "arm", block, ["a", "b"], "digest", clusters)
+
+    assert _apportion(12, [1, 3]) == [3, 9]
+    assert len(plan.members["a"]) == 4
+    assert len(plan.members["b"]) == 8
+    assert plan.members["a"] == ("c0_0", "c0_1", "c0_2", "c0_3")
+    assert plan.members["b"] == (
+        "c1_0",
+        "c1_1",
+        "c1_2",
+        "c3_0",
+        "c3_1",
+        "c2_0",
+        "c2_1",
+        "c4_0",
+    )
+
+
+def test_a_clustered_draw_the_ratio_apportions_no_whole_cluster_to_is_refused():
+    """The same refusal `test_a_drawn_arm_the_ratio_apportions_no_unit_to_is_refused`
+    pins for the unclustered path, over a fixture where a *cluster* rather
+    than a unit is the thing a level can be starved of: a single 5-unit
+    cluster over two arms leaves one arm no whole cluster to receive, since
+    the only thing that can move is the whole cluster and it can only move
+    to one side. A coarser unit of movement makes an empty arm *easier* to
+    reach than in the unclustered case, not exempt from the refusal —
+    `assignment_for`'s docstring states the same code applies for the
+    identical reason, "a coarser unit of movement makes it easier to reach,
+    not exempt from the refusal"."""
+    roster, clusters = _clustered({"c0": 5})
+    block = {"method": "random", "seed": 1}
+    with pytest.raises(ContractError) as e:
+        assignment_for(roster, "arm", block, ["a", "b"], "digest", clusters)
+    assert e.value.code == "E-DATA-ASSIGN-LEVELS"
+    assert "b" in str(e.value)
+    assert "resolves zero of them" in str(e.value)
 
 
 def test_arm_members_reduces_arms_of_across_the_resolved_conditions():

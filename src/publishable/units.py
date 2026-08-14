@@ -971,10 +971,10 @@ there, and because `validate`'s use of it is temporary — task 14 retires
 `E-DATA-ASSIGN-DRAWN` — while realizing a draw is permanent.
 
 `assignment_for` below no longer reads it for `random`, which task 8 realizes
-rather than refuses — `blocked`, and `random` beside a declared `cluster_by`
-(task 9), are what still route through the message this tuple names, and it
-is `DRAWN_ASSIGN_METHODS` membership, not tuple *order* or index, that either
-still consults.
+unclustered and task 9 realizes beside a declared `cluster_by` — `blocked` is
+what still routes through the message this tuple names, and it is
+`DRAWN_ASSIGN_METHODS` membership, not tuple *order* or index, that still
+consults it.
 
 **It is not what makes `assignment_for` fail closed**, and must not be mistaken
 for that: `assignment_for` allows `by_attribute` and `random` and refuses
@@ -1094,13 +1094,13 @@ def assignment_for(
       authority for a column-read partition and this one does not re-derive
       it. `from` is resolved here, once: the declared `from` when it is a
       non-empty string, else the axis name.
-    - `random`, unclustered (`clusters is None`) and unstratified (no
-      non-empty `stratify_by`), draws one — see below.
+    - `random`, unstratified (no non-empty `stratify_by`), draws one — see
+      below, whole clusters when `clusters` is given and individual units
+      when it is `None`.
     - **Every other value raises `NotImplementedError`** — an allowlist, not a
-      denylist of the methods that happen to draw today. `blocked`, and
-      `random` beside a declared `cluster_by`, raise the message
-      `DRAWN_ASSIGN_METHODS` selects, until task 10 (and task 9) build them;
-      any other string raises as a method this build cannot realize.
+      denylist of the methods that happen to draw today. `blocked` raises the
+      message `DRAWN_ASSIGN_METHODS` selects, until task 10 builds it; any
+      other string raises as a method this build cannot realize.
       Fail-closed costs nothing here, because `validate` already refuses an
       out-of-enum method outright (`E-DATA-ASSIGN-METHOD`) before `run` can
       reach this — and it is what keeps a *fifth* method, added to
@@ -1117,42 +1117,57 @@ def assignment_for(
     `digest` and `clusters` are unread on the `by_attribute` path and are
     parameters anyway: `digest` is what `random` draws its seed with
     (`assign_seed_for(block, axis, digest, roster)`, below), and `clusters`
-    is what task 9's clustered draw allocates whole clusters with instead of
-    individual units — a caller that already has to hold both cannot then be
-    told the signature changed under it.
+    is what `random`'s clustered draw allocates whole clusters with instead
+    of individual units — a caller that already has to hold both cannot then
+    be told the signature changed under it.
 
-    **`random`, unclustered, is realized here.** `assign.<axis>.ratio` (`{}`
-    meaning equal allocation, `reference.md` § Allocation) is apportioned
-    across `len(roster)` by `_apportion`, the whole roster is shuffled once
-    with `random.Random(assign_seed_for(...))`, and the shuffled list is cut
-    into consecutive slices sized by that apportionment, in `levels`'
-    declared order — so `members[level]` holds that level's slice **in the
-    order the shuffle realized**, exactly what `ArmPlan.members` promises for
-    a draw. Every declared level is a key of `members`, and **every one of
-    them is non-empty** — the `zip` below walks `levels` itself, so
-    `set(members) == set(levels)` unconditionally, and an apportioned size of
-    0 raises `E-DATA-ASSIGN-LEVELS` rather than returning an empty tuple. A
-    caller therefore gets from a draw exactly the partition `arms_of`
-    promises for a read: both halves, coverage and non-emptiness. **The same
-    fault deserves the same code**: `arms_of` refuses "a declared level no
-    unit's value names — that arm's condition would resolve zero units", and
-    an arm the ratio apportioned zero units to is that sentence, one line
-    later. `reference.md` § Allocation states it method-agnostically ("An arm
-    no unit resolves to is already refused, as `E-DATA-ASSIGN-LEVELS`"), in
-    the sentence whose job is to contrast it with the thin-but-nonzero cell
-    `limits.min_units_per_cell` does not yet warn about — a warning-shaped gap
-    a hard refusal must not be routed into. A `clusters` mapping passed
-    alongside `random` raises rather than falling silently back to the
-    unclustered draw: allocating whole clusters is task 9's, and a caller
-    that declared `cluster_by` must not be handed a per-unit split that
-    quietly ignores it.
+    **`random`, unclustered (`clusters is None`), is realized here.**
+    `assign.<axis>.ratio` (`{}` meaning equal allocation, `reference.md` §
+    Allocation) is apportioned across `len(roster)` by `_apportion`, the
+    whole roster is shuffled once with `random.Random(assign_seed_for(...))`,
+    and the shuffled list is cut into consecutive slices sized by that
+    apportionment, in `levels`' declared order — so `members[level]` holds
+    that level's slice **in the order the shuffle realized**, exactly what
+    `ArmPlan.members` promises for a draw. Every declared level is a key of
+    `members`, and **every one of them is non-empty** — the `zip` below
+    walks `levels` itself, so `set(members) == set(levels)` unconditionally,
+    and an apportioned size of 0 raises `E-DATA-ASSIGN-LEVELS` rather than
+    returning an empty tuple. A caller therefore gets from a draw exactly the
+    partition `arms_of` promises for a read: both halves, coverage and
+    non-emptiness. **The same fault deserves the same code**: `arms_of`
+    refuses "a declared level no unit's value names — that arm's condition
+    would resolve zero units", and an arm the ratio apportioned zero units to
+    is that sentence, one line later. `reference.md` § Allocation states it
+    method-agnostically ("An arm no unit resolves to is already refused, as
+    `E-DATA-ASSIGN-LEVELS`"), in the sentence whose job is to contrast it
+    with the thin-but-nonzero cell `limits.min_units_per_cell` does not yet
+    warn about — a warning-shaped gap a hard refusal must not be routed into.
 
-    **A non-empty `assign.<axis>.stratify_by` raises here too**, for the
-    `clusters` argument exactly: this build draws a plain shuffle, so honoring
-    a declared balance is task 12's, and drawing unbalanced while recording
-    `strata=()` would silently ignore a declared field rather than refuse it.
-    Presence is read structurally, `validate`'s own convention for this field
-    — a bare `stratify_by: site` is as non-empty as a list — so the empty
+    **`random`, clustered (`clusters is not None`), goes through
+    `_assign_whole_clusters_by_ratio` instead** — a sibling of the fold
+    primitive `_assign_whole_clusters`, not a parameterization of it, because
+    the two answer different questions: a fold deals whole clusters to the
+    *least-loaded* of `k` **equal** buckets, where an unequal
+    `assign.<axis>.ratio` needs the bucket **furthest below its own target
+    share**, which is the same rule only when every share is equal.
+    `reference.md` § Clustered units states the requirement this realizes:
+    "core computed the partition, so core keeps it indivisible" — a cluster
+    is drawn as a whole, so arms are balanced over clusters and no cluster
+    straddles two arms. The realized sizes are **not** the exact `ratio`:
+    a cluster is the smallest thing that can move, so one large cluster sets
+    a floor no assignment can get under, the same argument `partition_units`
+    makes for folds. An arm the draw allocates no whole cluster to is the
+    same fault as the unclustered path's zero-size arm and raises the same
+    code, `E-DATA-ASSIGN-LEVELS` — a coarser unit of movement makes it
+    *easier* to reach, not exempt from the refusal.
+
+    **A non-empty `assign.<axis>.stratify_by` raises here too**, whether or
+    not `clusters` is given: this build's `random` draw balances on nothing
+    beside the cluster indivisibility above, so honoring a declared balance
+    is task 12's, and drawing unbalanced while recording `strata=()` would
+    silently ignore a declared field rather than refuse it. Presence is read
+    structurally, `validate`'s own convention for this field — a bare
+    `stratify_by: site` is as non-empty as a list — so the empty
     `stratify_by: []` `init` writes stays on the draw path. `strata` is
     therefore `()` on every plan this returns, and truthfully: the only
     declaration it could record is one that no longer reaches the draw.
@@ -1165,13 +1180,6 @@ def assignment_for(
     block_map: Mapping[str, Any] = block if isinstance(block, Mapping) else {}
     method = block_map.get("method")
     if method == "random":
-        if clusters is not None:
-            raise NotImplementedError(
-                f"`data.units.assign.{axis}.method: random` beside a declared `cluster_by` "
-                "must allocate whole clusters, not individual units, and this build does not "
-                "draw that yet — task 9. Falling back to an unclustered draw here would "
-                "silently ignore the declared `cluster_by` rather than raising about it"
-            )
         if block_map.get("stratify_by"):
             raise NotImplementedError(
                 f"`data.units.assign.{axis}.stratify_by` names a balance this build's "
@@ -1187,6 +1195,27 @@ def assignment_for(
             if isinstance(ratio, dict) and ratio
             else [1] * len(levels)
         )
+        seed = assign_seed_for(block_map, axis, digest, roster)
+        if clusters is not None:
+            rng = random.Random(seed)
+            buckets = _assign_whole_clusters_by_ratio(list(roster), weights, rng, clusters)
+            empty = [level for level, bucket in zip(levels, buckets, strict=True) if not bucket]
+            if empty:
+                cluster_total = len({clusters[unit.key] for unit in roster})
+                raise ContractError(
+                    f"the drawn allocation for axis {axis!r} leaves no unit in "
+                    f"{', '.join(empty)} — {cluster_total} whole clusters apportioned by "
+                    f"{dict(ratio) if isinstance(ratio, dict) and ratio else 'equal shares'} "
+                    "gives that level no whole cluster. Every declared level needs at least "
+                    "one unit, or that arm's condition resolves zero of them; widen the "
+                    "ratio, resolve more clusters, or read an arm already assigned",
+                    code="E-DATA-ASSIGN-LEVELS",
+                )
+            clustered_members: dict[str, tuple[str, ...]] = {
+                level: tuple(unit.key for unit in bucket)
+                for level, bucket in zip(levels, buckets, strict=True)
+            }
+            return ArmPlan(levels=tuple(levels), members=clustered_members, seed=seed, strata=())
         sizes = _apportion(len(roster), weights)
         empty = [level for level, size in zip(levels, sizes, strict=True) if size == 0]
         if empty:
@@ -1199,7 +1228,6 @@ def assignment_for(
                 "or resolve a larger roster",
                 code="E-DATA-ASSIGN-LEVELS",
             )
-        seed = assign_seed_for(block_map, axis, digest, roster)
         shuffled = [unit.key for unit in roster]
         random.Random(seed).shuffle(shuffled)
         members: dict[str, tuple[str, ...]] = {}
@@ -1430,6 +1458,63 @@ def _assign_whole_clusters(
     for name in order:
         folds[min(range(k), key=lambda i: len(folds[i]))].extend(members[name])
     return folds
+
+
+def _assign_whole_clusters_by_ratio(
+    units: list[Unit], weights: Sequence[float], rng: random.Random, clusters: Mapping[str, str]
+) -> list[list[Unit]]:
+    """One list of units into `len(weights)` arms, each cluster whole, sized as
+    close to its own weight's target share as indivisible clusters allow.
+
+    **A sibling of `_assign_whole_clusters`, not a parameterization of it** —
+    spec decision 6, `reference.md` § Clustered units: "core computed the
+    partition, so core keeps it indivisible." That function deals whole
+    clusters to the *least-loaded* of `k` **equal** buckets; "least loaded"
+    and "furthest below its own target share" agree only because every
+    bucket's share there is identical. An unequal `assign.<axis>.ratio`
+    breaks the agreement: a bucket entitled to three times another's share is
+    still the one to prefer while it holds fewer than three times as many
+    units, not merely while it holds fewer units outright. So the rule here
+    is `counts[i] / weights[i]`, argmin, ties to the earlier-declared level —
+    a strict generalization that collapses to `_assign_whole_clusters`'s rule
+    when every weight is equal, but is a different comparison whenever they
+    are not, which is why it is a second function rather than that one
+    parameterized: changing the shared one to take weights risks a fold
+    regression for an arm feature, a bad trade `_assign_whole_clusters`'s own
+    bit-stability oracle exists to catch.
+
+    Dealt in the same order as `_assign_whole_clusters`, for the same
+    reasons: shuffled with `rng` to seed the tie between equal-sized
+    clusters (the only place it can still matter once the sort is stable),
+    then sorted largest-first so a big cluster is never stranded with only
+    already-unbalanced buckets left to go to.
+
+    Every realized size can differ from its exact target share (`n * weight
+    / sum(weights)`) by up to the size of the largest cluster assigned to
+    it: a cluster is the smallest thing that can move, so a bucket that has
+    already claimed one large cluster can overshoot its share before a
+    second cluster is even considered, and nothing here divides a cluster to
+    correct for that — `partition_units`'s docstring makes the identical
+    argument for folds and refuses to claim the stronger, exact one.
+
+    **A size of 0 is possible here and is the caller's to refuse**,
+    `_apportion`'s own convention: only `assignment_for` holds the axis
+    name, the declared `ratio`, and the roster a refusal's message has to
+    name, so this stays total rather than raising.
+    """
+    members: dict[str, list[Unit]] = {}
+    for unit in units:
+        members.setdefault(clusters[unit.key], []).append(unit)
+    order = list(members)
+    rng.shuffle(order)
+    order.sort(key=lambda name: -len(members[name]))
+    counts = [0.0] * len(weights)
+    buckets: list[list[Unit]] = [[] for _ in weights]
+    for name in order:
+        i = min(range(len(weights)), key=lambda i: (counts[i] / weights[i], i))
+        buckets[i].extend(members[name])
+        counts[i] += len(members[name])
+    return buckets
 
 
 def partition_units(
