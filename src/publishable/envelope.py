@@ -45,7 +45,12 @@ from typing import Any
 # genuinely cannot be named are the dynamic ones inside `grid`, `baseline`,
 # and `assign` — a swept parameter path, an axis name — which no fixed dotted
 # path reaches; closing the nameable leaves here and not those would leave a
-# partial closure reading like a total one.
+# partial closure reading like a total one. `assign` differs one level further
+# in: the axis *name* is still unnameable, but each axis block's own keys are
+# fixed — `{method, from, ratio, block_size, stratify_by, seed}`, § The one
+# config file's full expansion of an `assign` entry — so `_check_assign_axis_keys`
+# below closes that inner level on its own, the same way `measurements` is
+# closed one level in rather than left whole.
 LEAF_TYPES: dict[str, type | tuple[type, ...]] = {
     "schema_version": str,
     "experiment_type": str,
@@ -185,6 +190,50 @@ def _check_unknown_keys(
         )
 
 
+ASSIGN_AXIS_KEYS = frozenset({"method", "from", "ratio", "block_size", "stratify_by", "seed"})
+"""Every key an axis block under `data.units.assign` may itself carry — § The
+one config file's full expansion of one `assign` entry. The axis *name* one
+level up (`arm` in that expansion) is user-chosen and stays outside
+`LEAF_TYPES` for the reason the module docstring gives; the block's own keys
+are not user-chosen and are closed by `_check_assign_axis_keys` below."""
+
+
+def _check_assign_axis_keys(doc: dict[str, Any], findings: list[tuple[str, str, str]]) -> None:
+    """Close `data.units.assign`'s inner level: every axis block's own keys
+    against `ASSIGN_AXIS_KEYS`. Separate from `_check_unknown_keys` because
+    that closure never descends into a known LEAF's value — `data.units.assign`
+    is one — and the axis names one level in are exactly the dynamic keys no
+    fixed dotted path can name, so the generic mechanism cannot be pointed at
+    them. A non-mapping axis block is left to whatever already reports it
+    (`E-DATA-ASSIGN-METHOD`'s "the block naming no method that it is") rather
+    than duplicated here.
+    """
+    node: Any = doc
+    for part in ("data", "units", "assign"):
+        if not isinstance(node, dict):
+            return
+        node = node.get(part)
+    if not isinstance(node, dict):
+        return
+    for axis_name, axis_block in node.items():
+        if not isinstance(axis_block, dict):
+            continue
+        axis_label = axis_name if isinstance(axis_name, str) else str(axis_name)
+        for key in axis_block:
+            key_name = key if isinstance(key, str) else str(key)
+            if key_name in ASSIGN_AXIS_KEYS:
+                continue
+            near = difflib.get_close_matches(key_name, sorted(ASSIGN_AXIS_KEYS), n=1)
+            hint = f" — did you mean `{near[0]}`?" if near else ""
+            findings.append(
+                (
+                    "E-CONFIG-KEY-UNKNOWN",
+                    f"data.units.assign.{axis_label}.{key_name}",
+                    f"is not a key this schema declares{hint}",
+                )
+            )
+
+
 _LABEL = {str: "a string", int: "an integer", float: "a number", list: "a list", dict: "a mapping"}
 
 
@@ -236,4 +285,5 @@ def check_envelope(doc: dict[str, Any]) -> list[tuple[str, str, str]]:
                 )
             )
     _check_unknown_keys(doc, findings)
+    _check_assign_axis_keys(doc, findings)
     return findings

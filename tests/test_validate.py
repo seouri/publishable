@@ -8452,6 +8452,24 @@ def test_an_assignment_method_outside_the_enum_is_refused(write_config):
     assert "by_column" in c.findings[0].message
 
 
+def test_a_misspelled_key_inside_an_assign_block_is_reported(write_config):
+    """`stratifyy_by` is silently ignored today: `envelope.py` types
+    `data.units.assign` a bare `dict` and none of its children, so nothing
+    closes an axis block. The control is the correctly spelled key, which must
+    NOT be reported — an allowlist that rejects everything passes the first
+    assertion and fails the design."""
+    units = {
+        "allocation": "between",
+        "assign": {"arm": {"method": "by_attribute", "stratifyy_by": ["site"]}},
+    }
+    assert "E-CONFIG-KEY-UNKNOWN" in codes(write_config({"data.units": units}))
+    ok = {
+        "allocation": "between",
+        "assign": {"arm": {"method": "by_attribute", "from": "arm"}},
+    }
+    assert "E-CONFIG-KEY-UNKNOWN" not in codes(write_config({"data.units": ok}))
+
+
 @pytest.mark.parametrize(
     "assign",
     [
