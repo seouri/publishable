@@ -172,18 +172,20 @@ def discover_local(repo_root: Path) -> dict[str, LocalTemplate]:
     directly — the same `__`-prefix convention `__init__.py` already uses),
     and any non-`.py` file are skipped.
 
-    A file that raises on import, imports cleanly but registers nothing, or
-    registers something that is not a `BaseTemplate` subclass is a fault named
-    `E-TEMPLATE-LOAD` — none of the three stops the loop: every later file is
-    still imported, so a genuinely well-formed template elsewhere in the same
-    directory still resolves into the fault this function raises, and a
-    collision among the files that *did* load cleanly is still found rather
-    than masked by the first file that didn't. Reported for the first such
-    file in sorted order once the whole directory has been walked, and ahead
-    of any collision: a collision verdict computed while a file failed to load
-    is computed over a partial set of claims — the file that didn't load might
-    have been a third claimant. Any registration a raising file made *before*
-    raising is drained and discarded rather than left for the next file's
+    A file that raises on import (including a bare `sys.exit()`, which is a
+    `SystemExit` rather than an `Exception` and so needs its own `except`),
+    imports cleanly but registers nothing, or registers something that is not
+    a `BaseTemplate` subclass is a fault named `E-TEMPLATE-LOAD` — none of
+    these stops the loop: every later file is still imported, so a genuinely
+    well-formed template elsewhere in the same directory still resolves into
+    the fault this function raises, and a collision among the files that
+    *did* load cleanly is still found rather than masked by the first file
+    that didn't. Reported for the first such file in sorted order once the
+    whole directory has been walked, and ahead of any collision: a collision
+    verdict computed while a file failed to load is computed over a partial
+    set of claims — the file that didn't load might have been a third
+    claimant. Any registration a raising file made *before* raising is
+    drained and discarded rather than left for the next file's
     `drain_pending()` to inherit and misattribute.
 
     Discards whatever the pending buffer already held before this call — the
@@ -210,7 +212,30 @@ def discover_local(repo_root: Path) -> dict[str, LocalTemplate]:
             continue
         try:
             _import_file(path, _module_name(repo_root.resolve(), path.stem), templates_dir)
+        except SystemExit as exc:
+            # `SystemExit` is a `BaseException`, so the broad `except Exception` below
+            # does not see it — the same hazard `validate_config`'s own entrypoint import
+            # guards against, one import earlier: a `templates/*.py` calling `sys.exit()`
+            # at module scope, or building an `argparse` parser at import, would otherwise
+            # end the process with no diagnostic at all.
+            drain_pending()  # discard a partial registration — not this path's to keep
+            load_faults.append(
+                ContractError(
+                    f"the project-local template `{path}` called `sys.exit()` while "
+                    f"importing and registers nothing usable: SystemExit: {exc.code}",
+                    code="E-TEMPLATE-LOAD",
+                )
+            )
+            continue
         except Exception as exc:
+            # Deliberately broad and deliberately relabeling: a template's own top level
+            # can itself raise a coded `ContractError` (an `E-PARAM-VALUE` from a
+            # module-scope sanity check, say), and it is reported here as
+            # `E-TEMPLATE-LOAD` rather than under its original code — the original
+            # survives only inside `{exc!r}`. Undocumented as a design choice, but not
+            # accidental: `E-TEMPLATE-LOAD` is what names *this* fault, "a file this
+            # repo's `templates/` cannot use", and a coded exception from arbitrary user
+            # code reaching this point is exactly as unusable as an uncoded one.
             drain_pending()  # discard a partial registration — not this path's to keep
             load_faults.append(
                 ContractError(

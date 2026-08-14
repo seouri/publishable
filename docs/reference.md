@@ -433,11 +433,12 @@ those never appear together however wrong all of them are. A load failure report
 `E-TEMPLATE-LOAD` exactly once and, apart from those same two envelope rows, none of the
 others — the merge that would compute a collision, or resolve the name at all, never ran, since
 `discover_local` raises before either question is reached. A collision reports
-`E-TEMPLATE-COLLISION` exactly once and, apart from those same two envelope rows and a load
-failure (which it cannot follow, discovery having already raised for it), none of the others —
-`E-TEMPLATE-UNKNOWN` included, since the call that would have resolved the name raised instead of
-answering it, and a name whose meaning a collision leaves unanswered is not also unknown. An
-unresolvable `experiment_type` reports
+`E-TEMPLATE-COLLISION` exactly once and, apart from those same two envelope rows, none of the
+others — `E-TEMPLATE-UNKNOWN` included, since the call that would have resolved the name raised
+instead of answering it, and a name whose meaning a collision leaves unanswered is not also
+unknown. `E-TEMPLATE-LOAD` can never appear beside it: a collision is computed only once
+`discover_local` has walked the whole directory without a load fault, so reaching the collision
+check at all already rules one out. An unresolvable `experiment_type` reports
 `E-TEMPLATE-UNKNOWN` exactly once, since that check returns immediately after, and,
 likewise apart from those same two envelope rows, none of the others.
 
@@ -1479,7 +1480,7 @@ class GenericTemplate(BaseTemplate):
         return {"r": fn[cfg.parameters.analysis.method](units.pred, units.truth).statistic}
 ```
 
-**A template can live in three places, and where it lives decides how it's pinned.** Core ships `generic`; a plugin ships its own and arrives as a pinned `uv.lock` entry; `generate template` writes one into `templates/` in your own repo, for a template only this project needs. The third is code the run's numbers came out of and has no version anyone resolves, so [`code_hash` covers `templates/**`](#three-hashes) alongside `src/**` — editing a local `aggregate` moves the hash exactly as editing a step does, and `run` refuses a dirty `templates/` for the same reason it refuses a dirty `src/`. Where it lives also decides how it is *found*: the first two are [registered through an entry point](#creating-a-plugin-publishable-plugin-new), and the third — which is installed nowhere and distributed to nobody — is discovered by path from the fixed layout, making its `@register_template` argument the whole of its registration.
+**A template can live in three places, and where it lives decides how it's pinned.** Core ships `generic`; a plugin ships its own and arrives as a pinned `uv.lock` entry; `generate template` writes one into `templates/` in your own repo, for a template only this project needs. The third is code the run's numbers came out of and has no version anyone resolves, so [`code_hash` covers `templates/**`](#three-hashes) alongside `src/**` — editing a local `aggregate` moves the hash exactly as editing a step does, and `run` refuses a dirty `templates/` for the same reason it refuses a dirty `src/`. Where it lives also decides how it is *found*: the first two are [registered through an entry point](#creating-a-plugin-publishable-plugin-new), and the third — which is installed nowhere and distributed to nobody — is discovered by path from the fixed layout, making its `@register_template` argument the whole of its registration. Every non-dunder-stemmed file the fixed layout finds under `templates/` is read as one of these local templates, and one that fails to load — see [`E-TEMPLATE-LOAD`](#errors-validate-reports) — is a fault rather than a silence; a genuine helper file is named with the `__`-prefix `__init__.py` already uses to be skipped.
 
 **`validate` receives the whole config, not only `parameters`.** The rules a template most needs to enforce are often *cross-block*, because they are properties of what its steps do and core cannot know them. An experiment type that fits a model needs somewhere to fit — so a template whose pipeline compiles a program can reject a config that declares no [`holdout`](#a-fixed-holdout-split) and no `fold` repeat, because otherwise `io.units.train` is empty and the evaluation happens on the units the model was fitted against. Core has no way to tell that config from a legitimate one; the template does.
 

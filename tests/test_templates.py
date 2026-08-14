@@ -676,10 +676,14 @@ class Impostor:
 def test_a_file_that_raises_on_import_is_a_finding_not_a_traceback(tmp_path: Path):
     """Shape 1 of 3. `discover_local` must not let the raise propagate — it is
     user code, and `validate` is contracted never to raise. `sys.path` and
-    `sys.modules` are asserted unchanged for the same reason task 6's own
-    tests do: a diagnostic built by catching *inside* `_import_file` (around
-    `exec_module`) rather than *around* the call to it would skip task 6's own
-    `finally` restore, and this is the assertion that would catch it."""
+    `sys.modules` are asserted unchanged as a hygiene check on top of that:
+    task 6's own `finally` in `_import_file` restores both regardless of
+    where the catch sits, so this does not by itself distinguish a catch
+    placed around `_import_file`'s call from one placed inside it (around
+    `exec_module`) — that distinction is what
+    `test_a_partial_registration_before_a_raise_does_not_leak_into_the_buffer`
+    below actually pins, since only a catch at the call site sees the raise
+    before any second `drain_pending()` could run."""
     templates = tmp_path / "templates"
     templates.mkdir()
     (templates / "broken.py").write_text(RAISES_ON_IMPORT)
@@ -692,6 +696,27 @@ def test_a_file_that_raises_on_import_is_a_finding_not_a_traceback(tmp_path: Pat
     assert str(templates / "broken.py") in str(excinfo.value)
     assert sys.path == before
     assert _modules_under(tmp_path) == []
+
+
+def test_a_file_that_calls_sys_exit_is_a_finding_not_a_process_exit(tmp_path: Path):
+    """`SystemExit` is a `BaseException`, not an `Exception` — the same hazard
+    `validate_config`'s own entrypoint-import handler already guards against,
+    eight lines away in a different file, for the same reason: a
+    `templates/*.py` calling `sys.exit()` at module scope (or building an
+    `argparse` parser at import) would otherwise end the whole process with
+    the user's own exit code and no diagnostic at all, which is the one
+    outcome `validate` is contracted never to produce. Not one of the three
+    canonical shapes, but the same fault class, and `validate`'s own stated
+    goal for this task."""
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "exits.py").write_text("raise SystemExit(3)\n")
+
+    with pytest.raises(ContractError) as excinfo:
+        discover_local(tmp_path)
+
+    assert excinfo.value.code == "E-TEMPLATE-LOAD"
+    assert str(templates / "exits.py") in str(excinfo.value)
 
 
 def test_a_file_that_registers_nothing_is_a_finding(tmp_path: Path):
@@ -716,17 +741,25 @@ def test_a_file_that_registers_a_non_base_template_is_a_finding(tmp_path: Path):
     without checking `cls` at all — the type hint is not enforced — so a class
     that never subclasses `BaseTemplate` reaches `discover_local` with a name
     and a class, neither of which is a `BaseTemplate` a template resolution
-    can use."""
+    can use.
+
+    The file is named `shape3.py` rather than `impostor.py` on purpose: the
+    registered name and the class are both `impostor`/`Impostor`, and a file
+    named after either would let `assert "impostor" in message` pass on the
+    interpolated *path* alone, testing nothing about what the message says
+    was registered."""
     templates = tmp_path / "templates"
     templates.mkdir()
-    (templates / "impostor.py").write_text(REGISTERS_A_NON_BASE_TEMPLATE)
+    (templates / "shape3.py").write_text(REGISTERS_A_NON_BASE_TEMPLATE)
 
     with pytest.raises(ContractError) as excinfo:
         discover_local(tmp_path)
 
     assert excinfo.value.code == "E-TEMPLATE-LOAD"
-    assert str(templates / "impostor.py") in str(excinfo.value)
-    assert "impostor" in str(excinfo.value)
+    message = str(excinfo.value)
+    assert str(templates / "shape3.py") in message
+    assert "impostor" in message  # the registered name
+    assert "Impostor" in message  # the offending class
 
 
 def test_a_broken_file_does_not_abandon_discovery_of_the_rest_of_the_directory(
