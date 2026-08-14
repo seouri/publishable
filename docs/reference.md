@@ -2992,33 +2992,35 @@ None of this disturbs verification: `parameters_hash` [never covered the path fi
 
 These take a name plus what's needed to bring something into existence.
 
-| Command | Arguments | Does |
-|---|---|---|
-| `publishable demo` | *(none)*, `[--into DIR]` | Builds a complete worked example — synthetic units, a three-step pipeline, a sweep with a baseline — then walks you through validating and running it one command at a time. Data goes outside the created repo, as it would for real work. See [What `demo` walks you through](#what-demo-walks-you-through) |
-| `publishable new` | project name, `[--license]` | Scaffolds an experiment repo with README/LICENSE/CITATION.cff, `git init` + first commit |
-| `publishable plugin new` | plugin name | Scaffolds an installable template/resolver/step package |
-| `publishable generate` (`g`) | generator, name, generator args | `experiment` \| `step` \| `template` \| `report`; `experiment` accepts `--plugin` |
-| `publishable init` | `--template`, `--name`, `--input-dir`, `--output-dir`, `[--plugin]` | Alias for `generate experiment` |
-| `publishable study new` | bundle path, `--title` | Creates an empty study bundle, outside any experiment repo |
-| `publishable study add` | bundle path, run.yaml path, `--as <name>` | Copies a run record into the bundle under that name, with host paths redacted |
+**The `Status` column — carried by this table, by [Operation commands](#operation-commands), and by [Generators](#generators) — says what this build executes, and nothing else.** A row marked `NOT BUILT` is specified here and not yet implemented; invoking it prints that it is specified but not built and cites the section that specifies it, rather than `unknown command`, which is reserved for a name this document never specified — the two are different news, and telling them apart is what the column is for. Both exit `2` — see [Exit codes and diagnostics](#exit-codes-and-diagnostics). The rows stay in present tense because this document leads the code, the same reason [an unbuilt declaration](#the-one-config-file) keeps its expansion and [an unbuilt import](#the-importable-surface) keeps its row; the marker is what stops a reader taking the tense for a build fact. `tests/test_cli.py` reads these three tables and checks both directions against the CLI, so a marker that outlives its slice fails a test rather than misleading a reader.
+
+| Command | Status | Arguments | Does |
+|---|---|---|---|
+| `publishable demo` | NOT BUILT | *(none)*, `[--into DIR]` | Builds a complete worked example — synthetic units, a three-step pipeline, a sweep with a baseline — then walks you through validating and running it one command at a time. Data goes outside the created repo, as it would for real work. See [What `demo` walks you through](#what-demo-walks-you-through) |
+| `publishable new` | built | project name, `[--license]` | Scaffolds an experiment repo with README/LICENSE/CITATION.cff, `git init` + first commit |
+| `publishable plugin new` | NOT BUILT | plugin name | Scaffolds an installable template/resolver/step package |
+| `publishable generate` (`g`) | built | generator, name, generator args | `experiment` \| `step` \| `template` (NOT BUILT) \| `report` (NOT BUILT); `experiment` accepts `--plugin` |
+| `publishable init` | built | `--template`, `--name`, `--input-dir`, `--output-dir`, `[--plugin]` | Alias for `generate experiment` |
+| `publishable study new` | NOT BUILT | bundle path, `--title` | Creates an empty study bundle, outside any experiment repo |
+| `publishable study add` | NOT BUILT | bundle path, run.yaml path, `--as <name>` | Copies a run record into the bundle under that name, with host paths redacted |
 
 ### Operation commands
 
 These take paths and nothing else.
 
-| Command | Argument | Does |
-|---|---|---|
-| `publishable validate` | config path | Every check in [Validation](#validation). Reads your config and your input; creates nothing and reaches nothing off the machine |
-| `publishable dry-run` | config path | Validates, expands the sweep and repeat plan, builds the input manifest, [probes the apparatus](#the-apparatus-core-can-only-observe), prints every artifact path that *would* be written. Creates nothing |
-| `publishable run` | config path | The real thing: requires a clean `src/**` and `templates/**`, creates `run_<id>/`, captures provenance, executes conditions × repeats × steps, writes `run.yaml` |
-| `publishable draft` | config path | Same as `run`, but permits a dirty code tree. Recorded as `draft: true` — see [Draft runs](#draft-runs) |
-| `publishable resume` | run directory | Continues an interrupted run in place, skipping completed (condition, repeat, step) triples. Refuses a run that already holds a `run.yaml` — that run [ended](#what-status-means-and-when-a-run-keeps-going) — and one whose [lock is held](#one-execution-at-a-time-and-what-holds-the-run-directory) |
-| `publishable report` | run.yaml or study.yaml path | Renders Markdown/HTML from one run, or from a whole [study](#studies-what-a-paper-reports) |
-| `publishable freeze` | run directory | Re-reads the environment and re-probes the [apparatus](#the-apparatus-core-can-only-observe) mid-run, without executing anything. Reports a moved apparatus as a failure; the [gate](#the-apparatus-core-can-only-observe) is what stops the run — see below |
-| `publishable reproduce` | run.yaml or config path | Clones the recorded commit into a new checkout and prepares it to run — see [Reproducing on another device](#reproducing-on-another-device) |
-| `publishable diff` | two config or run paths | Reports each hash as identical or differing, then the specific parameter deltas |
-| `publishable docs` | *(none)* | Regenerates every `publishable:begin/end` managed region |
-| `publishable list-templates` | *(none)* | Registered templates, including plugin-provided, with their full parameter specs |
+| Command | Status | Argument | Does |
+|---|---|---|---|
+| `publishable validate` | built | config path | Every check in [Validation](#validation). Reads your config and your input; creates nothing and reaches nothing off the machine |
+| `publishable dry-run` | NOT BUILT | config path | Validates, expands the sweep and repeat plan, builds the input manifest, [probes the apparatus](#the-apparatus-core-can-only-observe), prints every artifact path that *would* be written. Creates nothing |
+| `publishable run` | built | config path | The real thing: requires a clean `src/**` and `templates/**`, creates `run_<id>/`, captures provenance, executes conditions × repeats × steps, writes `run.yaml` |
+| `publishable draft` | NOT BUILT | config path | Same as `run`, but permits a dirty code tree. Recorded as `draft: true` — see [Draft runs](#draft-runs) |
+| `publishable resume` | NOT BUILT | run directory | Continues an interrupted run in place, skipping completed (condition, repeat, step) triples. Refuses a run that already holds a `run.yaml` — that run [ended](#what-status-means-and-when-a-run-keeps-going) — and one whose [lock is held](#one-execution-at-a-time-and-what-holds-the-run-directory) |
+| `publishable report` | NOT BUILT | run.yaml or study.yaml path | Renders Markdown/HTML from one run, or from a whole [study](#studies-what-a-paper-reports) |
+| `publishable freeze` | NOT BUILT | run directory | Re-reads the environment and re-probes the [apparatus](#the-apparatus-core-can-only-observe) mid-run, without executing anything. Reports a moved apparatus as a failure; the [gate](#the-apparatus-core-can-only-observe) is what stops the run — see below |
+| `publishable reproduce` | NOT BUILT | run.yaml or config path | Clones the recorded commit into a new checkout and prepares it to run — see [Reproducing on another device](#reproducing-on-another-device) |
+| `publishable diff` | NOT BUILT | two config or run paths | Reports each hash as identical or differing, then the specific parameter deltas |
+| `publishable docs` | NOT BUILT | *(none)* | Regenerates every `publishable:begin/end` managed region |
+| `publishable list-templates` | NOT BUILT | *(none)* | Registered templates, including plugin-provided, with their full parameter specs |
 
 `resume` takes a run *directory* rather than a config path: resuming operates on a run that already exists, and that run directory already contains the config it used. A config plus a run identifier would be two arguments describing one thing, with the standing possibility of disagreeing. It is the one command that can't take a `run.yaml`, and for the same reason — the runs it exists for don't have one yet.
 
@@ -3032,7 +3034,7 @@ Every command is scriptable, so what it returns is part of the interface:
 |---|---|
 | `0` | Succeeded. Warnings may have been printed; a warning never changes the code |
 | `1` | The thing you asked about is wrong — a config that fails [validation](#validation), a `diff` of runs that don't share a hash, a `resume` whose hashes moved |
-| `2` | The invocation is wrong — unknown command, missing argument, unreadable path |
+| `2` | The invocation is wrong — unknown command, a [specified-but-unbuilt](#creation-commands) command or generator, missing argument, unreadable path |
 | `3` | **`run`, `draft`, `resume` only** — the run reached the end of its plan with failures: [`status: partial`](#what-status-means-and-when-a-run-keeps-going). There is a record, and it is worth reading |
 | `4` | **`run`, `draft`, `resume` only** — the run stopped: `status: failed`. There is a record of what happened and no result to report |
 | `5` | Something outside the machine refused — an unreachable [apparatus](#the-apparatus-core-can-only-observe), a missing credential, a clone or `uv sync` that failed |
@@ -3180,12 +3182,12 @@ The `<!-- publishable:begin ... -->` regions are **managed**: generators rewrite
 
 ## Generators
 
-| Generator | Example | Creates |
-|---|---|---|
-| `experiment` | `publishable g experiment cohort-pilot --template generic --input-dir ~/data --output-dir ~/results` | A fully-populated `configs/cohort-pilot/config.yaml`, `src/cohort_pilot/` (thin `experiment.py` declaring step order, plus `steps/` with one **working** starter step), and a row in the README's managed experiments table. Refuses if either path resolves inside the repo |
-| `step` | `publishable g step cohort-pilot analyze` | Next-numbered `src/cohort_pilot/steps/step03_analyze.py` with a `BaseStep` stub, registered in order |
-| `template` | `publishable g template my_assay` | `templates/my_assay.py` with a `BaseTemplate` + `parameter_spec` stub, for a template only this project needs. Its parameter table is added to the README |
-| `report` | `publishable g report cohort-pilot --format html` | `src/cohort_pilot/report.py` — a renderer override for one experiment; see below |
+| Generator | Status | Example | Creates |
+|---|---|---|---|
+| `experiment` | built | `publishable g experiment cohort-pilot --template generic --input-dir ~/data --output-dir ~/results` | A fully-populated `configs/cohort-pilot/config.yaml`, `src/cohort_pilot/` (thin `experiment.py` declaring step order, plus `steps/` with one **working** starter step), and a row in the README's managed experiments table. Refuses if either path resolves inside the repo |
+| `step` | built | `publishable g step cohort-pilot analyze` | Next-numbered `src/cohort_pilot/steps/step03_analyze.py` with a `BaseStep` stub, registered in order |
+| `template` | NOT BUILT | `publishable g template my_assay` | `templates/my_assay.py` with a `BaseTemplate` + `parameter_spec` stub, for a template only this project needs. Its parameter table is added to the README |
+| `report` | NOT BUILT | `publishable g report cohort-pilot --format html` | `src/cohort_pilot/report.py` — a renderer override for one experiment; see below |
 
 ```python
 # src/cohort_pilot/experiment.py — order, nothing else

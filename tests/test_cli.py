@@ -6094,3 +6094,118 @@ def test_a_reporting_stratum_inside_one_cluster_reports_no_interval(tmp_path, mo
     # The parent keeps its own interval over all five clusters, so the `null`
     # above is the stratum's cluster count and not a block-wide loss.
     assert _pred(doc["run_dir"])["method"] == "t_over_units_clustered"
+
+
+# --- `reference.md` § CLI reference versus what this build dispatches ---------
+#
+# The document leads the code, so its CLI tables stay in present tense and carry
+# a `Status` column instead. These checks are what keeps that column honest in
+# both directions: a row marked `NOT BUILT` must be declined *as specified* by
+# the CLI, and an unmarked row must be a name the CLI really routes. The list of
+# commands lives in the document and in `cli.NOT_BUILT_COMMANDS`, nowhere else —
+# this module parses the first and observes the second through `main`, rather
+# than keeping a third copy, since a third copy is the defect being prevented.
+
+REFERENCE_MD = Path(__file__).resolve().parents[1] / "docs" / "reference.md"
+NOT_BUILT_PREFIX = "` is specified but not built in this version — see docs/reference.md § "
+
+
+def _status_tables() -> dict[str, list[tuple[str, str]]]:
+    """Every `| ... | Status | ... |` table in `reference.md`, as (name, status).
+
+    Keyed by the table's first column header, so `Command` and `Generator` come
+    back apart — they are invoked differently. The name is the first backticked
+    token of the first cell, which drops the `(`g`)` alias spelling.
+    """
+    tables: dict[str, list[tuple[str, str]]] = {}
+    lines = REFERENCE_MD.read_text().split("\n")
+    for i, line in enumerate(lines):
+        cells = [c.strip() for c in line.strip().strip("|").split("|")]
+        if len(cells) < 3 or cells[1] != "Status" or not lines[i + 1].startswith("|---"):
+            continue
+        rows = tables.setdefault(cells[0], [])
+        for row in lines[i + 2 :]:
+            if not row.startswith("|"):
+                break
+            cell = [c.strip() for c in row.strip().strip("|").split("|")]
+            match = re.match(r"`([^`]+)`", cell[0])
+            assert match, row
+            rows.append((match.group(1).removeprefix("publishable "), cell[1]))
+    return tables
+
+
+def _cited_sections() -> set[str]:
+    """Every `##`-level heading in `reference.md`, as its bare text."""
+    return {
+        line.lstrip("#").strip()
+        for line in REFERENCE_MD.read_text().split("\n")
+        if re.match(r"#{2,4} ", line)
+    }
+
+
+def test_reference_cli_tables_are_parsed_at_all():
+    """The control for the two checks below: a parser that found nothing would
+    make both of them pass vacuously, which is the shape of the bug they exist to
+    catch. Both statuses must be present in both tables — a document that stopped
+    marking anything, or marked everything, fails here rather than silently."""
+    tables = _status_tables()
+    assert set(tables) == {"Command", "Generator"}
+    for column, rows in tables.items():
+        statuses = {status for _, status in rows}
+        assert statuses == {"built", "NOT BUILT"}, column
+    assert ("dry-run", "NOT BUILT") in tables["Command"]
+    assert ("validate", "built") in tables["Command"]
+
+
+@pytest.mark.parametrize("column", ["Command", "Generator"])
+def test_reference_cli_tables_match_what_the_cli_does(column, capsys):
+    """Both directions, observed through `main` rather than read off a constant.
+
+    A `NOT BUILT` row must produce the specified-but-unbuilt diagnostic, naming
+    itself and citing a section this document actually has. An unmarked row must
+    produce neither that diagnostic nor `unknown command` — it got as far as real
+    argument handling, which is only true of a name the dispatcher routes. So a
+    marker left behind by the slice that built the command fails here, and so
+    does a command that lands without the document being edited.
+
+    The probe arguments are deliberately wrong for every command: proving the
+    name is routed costs nothing and must not scaffold or execute anything.
+    """
+    headings = _cited_sections()
+    rows = _status_tables()[column]
+    for name, status in rows:
+        prefix = ["generate"] if column == "Generator" else []
+        code = main(prefix + name.split(" ") + ["_probe_a", "_probe_b"])
+        printed = capsys.readouterr().err
+        if status == "NOT BUILT":
+            assert code == EXIT_INVOCATION, (name, code)
+            expected = f"`publishable {' '.join(prefix + [name])}{NOT_BUILT_PREFIX}"
+            assert printed.startswith(expected), (name, printed)
+            cited = printed[len(expected) :].strip()
+            assert cited in headings, (name, cited)
+        else:
+            assert "unknown command" not in printed, (name, printed)
+            assert "is specified but not built" not in printed, (name, printed)
+
+
+def test_an_unspecified_name_still_reports_an_unknown_command(capsys):
+    """The distinction is the whole point, so it needs its own control at both
+    levels: a name the document never specified reads as a typo, not as a
+    roadmap entry, and both still exit 2."""
+    assert main(["frobnicate"]) == EXIT_INVOCATION
+    assert capsys.readouterr().err == "unknown command `frobnicate`\n"
+    assert main(["generate", "frobnicate", "x"]) == EXIT_INVOCATION
+    assert capsys.readouterr().err == (
+        "unknown generator `frobnicate` — see docs/reference.md § Generators\n"
+    )
+
+
+def test_a_command_group_answers_for_its_unbuilt_subcommands(capsys):
+    """`publishable study` names no subcommand, and every subcommand it could
+    name is unbuilt — so it is answered as unbuilt rather than as unknown, which
+    would be the one wrong word for a group the document specifies."""
+    assert main(["study"]) == EXIT_INVOCATION
+    assert capsys.readouterr().err == (
+        "`publishable study` is specified but not built in this version — "
+        "see docs/reference.md § Creation commands\n"
+    )

@@ -104,6 +104,54 @@ if TYPE_CHECKING:
 
 OPERATION_COMMANDS = {"validate", "run"}
 
+# The specified-but-unbuilt surface, in one place. Every name here is a command
+# `docs/reference.md` § CLI reference describes and this build does not execute;
+# the value is the section of that document which specifies it. A name is removed
+# from this mapping by the slice that builds it, and `tests/test_cli.py`'s
+# `test_reference_cli_tables_match_what_the_cli_does` binds the two directions:
+# the rows marked `NOT BUILT` there are exactly the keys here, and every unmarked
+# row is a command this module really dispatches. Cited by section, never by line
+# number — `docs/reference.md` moves under every edit above the citation.
+NOT_BUILT_COMMANDS: dict[str, str] = {
+    "demo": "What `demo` walks you through",
+    "diff": "Operation commands",
+    "docs": "Operation commands",
+    "draft": "Draft runs",
+    "dry-run": "Operation commands",
+    "freeze": "Operation commands",
+    "list-templates": "Operation commands",
+    "plugin new": "Creating a plugin: `publishable plugin new`",
+    "report": "Operation commands",
+    "reproduce": "Reproducing on another device",
+    "resume": "Resuming",
+    "study add": "What `study add` redacts",
+    "study new": "Building one",
+}
+
+# The same, for `generate`'s kinds: `docs/reference.md` § Generators names four
+# and this build materializes two.
+NOT_BUILT_GENERATORS: dict[str, str] = {
+    "report": "A report override renders one experiment's own figures",
+    "template": "Generators",
+}
+
+
+def _report_not_built(what: str, section: str) -> int:
+    """Print the diagnostic a specified-but-unbuilt name gets, and exit 2.
+
+    Deliberately not `unknown command`: the two cases are different news. One says
+    you typed something that was never specified; this one says the specification
+    holds it and this build does not, which is a roadmap entry rather than a typo.
+    Both exit 2 — the invocation is wrong either way, and a new exit code would be
+    a change to `docs/reference.md` § Exit codes and diagnostics.
+    """
+    print(
+        f"`publishable {what}` is specified but not built in this version — "
+        f"see docs/reference.md § {section}",
+        file=sys.stderr,
+    )
+    return EXIT_INVOCATION
+
 
 def _preloaded_experiment(config_path: Path) -> BaseExperiment | None:
     """Import the entrypoint before validating, so a run imports user code once.
@@ -2186,6 +2234,21 @@ def _dispatch(command: str, rest: list[str]) -> int:
         return EXIT_OK
     if command in ("generate", "g", "init"):
         return _dispatch_generate(command, rest)
+    # Everything built is handled above, so what reaches here is either specified
+    # and unbuilt or not specified at all. The built branches come first on
+    # purpose: a name that appeared in both places would keep working, and the
+    # document-versus-code test is what would then report the mistake, rather than
+    # a real command silently becoming a roadmap notice.
+    two_token = f"{command} {rest[0]}" if rest else ""
+    if two_token in NOT_BUILT_COMMANDS:
+        return _report_not_built(two_token, NOT_BUILT_COMMANDS[two_token])
+    if command in NOT_BUILT_COMMANDS:
+        return _report_not_built(command, NOT_BUILT_COMMANDS[command])
+    if any(n.startswith(f"{command} ") for n in NOT_BUILT_COMMANDS):
+        # `publishable study` with no subcommand, or an unrecognized one. Every
+        # subcommand of such a group is unbuilt today, so the group answer is the
+        # same answer; § Creation commands is the table that holds all of them.
+        return _report_not_built(command, "Creation commands")
     print(f"unknown command `{command}`", file=sys.stderr)
     return EXIT_INVOCATION
 
@@ -2229,6 +2292,14 @@ def _dispatch_generate(command: str, rest: list[str]) -> int:
             return EXIT_INVOCATION
         generate_step(repo_root=repo_root, experiment=positional[0], step_name=positional[1])
         return EXIT_OK
+    if kind in NOT_BUILT_GENERATORS:
+        return _report_not_built(f"generate {kind}", NOT_BUILT_GENERATORS[kind])
+    print(
+        f"unknown generator `{kind}` — see docs/reference.md § Generators"
+        if kind
+        else "`generate` takes a generator name — see docs/reference.md § Generators",
+        file=sys.stderr,
+    )
     return EXIT_INVOCATION
 
 
