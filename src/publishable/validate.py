@@ -1468,7 +1468,8 @@ def _check_assign(
     one name to the draw and a character sequence here.
 
     *Stratification is forward-only* — `E-DATA-ASSIGN-STRATIFY-FORWARD`, the
-    order half of the row above and a separate code because a row and a code are
+    the order half of *Allocation strata exist* and a separate code because a
+    row and a code are
     the same check seen from two ends: a stratum naming a `sweep.groups` axis
     this one is drawn *before*, or naming this axis itself. A drawn axis leaves
     no column, so the balance is over the earlier axis's **realized** membership,
@@ -1477,7 +1478,12 @@ def _check_assign(
     one, and the reason a cycle is unrepresentable rather than something to
     detect. Order comes from `sweep.selector_paths`, the same declaration order
     that loop walks. A stratum resolving to a declared attribute is exempt before
-    this runs, matching `units._stratum_groups`' own precedence.
+    this runs, matching `units._stratum_groups`' own precedence — which is also
+    why *Allocation strata survive clustering* never sees an axis-name stratum,
+    a gap `units.assignment_for`'s docstring records for the one direction where
+    it bites (an earlier `by_attribute` axis whose `from` varies within a
+    cluster, splitting that cluster before this axis's draw allocates the halves
+    independently).
 
     *Allocation strata survive clustering* — `E-DATA-ASSIGN-STRATIFY-VARIES`,
     the second row here needing a roster: a declared stratum whose value is not

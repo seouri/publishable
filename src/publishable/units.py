@@ -1433,13 +1433,23 @@ def assignment_for(
     `E-DATA-ASSIGN-STRATIFY-UNKNOWN`, both refused by `validate` first) and
     says why it carries neither code itself.
 
-    **No `E-DATA-ASSIGN-STRATIFY-VARIES` question arises for an axis-name
-    stratum under a declared `cluster_by`**, and no check is owed for one:
-    the earlier axis's own `random` draw allocated whole clusters, so its
-    realized membership is constant within every cluster by construction,
-    where a *column* can disagree inside one. That is why `validate`'s
-    constancy row reads only the strata that resolved to declared
-    attributes.
+    **An axis-name stratum and a declared `cluster_by` is covered in one
+    direction and not the other, and the uncovered one is recorded rather
+    than silently relied on.** When the earlier axis *draws*, it allocated
+    whole clusters, so its realized membership is constant within every
+    cluster by construction and no `E-DATA-ASSIGN-STRATIFY-VARIES` question
+    arises. When the earlier axis is `by_attribute` with a `from` naming a
+    column that is **not** constant within a cluster, it splits that cluster
+    between its own arms — `arms_of` reads a column and respects nothing
+    about clusters — and the two halves then land in different strata here,
+    where `_assign_whole_clusters_by_ratio` allocates each independently and
+    the cluster can straddle both arms. `validate`'s constancy row does not
+    reach it: that loop reads only the strata that resolved to declared
+    attributes, and an axis name is not one. Unreachable in this build
+    (`E-DATA-ASSIGN-DRAWN` still refuses this axis's `random`), and it needs
+    a `from` differing from the axis name — with the default, the stratum
+    resolves as a declared attribute on both sides and the existing check
+    covers it.
 
     **`blocked` is realized here too, and is what reads the roster's order
     as data** (`reference.md` § Where units come from): the resolved roster
