@@ -1707,6 +1707,79 @@ def _check_assign(
                         f"share of the roster, and a share of zero or less draws no "
                         f"units for that level",
                     )
+
+            # *Block size fills the arms* — `block_size` means something only for
+            # `blocked` (`from`'s own reason: the discriminator decides which of a
+            # block's other fields are read), and only for an explicit `int` value —
+            # `"auto"`, or anything else that isn't a plain `int`, resolves to twice
+            # the ratio's sum at draw time (`units.assignment_for`'s own rule) and is
+            # by construction a whole multiple of it. `ratio_sum` is read the same
+            # "usable" way the checks above establish it, rather than re-derived: a
+            # `ratio` that is absent, empty, or already reported above by *Ratio names
+            # levels* falls back to the level count — equal allocation's implied
+            # sum — so this row does not also re-report a `ratio` shape fault the row
+            # above already owns; a well-formed `ratio` sums its own declared shares.
+            # `math.isclose` rather than a bare `%`, because `ratio`'s values may be
+            # `float` and a sum like `1.5 + 2.5` should not fail a whole-multiple test
+            # to floating-point noise.
+            if method == "blocked":
+                block_size = block.get("block_size", "auto")
+                if block_size != "auto":
+                    # **One code covers the whole malformed-value family here too**
+                    # — not a mapping's keys this time, but `_apportion`'s own
+                    # caller-side gap: `units.assignment_for` cuts the roster with
+                    # `range(0, len(keys), block_size)`, which raises a bare
+                    # `ValueError` for `0` and silently produces no blocks at all
+                    # for a negative step, and treats any non-`"auto"`, non-`int`
+                    # value (`2.5`, `"four"`, `null`) as `auto` outright rather than
+                    # reporting it — the same validate-clean-then-crash/
+                    # silently-ignore shape `E-DATA-ASSIGN-RATIO`'s non-mapping and
+                    # non-positive branches close for `ratio`. Checked before the
+                    # whole-multiple arithmetic below and unconditionally — not
+                    # gated on `ratio_sum > 0`, which every reachable path already
+                    # makes true (`_usable_ratio_share` requires a positive value
+                    # and `_declared_levels` a non-empty level list) and so could
+                    # never itself skip this branch, only read as though it might.
+                    if (
+                        isinstance(block_size, bool)
+                        or not isinstance(block_size, int)
+                        or block_size <= 0
+                    ):
+                        c.error(
+                            "E-DATA-ASSIGN-BLOCK-SIZE",
+                            f"data.units.assign.{axis}.block_size",
+                            f"is {block_size!r}, which is not a positive whole "
+                            f"number of units — a block is a count to cut the "
+                            f"roster into, and only `\"auto\"` or a positive "
+                            f"`int` names one",
+                        )
+                    else:
+                        levels_for_block_size = _declared_levels(sweep, axis)
+                        if levels_for_block_size is not None:
+                            usable_ratio = (
+                                ratio
+                                if isinstance(ratio, dict)
+                                and ratio
+                                and set(ratio) == set(levels_for_block_size)
+                                and all(_usable_ratio_share(v) for v in ratio.values())
+                                else None
+                            )
+                            ratio_sum = (
+                                sum(usable_ratio[level] for level in levels_for_block_size)
+                                if usable_ratio is not None
+                                else len(levels_for_block_size)
+                            )
+                            quotient = block_size / ratio_sum
+                            if not math.isclose(quotient, round(quotient), abs_tol=1e-9):
+                                c.error(
+                                    "E-DATA-ASSIGN-BLOCK-SIZE",
+                                    f"data.units.assign.{axis}.block_size",
+                                    f"is {block_size}, which is not a whole "
+                                    f"multiple of `ratio`'s sum ({ratio_sum!r}) — a "
+                                    f"block must be a whole multiple of the ratio's "
+                                    f"sum, or it can't hold each arm's share. Use a "
+                                    f"multiple of {ratio_sum!r}, or `auto`",
+                                )
         else:
             # `method == "by_attribute"`, the one value neither elif above caught —
             # the branch where `from` and the axis's declared `levels` mean anything

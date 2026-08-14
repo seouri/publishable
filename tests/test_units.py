@@ -1210,27 +1210,6 @@ def test_assignment_for_resolves_from_against_the_axis_name_and_reads_no_other_c
     assert e.value.code == "E-DATA-ASSIGN-LEVELS"
 
 
-@pytest.mark.parametrize("method", [m for m in DRAWN_ASSIGN_METHODS if m != "random"])
-def test_assignment_for_refuses_a_drawn_method_rather_than_reading_a_column(method: str):
-    """An explicit hole until task 10, not a silent fallback: a drawn
-    axis's units carry no arm attribute, so falling back to `arms_of` would
-    either raise about a column nobody declared or partition on an unrelated
-    one. The fixture's units DO carry `arm`, so a fallback would succeed
-    silently here — which is exactly why the assertion is `NotImplementedError`
-    and not a `ContractError` about a missing column.
-
-    Filtered out of `DRAWN_ASSIGN_METHODS` rather than parametrized over it
-    directly, because task 8 makes `random` an exception to this test's own
-    premise: it now draws instead of raising, and its own tests below cover
-    it. `blocked` is what remains — still task 10's, so the tuple `validate`
-    reads `E-DATA-ASSIGN-DRAWN` from is still one source of truth for it."""
-    roster = _arm_roster12()
-    with pytest.raises(NotImplementedError) as e:
-        assignment_for(roster, "arm", {"method": method}, ["control", "treatment"], "digest")
-    assert method in str(e.value)
-    assert "draws its allocation" in str(e.value)
-
-
 def test_assignment_for_refuses_a_method_it_has_never_heard_of():
     """**Fail-closed, and this is the regression it prevents.** `assignment_for`
     allows `by_attribute` and refuses everything else, rather than denying the
@@ -1638,6 +1617,136 @@ def test_a_clustered_draws_zero_weight_level_refuses_rather_than_dividing_by_zer
     assert e.value.code == "E-DATA-ASSIGN-LEVELS"
     assert "a" in str(e.value)
     assert "resolves zero of them" in str(e.value)
+
+
+def test_a_blocked_draw_balances_within_every_whole_block():
+    """14 units, ratio `{}` (equal allocation), `block_size: auto` = 4. 14 is
+    NOT a multiple of 4: three whole blocks of 4 and a trailing 2, so a draw
+    that balanced only *overall* — 7 control / 7 treatment, exactly what
+    `random` also gives this roster — would pass a size assertion on the
+    whole roster and still fail this one, which checks every block on its
+    own. Asserting each whole block holds exactly 2 and 2, and the trailing
+    partial block's actual composition, is what a mutant that shuffled the
+    full 14 and cut it into 7/7 (§ Global Constraints' 'balance overall
+    rather than per block') cannot pass: nothing forces its arbitrary cut to
+    land 2-2 in every four-unit window.
+
+    A pinned seed makes the exact membership — not just the counts —
+    checkable, which is what the mutation for `auto`'s formula (task's
+    Global Constraints: 'auto as the ratio sum rather than twice it') needs:
+    with `ratio: {}` over two levels `auto` is twice the level count, so 4
+    here rather than 2, and a wrong `block_size` changes how the seeded RNG
+    is consumed and so changes who lands where, verified in
+    `test_auto_block_size_is_twice_the_ratio_sum` below."""
+    roster = _random_roster(14)
+    block = {"method": "blocked", "seed": 11}
+    plan = assignment_for(roster, "arm", block, ["control", "treatment"], "digest")
+
+    assert plan.seed == 11
+    assert plan.members["control"] == ("u00", "u01", "u04", "u05", "u08", "u11", "u13")
+    assert plan.members["treatment"] == ("u02", "u03", "u06", "u07", "u09", "u10", "u12")
+
+    control = set(plan.members["control"])
+    treatment = set(plan.members["treatment"])
+    keys = [u.key for u in roster]
+    for block_start in (0, 4, 8):
+        chunk = set(keys[block_start : block_start + 4])
+        assert len(chunk & control) == 2, f"block at {block_start} is not 2 control"
+        assert len(chunk & treatment) == 2, f"block at {block_start} is not 2 treatment"
+
+    # The trailing partial block (positions 12-13, only 2 units): its actual
+    # composition, asserted rather than left unchecked because it is the one
+    # block a "whole blocks only" check would silently skip.
+    trailing = set(keys[12:14])
+    assert trailing & control == {"u13"}
+    assert trailing & treatment == {"u12"}
+
+
+def test_blocked_reads_the_roster_order_as_data():
+    """§ Where units come from: `blocked` is 'the one declaration that reads
+    the order as data'. Same 14 units, same pinned seed, only `u00` and `u05`
+    swapped — a reorder confined to one pair, so a size-based assertion could
+    never catch it either way.
+
+    THE CONTROL: `random` over the same two rosters gives the identical
+    per-unit assignment. It is not order-blind in general — a full reversal
+    at this seed *does* move units across arms — but its single whole-roster
+    shuffle only cares which *positions* land in each arm's slice, not which
+    unit occupies a position; swapping two units who are both already in
+    that same position-set changes nothing about who ends up where. `u00`
+    and `u05` are exactly such a pair at seed 1 (verified: both `random`'s
+    positions land in `control`). Under `blocked` the same swap moves each
+    of them into a different *block*, and each block's within-block draw is
+    independent, so `u00` and `u05` end up trading arms — the property a
+    mutant that shuffled the whole roster before blocking (§ Global
+    Constraints: 'shuffle the roster before blocking') would not reproduce,
+    since that mutant's blocks would no longer be the roster's own
+    consecutive windows and this specific pair's fate would not track this
+    swap."""
+    roster = _random_roster(14)
+    keys = [u.key for u in roster]
+    swapped_keys = keys[:]
+    swapped_keys[0], swapped_keys[5] = swapped_keys[5], swapped_keys[0]
+    swapped = UnitList([Unit(key=k, paths=(), attributes={}) for k in swapped_keys])
+
+    levels = ["control", "treatment"]
+
+    random_block = {"method": "random", "seed": 1}
+    random_plan = assignment_for(roster, "arm", random_block, levels, "digest")
+    random_plan_swapped = assignment_for(swapped, "arm", random_block, levels, "digest")
+    random_map = {k: lvl for lvl, ks in random_plan.members.items() for k in ks}
+    random_map_swapped = {
+        k: lvl for lvl, ks in random_plan_swapped.members.items() for k in ks
+    }
+    assert random_map == random_map_swapped, (
+        "the control must report: random reads no order, so the same units "
+        "in a different order must land in the same arms"
+    )
+
+    blocked_block = {"method": "blocked", "seed": 1}
+    blocked_plan = assignment_for(roster, "arm", blocked_block, levels, "digest")
+    blocked_plan_swapped = assignment_for(swapped, "arm", blocked_block, levels, "digest")
+    blocked_map = {k: lvl for lvl, ks in blocked_plan.members.items() for k in ks}
+    blocked_map_swapped = {
+        k: lvl for lvl, ks in blocked_plan_swapped.members.items() for k in ks
+    }
+    assert blocked_map != blocked_map_swapped
+    assert blocked_map["u00"] == "treatment"
+    assert blocked_map["u05"] == "control"
+    assert blocked_map_swapped["u00"] == "control"
+    assert blocked_map_swapped["u05"] == "treatment"
+    # Every other unit is unmoved by the swap — it is exactly this pair the
+    # reorder touches, and both sit in different blocks (`u00` in the first,
+    # `u05` in the second), which is why `blocked`, and only `blocked`, feels
+    # the swap at all.
+    for key in keys:
+        if key not in ("u00", "u05"):
+            assert blocked_map[key] == blocked_map_swapped[key]
+
+
+def test_auto_block_size_is_twice_the_ratio_sum():
+    """`{control: 1, treatment: 2}` -> sum 3 -> `auto` 6. And with `ratio: {}`
+    over two levels -> `auto` 4, per § Allocation.
+
+    Both fixtures are chosen so `auto = 2 x sum` and the mutant `auto = sum`
+    disagree on *exact membership* at the same seed, not merely on size:
+    over a roster exactly one `auto`-block long, `_apportion`'s per-block
+    counts happen to sum to the identical totals under either reading (the
+    fixture trap the plan's Global Constraints name, restated for this
+    formula specifically), so only the precise unit-level draw — which
+    depends on whether the seeded shuffle consumes one block of `2 x sum`
+    positions or two of `sum` — tells them apart."""
+    roster = _random_roster(6)
+    block = {"method": "blocked", "ratio": {"control": 1, "treatment": 2}, "seed": 1}
+    plan = assignment_for(roster, "arm", block, ["control", "treatment"], "digest")
+    assert plan.members["control"] == ("u03", "u05")
+    assert plan.members["treatment"] == ("u00", "u01", "u02", "u04")
+
+    roster4 = _random_roster(4)
+    block2 = {"method": "blocked", "seed": 2}
+    plan2 = assignment_for(roster4, "arm", block2, ["a", "b"], "digest")
+    assert plan2.members["a"] == ("u00", "u03")
+    assert plan2.members["b"] == ("u01", "u02")
 
 
 def test_arm_members_reduces_arms_of_across_the_resolved_conditions():

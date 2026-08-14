@@ -962,7 +962,7 @@ def arms_of(roster: UnitList, column: str, levels: Sequence[str]) -> dict[str, l
 
 DRAWN_ASSIGN_METHODS = ("random", "blocked")
 """The `validate.ASSIGN_METHODS` values that draw an arm rather than read one
-already assigned — **one tuple, read by both the refusal and the draw**.
+already assigned — **one tuple, defined here, read by `validate` alone now**.
 
 `validate` imports it to report `E-DATA-ASSIGN-DRAWN` (a refusal of a *value*,
 distinct from `E-DATA-ASSIGN-METHOD`'s refusal of an absent or out-of-enum one).
@@ -970,17 +970,20 @@ It lives here rather than in `validate` because `units.py` depends on nothing
 there, and because `validate`'s use of it is temporary — task 14 retires
 `E-DATA-ASSIGN-DRAWN` — while realizing a draw is permanent.
 
-`assignment_for` below no longer reads it for `random`, which task 8 realizes
-unclustered and task 9 realizes beside a declared `cluster_by` — `blocked` is
-what still routes through the message this tuple names, and it is
-`DRAWN_ASSIGN_METHODS` membership, not tuple *order* or index, that still
-consults it.
+`assignment_for` below no longer reads it at all: task 8 realized `random`
+(unclustered, then task 9 beside a declared `cluster_by`) and task 10 realized
+`blocked` the same way, each in its own branch dispatched on `method` directly.
+The generic fallback below them no longer distinguishes a member of this tuple
+from any other unrecognized `method` string — every value that reaches it is,
+by construction, one neither branch above claimed, so there is nothing left for
+this tuple to pick a message for. It survives here **only** as `validate`'s
+source of truth, and only until task 14 retires the code it names.
 
-**It is not what makes `assignment_for` fail closed**, and must not be mistaken
-for that: `assignment_for` allows `by_attribute` and `random` and refuses
-everything else, so a fourth drawing method added to the enum and to nothing
-else raises rather than reading a column, whether or not anyone remembers to
-add it here. This tuple only picks which message that raise carries.
+**It was never what made `assignment_for` fail closed**, and must not be
+mistaken for that even in memory: `assignment_for` allows `by_attribute`,
+`random`, and `blocked`, and refuses everything else, so a fourth drawing
+method added to the enum and to nothing else raises rather than reading a
+column, whether or not anyone remembers to add it here.
 """
 
 
@@ -1097,11 +1100,17 @@ def assignment_for(
     - `random`, unstratified (no non-empty `stratify_by`), draws one — see
       below, whole clusters when `clusters` is given and individual units
       when it is `None`.
+    - `blocked`, unstratified and unclustered (`clusters is None`), draws one
+      too — see below. `blocked` beside a declared `cluster_by` raises
+      `NotImplementedError` rather than realizing it: a block fills to an
+      exact unit count and a cluster is indivisible, so no block size honours
+      both, and `validate` refuses the combination outright as
+      `E-DATA-ASSIGN-BLOCKED-CLUSTER` (task 11) — this build does not
+      implement the combination at all rather than silently picking one rule
+      over the other.
     - **Every other value raises `NotImplementedError`** — an allowlist, not a
-      denylist of the methods that happen to draw today. `blocked` raises the
-      message `DRAWN_ASSIGN_METHODS` selects, until task 10 builds it; any
-      other string raises as a method this build cannot realize.
-      Fail-closed costs nothing here, because `validate` already refuses an
+      denylist of the methods that happen to draw today. Fail-closed costs
+      nothing here, because `validate` already refuses an
       out-of-enum method outright (`E-DATA-ASSIGN-METHOD`) before `run` can
       reach this — and it is what keeps a *fifth* method, added to
       `validate.ASSIGN_METHODS` and to nothing else, from validating clean
@@ -1171,6 +1180,31 @@ def assignment_for(
     `stratify_by: []` `init` writes stays on the draw path. `strata` is
     therefore `()` on every plan this returns, and truthfully: the only
     declaration it could record is one that no longer reaches the draw.
+
+    **`blocked` is realized here too, and is what reads the roster's order
+    as data** (`reference.md` § Where units come from): the resolved roster
+    is cut into consecutive chunks of `assign.<axis>.block_size` units —
+    `"auto"` (or any declared value that isn't a plain `int`) resolving to
+    twice `ratio`'s sum, `validate`'s own whole-multiple rule keeping an
+    explicit value a multiple of that sum so every *whole* block fills each
+    arm exactly. Each chunk, including a final one shorter than
+    `block_size` when the roster doesn't divide evenly, is apportioned by
+    the same `_apportion` `random` uses, turned into a label list (each
+    level repeated its apportioned count of times) and shuffled *in place*
+    with one `random.Random(assign_seed_for(...))` instance whose state
+    carries from block to block — so the seed determines every block's
+    permutation together, not each in isolation — then zipped onto the
+    chunk's units in roster order. Reordering the roster therefore changes
+    which units share a block and so changes the draw, where `random`'s
+    single whole-roster shuffle does not carry any such structure for a
+    reorder to disturb. Coverage and non-emptiness are checked the same way
+    across the *whole* roster, not per block: a level with at least one
+    unit in some block is fine even if another block apportioned it none,
+    and only a level with zero units in *every* block raises
+    `E-DATA-ASSIGN-LEVELS` — the same code and the same argument as
+    `random`'s zero-size arm, one whole roster later. Whole clusters and a
+    declared `stratify_by` are both unrealized under `blocked`, refused the
+    same way and for the same reasons `random`'s are above.
     """
     # One narrowing of the block, read by every branch below: an absent or
     # non-mapping block declares nothing, which is what `{}` says here — and
@@ -1236,12 +1270,70 @@ def assignment_for(
             members[level] = tuple(shuffled[start : start + size])
             start += size
         return ArmPlan(levels=tuple(levels), members=members, seed=seed, strata=())
-    if method is not None and method != "by_attribute":
-        if method in DRAWN_ASSIGN_METHODS:
+    if method == "blocked":
+        if clusters is not None:
             raise NotImplementedError(
-                f"`data.units.assign.{axis}.method: {method}` draws its allocation, and this "
-                "build does not draw one yet (`validate` refuses it as `E-DATA-ASSIGN-DRAWN`)"
+                f"`data.units.assign.{axis}.method: blocked` beside a declared `cluster_by` "
+                "is not realized here — a block fills to an exact unit count and a cluster "
+                "is indivisible, so no block size honours both. `validate` refuses this "
+                "combination outright, as `E-DATA-ASSIGN-BLOCKED-CLUSTER`; use `random` for "
+                "a cluster-randomized design"
             )
+        if block_map.get("stratify_by"):
+            raise NotImplementedError(
+                f"`data.units.assign.{axis}.stratify_by` names a balance this build's "
+                "`blocked` draw does not perform beside its own within-block balance — "
+                "stratified drawing is task 12; until then, draw without `stratify_by` or "
+                "read an arm a trial system already assigned"
+            )
+        ratio = block_map.get("ratio")
+        weights = (
+            [ratio[level] for level in levels]
+            if isinstance(ratio, dict) and ratio
+            else [1] * len(levels)
+        )
+        ratio_sum = sum(weights)
+        declared_block_size = block_map.get("block_size", "auto")
+        block_size = (
+            declared_block_size
+            if isinstance(declared_block_size, int) and not isinstance(declared_block_size, bool)
+            else 2 * ratio_sum
+        )
+        seed = assign_seed_for(block_map, axis, digest, roster)
+        rng = random.Random(seed)
+        keys = [unit.key for unit in roster]
+        drawn: dict[str, list[str]] = {level: [] for level in levels}
+        for start in range(0, len(keys), block_size):
+            chunk = keys[start : start + block_size]
+            counts = _apportion(len(chunk), weights)
+            block_labels: list[str] = []
+            for level, count in zip(levels, counts, strict=True):
+                block_labels.extend([level] * count)
+            rng.shuffle(block_labels)
+            for key, label in zip(chunk, block_labels, strict=True):
+                drawn[label].append(key)
+        empty = [level for level in levels if not drawn[level]]
+        if empty:
+            raise ContractError(
+                f"the drawn allocation for axis {axis!r} leaves no unit in "
+                f"{', '.join(empty)} — {len(roster)} units, blocked in groups of "
+                f"{block_size} and apportioned within each block by "
+                f"{dict(ratio) if isinstance(ratio, dict) and ratio else 'equal shares'}, "
+                "gives that level no unit across every block. Every declared level needs at "
+                "least one unit, or that arm's condition resolves zero of them; widen the "
+                "ratio, shrink the block, or resolve a larger roster",
+                code="E-DATA-ASSIGN-LEVELS",
+            )
+        blocked_members: dict[str, tuple[str, ...]] = {
+            level: tuple(keys_) for level, keys_ in drawn.items()
+        }
+        return ArmPlan(levels=tuple(levels), members=blocked_members, seed=seed, strata=())
+    if method is not None and method != "by_attribute":
+        # `method in DRAWN_ASSIGN_METHODS` is not checked here: both of that tuple's
+        # members (`random`, `blocked`) are handled in their own branches above, so
+        # nothing reaches this point already knowing which method it is — everything
+        # that does is a method this build has no branch for at all, `by_attribute`'s
+        # allowlist failing closed rather than falling back to a column read.
         raise NotImplementedError(
             f"`data.units.assign.{axis}.method: {method!r}` is not a method this build can "
             "realize an allocation for; `by_attribute` is the one it reads a column for, and "

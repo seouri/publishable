@@ -8698,6 +8698,130 @@ def test_a_full_ratio_under_a_drawn_method_is_accepted():
     assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-DRAWN"]
 
 
+def test_an_explicit_block_size_must_be_a_whole_multiple_of_the_ratio_sum(write_config):
+    """*Block size fills the arms*: `block_size: 3` with `ratio: {control: 1,
+    treatment: 1}` (sum 2) "can't hold each arm's share" — 3 does not divide
+    into two equal-share slices. **The control is 4**, which can (twice the
+    sum, the value `auto` itself would pick) — it must report only the
+    method's own `E-DATA-ASSIGN-DRAWN`, with no new finding, so this test
+    still has teeth once task 14 retires that code and the accepted set
+    becomes empty."""
+    ratio = {"control": 1, "treatment": 1}
+    found = _error_codes(
+        write_config(_between({"arm": {"method": "blocked", "ratio": ratio, "block_size": 3}}))
+    )
+    assert found == {"E-DATA-ASSIGN-DRAWN", "E-DATA-ASSIGN-BLOCK-SIZE"}
+
+    found_ok = _error_codes(
+        write_config(_between({"arm": {"method": "blocked", "ratio": ratio, "block_size": 4}}))
+    )
+    assert found_ok == {"E-DATA-ASSIGN-DRAWN"}
+
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": _ARM_AXIS}},
+        {
+            "allocation": "between",
+            "assign": {"arm": {"method": "blocked", "ratio": ratio, "block_size": 3}},
+        },
+        None,
+        c,
+    )
+    assert {f.code for f in c.findings} == {"E-DATA-ASSIGN-DRAWN", "E-DATA-ASSIGN-BLOCK-SIZE"}
+    finding = next(f for f in c.findings if f.code == "E-DATA-ASSIGN-BLOCK-SIZE")
+    assert finding.path == "data.units.assign.arm.block_size"
+    assert "is 3" in finding.message
+    assert "'2'" in finding.message or "2" in finding.message
+
+
+@pytest.mark.parametrize("bad_block_size", [0, -2, 2.5, "four", None, True])
+def test_a_non_positive_or_non_int_block_size_is_refused(write_config, bad_block_size):
+    """`units.assignment_for` cuts the roster with `range(0, len(keys), block_size)`:
+    `0` raises a bare `ValueError` (not a diagnostic — `main` would print a
+    traceback where every other refusal prints a code), a negative step
+    silently walks the range backwards from 0 and produces no blocks at all,
+    and anything that is neither `"auto"` nor an `int` (`2.5`, `"four"`,
+    `null`) would otherwise be treated as `auto` with no report at all — the
+    same validate-clean-then-crash/silently-ignore shape `E-DATA-ASSIGN-RATIO`
+    closes for a non-mapping or non-positive `ratio`. One code covers the
+    whole family, folded in beside the whole-multiple check rather than left
+    for `units.py` to discover.
+
+    `True` is included deliberately: it is `!= "auto"` (so it reaches this
+    branch at all) and `isinstance(True, int)` is also true in Python, so a
+    guard that stopped at that check alone would treat it as the legal value
+    `1` — 1 does not divide the fixture's ratio sum of 2 either, but for the
+    wrong reason, and `bool` is excluded explicitly for the same reason
+    `_usable_ratio_share` excludes it from `ratio`."""
+    found = _error_codes(
+        write_config(
+            _between(
+                {
+                    "arm": {
+                        "method": "blocked",
+                        "ratio": {"control": 1, "treatment": 1},
+                        "block_size": bad_block_size,
+                    }
+                }
+            )
+        )
+    )
+    assert found == {"E-DATA-ASSIGN-DRAWN", "E-DATA-ASSIGN-BLOCK-SIZE"}
+
+
+def test_a_bool_block_size_is_refused_even_when_its_int_value_would_divide_evenly(
+    write_config,
+):
+    """The sibling `test_a_non_positive_or_non_int_block_size_is_refused[True]` case
+    over `ratio: {control: 1, treatment: 1}` (sum 2) is refused for two reasons at
+    once — `True` is a `bool`, and `int(True) == 1` doesn't divide 2 either — so it
+    cannot isolate which one the check is actually testing for. `ratio: {control:
+    0.5, treatment: 0.5}` (sum 1) isolates it: `1` **would** be a legal whole
+    multiple of `1`, so a guard that fell through to `isinstance(block_size, int)`
+    without excluding `bool` first would accept `True` here. It doesn't."""
+    found = _error_codes(
+        write_config(
+            _between(
+                {
+                    "arm": {
+                        "method": "blocked",
+                        "ratio": {"control": 0.5, "treatment": 0.5},
+                        "block_size": True,
+                    }
+                }
+            )
+        )
+    )
+    assert found == {"E-DATA-ASSIGN-DRAWN", "E-DATA-ASSIGN-BLOCK-SIZE"}
+
+
+def test_an_auto_block_size_is_never_refused_for_not_dividing_the_ratio_sum(write_config):
+    """`block_size: "auto"` — the literal string `init` writes — is the one
+    non-`int` `block_size` this check accepts rather than folding into
+    `E-DATA-ASSIGN-BLOCK-SIZE`'s malformed-value family
+    (`test_a_non_positive_or_non_int_block_size_is_refused` covers every
+    other non-`int` value): it resolves to twice `ratio`'s sum at draw time
+    (`units.assignment_for`'s own rule) and so is a whole multiple of it by
+    construction, never reaching the whole-multiple arithmetic at all. The
+    guard is an exact-match `block_size != "auto"`, not an `isinstance`
+    check, so this is the one string this row must not mistake for
+    malformed."""
+    found = _error_codes(
+        write_config(
+            _between(
+                {
+                    "arm": {
+                        "method": "blocked",
+                        "ratio": {"control": 1, "treatment": 1},
+                        "block_size": "auto",
+                    }
+                }
+            )
+        )
+    )
+    assert found == {"E-DATA-ASSIGN-DRAWN"}
+
+
 def test_a_non_empty_stratify_by_under_by_attribute_is_refused():
     """§ Allocation: "The same is true of `assign.<axis>.stratify_by`: under
     `method: by_attribute` it would describe how a draw was balanced when none
