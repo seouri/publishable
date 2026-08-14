@@ -9403,6 +9403,32 @@ def test_the_skip_is_per_block_and_not_per_config():
     }
 
 
+def test_a_drawn_block_whose_levels_do_not_resolve_draws_nothing(write_config, tmp_path):
+    """**The `levels` guard, asserted rather than merely present.** *Every arm
+    draws units* needs a level list to apportion across, and `_declared_levels`
+    returns `None` for an axis whose `sweep.groups` entry declares an empty (or
+    absent, or non-`str`) `levels` — `sweep.groups`'s own shape fault, reported
+    on its own terms and not this row's to restate.
+
+    Dropping that guard is not equivalent: `units.assignment_for` would be
+    handed `None` and raise `TypeError: object of type 'NoneType' has no len()`
+    **out of `validate`**, a traceback where a diagnostic belongs, from a module
+    contracted to collect findings and never raise. The assertion is the exact
+    set, so the crash and a spurious extra finding both fail it: an axis with no
+    levels expands into no conditions, which `E-SWEEP-EXPANDS-EMPTY` is the
+    backstop for."""
+    _wide_roster(tmp_path)
+    found = _error_codes(
+        write_config(
+            _between(
+                {"arm": {"method": "random"}},
+                axes=[{"by": "arm", "levels": []}],
+            )
+        )
+    )
+    assert found == {"E-SWEEP-EXPANDS-EMPTY"}
+
+
 def test_a_blocked_draw_that_starves_an_arm_over_this_roster_is_refused():
     """The same row under the other drawing method, which reaches it by a
     different route: `blocked` apportions per block rather than over the whole
@@ -9431,18 +9457,30 @@ def test_a_blocked_draw_that_starves_an_arm_over_this_roster_is_refused():
 
 
 def test_the_draw_check_does_not_reach_a_stratified_or_clustered_block():
-    """**The gate, and the residue it leaves, pinned rather than described.**
+    """**The gate, and the residue it leaves — three draws, two reasons —
+    pinned rather than described.**
+
     *Every arm draws units* realizes the draw with a placeholder digest, which
     is sound only where the realized sizes do not depend on the seed: with no
     strata and no clusters they are a function of the roster size and the ratio
     alone. `_assign_whole_clusters_by_ratio` shuffles the cluster order before
-    its size sort, so which arm is left empty there IS seed-dependent, and a
-    stratum naming an earlier axis needs a membership only the run's own
-    ordered draw produces.
+    its size sort, so which arm is left empty there IS seed-dependent.
 
-    So both of these validate clean and can still raise at the draw. That is
-    the recorded limit of this row (`reference.md` § Errors `validate` reports),
-    and this test is what keeps it from being widened by accident — widening it
+    **The stratified halves are excluded for a different reason, and the
+    attribute one is deliberately here to say so.** An attribute-stratified
+    draw is seed-*independent* — `_stratum_groups` groups by the column's
+    values in roster order and `_apportion` runs inside each group, so the
+    fixture below raises `E-DATA-ASSIGN-LEVELS` at the draw at every seed. It
+    is excluded because `_stratum_groups` raises `NotImplementedError` for a
+    declared attribute no resolved unit carries — a broken roster *Allocation
+    strata exist* passes, since that row reads the declaration — and `validate`
+    is contracted to collect findings rather than raise. A stratum naming an
+    earlier axis is excluded for the reason the digest cannot cover: it needs a
+    membership only the run's own ordered draw produces.
+
+    So all three validate clean and can still raise at the draw. That is the
+    recorded limit of this row (`reference.md` § Errors `validate` reports), and
+    this test is what keeps it from being widened by accident — widening it
     correctly means changing this test, not discovering it passes anyway."""
     stratified = {
         "attributes": ["site"],
@@ -9464,6 +9502,21 @@ def test_the_draw_check_does_not_reach_a_stratified_or_clustered_block():
     c = Collector()
     _check_assign({"sweep": {"groups": _ARM_AXIS}}, stratified, roster, c)
     assert [f.code for f in c.findings] == []
+    # The other half of the claim: this exact declaration DOES starve an arm,
+    # at every seed — two strata of five, `[0, 5]` in each — so the silence
+    # above is a check declining to run, not a config that is fine.
+    from publishable.errors import ContractError
+
+    for seed in range(5):
+        with pytest.raises(ContractError) as exc:
+            assignment_for(
+                roster,
+                "arm",
+                {**stratified["assign"]["arm"], "seed": seed},
+                ["control", "treatment"],
+                "d",
+            )
+        assert exc.value.code == "E-DATA-ASSIGN-LEVELS"
 
     clustered = {
         "attributes": ["site"],

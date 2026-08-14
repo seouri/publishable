@@ -2210,22 +2210,39 @@ def _check_assign(
             # a second producer of membership inside the check written to close
             # a gap.
             #
-            # **Gated to the unstratified, unclustered draw, and the residue is
-            # recorded rather than silently skipped** (`reference.md` §
-            # Errors `validate` reports, this code's row). What the gate buys is
-            # digest-independence: with no strata and no clusters, every level's
-            # realized size is a function of `(len(roster), ratio)` alone —
-            # `_apportion` decides the sizes and the shuffle only decides which
-            # unit lands in which — so the placeholder digest below cannot make
-            # this check answer differently from the run's own draw. Neither
-            # other path has that property. `_assign_whole_clusters_by_ratio`
-            # shuffles the cluster order before its stable size sort, so which
-            # arm is left with no cluster is genuinely seed-dependent, and a
-            # placeholder-digest draw could be wrong in either direction. A
+            # **Gated to the unstratified, unclustered draw, and the residue —
+            # three draws excluded for two different reasons — is recorded
+            # rather than silently skipped** (`reference.md` § Errors `validate`
+            # reports, this code's row).
+            #
+            # The first reason is digest-independence: with no strata and no
+            # clusters, every level's realized size is a function of
+            # `(len(roster), ratio)` alone — `_apportion` decides the sizes and
+            # the shuffle only decides which unit lands in which — so the
+            # placeholder digest below cannot make this check answer differently
+            # from the run's own draw. `"validate"` is `_check_replication`'s own
+            # placeholder convention, sound here only because of that. A
+            # clustered draw does not have the property:
+            # `_assign_whole_clusters_by_ratio` shuffles the cluster order
+            # before its stable size sort, so which arm is left with no cluster
+            # is genuinely seed-dependent and a placeholder-digest draw could be
+            # wrong in either direction.
+            #
+            # The second reason is the strata, and it is **not** the digest. A
             # stratum naming an earlier group axis needs that axis's realized
-            # membership, which only the run's own ordered draw produces.
-            # `"validate"` is `_check_replication`'s own placeholder convention
-            # for a digest, sound here only because of that gate.
+            # membership, which only the run's own ordered draw produces. A
+            # stratum naming a declared attribute would answer identically at
+            # every seed — `_stratum_groups` groups by the column's values in
+            # roster order and `_apportion` runs inside each group — so
+            # excluding it buys nothing about determinism. It is excluded
+            # because `_stratum_groups` **raises** for an attribute
+            # `data.units.attributes` declares and no resolved unit carries,
+            # which *Allocation strata exist* passes because it reads the
+            # declaration: drawing here would turn that broken roster into a
+            # traceback out of a module contracted to collect findings and never
+            # raise. Admitting it means either swallowing that raise or
+            # repeating `_stratum_groups`' precedence rule here, and both are a
+            # second rule rather than this one reaching further.
             #
             # Skipped when this block already earned a finding: a `ratio` this
             # build cannot apportion or a `block_size` it cannot honour is
