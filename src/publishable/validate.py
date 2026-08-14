@@ -2916,10 +2916,11 @@ def _check_sweep(
         # roster the level names they resolve to the same parameters, the same
         # units, and two condition directories identical at every artifact —
         # `experimental-designs.md` § Mistakes core prevents' *two identical
-        # measurements reported as two arms*, verbatim. At two or more levels
-        # `E-DATA-ALLOCATION-CONTRAST` fires beside it (the other levels' product
-        # rows cross the single baseline), but that refusal is temporary and
-        # reaches nothing at all at one level, where the run is green.
+        # measurements reported as two arms*, verbatim. Where the axis declares
+        # two or more levels, the other levels' product rows cross the single
+        # baseline and `E-DATA-ALLOCATION-CONTRAST` reports beside this code —
+        # but that refusal is temporary, and at one level there is no cross-arm
+        # comparison for it to read at all, which is where the run was green.
         #
         # The duplicate is stated for the case that produces it — a value naming
         # a level the axis declares. A baseline fixing a group path to something
@@ -2935,10 +2936,11 @@ def _check_sweep(
             "conditions hold the same units and the same parameters and their "
             "directories are identical at every artifact. Drop the level from the "
             "baseline, which then expands over the axis and gives every arm its own "
-            "reference; a named comparison between two arms is a "
-            "`statistics.contrasts` entry, whose delta this build refuses "
-            "(`E-DATA-ALLOCATION-CONTRAST`) until the unpaired estimators exist — "
-            "until then, a `summary`-step `Estimate` or two runs joined in a `study`",
+            "reference. Where the axis declares two or more levels, the comparison a "
+            "designated arm was reaching for is a `statistics.contrasts` entry naming "
+            "both conditions — whose delta this build refuses over disjoint arms "
+            "(`E-DATA-ALLOCATION-CONTRAST`) until the unpaired estimators exist, "
+            "leaving a `summary`-step `Estimate` or two runs joined in a `study`",
         )
 
     crossed_modes = parameter_axis_modes_present(sweep) if ablate else []
