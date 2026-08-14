@@ -441,6 +441,48 @@ def test_an_uninstalled_template_is_fatal(write_config):
     assert "E-TEMPLATE-UNKNOWN" in codes(write_config({"experiment_type": "llm_diagnostic"}))
 
 
+def test_an_unknown_template_still_reports_exactly_one_finding(write_config):
+    """§ Errors: the check "returns immediately after", so none of the other
+    rows appear. Assert the exact set, not that the code is present."""
+    assert codes(write_config({"experiment_type": "llm_diagnostic"})) == {"E-TEMPLATE-UNKNOWN"}
+
+
+def test_a_local_template_validates_through_the_real_path(git_repo: Path, write_config):
+    """End to end: a config naming a local template no longer draws
+    E-TEMPLATE-UNKNOWN. THE CONTROL: a config naming a template that exists
+    nowhere still draws it, so a check that stopped reporting entirely fails."""
+    templates = git_repo / "templates"
+    templates.mkdir()
+    (templates / "my_assay.py").write_text(
+        "from publishable import BaseTemplate, register_template\n\n\n"
+        '@register_template("my_assay")\n'
+        "class MyAssay(BaseTemplate):\n"
+        "    pass\n"
+    )
+
+    found = codes(write_config({"experiment_type": "my_assay", "parameters": {}}))
+    assert "E-TEMPLATE-UNKNOWN" not in found
+
+    still_missing = codes(write_config({"experiment_type": "nowhere_at_all"}))
+    assert "E-TEMPLATE-UNKNOWN" in still_missing
+
+
+def test_no_repo_means_local_discovery_is_skipped_and_generic_still_resolves(
+    write_config, monkeypatch
+):
+    """A config outside any repo. `find_repo_root` raises; the hoist must
+    swallow it. Assert the exact finding set — an added finding here would
+    break the documented early-return order."""
+    import publishable.validate as validate_mod
+    from publishable.errors import ContractError
+
+    def _no_repo(path):
+        raise ContractError("no git repository found", code="E-GIT-NO-REPO")
+
+    monkeypatch.setattr(validate_mod, "find_repo_root", _no_repo)
+    assert codes(write_config()) == set()
+
+
 def test_data_may_not_resolve_inside_the_repo(write_config, git_repo: Path):
     inside = str(git_repo / "results")
     assert "E-DATA-IN-REPO" in codes(write_config({"data.output_dir": inside}))
@@ -3269,7 +3311,7 @@ def test_a_template_cross_field_rule_is_reported(write_config, monkeypatch):
         def validate(self, config):
             return ["a cross-field rule was broken"]
 
-    monkeypatch.setattr(validate_mod, "get_template", lambda name: RuleBreaker())
+    monkeypatch.setattr(validate_mod, "get_template", lambda name, repo_root=None: RuleBreaker())
     assert "E-TEMPLATE-RULE" in codes(write_config())
 
 

@@ -492,7 +492,15 @@ def validate_config(
         return None  # every later check indexes into a block already known malformed
 
     name = doc.get("experiment_type", "")
-    template = get_template(name)
+    try:
+        repo_root: Path | None = find_repo_root(config_path)
+    except ContractError:
+        # No repo at all. That is `_check_data`'s finding to make (or not), and
+        # there is no `templates/` to discover locally, so local discovery is
+        # skipped rather than reported here — `generic` still resolves as a
+        # core template regardless.
+        repo_root = None
+    template = get_template(name, repo_root)
     if template is None:
         c.error(
             "E-TEMPLATE-UNKNOWN",
@@ -504,13 +512,6 @@ def validate_config(
 
     entrypoint = doc.get("entrypoint")
     if experiment is None and isinstance(entrypoint, str) and entrypoint:
-        try:
-            repo_root: Path | None = find_repo_root(config_path)
-        except ContractError:
-            # No repo at all. That is `_check_data`'s finding to make (or not), and
-            # there is no `src/` to import from, so the entrypoint check is skipped
-            # rather than reported as an import failure it did not cause.
-            repo_root = None
         try:
             if repo_root is not None:
                 experiment = load_experiment(repo_root, entrypoint)
