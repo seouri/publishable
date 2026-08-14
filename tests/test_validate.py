@@ -6603,17 +6603,28 @@ _GROUPS_CLUSTER_ARMS = {
     "control": ["c0", "c1", "c2", "c3", "c4", "c5", "c6"],
     "treatment": ["t0", "t1", "t2", "t3", "t4"],
 }
-# Every site spans both arms (A: c0,c1,t0; B: c2,c3,t1,t2; C: c4,c5,c6,t3,t4),
-# and `control` alone touches all three sites — the two ways task 12's own
-# 7/5 arm fixture and `test_runner.py`'s 5-unit/3-cluster harness do NOT cross,
-# since neither carries the other's partitioning attribute at all. `by_attribute`
+# Sites `A` and `B` span both arms (A: c0,c1,t0; B: c2,c3,t1,t2), and `control`
+# alone touches three distinct sites — the crossing task 12's own 7/5 arm
+# fixture and `test_runner.py`'s 5-unit/3-cluster harness do NOT have, since
+# neither carries the other's partitioning attribute at all. `by_attribute`
 # reads the arm rather than drawing it (§ Clustered units), and a cluster
 # spanning two arms is documented as correct under that method — this fixture
 # is not the matched case-control design that requires it, but it is legal
 # under it, which is what this test is checking is still true.
+#
+# `C` and `D` are arm-exclusive (`C` only in `control`, `D` only in
+# `treatment`) — kept in sync with `tests/test_cli.py`'s identical mapping,
+# whose own end-to-end execution test needed at least one arm-exclusive site
+# on each side to discriminate a whole-roster cluster count from either arm's
+# own (review found the first, all-crossing draft could not: every site being
+# shared made both arms' correct count and the whole roster's coincide at 3).
+# This validate-level test's own assertions are declaration-level only
+# (`_check_cluster_by` reads `attributes`, not per-unit values), so the change
+# does not affect what it checks — kept in sync purely so the "same design"
+# claim stays true rather than because this test needs the discrimination.
 _GROUPS_CLUSTER_SITES = {
     "c0": "A", "c1": "A", "c2": "B", "c3": "B", "c4": "C", "c5": "C", "c6": "C",
-    "t0": "A", "t1": "B", "t2": "B", "t3": "C", "t4": "C",
+    "t0": "A", "t1": "B", "t2": "B", "t3": "D", "t4": "D",
 }
 
 

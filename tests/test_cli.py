@@ -704,16 +704,26 @@ def test_groups_between_and_by_attribute_reach_all_three_narrowed_call_sites(
 # forces no `baseline`/`statistics.contrasts` beside the axis, since either
 # would draw `E-DATA-CLUSTER-CONTRAST`/`E-DATA-ALLOCATION-CONTRAST` instead of
 # validating), but validating clean is exactly what lets the same combination
-# execute — nothing before this pinned that it actually does. Same fixture as
-# `tests/test_validate.py`'s `_groups_cluster_doc` (7 `control`/5 `treatment`
-# over 3 sites, every site spanning both arms, `control` alone touching all
-# three), reused here rather than re-invented so the two tests are provably
-# about the same design.
+# execute — nothing before this pinned that it actually does.
+#
+# **Fixture, corrected after review found the first draft could not fail.**
+# The original mapping put every site in both arms, so the arm-scoped and the
+# whole-roster cluster count were both 3 for both arms — no mutation anywhere
+# could be told apart. Sites `C` and `D` are now arm-exclusive (`C` only in
+# `control`, `D` only in `treatment`), while `A` and `B` still span both arms —
+# the legal shape § Clustered units documents for `by_attribute` ("a cluster
+# may span both arms") stays represented, it is just no longer the ONLY shape.
+# Whole-roster distinct sites = {A, B, C, D} = 4; each arm's own distinct sites
+# = {A, B, C} = 3 for `control`, {A, B, D} = 3 for `treatment` — so a count
+# computed over the whole roster (4) now differs from either arm's correct
+# count (3), which is the number this test needs to fail a wrong computation.
+# Same site names as `tests/test_validate.py`'s `_GROUPS_CLUSTER_SITES` (kept
+# in sync there too), so the two tests are provably about the same design.
 _GROUPS_CLUSTER_CONTROL = ["c0", "c1", "c2", "c3", "c4", "c5", "c6"]
 _GROUPS_CLUSTER_TREATMENT = ["t0", "t1", "t2", "t3", "t4"]
 _GROUPS_CLUSTER_SITE = {
     "c0": "A", "c1": "A", "c2": "B", "c3": "B", "c4": "C", "c5": "C", "c6": "C",
-    "t0": "A", "t1": "B", "t2": "B", "t3": "C", "t4": "C",
+    "t0": "A", "t1": "B", "t2": "B", "t3": "D", "t4": "D",
 }
 
 
@@ -728,14 +738,48 @@ def _groups_cluster_roster_csv() -> str:
 
 def test_groups_and_cluster_by_execute_with_per_arm_cluster_counting(tmp_path: Path):
     """`n` gains `clusters` (task 8) under a declared `cluster_by`, and this
-    proves it does so PER ARM once a `groups` axis narrows each condition's own
-    roster — not merely that the combination runs without raising. `control`
-    (7 units) and `treatment` (5 units) each resolve their own 3 clusters (every
-    site spans both arms by construction), and each condition's interval uses
-    `t_over_units_clustered`, the cluster-robust construction § Statistical
-    reporting names for a declared `cluster_by` — proving per-arm cluster
-    counting is wired all the way to a real `run.yaml`, not just to `attrition`
-    called directly."""
+    proves the figure `run.yaml` actually prints for each arm is the arm's own
+    cluster count (3 — sites A, B, and one arm-exclusive site each) rather
+    than the whole roster's (4 — A, B, C, D together), now that the fixture
+    puts a genuinely arm-exclusive site on each side.
+
+    **What this number is actually computed from, corrected after review.**
+    An earlier version of this docstring claimed the figure was "wired all the
+    way to a real `run.yaml`, not just to `attrition` called directly" — false:
+    for a RECORDED column (`pred` here), `stats.summarize_step` recomputes
+    `clusters` itself, per column, from that column's own carrier keys
+    (`stats.py`'s `column_keys` — the keys that actually carried a value for
+    this metric), and OVERWRITES whatever `runner.attrition`/`_counts`
+    computed. `attrition`'s own `cluster_count_of(clusters, completed)` call
+    never reaches `run.yaml` unmodified for a recorded metric — confirmed by
+    direct experiment: mutating THAT line (`runner.py`) to count over the
+    whole roster instead of the arm-scoped `completed` set left this test's
+    numbers **unchanged** (still 3/3), even with this corrected, discriminating
+    fixture. The one path that WOULD pass `attrition`'s own figure through
+    unmodified is a DERIVED metric (`aggregate`'s return, not a recorded
+    column) — and that combination is refused unconditionally whenever
+    `cluster_by` is declared (`E-DATA-CLUSTER-DERIVED`,
+    `test_a_clustered_derived_metric_is_refused_rather_than_drawn` pins it),
+    so no config reaches `run.yaml` with `attrition`'s own clusters figure
+    displayed for cluster_by at all. `attrition`'s own arithmetic is not
+    unpinned by this — `tests/test_runner.py`'s
+    `test_n_gains_clusters_under_a_clustered_design`,
+    `test_every_attrition_return_site_agrees_about_clusters`, and
+    `test_clusters_and_effective_are_independent_parts_of_n` each call it
+    directly and DO catch that mutation — it is simply not observable through
+    any `command_run`-produced `run.yaml`. **This test's own discriminating
+    mutation is therefore in `stats.py`, not `runner.py`**: changing line
+    ~1360's `cluster_count_of(clusters, column_keys)` to
+    `cluster_count_of(clusters, clusters.keys())` moves both arms' printed
+    figure from 3 to 4 (whole-roster count), which this test's exact-value
+    assertions below catch. Mutation-verified: applied, confirmed FAIL (both
+    arms report `clusters: 4`), `__pycache__` cleared, reverted, confirmed
+    PASS.
+
+    Each condition's interval also uses `t_over_units_clustered`, the
+    cluster-robust construction § Statistical reporting names for a declared
+    `cluster_by` — proving the construction itself, not only the count, is
+    selected correctly per arm."""
     doc = run_a_project(
         tmp_path,
         aggregate_returns="total",
