@@ -49,7 +49,7 @@ def class_name(experiment: str) -> str:
 def generate_experiment(
     *, repo_root: Path, name: str, template_name: str, input_dir: str, output_dir: str
 ) -> Path:
-    template = get_template(template_name)
+    template = get_template(template_name, repo_root)
     if template is None:
         raise ContractError(
             f"no installed template registers `{template_name}`", code="E-TEMPLATE-UNKNOWN"

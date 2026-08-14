@@ -275,6 +275,169 @@ def test_an_unwritable_output_dir_is_a_diagnostic_not_a_traceback(tmp_path: Path
     assert "E-IO-FAILED" in err
 
 
+def test_generate_experiment_resolves_a_project_local_template(tmp_path: Path):
+    """`generate_experiment` draws its template through `get_template`, same as
+    `validate`. A project holding `templates/my_assay.py` must let
+    `generate experiment --template my_assay` succeed instead of raising
+    `E-TEMPLATE-UNKNOWN` — the probe named in the scoping.
+
+    THE CONTROL: `--template nope`, naming nothing anywhere, must still raise
+    it — otherwise a fix that stopped checking entirely would pass too.
+    """
+    root = tmp_path / "proj"
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "index.csv").write_text("patient_id\np1\n")
+
+    assert main(["new", str(root)]) == EXIT_OK
+    (root / "templates" / "my_assay.py").write_text(
+        "from publishable import BaseTemplate, register_template\n\n\n"
+        '@register_template("my_assay")\n'
+        "class MyAssay(BaseTemplate):\n"
+        "    pass\n"
+    )
+
+    cfg = generate_experiment(
+        repo_root=root,
+        name="my-experiment",
+        template_name="my_assay",
+        input_dir=str(data),
+        output_dir=str(tmp_path / "results"),
+    )
+    assert cfg.exists()
+    doc = yaml.safe_load(cfg.read_text())
+    assert doc["experiment_type"] == "my_assay"
+    # THE IDENTITY CHECK: `MyAssay`'s `parameter_spec` is empty, unlike
+    # `generic`'s `analysis.*` defaults — so this pins that `my_assay` itself
+    # resolved, not merely that some template answered to that name.
+    assert doc["parameters"] is None
+
+    with pytest.raises(ContractError) as excinfo:
+        generate_experiment(
+            repo_root=root,
+            name="another-experiment",
+            template_name="nope",
+            input_dir=str(data),
+            output_dir=str(tmp_path / "results"),
+        )
+    assert excinfo.value.code == "E-TEMPLATE-UNKNOWN"
+
+
+def test_generate_experiment_cli_resolves_a_project_local_template(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The literal probe: `publishable generate experiment --template my_assay`
+    through `main`, not `generate_experiment` called directly — exercising
+    `_dispatch_generate`'s `find_repo_root(Path.cwd())` too.
+
+    THE CONTROL: `--template nope` still returns `EXIT_WRONG`.
+    """
+    root = tmp_path / "proj"
+    data = tmp_path / "data"
+    results_dir = tmp_path / "results"
+    data.mkdir()
+    (data / "index.csv").write_text("patient_id\np1\n")
+
+    assert main(["new", str(root)]) == EXIT_OK
+    (root / "templates" / "my_assay.py").write_text(
+        "from publishable import BaseTemplate, register_template\n\n\n"
+        '@register_template("my_assay")\n'
+        "class MyAssay(BaseTemplate):\n"
+        "    pass\n"
+    )
+    monkeypatch.chdir(root)
+
+    assert main(
+        [
+            "generate", "experiment", "my-experiment",
+            "--template", "my_assay",
+            "--input-dir", str(data),
+            "--output-dir", str(results_dir),
+        ]
+    ) == EXIT_OK
+    assert (root / "configs" / "my-experiment" / "config.yaml").exists()
+
+    assert main(
+        [
+            "generate", "experiment", "another-experiment",
+            "--template", "nope",
+            "--input-dir", str(data),
+            "--output-dir", str(results_dir),
+        ]
+    ) == EXIT_WRONG
+
+
+def test_command_run_aggregate_resolves_a_project_local_template(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """`command_run`'s `aggregate` block draws the template through the same
+    `get_template` core uses elsewhere. A project-local template registered
+    under a name no built-in template holds must have its own `aggregate`
+    invoked when a config's `experiment_type` names it — not silently fall
+    back to a template that returns nothing.
+
+    The recording step is `_AGGREGATE_STEP` — the same `pred` column
+    `test_a_derived_metric_reaches_run_yaml_with_a_resampled_interval` uses —
+    rather than the scaffold's default step, which records a bare `True` that
+    a resampled `aggregate` cannot draw fractional resamples from cleanly.
+
+    `MyAssay` subclasses `publishable.BaseTemplate` directly, not
+    `GenericTemplate` — the one import root a plugin writes against — so
+    `parameters` is reset to `{}` alongside the `experiment_type` override:
+    `BaseTemplate.parameter_spec` is empty, and the generic-materialized
+    `analysis.*` keys would otherwise draw `E-PARAM-UNKNOWN`.
+    """
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+
+    root = tmp_path / "proj"
+    data = tmp_path / "data"
+    results_dir = tmp_path / "results"
+    data.mkdir()
+    (data / "index.csv").write_text("patient_id\np1\np2\np3\n")
+
+    assert main(["new", str(root)]) == EXIT_OK
+    (root / "templates" / "my_assay.py").write_text(
+        "from publishable import BaseTemplate, register_template\n\n\n"
+        '@register_template("my_assay")\n'
+        "class MyAssay(BaseTemplate):\n"
+        "    def aggregate(self, units, cfg):\n"
+        "        return {\n"
+        '            "n_units_seen": float(sum(1 for _ in units))\n'
+        "        }\n"
+    )
+
+    cfg = generate_experiment(
+        repo_root=root,
+        name="cohort-pilot",
+        template_name="generic",
+        input_dir=str(data),
+        output_dir=str(results_dir),
+    )
+    doc = yaml.safe_load(cfg.read_text())
+    doc["metadata"]["description"] = "a local-template aggregate run"
+    doc["metadata"]["authors"] = ["Kyungjoon Lee"]
+    doc["experiment_type"] = "my_assay"
+    doc["parameters"] = {}
+    cfg.write_text(yaml.safe_dump(doc))
+
+    subprocess.run(["git", "add", "."], cwd=root, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "assay"],
+        cwd=root,
+        check=True,
+    )
+
+    assert main(["run", str(cfg)]) == EXIT_OK
+    run_dir = next(results_dir.glob("run_*"))
+    run = yaml.safe_load((run_dir / "run.yaml").read_text())
+    metric = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"][
+        "n_units_seen"
+    ]
+    assert metric["value"] == 3.0
+
+
 RANDOMIZED_ACROSS_CONDITIONS: dict[str, Any] = {
     "sweep": {
         "baseline": {"analysis.method": "pearson"},

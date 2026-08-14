@@ -1488,7 +1488,7 @@ def command_run(config_path: Path) -> int:
             # each condition and never pools across conditions — an unguarded
             # filter would let a same-named step from another condition mark this
             # one as having a recording step it never ran.
-            template = get_template(doc.get("experiment_type", ""))
+            template = get_template(doc.get("experiment_type", ""), repo_root)
             resample_seed_value = resample_seed(digest)
             # The roster is resolved once per run and shared across every
             # condition, so this mapping is built once too — it is the same
