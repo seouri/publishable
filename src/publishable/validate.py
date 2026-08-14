@@ -331,7 +331,18 @@ def _check_shape(doc: dict[str, Any], c: Collector) -> bool:
                 by = entry.get("by")
                 if by is not None and not isinstance(by, str):
                     _bad(f"sweep.groups[{i}].by", by, "string")
-                elif isinstance(by, str) and not by.strip():
+                elif isinstance(by, str) and not by.rsplit(".", 1)[-1].strip():
+                    # Checked on the axis name **as `label_for` renders it** —
+                    # `path.rsplit('.', 1)[-1]` — not on `by` whole. A first
+                    # version tested `by.strip()` and left `by: "arm."` open,
+                    # which renders to nothing and reaches the exact outcome
+                    # this refusal exists to prevent: driven end to end with a
+                    # matching `assign` block it produced labels `=control`/
+                    # `=treatment`, directories `00_=control`/`01_=treatment`,
+                    # and exit 0 with nothing reported. The rendered name is
+                    # what a reader sees and what a directory carries, so it is
+                    # what the rule is about.
+                    #
                     # A blank axis name is where `selector_paths` and
                     # `cli._resolved_group_axes` disagree, and the one shape where
                     # that disagreement is not a caller bug but a config anyone can
@@ -362,9 +373,9 @@ def _check_shape(doc: dict[str, Any], c: Collector) -> bool:
                     c.error(
                         "E-CONFIG-SHAPE",
                         f"sweep.groups[{i}].by",
-                        f"is blank (`{by!r}`); expected an axis name — it names the "
-                        "conditions this axis expands into and the "
-                        "`data.units.assign` block that fills them",
+                        f"renders to a blank axis name (`{by!r}`); expected one — it "
+                        "names the conditions this axis expands into, the directories "
+                        "they get, and the `data.units.assign` block that fills them",
                     )
                 levels = entry.get("levels")
                 if levels is not None and not isinstance(levels, list):
@@ -2695,6 +2706,45 @@ def _check_sweep(
                     f"sweep.groups[{i}].levels[{j}]",
                     unnameable,
                 )
+        # A level repeated inside ONE axis, which is § Mistakes core prevents'
+        # *two identical measurements reported as two arms* by the one route
+        # that row's three codes do not cover. They all guard the
+        # `within`-versus-arms question — whether the design says every unit
+        # appears everywhere. This says nothing about allocation: with
+        # `levels: [control, treatment, control]` and a correct
+        # `allocation: between`, `expand` renders three conditions, two of them
+        # carrying the same label and the same `values`, and `arms_of` hands
+        # both the same units because `{control} == {control}` — its set
+        # equality has nothing to disagree with. The run is green, and two
+        # condition directories are byte-identical at every artifact.
+        #
+        # `E-SWEEP-PATH-DUPLICATE` is the sibling and does not reach this:
+        # it compares axis *names* across entries, never values within one
+        # entry's `levels`. The same hole exists on a parameter axis
+        # (`grid: {analysis.method: [pearson, pearson]}` expands to two
+        # identical conditions) and is left alone deliberately — there it is
+        # wasted compute, here it is the named prevented mistake, because a
+        # group level is a claim about *which units* rather than a setting.
+        # § Errors `validate` reports says so on this row.
+        seen: dict[str, int] = {}
+        for j, level in enumerate(entry["levels"]):
+            if not isinstance(level, str):
+                continue  # `_check_shape` owns the type; don't report it twice
+            if level in seen:
+                c.error(
+                    "E-SWEEP-LEVEL-DUPLICATE",
+                    f"sweep.groups[{i}].levels[{j}]",
+                    f"repeats {level!r}, already declared at "
+                    f"`sweep.groups[{i}].levels[{seen[level]}]` — a level names a "
+                    "set of units, so the two conditions it expands into carry the "
+                    "same label, hold the same units, and record the same values. "
+                    "That is one measurement reported as two arms, and no later "
+                    "check catches it: allocation is satisfied, and the arms are "
+                    "equal rather than overlapping. Drop the repeat, or rename it "
+                    "if two different sets of units were meant",
+                )
+            else:
+                seen[level] = j
 
     # `sweep.baseline` gets the same per-entry checks — one value, not a list.
     # `reference.md`:218 names this by example ("Baseline is a valid condition |

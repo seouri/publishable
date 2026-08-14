@@ -130,7 +130,7 @@ def materialize_config(
         "  # ---- What varies across conditions. Empty (or omitted) means a single,",
         "  #      unswept condition — no `conditions/` level in the run's artifact",
         "  #      tree. A parameter mode's keys are dotted paths into `parameters`;",
-        "  #      the modes are baseline | grid | paired | sample | ablate | groups.",
+        "  #      the modes are grid | paired | sample | groups | baseline | ablate.",
         '  #      See "Sweeps and repeats" in reference.md.',
         "  # baseline: {analysis.method: pearson}   # optional reference condition",
         "  # grid:",

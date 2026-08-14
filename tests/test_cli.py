@@ -568,6 +568,48 @@ def test_a_group_axis_actually_narrows_end_to_end(tmp_path: Path, monkeypatch):
     assert treatment_n == {"resolved": 3, "completed": 2, "ineligible": 0, "failed": 1}
 
 
+def test_a_group_axis_repeating_a_level_never_reaches_a_run(tmp_path: Path, monkeypatch):
+    """Task 20's Critical, pinned end to end rather than at `validate` alone.
+
+    `levels: [control, treatment, control]` over the 8/3 roster above used to run
+    to exit 0, and conditions `00_arm=control` and `02_arm=control` came out
+    byte-identical at every artifact — same units, same label, same recorded
+    values, across all five seed repeats. That is § Mistakes core prevents' *two
+    identical measurements reported as two arms* verbatim, and none of that row's
+    other three codes reaches it: allocation is correct, the axis is real, and
+    `arms_of`'s set equality is satisfied because `{control} == {control}`.
+
+    The unit test in `test_validate.py` pins the finding; this one pins that no
+    run directory is created at all, which is the property that matters — a
+    refusal `command_run` did not honor would still ship the identical trees.
+
+    **This test is only meaningful against a roster holding BOTH values.** With
+    an all-`control` roster the same config is also refused, but by
+    `E-DATA-ASSIGN-LEVELS` — `treatment` names no unit — which is a fact about
+    the data rather than the design. Task 20's original adversary sweep ran every
+    case against one roster and mistook exactly that kind of refusal for a
+    structural one."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _ARM_STEP)
+
+    control_rows = "\n".join(f"c{i},control" for i in range(8))
+    treatment_rows = "\n".join(f"t{i},treatment" for i in range(3))
+    doc = run_a_project(
+        tmp_path,
+        roster_csv=f"patient_id,arm\n{control_rows}\n{treatment_rows}\n",
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+            "attributes": ["arm"],
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment", "control"]}]},
+        expect_exit=EXIT_WRONG,
+    )
+    assert doc["run_dir"] is None
+    assert list(doc["results_dir"].glob("run_*")) == []
+
+
 _GROUPS_MEASURED_STEP = '''\
 # src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
 from publishable import BaseStep

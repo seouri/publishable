@@ -2117,6 +2117,80 @@ def test_a_blank_group_axis_name_is_a_shape_fault(write_config):
     assert "E-DATA-ASSIGN-MISSING" in both, both
 
 
+def test_a_group_axis_name_that_renders_blank_is_a_shape_fault(write_config):
+    """The rule is about the axis name **as `label_for` renders it**, not about
+    `by` whole — `path.rsplit('.', 1)[-1]`.
+
+    A first version of the check above tested `by.strip()`, which left `by:
+    "arm."` open: it renders to nothing, and driven end to end with a matching
+    `assign` block it produced labels `=control`/`=treatment`, directories
+    `00_=control`/`01_=treatment`, and exit 0 with nothing reported — the exact
+    outcome the refusal exists to prevent, reached by a `by` that passes
+    `strip()`. The rendered name is what a reader sees and what a directory
+    carries, so it is what the rule is about.
+
+    `analysis.method` is the control: a dotted `by` whose last segment is a real
+    name renders to `method=…` and is nobody's business here."""
+    for by in ("arm.", "a.b.", "arm. ", "."):
+        assert "E-CONFIG-SHAPE" in codes(
+            write_config({"sweep": {"groups": [{"by": by, "levels": ["a", "b"]}]}})
+        ), f"a `by` of {by!r} renders blank and was accepted"
+    assert "E-CONFIG-SHAPE" not in codes(
+        write_config({"sweep": {"groups": [{"by": "cohort.arm", "levels": ["a", "b"]}]}})
+    )
+
+
+def test_a_group_axis_repeating_a_level_is_refused(write_config):
+    """`E-SWEEP-LEVEL-DUPLICATE` — the one route to § Mistakes core prevents'
+    *two identical measurements reported as two arms* that the row's other three
+    codes do not close.
+
+    `E-DATA-ALLOCATION-NO-ARMS` and `E-DATA-ALLOCATION-WITHIN-ARMS` both read the
+    `within`-versus-arms question, and a config with `allocation: between` and a
+    real axis satisfies both. `E-SWEEP-PATH-DUPLICATE` compares axis *names*
+    across entries, never values inside one entry's `levels`. And `arms_of`'s set
+    equality has nothing to disagree with, because `{control} == {control}`.
+
+    Driven end to end before this check existed, `levels: [control, treatment,
+    control]` over a roster holding both values ran to exit 0 with `00_arm=control`
+    and `02_arm=control` **byte-identical at every artifact**, including every
+    seed repeat's `units.parquet` — one measurement reported as two arms, which is
+    the row verbatim.
+
+    The two controls matter for different reasons: a distinct pair must not
+    report, and a *parameter* axis repeating a value must not either — that has
+    the same shape and is deliberately left alone, since there it costs a wasted
+    execution rather than inventing an arm."""
+    found = messages_by_code(
+        write_config({"sweep": {"groups": [{"by": "arm", "levels": ["c", "t", "c"]}]}})
+    )
+    assert "E-SWEEP-LEVEL-DUPLICATE" in found
+    assert "'c'" in found["E-SWEEP-LEVEL-DUPLICATE"], found["E-SWEEP-LEVEL-DUPLICATE"]
+    assert "levels[0]" in found["E-SWEEP-LEVEL-DUPLICATE"]
+    assert "E-SWEEP-LEVEL-DUPLICATE" not in codes(
+        write_config({"sweep": {"groups": [{"by": "arm", "levels": ["c", "t"]}]}})
+    )
+    assert "E-SWEEP-LEVEL-DUPLICATE" not in codes(
+        write_config({"sweep": {"grid": {"analysis.method": ["pearson", "pearson"]}}})
+    )
+    # The scope control: `seen` resets per entry, so two DIFFERENT axes sharing a
+    # level name is ordinary and must not report. `sex=f × arm=f` is silly but
+    # legal, and hoisting the tally out of the per-entry loop — the obvious way
+    # to write this wrong — turns every such design into a false refusal.
+    assert "E-SWEEP-LEVEL-DUPLICATE" not in codes(
+        write_config(
+            {
+                "sweep": {
+                    "groups": [
+                        {"by": "sex", "levels": ["f", "m"]},
+                        {"by": "arm", "levels": ["f", "t"]},
+                    ]
+                }
+            }
+        )
+    )
+
+
 def test_a_resolver_source_is_refused_until_plugins_exist(write_config):
     units = {"from": {"resolver": "plate_wells"}, "key": "well"}
     assert "E-DATA-RESOLVER-UNSUPPORTED" in codes(write_config({"data.units": units}))
