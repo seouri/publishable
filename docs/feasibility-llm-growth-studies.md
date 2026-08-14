@@ -21,6 +21,7 @@ This document is non-normative and carries its own examples. It is **not** part 
 - [What core refuses, and the route for each](#what-core-refuses-and-the-route-for-each)
 - [Proposed plugin: `publishable-llm`](#proposed-plugin-publishable-llm)
 - [Gaps this analysis found in the specification](#gaps-this-analysis-found-in-the-specification)
+- [Executability on this build](#executability-on-this-build)
 - [Cost and execution summary](#cost-and-execution-summary)
 
 ---
@@ -63,8 +64,8 @@ Nine runs, two pipelines, one plugin. How many git repositories that is has a me
 | Mechanism | What it does across these nine runs |
 |---|---|
 | `code_hash` spans `src/**` | Every commit to `growth_shortcut` changes the recorded code identity of screening runs that never imported it |
-| `run` refuses a dirty `src/**` | E4 (4.4 h) and C3 (12 h) cannot start while the other package has uncommitted edits. [`draft`](reference.md#draft-runs) permits it and marks the run non-citable, which is no use for a confirmation run |
-| `resume` refuses a moved `uv.lock` | One lockfile serves both, so a dependency added for the shortcut makes an in-flight twelve-hour screening run unresumable |
+| `run` refuses a dirty `src/**` | E4 (4.4 h) and C3 (12 h) cannot start while the other package has uncommitted edits — `run` enforces this today. [`draft`](reference.md#draft-runs) is specified to permit it and mark the run non-citable, which is no use for a confirmation run anyway, and it does not dispatch in this build ([§ Executability on this build](#executability-on-this-build)) |
+| `resume` refuses a moved `uv.lock` | One lockfile serves both, so a dependency added for the shortcut makes an in-flight twelve-hour screening run unresumable — as specified; `resume` does not dispatch in this build either |
 
 **What that costs is the claim the screening sequence is built on.** E1 freezes the objective, E2 spends it, and E3, E4, and E6 all evaluate the same frozen program — a sequence spread over weeks whose reviewer-facing claim is [same code, different parameters](design-principles.md#same-code-different-parameters): identical `code_hash`, differing `parameters_hash`. Shortcut development inside that window destroys the first half of it. Sharpest is the pair of roster-variant runs [§ Cost and execution summary](#cost-and-execution-summary) sets aside, which exist *only* to be compared against E1 through E3 in a study — and [`report study.yaml`](reference.md#studies-what-a-paper-reports) cross-checks that runs claiming the same code really do share a `code_hash`.
 
@@ -407,6 +408,8 @@ statistics:
 
 **Design.** One condition, ten batches, and its own `entrypoint` — this is the run that swaps `step04_compare` for `step05_agreement`. Agreement across repeats is not something core computes: core averages repeats per unit before any interval. The agreement bound is therefore a `scope: "summary"` step reading each repeat's per-unit table through `io.read_condition(condition, step, name, repeat=r)` and returning an [`Estimate`](reference.md#estimate-carries-your-interval-without-core-claiming-it). The hypothesis names it and takes no `compare`.
 
+**One condition is declared by leaving `sweep` out**, which is what [§ The one config file](reference.md#the-one-config-file) says of the block — omit it entirely for a single-condition experiment. A `sweep` that is present and expands to nothing is not the same declaration and is refused as `E-SWEEP-EXPANDS-EMPTY`: a run that executes zero conditions while reporting success is the record-describing-an-experiment-nobody-performed failure, so writing the block out with an empty `grid` to show the intent is exactly the mistake the check exists to catch.
+
 ```yaml
 # configs/screen-repeatability/config.yaml
 metadata:
@@ -415,14 +418,8 @@ metadata:
 
 entrypoint: "growth_screen.experiment:RepeatabilityExperiment"   # not the four-step class
 
-sweep:
-  baseline: null
-  groups: []
-  paired: []
-  ablate: null
-  sample: null
-  grid: {}
-  # 1 condition
+# E1's `sweep` block is dropped, not overridden: no `sweep` key at all,
+# which is how a single-condition experiment is declared
 
 replication:
   repeats:
@@ -514,6 +511,8 @@ data:
 ```
 
 `weight_by` records `weighted_by` beside every affected value and adds `effective` to the three-part `n` from Kish's size. `resample.stratify_by: [consensus_label, count_stratum]` reproduces the source's "patient-level stratified bootstrap" exactly: `weight_by` says how much each unit stands for; `resample.stratify_by` says what an independent draw is.
+
+**That is the declaration read on its own, and C1, C2 and C3 never read it on its own.** Each pairs `weight_by` with a `baseline` or a declared contrast, and this build refuses the combination outright as `E-DATA-WEIGHT-CONTRAST`: it weights each condition's own value and interval, while a `vs_baseline` delta and a `statistics.contrasts` entry are both computed over *unweighted* per-unit differences, so the delta would answer a different question than the two weighted values beside it with nothing in the record saying so. The refusal names its own two remedies — drop `weight_by` and report the contrast over the sample as drawn, or keep the weighting and carry the difference as a `summary`-step `Estimate` — and it says of itself that the combination will be honored once the paired estimators take weights. It is therefore a temporary blocker rather than a design refusal, and it is the one blocker these three runs do not share with the six screening runs ([§ Executability on this build](#executability-on-this-build)).
 
 The development set (120) and confirmation set (330) are **two runs against two indexes**, not one holdout — because clean-label fine-tuning fits on the development patients and is evaluated on the confirmation patients, which is a cross-run dependency. The confirmation run reads the fitted artifact with `io.reuse_from`, and core records the upstream run's ID and both its hashes in `provenance.upstream`.
 
@@ -749,7 +748,7 @@ Three substantial pieces of both projects are not runs, and calling them runs wo
 | Calibration intercept and slope | Model fitting, beyond core aggregation | Template `aggregate` if derivable per condition from the unit table, else `summary` `Estimate` |
 | Gwet's AC1 with patient-bootstrap intervals | Not core aggregation | `summary` `Estimate` |
 | Latin-square counterbalancing of effort by block position | Core gives a randomized complete block; it has no per-unit condition sequence | Accept RCBD, or carry position into a `summary` step from the recorded order |
-| Class-ratio (10:1 versus 32:1) as a design axis | The roster is one roster per run; a ratio change is a different roster | Separate runs joined in a `study`; or one enriched roster with `weight_by` |
+| Class-ratio (10:1 versus 32:1) as a design axis | The roster is one roster per run; a ratio change is a different roster | Separate runs joined in a `study`; or one enriched roster with `weight_by`. **Neither route runs on this build**: `study` does not dispatch, and `weight_by` beside any published comparison is refused as `E-DATA-WEIGHT-CONTRAST` — which is what all three shortcut runs declare ([§ Executability on this build](#executability-on-this-build)) |
 | Disease-cap 200 versus 500 as a design axis | Same | Same |
 | Prevalence-adjusted PPV at 1% and 3% | Not a design axis at all | `report.prevalences` as a list `Param`, computed in `aggregate` |
 | Adaptive candidate selection inside one run | Refused | Two runs, selection recorded between them |
@@ -821,9 +820,9 @@ apparatus_facts = ["provider", "model_id", "api_version",
 
 **Three consequences worth stating before a run is scheduled.**
 
-1. **`deployment_revision` is declared even though Azure does not contractually return one.** A declared fact must be *supplied as a key*, not answered: the probe returns `None` where the provider omits a fingerprint, core records `null`, and [the gate compares observations](reference.md#the-apparatus-core-can-only-observe) — so `null → "fp_a3c1"` is the field becoming available rather than the deployment moving. What declaring it buys is the `dry-run` warning and the `unobserved` count, which is exactly the disclosure the source protocol asks for in prose when it says to "state explicitly if the provider does not return an immutable model revision."
+1. **`deployment_revision` is declared even though Azure does not contractually return one.** A declared fact must be *supplied as a key*, not answered: the probe returns `None` where the provider omits a fingerprint, core records `null`, and [the gate compares observations](reference.md#the-apparatus-core-can-only-observe) — so `null → "fp_a3c1"` is the field becoming available rather than the deployment moving. What declaring it buys — in the specification; see [§ Executability on this build](#executability-on-this-build) — is the `dry-run` warning and the `unobserved` count, which is exactly the disclosure the source protocol asks for in prose when it says to "state explicitly if the provider does not return an immutable model revision."
 2. **The probe runs before *every* execution.** A hosted deployment re-tuned during the E4 benchmark's 4.4 hours, or the C3 run's 12 hours, fails the run with no policy knob. That is correct — two deployment states are not one dataset — but it is an operational precondition, not a footnote. The ledger keeps both observations, so the evaluable earlier period stays reportable.
-3. **Probes cost quota.** They run at `dry-run`, at run start, and before every execution, never at `validate`. Budget one authenticated call per execution on top of the cohort passes.
+3. **Probes cost quota.** As specified they run at `dry-run`, at run start, and before every execution, never at `validate`, so the budget carries one authenticated call per execution on top of the cohort passes. None of that can be exercised yet, and the reason is worth being precise about: the apparatus mechanism is unbuilt in **core**, not merely unimplemented by this proposed plugin. `apparatus_probe` and `apparatus_facts` exist as declarable attributes on the template base class and are read by nothing; there is no `Apparatus` type, no `register_probe`, and no probe execution anywhere in the package ([§ Executability on this build](#executability-on-this-build)).
 
 ### Parameters
 
@@ -944,6 +943,32 @@ Three, all now closed in the specification. Each is recorded here with the case 
 
 ---
 
+## Executability on this build
+
+Everything above asks what the specification permits. This section asks a narrower and far more perishable question — **what happens when these nine configs are put through `publishable validate` as the tool stands** — because an analysis that never tries is an analysis whose configs nobody has typed. Measured on 2026-08-14 against commit `cb96c7d`, with the plugin assumed to exist and only *core* declarations judged.
+
+**None of the nine executes today.** Every config declares at least one thing this build refuses.
+
+**None of the nine is blocked by a permanent design refusal, and that is the finding worth keeping.** Every interaction, dose-response ordering, mean-absolute difference, Latin square, and adaptive candidate selection had already been routed out of the YAML — into a `summary`-step `Estimate`, a second run, or a `report_by` stratum — so not one of them reaches `validate` as a declaration at all. The routing in [§ What core refuses, and the route for each](#what-core-refuses-and-the-route-for-each) holds up when it is checked mechanically. Every blocker below is a slice not yet built, and each names itself as such.
+
+| Refusal | Runs it fires on |
+|---|---|
+| `E-DATA-RESOLVER-UNSUPPORTED` — the plugin registry is not implemented, so no resolver can be named | 9 of 9 |
+| `E-STATS-RESAMPLE-UNSUPPORTED` | 8 of 9 — every run but E5, whose `statistics.resample` is `null` |
+| `E-DATA-HOLDOUT-UNSUPPORTED` | 6 of 9 — the screening roster; the shortcut roster declares `holdout: null` |
+| `E-DATA-WEIGHT-CONTRAST` | 3 of 9 — C1, C2, C3 |
+| `E-STATS-NULLTEST-UNSUPPORTED`, `E-DATA-ALLOCATION-CONTRAST`, `E-DATA-CLUSTER-CONTRAST` | none |
+
+**Six of the nine are one slice-set away.** E1, E2, E3, E4, and E6 validate completely clean once three things land: the plugin registry a resolver is looked up through, `data.units.holdout`, and `statistics.resample`. E5 needs the first two and one correction of its own, described in [§ E5 — Binary-output repeatability](#e5--binary-output-repeatability). Only C1, C2, and C3 carry a second and independent blocker, `E-DATA-WEIGHT-CONTRAST` — the combination refusal described under [§ Shortcut: three runs](#shortcut-three-runs), which will lift when the paired estimators take weights.
+
+**The machinery built most recently unblocks none of them.** `sweep.groups`, `allocation: between`, `assign`, `cluster_by`, `data.units.measurements`, and `fold` repeats are all implemented here, and no config in this analysis declares any of them — these designs are one roster, one within-subjects allocation, and `seed` or `batch` repeats throughout. The only recently built field any of them touches is `weight_by`, which is honored for a condition's own values and now fails in combination with a contrast, which is what all three shortcut runs publish.
+
+**Several commands and one `io` method these designs lean on are not in this build.** `validate`, `run`, `new`, and `generate`/`g`/`init` dispatch; `dry-run`, `draft`, `resume`, `study`, and `reproduce` each print `unknown command` and exit 2, so every mention of them above is a claim about the specification rather than about what can be run. The same holds for `io.reuse_from`, which E3, E4, and E6 use to read their frozen compiled program, E6's swept `program_id` resolves through, and the shortcut's confirmation run uses to read its fine-tuned artifact: no such method exists yet, and a reader costing those runs should not assume the lineage they rest on is available. The apparatus probe is in the same position, for the reason given under [§ The apparatus probe is the sharpest fit, and it is also the operational risk](#the-apparatus-probe-is-the-sharpest-fit-and-it-is-also-the-operational-risk).
+
+**Why this section is dated.** Every refusal above is a build fact with a shelf life, and the commit is what makes the claim re-checkable rather than merely re-assertable. The cost and execution figures below are unaffected either way: they describe what these designs *would* meter, which is a property of the configs and not of the build.
+
+---
+
 ## Cost and execution summary
 
 All figures use the sources' own observed anchors: ≈ $95 per MIPRO-medium compilation, ≈ $14 per 440-patient evaluation, ≈ $10.60 per 330-patient evaluation, at $5.00 per million prompt tokens and $30.00 per million completion tokens. Runtime is serial; the sources note runtime is the least stable estimate.
@@ -972,4 +997,4 @@ Every run is far below `limits.max_executions: 500`, so the binding constraint i
 - **Condition-scoped compilation.** Moving compilation to repeat scope would multiply the five compilations by every repeat and add ≈ $1,900.
 - **Five inference passes in the shortcut runs.** Required by the source's own non-determinism rule, and they are `{kind: batch}`, which is what makes the resulting dispersion attributable rather than anonymous.
 
-`publishable dry-run` prints the resolved condition list, the execution count, the **unit-executions** the plan will produce, and where every artifact will land, and it runs the apparatus probe — so every number above is checkable before any quota is spent. Unit-executions is the one to multiply: at the sources' observed ~6,300 prompt tokens per patient, C3's 12 × 5 × 330 = 19,800 unit-executions is ~125 million prompt tokens, and that arithmetic is the budget check core deliberately leaves to you.
+**As specified**, `publishable dry-run` prints the resolved condition list, the execution count, the **unit-executions** the plan will produce, and where every artifact will land, and it runs the apparatus probe — so every number above is meant to be checkable before any quota is spent. That is a claim about the specification and not about this build, in which `dry-run` is not a command at all ([§ Executability on this build](#executability-on-this-build)); every figure in this table was therefore computed by hand. Unit-executions is the one to multiply: at the sources' observed ~6,300 prompt tokens per patient, C3's 12 × 5 × 330 = 19,800 unit-executions is ~125 million prompt tokens, and that arithmetic is the budget check core deliberately leaves to you.
