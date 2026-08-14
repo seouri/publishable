@@ -291,10 +291,10 @@ def test_generate_experiment_resolves_a_project_local_template(tmp_path: Path):
 
     assert main(["new", str(root)]) == EXIT_OK
     (root / "templates" / "my_assay.py").write_text(
-        "from publishable import BaseTemplate, register_template\n\n\n"
+        "from publishable import BaseTemplate, Param, register_template\n\n\n"
         '@register_template("my_assay")\n'
         "class MyAssay(BaseTemplate):\n"
-        "    pass\n"
+        '    parameter_spec = {"assay.tag": Param(str, default="my-assay-fingerprint")}\n'
     )
 
     cfg = generate_experiment(
@@ -307,10 +307,11 @@ def test_generate_experiment_resolves_a_project_local_template(tmp_path: Path):
     assert cfg.exists()
     doc = yaml.safe_load(cfg.read_text())
     assert doc["experiment_type"] == "my_assay"
-    # THE IDENTITY CHECK: `MyAssay`'s `parameter_spec` is empty, unlike
-    # `generic`'s `analysis.*` defaults — so this pins that `my_assay` itself
-    # resolved, not merely that some template answered to that name.
-    assert doc["parameters"] is None
+    # THE IDENTITY CHECK: `assay.tag`'s default is a fingerprint no other
+    # template — `generic` or an unrelated empty-`parameter_spec` local one —
+    # produces, so this pins that `my_assay` itself resolved rather than
+    # merely that some template answered to that name.
+    assert doc["parameters"] == {"assay": {"tag": "my-assay-fingerprint"}}
 
     with pytest.raises(ContractError) as excinfo:
         generate_experiment(
@@ -324,13 +325,14 @@ def test_generate_experiment_resolves_a_project_local_template(tmp_path: Path):
 
 
 def test_generate_experiment_cli_resolves_a_project_local_template(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ):
     """The literal probe: `publishable generate experiment --template my_assay`
     through `main`, not `generate_experiment` called directly — exercising
     `_dispatch_generate`'s `find_repo_root(Path.cwd())` too.
 
-    THE CONTROL: `--template nope` still returns `EXIT_WRONG`.
+    THE CONTROL: `--template nope` still returns `EXIT_WRONG` carrying
+    `E-TEMPLATE-UNKNOWN` specifically — not just some refusal.
     """
     root = tmp_path / "proj"
     data = tmp_path / "data"
@@ -365,6 +367,7 @@ def test_generate_experiment_cli_resolves_a_project_local_template(
             "--output-dir", str(results_dir),
         ]
     ) == EXIT_WRONG
+    assert "E-TEMPLATE-UNKNOWN" in capsys.readouterr().err
 
 
 def test_command_run_aggregate_resolves_a_project_local_template(
