@@ -25,7 +25,7 @@ This repository holds both the normative specification and the tool it specifies
 Modules not yet built are still planned, and the slices that build them are listed in
 `docs/superpowers/specs/2026-08-08-implementation-spine-design.md`.
 
-**Order of the slices that remain: H7a → H4 → H3d → H3c-3 → H7 (the rest).** Amended 2026-08-14
+**Order of the slices that remain: H7a → H4a → H3d (+3) → H4b → H7b → the rest.** Amended twice on 2026-08-14
 against outside evidence — all nine experiments in
 [the feasibility analysis](docs/feasibility-llm-growth-studies.md) were run through `validate`, and
 **none executes**. The gate is the **template registry**, not the plugin system: `get_template` reads a
@@ -33,9 +33,18 @@ builtin dict, so every config stops at `E-TEMPLATE-UNKNOWN` before any other che
 gives a template three homes, and a **project-local** one in `templates/` is *discovered by path*, not
 through an entry point. **H7a** is that subset — export `register_template`, discover `templates/**` by
 path, add `generate template` — and it needs none of entry-point resolution, probes or the change gate.
-H4 then unblocks three of the nine and H3d the rest — **but only for configs sourcing their roster from a
-table**; all nine as the analysis writes them declare a resolver, so *as written* none runs until full
-H7. H3c-3 unblocks none.
+H4a (`resample`) and H3d (`holdout`) then unblock six, and H4b (weighted contrasts) the last three —
+**but only for configs sourcing their roster from a table**; all nine as the analysis writes them declare
+a resolver, so *as written* none runs until H7b.
+
+A second amendment the same day scoped all five remaining slices against the code. **Every charter was
+stale in the same direction**: H4 is ~54 tasks split four ways, H7's remainder 38 split three ways, H3d
+16 against a charter saying "3 rows", H3c-3 17 against a charter saying 6. Two consequences worth
+carrying: `statistics.resample` for the unclustered case is **wiring, not construction** (two percentile
+constructions are built with zero production callers), and **H3c-3 contains a 3-task refusal that closes
+a live defect** — `groups` + `between` + `fold` validates clean today and produces empty folds per arm,
+because `fold_basis` answers over the whole roster. That refusal ships with H3d; the other 14 tasks wait
+for a design that needs folds inside cells.
 
 The cost is that H3d now precedes the cells work it was scheduled to consume, so **H3c-3 owns
 retrofitting the holdout to cells** — acceptable only because no experiment in that analysis declares a
