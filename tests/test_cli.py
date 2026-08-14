@@ -498,16 +498,20 @@ def test_resolved_group_axes_is_empty_with_no_roster_to_partition():
 
 
 def test_resolved_group_axes_raises_rather_than_reading_a_column_under_a_drawn_method():
-    """`from` "means nothing" under `random`/`blocked` — but this build does not
+    """`from` "means nothing" under `blocked` — but this build does not
     quietly read the axis name instead, which is what this function used to
-    resolve to. `units.assignment_for` raises `NotImplementedError` until tasks
-    8 and 10, an explicit hole; the fixture's units carry an arm attribute, so
+    resolve to. `units.assignment_for` raises `NotImplementedError` until task
+    10, an explicit hole; the fixture's units carry an arm attribute, so
     a fallback to a column read would have succeeded silently here.
+
+    `random` used to be this test's method too, until task 8 made it draw
+    instead of raise — `test_units.py`'s own `random` tests cover it now, so
+    `blocked` is what is left of "a drawn method" for this test's premise.
 
     Unreachable through `command_run`: `validate` refuses both methods as
     `E-DATA-ASSIGN-DRAWN` and returns before any of this runs."""
     sweep_block = {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}
-    units_decl = {"assign": {"arm": {"method": "random", "from": "arm_column"}}}
+    units_decl = {"assign": {"arm": {"method": "blocked", "from": "arm_column"}}}
     with pytest.raises(NotImplementedError):
         _resolved_group_axes(units_decl, sweep_block, _levels_roster(), "digest")
 

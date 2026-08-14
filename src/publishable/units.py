@@ -965,17 +965,22 @@ DRAWN_ASSIGN_METHODS = ("random", "blocked")
 already assigned — **one tuple, read by both the refusal and the draw**.
 
 `validate` imports it to report `E-DATA-ASSIGN-DRAWN` (a refusal of a *value*,
-distinct from `E-DATA-ASSIGN-METHOD`'s refusal of an absent or out-of-enum one),
-and `assignment_for` below reads it to say which of its two refusals a method
-earns. It lives here rather than in `validate` because `units.py` depends on
-nothing there, and because `validate`'s use of it is temporary — task 14 retires
+distinct from `E-DATA-ASSIGN-METHOD`'s refusal of an absent or out-of-enum one).
+It lives here rather than in `validate` because `units.py` depends on nothing
+there, and because `validate`'s use of it is temporary — task 14 retires
 `E-DATA-ASSIGN-DRAWN` — while realizing a draw is permanent.
 
+`assignment_for` below no longer reads it for `random`, which task 8 realizes
+rather than refuses — `blocked`, and `random` beside a declared `cluster_by`
+(task 9), are what still route through the message this tuple names, and it
+is `DRAWN_ASSIGN_METHODS` membership, not tuple *order* or index, that either
+still consults.
+
 **It is not what makes `assignment_for` fail closed**, and must not be mistaken
-for that: `assignment_for` allows `by_attribute` and refuses everything else, so
-a fourth drawing method added to the enum and to nothing else raises rather than
-reading a column, whether or not anyone remembers to add it here. This tuple
-only picks which message that raise carries.
+for that: `assignment_for` allows `by_attribute` and `random` and refuses
+everything else, so a fourth drawing method added to the enum and to nothing
+else raises rather than reading a column, whether or not anyone remembers to
+add it here. This tuple only picks which message that raise carries.
 """
 
 
@@ -1005,8 +1010,13 @@ class ArmPlan:
       system already assigned rather than drawing one, so recording a seed
       would be a false record of a draw that never happened.
     - `strata` is the realized `assign.<axis>.stratify_by`, empty under
-      `by_attribute` for the same reason: `stratify_by` names how a draw was
-      *balanced*, and with no draw there is nothing it describes.
+      `by_attribute` for the reason above: `stratify_by` names how a draw was
+      *balanced*, and with no draw there is nothing it describes. It is also
+      empty under `random` today — task 8 does not yet balance the draw on a
+      declared `stratify_by`, so recording one here would claim a balance
+      that did not happen, the same false-record shape as `by_attribute`'s
+      seed, for a different reason: a real gap in this build rather than a
+      draw that never occurred.
 
     `frozen=True` blocks rebinding an attribute; it does **not** deep-freeze
     `members`, whose values are tuples but whose mapping a determined caller
@@ -1019,6 +1029,40 @@ class ArmPlan:
     members: Mapping[str, tuple[str, ...]]
     seed: int | None
     strata: tuple[str, ...]
+
+
+def _apportion(n: int, weights: Sequence[float]) -> list[int]:
+    """`n` split across `weights`, largest-remainder (Hamilton) apportionment —
+    `assignment_for`'s `random` path uses it to turn `assign.<axis>.ratio` into
+    per-level sizes.
+
+    Each entry's exact share (`n * weight / sum(weights)`) floors, and the
+    remainder — `n` minus the sum of those floors — goes one at a time to the
+    largest fractional part, ties broken by the entry's position in `weights`
+    (so the first-declared level of an equal split wins any tie, deterministic
+    rather than left to dict or set order). Every size is within one of its
+    exact proportional share, which is the strongest claim a ratio that
+    doesn't divide `n` supports — `partition_units`'s docstring makes the same
+    argument for folds and refuses to claim the stronger, exact one.
+
+    **Not guaranteed non-zero.** A ratio skewed enough relative to `n` (a
+    weight so small its floor is 0, with the remainder exhausted by larger
+    fractions first) can still leave an entry at 0 — the same gap
+    `reference.md` § Allocation already records against `limits.min_units_per_cell`
+    ("declared, typed, and read by nothing in this build"). Nothing here
+    manufactures a unit for a level the ratio didn't earn one for; inventing
+    a floor-of-one rule would be a guarantee no document states.
+    """
+    total = sum(weights)
+    quotas = [n * weight / total for weight in weights]
+    floors = [int(quota) for quota in quotas]
+    remainder = n - sum(floors)
+    fractions = [quota - floor for quota, floor in zip(quotas, floors, strict=True)]
+    order = sorted(range(len(weights)), key=lambda i: (-fractions[i], i))
+    sizes = list(floors)
+    for i in order[:remainder]:
+        sizes[i] += 1
+    return sizes
 
 
 def assignment_for(
@@ -1047,18 +1091,19 @@ def assignment_for(
       authority for a column-read partition and this one does not re-derive
       it. `from` is resolved here, once: the declared `from` when it is a
       non-empty string, else the axis name.
+    - `random`, unclustered (`clusters is None`), draws one — see below.
     - **Every other value raises `NotImplementedError`** — an allowlist, not a
-      denylist of the methods that happen to draw today. `random` and
-      `blocked` raise the message `DRAWN_ASSIGN_METHODS` selects, until tasks
-      8 and 10 build them; any other string raises as a method this build
-      cannot realize. Fail-closed costs nothing here, because `validate`
-      already refuses an out-of-enum method outright
-      (`E-DATA-ASSIGN-METHOD`) before `run` can reach this — and it is what
-      keeps a *fifth* method, added to `validate.ASSIGN_METHODS` and to
-      nothing else, from validating clean and then silently partitioning on
-      a column. A denylist would have shipped exactly that regression, since
-      the two literals naming which methods draw would have been pinned in
-      agreement by nothing.
+      denylist of the methods that happen to draw today. `blocked`, and
+      `random` beside a declared `cluster_by`, raise the message
+      `DRAWN_ASSIGN_METHODS` selects, until task 10 (and task 9) build them;
+      any other string raises as a method this build cannot realize.
+      Fail-closed costs nothing here, because `validate` already refuses an
+      out-of-enum method outright (`E-DATA-ASSIGN-METHOD`) before `run` can
+      reach this — and it is what keeps a *fifth* method, added to
+      `validate.ASSIGN_METHODS` and to nothing else, from validating clean
+      and then silently partitioning on a column. A denylist would have
+      shipped exactly that regression, since the two literals naming which
+      methods draw would have been pinned in agreement by nothing.
 
     An explicit hole, not a silent fallback to reading a column that need not
     exist: a drawn axis's units carry no arm attribute, so a fallback would
@@ -1066,13 +1111,64 @@ def assignment_for(
     worse, partition on an unrelated one.
 
     `digest` and `clusters` are unread on the `by_attribute` path and are
-    parameters anyway: they are what tasks 8 and 10 draw with —
-    `assign_seed_for(block, axis, digest, roster)` for the seed, `clusters`
-    because a cluster is indivisible and a draw must allocate whole clusters
-    — and a caller that already has to hold them cannot then be told the
-    signature changed under it.
+    parameters anyway: `digest` is what `random` draws its seed with
+    (`assign_seed_for(block, axis, digest, roster)`, below), and `clusters`
+    is what task 9's clustered draw allocates whole clusters with instead of
+    individual units — a caller that already has to hold both cannot then be
+    told the signature changed under it.
+
+    **`random`, unclustered, is realized here.** `assign.<axis>.ratio` (`{}`
+    meaning equal allocation, `reference.md` § Allocation) is apportioned
+    across `len(roster)` by `_apportion`, the whole roster is shuffled once
+    with `random.Random(assign_seed_for(...))`, and the shuffled list is cut
+    into consecutive slices sized by that apportionment, in `levels`'
+    declared order — so `members[level]` holds that level's slice **in the
+    order the shuffle realized**, exactly what `ArmPlan.members` promises for
+    a draw. Every declared level is a key of `members` even when its
+    apportioned size is 0 (an empty tuple, not a missing key) — the `zip`
+    below walks `levels` itself, so `set(members) == set(levels)`
+    unconditionally, the same coverage `by_attribute` gets from `arms_of`,
+    though not that function's *non-emptiness* guarantee: see `_apportion`'s
+    own docstring for when a size can still land on 0. A `clusters` mapping
+    passed alongside `random` raises rather than falling silently back to the
+    unclustered draw: allocating whole clusters is task 9's, and a caller
+    that declared `cluster_by` must not be handed a per-unit split that
+    quietly ignores it.
+
+    `strata` is `()` here regardless of a declared `assign.<axis>.stratify_by`
+    — recording it would claim a balance this build does not yet perform, the
+    same false-record reasoning `ArmPlan.strata`'s own docstring gives for
+    `by_attribute`'s seed. Balancing the draw on `stratify_by` is a later
+    task's, not this one's — and until that task lands, `random` draws
+    unbalanced even when `stratify_by` is declared non-empty, silently, since
+    nothing refuses that combination today (recorded, not fixed, in the task
+    8 report).
     """
     method = block.get("method") if isinstance(block, Mapping) else None
+    if method == "random" and isinstance(block, Mapping):
+        if clusters is not None:
+            raise NotImplementedError(
+                f"`data.units.assign.{axis}.method: random` beside a declared `cluster_by` "
+                "must allocate whole clusters, not individual units, and this build does not "
+                "draw that yet — task 9. Falling back to an unclustered draw here would "
+                "silently ignore the declared `cluster_by` rather than raising about it"
+            )
+        ratio = block.get("ratio") if isinstance(block, Mapping) else None
+        weights = (
+            [ratio[level] for level in levels]
+            if isinstance(ratio, dict) and ratio
+            else [1] * len(levels)
+        )
+        sizes = _apportion(len(roster), weights)
+        seed = assign_seed_for(block, axis, digest, roster)
+        shuffled = [unit.key for unit in roster]
+        random.Random(seed).shuffle(shuffled)
+        members: dict[str, tuple[str, ...]] = {}
+        start = 0
+        for level, size in zip(levels, sizes, strict=True):
+            members[level] = tuple(shuffled[start : start + size])
+            start += size
+        return ArmPlan(levels=tuple(levels), members=members, seed=seed, strata=())
     if method is not None and method != "by_attribute":
         if method in DRAWN_ASSIGN_METHODS:
             raise NotImplementedError(

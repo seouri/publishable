@@ -1209,19 +1209,20 @@ def test_assignment_for_resolves_from_against_the_axis_name_and_reads_no_other_c
     assert e.value.code == "E-DATA-ASSIGN-LEVELS"
 
 
-@pytest.mark.parametrize("method", DRAWN_ASSIGN_METHODS)
+@pytest.mark.parametrize("method", [m for m in DRAWN_ASSIGN_METHODS if m != "random"])
 def test_assignment_for_refuses_a_drawn_method_rather_than_reading_a_column(method: str):
-    """An explicit hole until tasks 8 and 10, not a silent fallback: a drawn
+    """An explicit hole until task 10, not a silent fallback: a drawn
     axis's units carry no arm attribute, so falling back to `arms_of` would
     either raise about a column nobody declared or partition on an unrelated
     one. The fixture's units DO carry `arm`, so a fallback would succeed
     silently here — which is exactly why the assertion is `NotImplementedError`
     and not a `ContractError` about a missing column.
 
-    Parametrized over `DRAWN_ASSIGN_METHODS` itself, not over a literal pair:
-    `validate` reports `E-DATA-ASSIGN-DRAWN` from that same tuple, and two
-    independently written pairs are two sources of truth pinned in agreement
-    by nothing."""
+    Filtered out of `DRAWN_ASSIGN_METHODS` rather than parametrized over it
+    directly, because task 8 makes `random` an exception to this test's own
+    premise: it now draws instead of raising, and its own tests below cover
+    it. `blocked` is what remains — still task 10's, so the tuple `validate`
+    reads `E-DATA-ASSIGN-DRAWN` from is still one source of truth for it."""
     roster = _arm_roster12()
     with pytest.raises(NotImplementedError) as e:
         assignment_for(roster, "arm", {"method": method}, ["control", "treatment"], "digest")
@@ -1261,6 +1262,93 @@ def test_assignment_for_takes_the_by_attribute_path_for_an_unnamed_method():
         plan = assignment_for(roster, "arm", block, ["control", "treatment"], "digest")
         assert plan.members["control"] == expected
         assert plan.seed is None
+
+
+def _random_roster(n: int) -> UnitList:
+    """`n` units with no attributes at all — a drawn axis has no column to
+    read, so unlike `_arm_roster12` these carry nothing an `arm`-style
+    attribute could leak membership from."""
+    return UnitList([Unit(key=f"u{i:02d}", paths=(), attributes={}) for i in range(n)])
+
+
+def test_a_random_draw_honours_an_unequal_ratio():
+    """12 units, `ratio: {control: 1, treatment: 2}` -> 4 and 8. Deliberately
+    unequal AND not a half: 4/8 cannot be confused with 6/6, with 12, or with
+    each other — the fixture trap the plan's Global Constraints name, restated
+    for a draw rather than a read. Exact membership under a pinned seed is
+    asserted literally, not re-derived from the apportionment rule under
+    test."""
+    roster = _random_roster(12)
+    block = {"method": "random", "ratio": {"control": 1, "treatment": 2}, "seed": 7}
+    plan = assignment_for(roster, "arm", block, ["control", "treatment"], "digest")
+
+    assert plan.seed == 7
+    assert len(plan.members["control"]) == 4
+    assert len(plan.members["treatment"]) == 8
+    assert plan.members["control"] == ("u07", "u11", "u03", "u10")
+    assert plan.members["treatment"] == (
+        "u08",
+        "u04",
+        "u09",
+        "u01",
+        "u00",
+        "u06",
+        "u02",
+        "u05",
+    )
+
+
+def test_a_random_draw_is_a_partition():
+    """Every unit in exactly one arm, every declared level non-empty — the
+    property `arms_of` guarantees for a read assignment and a draw must too.
+    Reuses the 12-unit, `{control: 1, treatment: 2}` fixture from the ratio
+    test above: an equal split over a roster divisible by the arm count would
+    make a coverage bug (a duplicate, or a dropped unit) invisible by size
+    alone."""
+    roster = _random_roster(12)
+    block = {"method": "random", "ratio": {"control": 1, "treatment": 2}, "seed": 7}
+    plan = assignment_for(roster, "arm", block, ["control", "treatment"], "digest")
+
+    assert plan.members["control"]
+    assert plan.members["treatment"]
+    seen = plan.members["control"] + plan.members["treatment"]
+    assert len(seen) == len(set(seen)) == len(roster)
+    assert set(seen) == {unit.key for unit in roster}
+
+
+def test_the_same_seed_draws_the_same_arms():
+    """Two calls with the same pinned seed draw the same arms.
+
+    **The control**: a different pinned seed draws different arms. Without
+    it, an implementation that ignored the seed entirely — always shuffling
+    from an unseeded, or a constant, RNG state — would still pass the first
+    half by accident."""
+    roster = _random_roster(12)
+    levels = ["control", "treatment"]
+    first = assignment_for(roster, "arm", {"method": "random", "seed": 1}, levels, "digest")
+    again = assignment_for(roster, "arm", {"method": "random", "seed": 1}, levels, "digest")
+    assert first.members == again.members
+
+    different = assignment_for(roster, "arm", {"method": "random", "seed": 2}, levels, "digest")
+    assert different.members != first.members
+
+
+def test_a_ratio_that_does_not_divide_the_roster_is_reported_not_rounded_away():
+    """13 units at `ratio: {a: 1, b: 2}` — sum 3 does not divide 13, so there is
+    no exact solution. `_apportion` floors each level's exact share (4.333 ->
+    4, 8.667 -> 8, 12 of the 13 accounted for) and hands the 13th, leftover
+    unit to the largest fractional part rather than the largest level by
+    name: `b`'s 0.667 beats `a`'s 0.333, so that 13th unit — the last element
+    of `b`'s slice of the seed-3 shuffle — lands in `b`, giving 4 and 9. The
+    realized sizes are stated exactly rather than a false "even enough"
+    claim."""
+    roster = _random_roster(13)
+    block = {"method": "random", "ratio": {"a": 1, "b": 2}, "seed": 3}
+    plan = assignment_for(roster, "arm", block, ["a", "b"], "digest")
+
+    assert len(plan.members["a"]) == 4
+    assert len(plan.members["b"]) == 9
+    assert len(plan.members["a"]) + len(plan.members["b"]) == 13
 
 
 def test_arm_members_reduces_arms_of_across_the_resolved_conditions():
