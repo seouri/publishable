@@ -9363,6 +9363,46 @@ def test_the_draw_check_is_skipped_for_a_block_already_reported():
     assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-RATIO"]
 
 
+def test_the_skip_is_per_block_and_not_per_config():
+    """The guard *Every arm draws units* reads is the count of findings **this
+    block** earned, not whether the config earned any. Two axes: `sex` declares
+    a one-entry `ratio` (its own fault, and its own draw suppressed), and `arm`
+    is a well-formed block whose ratio starves an arm over this roster. Both
+    codes must appear.
+
+    A guard comparing against zero rather than against the count at the branch's
+    own entry passes every single-axis test in this file and silently stops
+    checking the second axis of every config whose first axis was wrong — which
+    is the shape of config a reader is most likely to be holding."""
+    c = Collector()
+    _check_assign(
+        {
+            "sweep": {
+                "groups": [
+                    {"by": "sex", "levels": ["f", "m"]},
+                    {"by": "arm", "levels": ["control", "treatment"]},
+                ]
+            }
+        },
+        {
+            "allocation": "between",
+            "assign": {
+                "sex": {"method": "random", "ratio": {"f": 1}},
+                "arm": {
+                    "method": "random",
+                    "ratio": {"control": 1, "treatment": 1000},
+                },
+            },
+        },
+        _plain_roster(10),
+        c,
+    )
+    assert {f.code for f in c.findings} == {
+        "E-DATA-ASSIGN-RATIO",
+        "E-DATA-ASSIGN-LEVELS",
+    }
+
+
 def test_a_blocked_draw_that_starves_an_arm_over_this_roster_is_refused():
     """The same row under the other drawing method, which reaches it by a
     different route: `blocked` apportions per block rather than over the whole

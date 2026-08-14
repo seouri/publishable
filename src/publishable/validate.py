@@ -2188,14 +2188,16 @@ def _check_assign(
                         )
 
             # *Every arm draws units* — the roster-dependent half of the drawn
-            # branch, and the row that closes the gap the retirement of
-            # `E-DATA-ASSIGN-DRAWN` opened: `ratio: {a: 1, b: 1000}` over a
-            # ten-unit roster names every level, carries only positive shares
-            # and so passes every declaration-only row above, and then
-            # apportions `b` the whole roster and `a` nothing —
-            # `units.assignment_for` raising `E-DATA-ASSIGN-LEVELS` on a config
-            # `validate` had approved. The fault is a *proportion against a
-            # roster size*, not a declaration, so it belongs here beside
+            # branch. `ratio: {a: 1, b: 1000}` over a ten-unit roster names
+            # every level and carries only positive shares, so it passes every
+            # declaration-only row above, and then apportions `b` the whole
+            # roster and `a` nothing — `units.assignment_for` raising
+            # `E-DATA-ASSIGN-LEVELS` on a config `validate` had approved. That
+            # was unreachable while a drawn method was refused outright, which
+            # is why this row arrived with the slice that retired the refusal.
+            #
+            # The fault is a *proportion against a roster size*, not a
+            # declaration, so it belongs here beside
             # `E-DATA-ASSIGN-LEVELS`'s existing roster-resolved check in the
             # `by_attribute` branch below rather than in the `ratio` family.
             #
