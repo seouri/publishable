@@ -1104,6 +1104,84 @@ def test_a_drawn_axis_runs_end_to_end_and_records_its_seed(tmp_path: Path):
     assert len(alloc["arms"]["arm"]["treatment"]) == 4
 
 
+_DRAWN_CLUSTER_SITES = ["A", "B", "C", "D"]
+
+
+def test_a_clustered_drawn_axis_keeps_every_cluster_whole_end_to_end(tmp_path: Path):
+    """**The clustered draw, end to end** — the wiring `cli._resolved_group_axes`'s
+    `clusters` argument exists for, and the only assertion that reads it.
+
+    `experimental-designs.md` § Mistakes core prevents promises that a declared
+    `cluster_by` makes clusters indivisible in *every* partition core computes,
+    and `reference.md` § Clustered units states it as "core computed the
+    partition, so core keeps it indivisible". Two documents, one wire: the
+    `clusters` map `command_run` builds and hands to `_resolved_group_axes`,
+    which passes it to `units.assignment_for`, which takes
+    `_assign_whole_clusters_by_ratio` instead of a per-unit shuffle. **The only
+    other end-to-end `groups × cluster_by` test uses `method: by_attribute`**
+    (`test_groups_and_cluster_by_execute_with_per_arm_cluster_counting` above),
+    where the arm is read from a column and `clusters` is never read at all —
+    so before this test, passing `None` there left the whole suite green.
+
+    Mutation-verified: `clusters` → `None` at `command_run`'s
+    `_resolved_group_axes` call splits all four sites across both arms and this
+    test fails; reverted, it passes. Applied, run, `__pycache__` cleared,
+    reverted, re-run.
+
+    **`random` rather than `blocked` is not a choice**: `blocked` beside any
+    `cluster_by` is refused outright, as `E-DATA-ASSIGN-BLOCKED-CLUSTER`, so
+    `random` is the one drawn method that reaches this path.
+
+    24 units in 4 equal clusters of 6, which makes the two failure modes
+    distinguishable: an equal-share apportionment of *whole clusters* gives 2
+    clusters (12 units) per arm, and a per-unit shuffle of the same roster
+    gives 12 units per arm as well — so a size assertion alone proves nothing
+    and the wholeness assertion is what discriminates. Membership is asserted
+    as *every cluster lands entirely in one arm*, not as literal arm labels:
+    which site draws which arm is `units.assignment_for`'s to pin (and
+    `tests/test_units.py` pins it), while an arm-label assertion here would
+    only be a second, weaker copy of that pin. Both arms are asserted non-empty
+    so the wholeness check cannot pass vacuously on an allocation that put
+    everything on one side.
+    """
+    keys = [f"p{i:02d}" for i in range(24)]
+    site_of = {key: _DRAWN_CLUSTER_SITES[i // 6] for i, key in enumerate(keys)}
+    roster_csv = "patient_id,site\n" + "".join(f"{k},{site_of[k]}\n" for k in keys)
+
+    doc = run_a_project(
+        tmp_path,
+        roster_csv=roster_csv,
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "random", "seed": 7}},
+            "attributes": ["site"],
+            "cluster_by": "site",
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+    )
+
+    run_yaml = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run_yaml["status"] == "completed"
+
+    alloc = json.loads((doc["run_dir"] / "allocation.json").read_text())
+    arms = alloc["arms"]["arm"]
+    assert sorted(arms["control"] + arms["treatment"]) == sorted(keys)
+
+    arm_of_site: dict[str, set[str]] = {site: set() for site in _DRAWN_CLUSTER_SITES}
+    for arm, members in arms.items():
+        for key in members:
+            arm_of_site[site_of[key]].add(arm)
+    # Every declared cluster is present, and each is in exactly one arm — the
+    # indivisibility both documents promise. Under the `clusters=None` mutation
+    # each of the four carries both arms instead.
+    split = {site: sorted(a) for site, a in arm_of_site.items() if len(a) != 1}
+    assert split == {}, f"clusters divided between arms: {split}"
+    assert set(arm_of_site) == set(_DRAWN_CLUSTER_SITES)
+    # Non-vacuous: both arms drew whole clusters, 12 units each.
+    assert len(arms["control"]) == 12
+    assert len(arms["treatment"]) == 12
+
+
 def test_one_plan_per_axis_is_realized_once_and_both_consumers_get_that_same_plan(
     tmp_path: Path, monkeypatch
 ):

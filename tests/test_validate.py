@@ -9075,6 +9075,93 @@ def test_blocked_with_no_cluster_by_is_not_blocked_clustered(write_config, tmp_p
     assert [f.code for f in c.findings] == []
 
 
+# --- *Assignment seed is auto or pinned* ---
+#
+# `E-DATA-ASSIGN-SEED`. The fault is silent by construction:
+# `units.assign_seed_for` returns a pinned `int` literally and derives from the
+# digest for everything else, so a wrongly-typed pin draws a *derived*
+# allocation and `allocation.json` records that derived number under the axis
+# whose seed the config wrote deliberately. Nothing later disagrees, which is
+# why the refusal has to be here.
+
+
+@pytest.mark.parametrize("seed", ["1234", 1.5, True, False, [11], {"n": 11}])
+def test_a_wrongly_typed_assign_seed_is_refused(write_config, tmp_path, seed):
+    """Every shape that is neither `auto` nor a pinned integer, including both
+    booleans: `assign_seed_for` excludes `bool` explicitly, so `seed: true`
+    would derive rather than pin `1` — and a reader of `allocation.json` would
+    see a number they never wrote.
+
+    `_wide_roster` first, so the block is otherwise clean and the assertion can
+    be an exact set: a `seed` fault must not suppress *Every arm draws units*
+    by accident, nor be reported alongside a second, derived finding."""
+    _wide_roster(tmp_path)
+    assert _error_codes(
+        write_config(_between({"arm": {"method": "random", "seed": seed}}))
+    ) == {"E-DATA-ASSIGN-SEED"}
+
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": _ARM_AXIS}},
+        {"allocation": "between", "assign": {"arm": {"method": "random", "seed": seed}}},
+        None,
+        c,
+    )
+    assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-SEED"]
+    finding = c.findings[0]
+    assert finding.path == "data.units.assign.arm.seed"
+    assert "neither `auto` nor a pinned integer" in finding.message
+
+
+def test_a_wrongly_typed_assign_seed_is_refused_under_blocked_too(write_config, tmp_path):
+    """The other drawn method reaches the same row — the check sits in the
+    branch both take, not in `random`'s own."""
+    _wide_roster(tmp_path)
+    assert _error_codes(
+        write_config(_between({"arm": {"method": "blocked", "seed": "1234"}}))
+    ) == {"E-DATA-ASSIGN-SEED"}
+
+
+@pytest.mark.parametrize("block", [
+    {"method": "random"},
+    {"method": "random", "seed": "auto"},
+    {"method": "random", "seed": None},
+    {"method": "random", "seed": 11},
+    {"method": "random", "seed": 0},
+    {"method": "blocked", "seed": 11},
+])
+def test_an_auto_or_pinned_assign_seed_reports_nothing(write_config, tmp_path, block):
+    """The can-fail control. An absent key, an explicit `auto`, an explicit
+    `null` (absent, the module's convention), and a pinned integer — `0`
+    included, since a falsy-but-legal pin is what a truthiness test would
+    reject — all validate clean. A mutation reporting the code for every drawn
+    block, or one reading the seed truthily, passes the refusal tests above and
+    fails here."""
+    _wide_roster(tmp_path)
+    assert _error_codes(write_config(_between({"arm": block}))) == set()
+
+
+def test_a_wrongly_typed_seed_under_by_attribute_is_not_this_row(write_config, tmp_path):
+    """Scope, stated rather than left to be discovered: `by_attribute` consults
+    no seed at all, so this row does not run there. The `seed` key is in
+    `envelope.ASSIGN_AXIS_KEYS`, so it earns no `E-CONFIG-KEY-UNKNOWN` either —
+    a `seed` declared beside a read assignment is accepted and ignored, the one
+    adjacent gap this row deliberately leaves open (a *present* `seed` under
+    `by_attribute` is the shape *Ratio and strata need a draw* covers for
+    `ratio`/`stratify_by`, and extending that row to `seed` is a separate
+    decision, not this one)."""
+    _wide_roster(tmp_path)
+    found = _error_codes(
+        write_config(
+            _between(
+                {"arm": {"method": "by_attribute", "from": "arm", "seed": "1234"}},
+                attributes=["arm"],
+            )
+        )
+    )
+    assert "E-DATA-ASSIGN-SEED" not in found
+
+
 # --- *Allocation strata exist* and *Allocation strata survive clustering* ---
 #
 # `assign.<axis>.stratify_by` under a method that DRAWS. The two rows split the

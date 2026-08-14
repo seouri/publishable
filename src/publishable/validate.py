@@ -1560,6 +1560,22 @@ def _check_assign(
     fills the arms*: once it fires, every check that branch would otherwise run
     is moot rather than merely redundant, and the loop moves to the next axis.
 
+    *Assignment seed is auto or pinned* — `E-DATA-ASSIGN-SEED`, checked in the
+    drawn branch because `by_attribute` consults no seed at all. A `seed` that
+    is neither `auto` (or absent, or `null`) nor a pinned `int` is one
+    `units.assign_seed_for` cannot honour: it returns an `int` literally and
+    derives from the digest for everything else, so `seed: "1234"` draws a
+    derived allocation and `allocation.json` records that derived seed as the
+    axis's own — a pin discarded with no diagnostic anywhere, the fault the
+    sibling `sweep.sample.seed` already earns `E-SWEEP-SAMPLE-INVALID` for. Its
+    own code rather than a broadening of a neighbour: each code here owns one
+    field's value space, and `seed` was the one drawn field with none —
+    `E-DATA-ASSIGN-NO-DRAW` least of all, that being about a field meaningless
+    under `by_attribute`. A `bool` is refused, matching `assign_seed_for`'s own
+    exclusion. Read from the declaration alone, so it reports with or without a
+    roster, and checked ahead of *Every arm draws units* so a block reported
+    here is not then drawn from the seed it just refused.
+
     *Every arm draws units* — `E-DATA-ASSIGN-LEVELS`, the other roster-needing
     row and the last thing the drawn branch does: `units.assignment_for` is
     called on a block every row above accepted, and the `ContractError` it
@@ -1579,10 +1595,15 @@ def _check_assign(
     only restate or crash on.
 
     **`method: by_attribute`'s three rows, checked only in that branch of the
-    same `elif` chain** — `from`, `levels`, `ratio`, and `stratify_by` all mean
-    something different under `random`/`blocked`, which *Assignment method isn't
-    drawn* already refuses, or nothing at all under an absent/out-of-enum method,
-    which *Assignment names a method* already refuses:
+    same `elif` chain** — the chain being a partition of which of a block's
+    fields mean what, not a refusal of any branch of it. `from` is the only one
+    a draw does not read at all, there being no column to read; `ratio`,
+    `stratify_by` and the axis's declared `levels` are all read under a draw
+    too, `ratio` and `stratify_by` by that branch's own rows above and `levels`
+    as *the set of arms the apportionment fills* rather than the set the
+    column's values must equal, which is this branch's own *Attribute
+    assignment resolves*. Under an absent or out-of-enum method they mean
+    nothing at all, which *Assignment names a method* already refuses:
 
     *Ratio and strata need a draw* — `by_attribute` reads an arm already assigned
     rather than drawing one, so a non-empty `ratio` describes a proportion no draw
@@ -2186,6 +2207,55 @@ def _check_assign(
                             f"own share of it — its ratio weight times the block "
                             f"size, over {ratio_sum!r} — is a whole number",
                         )
+
+            # *Assignment seed is auto or pinned* — a `seed` this build cannot
+            # honour as the pin it was written to be. `units.assign_seed_for`
+            # returns an `int` literally and derives from the digest for
+            # everything else, so `seed: "1234"`, `seed: 1.5` and `seed: true`
+            # each draw a *derived* allocation while `allocation.json` records
+            # that derived seed under the axis whose seed the config meant to
+            # fix — a discarded pin that surfaces nowhere, which is why it is
+            # refused here rather than left to a shape check nothing performs:
+            # `assign`'s children are axis names no `envelope.py` `LEAF_TYPES`
+            # path can type (the same absence `from`, `ratio` and `stratify_by`
+            # each answer for themselves), and `_check_assign_axis_keys` closes
+            # the block's key *names*, not its values' types.
+            #
+            # Its own code, `E-DATA-ASSIGN-SEED`, rather than a broadening of a
+            # neighbour: every code in this family owns one field's value space
+            # — `ratio`'s, `block_size`'s, `stratify_by`'s — and `seed` was the
+            # one field of a drawn block with none. `E-DATA-ASSIGN-NO-DRAW` in
+            # particular is the wrong home: it is about a field that means
+            # nothing under `by_attribute`, and a `seed` under a drawn method
+            # means a great deal. `E-SWEEP-SAMPLE-INVALID` refuses the sibling
+            # `sweep.sample.seed` for the identical shape, which is the
+            # precedent for refusing at all.
+            #
+            # A `bool` is not an integer here, matching `assign_seed_for`'s own
+            # `not isinstance(seed, bool)` exclusion — `seed: true` would
+            # otherwise pin the axis to 1 without ever saying so. An absent key
+            # and an explicit `null` are both `auto`, § What `auto` derives
+            # from's "an omitted `seed` is `auto`, not an error" and the
+            # module's `null` is absent convention.
+            #
+            # Checked before *Every arm draws units*, so a block reported here
+            # falls inside `findings_before_block`'s gate: realizing a draw over
+            # a seed this row just refused would seed it from the derivation and
+            # report a second, derived finding about an allocation no run makes.
+            seed = block.get("seed")
+            if (
+                seed is not None
+                and seed != "auto"
+                and not (isinstance(seed, int) and not isinstance(seed, bool))
+            ):
+                c.error(
+                    "E-DATA-ASSIGN-SEED",
+                    f"data.units.assign.{axis}.seed",
+                    f"is {seed!r}, which is neither `auto` nor a pinned integer — "
+                    f"a drawn axis takes one or the other, and anything else falls "
+                    f"through to the derived seed that `allocation.json` would then "
+                    f"record as though it were the pin",
+                )
 
             # *Every arm draws units* — the roster-dependent half of the drawn
             # branch. `ratio: {a: 1, b: 1000}` over a ten-unit roster names
@@ -3509,10 +3579,27 @@ def _check_sweep(
         # appears everywhere. This says nothing about allocation: with
         # `levels: [control, treatment, control]` and a correct
         # `allocation: between`, `expand` renders three conditions, two of them
-        # carrying the same label and the same `values`, and `arms_of` hands
-        # both the same units because `{control} == {control}` — its set
-        # equality has nothing to disagree with. The run is green, and two
-        # condition directories are byte-identical at every artifact.
+        # carrying the same label and the same `values`, and the run is green
+        # whichever way the arm is decided — but *what* it does depends on the
+        # method, and this comment names both rather than one. Under
+        # `method: by_attribute`, `arms_of` hands both conditions the same units
+        # because `{control} == {control}` — its set equality has nothing to
+        # disagree with — so two condition directories come out byte-identical
+        # at every artifact. Under a draw there is no column to agree with
+        # itself: `assignment_for` keys `members` by level, so the second
+        # `control` slice lands on the first key rather than beside it. Under
+        # `random` it **overwrites**, and units vanish — a 12-unit roster and
+        # `levels: [control, treatment, control]` leave 4 + 4 = 8 units
+        # allocated unclustered, and 3 + 3 = 6 clustered, where the whole-cluster
+        # buckets are zipped into the same duplicate key. Under `blocked` it
+        # accumulates instead — `_blocked_draw` extends per-level lists — so all
+        # 12 survive and `control` is drawn 8 to `treatment`'s 4, an arm twice
+        # the ratio it declared. Both are measured against the run's own
+        # `resolved`, and in every case the duplicate condition still reports,
+        # identical to its twin. None of it is reachable through a config, since
+        # this row refuses the declaration; what it is here to say is that the
+        # fault is not "a harmless repeat" under any of the three methods.
+        # Verified by calling `assignment_for` on that roster, not inferred.
         #
         # `E-SWEEP-PATH-DUPLICATE` is the sibling and does not reach this:
         # it compares axis *names* across entries, never values within one

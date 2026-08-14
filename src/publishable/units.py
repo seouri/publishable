@@ -394,11 +394,12 @@ def _assign_constant_columns(assign_decl: Any) -> dict[str, str]:
     the same validate-clean-then-crash gap this module's docstrings warn
     against elsewhere, in the opposite direction: a config no check approves
     yet, refused anyway by a rule that assumed a resolution `by_attribute`
-    alone performs. Every config that reaches `run` has `method:
-    by_attribute` regardless, since `random`/`blocked` and anything out of
-    the enum are refused at `validate` first — so this gate loses no coverage
-    a shipped run could reach, and narrows what an in-development `random`
-    config sees while `by_attribute` executes.
+    alone performs. **That gate went from redundant to load-bearing when the
+    draw was built**: `random`/`blocked` were refused at `validate` before it,
+    so no config carrying one could reach this function at all, and now every
+    drawn design does. This is the only thing standing between such a design
+    and an `E-DATA-ASSIGN-VARIES` over a column its declaration never named
+    and its draw never reads.
 
     Keyed `assign.<axis>.from`, the literal dotted path a reader would look for
     in `data.units` — not `assign` alone — because `assign` is one declaration

@@ -229,6 +229,24 @@ def test_a_pinned_assign_seed_is_returned_literally():
     assert assign_seed_for(block, "arm", "sha256:d", _roster(11)) == 42
 
 
+def test_a_boolean_seed_is_not_a_pin_and_derives():
+    """`bool` is a subclass of `int`, so `seed: true` would otherwise pin every
+    drawn axis to `1` and `seed: false` to `0` — a number nobody wrote, recorded
+    in `allocation.json` as the axis's own seed. `assign_seed_for` excludes it
+    explicitly, and this is what pins that exclusion: dropping the
+    `not isinstance(seed, bool)` guard makes both assertions below read `1`/`0`.
+
+    `validate` refuses the declaration outright (`E-DATA-ASSIGN-SEED`), so this
+    is the second line rather than the only one — but a raise-free fallback in
+    the function `validate` itself calls is worth keeping honest."""
+    roster = _roster(10)
+    derived = assign_seed_for({"method": "random"}, "arm", "sha256:d", roster)
+    for pinned in (True, False):
+        block = {"method": "random", "seed": pinned}
+        assert assign_seed_for(block, "arm", "sha256:d", roster) == derived
+    assert derived not in (0, 1)
+
+
 def test_the_derived_seed_moves_with_the_roster():
     """'the roster changes, or any axis is added or edited'. Two rosters
     differing by one unit -> different seeds. THE CONTROL: the same roster in a
