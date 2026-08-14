@@ -1806,8 +1806,9 @@ def test_auto_block_size_is_a_valid_int_even_for_a_fractional_ratio():
     `_usable_ratio_share` accepts any finite positive `float` share, so the
     config that reaches this validates clean.** This does not raise, and
     every unit resolves to exactly one arm — the property that matters here,
-    since `auto` is not checked against the whole-multiple rule at all and
-    is not guaranteed to give every level a perfectly whole per-block share
+    since a resolved `auto` is checked by the same whole-share rule an
+    explicit `block_size` is, and is not guaranteed to give every level a
+    whole per-block share
     for an arbitrary `ratio` (§ Allocation states this explicitly): the
     draw still has to complete via `_apportion`'s largest-remainder
     tolerance rather than raise a type error root cause away."""

@@ -8880,7 +8880,7 @@ def test_an_auto_block_size_is_not_exempt_from_the_type_check_but_usually_passes
     covers every genuinely malformed non-`int`), but **not** from the
     whole-share arithmetic: an earlier version of this check exempted
     `"auto"` from both, on the (false, corrected after review) theory that
-    `units.assign_seed_for`'s `2 x ratio_sum` formula always gives every
+    `units.auto_block_size`'s `2 × ratio_sum` formula always gives every
     level a whole share. `ratio: {control: 1, treatment: 1}` is the ordinary
     case where it does — resolved `auto` is 4, each level's own share is `4 x
     1 / 2 = 2`, whole — so this fixture passes, but
