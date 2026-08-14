@@ -1284,6 +1284,33 @@ def _seed_from(digest: str) -> int:
     return int.from_bytes(hashlib.sha256(f"{digest}|folds".encode()).digest()[:4], "big")
 
 
+def assign_seed_for(block: Mapping[str, Any], axis: str, digest: str, roster: UnitList) -> int:
+    """The seed an `assign` axis draws its allocation with.
+
+    `reference.md` § What `auto` derives from: an axis's `assign.seed` mixes
+    "digest + the axis name + the resolved roster" — the digest and the axis
+    name because a crossed design (`arm`, `sex`, ...) must not assign every
+    axis identically, and `units_hash(roster)` because it covers the roster
+    **in resolved order**: two runs that resolved the same units in a
+    different sequence did not allocate the same trial (§ Where units come
+    from).
+
+    A pinned integer is returned literally, and — the load-bearing half,
+    copied from `sweep.sample_seed_for`'s own docstring — **the digest is not
+    consulted at all** on that path, only read out of `block`. "Pinning an
+    integer is the deliberate act, and the one to take for anything you
+    intend to cite," so a pinned assignment must survive a roster that grows,
+    shrinks, or reorders, and `hashes.design_digest` strips `assign.<axis>.seed`
+    per axis for the same reason: a pinned seed must not move the digest it
+    would otherwise be mixed with.
+    """
+    seed = block.get("seed", "auto")
+    if isinstance(seed, int) and not isinstance(seed, bool):
+        return seed
+    payload = f"{digest}|assign|{axis}|{units_hash(roster)}".encode()
+    return int.from_bytes(hashlib.sha256(payload).digest()[:4], "big")
+
+
 def units_hash(units: UnitList) -> str:
     """Covers the list in resolved order — two runs that resolved the same units in a
     different sequence did not allocate the same trial."""

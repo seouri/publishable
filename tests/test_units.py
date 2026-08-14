@@ -11,6 +11,7 @@ from publishable.units import (
     apply_rule,
     arm_members,
     arms_of,
+    assign_seed_for,
     cluster_count,
     clusters_of,
     collapse_measurements,
@@ -213,6 +214,49 @@ def test_units_hash_follows_order_and_content(input_dir: Path):
 
 def _roster(n: int) -> UnitList:
     return UnitList([Unit(key=f"u{i:03d}", paths=(), attributes={}) for i in range(n)])
+
+
+def test_a_pinned_assign_seed_is_returned_literally():
+    """§ What `auto` derives from: 'pinning an integer is the deliberate act,
+    and the one to take for anything you intend to cite', so a pinned seed must
+    survive a roster change. Same block, two different rosters, same answer."""
+    block = {"method": "blocked", "seed": 42}
+    assert assign_seed_for(block, "arm", "sha256:d", _roster(10)) == 42
+    assert assign_seed_for(block, "arm", "sha256:d", _roster(11)) == 42
+
+
+def test_the_derived_seed_moves_with_the_roster():
+    """'the roster changes, or any axis is added or edited'. Two rosters
+    differing by one unit -> different seeds. THE CONTROL: the same roster in a
+    different ORDER must also differ, because `units_hash` covers order and
+    § Where units come from says two runs that resolved the same units in a
+    different sequence did not allocate the same trial."""
+    block = {"method": "blocked"}
+    base = assign_seed_for(block, "arm", "sha256:d", _roster(10))
+
+    grown = _roster(11)
+    assert assign_seed_for(block, "arm", "sha256:d", grown) != base
+
+    reordered = UnitList(list(reversed(list(_roster(10)))))
+    assert assign_seed_for(block, "arm", "sha256:d", reordered) != base
+
+
+def test_the_derived_seed_moves_with_the_axis_name():
+    """Two axes over one roster and one digest draw differently, or a crossed
+    design assigns both axes identically."""
+    block = {"method": "blocked"}
+    roster = _roster(10)
+    arm_seed = assign_seed_for(block, "arm", "sha256:d", roster)
+    sex_seed = assign_seed_for(block, "sex", "sha256:d", roster)
+    assert arm_seed != sex_seed
+
+
+def test_the_derived_seed_moves_with_the_digest():
+    block = {"method": "blocked"}
+    roster = _roster(10)
+    one = assign_seed_for(block, "arm", "sha256:d", roster)
+    other = assign_seed_for(block, "arm", "sha256:e", roster)
+    assert one != other
 
 
 def test_every_unit_appears_in_exactly_one_partition():
