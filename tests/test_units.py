@@ -1517,10 +1517,18 @@ def _five_clusters() -> tuple[UnitList, dict[str, str]]:
     "core computed the partition, so core keeps it indivisible" fixture,
     shared by the two tests below. Irregular sizes on purpose: no two are
     equal except the pair of 2s, so a mutation that dealt clusters out by
-    the wrong rule (or split one) lands on a size combination this exact
-    pair of fixtures does not otherwise produce — a roster of 12 equal-sized
-    clusters, or six pairs, would let several wrong rules agree with the
-    right one by chance."""
+    the wrong rule reaches a size combination none of the other rosters in
+    this file happen to share.
+
+    **Not a claim that a split-cluster mutation produces a size no correct
+    draw could** — it can, and does: `{c0, c3}` (4+2) and `{c1, c2, c4}`
+    (3+2+1) are both legitimate whole-cluster combinations summing to 6, so
+    a 6/6 split proves nothing about whether a cluster was divided to reach
+    it.
+    `test_a_clustered_random_draw_keeps_every_cluster_whole` below asserts
+    the structural property (every cluster's units land together) for
+    exactly this reason — a size-based assertion could not distinguish the
+    two."""
     return _clustered({"c0": 4, "c1": 3, "c2": 2, "c3": 2, "c4": 1})
 
 
@@ -1606,6 +1614,29 @@ def test_a_clustered_draw_the_ratio_apportions_no_whole_cluster_to_is_refused():
         assignment_for(roster, "arm", block, ["a", "b"], "digest", clusters)
     assert e.value.code == "E-DATA-ASSIGN-LEVELS"
     assert "b" in str(e.value)
+    assert "resolves zero of them" in str(e.value)
+
+
+def test_a_clustered_draws_zero_weight_level_refuses_rather_than_dividing_by_zero():
+    """`ratio: {a: 0, b: 1}` reaches `_assign_whole_clusters_by_ratio`'s
+    `counts[i] / weights[i]` with a weight of 0 for `a`. `validate` refuses a
+    non-positive ratio value today (`E-DATA-ASSIGN-RATIO`), but
+    `assignment_for` is reachable directly — the same reachability gap task
+    8's report already flagged for the unclustered path — so a defensive
+    guard here is worth having regardless of that gate.
+
+    Every cluster's priority for `a` is `inf` rather than a raw
+    `ZeroDivisionError`, so `a` is never the argmin while `b`'s weight stays
+    positive: `b` claims every cluster and `a` ends up an empty bucket,
+    refused by the same `E-DATA-ASSIGN-LEVELS` code and "resolves zero of
+    them" message a starved level always gets — a `ContractError` the
+    caller asked for, not an arithmetic exception it didn't."""
+    roster, clusters = _five_clusters()
+    block = {"method": "random", "seed": 1, "ratio": {"a": 0, "b": 1}}
+    with pytest.raises(ContractError) as e:
+        assignment_for(roster, "arm", block, ["a", "b"], "digest", clusters)
+    assert e.value.code == "E-DATA-ASSIGN-LEVELS"
+    assert "a" in str(e.value)
     assert "resolves zero of them" in str(e.value)
 
 

@@ -1490,17 +1490,26 @@ def _assign_whole_clusters_by_ratio(
     already-unbalanced buckets left to go to.
 
     Every realized size can differ from its exact target share (`n * weight
-    / sum(weights)`) by up to the size of the largest cluster assigned to
-    it: a cluster is the smallest thing that can move, so a bucket that has
-    already claimed one large cluster can overshoot its share before a
-    second cluster is even considered, and nothing here divides a cluster to
-    correct for that — `partition_units`'s docstring makes the identical
-    argument for folds and refuses to claim the stronger, exact one.
+    / sum(weights)`): a cluster is the smallest thing that can move, so a
+    bucket's share only ever changes in whole-cluster increments and nothing
+    here divides one to correct an overshoot or an undershoot. **No bound on
+    that deviation is promised** — `reference.md` § Clustered units makes
+    the identical non-promise for folds ("What is not promised is a bound on
+    how uneven the result may be"): one cluster larger than a bucket's whole
+    target share makes an uneven split unavoidable, in whichever direction
+    the greedy order happens to leave that bucket, and core reports the
+    realized sizes rather than pretending otherwise.
 
     **A size of 0 is possible here and is the caller's to refuse**,
     `_apportion`'s own convention: only `assignment_for` holds the axis
     name, the declared `ratio`, and the roster a refusal's message has to
-    name, so this stays total rather than raising.
+    name, so this stays total rather than raising — **including for a
+    non-positive weight**, which `counts[i] / weights[i]` cannot be asked to
+    divide by. Such a level is never the argmin while any other level still
+    has a positive weight (`float("inf")` outranks every finite quotient),
+    so it is dealt no cluster and correctly ends up a size-0 bucket for the
+    caller to refuse, rather than a raised `ZeroDivisionError` for the
+    caller never to see.
     """
     members: dict[str, list[Unit]] = {}
     for unit in units:
@@ -1510,8 +1519,17 @@ def _assign_whole_clusters_by_ratio(
     order.sort(key=lambda name: -len(members[name]))
     counts = [0.0] * len(weights)
     buckets: list[list[Unit]] = [[] for _ in weights]
+
+    def priority(i: int) -> tuple[float, int]:
+        # A non-positive weight has no target share to be "below" — `inf`
+        # keeps it out of the argmin (and out of a `ZeroDivisionError`)
+        # without raising, `_apportion`'s own convention of staying total
+        # and leaving the refusal to `assignment_for`.
+        share = counts[i] / weights[i] if weights[i] > 0 else float("inf")
+        return (share, i)
+
     for name in order:
-        i = min(range(len(weights)), key=lambda i: (counts[i] / weights[i], i))
+        i = min(range(len(weights)), key=priority)
         buckets[i].extend(members[name])
         counts[i] += len(members[name])
     return buckets
