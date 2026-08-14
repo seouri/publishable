@@ -74,6 +74,16 @@ def _counts(
     unit sets. It stays an `int`, unlike `effective`: a cluster count is a count of
     whole things, and § Clustered units' own example prints `clusters: 10`.
 
+    **For a RECORDED column, this figure is not what `run.yaml` ends up printing.**
+    `stats.summarize_step` recomputes `clusters` again, per column, from that
+    column's own carrier keys ("`clusters` is recomputed per column" — that
+    function's own docstring) — identical to this one for a full column, and
+    correctly narrower for a ragged one — and that recompute is what reaches the
+    record, overwriting this figure rather than reading it. This value survives
+    unread here only for a DERIVED metric, where `summarize_step` has no
+    per-column carrier set to recompute over and passes `**counts` through
+    untouched.
+
     Listed ahead of `effective` because § The three-part `n` names the joiners in
     that order, and this dict's insertion order is what `run.yaml` renders.
 

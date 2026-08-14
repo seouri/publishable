@@ -755,21 +755,41 @@ def test_groups_and_cluster_by_execute_with_per_arm_cluster_counting(tmp_path: P
     direct experiment: mutating THAT line (`runner.py`) to count over the
     whole roster instead of the arm-scoped `completed` set left this test's
     numbers **unchanged** (still 3/3), even with this corrected, discriminating
-    fixture. The one path that WOULD pass `attrition`'s own figure through
-    unmodified is a DERIVED metric (`aggregate`'s return, not a recorded
-    column) — and that combination is refused unconditionally whenever
-    `cluster_by` is declared (`E-DATA-CLUSTER-DERIVED`,
-    `test_a_clustered_derived_metric_is_refused_rather_than_drawn` pins it),
-    so no config reaches `run.yaml` with `attrition`'s own clusters figure
-    displayed for cluster_by at all. `attrition`'s own arithmetic is not
-    unpinned by this — `tests/test_runner.py`'s
+    fixture.
+
+    `stats.py`'s DERIVED-metric block (`aggregate`'s return, not a recorded
+    column) IS a live consumer of `attrition`'s own figure — `"n": {**counts,
+    "completed": len(collapsed)}` passes it straight through, unlike the
+    recorded-column path above. What keeps that path unreached here is a
+    narrower, run-time fact, not an unconditional refusal: `stats.py`'s gate
+    is `if clusters is not None and seed is not None:`, plus a non-empty
+    `drawable` (a per-key resample closure whose `statistics.resample` name
+    matches). `command_run` always supplies both — `resample_seed(digest)`
+    returns a real `int`, never `None`, and it builds a resample closure for
+    every derived key regardless of whether `statistics.resample` names it —
+    so the gate closes on every config `command_run` can produce today
+    (`E-DATA-CLUSTER-DERIVED`, confirmed by probe and pinned by
+    `test_a_clustered_derived_metric_is_refused_rather_than_drawn`), not
+    because the combination cannot exist in the code. A fourth call site
+    that omitted `seed` or built no `resample` closure would publish
+    `attrition`'s figure unmodified, and this claim would need re-checking
+    against it.
+
+    **This "no config reaches `run.yaml` with `attrition`'s own clusters
+    figure" is therefore scoped to today's build, not a permanent property**:
+    `reference.md` marks `E-DATA-CLUSTER-DERIVED` *Temporary*, twice, both
+    saying H4 lifts it — once H4 lands, a derived metric under `cluster_by`
+    may again reach `run.yaml`, carrying `attrition`'s figure straight
+    through, and this test's own discriminating mutation site may need
+    revisiting then. `attrition`'s own arithmetic is not unpinned by any of
+    this — `tests/test_runner.py`'s
     `test_n_gains_clusters_under_a_clustered_design`,
     `test_every_attrition_return_site_agrees_about_clusters`, and
     `test_clusters_and_effective_are_independent_parts_of_n` each call it
     directly and DO catch that mutation — it is simply not observable through
-    any `command_run`-produced `run.yaml`. **This test's own discriminating
-    mutation is therefore in `stats.py`, not `runner.py`**: changing line
-    ~1360's `cluster_count_of(clusters, column_keys)` to
+    any `command_run`-produced `run.yaml` today. **This test's own
+    discriminating mutation is therefore in `stats.py`, not `runner.py`**:
+    changing line ~1360's `cluster_count_of(clusters, column_keys)` to
     `cluster_count_of(clusters, clusters.keys())` moves both arms' printed
     figure from 3 to 4 (whole-roster count), which this test's exact-value
     assertions below catch. Mutation-verified: applied, confirmed FAIL (both
