@@ -1340,6 +1340,17 @@ def assignment_for(
     both draws on their unstratified paths unchanged, bit for bit. `strata`
     on the returned plan is the declaration realized, in declared order.
 
+    **Arm sizes can therefore differ by more than one**, and the deviation is
+    bounded by the number of strata rather than by one unit — `_apportion`
+    runs once per stratum, its one-unit tolerance applies inside each, and the
+    floors add. Three strata of five units at an equal two-arm ratio give 3/2
+    in every stratum, so 9/6 overall where the unstratified draw of the same
+    roster gives 8/7, and the surplus lands on the first-declared level every
+    time, since that is how `_apportion` breaks a tie. `partition_units` states
+    the identical consequence for stratified folds; it is the prescribed rule's
+    arithmetic rather than a defect, and balancing the totals *across* strata is
+    what would unbalance the thing `stratify_by` was declared to balance.
+
     **Coverage is checked over the merged draw, never per stratum** — the
     rule `blocked` already applies per block, one construction over: a level
     a small stratum apportioned no unit to is fine while another stratum

@@ -9117,7 +9117,13 @@ def test_a_stratum_naming_a_group_axis_is_not_refused(write_config):
     here — § Expansion modes' "`stratify_by` may name a group axis declared
     before it" — and only a `fold`'s or `holdout`'s stratum is restricted to a
     unit attribute. A check that read `data.units.attributes` alone would refuse
-    the crossed design § Expansion modes writes out."""
+    the crossed design § Expansion modes writes out.
+
+    `sex` is deliberately **not** declared in `data.units.attributes` here: with
+    both declared, the attribute branch would exempt the name first and the axis
+    branch would never run, leaving this test passing for a reason its own name
+    denies. The unrelated `E-DATA-ASSIGN-UNKNOWN` that absence earns is harmless
+    — the assertion names one code and is a `not in`."""
     found = _error_codes(
         write_config(
             _between(
@@ -9129,7 +9135,6 @@ def test_a_stratum_naming_a_group_axis_is_not_refused(write_config):
                     {"by": "sex", "levels": ["f", "m"]},
                     {"by": "arm", "levels": ["control", "treatment"]},
                 ],
-                attributes=["sex"],
             )
         )
     )
