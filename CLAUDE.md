@@ -25,15 +25,22 @@ This repository holds both the normative specification and the tool it specifies
 Modules not yet built are still planned, and the slices that build them are listed in
 `docs/superpowers/specs/2026-08-08-implementation-spine-design.md`.
 
-**Order of the slices that remain: H7 → H4 → H3d → H3c-3.** Amended 2026-08-14 against outside
-evidence — all nine experiments in [the feasibility analysis](docs/feasibility-llm-growth-studies.md)
-were run through `validate`, and **none executes**: `get_template` resolves a builtin dict and reads no
-entry points, so every config stops at `E-TEMPLATE-UNKNOWN` before any other check. H7 therefore gates
-all nine; H4 then unblocks three and H3d the rest, while H3c-3 unblocks none. The cost is that H3d now
-precedes the cells work it was scheduled to consume, so **H3c-3 owns retrofitting the holdout to cells**
-— acceptable only because no experiment in that analysis declares a group axis. The reasoning lives in
-the spine design's *Order, amended against outside evidence*; it is repeated here because
-`docs/superpowers/` is gitignored and a decision recorded only there is recorded nowhere.
+**Order of the slices that remain: H7a → H4 → H3d → H3c-3 → H7 (the rest).** Amended 2026-08-14
+against outside evidence — all nine experiments in
+[the feasibility analysis](docs/feasibility-llm-growth-studies.md) were run through `validate`, and
+**none executes**. The gate is the **template registry**, not the plugin system: `get_template` reads a
+builtin dict, so every config stops at `E-TEMPLATE-UNKNOWN` before any other check — but § Templates
+gives a template three homes, and a **project-local** one in `templates/` is *discovered by path*, not
+through an entry point. **H7a** is that subset — export `register_template`, discover `templates/**` by
+path, add `generate template` — and it needs none of entry-point resolution, probes or the change gate.
+H4 then unblocks three of the nine and H3d the rest; H3c-3 unblocks none. Full H7 remains owed for
+resolvers and the apparatus, which are genuinely plugin artifacts.
+
+The cost is that H3d now precedes the cells work it was scheduled to consume, so **H3c-3 owns
+retrofitting the holdout to cells** — acceptable only because no experiment in that analysis declares a
+group axis. The reasoning lives in the spine design's *Order, amended against outside evidence*; it is
+repeated here because `docs/superpowers/` is gitignored and a decision recorded only there is recorded
+nowhere.
 
 ## The documents
 
