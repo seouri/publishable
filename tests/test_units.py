@@ -1663,26 +1663,44 @@ def test_a_blocked_draw_balances_within_every_whole_block():
 
 
 def test_blocked_reads_the_roster_order_as_data():
-    """§ Where units come from: `blocked` is 'the one declaration that reads
-    the order as data'. Same 14 units, same pinned seed, only `u00` and `u05`
-    swapped — a reorder confined to one pair, so a size-based assertion could
-    never catch it either way.
+    """**What this test actually shows, corrected after review — not that
+    `blocked` is order-sensitive and `random` isn't.** At a pinned seed, both
+    `random` and `blocked` are pure functions of *position* → arm (verified:
+    200 random permutations leave each one's own position→arm vector
+    bit-identical across runs, and each is invariant under exactly 42 of the
+    91 pairwise position swaps at this seed) — they are **equally**
+    order-sensitive mechanically; only the *specific* position→arm map
+    differs between the two methods. What this test demonstrates is narrower
+    than the docstring this replaces claimed: `u00` and `u05` happen to sit
+    in the same arm under `random`'s map at seed 1 and in different arms
+    under `blocked`'s, so swapping them moves `blocked`'s output and not
+    `random`'s — which shows the two maps disagree on this one pair, not
+    that one method reads order and the other doesn't.
 
-    THE CONTROL: `random` over the same two rosters gives the identical
-    per-unit assignment. It is not order-blind in general — a full reversal
-    at this seed *does* move units across arms — but its single whole-roster
-    shuffle only cares which *positions* land in each arm's slice, not which
-    unit occupies a position; swapping two units who are both already in
-    that same position-set changes nothing about who ends up where. `u00`
-    and `u05` are exactly such a pair at seed 1 (verified: both `random`'s
-    positions land in `control`). Under `blocked` the same swap moves each
-    of them into a different *block*, and each block's within-block draw is
-    independent, so `u00` and `u05` end up trading arms — the property a
-    mutant that shuffled the whole roster before blocking (§ Global
-    Constraints: 'shuffle the roster before blocking') would not reproduce,
-    since that mutant's blocks would no longer be the roster's own
-    consecutive windows and this specific pair's fate would not track this
-    swap."""
+    **The real demonstration of § Where units come from's claim — the
+    property specific to `blocked`, and what § Allocation's "site batches,
+    plate order" rationale is actually about — is
+    `test_a_blocked_draw_balances_within_every_whole_block` above**: local
+    balance in every consecutive window is a property `random` has at no
+    window smaller than the whole roster, and `blocked` has by construction.
+    This test is kept as a secondary, narrower check on that same swap, with
+    its `random` half serving as a control that must still report (both
+    orderings of a roster giving `random` the identical map is not
+    guaranteed for every pair — a full reversal at this seed does move units
+    across arms — but holds for this hand-picked one, `u00`/`u05`, because
+    both land in `random`'s same arm-slice).
+
+    **This test's own discriminating power against 'shuffle the roster
+    before blocking' is real but narrower than once claimed, too**: it fails
+    against a mutant that reuses the block-drawing `rng` instance to shuffle
+    the whole roster first (consuming its state before any block draw runs),
+    but *survives* a mutant that shuffles with a **separate**,
+    freshly-seeded `random.Random(seed)` first and leaves the block-drawing
+    `rng` untouched — verified: under that variant, `u00` and `u05` still
+    land in the same post-shuffle grouping and this test passes.
+    `test_a_blocked_draw_balances_within_every_whole_block` catches both
+    variants, which is why it, not this test, is the mutation-proved
+    demonstration of 'balance within every block'."""
     roster = _random_roster(14)
     keys = [u.key for u in roster]
     swapped_keys = keys[:]
@@ -1747,6 +1765,104 @@ def test_auto_block_size_is_twice_the_ratio_sum():
     plan2 = assignment_for(roster4, "arm", block2, ["a", "b"], "digest")
     assert plan2.members["a"] == ("u00", "u03")
     assert plan2.members["b"] == ("u01", "u02")
+
+
+def test_a_declared_block_size_is_honoured_rather_than_ignored_for_auto():
+    """**Caught by review: a mutation replacing the resolved `block_size` with
+    `2 * ratio_sum` unconditionally — always drawing at `auto` and silently
+    discarding whatever was declared — passed the entire suite.** Every other
+    test in this file either omits `block_size` (so `auto` is also the
+    correct answer) or picks a declared value that happens to equal `auto`.
+    This fixture doesn't: `ratio: {}` over two levels makes `auto` 4, and the
+    declared value is 6 — both are legal whole multiples of the ratio sum
+    (2), so neither is refused, and they draw against genuinely different
+    block boundaries (12 units: one block of 6 vs. three of 4), which the
+    same pinned seed's RNG consumes differently. Exact membership, not size,
+    discriminates them: `_apportion` gives 3/3 and 2/2/2 respectively, both
+    summing to 6/6 overall, so a size assertion could not tell `block_size:
+    6` from `auto` here either — the same fixture trap this task's brief
+    names, now applied to the declared value itself rather than to `auto`'s
+    formula."""
+    roster = _random_roster(12)
+    block = {"method": "blocked", "seed": 1, "block_size": 6}
+    plan = assignment_for(roster, "arm", block, ["control", "treatment"], "digest")
+    assert plan.members["control"] == ("u00", "u03", "u05", "u06", "u07", "u08")
+    assert plan.members["treatment"] == ("u01", "u02", "u04", "u09", "u10", "u11")
+
+    auto_block = {"method": "blocked", "seed": 1}
+    auto_plan = assignment_for(roster, "arm", auto_block, ["control", "treatment"], "digest")
+    assert auto_plan.members != plan.members, (
+        "the control must report: block_size 6 and auto (4) must draw "
+        "differently at this seed, or this test proves nothing"
+    )
+
+
+def test_auto_block_size_is_a_valid_int_even_for_a_fractional_ratio():
+    """**Caught by review: `auto = 2 * ratio_sum` is a bare `2 * 0.5 = 1.0`
+    for `ratio: {control: 0.5, treatment: 0.5}` — a `float` — and
+    `range(0, len(keys), block_size)` in the draw below raises a bare
+    `TypeError` on a `float` step. Reachable with no `block_size` declared
+    at all: a fractional `ratio` alone does it, and `validate`'s
+    `_usable_ratio_share` accepts any finite positive `float` share, so the
+    config that reaches this validates clean.** This does not raise, and
+    every unit resolves to exactly one arm — the property that matters here,
+    since `auto` is not checked against the whole-multiple rule at all and
+    is not guaranteed to give every level a perfectly whole per-block share
+    for an arbitrary `ratio` (§ Allocation states this explicitly): the
+    draw still has to complete via `_apportion`'s largest-remainder
+    tolerance rather than raise a type error root cause away."""
+    roster = _random_roster(14)
+    block = {"method": "blocked", "seed": 1, "ratio": {"control": 0.5, "treatment": 0.5}}
+    plan = assignment_for(roster, "arm", block, ["control", "treatment"], "digest")
+    assert sorted(plan.members["control"] + plan.members["treatment"]) == sorted(
+        u.key for u in roster
+    )
+
+
+def test_a_blocked_level_empty_in_one_block_is_fine_if_another_block_covers_it():
+    """**Caught by review: a mutation checking emptiness *per block* rather
+    than over the whole roster passed the entire suite.** `assignment_for`'s
+    own docstring commits to the opposite explicitly: "a level with at least
+    one unit in some block is fine even if another block apportioned it
+    none." The 14-unit, two-level fixture above can never reach this,
+    because with only two levels every whole block of 4 is forced to 2/2 and
+    the trailing block of 2 to 1/1 — no level is ever apportioned zero in any
+    block there.
+
+    Three levels, 7 units, equal ratio (`auto` = 6): one whole block of 6
+    (`_apportion(6, [1,1,1]) == [2,2,2]`, exact) plus a trailing block of 1.
+    `_apportion(1, [1,1,1])`'s three equal fractional parts tie-break to the
+    first-declared level deterministically (largest-remainder ties go to
+    declared order — `_apportion`'s own rule), so the trailing block always
+    apportions `[1, 0, 0]`: `b` and `c` get **zero units in that block**,
+    every seed, while `a` gets one. Both still resolve to a non-empty arm
+    overall, because each already has 2 units from the full block — exactly
+    the property a per-block check would refuse and the real, whole-roster
+    check does not."""
+    roster = _random_roster(7)
+    block = {"method": "blocked", "seed": 1}
+    plan = assignment_for(roster, "arm", block, ["a", "b", "c"], "digest")
+
+    keys = [u.key for u in roster]
+    full_block = set(keys[0:6])
+    trailing_block = set(keys[6:7])
+    assert trailing_block == {"u06"}
+
+    for level in ("a", "b", "c"):
+        assert len(full_block & set(plan.members[level])) == 2, (
+            f"the full block of 6 must apportion {level} exactly 2 units"
+        )
+    # The trailing block of 1: `a` claims it, `b` and `c` are empty *in this
+    # block specifically* — the situation a per-block check would refuse.
+    assert trailing_block & set(plan.members["a"]) == {"u06"}
+    assert trailing_block & set(plan.members["b"]) == set()
+    assert trailing_block & set(plan.members["c"]) == set()
+    # No raise reached this point, and every level resolves overall — `a` at
+    # 3 (2 + the trailing unit), `b` and `c` at 2 each from the full block
+    # alone.
+    assert len(plan.members["a"]) == 3
+    assert len(plan.members["b"]) == 2
+    assert len(plan.members["c"]) == 2
 
 
 def test_arm_members_reduces_arms_of_across_the_resolved_conditions():

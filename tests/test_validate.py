@@ -8734,6 +8734,72 @@ def test_an_explicit_block_size_must_be_a_whole_multiple_of_the_ratio_sum(write_
     assert "'2'" in finding.message or "2" in finding.message
 
 
+@pytest.mark.parametrize(
+    ("ratio", "block_size"),
+    [
+        ({"control": 0.5, "treatment": 0.5}, 1),
+        ({"control": 1.5, "treatment": 2.5}, 4),
+    ],
+    ids=["sum-1-block-1", "sum-4-block-4"],
+)
+def test_the_whole_multiple_rule_checks_each_levels_own_share_not_just_the_sum(
+    write_config, ratio, block_size
+):
+    """**Controller ruling, caught by review — and the two checks turn out to
+    be unordered in *either* direction, not merely "sum passes, per-level
+    fails."** `ratio: {control: 0.5, treatment: 0.5}` sums to 1, and
+    `block_size: 1` is trivially "a whole multiple of 1" — the old check's
+    own words — yet every block apportions `[1, 0]`: `treatment` is starved
+    in *every* block, which dies at `units.assignment_for`'s
+    `E-DATA-ASSIGN-LEVELS` instead of being refused here, under the wrong
+    code, exactly the validate-clean-then-fail shape this row's own
+    `block_size: 0` guard exists to close. `{control: 1.5, treatment: 2.5}`
+    sums to 4, and `block_size: 4` is "a whole multiple of 4" too — 1 whole
+    multiple, in fact — yet `control`'s own per-block share, `4 x 1.5 / 4 =
+    1.5`, is not a whole number either. Neither of these would have been
+    caught by a check that only asked whether `ratio`'s *sum* divides
+    `block_size`; both are caught by asking whether *each level's own share*
+    of a block is whole. **The sibling test below,
+    `test_a_block_size_the_sum_rule_would_wrongly_refuse_is_accepted`, is the
+    other direction** — a case the old check refused and the real rule
+    accepts — without which "per-level" could be mistaken for merely a
+    tighter version of "sum," rather than a genuinely different test."""
+    found = _error_codes(
+        write_config(
+            _between({"arm": {"method": "blocked", "ratio": ratio, "block_size": block_size}})
+        )
+    )
+    assert found == {"E-DATA-ASSIGN-DRAWN", "E-DATA-ASSIGN-BLOCK-SIZE"}
+
+
+def test_a_block_size_the_sum_rule_would_wrongly_refuse_is_accepted(write_config):
+    """**The direction none of the refusal tests cover, per review: the two
+    rules are not ordered, so a case the sum rule refuses and the per-level
+    rule accepts is needed too, or "per-level" reads as a strict tightening
+    of "sum" rather than a genuinely different test.** `ratio: {control: 2,
+    treatment: 2}` sums to 4; `block_size: 2` is *not* a whole multiple of 4
+    — the old, retired check would have refused this outright — but each
+    level's own per-block share, `2 x 2 / 4 = 1`, is whole, and
+    `units._apportion(2, [2, 2]) == [1, 1]` fills it exactly. Must report
+    only the method's own `E-DATA-ASSIGN-DRAWN`, with no
+    `E-DATA-ASSIGN-BLOCK-SIZE` finding — a mutation reinstating the sum
+    check fails exactly this test."""
+    found = _error_codes(
+        write_config(
+            _between(
+                {
+                    "arm": {
+                        "method": "blocked",
+                        "ratio": {"control": 2, "treatment": 2},
+                        "block_size": 2,
+                    }
+                }
+            )
+        )
+    )
+    assert found == {"E-DATA-ASSIGN-DRAWN"}
+
+
 @pytest.mark.parametrize("bad_block_size", [0, -2, 2.5, "four", None, True])
 def test_a_non_positive_or_non_int_block_size_is_refused(write_config, bad_block_size):
     """`units.assignment_for` cuts the roster with `range(0, len(keys), block_size)`:
@@ -8769,43 +8835,57 @@ def test_a_non_positive_or_non_int_block_size_is_refused(write_config, bad_block
     assert found == {"E-DATA-ASSIGN-DRAWN", "E-DATA-ASSIGN-BLOCK-SIZE"}
 
 
-def test_a_bool_block_size_is_refused_even_when_its_int_value_would_divide_evenly(
+def test_a_bool_block_size_is_refused_by_the_type_check_not_by_coincidence(write_config):
+    """`True`'s underlying value, `1`, would fail *this* fixture's per-level
+    share check anyway (`ratio: {control: 1, treatment: 1}`, sum 2 — a block
+    of 1 can't give either level a whole share), so the exact-code-set
+    assertion `test_a_non_positive_or_non_int_block_size_is_refused[True]`
+    can't tell "refused because it's a `bool`" from "refused because `1`
+    doesn't divide 2 either" — and after the per-level tightening (§
+    Allocation's per-level-share ruling) there is no *legal* two-level ratio
+    for which `int(True) == 1` is ever a valid `block_size` at all, since two
+    positive shares can never both be whole multiples of a sum of 1. The
+    message text is what isolates it instead of the fixture: the type/
+    positivity branch's wording ("not a positive whole number of units")
+    fires for `True`, not the per-level branch's ("does not fill ... levels
+    ... exactly") — proving `bool` is excluded explicitly rather than merely
+    failing the arithmetic it happens to also fail here."""
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": _ARM_AXIS}},
+        {
+            "allocation": "between",
+            "assign": {
+                "arm": {
+                    "method": "blocked",
+                    "ratio": {"control": 1, "treatment": 1},
+                    "block_size": True,
+                }
+            },
+        },
+        None,
+        c,
+    )
+    finding = next(f for f in c.findings if f.code == "E-DATA-ASSIGN-BLOCK-SIZE")
+    assert "not a positive whole number of units" in finding.message
+    assert "does not fill" not in finding.message
+
+
+def test_an_auto_block_size_is_not_exempt_from_the_type_check_but_usually_passes_the_share_one(
     write_config,
 ):
-    """The sibling `test_a_non_positive_or_non_int_block_size_is_refused[True]` case
-    over `ratio: {control: 1, treatment: 1}` (sum 2) is refused for two reasons at
-    once — `True` is a `bool`, and `int(True) == 1` doesn't divide 2 either — so it
-    cannot isolate which one the check is actually testing for. `ratio: {control:
-    0.5, treatment: 0.5}` (sum 1) isolates it: `1` **would** be a legal whole
-    multiple of `1`, so a guard that fell through to `isinstance(block_size, int)`
-    without excluding `bool` first would accept `True` here. It doesn't."""
-    found = _error_codes(
-        write_config(
-            _between(
-                {
-                    "arm": {
-                        "method": "blocked",
-                        "ratio": {"control": 0.5, "treatment": 0.5},
-                        "block_size": True,
-                    }
-                }
-            )
-        )
-    )
-    assert found == {"E-DATA-ASSIGN-DRAWN", "E-DATA-ASSIGN-BLOCK-SIZE"}
-
-
-def test_an_auto_block_size_is_never_refused_for_not_dividing_the_ratio_sum(write_config):
-    """`block_size: "auto"` — the literal string `init` writes — is the one
-    non-`int` `block_size` this check accepts rather than folding into
-    `E-DATA-ASSIGN-BLOCK-SIZE`'s malformed-value family
-    (`test_a_non_positive_or_non_int_block_size_is_refused` covers every
-    other non-`int` value): it resolves to twice `ratio`'s sum at draw time
-    (`units.assignment_for`'s own rule) and so is a whole multiple of it by
-    construction, never reaching the whole-multiple arithmetic at all. The
-    guard is an exact-match `block_size != "auto"`, not an `isinstance`
-    check, so this is the one string this row must not mistake for
-    malformed."""
+    """`block_size: "auto"` — the literal string `init` writes — is exempt
+    from the *type/positivity* half of this check (it is never itself a
+    malformed value; `test_a_non_positive_or_non_int_block_size_is_refused`
+    covers every genuinely malformed non-`int`), but **not** from the
+    whole-share arithmetic: an earlier version of this check exempted
+    `"auto"` from both, on the (false, corrected after review) theory that
+    `units.assign_seed_for`'s `2 x ratio_sum` formula always gives every
+    level a whole share. `ratio: {control: 1, treatment: 1}` is the ordinary
+    case where it does — resolved `auto` is 4, each level's own share is `4 x
+    1 / 2 = 2`, whole — so this fixture passes, but
+    `test_an_auto_block_size_can_still_be_refused_for_a_percentage_ratio`
+    below is the sibling proving it isn't exempted, just usually lucky."""
     found = _error_codes(
         write_config(
             _between(
@@ -8820,6 +8900,34 @@ def test_an_auto_block_size_is_never_refused_for_not_dividing_the_ratio_sum(writ
         )
     )
     assert found == {"E-DATA-ASSIGN-DRAWN"}
+
+
+def test_an_auto_block_size_can_still_be_refused_for_a_percentage_ratio(write_config):
+    """**Caught by review: the first fix round exempted `"auto"` from the
+    whole-share check entirely, and a plain percentage-style ratio shows why
+    that's wrong.** `ratio: {a: 0.33, b: 0.33, c: 0.34}` sums to 1, so
+    resolved `auto` is `max(1, round(2)) == 2` — and none of the three
+    levels' own per-block shares (`0.66`, `0.66`, `0.68`) are whole. Left
+    unchecked, this would validate clean and then die at
+    `units.assignment_for`'s `E-DATA-ASSIGN-LEVELS` (a block that can never
+    give `b` a single whole unit starves it in every block) — the same
+    validate-clean-then-fail shape this whole row exists to close, reached
+    through the derived value instead of a declared one."""
+    found = _error_codes(
+        write_config(
+            _between(
+                {
+                    "arm": {
+                        "method": "blocked",
+                        "ratio": {"a": 0.33, "b": 0.33, "c": 0.34},
+                        "block_size": "auto",
+                    }
+                },
+                axes=[{"by": "arm", "levels": ["a", "b", "c"]}],
+            )
+        )
+    )
+    assert found == {"E-DATA-ASSIGN-DRAWN", "E-DATA-ASSIGN-BLOCK-SIZE"}
 
 
 def test_a_non_empty_stratify_by_under_by_attribute_is_refused():

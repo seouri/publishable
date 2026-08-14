@@ -39,6 +39,7 @@ from publishable.units import (
     NUMERIC_COLLAPSE_RULES,
     UnitList,
     arms_of,
+    auto_block_size,
     fold_basis,
     is_measurement_numeric,
     resolve_units,
@@ -1723,8 +1724,20 @@ def _check_assign(
             # `float` and a sum like `1.5 + 2.5` should not fail a whole-multiple test
             # to floating-point noise.
             if method == "blocked":
-                block_size = block.get("block_size", "auto")
-                if block_size != "auto":
+                declared_block_size = block.get("block_size", "auto")
+                # **`"auto"` is checked too, not exempted** — a controller ruling
+                # from a review round that first tried exempting it: `auto` is
+                # twice `ratio`'s sum, and for a ratio like `{a: 0.33, b: 0.33, c:
+                # 0.34}` (a plain percentage split) that resolves to a
+                # `block_size` of 2, which starves `b` in *every* block —
+                # `units.assignment_for` raises `E-DATA-ASSIGN-LEVELS` on a
+                # config that validated clean, the same validate-clean-then-fail
+                # shape the explicit-value half of this check exists to close.
+                # `resolved_block_size` is `None` only when there is nothing yet
+                # to check: a malformed explicit value (its own finding already
+                # filed below) or unresolved `levels` (below that).
+                resolved_block_size: int | None = None
+                if declared_block_size != "auto":
                     # **One code covers the whole malformed-value family here too**
                     # — not a mapping's keys this time, but `_apportion`'s own
                     # caller-side gap: `units.assignment_for` cuts the roster with
@@ -1741,45 +1754,108 @@ def _check_assign(
                     # and `_declared_levels` a non-empty level list) and so could
                     # never itself skip this branch, only read as though it might.
                     if (
-                        isinstance(block_size, bool)
-                        or not isinstance(block_size, int)
-                        or block_size <= 0
+                        isinstance(declared_block_size, bool)
+                        or not isinstance(declared_block_size, int)
+                        or declared_block_size <= 0
                     ):
                         c.error(
                             "E-DATA-ASSIGN-BLOCK-SIZE",
                             f"data.units.assign.{axis}.block_size",
-                            f"is {block_size!r}, which is not a positive whole "
-                            f"number of units — a block is a count to cut the "
-                            f"roster into, and only `\"auto\"` or a positive "
+                            f"is {declared_block_size!r}, which is not a positive "
+                            f"whole number of units — a block is a count to cut "
+                            f"the roster into, and only `\"auto\"` or a positive "
                             f"`int` names one",
                         )
                     else:
-                        levels_for_block_size = _declared_levels(sweep, axis)
-                        if levels_for_block_size is not None:
-                            usable_ratio = (
-                                ratio
-                                if isinstance(ratio, dict)
-                                and ratio
-                                and set(ratio) == set(levels_for_block_size)
-                                and all(_usable_ratio_share(v) for v in ratio.values())
-                                else None
-                            )
-                            ratio_sum = (
-                                sum(usable_ratio[level] for level in levels_for_block_size)
-                                if usable_ratio is not None
-                                else len(levels_for_block_size)
-                            )
-                            quotient = block_size / ratio_sum
-                            if not math.isclose(quotient, round(quotient), abs_tol=1e-9):
-                                c.error(
-                                    "E-DATA-ASSIGN-BLOCK-SIZE",
-                                    f"data.units.assign.{axis}.block_size",
-                                    f"is {block_size}, which is not a whole "
-                                    f"multiple of `ratio`'s sum ({ratio_sum!r}) — a "
-                                    f"block must be a whole multiple of the ratio's "
-                                    f"sum, or it can't hold each arm's share. Use a "
-                                    f"multiple of {ratio_sum!r}, or `auto`",
-                                )
+                        resolved_block_size = declared_block_size
+
+                levels_for_block_size = _declared_levels(sweep, axis)
+                if levels_for_block_size is not None and (
+                    declared_block_size == "auto" or resolved_block_size is not None
+                ):
+                    usable_ratio = (
+                        ratio
+                        if isinstance(ratio, dict)
+                        and ratio
+                        and set(ratio) == set(levels_for_block_size)
+                        and all(_usable_ratio_share(v) for v in ratio.values())
+                        else None
+                    )
+                    weights_for_block_size = (
+                        [usable_ratio[level] for level in levels_for_block_size]
+                        if usable_ratio is not None
+                        else [1] * len(levels_for_block_size)
+                    )
+                    ratio_sum = sum(weights_for_block_size)
+                    # `units.auto_block_size`, imported rather than a second copy
+                    # of its formula: the controller's task 7 ruling on
+                    # `DRAWN_ASSIGN_METHODS` applies verbatim here — two
+                    # independent copies of one value are pinned in agreement by
+                    # nothing, and `validate` approving a `block_size` its own
+                    # draw then computes differently is the validate-clean-
+                    # then-disagree gap this whole slice exists to close.
+                    # A ternary rather than an `assert` to reach `int`: the
+                    # outer `if` above already guarantees `resolved_block_size`
+                    # is not `None` whenever `declared_block_size != "auto"`, and
+                    # this expression covers the remaining case, `"auto"`,
+                    # explicitly — no runtime narrowing hint needed, and nothing
+                    # here disappears under `python -O`.
+                    block_size = (
+                        resolved_block_size
+                        if resolved_block_size is not None
+                        else auto_block_size(weights_for_block_size)
+                    )
+                    # **Per-level share, not the sum's divisibility** — a
+                    # controller ruling: `block_size` dividing `ratio_sum` evenly
+                    # is neither necessary nor sufficient for "every block fills
+                    # each arm exactly" (§ Allocation's own purpose clause) — the
+                    # two checks are not ordered, verified both directions rather
+                    # than assumed. Not sufficient: `ratio: {a: 0.5, b: 0.5}`
+                    # sums to 1, and `block_size: 1` is a whole multiple of `1` —
+                    # yet every block apportions `[1, 0]`, starving `b` in every
+                    # block and dying at `units.assignment_for`'s
+                    # `E-DATA-ASSIGN-LEVELS` instead. Not necessary either:
+                    # `ratio: {a: 2, b: 2}` sums to 4, and `block_size: 2` is
+                    # *not* a whole multiple of 4 — the old check would have
+                    # refused it — yet each level's own per-block share,
+                    # `2 x 2 / 4 = 1`, is whole, and `_apportion(2, [2, 2]) ==
+                    # [1, 1]` fills it exactly. (The two checks agree on some
+                    # ratios — `{}`, `{1, 2}` — and disagree on others — `{2,
+                    # 2}`, `{0.5, 0.5}` — with no single simpler rule
+                    # distinguishing which, so no "they coincide when ..."
+                    # clause is stated here; the two counterexamples are the
+                    # claim.) Checking each level's own per-block share
+                    # (`block_size * weight / ratio_sum`) is the direct
+                    # implementation of the purpose clause and replaces the sum
+                    # check rather than merely tightening it.
+                    bad_levels = [
+                        level
+                        for level, weight in zip(
+                            levels_for_block_size, weights_for_block_size, strict=True
+                        )
+                        if not math.isclose(
+                            (share := block_size * weight / ratio_sum),
+                            round(share),
+                            abs_tol=1e-9,
+                        )
+                    ]
+                    if bad_levels:
+                        noun = "level" if len(bad_levels) == 1 else "levels"
+                        resolved_note = (
+                            " (resolved from `auto`)" if declared_block_size == "auto" else ""
+                        )
+                        c.error(
+                            "E-DATA-ASSIGN-BLOCK-SIZE",
+                            f"data.units.assign.{axis}.block_size",
+                            f"is {block_size}{resolved_note}, which does "
+                            f"not fill {noun} "
+                            f"{', '.join(repr(lvl) for lvl in bad_levels)} exactly "
+                            f"in every block — a block must give each level a "
+                            f"whole number of units, or it can't hold that arm's "
+                            f"share. Use a `block_size` for which every level's "
+                            f"own share of it — its ratio weight times the block "
+                            f"size, over {ratio_sum!r} — is a whole number",
+                        )
         else:
             # `method == "by_attribute"`, the one value neither elif above caught —
             # the branch where `from` and the axis's declared `levels` mean anything

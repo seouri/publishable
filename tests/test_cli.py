@@ -497,6 +497,35 @@ def test_resolved_group_axes_is_empty_with_no_roster_to_partition():
     assert set(_resolved_group_axes(units_decl, sweep_block, _levels_roster(), "digest")) == {"arm"}
 
 
+def test_resolved_group_axes_draws_a_blocked_allocation():
+    """**Restores CLI-level coverage of a drawn allocation.** The only test at
+    this seam exercising `random`/`blocked` was
+    `test_resolved_group_axes_raises_rather_than_reading_a_column_under_a_drawn_method`,
+    deleted in task 10 because its premise — `blocked` still raises
+    `NotImplementedError` — became false the moment `blocked` started
+    drawing. Deleting it correctly closed a stale test, but left this seam
+    with **no** coverage of a drawn allocation at all, `random` included —
+    `_resolved_group_axes` hands the whole draw to `units.assignment_for`
+    without touching it further, so this is a thin integration check that
+    the seam still calls through and returns what it's given, not a second
+    unit test of the draw itself (`test_units.py` owns that in full — the
+    same 14-unit, pinned-seed fixture as
+    `test_a_blocked_draw_balances_within_every_whole_block` there, so a
+    result differing between the two call sites would be a real
+    divergence, not a second, independent computation of the same thing)."""
+    from publishable.units import Unit, UnitList
+
+    roster = UnitList([Unit(key=f"u{i:02d}", paths=(), attributes={}) for i in range(14)])
+    sweep_block = {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}
+    units_decl = {"assign": {"arm": {"method": "blocked", "seed": 11}}}
+    plans = _resolved_group_axes(units_decl, sweep_block, roster, "digest")
+
+    assert set(plans) == {"arm"}
+    assert plans["arm"].seed == 11
+    assert plans["arm"].members["control"] == ("u00", "u01", "u04", "u05", "u08", "u11", "u13")
+    assert plans["arm"].members["treatment"] == ("u02", "u03", "u06", "u07", "u09", "u10", "u12")
+
+
 def test_non_string_levels_make_arm_members_raise_rather_than_skip_narrowing():
     """`sweep.selector_paths` — the same function `expand` uses to decide which
     paths are group cells — accepts a `levels` list of any element type, but

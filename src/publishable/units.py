@@ -1071,6 +1071,43 @@ def _apportion(n: int, weights: Sequence[float]) -> list[int]:
     return sizes
 
 
+def auto_block_size(weights: Sequence[float]) -> int:
+    """`block_size: "auto"`'s resolved value for `assign.<axis>.method: blocked` —
+    `reference.md` § Allocation: twice `ratio`'s sum, rounded to a whole number of
+    units.
+
+    **The single producer of this value, imported by `validate._check_assign`
+    rather than recomputed there** — the same reason `DRAWN_ASSIGN_METHODS` lives
+    in this module and not in `validate`: two independent copies of one formula
+    are pinned in agreement by nothing, and a run whose `validate` pass approved
+    a `block_size` its own draw then computes differently is exactly the
+    validate-clean-then-disagree gap this whole slice exists to close. Task 7's
+    `ArmPlan`/`assignment_for` seam makes the identical argument for "which units
+    are in this arm"; this is the same argument for one number inside that draw.
+
+    `round`, not a bare `2 * sum(weights)`: a fractional `ratio` (any finite
+    positive `float` is a "usable" share, `validate._usable_ratio_share`) makes
+    the sum, and so twice the sum, a `float` too — `assignment_for`'s
+    `range(0, len(keys), block_size)` requires an `int` step and raises a bare
+    `TypeError` on one. `max(1, ...)` keeps the result a legal, positive step
+    even for a sum under `0.5`, however implausible a config that draws one is.
+
+    **Does not guarantee every level's per-block share is whole** — no finite
+    `block_size` can, for shares that aren't commensurate rationals
+    (`{a: 0.33, b: 0.33, c: 0.34}` is `reference.md`'s own example: this
+    resolves to `2`, and none of the three levels' shares of `2` are whole).
+    `validate._check_assign` runs the same whole-share check against this
+    value that it runs against a declared one, so that case is refused before
+    a run reaches `assignment_for` at all; a caller that bypasses `validate`
+    and reaches the draw anyway gets `_apportion`'s ordinary largest-remainder
+    tolerance, the same one an unclustered `random` draw already gets for a
+    `ratio` that doesn't divide the roster evenly — up to and including a
+    level starved in every block, which still raises `E-DATA-ASSIGN-LEVELS`
+    rather than silently misallocating.
+    """
+    return max(1, round(2 * sum(weights)))
+
+
 def assignment_for(
     roster: UnitList,
     axis: str,
@@ -1292,12 +1329,18 @@ def assignment_for(
             if isinstance(ratio, dict) and ratio
             else [1] * len(levels)
         )
-        ratio_sum = sum(weights)
         declared_block_size = block_map.get("block_size", "auto")
         block_size = (
             declared_block_size
             if isinstance(declared_block_size, int) and not isinstance(declared_block_size, bool)
-            else 2 * ratio_sum
+            # `auto_block_size`, not a second copy of its formula: `validate`
+            # imports the same function so the value it approves and the value
+            # this draw uses can never drift apart — see that function's own
+            # docstring for why a `ratio` that makes it unable to give every
+            # level a whole per-block share is refused there before a run
+            # reaches here at all, and what this module does when a caller
+            # bypasses `validate` and reaches it anyway.
+            else auto_block_size(weights)
         )
         seed = assign_seed_for(block_map, axis, digest, roster)
         rng = random.Random(seed)
