@@ -1392,7 +1392,7 @@ def _check_assign(
     doc: dict[str, Any], units: dict[str, Any], roster: UnitList | None, c: Collector
 ) -> None:
     """`data.units.allocation` and `data.units.assign` against each other and against
-    `sweep.groups` — ten § Validation rows, all but one read from declarations
+    `sweep.groups` — eleven § Validation rows, all but one read from declarations
     alone, so each reports whether or not a roster resolved; only *Attribute
     assignment resolves* needs the roster.
 
@@ -1452,6 +1452,27 @@ def _check_assign(
     when the axis's declared `levels` don't resolve to a non-empty list of
     strings, `sweep.groups`'s own shape fault — except the not-a-mapping case,
     which needs no `levels` to detect.
+
+    *Blocked draw excludes clustering* — `method: blocked` beside a declared,
+    non-empty `data.units.cluster_by`, refused as `E-DATA-ASSIGN-BLOCKED-CLUSTER`
+    beside `E-DATA-ASSIGN-DRAWN` rather than instead of it, the same "two things
+    about the same block" pairing *Ratio names levels* and *Block size fills the
+    arms* already make. A block fills to an exact unit count and a cluster is
+    indivisible, so no `block_size` — declared or `auto` — honours both;
+    `units.assignment_for`'s own `blocked` branch raises `NotImplementedError`
+    for the identical combination rather than realizing one rule over the
+    other, and this is the check that keeps a config naming it from ever
+    reaching that raise. **`random` earns no mirror row**: it draws whole
+    clusters instead of filling to a size, so it has no size for `cluster_by`
+    to conflict with — the asymmetry `reference.md` § Clustered units and §
+    Allocation both state. Read `usable_cluster`, resolved once ahead of the
+    per-axis loop the same "present, non-empty `str`" way `validate_config`'s
+    own local of that name is (a wrongly-typed or empty `cluster_by` is
+    `check_envelope`'s or `_check_cluster_by`'s fault to report, not this row's
+    to report a second time) — so it reports whether or not a roster resolved,
+    and the check runs first inside the `blocked` branch, ahead of *Block size
+    fills the arms*: once it fires, every check that branch would otherwise run
+    is moot rather than merely redundant, and the loop moves to the next axis.
 
     **`method: by_attribute`'s three rows, checked only in that branch of the
     same `elif` chain** — `from`, `levels`, `ratio`, and `stratify_by` all mean
@@ -1552,6 +1573,18 @@ def _check_assign(
     malformed = assign is not None and not isinstance(assign, dict)
     sweep = doc.get("sweep")
     axes = selector_paths(sweep) if isinstance(sweep, dict) else []
+
+    # *Blocked draw excludes clustering* — read the same "usable" way
+    # `validate_config`'s own `cluster_by` local is (a wrongly-typed or empty
+    # declaration is `check_envelope`'s/`_check_cluster_by`'s fault to report, and
+    # counting a second, derived fault on top of it here would cost a reader one
+    # more line for no new information). Resolved once, ahead of the loop below,
+    # since it does not vary per axis — every `blocked` block in this `assign`
+    # answers to the one `data.units.cluster_by` declaration.
+    declared_cluster = units.get("cluster_by")
+    usable_cluster = (
+        declared_cluster if isinstance(declared_cluster, str) and declared_cluster else None
+    )
 
     allocation = units.get("allocation")
     if allocation is not None and allocation not in ALLOCATION_MODES:
@@ -1724,6 +1757,36 @@ def _check_assign(
             # `float` and a sum like `1.5 + 2.5` should not fail a whole-multiple test
             # to floating-point noise.
             if method == "blocked":
+                # *Blocked draw excludes clustering* — checked before any of the
+                # `block_size` logic below, and with a `continue` rather than an
+                # `else` wrapping it: a block fills to an exact unit count and a
+                # cluster is indivisible, so no `block_size` — declared or `auto` —
+                # honours both, which makes every check below moot once this one
+                # fires rather than merely redundant. `random` earns no such row:
+                # it draws whole clusters instead of filling to a size, so it has
+                # no size to conflict with `cluster_by` in the first place — the
+                # asymmetry `reference.md` § Clustered units and § Allocation both
+                # state. `units.assignment_for`'s own `blocked` branch raises
+                # `NotImplementedError` for this exact combination — its own
+                # docstring names this refusal as the reason it never has to
+                # realize one rule over the other — so this check is what keeps a
+                # config naming it from ever reaching that raise. The `ratio`
+                # check above already ran for
+                # this block — orthogonal to whether a cluster is declared, so it
+                # is not re-gated here — but nothing after this point is: a
+                # `block_size` this build cannot honour beside a cluster is not a
+                # value to also validate on its own terms.
+                if usable_cluster is not None:
+                    c.error(
+                        "E-DATA-ASSIGN-BLOCKED-CLUSTER",
+                        where,
+                        f"is `blocked` beside a declared `data.units.cluster_by` "
+                        f"({usable_cluster!r}) — a block counts units and fills to an "
+                        f"exact size, a cluster is indivisible, and no block size "
+                        f"honours both. Use `random` for a cluster-randomized draw, or "
+                        f"`by_attribute` for a read one",
+                    )
+                    continue
                 declared_block_size = block.get("block_size", "auto")
                 # **`"auto"` is checked too, not exempted** — a controller ruling
                 # from a review round that first tried exempting it: `auto` is

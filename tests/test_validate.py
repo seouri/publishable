@@ -8930,6 +8930,121 @@ def test_an_auto_block_size_can_still_be_refused_for_a_percentage_ratio(write_co
     assert found == {"E-DATA-ASSIGN-DRAWN", "E-DATA-ASSIGN-BLOCK-SIZE"}
 
 
+# --- `blocked` beside a declared `cluster_by` is refused outright -----------
+#
+# Task 11's ruling: § Where units come from makes `blocked` the one method
+# that reads roster order as data, and § Clustered units already computes a
+# partition core keeps whole. A block fills to an exact unit count and a
+# cluster is indivisible, so no block size honours both — `random` has no such
+# conflict, since it draws whole clusters instead of filling to a size, and
+# `by_attribute` draws nothing at all. The two controls below are the point of
+# the task: each must report clean of `E-DATA-ASSIGN-BLOCKED-CLUSTER`, and each
+# is mutated on its own so a check that fires on the wrong branch — every
+# `blocked` block regardless of `cluster_by`, or every clustered block
+# regardless of method — fails exactly one of the two rather than neither.
+
+
+def test_blocked_beside_a_declared_cluster_by_is_refused(write_config, tmp_path):
+    """The refusal itself: `method: blocked` beside a non-empty
+    `data.units.cluster_by` earns `E-DATA-ASSIGN-BLOCKED-CLUSTER` beside its own
+    `E-DATA-ASSIGN-DRAWN` — the two say different things about the same block,
+    the pairing every sibling row in this `elif` chain already makes.
+    `units.assignment_for`'s own `blocked` branch raises `NotImplementedError`
+    for the identical combination; this is the check that keeps a config
+    naming it from ever reaching that raise, so the two layers agree on the
+    same refusal rather than one validating clean and the other dying."""
+    (tmp_path / "input" / "index.csv").write_text("patient_id,site\np1,S1\np2,S2\n")
+    found = _error_codes(
+        write_config(
+            _between(
+                {"arm": {"method": "blocked"}},
+                attributes=["site"],
+                cluster_by="site",
+            )
+        )
+    )
+    assert found == {"E-DATA-ASSIGN-DRAWN", "E-DATA-ASSIGN-BLOCKED-CLUSTER"}
+
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": _ARM_AXIS}},
+        {
+            "allocation": "between",
+            "cluster_by": "site",
+            "assign": {"arm": {"method": "blocked"}},
+        },
+        None,
+        c,
+    )
+    assert {f.code for f in c.findings} == {
+        "E-DATA-ASSIGN-DRAWN",
+        "E-DATA-ASSIGN-BLOCKED-CLUSTER",
+    }
+    finding = next(f for f in c.findings if f.code == "E-DATA-ASSIGN-BLOCKED-CLUSTER")
+    assert finding.path == "data.units.assign.arm.method"
+    # The wording, not just the code: both honest routes named, so a mutation
+    # that drops either from the message — or swaps in only one — still leaves
+    # the code assertion above passing.
+    assert "'site'" in finding.message
+    assert "random" in finding.message
+    assert "by_attribute" in finding.message
+
+
+def test_random_beside_a_declared_cluster_by_is_not_blocked_clustered(write_config, tmp_path):
+    """The first control: `random` beside a declared `cluster_by` is legal —
+    task 9 built exactly this, drawing whole clusters — so it must not also
+    earn `E-DATA-ASSIGN-BLOCKED-CLUSTER`. The can-fail sibling of the refusal
+    test above: a mutation that fires the new code for *any* drawn method
+    beside a declared `cluster_by`, rather than `blocked` specifically, passes
+    that test (which never inspects `random`) and fails this one instead."""
+    (tmp_path / "input" / "index.csv").write_text("patient_id,site\np1,S1\np2,S2\n")
+    found = _error_codes(
+        write_config(
+            _between(
+                {"arm": {"method": "random"}},
+                attributes=["site"],
+                cluster_by="site",
+            )
+        )
+    )
+    assert found == {"E-DATA-ASSIGN-DRAWN"}
+
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": _ARM_AXIS}},
+        {
+            "allocation": "between",
+            "cluster_by": "site",
+            "assign": {"arm": {"method": "random"}},
+        },
+        None,
+        c,
+    )
+    assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-DRAWN"]
+
+
+def test_blocked_with_no_cluster_by_is_not_blocked_clustered(write_config):
+    """The second control: `blocked` with no declared `cluster_by` is legal —
+    task 10 built exactly this, permuting blocks over an unclustered roster —
+    so `blocked` alone must not earn `E-DATA-ASSIGN-BLOCKED-CLUSTER`; the row's
+    fault is the combination, not the method by itself. The can-fail sibling
+    the refusal test's `cluster_by` half needs: a mutation that fires the new
+    code for *every* `blocked` block, dropping the `usable_cluster is not
+    None` guard entirely, passes the refusal test above (which never inspects
+    a `blocked` block with no `cluster_by`) and fails this one instead."""
+    found = _error_codes(write_config(_between({"arm": {"method": "blocked"}})))
+    assert found == {"E-DATA-ASSIGN-DRAWN"}
+
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": _ARM_AXIS}},
+        {"allocation": "between", "assign": {"arm": {"method": "blocked"}}},
+        None,
+        c,
+    )
+    assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-DRAWN"]
+
+
 def test_a_non_empty_stratify_by_under_by_attribute_is_refused():
     """§ Allocation: "The same is true of `assign.<axis>.stratify_by`: under
     `method: by_attribute` it would describe how a draw was balanced when none
