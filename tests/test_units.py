@@ -1711,6 +1711,83 @@ def test_an_axis_may_stratify_on_an_earlier_axis():
     assert set(other.members["control"]) != set(plan.members["control"])
 
 
+def test_a_blocked_axis_may_stratify_on_an_earlier_axis():
+    """**`blocked`'s own success path on an axis-name stratum**, which nothing
+    else in this suite reaches.
+
+    `test_a_stratum_no_resolved_unit_carries_is_not_drawn_as_one_stratum` loops
+    both methods but asserts a **raise** for each, so it passes whether or not
+    `blocked` can read a plan at all: a parametrized test asserting a failure for
+    both arms proves nothing about either arm's success path. Reverting only the
+    `blocked` branch's `_stratum_groups` call sites to the pre-`resolved`
+    signature left the whole suite green because of that gap.
+
+    The block loop runs inside each `sex` arm, from the one carried generator, so
+    each arm is filled 3/3 — and the pinned membership differs from the
+    UNSTRATIFIED `blocked` draw of the same roster at the same seed
+    (`('u00', 'u01', 'u04', 'u05', 'u08', 'u11')`), which is what makes
+    "`stratify_by` was ignored" a failure here rather than a coincidence."""
+    sex = _sex_plan()
+    levels = ("control", "treatment")
+    plan = assignment_for(
+        _stratum_roster(),
+        "arm",
+        {"method": "blocked", "seed": 11, "stratify_by": ["sex"]},
+        levels,
+        "digest",
+        None,
+        {"sex": sex},
+    )
+    assert plan.strata == ("sex",)
+    for sex_arm in sex.members.values():
+        assert len(set(sex_arm) & set(plan.members["control"])) == 3
+        assert len(set(sex_arm) & set(plan.members["treatment"])) == 3
+
+    assert plan.members["control"] == ("u00", "u01", "u06", "u07", "u08", "u11")
+    assert plan.members["treatment"] == ("u02", "u05", "u09", "u03", "u04", "u10")
+
+    other = assignment_for(
+        _stratum_roster(),
+        "arm",
+        {"method": "blocked", "seed": 12, "stratify_by": ["sex"]},
+        levels,
+        "digest",
+        None,
+        {"sex": sex},
+    )
+    assert set(other.members["control"]) != set(plan.members["control"])
+
+
+def test_a_blocked_draw_on_an_axis_stratum_names_the_strata_when_an_arm_is_empty():
+    """**The `E-DATA-ASSIGN-LEVELS` message under an axis-name stratum**, and the
+    reason it needs its own test: `blocked`'s refusal builds its "within each of
+    the N strata" clause by calling `_stratum_groups` a second time, from inside
+    the message construction. A call site left on the pre-`resolved` signature
+    there raises `NotImplementedError` **while formatting a diagnostic** — the
+    worse half of the same mutation, since it turns a clean refusal into a
+    traceback.
+
+    Four units, an earlier axis splitting them 2/2, three equal arms: each
+    stratum is one partial block apportioned `[1, 1, 0]`, so `c` is empty across
+    every block of every stratum — the merged-coverage rule, reached through a
+    stratum no unit carries as a column."""
+    roster = UnitList([Unit(key=f"u{i:02d}", paths=(), attributes={}) for i in range(4)])
+    earlier = assignment_for(roster, "sex", {"method": "random", "seed": 3}, ["f", "m"], "d")
+    with pytest.raises(ContractError) as e:
+        assignment_for(
+            roster,
+            "arm",
+            {"method": "blocked", "seed": 11, "stratify_by": ["sex"]},
+            ["a", "b", "c"],
+            "digest",
+            None,
+            {"sex": earlier},
+        )
+    assert e.value.code == "E-DATA-ASSIGN-LEVELS"
+    assert "no unit in c" in str(e.value)
+    assert "within each of the 2 strata of sex" in str(e.value)
+
+
 def test_a_stratum_the_roster_carries_is_an_attribute_before_it_is_an_axis():
     """**The precedence, pinned in the one place it can diverge.** `validate`
     exempts a `stratify_by` name found in `data.units.attributes` before it asks

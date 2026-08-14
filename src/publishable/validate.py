@@ -1468,9 +1468,8 @@ def _check_assign(
     one name to the draw and a character sequence here.
 
     *Stratification is forward-only* — `E-DATA-ASSIGN-STRATIFY-FORWARD`, the
-    the order half of *Allocation strata exist* and a separate code because a
-    row and a code are
-    the same check seen from two ends: a stratum naming a `sweep.groups` axis
+    order half of *Allocation strata exist* and a separate code because a row and
+    a code are the same check seen from two ends: a stratum naming a `sweep.groups` axis
     this one is drawn *before*, or naming this axis itself. A drawn axis leaves
     no column, so the balance is over the earlier axis's **realized** membership,
     which `cli._resolved_group_axes` supplies by handing each draw the plans

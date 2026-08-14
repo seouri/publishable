@@ -9207,6 +9207,32 @@ def test_stratifying_on_an_earlier_axis_is_not_refused(write_config):
     assert "E-DATA-ASSIGN-STRATIFY-UNKNOWN" not in found
 
 
+def test_a_block_whose_axis_is_not_declared_is_not_ordered_against_anything(write_config):
+    """**The `axis not in axes` guard, asserted rather than merely documented.**
+    `assign.ghost` names an axis `sweep.groups` does not declare, so nothing
+    draws it and it has no position for a stratum to be forward of. The row is
+    skipped: a finding about the order of a block no draw reaches would be
+    derived from a different fault (*Every assignment names an axis*).
+
+    Reachable and fatal unmutated-in-reverse: without the guard, the position
+    lookup raises `ValueError: 'ghost' is not in list` **out of `validate`** — a
+    traceback where a diagnostic belongs, from a module contracted to collect
+    findings and never raise. The assertion is therefore the exact set: this
+    config's one live refusal is `E-DATA-ASSIGN-DRAWN` (task 14 retires it), and
+    a set assertion catches a spurious ordering finding as well as a crash."""
+    found = _error_codes(
+        write_config(
+            _between(
+                {
+                    "arm": {"method": "random", "seed": 11},
+                    "ghost": {"method": "random", "seed": 7, "stratify_by": ["arm"]},
+                }
+            )
+        )
+    )
+    assert found == {"E-DATA-ASSIGN-DRAWN"}
+
+
 def test_a_declared_attribute_shadowing_a_later_axis_is_not_forward_only(write_config):
     """**The precedence, from `validate`'s side.** A `stratify_by` name that is
     both a declared unit attribute and a group axis is an ATTRIBUTE here — the
