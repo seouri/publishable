@@ -2094,6 +2094,27 @@ def test_a_blank_group_axis_name_is_a_shape_fault(write_config):
     assert "E-CONFIG-SHAPE" not in codes(
         write_config({"sweep": {"groups": [{"by": "study arm", "levels": ["a", "b"]}]}})
     )
+    # And it does not stop the pass. Unlike every container fault `_check_shape`
+    # reports, this one leaves `ok` alone — § Errors `validate` reports frames
+    # the early return as a container fault because every later check indexes
+    # into a block already known to be the wrong kind, which a well-typed string
+    # is not. A blank `by` under `allocation: between` must therefore still earn
+    # `E-DATA-ASSIGN-MISSING` in the same pass; returning early would report one
+    # finding and hide the rest.
+    both = codes(
+        write_config(
+            {
+                "sweep": {"groups": [{"by": "", "levels": ["a", "b"]}]},
+                "data.units": {
+                    "from": "index.csv",
+                    "key": "patient_id",
+                    "allocation": "between",
+                },
+            }
+        )
+    )
+    assert "E-CONFIG-SHAPE" in both
+    assert "E-DATA-ASSIGN-MISSING" in both, both
 
 
 def test_a_resolver_source_is_refused_until_plugins_exist(write_config):

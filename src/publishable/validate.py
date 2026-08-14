@@ -346,7 +346,19 @@ def _check_shape(doc: dict[str, Any], c: Collector) -> bool:
                     # diagnostic. A name of only whitespace is refused with it: it
                     # resolves, but it names condition directories (`00_ =control`)
                     # nothing else in this project would produce.
-                    ok = False
+                    #
+                    # `ok` is deliberately left alone, unlike every `_bad` above.
+                    # `_check_shape`'s return is what makes `validate_config`
+                    # give up, and § Errors `validate` reports frames that early
+                    # return as a *container*-shape fault: every later check
+                    # indexes into a block already known to be the wrong kind, so
+                    # continuing would cascade. A blank `by` is a well-typed
+                    # string with bad content — nothing downstream indexes into
+                    # it, `_check_assign` runs against it without incident (it
+                    # reports `E-DATA-ASSIGN-MISSING` for the same config), and
+                    # suppressing every other finding over one bad axis name
+                    # would cost `validate` the collect-everything contract for
+                    # no protection.
                     c.error(
                         "E-CONFIG-SHAPE",
                         f"sweep.groups[{i}].by",
