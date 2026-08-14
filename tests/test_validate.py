@@ -8471,6 +8471,37 @@ def test_a_misspelled_key_inside_an_assign_block_is_reported(write_config):
 
 
 @pytest.mark.parametrize(
+    "key,value,typo",
+    [
+        ("method", "by_attribute", "methdo"),
+        ("from", "arm", "form"),
+        ("ratio", {"treatment": 1, "control": 1}, "ratios"),
+        ("block_size", "auto", "blocksize"),
+        ("stratify_by", ["site"], "stratifyy_by"),
+        ("seed", "auto", "seeds"),
+    ],
+)
+def test_each_assign_axis_key_is_closed_key_by_key(write_config, key, value, typo):
+    """`ASSIGN_AXIS_KEYS` is a closed *set*, not a list with some decorative
+    entries — a key removed from it silently by a future edit would only be
+    caught if some test pins that exact key down. `stratify_by` above is one
+    such case, but the other five had no case of their own before this test:
+    coverage for them rested on incidental hits in unrelated tests (`ratio`,
+    `block_size`, `seed`) or on nothing at all. Mirrors the enum-style
+    parametrization `ASSIGN_METHODS`/`ALLOCATION_MODES` get elsewhere in this
+    file — one case per legal value, correctly spelled and misspelled."""
+    ok = {"allocation": "between", "assign": {"arm": {key: value}}}
+    assert "E-CONFIG-KEY-UNKNOWN" not in codes(write_config({"data.units": ok}))
+
+    bad = {"allocation": "between", "assign": {"arm": {typo: value}}}
+    bad_path = write_config({"data.units": bad})
+    c = Collector()
+    validate_config(bad_path, c)
+    fields = [f.path for f in c.findings if f.code == "E-CONFIG-KEY-UNKNOWN"]
+    assert f"data.units.assign.arm.{typo}" in fields
+
+
+@pytest.mark.parametrize(
     "assign",
     [
         {"arm": "random"},                    # the block itself is not a block
