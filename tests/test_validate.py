@@ -1493,6 +1493,126 @@ def test_ablate_composes_with_a_group_axis(write_config):
     assert found == {"E-DATA-ALLOCATION-WITHIN-ARMS"}
 
 
+def test_ablate_times_groups_gives_one_baseline_and_its_ablations_per_level(write_config):
+    """§ Expansion modes' own worked example, expanded for real now that H2's
+    review could not reach it (`groups` drew `E-SWEEP-GROUPS-UNSUPPORTED`
+    wholesale): 2 levels × (1 baseline + 2 ablations) = 6 conditions — the
+    document's own arithmetic, not the 2 × 4 = 8 this task's brief first
+    proposed and the addendum withdrew, because 8 does not discriminate `(1 + n)
+    × levels` from `n × levels` (4 × 2) the way 6 does.
+
+    Run through `expand` directly, on the document's own YAML verbatim (`cohort`
+    / `derivation`/`validation`, `features.labs`/`features.notes`) rather than
+    through `validate_config` — `GenericTemplate.parameter_spec` declares only
+    the four `analysis.*` paths, and `features.*` resolves nowhere in it, so a
+    validate-clean run of this exact example is impossible with this template.
+    `test_ablate_times_groups_with_declared_paths_validates_clean` below is the
+    validate-clean half, expressed against paths this template actually has.
+
+    **The count alone cannot tell a correct expansion from one that emitted the
+    baseline once per run instead of once per level** — both give six rows if
+    the wrong one also duplicates an ablation — so every label is asserted, as
+    a set (six distinct cells, no duplicate, no missing one) rather than a
+    length check on its own.
+
+    **`expand`'s actual index order does not match this same section's Index
+    row**, which numbers this exact example `00_cohort=derivation__baseline` and
+    `03_cohort=validation__baseline` (each cell's baseline at its own head).
+    `expand`'s own docstring records why: it emits every baseline row as one
+    leading block (indices `0`-`1` here) and every ablation after it (`2`-`5`),
+    because "the head of each cell" is undefined once a second axis makes a
+    cell's rows non-contiguous — a known, already-recorded divergence
+    (`docs/superpowers/spec-defects.md` § Per-cell baseline numbering, "Owner:
+    the groups slice", left as a document decision rather than a code change
+    taken in passing). This test pins the actual index order rather than
+    re-asserting the document's, since asserting the document's own numbering
+    here would just fail for a reason this task did not open."""
+    doc = {
+        "sweep": {
+            "groups": [{"by": "cohort", "levels": ["derivation", "validation"]}],
+            "baseline": {"features.labs": True, "features.notes": True},
+            "ablate": {"from": "baseline", "remove": ["features.labs", "features.notes"]},
+        }
+    }
+    conditions = expand(doc)
+    assert len(conditions) == 6
+    assert {c.label for c in conditions} == {
+        "cohort=derivation__baseline",
+        "cohort=derivation__labs=false",
+        "cohort=derivation__notes=false",
+        "cohort=validation__baseline",
+        "cohort=validation__labs=false",
+        "cohort=validation__notes=false",
+    }
+    # The leading-block order the spec-defect entry describes: both baselines
+    # before any ablation, one per level, in declared level order.
+    assert [c.label for c in conditions[:2]] == [
+        "cohort=derivation__baseline",
+        "cohort=validation__baseline",
+    ]
+
+    # § Expansion modes' next two claims, pinned beside the count so a change to
+    # either doesn't only surface as a stray label somewhere in the six above.
+    derivation_baseline = next(
+        c for c in conditions if c.label == "cohort=derivation__baseline"
+    )
+    validation_baseline = next(
+        c for c in conditions if c.label == "cohort=validation__baseline"
+    )
+    assert derivation_baseline.values["features.labs"] is True
+    assert validation_baseline.values["features.labs"] is True
+    assert derivation_baseline.index != validation_baseline.index  # one baseline PER LEVEL
+
+    # `sweep.baseline` may not name the group axis itself while `ablate` is
+    # declared (`E-SWEEP-ABLATE-BASELINE-GROUP`, task 6) — a one-line control
+    # that the refusal beside this composition still fires, not duplicated here.
+    assert "E-SWEEP-ABLATE-BASELINE-GROUP" in _error_codes(
+        write_config(
+            {
+                "sweep": {
+                    "groups": [{"by": "cohort", "levels": ["derivation", "validation"]}],
+                    "baseline": {"cohort": "derivation", "analysis.drop_missing": True},
+                    "ablate": {"remove": ["analysis.drop_missing"]},
+                }
+            }
+        )
+    )
+
+
+def test_ablate_times_groups_with_declared_paths_validates_clean(write_config):
+    """The validate-clean half of the composition above, against paths
+    `GenericTemplate.parameter_spec` actually declares (only `analysis.drop_missing`
+    is boolean, so this shape is 2 levels × (1 baseline + 1 ablation) = 4 — a
+    different count from the arithmetic test above on purpose, so the two are
+    never confused for restating one another). No `allocation` is declared
+    beside the axis, so *Arms need allocation* is the one finding this
+    well-formed composition may still carry — an empty set here would mean the
+    fixture accidentally validates as something other than the plain
+    `groups`-with-no-allocation case every other control in this module uses."""
+    found = _error_codes(
+        write_config(
+            {
+                "sweep": {
+                    "groups": [{"by": "cohort", "levels": ["a", "b"]}],
+                    "baseline": {"analysis.drop_missing": True},
+                    "ablate": {"from": "baseline", "remove": ["analysis.drop_missing"]},
+                }
+            }
+        )
+    )
+    assert found == {"E-DATA-ALLOCATION-WITHIN-ARMS"}
+    conditions = expand(
+        {
+            "sweep": {
+                "groups": [{"by": "cohort", "levels": ["a", "b"]}],
+                "baseline": {"analysis.drop_missing": True},
+                "ablate": {"from": "baseline", "remove": ["analysis.drop_missing"]},
+            }
+        }
+    )
+    assert len(conditions) == 4
+
+
 def test_a_plain_ablation_validates_clean(write_config):
     """The legal composition, so that a check firing where it should not fails
     here: a baseline fixing the removed boolean, one `remove`, no axis."""
@@ -6471,6 +6591,92 @@ def test_a_declared_contrast_across_arms_is_refused(write_config):
     assert "differ on group axis arm" in found[0].message
 
 
+# --- `groups × cluster_by` — task 19 Step 3 ------------------------------------
+#
+# No earlier task combined a declared `groups` axis with a declared `cluster_by`.
+# The fixture below is built so the two partitions genuinely cross — a reader
+# has to be able to check the discrimination without running anything, per the
+# addendum — and it deliberately carries no `statistics.contrasts` and no
+# `sweep.baseline` beside the axis: the addendum's own correction to this
+# task's brief, because a natural `baseline: {arm: control}` here would publish
+# a cross-arm comparison and draw `E-DATA-CLUSTER-CONTRAST` *and*
+# `E-DATA-ALLOCATION-CONTRAST` instead of validating — a config this test is
+# not about.
+
+_GROUPS_CLUSTER_ARMS = {
+    "control": ["c0", "c1", "c2", "c3", "c4", "c5", "c6"],
+    "treatment": ["t0", "t1", "t2", "t3", "t4"],
+}
+# Every site spans both arms (A: c0,c1,t0; B: c2,c3,t1,t2; C: c4,c5,c6,t3,t4),
+# and `control` alone touches all three sites — the two ways task 12's own
+# 7/5 arm fixture and `test_runner.py`'s 5-unit/3-cluster harness do NOT cross,
+# since neither carries the other's partitioning attribute at all. `by_attribute`
+# reads the arm rather than drawing it (§ Clustered units), and a cluster
+# spanning two arms is documented as correct under that method — this fixture
+# is not the matched case-control design that requires it, but it is legal
+# under it, which is what this test is checking is still true.
+_GROUPS_CLUSTER_SITES = {
+    "c0": "A", "c1": "A", "c2": "B", "c3": "B", "c4": "C", "c5": "C", "c6": "C",
+    "t0": "A", "t1": "B", "t2": "B", "t3": "C", "t4": "C",
+}
+
+
+def _groups_cluster_csv() -> str:
+    rows = ["patient_id,arm,site"]
+    for arm, keys in _GROUPS_CLUSTER_ARMS.items():
+        for key in keys:
+            rows.append(f"{key},{arm},{_GROUPS_CLUSTER_SITES[key]}")
+    return "\n".join(rows) + "\n"
+
+
+def _groups_cluster_doc(**extra) -> dict:
+    doc = {
+        "data.units": {
+            "from": "index.csv",
+            "key": "patient_id",
+            "attributes": ["arm", "site"],
+            "cluster_by": "site",
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+        },
+        "sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+    }
+    doc.update(extra)
+    return doc
+
+
+def test_groups_and_cluster_by_compose_with_no_comparison(write_config, tmp_path):
+    """The combination itself, with no baseline and no `statistics.contrasts`: a
+    real `between` + `by_attribute` + `cluster_by` config over a roster whose
+    arms and clusters genuinely cross, validating fully clean. This is what
+    proves the combination itself is not what either refusal in this file
+    reads — only a comparison beside it is, checked by the two controls below."""
+    (tmp_path / "input" / "index.csv").write_text(_groups_cluster_csv())
+    assert _error_codes(write_config(_groups_cluster_doc())) == set()
+
+
+def test_a_contrast_beside_groups_and_cluster_by_draws_both_refusals(write_config, tmp_path):
+    """The can-fail control for the clean composition above: adding a declared
+    `statistics.contrasts` entry across the two arms to the SAME fixture must
+    draw both `E-DATA-CLUSTER-CONTRAST` (task 12 — no clustered contrast
+    construction exists) and `E-DATA-ALLOCATION-CONTRAST` (task 16b — the two
+    sides are disjoint arms), asserted as the exact set. After task 16b there
+    are two reporters over one comparison, not one, and this is checked rather
+    than assumed."""
+    (tmp_path / "input" / "index.csv").write_text(_groups_cluster_csv())
+    doc = _groups_cluster_doc(
+        statistics={
+            "contrasts": [
+                {"id": "t_vs_c", "of": "arm=treatment", "against": "arm=control"}
+            ]
+        }
+    )
+    assert _error_codes(write_config(doc)) == {
+        "E-DATA-CLUSTER-CONTRAST",
+        "E-DATA-ALLOCATION-CONTRAST",
+    }
+
+
 # --- a cluster and a weight must not vary within a unit's measurement rows ----
 #
 # `units.collapse_measurements` raises; `_check_units` wraps `resolve_units` in
@@ -7341,6 +7547,54 @@ def test_a_group_axis_may_not_name_a_path_a_parameter_axis_writes(write_config):
                 }
             }
         )
+    ) == {"E-DATA-ALLOCATION-WITHIN-ARMS"}
+
+
+def test_a_group_axis_may_not_name_a_declared_parameter_even_if_unswept(write_config):
+    """The addendum's correction to this task's own brief: the swept-collision
+    test above only reaches `path in named_by`, built from `grid`/`paired`/`sample`
+    entries alone — so a `by` naming a path this template declares as a *parameter*
+    but which no OTHER axis-shaped mode sweeps slipped past every check, and
+    probing it directly before this fix landed drew only
+    `E-DATA-ALLOCATION-WITHIN-ARMS`, none of the `sweep.groups` § Validation rows.
+    Task 5's ruling — the one the addendum's Step 2 originally proposed minting a
+    second code for — turned out already correct in substance, just narrower than
+    it needed to be: extending the existing `E-SWEEP-PATH-DUPLICATE` check to read
+    `spec` (`template.parameter_spec`, the same reference `_path_resolves` checks
+    a `grid`/`baseline` path against) rather than only `named_by` is the fix.
+
+    The harm survives unswept, which is why this is a real gap and not a
+    stylistic one: `expand` still marks `analysis.method` a selector on this row
+    (asserted directly, not inferred from the refusal alone), so
+    `resolve_condition_cfg` still skips planting it — condition
+    `method=spearman`'s own resolved config keeps `analysis.method: "pearson"`,
+    the base value, while its label and directory claim `spearman`. That is
+    indistinguishable from a real swept parameter to a reader who has not opened
+    `sweep.yaml`'s `values`, and is the argument for refusing it even though no
+    *other* axis loses a value the way the already-built swept case does.
+
+    The control: `by: cohort` names no parameter this template declares (only
+    the four `analysis.*` paths are), so the ordinary composed groups design —
+    no `allocation` declared beside it — reports *Arms need allocation* alone,
+    proving the new check does not fire on every group axis."""
+    from publishable.runner import resolve_condition_cfg
+
+    doc = {"sweep": {"groups": [{"by": "analysis.method", "levels": ["pearson", "spearman"]}]}}
+    conditions = expand(doc)
+    spearman = next(c for c in conditions if c.label == "method=spearman")
+    assert spearman.selectors == {"analysis.method"}
+    resolved = resolve_condition_cfg(
+        {"parameters": {"analysis": {"method": "pearson"}}}, spearman
+    )
+    assert resolved.parameters.analysis.method == "pearson"  # not "spearman"
+
+    assert _error_codes(write_config(doc)) == {
+        "E-SWEEP-PATH-DUPLICATE",
+        "E-DATA-ALLOCATION-WITHIN-ARMS",
+    }
+
+    assert _error_codes(
+        write_config({"sweep": {"groups": [{"by": "cohort", "levels": ["a", "b"]}]}})
     ) == {"E-DATA-ALLOCATION-WITHIN-ARMS"}
 
 

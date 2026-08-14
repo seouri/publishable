@@ -568,6 +568,137 @@ def test_a_group_axis_actually_narrows_end_to_end(tmp_path: Path, monkeypatch):
     assert treatment_n == {"resolved": 3, "completed": 2, "ineligible": 0, "failed": 1}
 
 
+_GROUPS_MEASURED_STEP = '''\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        for unit in io.units:
+            if unit.key == "c1":
+                # Ineligible, not failed — proves `control`'s `ineligible: 1`.
+                io.skip(unit.key, "deliberately ineligible")
+                continue
+            if unit.key == "t1":
+                # Neither recorded nor skipped — proves `treatment`'s `failed: 1`.
+                continue
+            io.record(unit.key, {{"score": 1.0}})
+        return {{}}
+'''
+
+# `arm` (control/treatment) and `cohort` (a/b) are DIFFERENT partitions that
+# genuinely cross — `cohort=a` holds c1, c3 (control) and t1, t3 (treatment);
+# `cohort=b` holds c2, c4 (control) and t2 (treatment) — so `report_by:
+# [cohort]`'s per-level counts change under arm-narrowing rather than merely
+# adding levels, which is what makes this fixture discriminate call site 2
+# (`_condition_report_by_levels`) rather than merely exercise it. `measurements`
+# (`read_id`, uneven row counts per patient) reaches call site 3
+# (`_condition_beside_n`/`technical_n`). control (4 units) and treatment (3
+# units), 7 total: distinct from task 13's 7/5 (12), this module's own 8/3 (11)
+# and 4/9 (13) fixtures above, and `test_runner.py`'s 5-unit/3-cluster harness —
+# no arm fixture here shares a boundary with another.
+_GROUPS_MEASURED_ROSTER = (
+    "patient_id,arm,cohort,depth,read_id\n"
+    "c1,control,a,10,r1\nc1,control,a,20,r2\n"
+    "c2,control,b,30,r1\nc2,control,b,40,r2\nc2,control,b,90,r3\n"
+    "c3,control,a,11,r1\nc3,control,a,22,r2\n"
+    "c4,control,b,12,r1\nc4,control,b,24,r2\n"
+    "t1,treatment,a,13,r1\nt1,treatment,a,26,r2\n"
+    "t2,treatment,b,14,r1\nt2,treatment,b,28,r2\n"
+    "t3,treatment,a,15,r1\nt3,treatment,a,30,r2\nt3,treatment,a,45,r3\n"
+)
+
+
+def test_groups_between_and_by_attribute_reach_all_three_narrowed_call_sites(
+    tmp_path: Path, monkeypatch
+):
+    """Task 19 Step 6 — the end-to-end counting test task 13 could not write.
+
+    Task 13 narrowed `attrition`, `report_by`'s strata, and `beside_n` to a
+    condition's own arm, and disclosed that its own Step 5 mutation — reverting
+    all three of `command_run`'s call sites to the whole roster — passed green,
+    because `command_run`'s aggregation loop was unreachable end to end while
+    `E-SWEEP-GROUPS-UNSUPPORTED` stood. Task 17 retired that refusal, so the
+    route task 13 lacked now exists: a real `groups` + `between` +
+    `by_attribute` + `measurements` + `report_by` config, validating clean, run
+    through `command_run` to a real `run.yaml`.
+
+    Unlike `test_a_group_axis_actually_narrows_end_to_end` above (which reaches
+    only call site 1, `_condition_counts`), this fixture also declares
+    `data.units.measurements` and `statistics.report_by`, so all three call
+    sites `command_run` makes are exercised in one run: `_condition_counts`
+    (the per-condition `n`), `_condition_report_by_levels` (the `by.cohort`
+    strata), and `_condition_beside_n` (whether `technical_n` survives).
+
+    `technical_n` is asserted ABSENT from both conditions' `score` metric —
+    the correct behavior once a group axis narrows the roster
+    (`_cond_beside_n` withholds it whenever the roster handed to a condition is
+    not the identical whole-roster object) — which is itself a discriminating
+    assertion for call site 3: reverting to the whole roster makes `cond_roster
+    is roster` true again and `technical_n` would reappear.
+    """
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _GROUPS_MEASURED_STEP)
+
+    doc = run_a_project(
+        tmp_path,
+        roster_csv=_GROUPS_MEASURED_ROSTER,
+        units_overrides={
+            "allocation": "between",
+            "assign": {"arm": {"method": "by_attribute"}},
+            "attributes": ["arm", "cohort", "depth", "read_id"],
+            "measurements": {"by": "read_id", "collapse": {"depth": "mean"}},
+        },
+        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
+        statistics={"report_by": ["cohort"]},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    conditions = run["results"]["conditions"]
+    assert [c["label"] for c in conditions] == ["arm=control", "arm=treatment"]
+
+    control = conditions[0]["aggregated"]["step01_summarize_units"]
+    treatment = conditions[1]["aggregated"]["step01_summarize_units"]
+
+    # Call site 1: `_condition_counts`, narrowed to each condition's own arm.
+    control_n = control["score"]["n"]
+    treatment_n = treatment["score"]["n"]
+    assert control_n == {"resolved": 4, "completed": 3, "ineligible": 1, "failed": 0}
+    assert treatment_n == {"resolved": 3, "completed": 2, "ineligible": 0, "failed": 1}
+    for n in (control_n, treatment_n):
+        assert n["resolved"] == n["completed"] + n["ineligible"] + n["failed"]
+    # At least one arm attrites on each side of the ledger — neither
+    # `ineligible` nor `failed` is zero across the whole run.
+    assert control_n["ineligible"] + treatment_n["failed"] > 0
+
+    # Call site 2: `_condition_report_by_levels`, narrowed the same way —
+    # `cohort=a`/`cohort=b` each hold different units (and different counts)
+    # in `control` than in `treatment`, since the two partitions cross.
+    control_by_cohort = control["by"]["cohort"]
+    treatment_by_cohort = treatment["by"]["cohort"]
+    assert control_by_cohort["a"]["score"]["n"] == {
+        "resolved": 2, "completed": 1, "ineligible": 1, "failed": 0,
+    }
+    assert control_by_cohort["b"]["score"]["n"] == {
+        "resolved": 2, "completed": 2, "ineligible": 0, "failed": 0,
+    }
+    assert treatment_by_cohort["a"]["score"]["n"] == {
+        "resolved": 2, "completed": 1, "ineligible": 0, "failed": 1,
+    }
+    assert treatment_by_cohort["b"]["score"]["n"] == {
+        "resolved": 1, "completed": 1, "ineligible": 0, "failed": 0,
+    }
+
+    # Call site 3: `_condition_beside_n` — `technical_n` is withheld from BOTH
+    # conditions, because each was handed a narrowed (arm) roster rather than
+    # the whole one.
+    assert "technical_n" not in control["score"]
+    assert "technical_n" not in treatment["score"]
+
+
 def test_allocation_json_is_written_with_exact_arm_keys_when_declared(tmp_path: Path):
     """Task 14: a real `sweep.groups` + `allocation: between` + `assign` config,
     run all the way to a real `allocation.json`, with no `validate` patch

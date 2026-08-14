@@ -1455,6 +1455,46 @@ def test_an_arm_constant_within_a_units_rows_is_accepted(input_dir: Path):
     assert technical_n == {"min": 1, "max": 2, "median": 1.5}
 
 
+def test_a_constant_arm_survives_collapse_and_reaches_the_right_condition(input_dir: Path):
+    """Task 19 Step 4 — the loop task 11 opened and this closes: the constancy
+    check above refuses a *varying* arm, but nothing before this proved a
+    *constant* one actually reaches the right condition once collapsed. Three
+    assertions, not two: the resolved unit's own `arm` attribute (survived
+    collapse), `technical_n` showing the rows that were actually collapsed
+    (uneven — 2 for `p1`, 3 for `p2`, 2 for `p3` — so a roster collapse that
+    silently used only the first row per key cannot pass by coincidence), and —
+    the one that makes this end to end rather than the constancy test and
+    `test_two_arms_get_different_rosters_and_neither_is_the_whole_roster`'s
+    `arms_of` check run side by side — `units.arms_of` over THIS resolved
+    roster, proving `p1` and `p3` (both `control`) land in the same partition
+    and `p2` (`treatment`) lands in the other, using the exact roster
+    `resolve_units` produced rather than a hand-built stand-in."""
+    _write_reads(
+        input_dir,
+        "patient_id,read_id,arm,depth\n"
+        "p1,r1,control,10\np1,r2,control,20\n"
+        "p2,r1,treatment,30\np2,r2,treatment,40\np2,r3,treatment,90\n"
+        "p3,r1,control,11\np3,r2,control,22\n",
+    )
+    decl = {
+        "from": "reads.csv",
+        "key": "patient_id",
+        "attributes": ["arm", "depth", "read_id"],
+        "assign": {"arm": {"method": "by_attribute"}},
+        "measurements": {"by": "read_id", "collapse": {"depth": "mean"}},
+    }
+    roster, technical_n, _ = resolve_units(decl, input_dir)
+    by_key = {u.key: u for u in roster}
+    assert by_key["p1"].arm == "control"
+    assert by_key["p2"].arm == "treatment"
+    assert by_key["p3"].arm == "control"
+    assert technical_n == {"min": 2, "max": 3, "median": 2}
+
+    partition = arms_of(roster, "arm", ["control", "treatment"])
+    assert {u.key for u in partition["control"]} == {"p1", "p3"}
+    assert {u.key for u in partition["treatment"]} == {"p2"}
+
+
 def test_a_varying_arm_under_a_drawn_method_is_not_checked(input_dir: Path):
     """`_check_assign` reads `from`/`levels` only under `method: by_attribute` —
     "mean nothing" under `random`/`blocked` — so this accessor gates the same
