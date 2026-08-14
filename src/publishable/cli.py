@@ -261,8 +261,8 @@ def _wide_swept_paths(sweep_block: dict[str, Any]) -> set[str]:
 def _resolved_group_axes(
     units_decl: dict[str, Any] | None,
     sweep_block: dict[str, Any],
-    roster: "UnitList | None" = None,
-    digest: str = "",
+    roster: "UnitList | None",
+    digest: str,
     clusters: dict[str, str] | None = None,
 ) -> dict[str, ArmPlan]:
     """Every `sweep.groups` axis **realized** — one `units.ArmPlan` per axis,
@@ -280,6 +280,13 @@ def _resolved_group_axes(
     and `artifacts.build_allocation_document` are handed — neither recomputes
     it. Under `by_attribute` a recomputation would agree; under a draw a second
     call is a second allocation, so the plan is computed once and passed.
+
+    `roster` and `digest` are required rather than defaulted, `clusters` is
+    not: `digest` is unread on the `by_attribute` path today and task 8
+    threads it into `units.assign_seed_for`, so a defaulted one would become
+    a draw silently seeded from the empty string with every test still green
+    — exactly the class of silent-wrong-under-a-draw this seam exists to
+    close, sitting in the signature the draw will arrive through.
 
     Returns `{}` when `roster is None`: an allocation is a partition of a
     resolved roster, and there is nothing to partition without one. That is

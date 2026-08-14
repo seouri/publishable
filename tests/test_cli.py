@@ -411,19 +411,28 @@ def test_a_group_path_gets_no_swept_away_marker():
 
 def _levels_roster():
     """8 `control`, 3 `treatment`, 11 total — `tests/test_cli.py`'s own arm
-    sizes, distinct from `_arm_roster12`'s 7/5 and `test_artifacts.py`'s 4/9 —
-    and each unit also carries a `cohort` value, since these tests declare two
-    axes at once. `arm_column` rather than `arm`, so a `from` that resolved to
-    the axis name instead of the declaration would fail to partition."""
+    sizes, distinct from `_arm_roster12`'s 7/5 and `test_artifacts.py`'s 4/9.
+
+    `cohort` **crosscuts** `arm_column` rather than tracking it: 5 of the 8
+    controls are `derivation` and 3 are `validation`, and the 3 treatments run
+    the other way (1 `derivation`, 2 `validation`). Two axes that partitioned
+    the roster identically could not tell "read the `cohort` column" from
+    "read whatever column the other axis resolved," and crosstalk between the
+    two resolutions would pass unseen — the coinciding-properties fixture
+    fault this project has already been bitten by. `arm_column` rather than
+    `arm`, so a `from` that resolved to the axis name instead of the
+    declaration would fail to partition at all."""
     from publishable.units import Unit, UnitList
 
+    control_cohorts = ["derivation"] * 5 + ["validation"] * 3
+    treatment_cohorts = ["derivation", "validation", "validation"]
     control = [
-        Unit(key=f"c{i}", attributes={"arm_column": "control", "cohort": "derivation"})
-        for i in range(8)
+        Unit(key=f"c{i}", attributes={"arm_column": "control", "cohort": cohort})
+        for i, cohort in enumerate(control_cohorts)
     ]
     treatment = [
-        Unit(key=f"t{i}", attributes={"arm_column": "treatment", "cohort": "validation"})
-        for i in range(3)
+        Unit(key=f"t{i}", attributes={"arm_column": "treatment", "cohort": cohort})
+        for i, cohort in enumerate(treatment_cohorts)
     ]
     return UnitList(control + treatment)
 
@@ -465,15 +474,15 @@ def test_resolved_group_axes_realizes_a_plan_per_axis_and_skips_unresolvable_lev
     assert plans["arm"].members["control"] == ("c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7")
     assert plans["arm"].members["treatment"] == ("t0", "t1", "t2")
     assert plans["cohort"].levels == ("derivation", "validation")
-    assert plans["cohort"].members["derivation"] == (
-        "c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7",
-    )
-    assert plans["cohort"].members["validation"] == ("t0", "t1", "t2")
+    # Crosscutting, so all four member tuples differ: neither axis's answer
+    # could have come from the other's column.
+    assert plans["cohort"].members["derivation"] == ("c0", "c1", "c2", "c3", "c4", "t0")
+    assert plans["cohort"].members["validation"] == ("c5", "c6", "c7", "t1", "t2")
     assert all(p.seed is None and p.strata == () for p in plans.values())
 
 
 def test_resolved_group_axes_is_empty_with_no_groups_declared():
-    assert _resolved_group_axes({"assign": {"arm": {"from": "x"}}}, {}, _levels_roster()) == {}
+    assert _resolved_group_axes({"assign": {"arm": {"from": "x"}}}, {}, _levels_roster(), "d") == {}
 
 
 def test_resolved_group_axes_is_empty_with_no_roster_to_partition():
