@@ -2063,6 +2063,39 @@ def test_a_malformed_groups_entry_is_a_shape_fault(write_config):
     )
 
 
+def test_a_blank_group_axis_name_is_a_shape_fault(write_config):
+    """A `by` of the right *type* and no content is still refused, because it is
+    the one shape where `sweep.selector_paths` and `cli._resolved_group_axes`
+    disagree over a config a user can actually write.
+
+    `isinstance(by, str)` accepts `""`, so `expand` renders conditions under it
+    (`selectors == {""}`, labels `=a`/`=b`) while `_resolved_group_axes`' own
+    `not axis` check skips the axis. With no `assign` block of that name the
+    mismatch surfaces late as `E-DATA-ASSIGN-MISSING`; *with* one — and
+    `data.units.assign` is a bare mapping no schema closes — task 20's probe
+    ran this end to end and the config validated clean, then `run` died on
+    `units.arm_members`' bare `KeyError('')`: a traceback out of a command
+    rather than a diagnostic.
+
+    An all-whitespace name is refused beside it for a different reason: it
+    resolves fine, and task 20's probe ran `by: " "` to a green `run.yaml` with
+    correctly narrowed arms — but it names condition directories (`00_ =control`)
+    that no other path in this project can produce.
+
+    The control is the same well-formed axis the test above uses, plus a `by`
+    that merely *contains* a space, which is not this rule's business."""
+    for blank in ("", " ", "\t", "\n"):
+        assert "E-CONFIG-SHAPE" in codes(
+            write_config({"sweep": {"groups": [{"by": blank, "levels": ["a", "b"]}]}})
+        ), f"a `by` of {blank!r} was accepted"
+    assert "E-CONFIG-SHAPE" not in codes(
+        write_config({"sweep": {"groups": [{"by": "arm", "levels": ["a", "b"]}]}})
+    )
+    assert "E-CONFIG-SHAPE" not in codes(
+        write_config({"sweep": {"groups": [{"by": "study arm", "levels": ["a", "b"]}]}})
+    )
+
+
 def test_a_resolver_source_is_refused_until_plugins_exist(write_config):
     units = {"from": {"resolver": "plate_wells"}, "key": "well"}
     assert "E-DATA-RESOLVER-UNSUPPORTED" in codes(write_config({"data.units": units}))

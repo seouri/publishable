@@ -331,6 +331,29 @@ def _check_shape(doc: dict[str, Any], c: Collector) -> bool:
                 by = entry.get("by")
                 if by is not None and not isinstance(by, str):
                     _bad(f"sweep.groups[{i}].by", by, "string")
+                elif isinstance(by, str) and not by.strip():
+                    # A blank axis name is where `selector_paths` and
+                    # `cli._resolved_group_axes` disagree, and the one shape where
+                    # that disagreement is not a caller bug but a config anyone can
+                    # write: `isinstance(by, str)` accepts `""`, so `expand` renders
+                    # conditions under it (`Condition.selectors == {""}`, labels
+                    # `=a`/`=b`), while `_resolved_group_axes`' own `not axis` check
+                    # skips it. Without an `assign` block of the same name the pair
+                    # is caught late, as `E-DATA-ASSIGN-MISSING`; *with* one — and
+                    # `data.units.assign` is a bare mapping no schema closes — the
+                    # config validates clean and `run` dies on `arm_members`' bare
+                    # `KeyError('')`, a traceback out of a command rather than a
+                    # diagnostic. A name of only whitespace is refused with it: it
+                    # resolves, but it names condition directories (`00_ =control`)
+                    # nothing else in this project would produce.
+                    ok = False
+                    c.error(
+                        "E-CONFIG-SHAPE",
+                        f"sweep.groups[{i}].by",
+                        f"is blank (`{by!r}`); expected an axis name — it names the "
+                        "conditions this axis expands into and the "
+                        "`data.units.assign` block that fills them",
+                    )
                 levels = entry.get("levels")
                 if levels is not None and not isinstance(levels, list):
                     _bad(f"sweep.groups[{i}].levels", levels, "list")

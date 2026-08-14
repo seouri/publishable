@@ -94,10 +94,14 @@ _MARKED_LATER_SLICE = re.compile(
 # is not read by `validate_config` at all), so it gets its own probe.
 # `allocation` was here until task 17 retired `E-DATA-ALLOCATION-UNSUPPORTED`:
 # `between` is built and runs end to end, so `init`'s comment no longer marks
-# it, and this dict no longer carries a path for it.
-_MARKED_FIELD_PATHS: dict[str, tuple[object, ...]] = {
-    "kind": ("replication", "repeats", 0, "kind"),
-}
+# it, and this dict no longer carries a path for it. `kind` left for the same
+# reason at task 20: `replication.SUPPORTED_KINDS` is `seed`, `batch`, `fold`,
+# all three built, so `init`'s `(fold: later slice)` was a marking core no
+# longer honors — it now writes the enum § The one config file shows,
+# `seed | batch | fold`. The registry is empty rather than deleted: the loop
+# below still refuses a marking with no path registered here, which is what
+# keeps the next one honest.
+_MARKED_FIELD_PATHS: dict[str, tuple[object, ...]] = {}
 
 
 def _refusal_codes(key: str, doc: dict, config_path: Path) -> list[str]:
