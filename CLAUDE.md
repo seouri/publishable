@@ -58,6 +58,58 @@ These are load-bearing across all four documents; contradicting one in a single 
 
 The stated non-promises — adaptive/sequential designs, per-condition pipeline variation, factorial main effects and interactions, bit-identical reruns, scientific validity — are deliberate refusals with reasons attached, not gaps waiting to be filled. Treat a request to add one as a design change requiring an argument against `design-principles.md`, not a feature request.
 
+## Misreadings this repo has made more than once
+
+Every one of these was made by someone competent, reading carefully, more than once. They are not
+carelessness — each is a reasonable reading that happens to be wrong here, so knowing the rule is what
+prevents it. Slice ledgers record the instances but are gitignored; this section is the durable copy.
+
+### Reading the documents
+
+| Misreading | The rule |
+|---|---|
+| Taking a § Validation row's own wording as its whole scope | Several rows read as method-independent while the **surrounding prose carries the gating** — *Ratio names levels* and *Allocation strata exist* apply only under `random`/`blocked`. Read the section, not the cell |
+| Treating a row's example as its definition | An example can be a fault under *every* candidate reading, so the row looks settled and is not. *Attribute assignment resolves* showed a disjoint value set, which fails whether the rule is set equality or subset tolerance — the ambiguity survived until someone needed the answer |
+| Citing a sentence whose job is to **contrast** as if it supported the claim | "An arm no unit resolves to is already refused" exists to distinguish that case from `min_units_per_cell`'s thin-but-nonzero gap. It was read as licence to route a hard refusal into a warning-shaped gap |
+| Assuming a documented rule has code behind it | Five § Validation rows described checks with no emit site, no check and no test. **Grep for the code before building on the row**; a row and a code are the same check seen from two ends, and either end can be missing |
+| Reading a temporary refusal as permanent, or the reverse | A `-UNSUPPORTED` suffix is the undocumented build family, retired wholesale and absent from the registry. A *narrow* refusal of a combination is documented, carries rows, and outlives the slice that minted it |
+
+### Writing checks that can fail
+
+**Sixteen checks across the two H3c slices could not fail**, every one caught by a mutation and none by
+reading. Run the mutation before believing the test, **and run it where the behaviour lives** — not where
+the test happens to look. The shapes, each seen more than once:
+
+| Shape | Why it passes anyway |
+|---|---|
+| A fixture whose numbers agree with the bug | An "undeclared level" ratio that was *also* partial; a 13-unit apportionment that matched a reverse-order mutant by coincidence; a cluster fixture where correct and buggy cluster counts were both 3 |
+| A dimension no assertion can see | Per-stratum arm counts are **forced** by apportionment, so no count assertion can detect an RNG change. Deleting the shuffle, and replacing the seeded generator with `Random(0)`, both left the suite green — the second while `ArmPlan.seed` still *recorded* the ignored seed |
+| An assertion implied by another in the same test | Arm sizes summing to the roster is arithmetic, not a check, once the sizes are pinned |
+| A control asserting only absences | Passes identically if nothing ran. Pair it with something that must report |
+| A parametrized test asserting a **failure** for both arms | Proves nothing about either arm's **success** path — `blocked`'s stratified draw was fully threaded and never exercised |
+| Testing the refusal, never the honouring | `validate` refused bad `block_size` values while nothing checked the draw *used* a good one, so ignoring it entirely passed the suite |
+| A mutation applied to a proxy | The extracted helper's body rather than the call site; the fixture rather than the wiring |
+| Varying config **shape** when the property is about roster **content** | Nineteen adversary configs over one roster made every refusal roster-incidental. **A refusal that happens to fire must be attributed before it is counted** |
+
+### Two habits that cost real work
+
+- **A comment or docstring claiming a guarantee the code does not provide** — at least eight instances,
+  including one that explicitly promised "any other `method` string takes the `by_attribute` path" (the
+  fail-open defect written down as if intended), and three overreaching claims inside a single commit
+  that was itself fixing overreaching claims. When you change a guard, re-read its justification.
+- **Locating a table row by position** ("the two rows above", "further up") — at least seven instances,
+  wrong twice, once in a row no diff touched, falsified by an insertion that moved it. Name what a
+  sibling row *does*. When you insert or remove a row, check every row it **moved**, and every count
+  phrase near it.
+
+### Two mechanical traps
+
+- **Never filter the output of a sweep whose job is to find a string** — filter the file list. A reviewer
+  checking this exact rule lost a true hit to `grep -v superpowers`, because the matching line contained
+  that path. Prove each sweep can fail by running it against a string known to be present.
+- **`git checkout -- <file>` destroys uncommitted work**, twice mistaken for reverting a mutation. Keep a
+  copy before mutating, and verify a revert by **behaviour**, never by `git status`.
+
 ## Checking consistency after any `*.md` edit
 
 Editing one document is almost never a one-file change. Both passes below run before an edit is finished; the second is the one that catches real defects, and no tooling substitutes for it. The **cross-document** pass governs the four documents only — a [feasibility analysis](#feasibility-analyses) is exempt from it and subject to the mechanical pass in full.
