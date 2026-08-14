@@ -61,9 +61,15 @@ def _import_file(path: Path, module_name: str, templates_dir: Path) -> None:
 
     `templates_dir` goes on the *end* of `sys.path` so a file may import a
     sibling helper, without that directory shadowing a stdlib or site-packages
-    name for the duration.
+    name for the duration, and `sys.path` is snapshotted and put back whole —
+    the same shape as the `sys.modules` snapshot, and for the same reason.
+    Neither an index captured before `exec_module` nor a `remove` of the string
+    survives a template that mutates `sys.path` on its own top level, whether
+    itself or through a library it imports: one deletes an unrelated entry and
+    leaves `templates/` on the path permanently, which serves the *next* repo
+    this repo's helpers — precisely the leak this function exists to close.
 
-    Only the entries this import touched are undone, and only those `_is_local`
+    Only the `sys.modules` entries this import touched are undone, and only those `_is_local`
     places under `templates_dir` — plus any entry it *replaced*, wherever it
     lives, since that is the clobber path. Blanket-restoring every new entry
     would un-import whatever the template legitimately pulled in (numpy, say),
@@ -71,19 +77,17 @@ def _import_file(path: Path, module_name: str, templates_dir: Path) -> None:
     process.
     """
     before = dict(sys.modules)
+    before_path = list(sys.path)
     spec = importlib.util.spec_from_file_location(module_name, path)
     if spec is None or spec.loader is None:  # pragma: no cover - unreachable for a .py file
         raise ImportError(f"no import machinery for {path}")
     module = importlib.util.module_from_spec(spec)
     sys.path.append(str(templates_dir))
-    entry = len(sys.path) - 1
     sys.modules[module_name] = module
     try:
         spec.loader.exec_module(module)
     finally:
-        # By index, not `remove`, which takes the *first* occurrence and would
-        # strip a pre-existing entry for this directory while leaving ours.
-        del sys.path[entry]
+        sys.path[:] = before_path
         for key, was in list(sys.modules.items()):
             if key not in before:
                 if key == module_name or _is_local(sys.modules[key], templates_dir):

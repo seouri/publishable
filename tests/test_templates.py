@@ -123,6 +123,30 @@ def test_per_call_merge_does_not_leak_between_two_roots(tmp_path: Path):
     assert get_template("alpha", root_b) is None
 
 
+def _modules_under(directory: Path) -> list[str]:
+    """Every `sys.modules` key whose module was loaded out of `directory`.
+
+    Computed rather than enumerated by name. Listing the two helper names by
+    hand would pass a defect that evicted `plain` but left `plain.data`, and
+    `import plain.data` consults `sys.modules["plain.data"]` first — so a stale
+    submodule is a leak on its own, and one no hand-written list would have
+    thought to include.
+    """
+    root = directory.resolve()
+
+    def under(candidate: str) -> bool:
+        here = Path(candidate).resolve()
+        return root == here or root in here.parents
+
+    leaked = []
+    for key, module in list(sys.modules.items()):
+        origin = getattr(module, "__file__", None)
+        paths = list(getattr(module, "__path__", ()))
+        if (origin and under(origin)) or any(under(entry) for entry in paths):
+            leaked.append(key)
+    return sorted(leaked)
+
+
 def _two_repos_each_holding_my_assay(tmp_path: Path) -> tuple[Path, Path]:
     """Repo A and repo B, both with `templates/my_assay.py` registering `my_assay`.
 
@@ -200,7 +224,7 @@ def test_two_repos_in_one_process_do_not_cross_contaminate(tmp_path: Path):
     assert type(b).namespaced_origin == "B"
     assert type(a) is not type(b)
     assert type(a).__module__ != type(b).__module__
-    assert "plain" not in sys.modules and "support" not in sys.modules
+    assert _modules_under(tmp_path) == []
 
 
 def test_a_repos_own_templates_are_reachable_from_a_second_call(tmp_path: Path):
@@ -216,6 +240,48 @@ def test_a_repos_own_templates_are_reachable_from_a_second_call(tmp_path: Path):
     assert first is not None and second is not None
     assert type(first).__doc__ == type(second).__doc__ == "A's"
     assert type(first).origin == type(second).origin == "A"
+
+
+def test_a_template_that_mutates_sys_path_does_not_leak_to_the_next_repo(tmp_path: Path):
+    """A template whose top level touches `sys.path` — itself, or through any
+    library it imports — must not move the entry discovery is about to take
+    back off. Taking it by the index captured before the import deletes an
+    unrelated entry instead (`.../publishable/src`, measured) and leaves this
+    repo's `templates/` on `sys.path` for good, which is how repo B ends up
+    served repo A's helper: `origin` is the assertion that catches that, and
+    `sys.path` being unchanged is the assertion that catches the entry lost on
+    the way.
+
+    A `remove` of the string is no better and fails the other way round, which
+    is why each template here appends its *own* directory as well: `remove`
+    takes the first occurrence, which is discovery's, and leaves the
+    template's copy behind — same permanent entry, same leak. Only putting
+    `sys.path` back whole survives both."""
+    for tag in ("a", "b"):
+        templates = tmp_path / tag / "templates"
+        templates.mkdir(parents=True)
+        (templates / "helperx.py").write_text(f'ORIGIN = "{tag.upper()}"\n')
+        (templates / "my_assay.py").write_text(
+            "import os\n"
+            "import sys\n"
+            "sys.path.insert(0, '/zzz')\n"
+            "sys.path.append(os.path.dirname(__file__))\n"
+            "import helperx\n"
+            "from publishable import BaseTemplate, register_template\n\n\n"
+            '@register_template("my_assay")\n'
+            "class MyAssay(BaseTemplate):\n"
+            "    origin = helperx.ORIGIN\n"
+        )
+    before = list(sys.path)
+
+    a = get_template("my_assay", tmp_path / "a")
+    b = get_template("my_assay", tmp_path / "b")
+
+    assert a is not None and b is not None
+    assert type(a).origin == "A"
+    assert type(b).origin == "B"
+    assert sys.path == before
+    assert _modules_under(tmp_path) == []
 
 
 def test_a_template_named_for_a_stdlib_module_does_not_import_itself(tmp_path: Path):
