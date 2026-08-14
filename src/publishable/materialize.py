@@ -116,7 +116,7 @@ def materialize_config(
         '    from: index.csv                # index.csv | {glob: "*.dcm"}',
         "    key: patient_id                # stable, unique identity",
         "    attributes: []                 # available for stratification and reporting",
-        "    allocation: within             # within  (between: later slice)",
+        "    allocation: within             # within | between",
         "    cluster_by: null               # e.g. site, when units aren't independent",
         "    weight_by: null                # e.g. sampling_weight, when the sample is enriched",
         "    measurements: null             # e.g. {by: read_id, collapse: mean}",

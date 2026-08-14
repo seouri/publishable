@@ -1155,15 +1155,18 @@ def command_run(config_path: Path) -> int:
     # satisfy `_resolved_group_axes`'s stricter all-`str` requirement, the same
     # requirement `validate._check_assign`'s own `by_attribute` branch applies
     # before it ever calls `arms_of`. Gating on `group_axes` instead would let an
-    # axis whose `levels` resolves to `[]` — legal shape, no elements — silently
-    # skip arm narrowing entirely: every
-    # condition on the malformed axis would get the whole roster, which is
-    # exactly the outcome two declared arms exist to make impossible. Gating on
-    # `selector_paths` instead means `arm_members` is still called whenever
-    # `expand` treated the config as having a group axis, so a resolution gap
-    # surfaces as `arm_members`'s own `KeyError` — a caller-disagreement bug to
-    # see, not a config to silently accept — rather than as a silently
-    # unnarrowed run.
+    # axis this function skips but `selector_paths`/`expand` still treat as one
+    # silently skip arm narrowing entirely. `by: ""` is the live case:
+    # `isinstance(by, str)` accepts it, so `selector_paths` names `""` an axis
+    # and `expand` renders conditions under it (`Condition.selectors == {""}`,
+    # labels `=a`/`=b`), but this function's own `not axis` check (an empty
+    # string is falsy) skips it — every condition on that axis would then get
+    # the whole roster, exactly the outcome two declared arms exist to make
+    # impossible. Gating on `selector_paths` instead means `arm_members` is
+    # still called whenever `expand` treated the config as having a group axis,
+    # so a resolution gap surfaces as `arm_members`'s own `KeyError` — a
+    # caller-disagreement bug to see, not a config to silently accept — rather
+    # than as a silently unnarrowed run.
     group_axes = _resolved_group_axes(units_decl, sweep_block)
     arm_members_map = (
         arm_members(roster, group_axes, conditions)

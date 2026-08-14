@@ -655,8 +655,10 @@ def test_an_unrecognised_sweep_key_is_refused(write_config):
 
 
 def test_the_four_refused_modes_are_known_keys_not_unknown_ones(write_config):
-    """`paired`/`ablate`/`sample`/`groups` are refused by `_check_unimplemented` under
-    their own identifiers; `_check_sweep` must not double-report them as unknown."""
+    """`paired`, `ablate`, `sample`, and `groups` are each declared under their own
+    identifier in `SWEEP_MODES` — none refused by `_check_unimplemented` any more,
+    all four having lost that refusal across earlier tasks and this one — so
+    `_check_sweep` must not report any of them as an unrecognised key."""
     for mode in ("paired", "ablate", "sample", "groups"):
         found = codes(write_config({"sweep": {mode: {"analysis.method": ["pearson"]}}}))
         assert "E-SWEEP-KEY-UNKNOWN" not in found
@@ -1230,7 +1232,8 @@ def test_groups_is_accepted_and_expands_for_real(write_config):
 def test_paired_is_accepted_and_expands_for_real(write_config):
     """§ Expansion modes retires `E-SWEEP-PAIRED-UNSUPPORTED`: `paired` is now one
     of the axis-shaped modes `_axes` composes, and a config declaring it validates
-    clean rather than tripping the refusal `ablate`/`sample`/`groups` still get."""
+    clean — `ablate`, `sample`, and `groups` each lost their own such refusal too,
+    across earlier tasks and this one."""
     found = codes(
         write_config(
             {
@@ -1277,7 +1280,7 @@ def test_ablate_is_accepted_and_expands_for_real(write_config):
     """§ Expansion modes retires `E-SWEEP-ABLATE-UNSUPPORTED`: `ablate` is the one
     mode that does not multiply, applied after the product and reading the
     baseline rather than re-emitting it, and a config declaring it validates
-    clean rather than tripping the refusal `groups` still gets."""
+    clean — `groups` lost its own such refusal too, in this task."""
     found = codes(
         write_config(
             {
