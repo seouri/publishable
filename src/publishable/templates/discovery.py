@@ -63,8 +63,8 @@ def _import_file(path: Path, module_name: str, templates_dir: Path) -> None:
     sibling helper, without that directory shadowing a stdlib or site-packages
     name for the duration.
 
-    Only the entries this import touched are undone, and only those that
-    resolve under `templates_dir` — plus any entry it *replaced*, wherever it
+    Only the entries this import touched are undone, and only those `_is_local`
+    places under `templates_dir` — plus any entry it *replaced*, wherever it
     lives, since that is the clobber path. Blanket-restoring every new entry
     would un-import whatever the template legitimately pulled in (numpy, say),
     trading a discovery bug for a re-initialisation bug in the rest of the
@@ -76,21 +76,39 @@ def _import_file(path: Path, module_name: str, templates_dir: Path) -> None:
         raise ImportError(f"no import machinery for {path}")
     module = importlib.util.module_from_spec(spec)
     sys.path.append(str(templates_dir))
+    entry = len(sys.path) - 1
     sys.modules[module_name] = module
     try:
         spec.loader.exec_module(module)
     finally:
-        sys.path.remove(str(templates_dir))
+        # By index, not `remove`, which takes the *first* occurrence and would
+        # strip a pre-existing entry for this directory while leaving ours.
+        del sys.path[entry]
         for key, was in list(sys.modules.items()):
             if key not in before:
-                origin = getattr(sys.modules[key], "__file__", None)
-                if key == module_name or (origin and _under(Path(origin), templates_dir)):
+                if key == module_name or _is_local(sys.modules[key], templates_dir):
                     del sys.modules[key]
             elif was is not before[key]:
                 sys.modules[key] = before[key]
         for key, was in before.items():
             if key not in sys.modules:
                 sys.modules[key] = was
+
+
+def _is_local(module: object, templates_dir: Path) -> bool:
+    """Whether `module` was loaded out of the repo's own `templates/`.
+
+    `__file__` alone is not enough. A helper directory with no `__init__.py` —
+    the default shape, since nobody adds one on purpose — becomes a namespace
+    package, and a namespace package has no `__file__` at all. Left in
+    `sys.modules` it hands the next repo the previous repo's submodules, which
+    is the exact leak this restore exists to close. `__path__` covers regular
+    packages, namespace packages, and plain modules with one predicate.
+    """
+    origin = getattr(module, "__file__", None)
+    if origin and _under(Path(origin), templates_dir):
+        return True
+    return any(_under(Path(entry), templates_dir) for entry in getattr(module, "__path__", ()))
 
 
 def _under(path: Path, directory: Path) -> bool:

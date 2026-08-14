@@ -126,23 +126,40 @@ def test_per_call_merge_does_not_leak_between_two_roots(tmp_path: Path):
 def _two_repos_each_holding_my_assay(tmp_path: Path) -> tuple[Path, Path]:
     """Repo A and repo B, both with `templates/my_assay.py` registering `my_assay`.
 
-    Each file imports a helper from its own `templates/support/` package. The
-    helper is a *package*, not a sibling `.py`, on purpose: every `templates/*.py`
-    is itself imported by discovery, so a sibling module would be re-imported
-    per repo by accident and the leak would not show.
+    Each file imports helpers from its own `templates/`, in both shapes a
+    helper directory comes in — `support/` with an `__init__.py`, and `plain/`
+    without one, which Python makes a *namespace* package with no `__file__` at
+    all. Both, because a restore that tested only `__file__` would leave the
+    namespace package cached and leak it to the next repo; and directories
+    rather than sibling `.py` files, because every `templates/*.py` is itself
+    imported by discovery, so a sibling would be re-imported per repo by
+    accident and no leak would show.
+
+    `plain.data` carries a `__file__` and is evicted either way, so the value
+    it holds is not what the namespace package costs. What it costs is the
+    *parent* surviving in `sys.modules` with the previous repo's submodules
+    still attached to it — which a file saying `import plain` and reading
+    `plain.data` is then handed, silently and with the wrong repo's data. That
+    file cannot be written as a fixture here, because once the residue is gone
+    it is an `AttributeError` rather than a value; the residue's absence is
+    asserted directly instead.
     """
     roots = []
     for tag in ("a", "b"):
         root = tmp_path / tag
         (root / "templates" / "support").mkdir(parents=True)
+        (root / "templates" / "plain").mkdir(parents=True)
         (root / "templates" / "support" / "__init__.py").write_text(f'ORIGIN = "{tag.upper()}"\n')
+        (root / "templates" / "plain" / "data.py").write_text(f'ORIGIN = "{tag.upper()}"\n')
         (root / "templates" / "my_assay.py").write_text(
             "import support\n"
+            "import plain.data\n"
             "from publishable import BaseTemplate, register_template\n\n\n"
             '@register_template("my_assay")\n'
             "class MyAssay(BaseTemplate):\n"
             f'    """{tag.upper()}\'s"""\n\n'
             "    origin = support.ORIGIN\n"
+            "    namespaced_origin = plain.data.ORIGIN\n"
         )
         roots.append(root)
     return roots[0], roots[1]
@@ -155,11 +172,20 @@ def test_two_repos_in_one_process_do_not_cross_contaminate(tmp_path: Path):
     own helper), never by the name, which is identical either way and so proves
     nothing.
 
-    `origin` is the assertion that fails today: repo B's `import support` is
-    served repo A's package from `sys.modules`, so B's class silently carries
-    A's data. The `__module__` inequality is the second claim — that the two
-    files are not one `sys.modules` entry — and it is what dies if the
-    synthetic module name is keyed on the file stem alone."""
+    Three claims, each dying to a different defect:
+
+    - `origin` — repo B's `import support` served repo A's package from
+      `sys.modules`, so B's class silently carries A's data. This is the one
+      that fails today, and it dies to dropping the `sys.modules` restore.
+    - no `plain` or `support` left in `sys.modules` — the restore must catch a
+      helper directory with no `__init__.py` too, which has no `__file__` to
+      test. Dies to a restore that looks at `__file__` alone.
+    - `__module__` inequality — the two files are not one `sys.modules` entry.
+      Dies to keying the synthetic module name on the file stem alone.
+
+    `namespaced_origin` is a control rather than a claim: it holds under every
+    one of those defects, and it is here so a fix that made the namespace
+    helper unimportable fails rather than passing the residue assertion."""
     repo_a, repo_b = _two_repos_each_holding_my_assay(tmp_path)
 
     a = get_template("my_assay", repo_a)
@@ -170,8 +196,11 @@ def test_two_repos_in_one_process_do_not_cross_contaminate(tmp_path: Path):
     assert type(b).__doc__ == "B's"
     assert type(a).origin == "A"
     assert type(b).origin == "B"
+    assert type(a).namespaced_origin == "A"
+    assert type(b).namespaced_origin == "B"
     assert type(a) is not type(b)
     assert type(a).__module__ != type(b).__module__
+    assert "plain" not in sys.modules and "support" not in sys.modules
 
 
 def test_a_repos_own_templates_are_reachable_from_a_second_call(tmp_path: Path):
