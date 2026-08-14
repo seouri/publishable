@@ -2922,22 +2922,25 @@ def _check_sweep(
         # but that refusal is temporary, and at one level there is no cross-arm
         # comparison for it to read at all, which is where the run was green.
         #
-        # The duplicate is stated for the case that produces it — a value naming
-        # a level the axis declares. A baseline fixing a group path to something
-        # no level names expands over no units instead, and is refused by this
-        # same rule rather than by that consequence.
+        # The guard is keyed on the PATH, never on the value, so both shapes reach
+        # here and the message states both: a value naming a declared level is
+        # rendered twice, and one naming no declared level expands over no units.
+        # Saying only the first would be false of a config this same rule refuses —
+        # the defect class this branch hit seven times.
         c.error(
             "E-SWEEP-BASELINE-GROUP",
             f"sweep.baseline.{fixed_levels[0]}",
             f"fixes the `sweep.groups` axis `{fixed_levels[0]}` — the arms of a group "
             "axis are peers, and a baseline designating one of them is not a reference "
-            "the expansion can give: the fixed level is rendered twice, once as the "
-            "baseline row and once as the product row its own axis emits, so two "
-            "conditions hold the same units and the same parameters and their "
-            "directories are identical at every artifact. Drop the level from the "
-            "baseline, which then expands over the axis and gives every arm its own "
-            "reference. Where the axis declares two or more levels, the comparison a "
-            "designated arm was reaching for is a `statistics.contrasts` entry naming "
+            "the expansion can give. Where the value names a level the axis declares, "
+            "that level is rendered twice — once as the baseline row and once as the "
+            "product row its own axis emits — so two conditions hold the same units and "
+            "the same parameters and their directories are identical at every artifact; "
+            "where it names no declared level, the baseline row expands over no units at "
+            "all. Drop the level from the baseline, which then expands over the axis and "
+            "gives every arm its own reference. Where the axis declares two or more "
+            "levels, the comparison a designated arm was reaching for is a "
+            "`statistics.contrasts` entry naming "
             "both conditions — whose delta this build refuses over disjoint arms "
             "(`E-DATA-ALLOCATION-CONTRAST`) until the unpaired estimators exist, "
             "leaving a `summary`-step `Estimate` or two runs joined in a `study`",
