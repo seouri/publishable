@@ -10,6 +10,7 @@ from publishable.units import (
     ArmPlan,
     Unit,
     UnitList,
+    _apportion,
     apply_rule,
     arm_members,
     arms_of,
@@ -1299,18 +1300,22 @@ def test_a_random_draw_honours_an_unequal_ratio():
 
 
 def test_a_random_draw_is_a_partition():
-    """Every unit in exactly one arm, every declared level non-empty — the
-    property `arms_of` guarantees for a read assignment and a draw must too.
-    Reuses the 12-unit, `{control: 1, treatment: 2}` fixture from the ratio
-    test above: an equal split over a roster divisible by the arm count would
-    make a coverage bug (a duplicate, or a dropped unit) invisible by size
-    alone."""
+    """Every unit in exactly one arm — the coverage half of the property
+    `arms_of` guarantees for a read assignment, which a draw must too. Reuses
+    the 12-unit, `{control: 1, treatment: 2}` fixture from the ratio test
+    above: an equal split over a roster divisible by the arm count would make
+    a coverage bug (a duplicate, or a dropped unit) invisible by size alone.
+
+    The *non-emptiness* half is not asserted here and deliberately so: 12
+    units at 1:2 cannot floor either level to zero, so an assertion of it
+    against this fixture could never fail — it would document the property
+    rather than sense it.
+    `test_a_drawn_arm_the_ratio_apportions_no_unit_to_is_refused` below owns
+    that half, against a fixture where a size of 0 is reachable."""
     roster = _random_roster(12)
     block = {"method": "random", "ratio": {"control": 1, "treatment": 2}, "seed": 7}
     plan = assignment_for(roster, "arm", block, ["control", "treatment"], "digest")
 
-    assert plan.members["control"]
-    assert plan.members["treatment"]
     seen = plan.members["control"] + plan.members["treatment"]
     assert len(seen) == len(set(seen)) == len(roster)
     assert set(seen) == {unit.key for unit in roster}
@@ -1341,7 +1346,13 @@ def test_a_ratio_that_does_not_divide_the_roster_is_reported_not_rounded_away():
     name: `b`'s 0.667 beats `a`'s 0.333, so that 13th unit — the last element
     of `b`'s slice of the seed-3 shuffle — lands in `b`, giving 4 and 9. The
     realized sizes are stated exactly rather than a false "even enough"
-    claim."""
+    claim.
+
+    Membership is asserted literally beside the sizes, not sizes alone: this
+    is the one roster in this file whose remainder unit is *distributed* by
+    `_apportion` rather than falling out of an exact division, so it is the
+    one place a slicing bug that keeps the sizes right while cutting the
+    shuffle at the wrong offsets would show."""
     roster = _random_roster(13)
     block = {"method": "random", "ratio": {"a": 1, "b": 2}, "seed": 3}
     plan = assignment_for(roster, "arm", block, ["a", "b"], "digest")
@@ -1349,6 +1360,163 @@ def test_a_ratio_that_does_not_divide_the_roster_is_reported_not_rounded_away():
     assert len(plan.members["a"]) == 4
     assert len(plan.members["b"]) == 9
     assert len(plan.members["a"]) + len(plan.members["b"]) == 13
+    assert plan.members["a"] == ("u12", "u11", "u01", "u06")
+    assert plan.members["b"] == (
+        "u00",
+        "u04",
+        "u10",
+        "u07",
+        "u05",
+        "u02",
+        "u08",
+        "u09",
+        "u03",
+    )
+
+
+def test_apportion_hands_the_remainder_to_the_largest_fraction():
+    """**`_apportion`'s rule, pinned directly.** Every fixture drawn through
+    `assignment_for` above happens to agree with the mutant that gives the
+    remainder to the *last* entries in reverse order — 13 units at 1:2 puts the
+    leftover in `b` either way — so the whole of Hamilton's rule was enforced
+    by nothing. These two cases each kill a different wrong rule:
+
+    - `(10, [1, 1, 1])` -> `[4, 3, 3]`. Every fraction is equal (0.333), so
+      this is the *tie-break* alone: declared order wins, and the reverse-order
+      mutant gives `[3, 3, 4]`.
+    - `(10, [3, 3, 1])` -> `[4, 4, 2]`. Here the largest fraction (0.429)
+      belongs to the *smallest* weight, so it discriminates "largest fractional
+      part" from every weight-magnitude heuristic at once: giving the remainder
+      to the largest weight, or to the first entry, both give `[5, 4, 1]`.
+
+    `(10, [1, 2, 4])` would have been the natural third case and is left out on
+    purpose — it coincides with the reverse-order mutant, the same accident that
+    let the mutant survive the suite in the first place."""
+    assert _apportion(10, [1, 1, 1]) == [4, 3, 3]
+    assert _apportion(10, [3, 3, 1]) == [4, 4, 2]
+    # The floors themselves, so a mutation that distributed the whole of `n`
+    # by fractions alone is not mistaken for the rule above.
+    assert _apportion(12, [1, 2]) == [4, 8]
+
+
+@pytest.mark.parametrize(
+    ("n", "ratio", "levels", "expected_empty"),
+    [
+        (10, {"a": 1, "b": 1000}, ["a", "b"], "a"),
+        (2, None, ["a", "b", "c"], "c"),
+    ],
+    ids=["skewed-ratio", "fewer-units-than-levels"],
+)
+def test_a_drawn_arm_the_ratio_apportions_no_unit_to_is_refused(n, ratio, levels, expected_empty):
+    """A drawn arm with no units is the same fault as a read one, and carries
+    the same code. `arms_of` refuses "a declared level no unit's value names —
+    that arm's condition would resolve zero units" as `E-DATA-ASSIGN-LEVELS`,
+    and `reference.md` § Allocation states it method-agnostically ("An arm no
+    unit resolves to is already refused, as `E-DATA-ASSIGN-LEVELS`") in the
+    very sentence that contrasts it with the thin-but-nonzero cell
+    `limits.min_units_per_cell` does not yet warn about. A hard refusal routed
+    into that warning-shaped gap is what this test exists to prevent.
+
+    Two routes to a size of 0, so no single wrong guard covers both:
+
+    - `{a: 1, b: 1000}` over 10 units floors `a` to 0 while `b` takes all ten.
+      **`validate` approves this ratio** — the keys are exactly the levels and
+      both values are finite positives — so it is the validate-clean-then-
+      disagree shape, caught only at the draw.
+    - 2 units over 3 levels leaves `c` empty under equal allocation, with no
+      `ratio` declared at all: a guard written as a check on the declared
+      ratio rather than on the realized sizes would miss it entirely.
+
+    The message names the empty level, so a raise that reported the wrong one
+    (or all of them) is not mistaken for this one."""
+    roster = _random_roster(n)
+    block = {"method": "random", "seed": 5}
+    if ratio is not None:
+        block["ratio"] = ratio
+    with pytest.raises(ContractError) as e:
+        assignment_for(roster, "arm", block, levels, "digest")
+    assert e.value.code == "E-DATA-ASSIGN-LEVELS"
+    assert expected_empty in str(e.value)
+    assert "resolves zero of them" in str(e.value)
+
+
+def test_a_drawn_arm_of_one_unit_is_not_refused():
+    """**The control the refusal above needs.** 3 units over 3 levels gives
+    every arm exactly one unit — the thinnest partition that is still a
+    partition — and must draw, not raise. A guard written against "an arm
+    smaller than the others" or "an arm below some floor" rather than against
+    an arm of *zero* would fail here, and `reference.md` § Allocation is
+    explicit that a single-unit arm "is not the uncovered case either"."""
+    roster = _random_roster(3)
+    plan = assignment_for(roster, "arm", {"method": "random", "seed": 5}, ["a", "b", "c"], "d")
+    assert [len(plan.members[level]) for level in ("a", "b", "c")] == [1, 1, 1]
+    assert sorted(k for arm in plan.members.values() for k in arm) == ["u00", "u01", "u02"]
+
+
+@pytest.mark.parametrize("stratify_by", [["site"], "site"], ids=["list", "bare-string"])
+def test_a_random_draw_refuses_a_declared_stratify_by(stratify_by):
+    """This build's `random` draw shuffles the whole roster and cuts it, so it
+    balances on nothing. Drawing anyway while recording `strata=()` would
+    silently ignore a declared field — the same argument the `clusters` raise
+    in this same function is made from, and the reason both refuse rather than
+    fall back.
+
+    A bare `stratify_by: site` is refused as well as a list: presence is read
+    structurally, `validate`'s own convention for this field, so a wrong-typed
+    declaration cannot slip past a check written as `isinstance(x, list) and
+    x`.
+
+    The fixture's units carry no attributes at all, so a draw that ignored
+    `stratify_by` would succeed here rather than fail on a missing column —
+    which is why the assertion is the raise itself."""
+    roster = _random_roster(12)
+    block = {"method": "random", "seed": 5, "stratify_by": stratify_by}
+    with pytest.raises(NotImplementedError) as e:
+        assignment_for(roster, "arm", block, ["a", "b"], "digest")
+    assert "stratify_by" in str(e.value)
+    assert "task 12" in str(e.value)
+
+
+def test_an_empty_stratify_by_still_draws():
+    """**The control** for the refusal above: `stratify_by: []` is what `init`
+    writes and what most designs carry, and it declares no balance — so it
+    draws. A refusal written as "the key is present" rather than "the value is
+    non-empty" would refuse every generated config."""
+    roster = _random_roster(12)
+    block = {"method": "random", "seed": 5, "stratify_by": []}
+    plan = assignment_for(roster, "arm", block, ["a", "b"], "digest")
+    assert len(plan.members["a"]) == 6
+    assert len(plan.members["b"]) == 6
+    assert plan.strata == ()
+
+
+def test_a_random_draw_refuses_a_declared_cluster_by():
+    """Allocating whole clusters is a different construction — task 9 — and a
+    caller that declared `cluster_by` must not be handed a per-unit split that
+    quietly ignores it. The same argument as `stratify_by` above, one field
+    over.
+
+    **The control**: the identical call with `clusters=None` draws. Without it,
+    a mutation that raised for every `random` draw would pass.
+
+    `clusters` and `stratify_by` declared together resolve deterministically to
+    the `clusters` message rather than to whichever guard happens to be first
+    after an edit."""
+    roster = _random_roster(12)
+    block = {"method": "random", "seed": 5}
+    clusters = {unit.key: f"c{i % 3}" for i, unit in enumerate(roster)}
+    with pytest.raises(NotImplementedError) as e:
+        assignment_for(roster, "arm", block, ["a", "b"], "digest", clusters)
+    assert "cluster_by" in str(e.value)
+    assert "task 9" in str(e.value)
+
+    both = {"method": "random", "seed": 5, "stratify_by": ["site"]}
+    with pytest.raises(NotImplementedError) as e:
+        assignment_for(roster, "arm", both, ["a", "b"], "digest", clusters)
+    assert "cluster_by" in str(e.value)
+
+    plan = assignment_for(roster, "arm", block, ["a", "b"], "digest", None)
+    assert len(plan.members["a"]) == 6
 
 
 def test_arm_members_reduces_arms_of_across_the_resolved_conditions():

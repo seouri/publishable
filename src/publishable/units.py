@@ -1012,11 +1012,12 @@ class ArmPlan:
     - `strata` is the realized `assign.<axis>.stratify_by`, empty under
       `by_attribute` for the reason above: `stratify_by` names how a draw was
       *balanced*, and with no draw there is nothing it describes. It is also
-      empty under `random` today — task 8 does not yet balance the draw on a
-      declared `stratify_by`, so recording one here would claim a balance
-      that did not happen, the same false-record shape as `by_attribute`'s
-      seed, for a different reason: a real gap in this build rather than a
-      draw that never occurred.
+      empty under `random` today, and truthfully rather than by omission:
+      this build's draw balances on nothing, so `assignment_for` **refuses**
+      a non-empty `assign.<axis>.stratify_by` outright rather than drawing
+      unbalanced and recording `()` for a declaration it ignored. The only
+      `stratify_by` that reaches a plan is an empty one, which describes no
+      strata.
 
     `frozen=True` blocks rebinding an attribute; it does **not** deep-freeze
     `members`, whose values are tuples but whose mapping a determined caller
@@ -1045,13 +1046,15 @@ def _apportion(n: int, weights: Sequence[float]) -> list[int]:
     doesn't divide `n` supports — `partition_units`'s docstring makes the same
     argument for folds and refuses to claim the stronger, exact one.
 
-    **Not guaranteed non-zero.** A ratio skewed enough relative to `n` (a
-    weight so small its floor is 0, with the remainder exhausted by larger
-    fractions first) can still leave an entry at 0 — the same gap
-    `reference.md` § Allocation already records against `limits.min_units_per_cell`
-    ("declared, typed, and read by nothing in this build"). Nothing here
-    manufactures a unit for a level the ratio didn't earn one for; inventing
-    a floor-of-one rule would be a guarantee no document states.
+    **A size of 0 is possible here and is the caller's to refuse.** A ratio
+    skewed enough relative to `n` (a weight so small its floor is 0, with the
+    remainder exhausted by larger fractions first — `{a: 1, b: 1000}` over 10
+    units gives `[0, 10]`), or simply fewer units than levels, leaves an entry
+    at 0. Nothing here manufactures a unit for a level the ratio didn't earn
+    one for, and nothing here raises either: only `assignment_for` holds the
+    axis name, the declared `ratio`, and the roster the message has to name,
+    so the refusal lives there — as `E-DATA-ASSIGN-LEVELS`, the same code and
+    the same words `arms_of` refuses a read arm no unit resolves to with.
     """
     total = sum(weights)
     quotas = [n * weight / total for weight in weights]
@@ -1091,7 +1094,8 @@ def assignment_for(
       authority for a column-read partition and this one does not re-derive
       it. `from` is resolved here, once: the declared `from` when it is a
       non-empty string, else the axis name.
-    - `random`, unclustered (`clusters is None`), draws one — see below.
+    - `random`, unclustered (`clusters is None`) and unstratified (no
+      non-empty `stratify_by`), draws one — see below.
     - **Every other value raises `NotImplementedError`** — an allowlist, not a
       denylist of the methods that happen to draw today. `blocked`, and
       `random` beside a declared `cluster_by`, raise the message
@@ -1124,28 +1128,43 @@ def assignment_for(
     into consecutive slices sized by that apportionment, in `levels`'
     declared order — so `members[level]` holds that level's slice **in the
     order the shuffle realized**, exactly what `ArmPlan.members` promises for
-    a draw. Every declared level is a key of `members` even when its
-    apportioned size is 0 (an empty tuple, not a missing key) — the `zip`
-    below walks `levels` itself, so `set(members) == set(levels)`
-    unconditionally, the same coverage `by_attribute` gets from `arms_of`,
-    though not that function's *non-emptiness* guarantee: see `_apportion`'s
-    own docstring for when a size can still land on 0. A `clusters` mapping
-    passed alongside `random` raises rather than falling silently back to the
+    a draw. Every declared level is a key of `members`, and **every one of
+    them is non-empty** — the `zip` below walks `levels` itself, so
+    `set(members) == set(levels)` unconditionally, and an apportioned size of
+    0 raises `E-DATA-ASSIGN-LEVELS` rather than returning an empty tuple. A
+    caller therefore gets from a draw exactly the partition `arms_of`
+    promises for a read: both halves, coverage and non-emptiness. **The same
+    fault deserves the same code**: `arms_of` refuses "a declared level no
+    unit's value names — that arm's condition would resolve zero units", and
+    an arm the ratio apportioned zero units to is that sentence, one line
+    later. `reference.md` § Allocation states it method-agnostically ("An arm
+    no unit resolves to is already refused, as `E-DATA-ASSIGN-LEVELS`"), in
+    the sentence whose job is to contrast it with the thin-but-nonzero cell
+    `limits.min_units_per_cell` does not yet warn about — a warning-shaped gap
+    a hard refusal must not be routed into. A `clusters` mapping passed
+    alongside `random` raises rather than falling silently back to the
     unclustered draw: allocating whole clusters is task 9's, and a caller
     that declared `cluster_by` must not be handed a per-unit split that
     quietly ignores it.
 
-    `strata` is `()` here regardless of a declared `assign.<axis>.stratify_by`
-    — recording it would claim a balance this build does not yet perform, the
-    same false-record reasoning `ArmPlan.strata`'s own docstring gives for
-    `by_attribute`'s seed. Balancing the draw on `stratify_by` is a later
-    task's, not this one's — and until that task lands, `random` draws
-    unbalanced even when `stratify_by` is declared non-empty, silently, since
-    nothing refuses that combination today (recorded, not fixed, in the task
-    8 report).
+    **A non-empty `assign.<axis>.stratify_by` raises here too**, for the
+    `clusters` argument exactly: this build draws a plain shuffle, so honoring
+    a declared balance is task 12's, and drawing unbalanced while recording
+    `strata=()` would silently ignore a declared field rather than refuse it.
+    Presence is read structurally, `validate`'s own convention for this field
+    — a bare `stratify_by: site` is as non-empty as a list — so the empty
+    `stratify_by: []` `init` writes stays on the draw path. `strata` is
+    therefore `()` on every plan this returns, and truthfully: the only
+    declaration it could record is one that no longer reaches the draw.
     """
-    method = block.get("method") if isinstance(block, Mapping) else None
-    if method == "random" and isinstance(block, Mapping):
+    # One narrowing of the block, read by every branch below: an absent or
+    # non-mapping block declares nothing, which is what `{}` says here — and
+    # what sends it down the `by_attribute` path, `validate._check_assign`'s
+    # own fallback. Bound once so no branch repeats the `isinstance` test as a
+    # guard that reads like a second condition on the method.
+    block_map: Mapping[str, Any] = block if isinstance(block, Mapping) else {}
+    method = block_map.get("method")
+    if method == "random":
         if clusters is not None:
             raise NotImplementedError(
                 f"`data.units.assign.{axis}.method: random` beside a declared `cluster_by` "
@@ -1153,14 +1172,34 @@ def assignment_for(
                 "draw that yet — task 9. Falling back to an unclustered draw here would "
                 "silently ignore the declared `cluster_by` rather than raising about it"
             )
-        ratio = block.get("ratio") if isinstance(block, Mapping) else None
+        if block_map.get("stratify_by"):
+            raise NotImplementedError(
+                f"`data.units.assign.{axis}.stratify_by` names a balance this build's "
+                "`random` draw does not perform — it shuffles the whole roster and cuts it, "
+                "so the arms are balanced on nothing — and drawing it unbalanced while "
+                "recording no strata would silently ignore the declaration rather than "
+                "raise about it. Stratified drawing is task 12; until then, draw without "
+                "`stratify_by` or read an arm a trial system already assigned"
+            )
+        ratio = block_map.get("ratio")
         weights = (
             [ratio[level] for level in levels]
             if isinstance(ratio, dict) and ratio
             else [1] * len(levels)
         )
         sizes = _apportion(len(roster), weights)
-        seed = assign_seed_for(block, axis, digest, roster)
+        empty = [level for level, size in zip(levels, sizes, strict=True) if size == 0]
+        if empty:
+            raise ContractError(
+                f"the drawn allocation for axis {axis!r} leaves no unit in "
+                f"{', '.join(empty)} — {len(roster)} units apportioned by "
+                f"{dict(ratio) if isinstance(ratio, dict) and ratio else 'equal shares'} "
+                "gives that level a share of zero. Every declared level needs at least "
+                "one unit, or that arm's condition resolves zero of them; widen the ratio "
+                "or resolve a larger roster",
+                code="E-DATA-ASSIGN-LEVELS",
+            )
+        seed = assign_seed_for(block_map, axis, digest, roster)
         shuffled = [unit.key for unit in roster]
         random.Random(seed).shuffle(shuffled)
         members: dict[str, tuple[str, ...]] = {}
@@ -1181,7 +1220,7 @@ def assignment_for(
             "no other method may fall back to reading one (`validate` refuses an out-of-enum "
             "method as `E-DATA-ASSIGN-METHOD`)"
         )
-    declared_from = block.get("from") if isinstance(block, Mapping) else None
+    declared_from = block_map.get("from")
     column = declared_from if isinstance(declared_from, str) and declared_from else axis
     partition = arms_of(roster, column, levels)
     return ArmPlan(

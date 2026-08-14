@@ -8522,6 +8522,120 @@ def test_a_ratio_with_every_level_plus_an_extra_key_is_refused(write_config):
     assert "'f'" in ratio_finding.message
 
 
+def test_a_ratio_that_is_not_a_mapping_at_all_is_refused(write_config):
+    """`ratio: 3` — the shape that used to validate clean and then **silently
+    draw equal allocation**, because both `validate` and `units.assignment_for`
+    gated on the same `isinstance(ratio, dict) and ratio`. A bare scalar is not
+    an `envelope.py` `LEAF_TYPES` leaf (an axis name is no fixed dotted path),
+    so nothing reports `E-CONFIG-TYPE` for it either: without this branch the
+    declaration disappears.
+
+    3 is deliberately not 1 and not 0: a reader who meant "3:1" and typed the
+    numerator alone gets a finding rather than an equal split. The message must
+    name the type, since `E-DATA-ASSIGN-RATIO`'s other two branches format keys
+    and values and neither would say `int`."""
+    found = _error_codes(write_config(_between({"arm": {"method": "random", "ratio": 3}})))
+    assert found == {"E-DATA-ASSIGN-DRAWN", "E-DATA-ASSIGN-RATIO"}
+
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": _ARM_AXIS}},
+        {"allocation": "between", "assign": {"arm": {"method": "random", "ratio": 3}}},
+        None,
+        c,
+    )
+    assert {f.code for f in c.findings} == {"E-DATA-ASSIGN-DRAWN", "E-DATA-ASSIGN-RATIO"}
+    ratio_finding = next(f for f in c.findings if f.code == "E-DATA-ASSIGN-RATIO")
+    assert ratio_finding.path == "data.units.assign.arm.ratio"
+    assert "is 3, a int, not a mapping" in ratio_finding.message
+    assert "'control'" in ratio_finding.message
+    assert "'treatment'" in ratio_finding.message
+
+
+@pytest.mark.parametrize(
+    ("ratio", "bad"),
+    [
+        ({"control": 0, "treatment": 0}, "'control', 'treatment'"),
+        ({"control": -1, "treatment": 2}, "'control'"),
+        ({"control": float("nan"), "treatment": 2}, "'control'"),
+        ({"control": float("inf"), "treatment": 2}, "'control'"),
+        ({"control": "1", "treatment": 2}, "'control'"),
+    ],
+    ids=["all-zero", "negative", "nan", "inf", "numeric-string"],
+)
+def test_a_ratio_whose_values_are_not_usable_shares_is_refused(write_config, ratio, bad):
+    """The keys are exactly the declared levels in every case here — so the
+    set-equality branch above passes each one, and only a check of the *values*
+    reports them. Each is a distinct downstream failure `units._apportion` has
+    no guard of its own for:
+
+    - `{0, 0}` summed to a total of 0 and raised `ZeroDivisionError`;
+    - `{-1, 2}` apportioned silently to `control: 0` — a drawn arm with no
+      units, from a config that validated clean;
+    - `.nan` passes a check written as the *bad* test (`nan <= 0` is `False`,
+      so a value-is-bad-if test admits it) and reaches `int(nan)`, a
+      `ValueError` from inside the draw. `_usable_ratio_share` asks the
+      question the other way round — `nan > 0` is `False` — so the polarity is
+      what catches it, and this case pins that polarity;
+    - `.inf` is what `math.isfinite` catches and positivity cannot: `inf > 0`
+      is `True`, and `10 * inf / inf` is `nan`, so an infinite share reaches
+      the same `int(nan)` by the arithmetic instead of by the value;
+    - `"1"` is the case that discriminates it from `units.usable_weight`, which
+      would accept the string (a weight arrives from `csv.DictReader` and a
+      ratio never does) and hand `sum` a `str`.
+
+    The offending keys are asserted, not just the code: a mutation reporting
+    every key rather than the unusable ones passes a code-only assertion, and
+    the negative case — where exactly one of two entries is bad — is what
+    catches it."""
+    found = _error_codes(write_config(_between({"arm": {"method": "random", "ratio": ratio}})))
+    assert found == {"E-DATA-ASSIGN-DRAWN", "E-DATA-ASSIGN-RATIO"}
+
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": _ARM_AXIS}},
+        {"allocation": "between", "assign": {"arm": {"method": "random", "ratio": ratio}}},
+        None,
+        c,
+    )
+    assert {f.code for f in c.findings} == {"E-DATA-ASSIGN-DRAWN", "E-DATA-ASSIGN-RATIO"}
+    ratio_finding = next(f for f in c.findings if f.code == "E-DATA-ASSIGN-RATIO")
+    assert ratio_finding.path == "data.units.assign.arm.ratio"
+    assert "share of the roster" in ratio_finding.message
+    assert bad in ratio_finding.message
+
+
+def test_a_well_formed_ratio_reports_nothing_of_its_own(write_config):
+    """**The control the three tests above need.** `{control: 1, treatment: 2}`
+    names every declared level exactly once and every value is a finite
+    positive number, so the only finding is `E-DATA-ASSIGN-DRAWN`, for the
+    method — a mutation that reported every non-empty `ratio` would pass all
+    three refusal tests and fail only this one.
+
+    1 and 2, not 1 and 1: an unequal ratio is the case a check confusing "the
+    values differ" with "a value is unusable" would report."""
+    found = _error_codes(
+        write_config(
+            _between({"arm": {"method": "random", "ratio": {"control": 1, "treatment": 2}}})
+        )
+    )
+    assert found == {"E-DATA-ASSIGN-DRAWN"}
+
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": _ARM_AXIS}},
+        {
+            "allocation": "between",
+            "assign": {
+                "arm": {"method": "random", "ratio": {"control": 1, "treatment": 2}}
+            },
+        },
+        None,
+        c,
+    )
+    assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-DRAWN"]
+
+
 def test_a_non_empty_ratio_under_by_attribute_is_refused():
     """The draw didn't happen, so the proportion describes nothing. § Allocation:
     "Under `method: by_attribute` a `ratio` describes a draw that didn't happen,

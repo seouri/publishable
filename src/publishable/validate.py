@@ -1,5 +1,6 @@
 """The S1 check subset. Collects rather than stops. docs/reference.md § Validation."""
 
+import math
 import re
 from collections import Counter
 from pathlib import Path
@@ -1360,6 +1361,32 @@ def _declared_levels(sweep: Any, axis: str) -> list[str] | None:
     return None
 
 
+def _usable_ratio_share(value: Any) -> bool:
+    """Whether one `assign.<axis>.ratio` entry is a share `units._apportion`
+    can divide a roster by: a finite, strictly positive `int` or `float`.
+
+    **Deliberately not `units.usable_weight`**, the house predicate for the
+    neighbouring question about `data.units.weight_by`. That one reads through
+    `is_measurement_numeric`, which accepts a numeric *string* — it has to,
+    because a weight arrives from `csv.DictReader`, which yields `str` for
+    every column. A `ratio` share never arrives from a table: it is written in
+    the config file by hand, and `units._apportion` sums its values, so
+    accepting `"3"` here would validate clean and then raise a bare
+    `TypeError` on `sum` — the validate-clean-then-crash gap this whole family
+    of checks exists to close.
+
+    `bool` is excluded ahead of `int` for the usual reason `True` is `1`: a
+    `ratio: {a: true, b: 2}` describes no split anyone meant. Finiteness is
+    checked on top of positivity for `usable_weight`'s reason, one step
+    earlier: `float("nan") <= 0` is `False`, so a positivity test alone admits
+    a value that reaches `int(nan)` in `_apportion` and raises `ValueError`
+    there instead of being reported here.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    return math.isfinite(value) and value > 0
+
+
 def _check_assign(
     doc: dict[str, Any], units: dict[str, Any], roster: UnitList | None, c: Collector
 ) -> None:
@@ -1416,8 +1443,9 @@ def _check_assign(
     keys don't equal the axis's declared `sweep.groups` levels exactly (a partial
     mapping — § Allocation: "the levels I left out get the average" is a rule
     nobody should have to infer — or a key naming no declared level); or a mapping
-    with the right keys but a non-positive or non-numeric value (`{a: -1, b: 2}`,
-    `{a: "x", b: 2}`) — a share of zero or less draws no units for that level and
+    with the right keys but a value that is not a finite positive number (`{a:
+    -1, b: 2}`, `{a: "x", b: 2}`, `{a: .nan, b: 2}` — `_usable_ratio_share` is
+    the predicate) — a share of zero or less draws no units for that level and
     `units._apportion` has no check of its own to catch it. An empty `ratio` is
     equal allocation and earns nothing, matching every other row here. Skipped
     when the axis's declared `levels` don't resolve to a non-empty list of
@@ -1635,7 +1663,9 @@ def _check_assign(
             # backstop of its own for any of the three — a non-mapping falls
             # through `assignment_for`'s own `isinstance(ratio, dict) and ratio`
             # guard to equal allocation silently, and a non-positive weight (`{a:
-            # -1, b: 2}`) is silently floored to 0 rather than raising. Reported
+            # -1, b: 2}`) is silently floored to 0 rather than raising, and a
+            # `nan` share reaches `int(nan)` and raises `ValueError` from inside
+            # the apportionment — see `_usable_ratio_share`. Reported
             # once per block, the first violation found, mirroring every other row
             # here that reports one finding rather than every possible one.
             ratio = block.get("ratio")
@@ -1661,15 +1691,12 @@ def _check_assign(
                         f"axis {axis!r} ({levels_repr})",
                     )
                 elif levels is not None and any(
-                    isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0
-                    for value in ratio.values()
+                    not _usable_ratio_share(value) for value in ratio.values()
                 ):
                     bad_keys = sorted(
                         str(key)
                         for key, value in ratio.items()
-                        if isinstance(value, bool)
-                        or not isinstance(value, (int, float))
-                        or value <= 0
+                        if not _usable_ratio_share(value)
                     )
                     noun = "value" if len(bad_keys) == 1 else "values"
                     c.error(
