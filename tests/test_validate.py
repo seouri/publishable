@@ -8477,6 +8477,51 @@ def test_a_ratio_naming_an_undeclared_level_is_refused(write_config):
     assert "'f'" in ratio_finding.message
 
 
+def test_a_ratio_with_every_level_plus_an_extra_key_is_refused(write_config):
+    """The set-inequality direction `test_a_ratio_naming_an_undeclared_level_is_refused`
+    cannot isolate on its own: `{control: 1, f: 2}` is simultaneously missing
+    `treatment` *and* naming an undeclared key, so a check reading only "every
+    declared level has an entry" (`not set(levels) <= set(ratio)`, missing the
+    other half of the promised set-equality) passes that test just as well as
+    the real `set(ratio) != set(levels)` does. `{control: 1, treatment: 1, f: 2}`
+    is a strict superset of the declared levels — every level present, plus one
+    that isn't — so it isolates the direction the other two tests can't: refused
+    only if the check also catches an extra key beside a complete level set."""
+    found = _error_codes(
+        write_config(
+            _between(
+                {
+                    "arm": {
+                        "method": "random",
+                        "ratio": {"control": 1, "treatment": 1, "f": 2},
+                    }
+                }
+            )
+        )
+    )
+    assert found == {"E-DATA-ASSIGN-DRAWN", "E-DATA-ASSIGN-RATIO"}
+
+    c = Collector()
+    _check_assign(
+        {"sweep": {"groups": _ARM_AXIS}},
+        {
+            "allocation": "between",
+            "assign": {
+                "arm": {
+                    "method": "random",
+                    "ratio": {"control": 1, "treatment": 1, "f": 2},
+                }
+            },
+        },
+        None,
+        c,
+    )
+    assert {f.code for f in c.findings} == {"E-DATA-ASSIGN-DRAWN", "E-DATA-ASSIGN-RATIO"}
+    ratio_finding = next(f for f in c.findings if f.code == "E-DATA-ASSIGN-RATIO")
+    assert ratio_finding.path == "data.units.assign.arm.ratio"
+    assert "'f'" in ratio_finding.message
+
+
 def test_a_non_empty_ratio_under_by_attribute_is_refused():
     """The draw didn't happen, so the proportion describes nothing. § Allocation:
     "Under `method: by_attribute` a `ratio` describes a draw that didn't happen,
@@ -8574,6 +8619,47 @@ def test_an_empty_stratify_by_under_by_attribute_is_accepted():
         c,
     )
     assert [f.code for f in c.findings] == []
+
+
+def test_a_wrong_typed_ratio_under_by_attribute_is_refused():
+    """`ratio` is not an `envelope.py` `LEAF_TYPES` leaf and task 4's key-closure
+    check closes axis-block *names*, not the *types* of their values, so a bare
+    `ratio: 3` — a routine YAML slip for a mapping — is read by nothing else in
+    `src/`. `E-DATA-ASSIGN-NO-DRAW`'s fault is presence, not shape, so this is
+    absorbed under the same code as a well-formed non-empty `ratio` rather than
+    left silent or given a code of its own."""
+    c = Collector()
+    _check_assign(
+        {},
+        {
+            "attributes": ["arm"],
+            "assign": {"arm": {"method": "by_attribute", "ratio": 3}},
+        },
+        None,
+        c,
+    )
+    assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-NO-DRAW"]
+    assert c.findings[0].path == "data.units.assign.arm.ratio"
+    assert "3" in c.findings[0].message
+
+
+def test_a_wrong_typed_stratify_by_under_by_attribute_is_refused():
+    """The `stratify_by` half of the same absorption: a bare `stratify_by: site`
+    — the list form left off — where nothing else in `src/` reads
+    `assign.<axis>.stratify_by` at all, wrong-typed or not."""
+    c = Collector()
+    _check_assign(
+        {},
+        {
+            "attributes": ["arm"],
+            "assign": {"arm": {"method": "by_attribute", "stratify_by": "site"}},
+        },
+        None,
+        c,
+    )
+    assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-NO-DRAW"]
+    assert c.findings[0].path == "data.units.assign.arm.stratify_by"
+    assert "site" in c.findings[0].message
 
 
 def test_an_assignment_declaring_no_method_is_refused(write_config):

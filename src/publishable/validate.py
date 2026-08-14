@@ -1418,7 +1418,7 @@ def _check_assign(
     every other row here. Skipped when the axis's declared `levels` don't resolve
     to a non-empty list of strings, `sweep.groups`'s own shape fault.
 
-    **`method: by_attribute`'s four rows, checked only in that branch of the
+    **`method: by_attribute`'s three rows, checked only in that branch of the
     same `elif` chain** — `from`, `levels`, `ratio`, and `stratify_by` all mean
     something different under `random`/`blocked`, which *Assignment method isn't
     drawn* already refuses, or nothing at all under an absent/out-of-enum method,
@@ -1432,9 +1432,18 @@ def _check_assign(
     the finding names — one finding per offending field, so a block declaring
     both earns two findings rather than one that only names the first. An empty
     `ratio: {}` or `stratify_by: []` — what `init` writes and what most designs
-    carry — changes no behavior and earns neither; nor does a non-mapping `ratio`
-    or non-list `stratify_by`, which carries no meaningful key set to report on
-    and is left to whatever else might catch it.
+    carry — changes no behavior and earns neither. **A wrong-typed value is
+    absorbed here too rather than left silent** — `ratio: 3`, a bare
+    `stratify_by: site` — the same absorption `E-DATA-ASSIGN-METHOD` performs
+    for a non-mapping block and `E-DATA-ASSIGN-UNKNOWN` for a non-`str` `from`:
+    neither field is an `envelope.py` `LEAF_TYPES` leaf, so there is no
+    `E-CONFIG-TYPE` backstop, and task 4's key-closure check closes the axis
+    block's names, not its values' types, so nothing else in `src/` reads either
+    field at all. "Present and non-empty" is read structurally
+    (`is not None and != {}` / `!= []`) rather than by `isinstance`, so a bare
+    string is exactly as non-empty as a populated mapping — this row's fault is
+    presence, unlike *Ratio names levels* above, whose fault is specifically the
+    keys.
 
     *Assignment attribute exists* — `assign.<axis>.from`, declared or **defaulted
     to the axis name** (§ The one config file: "`from` is `by_attribute` only, and
@@ -1635,14 +1644,26 @@ def _check_assign(
             # no draw produced and a `stratify_by` describes a balance no draw
             # performed. § Allocation calls the two "the same fault", so both are
             # reported under the one code, `E-DATA-ASSIGN-NO-DRAW`, distinguished
-            # only by which field's path the finding names. An empty `ratio`/`{}`
-            # or an empty `stratify_by`/`[]` — what `init` writes and what most
-            # designs carry — changes no behavior and is not this row's concern;
-            # neither is a non-mapping `ratio` or non-list `stratify_by`, which
-            # carries no meaningful key set to report on and is left to whatever
-            # else might catch it.
+            # only by which field's path the finding names. An empty `ratio: {}` or
+            # an empty `stratify_by: []` — what `init` writes and what most designs
+            # carry — changes no behavior and is not this row's concern.
+            #
+            # A wrong-typed value (`ratio: 3`, `stratify_by: site`) is absorbed here
+            # too, rather than left silent: neither field is an `envelope.py`
+            # `LEAF_TYPES` leaf, so there is no `E-CONFIG-TYPE` backstop to defer
+            # to — the same reason `from`'s own non-`str` case has none — and
+            # task 4's key-closure check (`_check_assign_axis_keys`) closes the
+            # axis block's *names*, not the *types* of their values, so nothing
+            # else in `src/` reads `assign.<axis>.stratify_by` at all, and nothing
+            # else reads a non-mapping `assign.<axis>.ratio` either. So "present and
+            # non-empty" is read structurally — `is not None and != {}` / `!= []` —
+            # rather than by `isinstance`, the same absorption `E-DATA-ASSIGN-METHOD`
+            # performs for a non-mapping block and `E-DATA-ASSIGN-UNKNOWN` for a
+            # non-`str` `from`. A bare string is non-empty by this test the same way
+            # `{control: 1}` is: the fault is *presence*, not a key set — unlike
+            # *Ratio names levels* above, whose fault is specifically the keys.
             ratio = block.get("ratio")
-            if isinstance(ratio, dict) and ratio:
+            if ratio is not None and ratio != {}:
                 c.error(
                     "E-DATA-ASSIGN-NO-DRAW",
                     f"data.units.assign.{axis}.ratio",
@@ -1653,7 +1674,7 @@ def _check_assign(
                     f"`blocked`",
                 )
             stratify_by = block.get("stratify_by")
-            if isinstance(stratify_by, list) and stratify_by:
+            if stratify_by is not None and stratify_by != []:
                 c.error(
                     "E-DATA-ASSIGN-NO-DRAW",
                     f"data.units.assign.{axis}.stratify_by",
