@@ -33,8 +33,9 @@ builtin dict, so every config stops at `E-TEMPLATE-UNKNOWN` before any other che
 gives a template three homes, and a **project-local** one in `templates/` is *discovered by path*, not
 through an entry point. **H7a** is that subset — export `register_template`, discover `templates/**` by
 path, add `generate template` — and it needs none of entry-point resolution, probes or the change gate.
-H4 then unblocks three of the nine and H3d the rest; H3c-3 unblocks none. Full H7 remains owed for
-resolvers and the apparatus, which are genuinely plugin artifacts.
+H4 then unblocks three of the nine and H3d the rest — **but only for configs sourcing their roster from a
+table**; all nine as the analysis writes them declare a resolver, so *as written* none runs until full
+H7. H3c-3 unblocks none.
 
 The cost is that H3d now precedes the cells work it was scheduled to consume, so **H3c-3 owns
 retrofitting the holdout to cells** — acceptable only because no experiment in that analysis declares a
