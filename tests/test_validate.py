@@ -472,15 +472,31 @@ def test_no_repo_means_local_discovery_is_skipped_and_generic_still_resolves(
 ):
     """A config outside any repo. `find_repo_root` raises; the hoist must
     swallow it. Assert the exact finding set — an added finding here would
-    break the documented early-return order."""
+    break the documented early-return order.
+
+    Isolated from `_check_data`'s own `find_repo_root` call, which reads the
+    same module-level name and would otherwise make this indistinguishable
+    from `test_the_genuine_no_repo_case_returns_quietly`: only the *first*
+    call (the hoist, which runs before every other check) is made to raise;
+    later calls (`_check_data`'s) hit the real implementation and find the
+    real repo `write_config` writes into. A finding added only on the
+    hoisted path, or the `ContractError` escaping only there, shows up here
+    without needing every other `find_repo_root` call site to fail too."""
     import publishable.validate as validate_mod
     from publishable.errors import ContractError
+    from publishable.provenance import find_repo_root as real_find_repo_root
 
-    def _no_repo(path):
-        raise ContractError("no git repository found", code="E-GIT-NO-REPO")
+    calls = []
 
-    monkeypatch.setattr(validate_mod, "find_repo_root", _no_repo)
+    def _first_call_no_repo(path):
+        calls.append(path)
+        if len(calls) == 1:
+            raise ContractError("no git repository found", code="E-GIT-NO-REPO")
+        return real_find_repo_root(path)
+
+    monkeypatch.setattr(validate_mod, "find_repo_root", _first_call_no_repo)
     assert codes(write_config()) == set()
+    assert len(calls) > 1  # confirms a later call site really was reached and passed
 
 
 def test_data_may_not_resolve_inside_the_repo(write_config, git_repo: Path):
