@@ -1915,34 +1915,55 @@ def command_run(config_path: Path) -> int:
                         # containment path. (A weight core cannot use cannot
                         # arrive here: `attrition` above gates the same mapping
                         # through `kish_effective_n`, outside any `try`.)
-                        # `resample_columns` deliberately NOT passed here (H4a
-                        # task 14). Today this retry already passes no `seed`,
-                        # so `resample_columns`'s own gate
-                        # (`resample_columns and seed is not None`) would stay
-                        # closed regardless — passing it here is inert right
-                        # now, not a live behavior change, and the suite
-                        # cannot tell the two apart. It is still left off on
-                        # purpose: this call's job is to reproduce the
-                        # recorded columns exactly as the first call built
-                        # them, after a derived-key fault, not to change their
-                        # construction — so if a future change ever threads a
-                        # `seed` through here too, `resample_columns` must not
-                        # come along with it, or the same run would record two
-                        # different constructions for the same column
-                        # depending on whether its derived metrics happened to
-                        # collide. `strata` (H4a task 15) is left off for the
-                        # identical reason: it only ever moves a column's
-                        # interval through the SAME `resample_columns and seed
-                        # is not None` gate `resample_columns` itself reads, so
-                        # with neither passed here `strata` is inert now and
-                        # must stay off if a future change ever threads a
-                        # `seed` through this retry.
+                        # `seed`, `draws`, `resample_columns` and `strata` on
+                        # the retry for the same reason `weights` is on it, and
+                        # the four travel together because the column branch
+                        # reads all four (H4a whole-branch review, I1). Left
+                        # off — as they were until that review — a declared
+                        # `statistics.resample` was silently dropped from every
+                        # recorded column here while `beside_n` went on
+                        # carrying the `resample` echo, so one block claimed a
+                        # declaration and omitted the `resample_draws` key that
+                        # `reference.md` § Statistical reporting makes the mark
+                        # of an UNDECLARED resample ("absent entirely — not
+                        # `null` — when no `resample` is declared"). `draws` matters
+                        # as much as the gate does: at its 2000 default a
+                        # config declaring `n: 500` would resample the column
+                        # at 2000 draws beside an echo saying 500.
+                        #
+                        # This retry cannot raise a second time on the strata
+                        # path, which is what would turn a contained fault into
+                        # a crash after every execution is spent (`stats.py`'s
+                        # `E-STEP-KEY-COLLISION` comment states that
+                        # non-re-raise as the invariant): the run-time
+                        # `E-STATS-RESAMPLE-STRATIFY-VARIES` in
+                        # `percentile_over_units_clustered` fires from the
+                        # COLUMN loop, ahead of the derived block, so the first
+                        # call above raises it before the fault this `except`
+                        # contains — and `validate` refuses the same
+                        # composition from the roster
+                        # (`stratum_varies_within_cluster`, per declared name)
+                        # before `run` starts. This depends on the run-time
+                        # check being no stricter than the validate-time one:
+                        # it is looser, because `resample_strata` above joins
+                        # the declared names into one label, and a label
+                        # collision can only merge two strata into one — never
+                        # split one into two. That composition's own gap
+                        # (`<absent>` and `|` colliding with a real attribute
+                        # value) is filed in
+                        # `docs/superpowers/spec-defects.md`; it is named here
+                        # as the dependency this argument rests on, not as
+                        # coverage this code provides.
                         step_summary = summarize_step(
                             collapsed,
                             counts,
+                            seed=resample_seed_value,
+                            draws=derived_metric_draws,
                             beside_n=cond_beside_n,
                             weights=weights,
                             clusters=clusters,
+                            resample_columns=resample_spec["declared"],
+                            strata=resample_strata,
                         )
                         # What the parent block dropped, every stratum of it
                         # drops too. A level's table carries the same columns as

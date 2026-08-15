@@ -4993,21 +4993,36 @@ documented change rather than a silent one."""
 
 
 def _check_resample(doc: dict[str, Any], roster: UnitList | None, c: Collector) -> None:
-    """`statistics.resample`'s `method` enum, its `n` floor, the comparison-family
-    lower bound on that same `n`, its `stratify_by` names, whether a roster was
-    declared at all, and — the one check here that reads the roster —
-    `limits.min_clusters` against the resolved cluster count.
+    """Every check `statistics.resample` gets, seven findings in declaration
+    order — the enumeration is the list, not a sample of it:
+
+    - `E-STATS-RESAMPLE-UNITS` — a `resample` with no `data.units` at all.
+    - `E-STATS-RESAMPLE-METHOD` — the `method` enum.
+    - `E-STATS-RESAMPLE-N` — the `n` floor.
+    - `E-STATS-RESAMPLE-STRATIFY-UNKNOWN` — a `stratify_by` name that is not a
+      declared unit attribute.
+    - `W-STATS-RESAMPLE-CLUSTERS` — **reads the roster:** `limits.min_clusters`
+      against the resolved cluster count.
+    - `E-STATS-RESAMPLE-STRATIFY-VARIES` — **reads the roster too:** a stratum
+      that varies within a `cluster_by` cluster.
+    - `W-STATS-RESAMPLE-FAMILY` — the comparison-family lower bound on that
+      same `n`.
+
+    **Two of the seven read `roster`, not one**, and each carries its own
+    `roster is not None` guard rather than leaning on a caller or on the
+    no-`return` gate below. A check added here must state which side of that
+    line it is on; this list is what the next reader counts against, so an
+    eighth finding belongs in it.
 
     `_check_unimplemented`'s wholesale refusal of a declared `resample`
     retired with H4a task 12 (commit `2fdc957`) — a shape fault inside the
     block is worth reporting on its own terms rather than only as
     "unsupported", the same way a malformed `report_by` entry is worth
-    naming even though `report_by` runs for real.
-    Resampling itself had not been honored by `cli.command_run` as of that
-    commit; the two tasks after it resolve the block and thread it into the
-    interval constructions, so a declared `resample` validated clean here
-    before it changed any interval. Check `cli.command_run`'s
-    `derived_metric_draws` directly for whether that gap is still open.
+    naming even though `report_by` runs for real. Resampling itself was not
+    honored by `cli.command_run` at that commit, so for two tasks a declared
+    `resample` validated clean here before it changed any interval; H4a tasks
+    13–15 closed that window, and `cli.command_run` now resolves the block
+    once and threads it into the column and derived constructions alike.
 
     Every check here presupposes the declaration is a mapping; a scalar or a
     list is `check_envelope`'s `E-CONFIG-TYPE` (`statistics.resample` is typed
@@ -5044,16 +5059,17 @@ def _check_resample(doc: dict[str, Any], roster: UnitList | None, c: Collector) 
     # `usable_cluster` guard avoids by the same argument.
     #
     # No `return` here, matching the `E-REPL-FOLD-NO-UNITS` twin. Of the checks
-    # below, `method`, `n`, the family bound, and `stratify_by` read
-    # `resample`/`doc` alone and are safe with no roster at all. The
-    # `limits.min_clusters` check further down is the one exception — it DOES
-    # read `roster`, and is written to require `roster is not None` itself
-    # rather than leaning on this early-exit having not fired. So this
-    # comment's job is only to explain why there is no `return` here — not to
-    # promise every check below is roster-independent, which the next reader
-    # extending this function must re-verify rather than assume from this
-    # sentence alone. Stopping here would silently swallow a `method`/`n`
-    # fault the reader would only meet on their next pass.
+    # below, `method`, `n`, the family bound, and `stratify_by`'s names read
+    # `resample`/`doc` alone and are safe with no roster at all. The two that
+    # DO read `roster` — `limits.min_clusters` and the stratum-varies-within-
+    # cluster composition, both enumerated in the docstring above — each
+    # require `roster is not None` themselves rather than leaning on this
+    # early-exit having not fired. So this comment's job is only to explain why
+    # there is no `return` here — not to promise every check below is
+    # roster-independent, which the next reader extending this function must
+    # re-verify against the docstring's list rather than assume from this
+    # sentence. Stopping here would silently swallow a `method`/`n` fault the
+    # reader would only meet on their next pass.
     units_declared = ((doc.get("data") or {}).get("units")) or {}
     if not units_declared:
         c.error(

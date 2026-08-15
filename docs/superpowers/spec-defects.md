@@ -5161,8 +5161,19 @@ observe an individual draw's `compute` fail. Adding a survivor count here would 
 `(Interval(nan, nan), n)`: the identical false claim, with an extra field implying it was
 checked.
 
-**Proposed resolution, not attempted here:** whichever slice wires column resample into
-`summarize_step` (task 12/14) should validate `values` and any weight vector for finiteness
+**Owner re-assigned to H4b — weights and clusters through the contrast family**
+(`docs/superpowers/H4-SCOPING.md` § Decomposition), amended by the H4a whole-branch review
+(2026-08-15, `d59316d`). The original owner named below — "whichever slice wires column resample
+into `summarize_step` (task 12/14)" — **was H4a**, and both tasks landed without it. That was a
+deliberate decline, not an oversight: H4a task 14's ledger entry records the choice, and the
+disclosure it took instead is live in two places — `stats.summarize_step`'s docstring, which says
+in terms that "nothing on this path checks that condition", and `reference.md`
+§ How a metric becomes a number. The two `*_is_a_known_unfixed_gap` tests below still pin it.
+H4b is the successor because it builds the weighted and clustered paired constructions, which is
+where the same unchecked finiteness assumption lands next.
+
+**Proposed resolution, not attempted here:** whichever slice takes it should validate `values` and
+any weight vector for finiteness
 before drawing — plausibly reusing `is_measurement_numeric`/`usable_weight`'s existing finite
 checks, extended to also catch a weight sum that overflows once accumulated — and route a
 failure to a real refusal (`ci95: null`, `resample_draws: null` per the ruling above) rather than
@@ -5379,9 +5390,13 @@ amendment.
 
 ## The contrast path discloses nothing about its resample, and `paired_percentile_of_derived` never got the zero-width sweep
 
-Found by the **task 16 review** (H4a, `2026-08-15-resample-honoured`), at commit `b06079c`. Two
-findings, both **deferred with a named owner — H4's contrast-side hardening** — because both are
-disclosure/refusal gaps on a path task 16 widened rather than created, and neither is a regression.
+Found by the **task 16 review** (H4a, `2026-08-15-resample-honoured`), at commit `b06079c`; a third
+finding added below by the whole-branch review at `d59316d`. Three
+findings, all **deferred with a named owner — H4b, "weights and clusters through the contrast
+family"** (`docs/superpowers/H4-SCOPING.md` § Decomposition; a third finding was appended by the
+H4a whole-branch review, and the owner named here was "H4's contrast-side hardening", a description
+rather than a slice, until the same review) — because all are
+disclosure/refusal gaps on a path task 16 widened rather than created, and none is a regression.
 
 **Finding 1 — a declared `resample` can silently remove a column contrast's interval.** Task 16
 routes a recorded column's contrast through `stats.paired_percentile_of_derived` under a declared
@@ -5403,6 +5418,17 @@ refusals its three siblings now have.** `percentile_over_units` (strata branch),
 above this one — `percentile_of_derived` each refuse a draw whose structure cannot vary, on the
 stated authority of `reference.md` § Statistical reporting: "a zero-width 95 % interval is not
 [honest]; reporting a point with no interval is honest." The paired construction has no such check.
+
+**Scoped by the whole-branch review (`d59316d`): each of those three refusals is on its stratified
+or clustered branch, and none of them is a general "core never publishes a zero-width percentile
+interval" guarantee.** Probed directly: an **unstratified** constant pool still returns
+`Interval(5, 5)` from `percentile_over_units` and `(Interval(5, 5), 200)` from
+`percentile_of_derived`; the same pool with `strata` (or with `cluster_by`) returns `None`. That is
+not a regression — `t_over_units` over the identical column returns `Interval(5, 5)` too — and it
+is defensible on its own terms, since an unstratified bootstrap of a constant column genuinely has
+no sampling variance. It is recorded because within one run a constant column is refused with
+`stratify_by` declared and published without it, and a reader inferring the general guarantee from
+the sentence above would be wrong.
 Verified end to end at `b06079c`: a column recorded identically under both conditions
 (`tests/test_cli.py`'s `_AGGREGATE_STEP`, whose `pred = float(i)` ignores `cfg`) under
 `resample: {method: bootstrap, n: 2000}` publishes
@@ -5419,3 +5445,54 @@ sound for the same reason: the two tables are the two conditions' own collapsed 
 seen twice, so nothing cancels. What is owed is consistency — the paired construction is now the
 fourth reachable from a recorded column and the only one the zero-width sweep never touched, and the
 sweep should finish rather than stop at three.
+
+**Finding 3 — a contrast entry carries no resolved-`resample` echo, while every `aggregated` block
+beside it does.** Filed by the **H4a whole-branch review** (2026-08-15, at `d59316d`), which found
+the gap real and found that it had never been filed: H4a task 17's ledger entry recorded it as
+"registered against H4's contrast-side hardening, same owner as task 16's filed items", and no such
+amendment was ever made to this entry. The ledger is tracked, so the ruling was not lost, but
+`CLAUDE.md` names this file as the place to look before filing a "new" gap, and it was not here.
+
+The gap, confirmed by the review by running a config, and re-confirmed here at the construction
+site: under a declared `statistics.resample`, a `vs_baseline` entry reports
+`method: paired_percentile_over_units` with no `resample` block beside it, while every `aggregated`
+metric block in the same `run.yaml` carries the resolved `{method, n, stratify_by}` echo task 17
+added. `_comparison_step_blocks` builds each entry as a literal
+`{delta, n_paired, method, ci95, cohens_d, correction}` mapping and takes no `beside_n` parameter
+at all, so there is no route by which the echo could reach it. `cli.py` merges `resample_beside` into
+`weighted_beside`, which reaches `summarize_step`'s `beside_n` and so the per-condition blocks;
+`_comparison_step_blocks` builds its entries by another route and receives no such mapping. So a
+reader can see what a condition's own interval rests on and cannot see it for the contrast between
+two conditions — which is the half `reference.md` § Statistical reporting's "so the number is never
+the result of an undocumented default" reason applies to equally.
+
+**Same owner as Findings 1 and 2, and it should be built with them:** all three are contrast-path
+disclosure gaps, and a `where` that names the comparison is the thing Finding 1 needs and this one
+would reuse. Not a regression — no contrast entry ever carried the echo, the echo itself being H4a
+task 17's own addition.
+
+## Five code comments cite a `reference.md` section that has never existed
+
+Found by the **H4a whole-branch fix pass** (2026-08-15, at `d59316d`), while adding a citation to
+the same phantom section and checking that the anchor resolved. `stats.py` (four sites),
+`validate.py` (one) cite "`reference.md` § How a metric becomes a number". **There is no such
+heading**, in `reference.md` or in any of the four documents, and `git log -S` over
+`docs/reference.md` finds no commit that ever removed one — the name was invented in a comment and
+copied. A sixth site in `cli.py` was written by this pass and corrected before it landed.
+
+The material each citation means is real and is all under § Statistical reporting — the
+`basis`/`method` table, the `resample_draws` three-valued scheme, and the recorded-column paragraph
+that states a column's `resample_draws` is "absent entirely — not `null` — when no `resample` is
+declared". Two of the five could equally mean its `#### The unit table is the inference base`
+subsection, which is why this is filed rather than fixed by sed: each site needs reading to see
+which section it is actually leaning on, and one of them (`stats.py`'s
+`percentile_of_derived`-is-the-only-construction quotation) quotes text whose home should be
+confirmed before the pointer is changed.
+
+Not a behaviour defect, and no reader is misled about a rule — every quoted sentence is true, only the
+address is wrong. It is filed because `CLAUDE.md` § Documentation conventions makes section
+citations the one durable way to point between files ("never by line number"), and a cited section
+that does not exist is the failure that convention exists to prevent.
+
+**Owner: unassigned** — it is five one-line edits in `src/`, and any slice touching `stats.py`'s
+interval constructions (H4b next) can close it in passing.

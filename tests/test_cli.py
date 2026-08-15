@@ -6204,6 +6204,50 @@ def test_the_same_derived_metric_unclustered_is_drawn_as_it_always_was(tmp_path,
     assert "E-DATA-CLUSTER-DERIVED" not in doc["stdout"]
 
 
+def test_a_contained_aggregate_fault_does_not_downgrade_a_declared_column_resample(
+    tmp_path, capsys
+):
+    """The contained fault costs the DERIVED mapping and nothing else — including
+    the construction a declared `statistics.resample` puts around every recorded
+    column (H4a whole-branch review, I1).
+
+    `cli.py`'s retry after `E-DATA-CLUSTER-DERIVED` re-summarizes without the
+    derived metrics. Until this fix it also dropped `resample_columns`/`strata`/
+    `seed`/`draws`, so `pred` came back `weighted_t_over_units_clustered` with no
+    `resample_draws` key — which `reference.md` § How a metric becomes a number
+    makes the shape of a run that declared NO resample — while `beside_n` went on
+    carrying the `resample` echo beside it. One block cannot say both.
+
+    `n: 500` rather than the 2000 default on purpose: `draws` is a separate
+    parameter from the gate, and at its default a declared 500 would be resampled
+    2000 times beside an echo saying 500."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        aggregate_returns="total",
+        roster_csv=_UNEVEN_CLUSTERS,
+        units_overrides={"attributes": ["site"], "cluster_by": "site"},
+        statistics={"correction": "holm", "resample": {"method": "bootstrap", "n": 500}},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    # The fault fired and cost exactly the derived mapping, as before.
+    assert "E-DATA-CLUSTER-DERIVED" in doc["stdout"]
+    assert set(aggregated) == {"pred"}
+    # And the recorded column came back with the construction the declaration
+    # asked for, at the number of draws it asked for.
+    assert aggregated["pred"]["method"] == "percentile_over_units_clustered"
+    assert aggregated["pred"]["resample_draws"] == 500
+    # The echo and the column now agree about what happened.
+    assert aggregated["pred"]["resample"] == {
+        "method": "bootstrap",
+        "n": 500,
+        "stratify_by": [],
+    }
+    assert run["status"] == "completed"
+
+
 def test_the_shipped_template_derives_nothing_so_no_generated_project_is_reached():
     """The blast radius of the refusal above, measured rather than asserted: core
     ships exactly one template, and `generic` does not override `aggregate` at all
