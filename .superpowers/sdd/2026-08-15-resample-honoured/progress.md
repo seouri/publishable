@@ -729,3 +729,31 @@ Task 14 review: spec ✅, quality 4 Important + 4 Minor, no Critical. Confirmed 
 Task 14: COMPLETE, all review findings addressed. 1781 passed + 2 xfailed (baseline 1770 + 11 new
   across both rounds); ruff and mypy clean. Every new assertion mutated, confirmed to FAIL, reverted
   in place. BASE for task 15 is this commit.
+Task 14: COMPLETE (commits b156b1b, 556d13d, d61c640, a6fe234). 1781 passed + 2 xfailed; ruff and mypy
+  clean. All 4 Importants and all Minors closed. The undiscriminated gate now has its discriminating
+  config (resample: {n: 2000} declared explicitly, same value as the undeclared default); clustered+
+  weighted pinned by exact ci95; the finiteness claim hedged in BOTH reference.md and the stats.py
+  docstring with the unchecked-ness disclosed; and W-STATS-RESAMPLE-STRATIFY-UNHONOURED added, fired once
+  per run, registered in § Warnings core reports, with positive and negative tests both
+  mutation-confirmed. MERGE GATE CLOSED.
+RULING — TASK 15 IS AMENDED, BECAUSE ITS PLAN TEXT PREDATES TASK 14'S DECISION AND CONTRADICTS IT.
+  As written, task 15 threads strata into the COLUMN path only (summarize_step -> percentile_over_units/
+  _clustered). THAT IS EXACTLY THE ASYMMETRY TASK 14 DECLINED TO CREATE — two intervals in one table
+  computed under different designs, with nothing in the record to tell them apart. Executing task 15
+  verbatim would undo a decision this slice made deliberately two tasks ago.
+  Three options weighed. (a) Thread column-only anyway: contradicts task 14, reintroduces the asymmetry.
+  (b) Grow task 15 to include a `strata` parameter on percentile_of_derived, so BOTH paths honour the
+  declaration. (c) Defer, and ship H4a with stratify_by disclosed-but-not-honoured.
+  CHOSEN: (b). Grounds — SIX OF SEVEN non-null resample declarations in the feasibility analysis carry a
+  stratify_by, so (c) leaves the slice's headline deliverable partial for the common case; and the
+  construction is CONTAINED, being the same draw discipline percentile_over_units already implements,
+  applied to KEY selection rather than value selection. The slice is called "resample honoured" and (b)
+  is what makes that name true.
+  CONSEQUENCE TASK 15 MUST HANDLE: W-STATS-RESAMPLE-STRATIFY-UNHONOURED, which task 14 added one task
+  ago, IS RETIRED BY TASK 15 — the gap it discloses closes. That is the correct sequence rather than
+  waste: disclosure was right for the state task 14 shipped, and retiring it is right for the state task
+  15 ships. Task 15 must remove the warning, its registry row and its tests, or the record will warn
+  about a gap that no longer exists.
+  COST IF WRONG: task 15 grows from wiring to wiring-plus-one-construction and may need splitting. The
+  dispatch tells the implementer to report rather than push through if the derived construction turns
+  out large.

@@ -3530,10 +3530,8 @@ def test_a_column_below_the_honest_draw_floor_also_reports_a_null_draw_count():
     `draws=10` is below it).
     `test_a_column_below_two_units_reports_a_null_draw_count_under_resample` and
     this one exercise two of the three ways a column's interval can come back
-    refused; the third
-    (the per-stratum constant-pair refusal) is unreachable for a column today,
-    since no stratification is threaded into the column path
-    (`docs/superpowers/spec-defects.md`)."""
+    refused; the third (the per-stratum constant-pair refusal) needs a declared
+    `strata` to reach at all, which neither fixture here carries."""
     collapsed = _ragged_collapsed(40)
     counts = {"resolved": 40, "completed": 40, "failed": 0}
     got = summarize_step(collapsed, counts, seed=5, draws=10, resample_columns=True)
@@ -3541,3 +3539,148 @@ def test_a_column_below_the_honest_draw_floor_also_reports_a_null_draw_count():
     assert got["pred"]["method"] is None
     assert "resample_draws" in got["pred"]
     assert got["pred"]["resample_draws"] is None
+
+
+def test_summarize_step_draws_within_the_strata_it_is_given():
+    """The stratified column interval, end of the thread. The fixture is the
+    banded one: 20 units in [0,1), 8 in [10,11), 2 in [100,101), so the
+    stratified interval is far narrower than the unstratified one and nowhere
+    near the mean-of-stratum-means answer."""
+    values = (
+        [i / 20.0 for i in range(20)]
+        + [10.0 + i / 8.0 for i in range(8)]
+        + [100.0 + i / 2.0 for i in range(2)]
+    )
+    collapsed = {f"u{i}": {"pred": v} for i, v in enumerate(values)}
+    strata = {f"u{i}": ("low" if i < 20 else "mid" if i < 28 else "high") for i in range(30)}
+    counts = {"resolved": 30, "completed": 30, "failed": 0}
+    plain = summarize_step(collapsed, counts, seed=7, draws=2000, resample_columns=True)
+    drawn = summarize_step(
+        collapsed, counts, seed=7, draws=2000, resample_columns=True, strata=strata
+    )
+    plain_low, plain_high = plain["pred"]["ci95"]
+    low, high = drawn["pred"]["ci95"]
+    assert (high - low) < (plain_high - plain_low) / 2.0
+    assert low < drawn["pred"]["value"] < high
+    assert high < 20.0  # not the 37.17 of equal-weighted stratum means
+
+
+def test_the_stratum_vector_is_aligned_to_the_columns_own_keys():
+    """A RAGGED column: only some units carry `late`, and its stratum vector
+    must be the subset those units carry, not the whole table's. A vector
+    filtered differently draws the wrong composition and produces a plausible
+    number rather than an error — the same reason `weights` and `clusters` are
+    both looked up per column key."""
+    collapsed: dict[str, dict[str, float]] = {}
+    for i in range(30):
+        row: dict[str, float] = {"early": float(i)}
+        if i >= 20:  # only the `high`/`mid` tail carries `late`
+            row["late"] = 100.0 + float(i)
+        collapsed[f"u{i}"] = row
+    strata = {f"u{i}": ("low" if i < 20 else "mid" if i < 28 else "high") for i in range(30)}
+    counts = {"resolved": 30, "completed": 30, "failed": 0}
+    got = summarize_step(
+        collapsed, counts, seed=7, draws=2000, resample_columns=True, strata=strata
+    )
+    # The ragged column's own `n.completed` is 10, and its interval exists —
+    # a whole-table stratum vector would zip against 30 labels and raise.
+    assert got["late"]["n"]["completed"] == 10
+    assert got["late"]["ci95"] is not None
+    assert got["late"]["method"] == "percentile_over_units"
+    # The full column is unaffected, so this cannot pass by both being broken.
+    assert got["early"]["n"]["completed"] == 30
+    assert got["early"]["ci95"] is not None
+
+
+def test_percentile_of_derived_draws_within_the_strata_it_is_given():
+    """The derived half of the amendment: `percentile_of_derived` recomputes
+    `aggregate` (here, `sum(units.pred)`) on each draw, so stratifying it means
+    drawing unit KEYS within each stratum rather than values — the banded
+    fixture makes the stratified interval measurably narrower than the plain
+    one, and nowhere near the mean-of-stratum-means answer, the same three-way
+    separation `percentile_over_units`'s own stratified tests use."""
+    values, strata_list = _banded_strata()
+    collapsed = {f"u{i}": {"pred": v} for i, v in enumerate(values)}
+    strata = {f"u{i}": s for i, s in enumerate(strata_list)}
+
+    def compute(units: UnitTable) -> float:
+        return sum(units.pred)
+
+    plain, plain_n = percentile_of_derived(collapsed, compute, seed=7, draws=2000)
+    drawn, drawn_n = percentile_of_derived(
+        collapsed, compute, seed=7, draws=2000, strata=strata
+    )
+    assert plain is not None and drawn is not None
+    assert plain_n == 2000 and drawn_n == 2000
+    plain_width = plain.high - plain.low
+    drawn_width = drawn.high - drawn.low
+    assert drawn_width < plain_width / 2.0
+    total = sum(values)
+    assert drawn.low < total < drawn.high
+    # Mean-of-stratum-means scaled up by 30 units would be nowhere close;
+    # the correct stratified sum sits near `total` (294.9), not there.
+    assert drawn.high < 700.0
+
+
+def test_percentile_of_derived_stratum_vector_is_indexed_not_defaulted():
+    """A key `collapsed` holds but `strata` does not is a core defect — the
+    caller built `strata` from the same roster `collapsed` was collapsed
+    from, so a missing entry means the two disagree about which units exist,
+    and inventing a stratum for it would draw a plausible-looking interval
+    over the wrong design instead of failing loudly."""
+    collapsed = {f"u{i}": {"pred": float(i)} for i in range(20)}
+    strata = {f"u{i}": "only" for i in range(19)}  # u19 missing on purpose
+
+    def compute(units: UnitTable) -> float:
+        return sum(units.pred)
+
+    with pytest.raises(KeyError):
+        percentile_of_derived(collapsed, compute, seed=7, draws=50, strata=strata)
+
+
+def test_summarize_step_stratifies_a_column_and_a_derived_metric_together():
+    """The amendment's own requirement: one declared `strata` mapping must move
+    BOTH a recorded column's interval and a derived metric's interval in the
+    same call, not just one of them — the asymmetry a single `stratify_by`
+    producing a stratified column beside an unstratified derived metric would
+    otherwise leave invisible in the record. Both are computed from the same
+    banded fixture (`pred` recorded per unit, `total` derived as its sum), and
+    both must come back narrower than their unstratified counterparts."""
+    values, strata_list = _banded_strata()
+    collapsed = {f"u{i}": {"pred": v} for i, v in enumerate(values)}
+    strata = {f"u{i}": s for i, s in enumerate(strata_list)}
+    counts = {"resolved": 30, "completed": 30, "failed": 0}
+
+    def compute(units: UnitTable) -> float:
+        return sum(units.pred)
+
+    plain = summarize_step(
+        collapsed,
+        counts,
+        derived={"total": sum(values)},
+        seed=7,
+        resample={"total": compute},
+        draws=2000,
+        resample_columns=True,
+    )
+    drawn = summarize_step(
+        collapsed,
+        counts,
+        derived={"total": sum(values)},
+        seed=7,
+        resample={"total": compute},
+        draws=2000,
+        resample_columns=True,
+        strata=strata,
+    )
+    plain_col_low, plain_col_high = plain["pred"]["ci95"]
+    col_low, col_high = drawn["pred"]["ci95"]
+    assert (col_high - col_low) < (plain_col_high - plain_col_low) / 2.0
+
+    plain_der_low, plain_der_high = plain["total"]["ci95"]
+    der_low, der_high = drawn["total"]["ci95"]
+    assert (der_high - der_low) < (plain_der_high - plain_der_low) / 2.0
+    # Neither happened to move by being byte-identical to the other's width —
+    # each was checked against its OWN unstratified counterpart above.
+    assert drawn["pred"]["ci95"] != plain["pred"]["ci95"]
+    assert drawn["total"]["ci95"] != plain["total"]["ci95"]

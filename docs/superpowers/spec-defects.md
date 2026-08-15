@@ -5137,7 +5137,7 @@ publishing `nan` under a false `resample_draws: n`. This is bigger than task 11'
 also affects the unweighted and clustered percentile constructions and the `t_over_units` family,
 none of which check finiteness either, and none of which this entry claims to have surveyed.
 
-## `statistics.resample.stratify_by` is checked by `validate` and honoured by nothing
+## `statistics.resample.stratify_by` is checked by `validate` and honoured by nothing — CLOSED
 
 Found during task 14's review (2026-08-15, H4a, `ce2f2db`). `validate._check_resample` refuses a
 `stratify_by` naming an undeclared attribute (§ Validation's *Resample strata exist* /
@@ -5187,6 +5187,21 @@ construction in this build honours it — registered in `reference.md` § Warnin
 gap itself (no construction stratifies either path) is unchanged and still owed to whichever slice
 gives `percentile_of_derived` a `strata` parameter, per this entry's own "What is owed, and by whom"
 paragraph; only its visibility changed.
+
+**CLOSED 2026-08-15 (H4a task 15).** `percentile_of_derived` now takes a `strata` parameter — the
+"What is owed, and by whom" paragraph's own construction: it draws unit **keys** with replacement
+within each stratum, preserving each stratum's key count, rather than drawing a per-unit value the
+way `percentile_over_units` does, since a derived metric has no per-unit value of its own. Task 15
+landed that alongside wiring `strata` into the column path (`percentile_over_units`/
+`percentile_over_units_clustered`) in the same commit, exactly as this entry's "Only once that
+exists can a slice safely wire `strata` into the column path too, landing both together" said —
+`cli.command_run` composes one `resample_strata` mapping (the cross of every declared
+`stratify_by` name, a unit missing a name joining a stratum of its own labelled from the absence
+rather than being dropped) and threads it into both `summarize_step` call sites that resample at
+all, so a declared `stratify_by` now moves a recorded column's interval and a derived metric's
+interval the same way in the same table. `W-STATS-RESAMPLE-STRATIFY-UNHONOURED` is retired — the
+gap it disclosed no longer exists — and its `reference.md` § Warnings core reports row and its two
+`tests/test_cli.py` pins are removed rather than kept as dead code warning about nothing.
 
 ## A column's `resample_draws` under a refused (too-few-units) interval is `null`, not the requested `n`
 

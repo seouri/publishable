@@ -1034,18 +1034,13 @@ def _resolved_resample(doc: dict[str, Any]) -> dict[str, Any]:
     `stratify_by` goes through `units.stratum_names`, the same normalization the
     draw balances on and `validate._check_resample` checks names against, so a
     bare `stratify_by: site` is one name to all three. Resolved here and carried
-    on the returned dict; **nothing in `command_run` reads it, including after
-    task 14** — `percentile_over_units`/`percentile_over_units_clustered` accept
-    a `strata` parameter and could honour it for a recorded column, but
-    `percentile_of_derived` takes none, and wiring stratification into the
-    column path alone would leave one table holding two intervals computed
-    under different designs (a stratified column beside an unstratified
-    derived metric) with nothing in the record to tell a reader which is
-    which. Left unwired on both paths instead, deliberately, so a declared
-    `stratify_by` today changes no arithmetic anywhere — see
-    `docs/superpowers/spec-defects.md` for the open gap. That is a fact about
-    both `stats.py` and this function today, not a commitment about which
-    future task closes it.
+    on the returned dict; `command_run` reads it to compose the roster-wide
+    `resample_strata` mapping (H4a task 15) that reaches both
+    `summarize_step`'s recorded-column branch and its derived-metric one —
+    `percentile_over_units`/`percentile_over_units_clustered` and
+    `percentile_of_derived` all take a `strata` parameter now, so one declared
+    `stratify_by` moves both constructions the same way rather than leaving a
+    stratified column beside an unstratified derived metric in the same table.
     """
     declared = ((doc.get("statistics") or {}).get("resample")) or {}
     if not isinstance(declared, dict):
@@ -1564,43 +1559,39 @@ def command_run(config_path: Path) -> int:
             # own — a config asking for exactly 2000 draws and a config asking
             # for nothing both resolve to `n: 2000`. `method` stays unread
             # (`validate.RESAMPLE_METHODS` is `("bootstrap",)` only, so there
-            # is nothing yet to choose between). **`stratify_by` is read only
-            # to WARN, never to change a draw** — `percentile_of_derived`
-            # takes no `strata` parameter, and wiring it into the column path
-            # alone (which `percentile_over_units`/`_clustered` could honour)
-            # would put two intervals in one table under different designs
-            # with nothing in the record distinguishing them; see
-            # `docs/superpowers/spec-defects.md`. None of `reference.md` §
-            # Statistical reporting's "resolved values ... recorded beside the
-            # interval" is met yet — task 17 is what writes that record; today
-            # only a survivor count sits beside a derived metric's interval.
+            # is nothing yet to choose between).
             resample_spec = _resolved_resample(doc)
             derived_metric_draws = resample_spec["n"]
-            # A declared `resample.stratify_by` validates clean
-            # (`_check_resample`'s *Resample strata exist* row) and looks
-            # honoured — `resample_spec["stratify_by"]` is a real, checked
-            # value sitting right beside `n`, which is honoured. It isn't:
-            # no construction below draws within a stratum (H4a task 14's own
-            # spec-defects.md entry). Before this task neither a column's nor
-            # a derived metric's interval moved under a declared `resample` at
-            # all, so the gap was invisible in exactly the way an unbuilt
-            # feature's gap always is. Now a declared `resample` visibly moves
-            # a column's interval, so a `stratify_by` beside it that silently
-            # does nothing is a materially worse silence than before this
-            # commit landed — warned once per run, here, rather than left for
-            # a reader to discover by comparing two `run.yaml`s.
-            if resample_spec["declared"] and resample_spec["stratify_by"]:
-                aggregate_c.warn(
-                    "W-STATS-RESAMPLE-STRATIFY-UNHONOURED",
-                    "statistics.resample.stratify_by",
-                    f"names {', '.join(repr(n) for n in resample_spec['stratify_by'])}, "
-                    "but no interval construction in this build draws within a "
-                    "stratum: every `percentile_over_units`/"
-                    "`percentile_over_units_clustered` draw in this run is "
-                    "unstratified, for both recorded columns and derived metrics, "
-                    "regardless of this declaration. See "
-                    "`docs/superpowers/spec-defects.md`",
-                )
+            # One stratum LABEL per unit, composed once for the run: several
+            # declared names mean the stratum is their cross — `reference.md`
+            # § Weighted samples' own `stratify_by: [dx_status, count_stratum]`
+            # — so the composition happens here, where the attributes live, and
+            # `stats.py` sees one label per unit and never learns how many
+            # attributes made it. Named `resample_strata` rather than `strata`:
+            # that name is already this function's own fold-partition mapping,
+            # a different stratification for a different purpose, in scope a
+            # few hundred lines above.
+            #
+            # A unit carrying no value for one of the names joins a stratum of
+            # its own rather than being dropped. `strata.levels_for` drops such
+            # a unit from every REPORTING level, because there is no honest
+            # level for "we don't know" — but a DRAW cannot drop it: the draw is
+            # over the completed table, and dropping would change `n` silently
+            # beneath an interval that claimed the full count. The sentinel is
+            # printable rather than a control character: nothing emits a stratum
+            # LABEL into `run.yaml` today (a future task records the attribute
+            # names), but a NUL byte in a string PyYAML is later asked to emit
+            # raises, and a printable one costs nothing to choose now.
+            resample_strata: dict[str, str] | None = None
+            if resample_spec["stratify_by"]:
+                resample_strata = {
+                    u.key: "|".join(
+                        "<absent>" if u.attributes.get(name) is None
+                        else str(u.attributes.get(name))
+                        for name in resample_spec["stratify_by"]
+                    )
+                    for u in roster
+                }
             aggregate_where = f"{doc.get('experiment_type', '')}.aggregate"
             # `aggregate` is user code in exactly the sense `runner.py`'s own
             # step execution is — "a failed execution never stops the run" —
@@ -1779,6 +1770,7 @@ def command_run(config_path: Path) -> int:
                             weights=weights,
                             clusters=clusters,
                             resample_columns=resample_spec["declared"],
+                            strata=resample_strata,
                         )
                     except ContractError as exc:
                         prefix = f"{exc.code} " if exc.code else ""
@@ -2130,9 +2122,15 @@ def command_run(config_path: Path) -> int:
                                 # and its Kish size are its own, which is the
                                 # same reason `level_counts` is recomputed above
                                 # rather than copied down, and the same reason the
-                                # cluster mapping travels with it.
+                                # cluster mapping travels with it. `strata` the
+                                # same way: a level's own units carry the same
+                                # stratum labels the whole roster does, and
+                                # `summarize_step` filters the mapping down to
+                                # this level's own keys exactly as it does for
+                                # a ragged column.
                                 weights=weights,
                                 clusters=clusters,
+                                strata=resample_strata,
                             )
                             # At least one entry has to come from the level's own
                             # table. A block holding nothing but derived metrics

@@ -7030,40 +7030,124 @@ def test_declaring_n_2000_still_gates_a_column_on_declared_not_on_n(tmp_path, ca
     assert aggregated["pred"]["resample_draws"] == 2000
 
 
-def test_a_declared_stratify_by_warns_that_no_construction_honours_it(tmp_path, capsys):
-    """§ Weighted samples documents `resample.stratify_by` with a worked YAML,
-    and `validate` checks it for real (`_check_resample`'s *Resample strata
-    exist* row) — a config declaring it validates clean and looks accepted.
-    Task 14 decided, deliberately, not to thread `stratify_by` into either the
-    column or the derived percentile construction (`docs/superpowers/
-    spec-defects.md`), and that decision is materially worse silently after
-    this task than before it: a declared `resample` now visibly moves a
-    column's interval, so a `stratify_by` beside it doing nothing needs its
-    own disclosure rather than inheriting the column wiring's. This is that
-    disclosure, once per run."""
-    doc = run_a_project(
-        tmp_path,
-        capsys=capsys,
-        aggregate_returns="mean_pred",
-        units=40,
-        unit_attributes=["cohort"],
-        statistics={"resample": {"method": "bootstrap", "n": 500,
-                                  "stratify_by": "cohort"}},
-    )
-    assert "W-STATS-RESAMPLE-STRATIFY-UNHONOURED" in doc["stdout"]
-    assert "'cohort'" in doc["stdout"]
+_COHORT_BANDED_STEP = '''\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
 
 
-def test_an_undeclared_stratify_by_warns_of_nothing(tmp_path, capsys):
-    """The negative control
-    `test_a_declared_stratify_by_warns_that_no_construction_honours_it` needs: a
-    declared `resample` with no `stratify_by` at all must not trip the new
-    warning — it exists for the declaration, not for `resample` in general."""
-    doc = run_a_project(
-        tmp_path,
-        capsys=capsys,
-        aggregate_returns="mean_pred",
-        units=40,
-        statistics={"resample": {"method": "bootstrap", "n": 500}},
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        units = list(io.units)
+        for i, unit in enumerate(units):
+            pred = (
+                float(i) / 40.0
+                if unit.attributes["cohort"] == "a"
+                else 100.0 + float(i) / 40.0
+            )
+            io.record(unit.key, {{"pred": pred}})
+        return {{"n_units": len(units)}}
+'''
+
+
+def test_a_declared_stratify_by_reaches_the_column_interval(tmp_path, capsys):
+    """The thread from `statistics.resample.stratify_by` through
+    `unit_attributes` to the draw. `cohort` alternates a/b across 40 units, and
+    the step records a `pred` that is banded by cohort, so the stratified
+    interval is measurably narrower than the unstratified one — a fixture where
+    the two cohorts held the same values could not tell them apart."""
+    doc_plain = run_a_project(
+        tmp_path / "plain", capsys=capsys, units=40, unit_attributes=["cohort"],
+        _starter_step=_COHORT_BANDED_STEP,
+        statistics={"correction": "holm", "resample": {"method": "bootstrap", "n": 2000}},
     )
-    assert "W-STATS-RESAMPLE-STRATIFY-UNHONOURED" not in doc["stdout"]
+    doc_strat = run_a_project(
+        tmp_path / "strat", capsys=capsys, units=40, unit_attributes=["cohort"],
+        _starter_step=_COHORT_BANDED_STEP,
+        statistics={"correction": "holm",
+                    "resample": {"method": "bootstrap", "n": 2000,
+                                 "stratify_by": ["cohort"]}},
+    )
+    def width(doc):
+        run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+        metric = run["results"]["conditions"][0]["aggregated"][
+            "step01_summarize_units"]["pred"]
+        assert metric["method"] == "percentile_over_units"
+        low, high = metric["ci95"]
+        return high - low
+    assert width(doc_strat) < width(doc_plain)
+
+
+def test_a_unit_missing_a_stratum_attribute_joins_a_stratum_of_its_own(
+    tmp_path, capsys
+):
+    """`strata.levels_for` drops such a unit from every reporting level, because
+    "there is no honest level for 'we don't know'". A DRAW cannot drop it — that
+    would change `n` silently — so it joins a stratum labelled from the absence.
+
+    A blank CSV cell will not do here: `csv.DictReader` reads it as `""`, a
+    real (if empty) value `u.attributes.get("cohort")` returns, and `""` is a
+    stratum of its own already, the same way `cli.py`'s own fold-strata
+    comment documents for a blank cell. To make `u.attributes.get("cohort")`
+    return `None` — the case the sentinel exists for — the row itself has to
+    be shorter than the header: with `cohort` the LAST column, a row that
+    omits it entirely leaves `DictReader`'s `restval` (`None`) in its place.
+    Asserted because a fixture with every attribute present cannot see it."""
+    header = "patient_id,arm,cohort\n"
+    rows = [
+        f"p{i},x" if i % 10 == 0 else f"p{i},x,{'a' if i % 2 else 'b'}"
+        for i in range(40)
+    ]
+    roster = header + "\n".join(rows) + "\n"
+    doc = run_a_project(
+        tmp_path, capsys=capsys, units=40, unit_attributes=["cohort"],
+        roster_csv=roster, _starter_step=_COHORT_BANDED_STEP,
+        statistics={"correction": "holm",
+                    "resample": {"method": "bootstrap", "n": 2000,
+                                 "stratify_by": ["cohort"]}},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    metric = run["results"]["conditions"][0]["aggregated"][
+        "step01_summarize_units"]["pred"]
+    # Every completed unit is still in `n` — the draw dropped nobody.
+    assert metric["n"]["completed"] == 40
+    assert metric["ci95"] is not None
+
+
+def test_a_declared_stratify_by_reaches_the_column_and_the_derived_interval_together(
+    tmp_path, capsys
+):
+    """The amendment this task was scoped against: a single declared
+    `stratify_by` must move a recorded column's interval AND a derived
+    metric's interval the same way in the same run, not just the column's.
+    `mean_pred` is `aggregate_returns`'s derived mean of the same banded
+    `pred` column the column-only test above uses, so both metrics are
+    computed from one design and neither can move by accident while the
+    other stays put."""
+    doc_plain = run_a_project(
+        tmp_path / "plain", capsys=capsys, units=40, unit_attributes=["cohort"],
+        _starter_step=_COHORT_BANDED_STEP, aggregate_returns="mean_pred",
+        statistics={"correction": "holm", "resample": {"method": "bootstrap", "n": 2000}},
+    )
+    doc_strat = run_a_project(
+        tmp_path / "strat", capsys=capsys, units=40, unit_attributes=["cohort"],
+        _starter_step=_COHORT_BANDED_STEP, aggregate_returns="mean_pred",
+        statistics={"correction": "holm",
+                    "resample": {"method": "bootstrap", "n": 2000,
+                                 "stratify_by": ["cohort"]}},
+    )
+    def widths(doc):
+        run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+        agg = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+        column, derived = agg["pred"], agg["mean_pred"]
+        assert column["method"] == "percentile_over_units"
+        assert derived["method"] == "percentile_over_units"
+        return (
+            column["ci95"][1] - column["ci95"][0],
+            derived["ci95"][1] - derived["ci95"][0],
+        )
+    plain_column_width, plain_derived_width = widths(doc_plain)
+    strat_column_width, strat_derived_width = widths(doc_strat)
+    assert strat_column_width < plain_column_width
+    assert strat_derived_width < plain_derived_width

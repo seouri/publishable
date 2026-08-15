@@ -904,6 +904,7 @@ def percentile_of_derived(
     seed: int,
     draws: int = 2000,
     confidence: float = 0.95,
+    strata: dict[str, str] | None = None,
 ) -> tuple[Interval | None, int]:
     """A percentile interval for a derived metric, by recomputing it, and the
     number of draws it actually rests on.
@@ -965,15 +966,48 @@ def percentile_of_derived(
     so the interval is `None` while the count returned alongside it stays
     real. `cli.py` warns on any shortfall, a count below the floor and a count
     merely reduced being the same event at two magnitudes.
+
+    **With `strata`, each draw preserves each stratum's own key count and draws
+    keys with replacement within it** — the same discipline
+    `percentile_over_units`'s stratified branch applies to *values*, applied
+    here to *key* selection instead: a derived metric has no per-unit value of
+    its own to stratify, so what stratifies is which units end up in the
+    resampled table `compute` is handed. Pools are built by walking the
+    already-sorted `keys`, so each pool's own contents come out sorted, and the
+    pools are then ordered by their own sorted contents rather than by label —
+    the same invariance `percentile_over_units` keeps for exactly the same
+    reason: a relabelled stratum must draw the identical sequence of tables.
+    `strata` is indexed by key, not `.get`-ed, the same discipline `weights`
+    and `clusters` follow elsewhere in this module: every key `collapsed`
+    holds must have an entry, or a unit the caller could not otherwise
+    stratify would silently draw as if it were unstratified. This does not
+    add the constant-pool refusal `percentile_over_units` applies to a
+    degenerate stratum — a derived metric's `compute` may still return the
+    same value on every draw of a constant pool, and that reaches
+    `min_honest_draws` the same way any other run of identical survivors
+    would, not a `None` interval reported for the stratification alone.
     """
     keys = sorted(collapsed)
     if len(keys) < 2:
         return None, 0
     rng = random.Random(seed)
     n = len(keys)
+    pools: dict[str, list[str]] | None = None
+    if strata is not None:
+        pools = {}
+        for key in keys:
+            pools.setdefault(strata[key], []).append(key)
+    ordered_pools = None if pools is None else sorted(pools.values())
     values: list[float] = []
     for _ in range(draws):
-        drawn = [keys[rng.randrange(n)] for _ in range(n)]
+        if ordered_pools is not None:
+            drawn = [
+                group[rng.randrange(len(group))]
+                for group in ordered_pools
+                for _ in range(len(group))
+            ]
+        else:
+            drawn = [keys[rng.randrange(n)] for _ in range(n)]
         table = unit_table_from_rows([{"unit": key, **collapsed[key]} for key in drawn])
         try:
             value = compute(table)
@@ -1393,6 +1427,7 @@ def summarize_step(
     weights: dict[str, Any] | None = None,
     clusters: dict[str, str] | None = None,
     resample_columns: bool = False,
+    strata: dict[str, str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Per-column value, basis, `n`, and interval over the collapsed unit table.
 
@@ -1579,6 +1614,26 @@ def summarize_step(
     already assembled — the `value` itself does not move, only the construction
     of the interval around it.
 
+    `strata` is unit key → that unit's `statistics.resample.stratify_by` label,
+    over the whole roster, supplied only when the declaration carries one —
+    built in `cli.py` the same way `weights` and `clusters` are, from the same
+    place. **The keys the strata are looked up by are the column's own**, taken
+    in the same pass as its values, for the identical reason the weights and
+    clusters paragraphs above give: a vector filtered or ordered differently
+    would stratify the wrong unit and produce a plausible number rather than an
+    error. Indexed rather than `.get`-ed for the same reason those two are: every
+    key in the collapsed table came from the roster `cli.py` built `strata`
+    from, so a default would quietly invent a stratum instead of failing. It
+    reaches both interval constructions this function can produce, and the
+    DERIVED metrics below the same call: `percentile_over_units`/
+    `percentile_over_units_clustered` draw within each stratum for a recorded
+    column, and `percentile_of_derived` draws unit keys within each stratum,
+    preserving each stratum's key count, for a derived one — the same
+    declaration honoured the same way on both paths, so one declared
+    `stratify_by` cannot leave a stratified column beside an unstratified
+    derived metric in the same table with nothing in the record to tell a
+    reader which is which.
+
     `resample_draws` is **absent** from a column's block when `resample_columns`
     is `False` (or `seed` is `None`): no resample was attempted, and a `null`
     there would claim otherwise. When `resample_columns` is `True` it is present
@@ -1617,6 +1672,14 @@ def summarize_step(
         # cluster of a unit is looked up by key, so a vector filtered or ordered
         # differently would group the wrong unit and produce a plausible number.
         column_keys = [key for key, _ in carried]
+        # The column's OWN keys, the same one-pass discipline `weights` and
+        # `clusters` already follow and for the identical reason the docstring
+        # gives for both: a vector filtered or ordered differently draws the
+        # wrong composition and produces a plausible number rather than an
+        # error. Indexed rather than `.get`-ed — every key in `column_keys`
+        # came from the roster the caller built `strata` from, so a default
+        # would quietly invent a stratum instead of failing.
+        column_strata = None if strata is None else [strata[key] for key in column_keys]
         n_block: dict[str, Any] = {**counts, "completed": len(values)}
         if clusters is not None:
             n_block["clusters"] = cluster_count_of(clusters, column_keys)
@@ -1639,10 +1702,18 @@ def summarize_step(
         # reports the count. Only the interval's construction moves.
         if resample_columns and seed is not None:
             interval = (
-                percentile_over_units(values, seed, draws=draws, weights=column_weights)
+                percentile_over_units(
+                    values, seed, draws=draws, weights=column_weights, strata=column_strata
+                )
                 if clusters is None
                 else percentile_over_units_clustered(
-                    values, column_keys, clusters, seed, draws=draws, weights=column_weights
+                    values,
+                    column_keys,
+                    clusters,
+                    seed,
+                    draws=draws,
+                    weights=column_weights,
+                    strata=column_strata,
                 )
             )
         elif weights is None:
@@ -1755,7 +1826,7 @@ def summarize_step(
             draws_used: int | None
             if compute is not None and seed is not None:
                 derived_interval, draws_used = percentile_of_derived(
-                    collapsed, compute, seed, draws=draws
+                    collapsed, compute, seed, draws=draws, strata=strata
                 )
             else:
                 derived_interval, draws_used = None, None
