@@ -552,6 +552,25 @@ def percentile_over_units(
     constant stratum among others that still vary — which keeps its interval,
     the same way `percentile_over_units_clustered` reports a point rather than
     a zero-width interval at `G < 2`.
+
+    **This returns a bare `Interval`, with no survivor count, and that is a
+    decision rather than an omission.** `percentile_of_derived` returns
+    `(Interval, int)` because a derived metric's `compute` can fail on a
+    degenerate draw — `nan`, `None`, or a raise — so how many draws survived is
+    a real fact about the interval. A column metric's draw statistic is a mean
+    over a non-empty sample, which is always defined: the unweighted branch
+    divides by `n >= 2`, the weighted branch's Σw is strictly positive because
+    `checked_weights` refuses a zero, negative, non-finite or non-numeric weight
+    before any draw is taken, and the stratified branch draws `len(pool) >= 1`
+    rows from each non-empty pool. So a column's `resample_draws` — once a later
+    slice wires `statistics.resample` for recorded columns into `summarize_step`
+    (today's build still refuses a declared `resample` with
+    `E-STATS-RESAMPLE-UNSUPPORTED`, and the recorded-column branch there carries
+    no `resample_draws` key at all) — can safely be the REQUESTED `n` rather than
+    a survivor count, and `percentile_over_units`'s return type need not change to
+    carry one. The invariant is pinned by
+    `test_a_column_resample_is_never_degenerate_across_adversarial_columns`
+    rather than asserted here.
     """
     if len(values) < 2:
         return None

@@ -3301,3 +3301,50 @@ def test_every_unit_its_own_stratum_gives_no_interval_at_all():
     strata = ["a", "b", "c", "d"]
     got = percentile_over_units(values, seed=19, draws=2000, strata=strata)
     assert got is None
+
+
+@pytest.mark.parametrize(
+    "bad", [0, 0.0, -1.0, float("nan"), float("inf"), "heavy", None, True]
+)
+def test_a_column_resample_refuses_a_bad_weight_before_any_draw(bad):
+    """The invariant decision 2 rests on: a column metric's draw statistic is a
+    mean over a non-empty sample, so it is ALWAYS defined and
+    `resample_draws == n` always. What could break that is a weight of zero
+    making Σw zero on some draw — so the check is that `checked_weights`
+    (reading `units.usable_weight`, which requires a finite positive number)
+    refuses every such weight before a single draw is taken."""
+    values = [1.0, 2.0, 3.0, 4.0]
+    weights = [1.0, 1.0, 1.0, bad]
+    with pytest.raises(ContractError) as exc:
+        percentile_over_units(values, seed=1, draws=100, weights=weights)
+    assert exc.value.code == "E-DATA-WEIGHT-INVALID"
+
+
+def test_a_column_resample_is_never_degenerate_across_adversarial_columns():
+    """The positive half, and the one that would catch a `(Interval, int)`
+    requirement appearing: over columns chosen to be as degenerate as a column
+    can be — zero variance, a single repeated value, extreme weight spread,
+    a one-unit stratum — the interval is always produced, so no survivor count
+    ever differs from the requested draws."""
+    cases: list[tuple[list[float], dict]] = [
+        ([5.0, 5.0, 5.0, 5.0], {}),                                  # zero variance
+        ([0.0, 0.0, 0.0, 1e-12], {}),                                # near-zero spread
+        ([1.0, 2.0, 3.0, 4.0], {"weights": [1e-9, 1e-9, 1e-9, 1e9]}),  # extreme spread
+        ([1.0, 2.0, 3.0], {"strata": ["a", "b", "b"]}),               # one-unit stratum
+        ([1.0, 2.0, 3.0, 4.0], {"strata": ["a", "a", "b", "b"],
+                                "weights": [1.0, 2.0, 3.0, 4.0]}),
+    ]
+    for values, kwargs in cases:
+        got = percentile_over_units(values, seed=2, draws=100, **kwargs)
+        assert got is not None, (values, kwargs)
+        assert got.method == "percentile_over_units"
+        assert got.low <= got.high
+
+
+def test_percentile_over_units_still_returns_a_bare_interval():
+    """Pinned deliberately: ~20 tests read this return, and decision 2 is that
+    it does NOT become `(Interval, int)`. A slice that changed it would have to
+    change this test, which is where the decision gets re-argued rather than
+    drifted past."""
+    got = percentile_over_units([1.0, 2.0, 3.0, 4.0], seed=1, draws=100)
+    assert isinstance(got, Interval)

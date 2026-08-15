@@ -5033,3 +5033,34 @@ plan) adds the same declaration-gated check `_check_resample` and `_check_replic
 match the naming this task settled on rather than the `E-REPL-FOLD-K` name once miscited for it),
 reporting without returning, so a roster-independent `null_test` shape fault (its own `shuffle`
 checks) still surfaces in the same pass.
+
+## A column metric's `resample_draws` records the requested `n`, not a survivor count
+
+Decided in H4a (2026-08-15). `stats.percentile_over_units` returns a bare `Interval` where
+`percentile_of_derived` returns `(Interval, int)`, so a recorded column under a declared
+`statistics.resample` has no survivor count to record beside its interval.
+
+**Ruling: record the requested `n`.** A column's draw statistic is a mean over a non-empty
+sample and is always defined — the unweighted branch divides by `n >= 2`, `checked_weights`
+refuses a non-positive or non-finite weight before any draw, and a stratified pool is non-empty
+by construction — so `draws_used == n` always and the return type need not change (~20 existing
+tests read it). Verified rather than assumed, by
+`tests/test_stats.py::test_a_column_resample_is_never_degenerate_across_adversarial_columns`
+and the parametrized weight refusal beside it.
+
+**Consequence to keep in view:** `W-STATS-RESAMPLE-THIN` fires on `used < requested`, so it can
+never fire for a column. That is correct — the warning exists for a template's `aggregate`
+producing nothing on some draws — but it means the two metric kinds carry the same field with
+subtly different provenance, which `reference.md` § Statistical reporting states.
+
+**Task 11's own docstring text was itself an instance of the trap this section warns about.**
+The brief's Step 3 text read "a column's `resample_draws` is the requested `n` and is recorded as
+such by `summarize_step`" in the present tense. Checked against the code (2026-08-15,
+`c5de085`): `summarize_step`'s recorded-column branch (`out[column] = {...}`, distinct from the
+derived-metric branch a few lines below it) carries no `resample_draws` key at all today — only
+`value`, `basis`, `n`, `ci95`, `method`, `correction`. Wiring `statistics.resample` into that
+branch is task 12/14's work; `E-STATS-RESAMPLE-UNSUPPORTED` still refuses a declared `resample`
+end to end. The docstring landed in `stats.py` was reworded to say the invariant holds for
+whenever that wiring lands, rather than asserting current behavior the code does not have — the
+same "comment claiming a guarantee the code does not provide" failure mode this repo has hit at
+least eight times before.
