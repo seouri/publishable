@@ -3524,7 +3524,7 @@ publishable/
 │   ├── reproduce.py           # clone/checkout/sync, then report what's left to supply — not yet built
 │   ├── report.py              # BaseReport: standard sections, html/markdown, override discovery — not yet built
 │   ├── diagnostics.py         # stable E-/W- identifiers, collected reporting, exit codes
-│   └── templates/{base.py,registry.py,builtin/generic.py}
+│   └── templates/{base.py,registry.py,discovery.py,builtin/generic.py}
 ├── tests/
 ├── examples/generic/
 └── pyproject.toml
