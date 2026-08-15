@@ -582,6 +582,58 @@ def test_two_local_files_claiming_one_name_are_refused_naming_both(tmp_path: Pat
     assert str(templates / "three.py") not in message
 
 
+def test_the_colliding_name_reported_is_the_first_in_name_order(tmp_path: Path):
+    """`discover_local` walks `sorted(claims)` rather than the dict's insertion
+    order, and the docstring gives the reason: import order is a property of a
+    machine, so it may not decide which fault a user is shown either.
+
+    More than one colliding name is what makes that observable at all. Every
+    other collision fixture in this file has exactly one, so the iteration
+    order is a dimension no assertion in them can see — replacing
+    `sorted(claims)` with the raw insertion order, or with its reverse, leaves
+    them all green.
+
+    **Three**, claimed in the order `zzz`, `aaa`, `mmm`, because two cannot
+    separate the two wrong answers: with two names the reverse of the
+    insertion order is the sorted order for one arrangement and the insertion
+    order is for the other, so one fixture kills only one mutant. Here the
+    name reported under insertion order is `zzz`, under its reverse `mmm`, and
+    under name order `aaa` — three distinct answers, so both mutants fail.
+    """
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    claims = (
+        "from publishable import BaseTemplate, register_template\n\n\n"
+        '@register_template("zzz")\n'
+        "class Zzz{tag}(BaseTemplate):\n"
+        "    pass\n\n\n"
+        '@register_template("aaa")\n'
+        "class Aaa{tag}(BaseTemplate):\n"
+        "    pass\n\n\n"
+        '@register_template("mmm")\n'
+        "class Mmm{tag}(BaseTemplate):\n"
+        "    pass\n"
+    )
+    (templates / "one.py").write_text(claims.format(tag="FirstFile"))
+    (templates / "two.py").write_text(claims.format(tag="SecondFile"))
+
+    with pytest.raises(ContractError) as excinfo:
+        discover_local(tmp_path)
+
+    assert excinfo.value.code == "E-TEMPLATE-COLLISION"
+    message = str(excinfo.value)
+    assert "`aaa`" in message
+    assert "`zzz`" not in message
+    assert "`mmm`" not in message
+    # Both `aaa` claimants named, and no class claiming another name — the
+    # message is about the name it reported, not a dump of everything that
+    # collided.
+    assert f"{templates / 'one.py'}::AaaFirstFile" in message
+    assert f"{templates / 'two.py'}::AaaSecondFile" in message
+    assert "ZzzFirstFile" not in message
+    assert "MmmSecondFile" not in message
+
+
 def test_one_file_claiming_one_name_twice_names_both_classes(tmp_path: Path):
     """The degenerate collision: both providers are the same file, so a message
     built from paths alone would print one path twice and name no second
@@ -824,6 +876,29 @@ def test_a_broken_file_does_not_abandon_discovery_of_the_rest_of_the_directory(
     assert str(templates / "aaa_broken.py") in str(excinfo.value)
     assert str(templates / "zzz_good.py") not in str(excinfo.value)
     assert sentinel.exists()
+
+
+def test_the_broken_file_reported_is_the_first_in_the_sorted_walk(tmp_path: Path):
+    """`reference.md` § Errors `validate` reports, the `E-TEMPLATE-LOAD` row:
+    "reported for the first such file in `discover_local`'s sorted walk of the
+    directory". **Two** broken files are what make that observable — every
+    other load-fault fixture in this file has exactly one, so both
+    `sorted(…, reverse=True)` on the walk and `load_faults[-1]` on the report
+    leave them green.
+
+    The two assertions are one guarantee seen from both ends: the earlier name
+    is reported, and the later one is not."""
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "aaa_broken.py").write_text(RAISES_ON_IMPORT)
+    (templates / "zzz_broken.py").write_text(RAISES_ON_IMPORT)
+
+    with pytest.raises(ContractError) as excinfo:
+        discover_local(tmp_path)
+
+    assert excinfo.value.code == "E-TEMPLATE-LOAD"
+    assert str(templates / "aaa_broken.py") in str(excinfo.value)
+    assert str(templates / "zzz_broken.py") not in str(excinfo.value)
 
 
 def test_a_partial_registration_before_a_raise_does_not_leak_into_the_buffer(
