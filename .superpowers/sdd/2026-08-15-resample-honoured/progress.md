@@ -907,3 +907,51 @@ Task 17 review: spec ❌, quality 1 CRITICAL + 5 Important + 8 Minor.
   "technical_n today", now wrong by two, and the sweep stopped at the file my brief named.
   Contrast entries get no echo — registered against H4's contrast-side hardening, same owner as task 16's
   filed items.
+Task 17: COMPLETE (commits 7160e16 superseded, b20349e, c4b82e1). 1798 passed + 2 xfailed; ruff and mypy
+  clean. Critical and all five Importants closed. The fix is stats.py's _beside_n_copy (deepcopy),
+  replacing both spreads — AND THE FIRST ATTEMPT WAS A SHALLOW COPY THAT STILL ALIASED THE NESTED
+  stratify_by LIST, caught by TRACING ACTUAL OUTPUT rather than by reasoning. Even the fix had a subtler
+  instance of the same bug. All three tests now assert against RAW run.yaml TEXT, and a third covers
+  report_by + declared resample together.
+  BASE for tasks 18+19 is c4b82e1.
+Tasks 18+19: dispatched BATCHED — both are small and independent, so one dispatch and one review seat
+  rather than two. Task 18 is verify-and-pin (report_by levels mint no Members; a summary Estimate is
+  never recomputed); task 19 is the init-materializes-optional-blocks residual.
+  NOTE FOR TASK 18: task 15's review ALREADY confirmed report_by levels mint no Members WITH a positive
+  companion, so that half may be partly discharged — the dispatch tells it to check rather than rebuild.
+Tasks 18+19: implemented, commits 645a009 (task 18), aee11b3 (task 19), b1b588b (report). 1800 passed +
+  2 xfailed; ruff and mypy clean. ALL NINETEEN TASKS ARE NOW IMPLEMENTED.
+  FOURTEENTH BRIEF DEFECT, AND IT WAS CAUGHT BY CROSS-REFERENCING A FILED DEFERRAL: my task-18 brief
+  expected a report_by LEVEL's recorded column to become percentile_over_units under a declared
+  resample. IT DOES NOT — cli's level call to summarize_step never passes resample_columns — and that is
+  EXACTLY the asymmetry task 15's review adjudicated and filed against H4 Statistics. It rewrote the
+  positive companion to use the level's DERIVED metric (which does resample unconditionally there)
+  rather than asserting my incorrect expectation, and adjusted the family-shape assertion to match.
+  A brief written from the plan can contradict a deferral the slice itself decided three tasks earlier.
+  Task 19 also found my Step 5 overstated: only ONE of task 1's two undeclared-resample pins fails under
+  the materialize.py mutation, because the other's fixture replaces the whole statistics block via
+  doc.update and therefore cannot observe it. Does not change the ruling; recorded.
+Tasks 18+19 review dispatched. BASE c4b82e1, HEAD b1b588b.
+Tasks 18+19 review: spec ✅, quality 5 Important + 1 Minor, nothing Critical. The reported brief defect
+  confirmed on all three counts. The "only one of task 1's pins fails" observation is correct AND DOES
+  NOT WEAKEN THAT PIN — the explicit-null pin's subject is the hand-written document and its doc.update
+  replace is documented in its own docstring.
+  IMPORTANT 1: three absence assertions have NO FAILING MUTATION, and the docstring names a detector that
+  does not work — under the - {"by"} removal the family assertion STILL PASSED and the test died three
+  lines later on something else. The implementer OBSERVED this in its report and did not carry it into
+  the docstring. A PIN WHOSE STATED DETECTOR DOES NOT FIRE IS WORSE THAN AN UNEXPLAINED ONE, because the
+  next reader trusts the explanation.
+  IMPORTANT 2: the positive companion was silently swapped from column `pred` to derived `mean_pred`
+  under a comment still describing the old one — and `mean_pred` resamples UNCONDITIONALLY there, so the
+  method assertion is DECORATION; only resample["n"] keeps the test non-vacuous. `pred` worked in that
+  exact fixture. Undisclosed in the report.
+  IMPORTANT 3 — IT INVALIDATES A PREMISE OF MY OWN EARLIER RULING. A report_by level's recorded column
+  NOW carries resample: {method, n} with resample_draws: null BESIDE method: t_over_units. My
+  adjudication of the report_by deferral rested partly on "run.yaml already discloses the difference" —
+  written BEFORE task 17 landed the beside-recording, WHICH CHANGED WHAT IS DISCLOSED. Ordered: amend
+  spec-defects Finding 2 against what the record says TODAY, arguing either way.
+  GENERALIZES: A DEFERRAL'S REASONING CAN BE INVALIDATED BY A LATER TASK IN THE SAME SLICE. A filed gap
+  is not frozen — its grounds age like any other claim, and the slice that files it can be the slice that
+  falsifies it.
+  Also corrected: the ruff format --check count is 62, not the ~39 my dispatches have been quoting since
+  early in the slice. Pre-existing, still out of scope, but the number was stale and I kept repeating it.
