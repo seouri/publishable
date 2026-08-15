@@ -30,9 +30,12 @@ from typing import Any
 # `holdout` stays whole for now: `E-DATA-HOLDOUT-UNSUPPORTED` still refuses the
 # block, so its gap is latent, and H3d closes it. The optional blocks that
 # section documents but a materialized config omits — `sweep`'s modes,
-# `statistics.contrasts` / `.resample` / `.null_test` / `.report_by`, and
-# `data.units.assign` — are declared at their own key with the one outer type
-# that section gives them.
+# `statistics.contrasts` / `.null_test` / `.report_by`, and `data.units.assign`
+# — are declared at their own key with the one outer type that section gives
+# them. `statistics.resample` is no longer among them: it is closed one level
+# in, the same way `measurements` is — its three keys (`method`, `n`,
+# `stratify_by`) are fixed, so leaving the block whole would make a typo among
+# them unreachable by any check.
 #
 # The table stopping at a key is the end of the line for everything under it:
 # the closure below never descends into a known leaf, and `_check_shape`
@@ -85,6 +88,20 @@ LEAF_TYPES: dict[str, type | tuple[type, ...]] = {
     "statistics.correction": str,
     "statistics.contrasts": list,
     "statistics.resample": dict,
+    # Closed one level in, the arrangement `data.units.measurements` above has
+    # and for its reason: these three names are fixed, the block is no longer
+    # refused wholesale, and leaving it whole would make a `stratifyy_by` typo
+    # unreachable by any check the moment the wholesale refusal retired — a
+    # latent gap turning live. `assign`'s separate `_check_assign_axis_keys` is
+    # not the precedent: it exists because an axis NAME is user-chosen and no
+    # fixed dotted path reaches it. `stratify_by` is `(str, list)` because
+    # `units.stratum_names` — the single authority the draw balances on — reads
+    # a bare `stratify_by: site` as one name exactly as `[site]` is; typing it
+    # `list` alone would make the envelope and the draw disagree about the same
+    # declaration.
+    "statistics.resample.method": str,
+    "statistics.resample.n": int,
+    "statistics.resample.stratify_by": (str, list),
     "statistics.null_test": dict,
     "statistics.report_by": list,
     "sweep.baseline": dict,

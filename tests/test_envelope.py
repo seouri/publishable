@@ -92,3 +92,44 @@ def test_a_non_string_nested_key_is_reported_not_raised() -> None:
     findings = check_envelope({"metadata": {1: "oops"}})
 
     assert [(f[0], f[1]) for f in findings] == [("E-CONFIG-KEY-UNKNOWN", "metadata.1")]
+
+
+def test_a_misspelled_resample_key_is_reported_rather_than_ignored():
+    """`statistics.resample` is now both a leaf and a container, the same
+    arrangement `data.units.measurements` has: typed a mapping by the loop in
+    `check_envelope`, and descended into by `_check_unknown_keys`, which checks
+    containers before leaves. Without the three child paths the closure stops at
+    the leaf and `stratifyy_by` is reached by no check in this build."""
+    findings = check_envelope(
+        {"statistics": {"resample": {"method": "bootstrap", "n": 2000, "stratifyy_by": ["a"]}}}
+    )
+    by_code = [(code, path) for code, path, _ in findings]
+    assert ("E-CONFIG-KEY-UNKNOWN", "statistics.resample.stratifyy_by") in by_code
+    # The positive companion: the three real keys are NOT reported, so the test
+    # cannot pass by the closure rejecting everything under the block.
+    assert not any(
+        path.startswith("statistics.resample.") and path.endswith(("method", "n", "stratify_by"))
+        for _, path in by_code
+    )
+
+
+def test_the_three_resample_leaves_are_typed():
+    """A wrong-typed child now has an `E-CONFIG-TYPE` backstop, which is what
+    lets `_check_resample` read each value without its own isinstance ladder."""
+    findings = check_envelope(
+        {"statistics": {"resample": {"method": 3, "n": "many", "stratify_by": 7}}}
+    )
+    paths = {path for code, path, _ in findings if code == "E-CONFIG-TYPE"}
+    assert paths == {
+        "statistics.resample.method",
+        "statistics.resample.n",
+        "statistics.resample.stratify_by",
+    }
+
+
+def test_a_bare_string_stratify_by_is_accepted_by_the_envelope():
+    """`units.stratum_names` reads a bare `stratify_by: site` as one name, the
+    same as `[site]`. Typing this `list` alone would make the two readings
+    disagree — `E-CONFIG-TYPE` here while the draw balances on it there."""
+    findings = check_envelope({"statistics": {"resample": {"stratify_by": "site"}}})
+    assert not [f for f in findings if f[1].startswith("statistics.resample")]
