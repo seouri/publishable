@@ -16,6 +16,7 @@ so a `templates/` core cannot merge refuses a config naming some third
 template too, and there is no order left for a merge to express.
 """
 
+from collections.abc import Sequence
 from pathlib import Path
 
 from publishable.errors import ContractError
@@ -50,17 +51,39 @@ def get_template(name: str, repo_root: Path | None = None) -> BaseTemplate | Non
     return cls() if cls else None
 
 
+def resolve_template(
+    name: str, repo_root: Path | None = None
+) -> tuple[BaseTemplate | None, list[str]]:
+    """`get_template`, plus the known names, from **one** merge.
+
+    The pair exists because the two callers that report `E-TEMPLATE-UNKNOWN`
+    need both halves, and asking for them separately would run local discovery
+    twice — which means importing every `templates/*.py` twice, executing every
+    user top level twice. `reference.md` § Creating a plugin widens `validate`'s
+    import exception from one named module to a whole directory; it does not
+    widen it to that directory twice.
+    """
+    merged = _merged(repo_root)
+    cls = merged.get(name)
+    return (cls() if cls else None), sorted(merged)
+
+
 def template_names(repo_root: Path | None = None) -> list[str]:
     return sorted(_merged(repo_root))
 
 
-def unknown_template_message(name: str, repo_root: Path | None) -> str:
-    """The one wording for a name neither `get_template` call site resolved —
+def unknown_template_message(name: str, known: Sequence[str]) -> str:
+    """The one wording for a name neither `resolve_template` call site resolved —
     `validate`'s finding and `generate_experiment`'s raise both read this
     rather than each keeping its own copy, so the two surfaces cannot drift
-    the way two hard-coded literals eventually would."""
+    the way two hard-coded literals eventually would.
+
+    Takes the already-resolved names rather than a repo root, so building the
+    message costs no second discovery: each caller has just merged, and has
+    them in hand.
+    """
     return (
         f"names `{name}`, which no template — core's, an installed plugin's, "
         f"or this project's own `templates/` — registers "
-        f"(known: {', '.join(template_names(repo_root))})"
+        f"(known: {', '.join(known)})"
     )

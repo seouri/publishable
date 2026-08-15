@@ -33,7 +33,7 @@ from publishable.sweep import (
 )
 from publishable.templates.base import BaseTemplate
 from publishable.templates.discovery import is_local_template
-from publishable.templates.registry import get_template, unknown_template_message
+from publishable.templates.registry import resolve_template, unknown_template_message
 from publishable.units import (
     COLLAPSE_RULES,
     DRAWN_ASSIGN_METHODS,
@@ -502,7 +502,13 @@ def validate_config(
         # core template regardless.
         repo_root = None
     try:
-        template = get_template(name, repo_root)
+        # One merge, so one local discovery: the known-name list the unknown-name
+        # finding prints comes back from the same call that resolved the name.
+        # Asking for it separately would import every `templates/*.py` a second
+        # time — every user top level executed twice — and, since the message is
+        # built after this guard closes, a `ContractError` from that second
+        # import would escape `validate_config` and discard every other finding.
+        template, known = resolve_template(name, repo_root)
     except ContractError as exc:
         # The load-time refusals resolving a template can make — two today,
         # `E-TEMPLATE-LOAD` and `E-TEMPLATE-COLLISION`. Reported under the code
@@ -516,7 +522,7 @@ def validate_config(
         c.error(
             "E-TEMPLATE-UNKNOWN",
             "experiment_type",
-            unknown_template_message(name, repo_root),
+            unknown_template_message(name, known),
         )
         return None  # every later check reads the spec
 

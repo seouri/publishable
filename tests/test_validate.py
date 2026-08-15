@@ -486,6 +486,91 @@ def test_the_unknown_message_lists_local_templates_among_the_known(
     )
 
 
+def test_one_validate_discovers_local_templates_once_on_the_unknown_name_path(
+    git_repo: Path, write_config, monkeypatch: pytest.MonkeyPatch
+):
+    """Discovery is eager, so each call imports and executes **every** file under
+    `templates/`. `reference.md` § Creating a plugin widens `validate`'s import
+    exception from one named module to a whole directory, once — so a `validate`
+    that resolves the name and a `validate` that reports it unknown must both
+    cost one discovery, the unknown-name finding's known-list being read from the
+    merge that already happened rather than from a second one.
+
+    THE ASSERTION IS THE COUNT, not the wording: a message built from a fresh
+    discovery reads identically. `registry.discover_local` is the patch target
+    because `registry` imported the name — patching `discovery.discover_local`
+    would never fire — and the real function is called through, so behaviour is
+    unchanged and the resolvable-name case below still resolves.
+
+    The resolvable-name case is the control: it pins the baseline at one, so a
+    count of one on the unknown path is a comparison rather than a bare number.
+    """
+    from publishable.templates import registry
+
+    templates = git_repo / "templates"
+    templates.mkdir()
+    (templates / "cohort_local.py").write_text(
+        "from publishable import BaseTemplate, register_template\n\n\n"
+        '@register_template("cohort_local")\n'
+        "class CohortLocal(BaseTemplate):\n"
+        "    pass\n"
+    )
+
+    calls: list[Path] = []
+    real = registry.discover_local
+
+    def counting(repo_root: Path):
+        calls.append(repo_root)
+        return real(repo_root)
+
+    monkeypatch.setattr(registry, "discover_local", counting)
+
+    assert codes(write_config({"experiment_type": "not_anywhere"})) == {"E-TEMPLATE-UNKNOWN"}
+    assert len(calls) == 1
+
+    calls.clear()
+    assert "E-TEMPLATE-UNKNOWN" not in codes(write_config({"experiment_type": "cohort_local"}))
+    assert len(calls) == 1
+
+
+def test_a_template_whose_import_is_not_idempotent_survives_an_unknown_name(
+    git_repo: Path, tmp_path: Path, write_config
+):
+    """The behavioural half of the count above, and the one that catches the class
+    rather than this path: re-executing a user top level is not merely wasteful,
+    it can raise. A template registering into any object that outlives the
+    `sys.modules` restore — a `Base` imported from `src/**`, a third-party
+    registry refusing a duplicate name — raises deterministically on a second
+    import, with no mistake on its author's part.
+
+    Here that shape is a sentinel file the top level refuses to pass twice. Under
+    a second discovery the `ContractError` it becomes is raised while the message
+    is being built, which is **outside** `validate_config`'s guard: the contract
+    that `validate` never raises breaks, and every other finding in the pass is
+    discarded with it. So the assertions are that the call returns and that the
+    finding it returns is the unknown-name one.
+    """
+    sentinel = tmp_path / "imported-once"
+    templates = git_repo / "templates"
+    templates.mkdir()
+    (templates / "once_only.py").write_text(
+        "from pathlib import Path\n"
+        f"_sentinel = Path({str(sentinel)!r})\n"
+        "if _sentinel.exists():\n"
+        "    raise RuntimeError('this template was imported twice in one process')\n"
+        "_sentinel.write_text('ran')\n"
+        "from publishable import BaseTemplate, register_template\n\n\n"
+        '@register_template("once_only")\n'
+        "class OnceOnly(BaseTemplate):\n"
+        "    pass\n"
+    )
+
+    assert codes(write_config({"experiment_type": "not_anywhere"})) == {"E-TEMPLATE-UNKNOWN"}
+    # The template did import — otherwise the test would pass on a build that
+    # stopped discovering local templates altogether.
+    assert sentinel.exists()
+
+
 def test_a_local_template_validates_through_the_real_path(git_repo: Path, write_config):
     """End to end: a config naming a local template no longer draws
     E-TEMPLATE-UNKNOWN. THE CONTROL: a config naming a template that exists
@@ -3450,7 +3535,11 @@ def test_a_template_cross_field_rule_is_reported(write_config, monkeypatch):
         def validate(self, config):
             return ["a cross-field rule was broken"]
 
-    monkeypatch.setattr(validate_mod, "get_template", lambda name, repo_root=None: RuleBreaker())
+    monkeypatch.setattr(
+        validate_mod,
+        "resolve_template",
+        lambda name, repo_root=None: (RuleBreaker(), ["generic"]),
+    )
     assert "E-TEMPLATE-RULE" in codes(write_config())
 
 
