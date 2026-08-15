@@ -227,10 +227,12 @@ def discover_local(repo_root: Path) -> dict[str, LocalTemplate]:
     names — because a collision between two local templates can only be
     detected between files a config never mentions. Import order therefore
     never decides which template wins: every file is imported before any
-    verdict is reached, so both claimants are found, and both are named —
-    unless a file in the same directory failed to load, which preempts the
-    collision verdict entirely (see the load-fault paragraph below). See
-    `reference.md` § Creating a plugin.
+    verdict is reached, so both claimants are found and every *distinct*
+    claimant is named — two decorators on one class are one claimant, and the
+    message says so rather than naming it twice — unless a file in the same
+    directory failed to load, which preempts the collision verdict entirely
+    (see the load-fault paragraph below). See `reference.md` § Creating a
+    plugin.
 
     Imports by path, for the reason `base_experiment.load_experiment` gives —
     a cached module from another project would silently hand back the wrong
@@ -277,11 +279,11 @@ def discover_local(repo_root: Path) -> dict[str, LocalTemplate]:
     """
     # Before the `templates/` check, not after, so the promise above holds on
     # every path out of this function rather than only on the one that finds a
-    # directory. A repo with no `templates/` is the case that inherits without
-    # discarding, and something is there to inherit: `cli` imports the
-    # experiment package before `validate_config` runs, so a module-scope
-    # `@register_template` anywhere under `src/**` queues an entry with no
-    # `templates/` in sight.
+    # directory. A repo with no `templates/` is the path that would otherwise
+    # return without discarding, and something would be left behind: `cli`
+    # imports the experiment package before `validate_config` runs, so a
+    # module-scope `@register_template` anywhere under `src/**` queues an entry
+    # with no `templates/` in sight.
     drain_pending()  # discard anything queued before this call — not ours to return
     templates_dir = repo_root / "templates"
     if not templates_dir.is_dir():
