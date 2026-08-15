@@ -625,12 +625,14 @@ def validate_config(
     )
     _check_unimplemented(doc, c)
     _check_sweep(doc, template, c, fold_basis=basis)
-    # After `_check_sweep`, not before it, and this is the one ordering question
-    # H4a inherits from H7a's prologue reshuffle: the strata check needs the
-    # resolved roster and the declared attributes, and the `n` bound needs the
-    # resolved comparison family, which `_check_sweep` is the first thing to
-    # compute. Before `_check_contrasts`, which reports the shape faults in a
-    # `statistics.contrasts` block this one only counts.
+    # After `_check_sweep`, before `_check_contrasts`: `roster` is already in
+    # hand three calls earlier (`_check_fold_stratify_by` reads it too), so
+    # position here buys grouping with the other `statistics.*` checks and a
+    # sensible finding order, not roster availability. `_check_sweep` returns
+    # `None` and stores nothing on `doc` — it hands nothing forward — so a
+    # later check needing the resolved comparison family (task 6's `n` bound
+    # against it) must recompute that family locally rather than read it off
+    # this call site.
     _check_resample(doc, roster, c)
     _check_contrasts(doc, c, roster)
     _check_hypotheses(doc, c, experiment, template)
@@ -4997,9 +4999,9 @@ def _check_resample(doc: dict[str, Any], roster: UnitList | None, c: Collector) 
     `dict`), and a wrong-typed child (`method`, `n`) is the same, because Task 3
     closed the block one level in. A leaf type fault is deliberately non-fatal
     in this module — reported, and validation continues — so each value read
-    here is `isinstance`-guarded and quietly skipped when it is not the type
-    `E-CONFIG-TYPE` already flagged, the same division `_check_report_by` keeps
-    with the envelope: this checks values, not types.
+    here is `isinstance`-guarded and quietly skipped when it is not a leaf the
+    envelope types — the same division `_check_report_by` keeps with its own
+    entries.
 
     **The `n` floor is the load-bearing one.** `stats.percentile_over_units`
     returns `None` below `min_honest_draws(confidence)` draws — 80 at 95 % — so

@@ -3258,8 +3258,12 @@ def test_a_resample_n_below_the_honest_floor_is_refused(write_config, n):
 
 def test_a_resample_n_at_the_floor_is_accepted(write_config):
     """The positive companion `79` above needs: exactly 80 is honest, so an
-    off-by-one in either direction fails one of the two."""
-    found = codes(
+    off-by-one in either direction fails one of the two. The refusal at `79`
+    is asserted in the same test, beside the acceptance at `80` — an
+    absence-only assertion on `80` alone would still pass with
+    `_check_resample` deleted outright; pairing it with a value that must
+    report is what a control on the same code, not an unrelated one, requires."""
+    accepted = codes(
         write_config(
             {
                 "data.units": _RESAMPLE_UNITS,
@@ -3267,7 +3271,16 @@ def test_a_resample_n_at_the_floor_is_accepted(write_config):
             }
         )
     )
-    assert "E-STATS-RESAMPLE-N" not in found
+    assert "E-STATS-RESAMPLE-N" not in accepted
+    refused = codes(
+        write_config(
+            {
+                "data.units": _RESAMPLE_UNITS,
+                "statistics": {"resample": {"method": "bootstrap", "n": 79}},
+            }
+        )
+    )
+    assert "E-STATS-RESAMPLE-N" in refused
 
 
 def test_the_resample_floor_message_names_the_number_and_the_consequence(write_config):
@@ -3322,6 +3335,54 @@ def test_a_resample_n_of_the_wrong_type_is_a_type_fault_not_a_traceback(write_co
     assert "E-STATS-RESAMPLE-N" not in found
     # Validation continued past the bad leaf: the wholesale refusal still fires.
     assert "E-STATS-RESAMPLE-UNSUPPORTED" in found
+
+
+def test_a_resample_n_of_bool_type_is_a_type_fault_not_a_floor_violation(write_config):
+    """`isinstance(True, int)` is `True` in Python, so a bare `isinstance(n, int)`
+    guard would let `n: true` reach the floor comparison. `n: true` is
+    `E-CONFIG-TYPE` from the envelope already; this pins that it does NOT also
+    earn `E-STATS-RESAMPLE-N` — the same double-report shape the `method`
+    fix (task 4's post-review commit) corrected, on the field that motivated
+    the correction in the first place."""
+    found = codes(
+        write_config(
+            {
+                "data.units": _RESAMPLE_UNITS,
+                "statistics": {"resample": {"method": "bootstrap", "n": True}},
+            }
+        )
+    )
+    assert "E-CONFIG-TYPE" in found
+    assert "E-STATS-RESAMPLE-N" not in found
+    assert "E-STATS-RESAMPLE-UNSUPPORTED" in found
+
+
+def test_resample_method_null_or_absent_takes_the_documented_default(write_config):
+    """§ Errors `validate` reports promises `E-STATS-RESAMPLE-METHOD`'s row:
+    "Unset (`null`) is accepted and takes the documented default." Pinned for
+    both spellings — an explicit `method: null` and `method` absent entirely —
+    since either could regress independently of the other."""
+    explicit_null = codes(
+        write_config(
+            {
+                "data.units": _RESAMPLE_UNITS,
+                "statistics": {"resample": {"method": None, "n": 2000}},
+            }
+        )
+    )
+    assert "E-STATS-RESAMPLE-METHOD" not in explicit_null
+    assert "E-STATS-RESAMPLE-UNSUPPORTED" in explicit_null
+
+    absent = codes(
+        write_config(
+            {
+                "data.units": _RESAMPLE_UNITS,
+                "statistics": {"resample": {"n": 2000}},
+            }
+        )
+    )
+    assert "E-STATS-RESAMPLE-METHOD" not in absent
+    assert "E-STATS-RESAMPLE-UNSUPPORTED" in absent
 
 
 def test_a_declared_null_test_is_refused(write_config):
