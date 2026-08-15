@@ -840,3 +840,24 @@ Task 16 review: spec ✅, quality approved with findings — 1 Important, 6 Mino
   M6/M7 FILED with owner H4 contrast-side hardening: a declared resample can silently null a column
   contrast's interval (W-STATS-RESAMPLE-THIN fires only from the per-condition path), and
   paired_percentile_of_derived never got the zero-width sweep its three siblings have.
+Task 16: COMPLETE (commits b06079c, 584a24a). 1795 passed + 2 xfailed; ruff and mypy clean. Important
+  and all actionable Minors closed; the docstring claim re-swept across the tracked tree with no other
+  instance found. THE SLICE'S MOST DANGEROUS TASK IS DONE AND ITS TWO TRAPS ARE PINNED.
+  BASE for task 17 is 584a24a.
+Task 17: dispatched — echo the resolved method/n/stratify_by into run.yaml. This is the requirement
+  MULTIPLE COMMENTS ACROSS THIS SLICE HAVE BEEN DEFERRING TO: § Statistical reporting says "the resolved
+  values are recorded in run.yaml beside the interval", and tasks 12, 13 and 14 each had to be corrected
+  for implying it was already met.
+Task 17: COMPLETE. `resample_beside` built once, right after `_resolved_resample` resolves the
+  declaration, and merged into both `weighted_beside` and `cond_beside_n` — the two `beside_n` carriers
+  `summarize_step` copies verbatim, the same route `weighted_by` already takes. Absent (not `null`) when
+  undeclared, so task 1's undeclared-shape pin needed no amendment and stays green as-is — a deliberate
+  reading, not an accident. `stratify_by` always materializes as a list. The stale "a future task
+  records the attribute names" comment beside `resample_strata`'s sentinel (naming the composed `|`-label,
+  a different fact from the attribute NAMES this task records) is now updated to point at this task
+  instead of deferring past it. docs/reference.md § Statistical reporting's own deferring sentence is now
+  true, and gained a second, clearly-labelled `resample:`-bearing metric block distinct from the shared
+  worked example, whose own numbers are untouched (grep-verified). 1797 passed (1795 + 2 new) + 2
+  xfailed; ruff and mypy clean. Both mutations (dropping the `declared` guard; forcing `stratify_by: []`)
+  failed as required and were reverted in place.
+  for implying it was already met.

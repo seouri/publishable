@@ -1631,6 +1631,40 @@ def command_run(config_path: Path) -> int:
             # is nothing yet to choose between).
             resample_spec = _resolved_resample(doc)
             derived_metric_draws = resample_spec["n"]
+            # The resolved block, beside the interval rather than joining `n` —
+            # `summarize_step`'s own rule for which carrier a fact takes, and
+            # `weighted_by` is the precedent: a key that names a declaration
+            # rather than reporting a figure. § Statistical reporting requires
+            # it be recorded "so the number is never the result of an
+            # undocumented default".
+            #
+            # ABSENT when nothing was declared, not null: a null would claim a
+            # resolution was performed. `stratify_by` is materialized as a list
+            # even where the config wrote a bare string, because the record
+            # resolves what the config abbreviates — the same rule `of`/`against`
+            # follow in `results.contrasts`.
+            #
+            # `n` here is what was REQUESTED; `resample_draws` beside it is what
+            # the interval rests on. Equal for a column by construction and
+            # different for a derived metric whenever a draw was degenerate,
+            # which is what `W-STATS-RESAMPLE-THIN` reports.
+            resample_beside = (
+                {
+                    "resample": {
+                        "method": resample_spec["method"],
+                        "n": resample_spec["n"],
+                        "stratify_by": list(resample_spec["stratify_by"]),
+                    }
+                }
+                if resample_spec["declared"]
+                else {}
+            )
+            # Merged into `weighted_beside` here, not left for the report_by
+            # level call to add on its own: the declaration is true of the run
+            # either way, the same argument already made for `weighted_by`
+            # above — a stratum's own units were resampled under the same
+            # declared `resample` as the whole roster.
+            weighted_beside.update(resample_beside)
             # One stratum LABEL per unit, composed once for the run: several
             # declared names mean the stratum is their cross — `reference.md`
             # § Weighted samples' own `stratify_by: [dx_status, count_stratum]`
@@ -1647,10 +1681,13 @@ def command_run(config_path: Path) -> int:
             # level for "we don't know" — but a DRAW cannot drop it: the draw is
             # over the completed table, and dropping would change `n` silently
             # beneath an interval that claimed the full count. The sentinel is
-            # printable rather than a control character: nothing emits a stratum
-            # LABEL into `run.yaml` today (a future task records the attribute
-            # names), but a NUL byte in a string PyYAML is later asked to emit
-            # raises, and a printable one costs nothing to choose now.
+            # printable rather than a control character: nothing emits the
+            # composed `|`-joined stratum LABEL into `run.yaml` (the attribute
+            # NAMES that make it up are recorded instead, on `resample_beside`'s
+            # `resample.stratify_by`, H4a task 17 — a different, coarser fact
+            # than the per-unit label this sentinel guards), but a NUL byte in
+            # a string PyYAML is later asked to emit raises, and a printable
+            # one costs nothing to choose now.
             #
             # NOT ADDRESSED: `<absent>` and the `|` separator are both ordinary
             # printable text, not reserved characters, so a real attribute value
@@ -1717,7 +1754,10 @@ def command_run(config_path: Path) -> int:
                 # a few lines down: that two-step shape is exactly how the bug
                 # this task fixes happened — a narrowed roster computed and
                 # then not passed to `attrition`.
-                cond_beside_n = _condition_beside_n(beside_n, roster, cond.index, arm_members_map)
+                cond_beside_n = {
+                    **_condition_beside_n(beside_n, roster, cond.index, arm_members_map),
+                    **resample_beside,
+                }
                 for step_name in sorted(recording_steps):
                     collapsed = collapse_repeats(
                         results, step_name, cond.index, fold_members=fold_members

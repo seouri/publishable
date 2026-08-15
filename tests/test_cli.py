@@ -7306,3 +7306,46 @@ def test_a_column_contrast_draws_from_the_columns_own_keys(tmp_path, capsys):
     assert full is not None
     assert full["ci95"] is not None
     assert full["n_paired"] == 40
+
+
+def test_the_resolved_resample_is_recorded_beside_every_interval(tmp_path, capsys):
+    """§ Statistical reporting: "the resolved values are recorded in `run.yaml`
+    beside the interval so the number is never the result of an undocumented
+    default". Carried on `beside_n`, the documented route for a key that sits
+    beside `n` rather than joining it — the same position `weighted_by` takes."""
+    doc = run_a_project(
+        tmp_path, capsys=capsys, aggregate_returns="mean_pred", units=40,
+        unit_attributes=["cohort"],
+        statistics={"correction": "holm",
+                    "resample": {"method": "bootstrap", "n": 500,
+                                 "stratify_by": ["cohort"]}},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    for name in ("pred", "mean_pred"):
+        assert aggregated[name]["resample"] == {
+            "method": "bootstrap", "n": 500, "stratify_by": ["cohort"]
+        }
+    # `n` is what was REQUESTED; `resample_draws` is what the interval rests on.
+    # Equal for a column by construction, and equal here for the derived metric
+    # because no draw was degenerate — but they are different facts and both are
+    # recorded.
+    assert aggregated["pred"]["resample_draws"] == 500
+    assert aggregated["mean_pred"]["resample_draws"] == 500
+
+
+def test_no_resample_block_is_recorded_when_none_was_declared(tmp_path, capsys):
+    """Absent, not null: an explicit null would claim a resolution was performed.
+    Paired with a positive assertion in the same test so it cannot pass by
+    nothing having run."""
+    doc = run_a_project(
+        tmp_path, capsys=capsys, aggregate_returns="mean_pred", units=40
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert "resample" not in aggregated["pred"]
+    assert "resample" not in aggregated["mean_pred"]
+    # The positive companion: the derived metric IS still resampled at the
+    # documented default, so the block really did run.
+    assert aggregated["mean_pred"]["resample_draws"] == 2000
+    assert aggregated["mean_pred"]["method"] == "percentile_over_units"
