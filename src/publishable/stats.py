@@ -778,7 +778,20 @@ def percentile_over_units_clustered(
     that function over a roster, and is normalized the identical way it is
     ("no value" for `None`, `str()` otherwise) so the two independent checks
     cannot disagree over a stratum read back as `1` in one place and `"1"` in
-    the other. Each stratum then draws exactly as many clusters, with
+    the other — **provided both are handed the same raw per-unit value**, which
+    is the case this equality was built for: a single undeclared-composition
+    `stratify_by` name, read straight off the roster. `cli.py`'s
+    `resample_strata` (H4a task 15) hands this function something already
+    transformed instead — a cross of every declared name joined by `|`, with a
+    missing name rendered `<absent>` rather than passed through as `None` — so
+    in production this function's own `stratum is None` branch is rarely if
+    ever what actually distinguishes an absent unit; `cli.py`'s sentinel
+    already has. The two normalizations no longer operate on one shared input,
+    and neither is checked against a real attribute value that happens to
+    collide with either sentinel string, or against two different attribute
+    combinations that happen to join into the identical `|`-separated label —
+    both are unaddressed here, and are gaps to record, not guarantees this
+    docstring is making. Each stratum then draws exactly as many clusters, with
     replacement, as it holds — preserving each stratum's own cluster count the
     way the unstratified draw preserves `G`.
 
@@ -828,7 +841,11 @@ def percentile_over_units_clustered(
     # function is — "no value" for `None`, `str()` otherwise — so the two
     # independent checks cannot disagree over a stratum read as `1` in one
     # place and `"1"` in the other, which raw `!=` would have called a
-    # violation.
+    # violation — provided both see the same raw value. `cli.py`'s
+    # `resample_strata` (H4a task 15) pre-transforms what this function
+    # actually receives (a `|`-joined cross, `<absent>` for a missing name),
+    # so that provision no longer holds unconditionally in production; see the
+    # docstring above for what is and is not covered.
     cluster_stratum: dict[str, str] = {}
     if strata is not None:
         for key, stratum in zip(keys, strata, strict=True):
@@ -979,16 +996,37 @@ def percentile_of_derived(
     reason: a relabelled stratum must draw the identical sequence of tables.
     `strata` is indexed by key, not `.get`-ed, the same discipline `weights`
     and `clusters` follow elsewhere in this module: `strata` must be total
-    over `collapsed`'s keys, or a unit the caller could not otherwise
-    stratify would silently draw as if it were unstratified. It need not be
+    over `collapsed`'s keys, or the missing lookup raises `KeyError` rather
+    than quietly defaulting the unit into some invented stratum — a caller
+    whose roster and `strata` mapping have come to disagree about which units
+    exist is a core defect, not a silent extra stratum. It need not be
     exactly `collapsed`'s key set — a caller resampling a subset of a larger
     roster (a `report_by` level, say) can pass the roster-wide mapping
     unfiltered, and any extra entry it carries is simply never looked up.
-    This does not add the constant-pool refusal `percentile_over_units` applies to a
-    degenerate stratum — a derived metric's `compute` may still return the
-    same value on every draw of a constant pool, and that reaches
-    `min_honest_draws` the same way any other run of identical survivors
-    would, not a `None` interval reported for the stratification alone.
+
+    **The degenerate case is refused here too, content-based, the same check
+    `percentile_over_units`'s own strata branch and
+    `percentile_over_units_clustered`'s cluster-content branch both carry, one
+    level down over ROWS rather than over values or clusters.** If every key in
+    a stratum carries the identical recorded row (a singleton stratum — "any
+    near-unique attribute" — is the trivial case of this, and is exactly what
+    a near-unique `stratify_by` produces), every draw of that stratum picks
+    from an identical multiset of rows: the same units drawn every time, in
+    whatever order, so `compute` — assuming it is itself deterministic, which
+    every `aggregate` this module is handed is — returns the identical value on
+    every draw. If this holds for every stratum, the interval has zero width,
+    which § Statistical reporting refuses in those terms: "a zero-width 95 %
+    interval is not [honest]; reporting a point with no interval is honest."
+    Without this, a near-unique `stratify_by` would validate clean and publish
+    `ci95: [x, x]` — indistinguishable from a genuine 2000-draw interval — right
+    beside a recorded column's `ci95: null` for the identical degenerate
+    design, the exact disagreement `percentile_over_units`'s own strata branch
+    and `percentile_over_units_clustered`'s `G < 2` floor already refuse to
+    let happen for their own constructions. Checked whether or not the
+    resulting `compute` calls would agree in practice — this refuses on the
+    STRUCTURE of the draw, not on running it and comparing outputs, since
+    running it first would cost `draws` calls to `compute` for a refusal that
+    is knowable from `collapsed` and `strata` alone.
     """
     keys = sorted(collapsed)
     if len(keys) < 2:
@@ -1001,6 +1039,19 @@ def percentile_of_derived(
         for key in keys:
             pools.setdefault(strata[key], []).append(key)
     ordered_pools = None if pools is None else sorted(pools.values())
+    if ordered_pools is not None and all(
+        len({tuple(sorted(collapsed[key].items())) for key in group}) <= 1
+        for group in ordered_pools
+    ):
+        # Content-based, over each stratum's own recorded ROW rather than a
+        # count: a singleton stratum is the trivial case (one key, so one
+        # possible row every draw), but a larger stratum whose members all
+        # carry the identical recorded row is the same zero-freedom fact,
+        # whatever its size. Refused before a single draw is taken, the same
+        # way the two sibling constructions refuse their own degenerate case
+        # — see the docstring's own paragraph for why this is checked on the
+        # DRAW's structure and not by running `compute` and comparing outputs.
+        return None, 0
     values: list[float] = []
     for _ in range(draws):
         if ordered_pools is not None:

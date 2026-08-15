@@ -1583,6 +1583,15 @@ def command_run(config_path: Path) -> int:
             # names), but a NUL byte in a string PyYAML is later asked to emit
             # raises, and a printable one costs nothing to choose now.
             #
+            # NOT ADDRESSED: `<absent>` and the `|` separator are both ordinary
+            # printable text, not reserved characters, so a real attribute value
+            # equal to `<absent>`, or two attribute combinations that happen to
+            # join into the identical `|`-separated string (one name's value
+            # containing `|`, say), collide with the sentinel or with each
+            # other and are read back as the same stratum. Recorded as a known
+            # gap (`docs/superpowers/spec-defects.md`) rather than fixed here —
+            # an unambiguous encoding is a bigger change than this task's own.
+            #
             # Gated on BOTH `declared` and `stratify_by`, not on `stratify_by`
             # alone: they cannot disagree today (`_resolved_resample` reads
             # `stratify_by` off the same `declared` dict `declared` itself is
@@ -1812,7 +1821,13 @@ def command_run(config_path: Path) -> int:
                         # come along with it, or the same run would record two
                         # different constructions for the same column
                         # depending on whether its derived metrics happened to
-                        # collide.
+                        # collide. `strata` (H4a task 15) is left off for the
+                        # identical reason: it only ever moves a column's
+                        # interval through the SAME `resample_columns and seed
+                        # is not None` gate `resample_columns` itself reads, so
+                        # with neither passed here `strata` is inert now and
+                        # must stay off if a future change ever threads a
+                        # `seed` through this retry.
                         step_summary = summarize_step(
                             collapsed,
                             counts,

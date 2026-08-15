@@ -3684,3 +3684,136 @@ def test_summarize_step_stratifies_a_column_and_a_derived_metric_together():
     # each was checked against its OWN unstratified counterpart above.
     assert drawn["pred"]["ci95"] != plain["pred"]["ci95"]
     assert drawn["total"]["ci95"] != plain["total"]["ci95"]
+
+
+def test_percentile_of_derived_refuses_the_singleton_stratum_case():
+    """A near-unique `stratify_by` — one stratum per unit — validates clean and
+    is exactly the fault this refusal exists for: every draw of a singleton
+    stratum picks the identical one key every time, so `compute` (deterministic
+    here, as every `aggregate` this module is handed must be) returns the
+    identical value on every draw and the interval would be zero-width — the
+    same "a zero-width 95% interval is not honest" refusal
+    `percentile_over_units`'s own strata branch and
+    `percentile_over_units_clustered`'s `G < 2` floor already give for their
+    own constructions. Before this fix, this returned `(Interval(x, x), 2000)`
+    instead — a plausible-looking interval a reader could not tell from a real
+    one, sitting right beside a recorded column's `ci95: null` on the identical
+    design."""
+    collapsed = {f"u{i}": {"pred": float(i)} for i in range(20)}
+    strata = {f"u{i}": f"u{i}" for i in range(20)}  # one stratum per unit
+
+    def compute(units: UnitTable) -> float:
+        return sum(units.pred)
+
+    interval, draws_used = percentile_of_derived(
+        collapsed, compute, seed=7, draws=2000, strata=strata
+    )
+    assert interval is None
+    assert draws_used == 0
+
+
+def test_percentile_of_derived_refuses_a_multi_key_stratum_of_identical_rows_too():
+    """Not just singletons: a 4-key stratum whose members all carry the
+    IDENTICAL recorded row is the same zero-freedom fact, whatever its size —
+    content-based, not count-based, mirroring
+    `percentile_over_units_clustered`'s own "content, not count" ruling for
+    clusters. Every key in stratum `const` carries `{"pred": 1.0}`."""
+    collapsed = {f"u{i}": {"pred": 1.0} for i in range(4)}
+    strata = {f"u{i}": "const" for i in range(4)}
+
+    def compute(units: UnitTable) -> float:
+        return sum(units.pred)
+
+    interval, draws_used = percentile_of_derived(
+        collapsed, compute, seed=7, draws=2000, strata=strata
+    )
+    assert interval is None
+    assert draws_used == 0
+
+
+def test_percentile_of_derived_does_not_over_refuse_one_constant_stratum_among_others():
+    """A single degenerate stratum among others that vary keeps its interval —
+    the `all(...)` gate, not `any(...)`: the varying strata still supply real
+    sampling variance, and refusing the whole draw because one of several
+    strata is constant would sink an otherwise-informative resample. Mirrors
+    `percentile_over_units`'s own "a single constant stratum among others still
+    varies" case for the column path."""
+    values, strata_list = _banded_strata()
+    collapsed = {f"u{i}": {"pred": v} for i, v in enumerate(values)}
+    # Collapse the two-unit "high" stratum to an identical row each — constant
+    # on its own — while "low" and "mid" keep their own genuine variation.
+    collapsed["u28"]["pred"] = collapsed["u29"]["pred"] = 50.0
+    strata = {f"u{i}": s for i, s in enumerate(strata_list)}
+
+    def compute(units: UnitTable) -> float:
+        return sum(units.pred)
+
+    interval, draws_used = percentile_of_derived(
+        collapsed, compute, seed=7, draws=2000, strata=strata
+    )
+    assert interval is not None
+    assert draws_used == 2000
+
+
+def test_summarize_step_threads_strata_into_the_clustered_column_call():
+    """Finding 2 of the task-15 review: the clustered × stratified construction
+    was covered at `percentile_over_units_clustered` function level, but
+    nothing pinned that `summarize_step` actually passes `strata` at ITS
+    clustered call site — replacing `strata=column_strata` with `strata=None`
+    there left the whole suite green. This is that end-to-end pin.
+
+    The banded fixture, paired into two-unit clusters so each cluster is
+    homogeneous (a stratum must be constant within a cluster): 10 `low`
+    clusters, 4 `mid` clusters, 1 `high` cluster, 15 in total. Stratified, the
+    draw preserves each stratum's own cluster count; unstratified, all 15 pool
+    together and the two large `high` values (each its own two-unit cluster)
+    dominate far more of the resampled mean's variance."""
+    values, band = _banded_strata()
+    collapsed = {f"u{i}": {"pred": v} for i, v in enumerate(values)}
+    strata = {f"u{i}": s for i, s in enumerate(band)}
+    clusters: dict[str, str] = {}
+    for i in range(20):
+        clusters[f"u{i}"] = f"c{i // 2}"  # c0..c9, 10 low clusters
+    for i in range(20, 28):
+        clusters[f"u{i}"] = f"c{10 + (i - 20) // 2}"  # c10..c13, 4 mid clusters
+    for i in range(28, 30):
+        clusters[f"u{i}"] = "c14"  # 1 high cluster
+    counts = {"resolved": 30, "completed": 30, "failed": 0}
+    plain = summarize_step(
+        collapsed, counts, seed=7, draws=2000, resample_columns=True, clusters=clusters
+    )
+    drawn = summarize_step(
+        collapsed,
+        counts,
+        seed=7,
+        draws=2000,
+        resample_columns=True,
+        clusters=clusters,
+        strata=strata,
+    )
+    assert plain["pred"]["method"] == "percentile_over_units_clustered"
+    plain_low, plain_high = plain["pred"]["ci95"]
+    drawn_low, drawn_high = drawn["pred"]["ci95"]
+    assert drawn["pred"]["method"] == "percentile_over_units_clustered"
+    assert (drawn_high - drawn_low) < (plain_high - plain_low)
+    assert drawn["pred"]["ci95"] != plain["pred"]["ci95"]
+
+
+def test_percentile_of_derived_is_invariant_to_stratum_labels():
+    """The derived path's own version of
+    `test_a_stratified_draw_is_invariant_to_stratum_labels`: pools are ordered
+    by their own sorted CONTENTS, not by label, so renaming `low`/`mid`/`high`
+    to `z`/`a`/`m` must draw the identical sequence of tables and so return the
+    identical interval and survivor count."""
+    values, band = _banded_strata()
+    collapsed = {f"u{i}": {"pred": v} for i, v in enumerate(values)}
+    strata = {f"u{i}": s for i, s in enumerate(band)}
+    renamed = {"low": "z", "mid": "a", "high": "m"}
+    strata_renamed = {key: renamed[s] for key, s in strata.items()}
+
+    def compute(units: UnitTable) -> float:
+        return sum(units.pred)
+
+    a = percentile_of_derived(collapsed, compute, seed=3, draws=2000, strata=strata)
+    b = percentile_of_derived(collapsed, compute, seed=3, draws=2000, strata=strata_renamed)
+    assert a == b

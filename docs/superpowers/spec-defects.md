@@ -5203,6 +5203,46 @@ interval the same way in the same table. `W-STATS-RESAMPLE-STRATIFY-UNHONOURED` 
 gap it disclosed no longer exists — and its `reference.md` § Warnings core reports row and its two
 `tests/test_cli.py` pins are removed rather than kept as dead code warning about nothing.
 
+## `cli.resample_strata`'s composed label can collide with a real attribute value, or with itself
+
+Found during task 15's review (2026-08-15, H4a). `cli.command_run` composes one stratum label per
+unit for a declared `statistics.resample.stratify_by` naming more than one attribute: the names'
+values joined by `|`, with a missing name rendered `<absent>` rather than dropping the unit
+(`resample_strata`, next to `unit_attributes`). Neither the separator nor the sentinel is a reserved
+character — both are ordinary printable text a unit's own attribute value could equally contain —
+so two distinct designs read back as one stratum:
+
+- **Sentinel collision.** A unit whose attribute is genuinely present and equal to the literal
+  string `<absent>` composes to the identical label a unit MISSING that attribute would, so the two
+  populations are pooled into one stratum rather than kept apart.
+- **Separator collision.** `stratify_by: [a, b]` with one unit's `a = "x|y", b = "z"` and another's
+  `a = "x", b = "y|z"` both compose to `"x|y|z"` — two different (a, b) pairs joining into one label.
+
+Neither is refused by `validate` (`_check_resample`'s rows check that each named attribute exists
+and survives clustering, not what values it may hold) nor detected at run time — `stats.py` receives
+only the composed label and has no way to tell a genuine collision from an intentional one. This
+also weakens the "cannot disagree" guarantee `E-STATS-RESAMPLE-STRATIFY-VARIES`'s dual listing makes
+(`stats.percentile_over_units_clustered`'s inline re-implementation of `units
+.stratum_varies_within_cluster`'s equality): that guarantee was built for a single, uncomposed name
+read straight off the roster, where both checks see the identical raw value. A composed, multi-name
+`stratify_by`'s cross-label reaches `percentile_over_units_clustered` already transformed by
+`cli.py`, so the run-time check's own `stratum is None` branch is rarely if ever what distinguishes
+a missing unit there in production — `cli.py`'s sentinel already has, before `stats.py` sees
+anything. `reference.md` § Errors validate reports and § Errors core raises both amend their
+`E-STATS-RESAMPLE-STRATIFY-VARIES` rows to state this narrowed scope rather than the unqualified
+claim task 10 wrote it under.
+
+**Not fixed here.** An unambiguous encoding (a delimiter and sentinel neither can appear in a
+user's own attribute values, or a structured label carrying the individual attribute values rather
+than a joined string) is a bigger change than a doc-and-comment fix: `stats.py` sees "one label per
+unit and never learns how many attributes made it" by design (task 15's own brief), and any fix
+preserving that would need to move the collision-avoidance into the encoding itself. Left as an
+acknowledged, unaddressed gap — a real value or a real combination has to collide for it to bite,
+and the near-unique-attribute case that would make an attribute value equal to `<absent>` a live
+risk (an identifier column, say) is already a poor choice of `stratify_by` on other grounds (task
+15's own constant-pool refusal in `percentile_of_derived` and `percentile_over_units` both refuse a
+near-unique stratum as uninformative before this collision would ever surface in an interval).
+
 ## A column's `resample_draws` under a refused (too-few-units) interval is `null`, not the requested `n`
 
 Found during task 14's implementation (2026-08-15, H4a, `ce2f2db`), reviewing the brief's own Step 1
@@ -5226,3 +5266,48 @@ mutations — dropping the `if interval else None` guard, and gating the key's p
 but `resample_columns and seed is not None` — are pinned by this test and by
 `test_the_undeclared_resample_shape_is_pinned_absent_key` respectively; both were run and confirmed
 to fail before being reverted.
+
+## `percentile_of_derived` reported a zero-width interval for a near-unique stratum — CLOSED; and a report_by asymmetry deferred beside it
+
+Found during task 15's review (2026-08-15, H4a). Two related findings, recorded together because
+the fix for the first is what makes the second visible rather than merely theoretical.
+
+**Finding 1, CLOSED.** `percentile_of_derived`'s new stratified branch (this task's own construction)
+shipped with no constant-pool refusal, unlike its two siblings: `percentile_over_units`'s stratified
+branch refuses when every stratum's own (value, weight) pairs are all identical (task 9's own first
+❌), and `percentile_over_units_clustered` refuses when every stratum's own clusters are pairwise
+identical in content (task 10 shipped the identical hole once, closed the same way). A near-unique
+`stratify_by` — one stratum per unit, which validates clean — makes every draw of a singleton
+stratum pick the identical one key every time, so a deterministic `compute` returns the identical
+value on every draw: `Interval(x, x)` at `resample_draws: 2000`, indistinguishable from a real
+2000-draw interval, reachable end to end with no warning. The extra sting: the recorded column
+beside it (which does have the refusal) reports `ci95: null` for the identical design, so a reader
+sees one metric refuse and its neighbour publish a point as if it were an interval. Fixed by adding
+the same content-based check — every key in a stratum carrying the identical recorded row, a
+singleton stratum being the trivial case of that — before any draw is taken, mirrored from its two
+siblings and pinned by three tests (`test_percentile_of_derived_refuses_the_singleton_stratum_case`,
+`test_percentile_of_derived_refuses_a_multi_key_stratum_of_identical_rows_too`,
+`test_percentile_of_derived_does_not_over_refuse_one_constant_stratum_among_others`), each mutated
+and confirmed to fail before being reverted.
+
+**Finding 2, deferred — owed to whichever slice hardens `report_by` (`H4 Statistics`, per this
+file's existing "A `report_by` whose every level is empty…" entry, which names the same owner).**
+`cli.command_run`'s `report_by` level call (`level_summary = summarize_step(...)`) does not pass
+`resample_columns`, so a level's own recorded-column interval stays `t_over_units` even under a
+declared `resample`; `strata` (this task's own thread) reaches only that level's *derived* metrics
+there, because a derived metric has no unresampled fallback and is always resampled when a `seed` and
+a callable exist, `resample_columns` or no. Under a declared `resample` with a `stratify_by`, a
+`report_by` level block therefore holds an unresampled column interval beside a *stratified*
+`percentile_over_units` derived one — two different designs in one table.
+
+**Adjudicated NOT the same class task 14 declined to create, and that is why it is deferred rather
+than fixed here.** Task 14's asymmetry was two IDENTICAL `method` strings computed under different
+designs with nothing in the record to tell them apart. Here the two blocks carry DIFFERENT `method`
+strings (`t_over_units` beside `percentile_over_units`) and differ on whether `resample_draws` is
+present at all — `run.yaml` already discloses the difference, it just doesn't explain it. It also
+predates this task: the level path never got `resample_columns` in task 14 either, so this is not a
+regression task 15 introduced, only one task 15's own `strata` thread reaches one layer further into.
+The fix is a task, not a line: a level's own two-valued `resample_draws`, a level-thin
+`min_honest_draws` check (a level with fewer units than the floor should refuse the same way the
+whole-condition case does), and end-to-end tests crossing `report_by` with a declared `resample` —
+not something to improvise inside this task's already-amended scope.
