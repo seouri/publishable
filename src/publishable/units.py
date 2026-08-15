@@ -1115,7 +1115,9 @@ def auto_block_size(weights: Sequence[float]) -> int:
 
 
 def stratum_names(stratify_by: Any) -> tuple[str, ...]:
-    """`assign.<axis>.stratify_by`'s declared names, normalized to a tuple.
+    """A `stratify_by` declaration's names, normalized to a tuple — shared by
+    `assign.<axis>.stratify_by` and `statistics.resample.stratify_by`, and
+    written against neither in particular.
 
     **Presence and shape are read structurally**, `validate`'s own convention for
     this field and the one the refusal this replaces already used: a bare
@@ -1131,12 +1133,16 @@ def stratum_names(stratify_by: Any) -> tuple[str, ...]:
     fault. `validate` refuses it before a run reaches here, as
     `E-DATA-ASSIGN-STRATIFY-UNKNOWN`.
 
-    **Public, and imported by `validate._check_assign` rather than re-read
-    there** — `auto_block_size`'s own reason, one field over: `validate`'s
-    *Allocation strata exist* row checks the names this returns and the draw
-    balances on the names this returns, so two independent readings of the same
-    declaration would be pinned in agreement by nothing. A bare string read as
-    one name here and as a sequence of characters there is exactly the
+    **Public, and imported by `validate._check_assign` and
+    `validate._check_resample` rather than re-read there** — `auto_block_size`'s
+    own reason, one field over: `validate`'s *Allocation strata exist* and
+    *Resample strata exist* rows each check the names this returns. `assign`'s
+    own draw already balances on the names this returns; a resample draw does
+    not exist yet in this build (`E-STATS-RESAMPLE-UNSUPPORTED` still refuses
+    the block wholesale), but when it is built it has to read the same
+    declaration this way too, or two independent readings of one declaration
+    would be pinned in agreement by nothing. A bare string read as one name
+    here and as a sequence of characters there is exactly the
     validate-clean-then-disagree shape that costs.
     """
     if not stratify_by:

@@ -4997,7 +4997,7 @@ def _check_resample(doc: dict[str, Any], roster: UnitList | None, c: Collector) 
 
     Every check here presupposes the declaration is a mapping; a scalar or a
     list is `check_envelope`'s `E-CONFIG-TYPE` (`statistics.resample` is typed
-    `dict`), and a wrong-typed child (`method`, `n`) is the same, because Task 3
+    `dict`), and a wrong-typed child (`method`, `n`, `stratify_by`) is the same, because Task 3
     closed the block one level in. A leaf type fault is deliberately non-fatal
     in this module — reported, and validation continues — so each value read
     here is `isinstance`-guarded and quietly skipped when it is not a leaf the
@@ -5048,7 +5048,9 @@ def _check_resample(doc: dict[str, Any], roster: UnitList | None, c: Collector) 
     # draw both read the attribute per unit, so a typo and an attribute no unit
     # carries are indistinguishable downstream. NOT `units._stratum_groups`,
     # which is `assign`-specific: it admits a `sweep.groups` axis name as a
-    # legal target and raises `E-DATA-ASSIGN-STRATIFY-UNKNOWN`, and a resample
+    # legal target and raises a bare `NotImplementedError` for everything
+    # else (deliberately uncoded — its own docstring says why: the raise
+    # cannot tell which of two `validate`-time faults it is), and a resample
     # draws from the roster rather than from an allocation, so neither applies.
     #
     # Read through `units.stratum_names`, the same normalization the draw
@@ -5085,8 +5087,9 @@ def _check_resample(doc: dict[str, Any], roster: UnitList | None, c: Collector) 
             c.error(
                 "E-STATS-RESAMPLE-STRATIFY-UNKNOWN",
                 "statistics.resample.stratify_by",
-                f"names `{name}`, which is not in `data.units.attributes` — a stratum "
-                "is read per unit when the draw is taken, so it has to be one",
+                f"names `{name}`, which is not a unit attribute — a stratum is read "
+                f"per unit when the draw is taken, so it has to be one. "
+                f"`data.units.attributes` declares {', '.join(sorted(declared)) or 'none'}",
             )
 
 
