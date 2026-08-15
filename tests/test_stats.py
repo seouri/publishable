@@ -2203,7 +2203,7 @@ def test_two_clusters_still_report_a_percentile():
     """The control that must report, immediately above the floor: G = 2 has three
     achievable replicates, so the interval has real width and is not refused.
     There is deliberately no higher threshold here — the judgment that a
-    cluster count is too small for a resample belongs to `statistics.min_clusters`,
+    cluster count is too small for a resample belongs to `limits.min_clusters`,
     which `validate` warns on."""
     membership = dict.fromkeys(_POOL_KEYS, "left")
     for key in ("c1", "c2", "c3", "d1", "d2"):

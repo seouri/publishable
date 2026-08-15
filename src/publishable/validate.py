@@ -605,11 +605,16 @@ def validate_config(
             # the difference matters.** `E-DATA-CLUSTER-UNKNOWN` raised here for a
             # unit with no value for the attribute has no validate-time reporter:
             # `_check_cluster_by` tests the declaration against `attributes`, not
-            # each unit's value. With no `fold` level nothing downstream needs the
-            # basis either, so a config in that shape validates clean and raises at
-            # `run`. The reachable case is `cluster_by` naming `measurements.by`
-            # where every unit has one measurement row; see `cli`'s note at the
-            # `clusters_of` call.
+            # each unit's value. The reachable case is `cluster_by` naming
+            # `measurements.by` where every unit has one measurement row; see
+            # `cli`'s note at the `clusters_of` call. With no `fold` level, this
+            # `basis` local itself goes unused — but `_check_resample`'s own
+            # `limits.min_clusters` check (below) resolves the identical
+            # roster/`cluster_by` pair a second time and meets the same
+            # `ContractError`, so "nothing downstream needs it" is no longer
+            # true in general, only true of this particular local. Either way
+            # the config validates clean here and meets `E-DATA-CLUSTER-UNKNOWN`
+            # for real at `run`.
             basis = None
     # A `fold` level's `stratify_by`, from the same usable-cluster local the basis
     # was resolved from: the name it declares, and — when a cluster is declared —
@@ -4988,7 +4993,9 @@ documented change rather than a silent one."""
 
 def _check_resample(doc: dict[str, Any], roster: UnitList | None, c: Collector) -> None:
     """`statistics.resample`'s `method` enum, its `n` floor, the comparison-family
-    lower bound on that same `n`, and its `stratify_by` names.
+    lower bound on that same `n`, its `stratify_by` names, whether a roster was
+    declared at all, and — the one check here that reads the roster —
+    `limits.min_clusters` against the resolved cluster count.
 
     `E-STATS-RESAMPLE-UNSUPPORTED` (`_check_unimplemented`) still refuses any
     declared `resample` wholesale in this build — resampling itself is not yet
@@ -5030,11 +5037,17 @@ def _check_resample(doc: dict[str, Any], roster: UnitList | None, c: Collector) 
     # the one the reader has to fix anyway is what `validate_config`'s
     # `usable_cluster` guard avoids by the same argument.
     #
-    # No `return` here, matching the `E-REPL-FOLD-NO-UNITS` twin: `roster` is
-    # unused by every check below (`method`, `n`, the family bound, and
-    # `stratify_by` all read `resample`/`doc` alone), so a missing roster does
-    # not make any of them unsafe to run. Stopping here would silently swallow
-    # a `method`/`n` fault the reader would only meet on their next pass.
+    # No `return` here, matching the `E-REPL-FOLD-NO-UNITS` twin. Of the checks
+    # below, `method`, `n`, the family bound, and `stratify_by` read
+    # `resample`/`doc` alone and are safe with no roster at all. The
+    # `limits.min_clusters` check further down is the one exception — it DOES
+    # read `roster`, and is written to require `roster is not None` itself
+    # rather than leaning on this early-exit having not fired. So this
+    # comment's job is only to explain why there is no `return` here — not to
+    # promise every check below is roster-independent, which the next reader
+    # extending this function must re-verify rather than assume from this
+    # sentence alone. Stopping here would silently swallow a `method`/`n`
+    # fault the reader would only meet on their next pass.
     units_declared = ((doc.get("data") or {}).get("units")) or {}
     if not units_declared:
         c.error(
@@ -5130,12 +5143,14 @@ def _check_resample(doc: dict[str, Any], roster: UnitList | None, c: Collector) 
     # (warning)". Scoped to `resample` WITH `cluster_by`, because `cluster_by`
     # alone decides each condition's own interval and draws nothing.
     #
-    # Counted through `units.fold_basis`, the single counting expression
-    # `_check_replication` and `_check_sweep` already share: it resolves to the
-    # cluster count when `cluster_by` is a non-empty string. A second expression
-    # for "how many clusters are there" is the drift one derivation removes, and
-    # the number a reader compares against `n.clusters` in `run.yaml` has to be
-    # the same number.
+    # Counted through `units.fold_basis`, the same function `_check_replication`
+    # and `_check_sweep` read — via `basis`, resolved once above this call and
+    # threaded through as their `fold_basis=` argument. This check calls it a
+    # second time on the same roster and `cluster_by` rather than being handed
+    # that value: a second call to one derivation is not a second derivation,
+    # but it IS a second `try`/`except ContractError` an edit to the first must
+    # not forget to mirror. Not threaded through as a parameter in this slice;
+    # doing so is a cheap follow-up, not a correctness gap today.
     cluster_by = units_declared.get("cluster_by")
     min_clusters = (doc.get("limits") or {}).get("min_clusters")
     if (
@@ -5149,9 +5164,18 @@ def _check_resample(doc: dict[str, Any], roster: UnitList | None, c: Collector) 
             groups = fold_basis(roster, cluster_by)
         except ContractError:
             # A unit carrying no value for the cluster attribute
-            # (`E-DATA-CLUSTER-UNKNOWN`), already reported beside this by
-            # `_check_cluster_by` or by the resolution `_check_units` performed.
-            # This module collects rather than raises.
+            # (`E-DATA-CLUSTER-UNKNOWN`). Sometimes reported beside this by
+            # `_check_cluster_by` (which tests the DECLARATION against
+            # `attributes`) or by `_check_units` (a column that never resolved
+            # at all) — but NOT always: `cluster_by: measurements.by`, naming a
+            # measurement rather than an input column, resolves the roster and
+            # `_check_units` cleanly, and `_check_cluster_by` has nothing to
+            # say about a name that isn't a unit attribute in the first place.
+            # That combination reaches here with no companion finding. Swallowed
+            # anyway, because this check cannot proceed without a readable
+            # grouping and `validate` collects rather than raises — a config in
+            # that shape validates clean today and meets `E-DATA-CLUSTER-UNKNOWN`
+            # for real at `run`, same as the `basis` computation above handles it.
             groups = None
         if groups is not None and groups < min_clusters:
             c.warn(

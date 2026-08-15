@@ -334,3 +334,39 @@ Task 7: COMPLETE (commits d280f86, 01b2b97, cf9f022). 1722 passed + 2 xfailed; r
   BASE for task 8 is cf9f022.
 Task 8: dispatched. IT IS THE FIRST REAL ROSTER CONSUMER in this slice — limits.min_clusters needs the
   cluster count — so it must NOT reuse task 5's _resample_stratum_table, which writes ONE unit row.
+Task 8: implemented, commits 21214d8 + f75078b. 1726 passed + 2 xfailed (baseline 1722 + 4 new); ruff
+  and mypy clean. W-STATS-RESAMPLE-CLUSTERS emitted; cluster count derived via units.fold_basis, the
+  same derivation _check_replication/_check_sweep share; E-DATA-CLUSTER-UNKNOWN from an unreadable
+  cluster attribute caught and treated as unresolved rather than re-reported. The
+  statistics.min_clusters -> limits.min_clusters miscitation in stats.py is fixed.
+  SEVENTH OF EIGHT IMPLEMENTERS FOUND A BRIEF DEFECT, and this one would not have compiled: the brief's
+  test code used dotted overrides (`"limits.min_clusters": 10`) against tests/test_validate.py's
+  write_config fixture, WHICH ONLY ASSIGNS THE FINAL LEAF OF A DOTTED PATH and never creates missing
+  intermediates — and base_config() declares no top-level "limits" key at all. The literal brief code
+  raises KeyError inside the fixture BEFORE the check under test runs. Every other limits override in
+  that same file already uses the nested form, so it used `{"limits": {"min_clusters": 10}}`. Same floor
+  values, different override syntax, shared fixture untouched.
+Task 8 review dispatched. BASE cf9f022, HEAD f75078b.
+Task 8 review: spec ✅, quality APPROVED WITH FINDINGS — 3 Important, 5 Minor, NO BEHAVIOURAL DEFECT
+  SHIPPED. Everything the dispatch flagged as most-likely-wrong came back RIGHT and verified by
+  behaviour: fixtures resolve a real roster (12 units / 4 clusters, not the vacuous-roster trap); the
+  count is NOT a proxy — fold_basis -> cluster_count -> clusters_of is the same authority cli.py hands
+  percentile_over_units_clustered; a 12-cluster roster at floor 10 is silent, so the cluster count is
+  genuinely what moves.
+  IMPORTANT 1 — AN UNTESTED GUARD HIDES A REAL CRASH. Three of four guard clauses can be deleted with
+  the suite still green. `roster is not None` is load-bearing: missing input file + cluster_by +
+  resample sends a TypeError out of units.py, so VALIDATE RAISES WHERE IT IS CONTRACTED TO COLLECT —
+  the one outcome validate must never produce. Dropping the cluster_by half yields the nonsense
+  "`cluster_by: None` puts this roster in 1 clusters".
+  IMPORTANT 2 — FIFTH FALSE CLAIM IN _check_resample'S COMMENTS. "`roster` is unused by every check
+  below" is now false (task 8's check reads it) and its enumeration omits the new check. THIS IS THE
+  SAME COMMENT THAT IN TASK 7 JUSTIFIED A RETURN SWALLOWING TWO FINDINGS. Ruled: replace the blanket
+  property with a per-check statement, since a blanket claim invites the next task to falsify it again.
+  IMPORTANT 3 — A FALSE COMMENT PROPAGATING BY COPY-PASTE. The new `except ContractError` comment says
+  the fault is "already reported beside this"; measured false (cluster_by naming measurements.by fires
+  the branch and NOTHING reports E-DATA-CLUSTER-UNKNOWN). The wording was copied from a sibling handler
+  CARRYING THE SAME FALSEHOOD. Ruled: FIX BOTH, against my usual refusal to widen scope — the
+  propagation mechanism is copy-paste and the sibling is one line, so leaving it guarantees a third copy.
+  Minor worth carrying: the min_clusters miscitation SURVIVES at tests/test_stats.py:2206 — the
+  implementer's sweep covered src/ and docs/ only. The "filter the file list" rule is necessary but not
+  sufficient; the SCOPE of the file list is the other half.

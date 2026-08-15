@@ -3669,33 +3669,22 @@ def test_the_cluster_warning_counts_clusters_not_units(write_config, tmp_path):
     """12 units and 4 clusters: a check reading `len(roster)` sees 12, clears a
     floor of 10, and is silent. The fixture is sized so unit count and cluster
     count fall on OPPOSITE sides of the same threshold, which a 12-unit /
-    12-cluster fixture could not distinguish."""
+    12-cluster fixture could not distinguish. One `write_config` call, read
+    both ways — `codes`/`messages_by_code` each re-run `validate_config` on the
+    same path, so a second write bought nothing but a second parse."""
     (tmp_path / "input" / "index.csv").write_text(_FOUR_ANIMALS)
-    found = codes(
-        write_config(
-            {
-                "data.units": {
-                    "from": "index.csv", "key": "patient_id",
-                    "attributes": ["animal_id"], "cluster_by": "animal_id",
-                },
-                "limits": {"min_clusters": 10},
-                "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
-            }
-        )
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv", "key": "patient_id",
+                "attributes": ["animal_id"], "cluster_by": "animal_id",
+            },
+            "limits": {"min_clusters": 10},
+            "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
+        }
     )
-    assert "W-STATS-RESAMPLE-CLUSTERS" in found
-    messages = messages_by_code(
-        write_config(
-            {
-                "data.units": {
-                    "from": "index.csv", "key": "patient_id",
-                    "attributes": ["animal_id"], "cluster_by": "animal_id",
-                },
-                "limits": {"min_clusters": 10},
-                "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
-            }
-        )
-    )
+    messages = messages_by_code(path)
+    assert "W-STATS-RESAMPLE-CLUSTERS" in messages
     assert "4" in messages["W-STATS-RESAMPLE-CLUSTERS"]
     assert "12" not in messages["W-STATS-RESAMPLE-CLUSTERS"]
 
@@ -3736,6 +3725,120 @@ def test_no_cluster_warning_without_a_declared_resample(write_config, tmp_path):
         )
     )
     assert "W-STATS-RESAMPLE-CLUSTERS" not in found
+
+
+def test_an_unresolved_roster_does_not_crash_the_cluster_check(write_config):
+    """`roster is not None` is load-bearing, not decorative: `data.units.from`
+    naming a file that does not exist leaves `roster` unresolved (`None`) while
+    `data.units` itself is still a truthy declaration, `cluster_by` is a real
+    string and `limits.min_clusters` is a real int — every OTHER guard in the
+    condition is satisfied. Without this one, `fold_basis(None, "animal_id")`
+    reaches `units.clusters_of`, which iterates the roster, and raises
+    `TypeError` out of `validate`, which is contracted to collect diagnostics
+    and never raise. `validate_config` (via `codes`) completing at all, rather
+    than raising, is the assertion."""
+    found = codes(
+        write_config(
+            {
+                "data.units": {
+                    "from": "does-not-exist.csv",
+                    "key": "patient_id",
+                    "cluster_by": "animal_id",
+                },
+                "limits": {"min_clusters": 10},
+                "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
+            }
+        )
+    )
+    # The roster never resolved, so `E-UNITS-SOURCE-MISSING` is `_check_units`'
+    # own finding for the missing file — proof this test reached the unresolved-
+    # roster path rather than short-circuiting somewhere else.
+    assert "E-UNITS-SOURCE-MISSING" in found
+    assert "W-STATS-RESAMPLE-CLUSTERS" not in found
+
+
+def test_no_cluster_warning_when_cluster_by_is_undeclared(write_config, tmp_path):
+    """The default fixture is a single unit — below any `min_clusters` floor if
+    counted as a unit count. `cluster_by` undeclared means `fold_basis` would
+    fall back to `len(roster)` (a unit count, not a cluster count) if this
+    guard were missing, producing the nonsense a plain unit-count read would
+    give: a warning on an unclustered design, naming `cluster_by: None`."""
+    found = codes(
+        write_config(
+            {
+                "data.units": {"from": "index.csv", "key": "patient_id"},
+                "limits": {"min_clusters": 10},
+                "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
+            }
+        )
+    )
+    assert "W-STATS-RESAMPLE-CLUSTERS" not in found
+
+
+@pytest.mark.parametrize("bad_min_clusters", ["ten", True, 10.0])
+def test_a_wrong_typed_min_clusters_is_a_type_fault_not_a_warning(
+    write_config, tmp_path, bad_min_clusters
+):
+    """`limits.min_clusters: "ten"` / `true` / `10.0` are each `E-CONFIG-TYPE`
+    from the envelope — a leaf fault this module treats as non-fatal and never
+    reports a second time under its own code. `True` is the sharpest case:
+    `isinstance(True, int)` is `True` in Python, so a bare `isinstance` guard
+    would let it reach the floor comparison; excluded the same way `n`'s own
+    bool guard is."""
+    (tmp_path / "input" / "index.csv").write_text(_FOUR_ANIMALS)
+    found = codes(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv", "key": "patient_id",
+                    "attributes": ["animal_id"], "cluster_by": "animal_id",
+                },
+                "limits": {"min_clusters": bad_min_clusters},
+                "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
+            }
+        )
+    )
+    assert "E-CONFIG-TYPE" in found
+    assert "W-STATS-RESAMPLE-CLUSTERS" not in found
+
+
+def test_the_cluster_warning_tracks_the_cluster_count_at_a_fixed_floor(write_config, tmp_path):
+    """The floor stays put at 10 across both configs; only the cluster count
+    moves — 4 animals below it, 12 above. Companion to the tests above, which
+    fix the roster and vary the floor instead; both directions are cheap, and
+    a reader comparing this row's example to a run's `n.clusters` expects the
+    warning to track the roster's own cluster count, not just the declared
+    number some other value happens to sit near."""
+    (tmp_path / "input" / "index.csv").write_text(_FOUR_ANIMALS)
+    below = codes(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv", "key": "patient_id",
+                    "attributes": ["animal_id"], "cluster_by": "animal_id",
+                },
+                "limits": {"min_clusters": 10},
+                "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
+            }
+        )
+    )
+    assert "W-STATS-RESAMPLE-CLUSTERS" in below
+
+    twelve_clusters = "patient_id,animal_id\n" + "".join(f"p{i},a{i}\n" for i in range(12))
+    (tmp_path / "input" / "index.csv").write_text(twelve_clusters)
+    above = codes(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv", "key": "patient_id",
+                    "attributes": ["animal_id"], "cluster_by": "animal_id",
+                },
+                "limits": {"min_clusters": 10},
+                "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
+            }
+        )
+    )
+    assert "W-STATS-RESAMPLE-CLUSTERS" not in above
 
 
 def test_a_declared_null_test_is_refused(write_config):
