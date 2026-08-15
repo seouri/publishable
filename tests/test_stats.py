@@ -2862,3 +2862,150 @@ def test_a_single_cluster_column_reports_its_point_with_no_interval():
     # interval, so the `None` above is the cluster count and not the shape.
     two = summarize_step(collapsed, counts, clusters={"u1": "a", "u2": "a", "u3": "b"})
     assert two["score"]["ci95"] is not None
+
+
+def _banded_strata() -> tuple[list[float], list[str]]:
+    """Three strata, unequal sizes, disjoint value bands. Sized so that the
+    three candidate constructions produce three DIFFERENT numbers:
+
+      correct stratified mean  (20·0.5 + 8·10.5 + 2·100.5) / 30  ≈  9.83
+      unstratified             same centre, several times wider
+      mean of stratum means    (0.5 + 10.5 + 100.5) / 3          ≈ 37.17
+
+    Two equal strata distinguish none of them, which is the fixture-sizing rule
+    this repo wrote into CLAUDE.md after an apportionment test matched a
+    reverse-order mutant by coincidence."""
+    values = (
+        [i / 20.0 for i in range(20)]
+        + [10.0 + i / 8.0 for i in range(8)]
+        + [100.0 + i / 2.0 for i in range(2)]
+    )
+    strata = ["low"] * 20 + ["mid"] * 8 + ["high"] * 2
+    return values, strata
+
+
+def test_a_stratified_draw_preserves_each_stratum_size():
+    """§ Weighted samples: resampling within each stratum "so a bootstrap can't
+    return a replicate whose stratum composition the design ruled out". The
+    two-value stratum contributes exactly 2 rows to every draw, which pins the
+    interval near 9.83 and makes it much narrower than the unstratified one."""
+    values, strata = _banded_strata()
+    stratified = percentile_over_units(values, seed=7, draws=2000, strata=strata)
+    plain = percentile_over_units(values, seed=7, draws=2000)
+    assert stratified is not None and plain is not None
+    expected = sum(values) / len(values)  # 9.83…
+    assert stratified.low < expected < stratified.high
+    stratified_width = stratified.high - stratified.low
+    plain_width = plain.high - plain.low
+    # Narrower, and by a lot: the whole point of the declaration is that the
+    # 2-unit stratum's contribution stops varying.
+    assert stratified_width < plain_width / 2.0
+    # And NOT the mean-of-stratum-means answer, which is 37.17 — a construction
+    # that gave each stratum equal say would put the interval there instead.
+    assert stratified.high < 20.0
+
+
+def test_a_stratified_draw_is_invariant_to_row_order():
+    """A fixed seed draws a fixed sequence of indices, so the multiset of
+    (value, stratum) pairs must be all that matters — the same invariance the
+    unstratified branch gets from sorting its pool, and the same one
+    `percentile_over_units_clustered` gets from ordering its pools by contents."""
+    values, strata = _banded_strata()
+    pairs = list(zip(values, strata, strict=True))
+    shuffled = pairs[7:] + pairs[:7]
+    a = percentile_over_units(values, seed=11, draws=2000, strata=strata)
+    b = percentile_over_units(
+        [v for v, _ in shuffled], seed=11, draws=2000, strata=[s for _, s in shuffled]
+    )
+    assert a == b
+
+
+def test_a_stratified_draw_is_invariant_to_stratum_labels():
+    """Strata ordered by their own sorted contents, not by label — so renaming
+    `low`/`mid`/`high` to `z`/`a`/`m` gives the identical interval."""
+    values, strata = _banded_strata()
+    renamed = {"low": "z", "mid": "a", "high": "m"}
+    a = percentile_over_units(values, seed=3, draws=2000, strata=strata)
+    b = percentile_over_units(
+        values, seed=3, draws=2000, strata=[renamed[s] for s in strata]
+    )
+    assert a == b
+
+
+def test_one_stratum_reproduces_the_unstratified_interval_digit_for_digit():
+    """The degenerate case is not a special case: with every unit in one
+    stratum, the stratified path draws n indices from one sorted pool, which is
+    exactly what the unstratified path does."""
+    values, _ = _banded_strata()
+    a = percentile_over_units(values, seed=5, draws=2000)
+    b = percentile_over_units(values, seed=5, draws=2000, strata=["only"] * len(values))
+    assert a == b
+
+
+def test_a_stratified_weighted_draw_keeps_each_value_with_its_weight():
+    """Weights travel with values through the grouping AND the sort. Sorting the
+    two sequences separately would preserve every invariance above and silently
+    re-pair them — a mistake equal weights cannot see, which is why the weights
+    here are as banded as the values."""
+    values, strata = _banded_strata()
+    weights = [1.0] * 20 + [5.0] * 8 + [50.0] * 2
+    got = percentile_over_units(values, seed=9, draws=2000, weights=weights, strata=strata)
+    assert got is not None
+    expected = sum(v * w for v, w in zip(values, weights, strict=True)) / sum(weights)
+    assert got.low < expected < got.high
+    # The weighted centre (≈ 39.5) is far from the unweighted one (≈ 9.83), so a
+    # re-pairing or a dropped weight lands outside this interval rather than
+    # inside it.
+    assert got.low > 20.0
+
+
+def test_a_stratified_draw_refuses_a_misaligned_stratum_vector():
+    """A length mismatch is a misaligned vector, and would produce a plausible
+    number rather than an error — the same reason `strict=True` guards the
+    clustered zip."""
+    values, strata = _banded_strata()
+    with pytest.raises(ValueError):
+        percentile_over_units(values, seed=1, draws=2000, strata=strata[:-1])
+
+
+def test_a_size_one_stratum_is_drawn_deterministically_every_time():
+    """A singleton stratum has exactly one candidate index on every draw, so it
+    contributes its one value to every replicate with no variance of its own —
+    it neither breaks the draw nor gets skipped."""
+    values, strata = _banded_strata()
+    # The two-value "high" stratum becomes two singleton strata.
+    strata = strata[:-2] + ["high_a", "high_b"]
+    got = percentile_over_units(values, seed=13, draws=2000, strata=strata)
+    assert got is not None
+    # Both singleton values (100.0 and 100.5) are fixed contributions on every
+    # draw, so the interval still centres near the same overall mean.
+    expected = sum(values) / len(values)
+    assert got.low < expected < got.high
+
+
+def test_a_stratum_of_identical_values_contributes_no_variance_of_its_own():
+    """A stratum whose values are all identical draws different indices but the
+    same number every time — it cannot widen the interval, only the varying
+    strata can."""
+    values, strata = _banded_strata()
+    # Replace the "mid" band (indices 20:28) with a single repeated value.
+    values = list(values)
+    for i in range(20, 28):
+        values[i] = 50.0
+    got = percentile_over_units(values, seed=17, draws=2000, strata=strata)
+    assert got is not None
+    expected = sum(values) / len(values)
+    assert got.low < expected < got.high
+
+
+def test_more_strata_than_two_units_gives_a_zero_width_interval():
+    """Every unit its own singleton stratum: each draw reproduces every value
+    exactly once, so the resample has no freedom left and the interval
+    collapses to a point at the sample mean — not an error, just uninformative,
+    which is why `E-STATS-RESAMPLE-*` validation (not this function) is where a
+    design that does this should be refused."""
+    values = [1.0, 2.0, 3.0, 4.0]
+    strata = ["a", "b", "c", "d"]
+    got = percentile_over_units(values, seed=19, draws=2000, strata=strata)
+    assert got is not None
+    assert got.low == got.high == sum(values) / len(values)

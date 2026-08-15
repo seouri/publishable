@@ -491,6 +491,7 @@ def percentile_over_units(
     draws: int = 2000,
     confidence: float = 0.95,
     weights: Sequence[Any] | None = None,
+    strata: Sequence[Any] | None = None,
 ) -> Interval | None:
     """A percentile interval over the units, by resampling with replacement.
 
@@ -519,18 +520,73 @@ def percentile_over_units(
     is sorted for the row-order invariance the unweighted branch explains below,
     and sorting the two sequences separately would preserve that invariance while
     silently re-pairing them — a mistake equal weights cannot see.
+
+    With `strata`, each draw preserves **each stratum's own size** and draws with
+    replacement *within* it — `reference.md` § Weighted samples:
+    "`resample.stratify_by` says what an independent draw is, resampling within
+    each stratum so a bootstrap can't return a replicate whose stratum
+    composition the design ruled out." The two ways to get this wrong both
+    produce a plausible number: drawing `n` units and repairing the composition
+    afterwards is the unstratified interval however carefully the counts are
+    matched, and averaging the strata's own means gives every stratum equal say,
+    which is a different estimator entirely (for 20/8/2 units in three bands it
+    reports 37.2 where the sample mean is 9.8).
+
+    `strata` is aligned positionally to `values`, the same contract `weights`
+    has, and `strict=True` on the zip for the same reason: a length mismatch is
+    a misaligned vector and would produce a number rather than an error.
+
+    **Grouping happens before any sort and carries the pairs**, so each value
+    keeps its stratum and its weight; the strata are then ordered by their own
+    sorted contents rather than by label, which is what makes a relabelled
+    stratum give the identical interval and what makes the one-stratum case
+    reproduce the unstratified path digit for digit. Sorting values and stratum
+    labels as separate sequences would preserve every invariance and silently
+    re-pair them — the mistake equal-sized strata cannot see.
     """
     if len(values) < 2:
         return None
     if draws < min_honest_draws(confidence):
         return None
+    # One weight vector for every branch below, so a value and its weight are
+    # paired once. `checked_weights` gates before any draw rather than producing
+    # `draws` worth of `nan`, and it is the one authority `validate` and
+    # `kish_effective_n` also read.
+    carried = None if weights is None else checked_weights(weights)
     rng = random.Random(seed)
-    if weights is not None:
+    if strata is not None:
+        # Grouped BEFORE any sort, carrying (value, weight) pairs, then each
+        # group sorted and the groups ordered by their own sorted contents —
+        # so the interval depends on the multiset of (value, weight, stratum)
+        # triples and on nothing else, not on row order and not on the labels.
+        pools: dict[Any, list[tuple[float, float]]] = {}
+        pairs_in = zip(
+            values,
+            strata,
+            [1.0] * len(values) if carried is None else carried,
+            strict=True,
+        )
+        for value, stratum, weight in pairs_in:
+            pools.setdefault(stratum, []).append((float(value), weight))
+        ordered = sorted(sorted(pool) for pool in pools.values())
+        means_out: list[float] = []
+        for _ in range(draws):
+            # Each stratum contributes exactly as many rows as it holds: that
+            # is the composition the design ruled the alternatives out of.
+            drawn = [
+                pool[rng.randrange(len(pool))] for pool in ordered for _ in range(len(pool))
+            ]
+            if carried is None:
+                means_out.append(sum(v for v, _ in drawn) / len(drawn))
+            else:
+                means_out.append(_weighted_mean([w for _, w in drawn], [v for v, _ in drawn]))
+        means = sorted(means_out)
+    elif carried is not None:
         # `sorted` over the pairs, so a value and its weight travel together; the
         # gate is `checked_weights`, the one authority `validate` and
         # `kish_effective_n` also read, and it runs before any draw rather than
         # producing 2000 draws' worth of `nan`.
-        pairs = sorted(zip(values, checked_weights(weights), strict=True))
+        pairs = sorted(zip(values, carried, strict=True))
         n = len(pairs)
         drawn_means = []
         for _ in range(draws):
