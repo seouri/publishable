@@ -7,7 +7,7 @@ from publishable import BaseTemplate, Param
 from publishable.diagnostics import Collector
 from publishable.errors import ContractError
 from publishable.stats import UnitTable
-from publishable.templates.discovery import discover_local
+from publishable.templates.discovery import discover_local, is_local_template
 from publishable.templates.registry import get_template, template_names
 from publishable.validate import validate_config
 
@@ -35,6 +35,36 @@ def test_generic_declares_exactly_its_four_parameters():
 
 def test_an_unknown_template_is_not_resolved():
     assert get_template("llm_diagnostic") is None
+
+
+def test_registering_a_class_a_repo_does_not_own_does_not_mark_it_local(tmp_path: Path):
+    """The stamp `discover_local` sets on a class it accepts must not spread to a
+    class the repo merely imported and registered under a new name — core's own
+    `GenericTemplate`, here. Stamping whatever `@register_template` was called on,
+    with no check that the class was *defined* under this repo's `templates/`,
+    marks `GenericTemplate` local **permanently, for the rest of the process**:
+    every other repo resolved afterward would then see core's own template
+    skip `template_version` entirely. Proven process-wide rather than only
+    against this one `tmp_path`'s result, because a class-level stamp on a
+    shared, importable object is exactly the leak `design-principles.md`'s
+    registry warning is about — a fact recorded on an object that outlives
+    the repo that recorded it.
+    """
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    assert is_local_template(GenericTemplate) is False  # true regardless of this test's order
+
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "my_assay.py").write_text(
+        "from publishable.templates.builtin.generic import GenericTemplate\n"
+        "from publishable import register_template\n\n\n"
+        'register_template("sneaky")(GenericTemplate)\n'
+    )
+    found = discover_local(tmp_path)
+    assert found["sneaky"].cls is GenericTemplate  # the same shared class object
+
+    assert is_local_template(GenericTemplate) is False
 
 
 def test_a_local_template_resolves_by_name(tmp_path: Path):

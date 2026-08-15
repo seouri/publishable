@@ -84,9 +84,9 @@ _LOCAL_MARKER = "_publishable_local_template"
 
 
 def is_local_template(cls: type[BaseTemplate]) -> bool:
-    """Whether `cls` is one `discover_local` accepted as a repo's own —
-    judged by a marker `discover_local` stamps directly onto every class it
-    keeps, not by where the class happens to be *defined*.
+    """Whether `cls` is one `discover_local` found **defined inside** a repo's
+    own `templates/`, judged by a marker `_import_file` stamps directly onto
+    the class, not by where the class merely happens to be *registered*.
 
     A registered class's `__module__` is not always the file that claimed its
     name: `_module_name`'s `_publishable_local_` prefix is only ever applied
@@ -95,20 +95,28 @@ def is_local_template(cls: type[BaseTemplate]) -> bool:
     __helper.py`) and merely imported and `@register_template`-ed from
     `templates/my_assay.py` carries the *helper's* real module name, not the
     synthetic one — a prefix check on `__module__` would call that class
-    non-local and let core's `template_version` be written and compared
-    against it, the exact false claim this predicate exists to prevent. The
-    marker instead records the one fact that matters — `discover_local`
-    itself decided this class is local — directly on the class, at the one
-    site that already knows: `GenericTemplate` and every other builtin are
-    never stamped, so they read `False` by default, and the stamp is set
-    fresh on every `discover_local` call (new class objects each import), so
-    nothing carries over between repos in one process.
+    non-local. The marker fixes that, but a marker set on *every* registered
+    class has the opposite fault: a `templates/my_assay.py` that imports and
+    registers a class it does not own — core's own `GenericTemplate`, or an
+    installed plugin's — would stamp that shared class permanently, for
+    every repo resolved in the same process afterward. So the stamp is set
+    only when the class's own defining module resolves under `templates_dir`
+    (`_is_local`, the same predicate the `sys.modules` restore below already
+    trusts) — checked by `_import_file` itself, while that module is still in
+    `sys.modules` to look up, before its own restore deletes the only
+    evidence of where a local class was defined. `GenericTemplate` and every
+    other builtin are never stamped, so they read `False` by default, and the
+    stamp is set fresh on every `discover_local` call (new class objects each
+    import), so nothing carries over between repos in one process.
     """
     return bool(getattr(cls, _LOCAL_MARKER, False))
 
 
-def _import_file(path: Path, module_name: str, templates_dir: Path) -> None:
-    """Execute one `templates/*.py` under `module_name`, leaving `sys.modules` as found.
+def _import_file(
+    path: Path, module_name: str, templates_dir: Path
+) -> list[tuple[str, type[BaseTemplate]]]:
+    """Execute one `templates/*.py` under `module_name`, leaving `sys.modules` as found,
+    and return what it registered.
 
     `templates_dir` goes on the *end* of `sys.path` so a file may import a
     sibling helper, without that directory shadowing a stdlib or site-packages
@@ -126,6 +134,21 @@ def _import_file(path: Path, module_name: str, templates_dir: Path) -> None:
     would un-import whatever the template legitimately pulled in (numpy, say),
     trading a discovery bug for a re-initialisation bug in the rest of the
     process.
+
+    The pending buffer is drained **here**, and each registered class is
+    stamped local (`is_local_template`) here too, rather than by the caller
+    after this function returns — both for the same reason: the restore below
+    deletes the local `sys.modules` entries this call added (the file's own
+    module, and any `__`-prefixed helper it imported), and once deleted there
+    is no way left to ask where a class came from — `LocalTemplate.provider`
+    hits the identical wall, which is why it builds its string from `path`
+    while it still has it rather than recovering it from the class afterward.
+    Checked with `_is_local` against each registration's *own* defining
+    module (`sys.modules.get(cls.__module__)`), not against `module` — the
+    file that did the `@register_template` call and the module a class was
+    *defined* in are the same object only when a template defines its class
+    directly rather than importing one from a sibling helper or from outside
+    `templates/` entirely.
     """
     before = dict(sys.modules)
     before_path = list(sys.path)
@@ -137,6 +160,12 @@ def _import_file(path: Path, module_name: str, templates_dir: Path) -> None:
     sys.modules[module_name] = module
     try:
         spec.loader.exec_module(module)
+        registered = drain_pending()
+        for _, cls in registered:
+            defining_module = sys.modules.get(cls.__module__)
+            if defining_module is not None and _is_local(defining_module, templates_dir):
+                setattr(cls, _LOCAL_MARKER, True)
+        return registered
     finally:
         sys.path[:] = before_path
         for key, was in list(sys.modules.items()):
@@ -238,7 +267,9 @@ def discover_local(repo_root: Path) -> dict[str, LocalTemplate]:
         if path.stem.startswith("__"):
             continue
         try:
-            _import_file(path, _module_name(repo_root.resolve(), path.stem), templates_dir)
+            registered = _import_file(
+                path, _module_name(repo_root.resolve(), path.stem), templates_dir
+            )
         except SystemExit as exc:
             # `SystemExit` is a `BaseException`, so the broad `except Exception` below
             # does not see it — the same hazard `validate_config`'s own entrypoint import
@@ -272,7 +303,6 @@ def discover_local(repo_root: Path) -> dict[str, LocalTemplate]:
                 )
             )
             continue
-        registered = drain_pending()
         if not registered:
             load_faults.append(
                 ContractError(
@@ -302,10 +332,11 @@ def discover_local(repo_root: Path) -> dict[str, LocalTemplate]:
             )
             continue
         for name, cls in registered:
-            # Stamped here, not inferred later from `__module__`: this is the
-            # one site that has just decided `cls` is a repo's own, whatever
-            # module it happens to be defined in — see `is_local_template`.
-            setattr(cls, _LOCAL_MARKER, True)
+            # Locality is already decided and stamped by `_import_file`, per
+            # class rather than per file — see `is_local_template`. Not
+            # redone here: a class this file merely imported and registered
+            # (core's own `GenericTemplate`, say) must stay unstamped even
+            # though it arrives in this same `registered` list.
             provider = f"{path}::{cls.__name__}"
             claims.setdefault(name, []).append(provider)
             found.setdefault(name, LocalTemplate(cls, provider))
