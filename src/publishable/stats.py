@@ -7,6 +7,7 @@ entangled with I/O, and purity is what lets this be tested exhaustively.
 See docs/reference.md § Statistical reporting.
 """
 
+import copy
 import hashlib
 import math
 import random
@@ -1470,6 +1471,37 @@ def repeat_spread(
     return entries
 
 
+def _beside_n_copy(beside_n: dict[str, Any] | None) -> dict[str, Any]:
+    """`beside_n`, fresh for one metric block rather than the same object
+    spread into every one.
+
+    `beside_n` is built once per run (or once per condition) and reused across
+    every metric block a call to `summarize_step` writes. Spreading the same
+    dict-valued entry — `technical_n`, and now `resample` — into more than one
+    block hands `yaml.safe_dump` the same object twice, and its default
+    aliasing writes the first occurrence as `&id001 {...}` and every other as
+    a bare `*id001` pointer. `hypotheses.py`'s `_observed_block` names the
+    consequence exactly: "the number … is no longer readable where it is
+    written" — a `run.yaml` a human opens must show the value at every block,
+    not a pointer to the first one. A scalar-valued entry (`weighted_by`, a
+    string) doesn't have this failure mode — a string is immutable and two
+    equal strings dumping identically costs nothing to a reader either way —
+    but copying every entry uniformly is simpler than deciding per key which
+    ones need it, and cheap at this size.
+
+    `copy.deepcopy`, not `dict(v)`: `resample`'s own `stratify_by` is a list
+    nested one level inside the dict, and a shallow `dict(v)` copies the outer
+    mapping while still pointing every copy's `stratify_by` at the one list
+    object `cli.py` built once — which aliases exactly the same way, one level
+    down, and a first attempt at this fix shipped that shallow version and
+    caught the bug only by tracing the actual emitted `run.yaml` byte for byte,
+    not by reasoning about the dict alone.
+    """
+    if not beside_n:
+        return {}
+    return {k: (copy.deepcopy(v) if isinstance(v, dict) else v) for k, v in beside_n.items()}
+
+
 def summarize_step(
     collapsed: dict[str, dict[str, float]],
     counts: dict[str, float],
@@ -1537,9 +1569,13 @@ def summarize_step(
     column's mean and a derived value.
 
     `beside_n` is core-supplied context copied verbatim into every metric block —
-    `technical_n` today. It is the second of two routes a count-shaped fact
-    travels, and which one a new fact takes is decided by where `reference.md`
-    shows it:
+    `technical_n`, `weighted_by`, and `resample` today (`_beside_n_copy`, not a
+    bare spread, is what makes "copied" true rather than "shared": a dict-valued
+    entry spread by reference into more than one block is one Python object
+    dumped twice, and `yaml.safe_dump`'s aliasing turns every occurrence after
+    the first into a pointer at the first). It is the second of two routes a
+    count-shaped fact travels, and which one a new fact takes is decided by
+    where `reference.md` shows it:
 
     - **A key that JOINS `n` travels in `counts`.** § What isn't a repeat says the
       three-part `n` is "joined by `clusters` … by `effective` … by `ineligible`",
@@ -1792,7 +1828,7 @@ def summarize_step(
                 )
             )
         out[column] = {
-            **(beside_n or {}),
+            **_beside_n_copy(beside_n),
             "value": value,
             "basis": "units",
             "n": n_block,
@@ -1887,7 +1923,7 @@ def summarize_step(
             else:
                 derived_interval, draws_used = None, None
             out[key] = {
-                **(beside_n or {}),
+                **_beside_n_copy(beside_n),
                 "value": value,
                 "basis": "units",
                 "n": {**counts, "completed": len(collapsed)},

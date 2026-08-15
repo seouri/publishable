@@ -860,4 +860,50 @@ Task 17: COMPLETE. `resample_beside` built once, right after `_resolved_resample
   worked example, whose own numbers are untouched (grep-verified). 1797 passed (1795 + 2 new) + 2
   xfailed; ruff and mypy clean. Both mutations (dropping the `declared` guard; forcing `stratify_by: []`)
   failed as required and were reverted in place.
+Task 17 review: spec ❌, quality 1 Critical, 5 Important, 8 Minor. C1: `resample_beside`'s inner dict was
+  ONE shared object spread into every metric block — `yaml.safe_dump` anchored the first occurrence and
+  aliased every other (`resample: &id001` / `*id001`), invisible to both new tests because `yaml.safe_load`
+  resolves aliases before any assertion runs. Pre-existing for `technical_n`, made live by this task's
+  `resample`. Fixed: `stats.py._beside_n_copy` (`copy.deepcopy` per dict-valued entry — a first shallow
+  `dict(v)` attempt still aliased `stratify_by` one level down) replaces both bare `**(beside_n or {})`
+  spreads; tests now assert the raw `run.yaml` text carries no `&id`/`*id`, plus a third test combining
+  `report_by` with a declared `resample` (the path most exposed, per I5). I1/I2 fixed: a positional,
+  wrong-directioned, unnamed block citation, and an over-scoped rule citation, both in the same sentence.
+  I3: the stated justification for absent-not-null was circular (task 1's pin passes either way) — the
+  real reason is `run.yaml` already echoes the undeclared config verbatim, so a reader never lacks the
+  distinction. I4: the `beside_n` docstring sweep stopped one file short a third time (still said
+  "technical_n today", wrong by two). Weighted-samples Minor fixed with a second `r:` example pairing both
+  siblings. 1798 passed (1795 + 3 new) + 2 xfailed; ruff and mypy clean.
+Task 17: COMPLETE (round 2, post-review). See task-17-report.md for the full addressed list.
   for implying it was already met.
+Task 17: implemented, commits 7160e16 + 9d2f8d4. 1797 passed + 2 xfailed (+2 new); ruff and mypy clean.
+  Both new tests confirmed FAIL before implementation; both Step-5 mutations confirmed FAIL then reverted.
+  THE UNDECLARED-CASE FORK WAS DECIDED DELIBERATELY, AS ASKED: absent-not-null, which matches task 1's
+  existing pin with NO amendment needed. That is the outcome I hoped for but did not assume — the
+  instruction was that the pin's greenness must not be an accident, and the report states the reasoning
+  rather than reporting the green.
+  § Statistical reporting's "the resolved values are recorded in run.yaml beside the interval" IS NOW
+  TRUE. It was false for the whole slice, and tasks 12, 13 and 14 each shipped a comment implying
+  otherwise and were each corrected for it.
+Task 17 review dispatched. BASE 584a24a, HEAD 9d2f8d4.
+Task 17 review: spec ❌, quality 1 CRITICAL + 5 Important + 8 Minor.
+  CRITICAL — THE ECHO IS EMITTED AS A YAML ALIAS, AND NEITHER TEST COULD SEE IT. resample_beside's inner
+  dict is ONE OBJECT shared into weighted_beside and every cond_beside_n, and summarize_step spreads
+  beside_n verbatim — so safe_dump writes `resample: &id001 {...}` once and `resample: *id001` at every
+  other block. Observed: a report_by run emits 6 metric blocks, 1 anchor, 5 ALIASES. BOTH NEW TESTS CALL
+  yaml.safe_load, WHICH RESOLVES ALIASES — the reader undoes the exact thing that is wrong before
+  asserting. A NEW SHAPE OF "a check that could not fail": THE DEFECT LIVES IN THE SERIALIZATION AND THE
+  TEST PARSES IT AWAY. The repo has already ruled on this in hypotheses.py's _observed_block ("the number
+  ... is no longer readable where it is written"). technical_n aliases identically TODAY, so the shared
+  beside_n carrier my brief mandated pre-dates this task; ONE FIX IN summarize_step CLOSES BOTH, and the
+  guarding test MUST READ THE RAW run.yaml TEXT.
+  IMPORTANT 3 — THE DECISION WAS RIGHT AND THE STATED REASON WAS NOT THE REASON, which is exactly what I
+  asked to be pressed on. Mutation confirms BOTH task-1 pins PASS with the `declared` guard removed —
+  _assert_undeclared_resample_shape never asserts "resample" not in ..., so the pin was NEVER what made
+  absent-not-null safe. The real justification is better: run.yaml EMBEDS THE CONFIG VERBATIM, so an
+  undeclared run already shows statistics.resample absent beside resample_draws: 2000 — the
+  "can't tell a default from a choice" cost I raised IS NOT REAL.
+  IMPORTANT 4 — THIRD INCOMPLETE SWEEP IN THIS SLICE. stats.py's comment still says beside_n carries
+  "technical_n today", now wrong by two, and the sweep stopped at the file my brief named.
+  Contrast entries get no echo — registered against H4's contrast-side hardening, same owner as task 16's
+  filed items.

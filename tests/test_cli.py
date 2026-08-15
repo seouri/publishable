@@ -7312,7 +7312,18 @@ def test_the_resolved_resample_is_recorded_beside_every_interval(tmp_path, capsy
     """§ Statistical reporting: "the resolved values are recorded in `run.yaml`
     beside the interval so the number is never the result of an undocumented
     default". Carried on `beside_n`, the documented route for a key that sits
-    beside `n` rather than joining it — the same position `weighted_by` takes."""
+    beside `n` rather than joining it — the same position `weighted_by` takes.
+
+    The raw-text assertion is not decorative: `resample_beside`'s inner dict is
+    one Python object shared into every metric block's `beside_n`/
+    `weighted_beside`, and `yaml.safe_dump`'s default aliasing writes the first
+    occurrence as `resample: &id001 {...}` and every other as a bare `*id001`
+    pointer — invisible to `yaml.safe_load`, which resolves aliases before this
+    test's own assertions ever see the data. `test_acceptance_the_verdict_record
+    _carries_every_field` names the identical failure mode for `_observed_block`
+    and `hypotheses.py` fixed it by copying rather than sharing; `stats.py`'s
+    `_beside_n_copy` is the same fix for this carrier.
+    """
     doc = run_a_project(
         tmp_path, capsys=capsys, aggregate_returns="mean_pred", units=40,
         unit_attributes=["cohort"],
@@ -7320,7 +7331,10 @@ def test_the_resolved_resample_is_recorded_beside_every_interval(tmp_path, capsy
                     "resample": {"method": "bootstrap", "n": 500,
                                  "stratify_by": ["cohort"]}},
     )
-    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    text = (doc["run_dir"] / "run.yaml").read_text()
+    assert "&id" not in text
+    assert "*id" not in text
+    run = yaml.safe_load(text)
     aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
     for name in ("pred", "mean_pred"):
         assert aggregated[name]["resample"] == {
@@ -7332,6 +7346,42 @@ def test_the_resolved_resample_is_recorded_beside_every_interval(tmp_path, capsy
     # recorded.
     assert aggregated["pred"]["resample_draws"] == 500
     assert aggregated["mean_pred"]["resample_draws"] == 500
+
+
+def test_the_resolved_resample_survives_report_by_without_aliasing(
+    tmp_path, capsys, monkeypatch
+):
+    """The `report_by` level path carries `weighted_beside`, not the parent's
+    `beside_n` — the one call site the first test above never reaches, since it
+    only reads `conditions[0]["aggregated"]` at the top level. Combining
+    `report_by` with a declared `resample` puts the shared `resample_beside`
+    dict into three metric blocks at once (the parent's `pred`, and each of the
+    two `cohort` levels' own `pred`), which is exactly the shape that produces
+    an anchor and two aliases if `_beside_n_copy` is ever bypassed."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+    doc = run_a_project(
+        tmp_path, capsys=capsys, units=40,
+        unit_attributes=["cohort"],
+        statistics={"correction": "holm", "report_by": ["cohort"],
+                    "resample": {"method": "bootstrap", "n": 500,
+                                 "stratify_by": ["cohort"]}},
+    )
+    text = (doc["run_dir"] / "run.yaml").read_text()
+    assert "&id" not in text
+    assert "*id" not in text
+    run = yaml.safe_load(text)
+    step_block = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    expected = {"method": "bootstrap", "n": 500, "stratify_by": ["cohort"]}
+    assert step_block["pred"]["resample"] == expected
+    by = step_block["by"]["cohort"]
+    assert by["a"]["pred"]["resample"] == expected
+    assert by["b"]["pred"]["resample"] == expected
+    # Not the same object as the parent's, even though it compares equal — a
+    # mutation of one must never reach the other, and this is the assertion a
+    # `dict(v)` copy passes and a bare reuse of `beside_n["resample"]` would not.
+    assert by["a"]["pred"]["resample"] is not step_block["pred"]["resample"]
 
 
 def test_no_resample_block_is_recorded_when_none_was_declared(tmp_path, capsys):
