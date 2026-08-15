@@ -3012,8 +3012,10 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     cluster count — so a fault in the block is named on its own terms rather
     than the whole block being refused. The *honouring* — resolving the block
     in `cli.command_run` and threading it into the interval constructions —
-    lands in the two tasks after this one, and until it does a declared
-    `resample` changes no interval. `.null_test` is still refused the same way
+    had not landed as of commit `2fdc957` (H4a task 12, the wholesale
+    refusal's retirement): check `cli.command_run`'s `derived_metric_draws`
+    directly rather than trusting this sentence, since two tasks after that
+    commit close exactly this gap. `.null_test` is still refused the same way
     the whole family used to be: a declared 5000-draw permutation that runs
     and reports nothing is the silent-no-op class, and `p_value` exists
     nowhere in this build. A top-level `hypotheses` block is refused the same
@@ -4997,14 +4999,15 @@ def _check_resample(doc: dict[str, Any], roster: UnitList | None, c: Collector) 
     `limits.min_clusters` against the resolved cluster count.
 
     `_check_unimplemented`'s wholesale refusal of a declared `resample`
-    retired with H4a task 12 — a shape fault inside the block is worth
-    reporting on its own terms rather than only as "unsupported", the same way
-    a malformed `report_by` entry is worth naming even though `report_by`
-    runs for real.
-    Resampling itself is not honored by `cli.command_run` yet at that same
+    retired with H4a task 12 (commit `2fdc957`) — a shape fault inside the
+    block is worth reporting on its own terms rather than only as
+    "unsupported", the same way a malformed `report_by` entry is worth
+    naming even though `report_by` runs for real.
+    Resampling itself had not been honored by `cli.command_run` as of that
     commit; the two tasks after it resolve the block and thread it into the
-    interval constructions, so a declared `resample` validates clean here
-    before it changes any interval.
+    interval constructions, so a declared `resample` validated clean here
+    before it changed any interval. Check `cli.command_run`'s
+    `derived_metric_draws` directly for whether that gap is still open.
 
     Every check here presupposes the declaration is a mapping; a scalar or a
     list is `check_envelope`'s `E-CONFIG-TYPE` (`statistics.resample` is typed

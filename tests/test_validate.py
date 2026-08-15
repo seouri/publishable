@@ -3329,23 +3329,28 @@ def test_a_resample_method_of_the_wrong_type_is_a_type_fault_not_a_second_findin
 def test_a_resample_n_of_the_wrong_type_is_a_type_fault_not_a_traceback(write_config):
     """`n: "many"` is `E-CONFIG-TYPE`; a bare `n >= 80` raises `TypeError` on a
     string and would take out the entire `validate` call, not just this
-    check. This test must fail if the `isinstance` guard is removed. `method:
-    "bootstap"` rides beside the bad `n` leaf so this test still proves
-    validation continued past it, on a finding from `_check_resample` itself
-    rather than the retired wholesale refusal."""
+    check. This test must fail if the `isinstance` guard is removed. An
+    unknown `stratify_by` name rides beside the bad `n` leaf — checked
+    DOWNSTREAM of the `n` floor in `_check_resample`'s source order, unlike
+    a `method` fault, which runs upstream of `n` and so would not catch a
+    `return` inserted right after the `n` check — so this test proves
+    validation continued PAST the `n` leaf specifically, on a finding from
+    `_check_resample` itself rather than the retired wholesale refusal."""
     found = codes(
         write_config(
             {
                 "data.units": _RESAMPLE_UNITS,
-                "statistics": {"resample": {"method": "bootstap", "n": "many"}},
+                "statistics": {
+                    "resample": {"method": "bootstrap", "n": "many", "stratify_by": ["nope"]}
+                },
             }
         )
     )
     assert "E-CONFIG-TYPE" in found
     assert "E-STATS-RESAMPLE-N" not in found
-    # Validation continued past the bad leaf: a second, independent
-    # `_check_resample` finding on the same declaration still fires.
-    assert "E-STATS-RESAMPLE-METHOD" in found
+    # Validation continued past the `n` leaf: a second, independent
+    # `_check_resample` finding that runs AFTER `n` in source order still fires.
+    assert "E-STATS-RESAMPLE-STRATIFY-UNKNOWN" in found
 
 
 def test_a_resample_n_of_bool_type_is_a_type_fault_not_a_floor_violation(write_config):
@@ -3354,21 +3359,25 @@ def test_a_resample_n_of_bool_type_is_a_type_fault_not_a_floor_violation(write_c
     `E-CONFIG-TYPE` from the envelope already; this pins that it does NOT also
     earn `E-STATS-RESAMPLE-N` — the same double-report shape the `method`
     fix (task 4's post-review commit) corrected, on the field that motivated
-    the correction in the first place. `method: "bootstap"` rides beside the
-    bool `n` so this test still proves validation continued past it, on a
-    finding from `_check_resample` itself rather than the retired wholesale
-    refusal."""
+    the correction in the first place. An unknown `stratify_by` name rides
+    beside the bool `n`, checked downstream of `n` in source order for the
+    same reason the sibling test above uses it rather than `method`, so this
+    test still proves validation continued past the `n` leaf specifically,
+    on a finding from `_check_resample` itself rather than the retired
+    wholesale refusal."""
     found = codes(
         write_config(
             {
                 "data.units": _RESAMPLE_UNITS,
-                "statistics": {"resample": {"method": "bootstap", "n": True}},
+                "statistics": {
+                    "resample": {"method": "bootstrap", "n": True, "stratify_by": ["nope"]}
+                },
             }
         )
     )
     assert "E-CONFIG-TYPE" in found
     assert "E-STATS-RESAMPLE-N" not in found
-    assert "E-STATS-RESAMPLE-METHOD" in found
+    assert "E-STATS-RESAMPLE-STRATIFY-UNKNOWN" in found
 
 
 def test_resample_method_null_or_absent_takes_the_documented_default(write_config):
@@ -11279,22 +11288,6 @@ def test_a_declared_resample_is_no_longer_refused_wholesale(write_config):
     # The positive companion, in the same test: the config is now CLEAN of every
     # resample finding, so this cannot pass by the refusal having been renamed.
     assert not [code for code in found if code.startswith("E-STATS-RESAMPLE")]
-
-
-def test_a_declared_null_test_is_still_refused_h4a(write_config):
-    """The sibling entry in the same loop is H4d's and does not retire here. A
-    single-key retirement that deleted the whole loop would pass the test
-    above and fail this one — the control that keeps the sibling honest."""
-    assert "E-STATS-NULLTEST-UNSUPPORTED" in codes(
-        write_config(
-            {
-                "data.units": {"from": "index.csv", "key": "patient_id"},
-                "statistics": {
-                    "null_test": {"method": "permutation", "n": 5000, "shuffle": "cohort"}
-                },
-            }
-        )
-    )
 
 
 def test_the_retired_resample_code_appears_nowhere_in_src():

@@ -1138,11 +1138,13 @@ def stratum_names(stratify_by: Any) -> tuple[str, ...]:
     own reason, one field over: `validate`'s *Allocation strata exist* and
     *Resample strata exist* rows each check the names this returns. `assign`'s
     own draw already balances on the names this returns; a resample draw is
-    built (`stats.percentile_over_units`'s stratified branch) but not yet
-    wired to a config's declaration — `cli.command_run` doesn't resolve
-    `statistics.resample` into a call here yet — and when it is wired it has
-    to read the same declaration this way too, or two independent readings of
-    one declaration would be pinned in agreement by nothing. A bare string read as one name
+    built (`stats.percentile_over_units`'s stratified branch) but, as of
+    commit `2fdc957` (H4a task 12), still not wired to a config's declaration
+    — `cli.command_run` did not yet resolve `statistics.resample` into a call
+    here. Check `cli.command_run` directly for whether that wiring has since
+    landed; whenever it does, it has to read the same declaration this way
+    too, or two independent readings of one declaration would be pinned in
+    agreement by nothing. A bare string read as one name
     here and as a sequence of characters there is exactly the
     validate-clean-then-disagree shape that costs.
     """

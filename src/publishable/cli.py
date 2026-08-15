@@ -1500,14 +1500,16 @@ def command_run(config_path: Path) -> int:
             # fires and such a project never rebuilds a row list at all.
             unit_attributes = {u.key: dict(u.attributes) for u in roster if u.attributes}
             # `statistics.resample` is no longer refused wholesale (H4a task
-            # 12 retired that refusal), but nothing here reads a declared one
-            # yet — that lands in the two tasks after it, which resolve the
-            # block in `cli.command_run` and thread it into every interval
-            # construction. Until then this is the one place the default
-            # `reference.md` § How a metric becomes a number documents —
-            # bootstrap at 2000 — is a real, passed value rather than
-            # `summarize_step`'s own default taking effect unseen at every
-            # call site that forgets it.
+            # 12, commit `2fdc957`, retired that refusal), but this line still
+            # does not read a declared one as of that commit — the two tasks
+            # after it resolve the block here and thread it into every
+            # interval construction. If this line still reads a literal 2000
+            # rather than a resolved value, that gap is still open; this
+            # comment describes its own line, so update both together. Until
+            # resolved, this is the one place the default `reference.md` §
+            # How a metric becomes a number documents — bootstrap at 2000 —
+            # is a real, passed value rather than `summarize_step`'s own
+            # default taking effect unseen at every call site that forgets it.
             derived_metric_draws = 2000
             aggregate_where = f"{doc.get('experiment_type', '')}.aggregate"
             # `aggregate` is user code in exactly the sense `runner.py`'s own

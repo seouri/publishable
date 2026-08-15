@@ -582,10 +582,11 @@ def percentile_over_units(
     rather than fixed here. Under the finiteness condition, though, a column's
     `resample_draws` — once a later slice wires `statistics.resample` for
     recorded columns into `summarize_step` (the wholesale refusal retired with
-    H4a task 12, but `cli.command_run` does not yet resolve the block into a
-    call here, so the recorded-column branch there still carries no
-    `resample_draws` key at all) — can safely be the REQUESTED `n` rather than
-    a survivor count, and
+    H4a task 12, commit `2fdc957`; as of that commit `cli.command_run` did
+    not yet resolve the block into a call here, so the recorded-column branch
+    there still carried no `resample_draws` key at all — check
+    `cli.command_run` directly for whether that has since changed) — can
+    safely be the REQUESTED `n` rather than a survivor count, and
     `percentile_over_units`'s return type need not change to carry one: a
     non-finite draw statistic would not be caught by a survivor filter either,
     since nothing here treats `nan`/`inf` as a failed draw to exclude, so
