@@ -144,7 +144,8 @@ statistics:
                                          #   of: "shift=abnormal", against: "shift=normal",
                                          #   within: {sex: f}}] — `within` is optional and
                                          #   restricts to a stratum. See "Contrasts"
-  resample: null                         # NOT BUILT; {method: bootstrap, n: 2000, stratify_by: []}
+  resample: null                         # NOT BUILT; bootstrap
+                                         #   {method: bootstrap, n: 2000, stratify_by: []}
                                          #   → percentile CIs for column metrics too; derived
                                          #   metrics resample either way
   null_test: null                        # NOT BUILT; e.g. {method: permutation, n: 5000,
@@ -2323,6 +2324,14 @@ And `cohens_d`, when the metric is a per-unit mean: **paired contrasts report *d
 A [`null_test`](#what-isnt-a-repeat) p-value is corrected alongside the intervals when the method supplies one, at the same level the interval was computed at. **It does not add a place in the family**: the family counts comparisons × metrics, and a metric reported with both an interval and a p-value is one metric described two ways, not two findings. Counting it twice would correct a design for declaring `null_test` rather than for the comparisons it actually put in front of a reader.
 
 **A derived metric is resampled whether or not you declare `statistics.resample`.** The two `basis: units` rows of the first table above — the column metric and the derived one — are not symmetric, and this is the asymmetry: a column metric has a t-interval available, so resampling it is a choice, and `resample` is what makes it. A derived metric has no such fallback — there is no closed form for the sampling distribution of whatever `aggregate` computed — so the alternatives are a percentile interval from resampling or no interval at all, and core resamples. With `resample: null` it uses the default it documents here, `bootstrap` at `n: 2000`, which is why the worked example reports `method: percentile_over_units` under a config that declares nothing. Declaring `resample` then changes the method or the count rather than switching the behaviour on, and the resolved values are recorded in `run.yaml` beside the interval so the number is never the result of an undocumented default. **In this build a declared [`cluster_by`](#clustered-units) is the one case where core resamples nothing**: the clustered draw for a *recomputed* metric is a construction that doesn't exist yet, and reporting a unit-level percentile beside recorded columns that are cluster-robust would be the narrower interval this section exists to refuse — so core drops that step's derived metrics and says so. The refusal is [`E-DATA-CLUSTER-DERIVED`](#errors-core-raises) and the record is [`W-STATS-AGGREGATE-FAILED`](#warnings-core-reports) carrying that code in its message — the same containment every other `aggregate` fault gets, so the recorded columns keep their clustered intervals and the run keeps its `run.yaml`. It is a run-time refusal rather than a `validate` one for the reason that row gives: whether a template derives anything is not knowable before `aggregate` runs.
+
+**Resample methods.** `statistics.resample.method` names how the draws are taken, and the vocabulary is closed:
+
+| `method` | What one draw is |
+|---|---|
+| `bootstrap` | Units drawn with replacement to the original count, or whole [clusters](#clustered-units) when `cluster_by` is declared, or within each [stratum](#weighted-samples) when `stratify_by` is — the statistic recomputed on each draw |
+
+One value is the whole enum. It is stated as an enum rather than left implicit so that adding a second is a documented change rather than a silent one, and so a misspelled `method` is a refusal the schema can name rather than a value silently ignored. The method strings in the two construction tables above — `percentile_over_units`, `paired_percentile_over_units` and their `_clustered` forms — are what core **emits** into `run.yaml`, not values a config may name here.
 
 **`resample_draws` says how many draws the interval actually rests on**, recorded beside every derived metric in `aggregated`. Resampling a derived metric means [recomputing it](#templates-where-parameters-are-defined), and a draw can legitimately have no answer: a resampled table with no variance makes a correlation `nan`, makes a hand-rolled ratio raise, and makes a careful `aggregate` return `None`. Which library the template happened to call is not a fact about whether the draw was degenerate, so all three are dropped alike and the percentiles are read off what survived. The field is `null` when resampling was never attempted, `0` when it was attempted and every draw was degenerate, and otherwise the surviving count — three different facts that `ci95: null` alone cannot tell apart.
 
