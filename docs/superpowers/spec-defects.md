@@ -1724,6 +1724,14 @@ appears in at least one draw, the property the fix exists to produce.
 `(0, 0)` — a one-draw pool's single value reported as both bounds of a degenerate interval — and is
 unpinned by any test.
 
+**AMENDED 2026-08-15 (spec-defects staleness audit at `5578988`): the first fix's parenthetical is
+now false.** "`statistics.resample` still isn't honored, so there is nothing else to pass" was true
+when written. H4a made a declared `resample` real, and `cli.py` now sets
+`derived_metric_draws = resample_spec["n"]` when the config declares one, keeping the named 2000
+default when it does not — so the value this fix made visible end to end is exactly the one a
+config now supplies. Nothing else in the entry changes; the `null`/`0` distinction it minted is
+unaffected.
+
 ## New error identifiers: `E-STATS-CONTRASTS-UNSUPPORTED`, `E-STATS-RESAMPLE-UNSUPPORTED`, `E-STATS-NULLTEST-UNSUPPORTED`, `E-STATS-REPORTBY-UNSUPPORTED`, `E-HYPOTHESIS-UNSUPPORTED`
 
 **Retirement status:** `E-STATS-CONTRASTS-UNSUPPORTED` retired with S4b,
@@ -1772,6 +1780,20 @@ Statistics** (spine § The hardening slices), which owns `statistics.resample` a
 string and is left alone — a diagnostic should not name this repository's internal slice IDs — but
 the *ledger's* deferral now has an owner, which is what was missing. The three retired codes need
 nothing further.
+
+**AMENDED 2026-08-15 (spec-defects staleness audit at `5578988`): one of the two live refusals has
+retired; `E-STATS-NULLTEST-UNSUPPORTED` is the only one left.**
+`E-STATS-RESAMPLE-UNSUPPORTED` retired with **H4a**, which honours a declared `statistics.resample`
+for real — method enum, draw count, strata, column metrics, clustered metrics, derived metrics and
+column contrasts. It is gone from `src/` (zero occurrences) and from the four documents;
+`reference.md` § The one config file records the block *leaving* the `NOT BUILT` list rather than
+still naming it. Two surviving mentions, both deliberate and neither a use: `tests/test_validate.py`
+keeps `assert "E-STATS-RESAMPLE-UNSUPPORTED" not in found` and a sweep asserting no source file
+carries the string — the same negative-assertion exception `E-HYPOTHESIS-UNSUPPORTED` already holds,
+now its second instance — and `docs/feasibility-llm-growth-studies.md` § Executability on this build
+names it inside a dated measurement, which is a feasibility analysis and not one of the four
+documents. `E-STATS-NULLTEST-UNSUPPORTED` is unchanged and still live; its retiring slice is
+**H4d** specifically, which the 2026-08-11 amendment above could only name as the H4 family.
 
 ## S4a whole-branch review: four defects fixed, and what `reference.md` gained
 
@@ -1900,6 +1922,17 @@ and `statistics.resample` is refused — but S4b or S4c will wire it up when the
 `resample` block lands, and would inherit the gap. Apply the same floor at that point, or make
 the two share one entry point.
 
+**AMENDED 2026-08-15 (spec-defects staleness audit at `5578988`): the 2026-08-11 amendment's
+surviving half is FALSE too, and the entry is closed on both claims.** "Nothing in production calls
+it" no longer holds: `E-STATS-RESAMPLE-UNSUPPORTED` retired with H4a, and `stats.summarize_step`'s
+recorded-column branch calls `percentile_over_units` whenever a declared `statistics.resample` makes
+`resample_columns` true. It arrives **guarded** — the survivor floor S4c task 9 added sits on the
+path the production caller now takes, which is the sequencing that task hoped for when it landed the
+floor ahead of a caller. The same correction governs "RESOLVED in S4c Task 9: `percentile_over_units`
+now shares `percentile_of_derived`'s survivor floor" below, whose "still unreachable in production as
+of this task" was true of that task and is not true at HEAD; it is recorded here so there is one copy
+of the correction rather than three.
+
 ## New identifiers from the S4b whole-branch review: `E-STATS-CONTRAST-SAME-SIDES`, `E-STATS-CONTRAST-SHAPE`, `W-STATS-CONTRAST-THIN`
 
 Three codes minted while closing the S4b whole-branch review, all in the same shape as
@@ -1998,6 +2031,18 @@ move. `max_ineligible_fraction` is still written by `materialize.py` and read by
 `min_clusters` and `min_units_per_cell` stay unreachable behind `cluster_by` and
 `allocation: between`. It needs `runner.attrition`'s `ineligible` count at the point the run
 record is assembled, which is where S4c's reporting work already is.
+
+**AMENDED 2026-08-15 (spec-defects staleness audit at `5578988`): one of the two surviving claims is
+now false.** `limits.min_clusters` **is read** — `validate.py` names it at eleven sites and emits
+`W-STATS-RESAMPLE-CLUSTERS` when a declared `data.units.cluster_by` would put a resample below it.
+Two slices did that between them: H3b made `cluster_by` reachable, and H4a gave the limit the
+declaration it is checked against. `limits.min_units_per_cell` is the only one of the three still
+declared, typed, and read by nothing, and it has its own live entry below
+("`limits.min_units_per_cell` is still declared, typed, and read by nothing, now that
+`allocation: between` is reachable for real"), which is where that half is tracked. The carry table
+in "Carried out of the S4a whole-branch review" states the same "unread … but unreachable" fact in
+one of its historical cells and is deliberately
+left as filed — this is the single correction, so the count of copies does not drift.
 
 ## `W-STATS-FAMILY` counts a baseline comparison per condition even with no baseline
 
@@ -2570,6 +2615,18 @@ owns all six remaining names — `Apparatus` and `register_probe` are the appara
 `register_template`/`register_resolver`/`register_writer` are the other three registries, and
 `BaseReport` is the report override. `BaseReport` is shared with **H8 Studies and reporting**,
 which builds `report`; H7 exports the name, H8 makes it do something.
+
+**AMENDED 2026-08-15 (spec-defects staleness audit at `5578988`): one of the six landed, and the
+audit's "zero registries exist" no longer stands.** H7a shipped project-local templates, so
+`register_template` is defined (`src/publishable/templates/discovery.py`) and exported: `__all__`
+holds **eleven** names, not ten, and `reference.md` § The importable surface marks that row `built`
+while the other three registries keep `not yet built` — document and code agree, so this is a
+closure rather than a new divergence. **One** of the four registries exists, not zero. The table
+therefore names **five** absent things, not six: `Apparatus`, `BaseReport`, `register_resolver`,
+`register_probe`, `register_writer`. The residual narrows with it and stays H7's, now by sub-slice:
+`register_resolver`/`register_writer`, `register_probe` and `Apparatus` are **H7b/H7d** — H7a shipped
+none of entry-point resolution, the other three registries, probes, the `Apparatus`, or the change
+gate — and `BaseReport` is still shared with **H8**.
 
 ## Carried out of S5a for S5b: `Estimate.ci95` has no length or ordering rule
 
@@ -3211,6 +3268,14 @@ residual — that none of the four is exported, and the table now marks them `no
 tracked in "The importable surface names five things `publishable/__init__.py` does not export"
 above, owned by H7.
 
+**AMENDED 2026-08-15 (spec-defects staleness audit at `5578988`): the disposition stands; its last
+clause does not.** The § Templates and § Creating a plugin occurrences are still prose *about* the
+decorator's semantics, so this remains not a defect. What changed is the tail: since H7a the
+§ The importable surface table no longer marks `register_template` `not yet built` — it marks it
+`built`, and `publishable` exports it — so "none of the four is exported" is false of that one name.
+The related residual is correspondingly narrower; see the 2026-08-15 amendment on the entry this
+paragraph points at.
+
 ## Validate-time `E-` identifiers have no registry, where `W-` ones now do
 
 Found by task 16's cross-document pass, comparing the two registries against `src/`.
@@ -3636,6 +3701,18 @@ an unresolvable `experiment_type` can name a template some *uninstalled* distrib
 which is the entry-point resolution H7 owns; with `generic` the only installed template, the hint
 would name a distribution core has no way to check. No code change made.
 
+**AMENDED 2026-08-15 (spec-defects staleness audit at `5578988`): locator corrected; finding and
+owner unchanged.** H7a renamed the § Validation row this section names. It is **"Template resolves"**,
+not "Template is installed" — grep for the new name, not the old one. (The line number `211` is the
+one task 11 measured and is not re-measured here; the row is located by its name.) The finding
+survives intact: `validate_config` still reports `E-TEMPLATE-UNKNOWN` through
+`unknown_template_message(name, known)` and still prints no `plugin` hint. So does the reasoning,
+with one term corrected — H7a made a project-local `templates/*.py` resolvable, so `generic` is no
+longer the only *resolvable* template, but it is still the only *installed* one, and an uninstalled
+distribution is precisely what core still has no way to check. Two load-time refusals joined the same
+surface (`E-TEMPLATE-LOAD`, `E-TEMPLATE-COLLISION`), reported under the code the raise carries;
+neither bears on this row. **Owner stays H7 — specifically H7b**, which owns entry-point resolution.
+
 ### Row 212 "Template version moved", first half — **Owner: H7 Plugins and the apparatus**
 
 `_check_versions` compares the declared `template_version` against the module constant
@@ -3648,6 +3725,19 @@ when a plugin ships a template with a version of its own, which is H7's work.
 The row's *second* half — "`request.timeout` is new and unset (warning)" — was implemented here
 instead: it is computable from `parameter_spec` alone, needs no new identifier, and is named inside
 `W-TEMPLATE-VERSION`'s existing message gated on the version mismatch.
+
+**AMENDED 2026-08-15 (spec-defects staleness audit at `5578988`): the justification is stale; the
+finding, the row name and the owner are not.** "Behaviourally inert while `generic` is the only
+installed template" no longer carries the point by itself, because H7a made a second kind of template
+resolvable. Inertness now rests on a composed reason: `generic` is still the only *installed*
+template and `materialize` still the only writer of the field, **and** H7a ruled that a project-local
+template writes **no `template_version` at all** and is never version-checked — `materialize.py`
+omits the line for a local template, and `_check_versions` skips the comparison whatever a local
+config declares, which `reference.md` § Validation and § Three hashes both state. The gap itself is
+untouched: `_check_versions` still compares against the module constant `materialize.TEMPLATE_VERSION`
+rather than an installed template's own reported version, and still becomes observable only when a
+plugin ships a template carrying one. **Owner stays H7 — specifically H7b.** Unlike its sibling, this
+row was *not* renamed: it is still "Template version moved".
 
 ### Row 284 "Correction can be applied" — **Owner: H4 Statistics**
 
@@ -3822,6 +3912,27 @@ rediscovered.
 
 Task 12 changed no code for any of this. What it changed is the sentence in `reference.md`
 § Validation, which now names all four cases and is true as written.
+
+**AMENDED 2026-08-15 (spec-defects staleness audit at `5578988`): the enumeration's row for
+`measurements` · `holdout` · `assign` · `resample` · `null_test` · `sweep.groups`/`paired`/`ablate`/`sample`
+has aged.** Its verdict "unreachable; refused by the `-UNSUPPORTED` family" was true of all nine
+blocks on
+2026-08-11 and is true of three today. The `-UNSUPPORTED` codes still raised anywhere in `src/` are
+`E-DATA-ALLOCATION-UNSUPPORTED`, `E-DATA-HOLDOUT-UNSUPPORTED`, `E-DATA-RESOLVER-UNSUPPORTED`,
+`E-REPL-FOLD-STRATIFY-UNSUPPORTED`, `E-SWEEP-GROUPS-UNSUPPORTED` and
+`E-STATS-NULLTEST-UNSUPPORTED` — so of that row's blocks only `data.units.holdout`,
+`statistics.null_test` and `sweep.groups` are still unreachable behind one.
+(`E-STATS-CONTRASTS-UNSUPPORTED` also matches a `src/` grep, but only inside explanatory comments in
+`cli.py` and `validate.py`; it is raised nowhere and its retirement stands.) `statistics.resample` is
+the one this audit followed through: reachable since H4a **and closed one level in** —
+`envelope.LEAF_TYPES` types `statistics.resample.method` / `.n` / `.stratify_by` individually rather
+than leaving the block whole, and `envelope.py`'s own comment records that the closure landed
+*before* the wholesale refusal retired, so a typo among the three was never briefly unreachable.
+`data.units.measurements` was already closed the same way, and `data.units.assign` has
+`_check_assign_axis_keys`. **Not verified by this audit:** `sweep.paired`, `sweep.ablate` and
+`sweep.sample` became reachable with H2/H3 work and are still typed as whole `dict`s in
+`LEAF_TYPES`, so whether an additive junk key inside one is reported rests on each mode's own
+checker — named here as an open question rather than answered.
 
 ## `sweep.grid` and `sweep.paired` naming the same path is unaddressed by § Expansion modes
 
@@ -5130,6 +5241,25 @@ end to end. The docstring landed in `stats.py` was reworded to say the invariant
 whenever that wiring lands, rather than asserting current behavior the code does not have — the
 same "comment claiming a guarantee the code does not provide" failure mode this repo has hit at
 least eight times before.
+
+**AMENDED 2026-08-15 (spec-defects staleness audit at `5578988`): the documentation debt this entry
+books was PAID, and its owner — "whichever slice (task 12/14) wires column resample into
+`summarize_step`" — is a closed slice, so nothing here is left owing.** That slice ran: it was H4a.
+`reference.md` § Statistical reporting now carries the column-provenance paragraph this entry said
+was owed, and it says what the ruling above ruled — a recorded column's `resample_draws` is
+**absent** (not `null`) with no declared `resample`, `null` whenever `ci95` is, and otherwise the
+**requested** `n`, explicitly "given finite recorded values and finite weights", with the
+two-valued-for-a-column against three-valued-for-a-derived-metric asymmetry named rather than
+smoothed over and the unchecked-finiteness gap disclosed in the same paragraph. The
+`W-STATS-RESAMPLE-THIN` consequence recorded above (it can never fire for a column) is unchanged and
+still correct. **One sentence of this entry is false at HEAD** and is corrected rather than deleted:
+the closing clause "`E-STATS-RESAMPLE-UNSUPPORTED` still refuses a declared `resample` end to end"
+described the code at `c5de085` and stopped being true when H4a task 12 retired that code;
+`summarize_step`'s recorded-column branch now emits `resample_draws` under a declared resample, as
+the entry "A column's `resample_draws` under a refused (too-few-units) interval is `null`, not the
+requested `n`" records. The rest of that paragraph stands as the dated
+record it is. The separate finiteness gap it uncovered is **not** closed and keeps its own entry and
+its own H4b owner below.
 
 ## A column resample is only ever defined given finite inputs, and nothing checks that today
 
