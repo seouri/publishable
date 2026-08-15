@@ -907,6 +907,9 @@ Task 17 review: spec ❌, quality 1 CRITICAL + 5 Important + 8 Minor.
   "technical_n today", now wrong by two, and the sweep stopped at the file my brief named.
   Contrast entries get no echo — registered against H4's contrast-side hardening, same owner as task 16's
   filed items.
+  CORRECTION (whole-branch fix pass, 2026-08-15): that registration never happened — spec-defects.md
+  carried no such amendment. Now filed for real as Finding 3 on the task-16 entry ("The contrast path
+  discloses nothing about its resample..."), owner H4b.
 Task 17: COMPLETE (commits 7160e16 superseded, b20349e, c4b82e1). 1798 passed + 2 xfailed; ruff and mypy
   clean. Critical and all five Importants closed. The fix is stats.py's _beside_n_copy (deepcopy),
   replacing both spreads — AND THE FIRST ATTEMPT WAS A SHALLOW COPY THAT STILL ALIASED THE NESTED
