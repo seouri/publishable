@@ -52,9 +52,14 @@ no change to the four documents is needed.
 **AMENDED 2026-08-11 (S5 checkpoint, task 16): NARROWED AGAIN, AND THE "no document change"
 CLAUSE WAS WRONG.** S4 landed `statistics.contrasts` and `statistics.report_by` for real, so two
 of the four are now **built features whose key `init` does not write** — which is what `CLAUDE.md`'s
-config-completeness triage calls a real gap, not a slice boundary. `resample` and `null_test` are
-still refused outright (`E-STATS-RESAMPLE-UNSUPPORTED`, `E-STATS-NULLTEST-UNSUPPORTED`) and remain
-a boundary. Two document changes were in fact needed and were made by task 16:
+config-completeness triage calls a real gap, not a slice boundary. At the time of this amendment
+(2026-08-11), `resample` and `null_test` were both still refused outright
+(`E-STATS-RESAMPLE-UNSUPPORTED`, `E-STATS-NULLTEST-UNSUPPORTED`) and remained a boundary. **That is
+no longer true of `resample` as of H4a task 12 (2026-08-15), which retired
+`E-STATS-RESAMPLE-UNSUPPORTED` wholesale — `resample` is now a third built feature whose key `init`
+does not write, same as `contrasts` and `report_by`. `null_test` remains refused
+(`E-STATS-NULLTEST-UNSUPPORTED`) and is the one sub-block this entry's "built vs. boundary" split
+still describes.** Two document changes were in fact needed and were made by task 16:
 
 - `reference.md` § The one config file: task 6's clause explained the four blocks' absence by "a
   feature core does not yet execute", which is false for `contrasts` and `report_by`. Rewritten to
@@ -66,15 +71,28 @@ a boundary. Two document changes were in fact needed and were made by task 16:
   it now says. The prevented mistake is not weakened: an unknown key still fails validation.
 
 **Residual — CLOSED by H4a (2026-08-15).** Whether `init` should materialize the optional
-`statistics` sub-blocks: **no.** Three grounds, in the order they bind.
+`statistics` sub-blocks: **no.** Grounds 2 and 3 carry the ruling; ground 1 is context, qualified
+below rather than dropped, because an earlier draft over-read it.
 
-1. `parameter_spec` is the single source of truth for what `init` writes, and none of these is a
-   parameter. `materialize.py` writes `statistics.correction` and a top-level `hypotheses: []`
-   and nothing else under `statistics`.
-2. `reference.md` § The one config file already resolves it for `contrasts` and `report_by` —
-   its fenced example is "the complete config *schema*, which is a wider thing than the literal
-   output of `init`; a materialized file that does not carry them is not an incomplete config" —
-   and `resample` and `null_test` inherit that sentence rather than needing their own.
+1. **Context, not a standalone argument: `parameter_spec` is the single source of truth for what
+   `init` writes as a plugin's *own* parameters, but this does not by itself forbid a hand-written
+   `statistics` sub-block** — `materialize.py` already writes `statistics.correction` (and a
+   top-level `hypotheses: []`), and neither is a `Param` either. So "not a parameter" alone proves
+   too much; it would argue against the block core already materializes. What ground 1 does
+   establish: nothing about `resample`/`null_test`/`contrasts`/`report_by` being non-`Param`
+   *requires* materializing them, which leaves the decision to grounds 2 and 3.
+2. **The argument, not just the citation: `reference.md` § The one config file's "wider than
+   `init`'s output" sentence was written by task 16 specifically to let a BUILT feature go
+   unmaterialized.** Before task 16, the config-completeness clause explained an absent block by
+   "a feature core does not yet execute" — false once `contrasts` and `report_by` were built, which
+   is why task 16 rewrote it to rest on the schema being wider than `init`'s literal output "with no
+   claim about which features are built" (the amendment two paragraphs above). `resample` becoming a
+   built feature at H4a task 12 is exactly the condition that sentence was generalized to cover, not
+   a new case needing its own carve-out — the same logic that lets `report_by` go unmaterialized
+   today lets `resample` go unmaterialized now that it stands in the same place. `null_test` still
+   sits where `contrasts`/`report_by` sat before task 16 (unbuilt, refused wholesale) and inherits
+   the pre-task-16 reasoning instead: an unbuilt feature's key is not one `init` can honor by writing
+   it.
 3. **The argument only this slice could make:** now that `resample` is honored, a materialized
    `resample: {method: bootstrap, n: 2000}` would be a *declared* resample, so every generated
    project would give every recorded column a percentile interval by default — reversing
@@ -5326,6 +5344,38 @@ The fix is a task, not a line: a level's own two-valued `resample_draws`, a leve
 `min_honest_draws` check (a level with fewer units than the floor should refuse the same way the
 whole-condition case does), and end-to-end tests crossing `report_by` with a declared `resample` —
 not something to improvise inside this task's already-amended scope.
+
+**AMENDED 2026-08-15 (H4a task 19 review): the disclosure premise above was written before task 17
+landed the resolved-`resample`-beside-every-interval recording, which changed what a level's own
+column block actually carries — re-checked against `run.yaml` as this task now writes it, not
+against what task 15 observed three tasks earlier.** A level's recorded-column block today (verified
+end to end, `report_by: [cohort]` crossed with a declared `resample`) is:
+
+```yaml
+resample: {method: bootstrap, n: 500, stratify_by: []}
+method: t_over_units
+# no resample_draws key at all — ABSENT, not null
+```
+
+— the resolved `resample` declaration now sits beside `method: t_over_units`, where before task 17
+it sat beside nothing at all (the key did not exist for a recorded column until task 17 threaded it
+onto every metric block `resample_spec["declared"]` reaches, level blocks included). **The disclosure
+argument still holds, and holds on the same two signals as before plus one more, not on a weaker
+one:** `method` is unchanged (`t_over_units` beside `percentile_over_units` remains the read a
+`report_by` + `contrasts`-savvy reader already has to make), `resample_draws` is unchanged in kind
+(present-with-a-count for the column that honored `resample_columns`, absent for the one that
+didn't — the same absent/null/count three-way split `reference.md` § Statistical reporting documents
+everywhere else in the run, not a new or contradictory reading invented for this one block). The new
+element — a `resample` echo sitting beside `t_over_units` with no `resample_draws` — reads as
+"declared, not the basis of this interval" to a reader who already holds that convention, not as a
+contradiction: it is the identical shape `test_no_resample_block_is_recorded_when_none_was_declared`
+already established for an undeclared run's OWN unresampled columns (absent `resample_draws`, no
+claim of a resolution attempted here), transplanted to a column that sits beside a sibling
+declaration it did not use. Nothing about task 17's own change makes the level path lie; it makes
+the level path echo a declaration whose relevance to that one block a reader must still work out from
+`method`, which is exactly the "discloses, does not explain" gap this entry already named as the
+open half of the fix. The deferral, its owner, and the fix list above are unchanged by this
+amendment.
 
 ## The contrast path discloses nothing about its resample, and `paired_percentile_of_derived` never got the zero-width sweep
 
