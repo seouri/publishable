@@ -5,7 +5,7 @@ from pathlib import Path
 from publishable.errors import ContractError
 from publishable.materialize import materialize_config
 from publishable.provenance import resolves_inside_repo
-from publishable.templates.registry import get_template
+from publishable.templates.registry import get_template, template_names
 
 STARTER_STEP = '''\
 # src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
@@ -52,7 +52,10 @@ def generate_experiment(
     template = get_template(template_name, repo_root)
     if template is None:
         raise ContractError(
-            f"no installed template registers `{template_name}`", code="E-TEMPLATE-UNKNOWN"
+            f"names `{template_name}`, which no template — core's, an installed "
+            f"plugin's, or this project's own `templates/` — registers "
+            f"(known: {', '.join(template_names(repo_root))})",
+            code="E-TEMPLATE-UNKNOWN",
         )
     root = repo_root.resolve()
     for label, raw in (("input_dir", input_dir), ("output_dir", output_dir)):

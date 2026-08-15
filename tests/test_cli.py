@@ -324,6 +324,43 @@ def test_generate_experiment_resolves_a_project_local_template(tmp_path: Path):
     assert excinfo.value.code == "E-TEMPLATE-UNKNOWN"
 
 
+def test_generate_experiments_unknown_template_message_matches_validates(tmp_path: Path):
+    """`E-TEMPLATE-UNKNOWN` is one code with two emitters — this raise and
+    `validate_config`'s finding — and `reference.md`'s one § Errors row
+    describes both, so the wording must agree. Assert the exact message
+    rather than a substring the template name would satisfy either way:
+    the local template is named `cohort_local` and the unknown name is
+    `not_anywhere`, so neither could pass by an interpolated name coinciding
+    with the other."""
+    root = tmp_path / "proj"
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "index.csv").write_text("patient_id\np1\n")
+
+    assert main(["new", str(root)]) == EXIT_OK
+    (root / "templates" / "cohort_local.py").write_text(
+        "from publishable import BaseTemplate, register_template\n\n\n"
+        '@register_template("cohort_local")\n'
+        "class CohortLocal(BaseTemplate):\n"
+        "    pass\n"
+    )
+
+    with pytest.raises(ContractError) as excinfo:
+        generate_experiment(
+            repo_root=root,
+            name="another-experiment",
+            template_name="not_anywhere",
+            input_dir=str(data),
+            output_dir=str(tmp_path / "results"),
+        )
+    assert excinfo.value.code == "E-TEMPLATE-UNKNOWN"
+    assert str(excinfo.value) == (
+        "names `not_anywhere`, which no template — core's, an installed "
+        "plugin's, or this project's own `templates/` — registers "
+        "(known: cohort_local, generic)"
+    )
+
+
 def test_generate_experiment_cli_resolves_a_project_local_template(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ):
