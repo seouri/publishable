@@ -25,7 +25,7 @@ This repository holds both the normative specification and the tool it specifies
 Modules not yet built are still planned, and the slices that build them are listed in
 `docs/superpowers/specs/2026-08-08-implementation-spine-design.md`.
 
-**Order of the slices that remain: H4a → H3d (+3) → H4b → H7b → the rest.** Amended twice on 2026-08-14
+**Order of the slices that remain: H3d (+3) → H4b → H7b → the rest.** Amended twice on 2026-08-14
 against outside evidence — all nine experiments in
 [the feasibility analysis](docs/feasibility-llm-growth-studies.md) were run through `validate`, and
 **none executed**. The gate was the **template registry**, not the plugin system: `get_template` read a
@@ -33,9 +33,11 @@ builtin dict, so every config stopped at `E-TEMPLATE-UNKNOWN` before any other c
 gives a template three homes, and a **project-local** one in `templates/` is *discovered by path*, not
 through an entry point. **H7a was that subset** — `register_template` exported, `templates/**` discovered
 by path, `generate template` — and it needed none of entry-point resolution, probes or the change gate.
-**It merged on 2026-08-15 and that gate is gone.** H4a (`resample`) and H3d (`holdout`) then unblock six,
-and H4b (weighted contrasts) the last three — **but only for configs sourcing their roster from a
-table**; all nine as the analysis writes them declare a resolver, so *as written* none runs until H7b.
+**It merged on 2026-08-15 and that gate is gone.** **H4a (`resample`) merged the same day** — one refusal
+retired that 8 of 9 configs hit, a regression preserved, and **zero experiments newly executing**, which
+is the honest form of that number. H3d (`holdout`) then unblocks six and H4b (weighted contrasts) the
+last three — **but only for configs sourcing their roster from a table**; all nine as the analysis writes
+them declare a resolver, so *as written* none runs until H7b.
 
 A second amendment the same day scoped all five remaining slices against the code. **Every charter was
 stale in the same direction**: H4 is ~54 tasks split four ways, H7's remainder 38 split three ways, H3d
@@ -143,6 +145,9 @@ the behaviour lives** — not where the test happens to look. The shapes, each s
 | A test whose **name** claims the guarantee | `test_..._message_matches_validates` compared each of two messages against **its own** hard-coded literal, so mutating one site failed one test and nothing compared the two. The name and docstring asserted an agreement no assertion made — and a reader greps for exactly that name and stops looking |
 | A fixture with too few elements to distinguish the candidate orderings | Both documented orderings survived reversal with the suite green: one colliding name and one broken file cannot tell name order from import order. **Two elements only ever distinguish two answers** — with two names the reverse of insertion order *is* sorted order for one arrangement. Count the orderings you must rule out, then size the fixture so each yields a different answer |
 | A monkeypatch left aimed at a name the code no longer calls | Rerouting a call site through a new helper silently defused a patch on the old name; the test kept passing while testing nothing. **When you move a call site, grep the suite for patches aimed at what you moved** |
+| A seam named in the brief and instantiated by no fixture | Twice in one slice a distinction was described precisely — `declared` versus `n`, strata threaded into the clustered call — and **the mutation passed all 1700+ tests**, because no config made the two readings differ. Naming a seam is not testing it: ask what config separates the readings, then check it exists |
+| The test's **reader** normalising the defect away | A resolved-values echo shipped as a YAML alias — one anchor, five `*id001` pointers — and **both tests used `yaml.safe_load`, which resolves aliases**. The defect lived in the serialization and the reader undid it before the assertion. When a defect could live in *how* a value is written, assert on the raw text |
+| A **mutation** whose two branches cannot differ | A reviewer proposed proving a distinction by swapping to a value derived from the same source — a mathematical no-op no fixture could ever catch; a controller's proposed mutation was blind for a different reason. **A mutation is a claim too**: before trusting "this would prove X", check the two branches can actually produce different results |
 
 ### Answering a question with a proxy
 
@@ -170,6 +175,9 @@ class's module is gone, while an external one is still cached.
   the files that *did* load is still found rather than masked" appeared at four sites including a
   normative § Errors row, while the reason load-failure is checked first is precisely that a collision
   verdict computed then would be computed over a partial set of claims. Both properties cannot hold.
+- **A safety argument in a comment is a claim, and needs a mutation like any other.** A retry inside an `except` was widened, and its new comment argued the retry could never raise because the faults it handles "surface on the first call". **The first call was inside the `try`.** Patching the widened function to raise gave exit 1 with no `run.yaml` and no run directory — every execution paid for, the record lost. Written by someone whose task was closing findings about false comments, and it passed a review. If a comment says *this cannot happen*, make it happen.
+- **Sweep for the claim, not for the file the claim was first noticed in.** Three sweeps in one slice stopped one file short — one covered `src/` and `docs/` but not `tests/`, one fixed a sentence in `correction.py` and missed the same sentence in the function that falsified it, one stopped at the file its brief happened to name.
+- **A ledger line saying "filed" is not a filing.** A gap recorded as "registered against \<owner\>" existed only in the ledger; the defects file had no such entry. And an entry naming its owner as *"whichever slice does X"* points at a closed slice once X lands — **re-owner a deferral when the slice that filed it finishes**, or it reads as live work nobody holds.
 - **Rewriting a sentence when a table row was the thing that was wrong.** "Importing one raises
   `ImportError` today" was false only while `register_template` sat in a row marked `not yet built` —
   splitting the row repaired it, because the sentence **derives** its claim from the `Status` column.
