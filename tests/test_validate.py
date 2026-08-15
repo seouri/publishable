@@ -10930,3 +10930,46 @@ def test_the_family_bound_applies_to_an_unset_n_too(write_config):
         )
     )
     assert "W-STATS-RESAMPLE-FAMILY" not in few
+
+
+def test_a_resample_with_no_unit_roster_is_refused(write_config):
+    """`reference.md` marks `data.units` "required by fold, resample,
+    null_test". Once `E-STATS-RESAMPLE-UNSUPPORTED` retires, this shape would
+    otherwise validate clean and do nothing — the exact failure
+    `_check_unimplemented`'s own `E-SWEEP-SAMPLE-BASELINE` comment records."""
+    found = codes(
+        write_config({"statistics": {"resample": {"method": "bootstrap", "n": 2000}}})
+    )
+    assert "E-STATS-RESAMPLE-UNITS" in found
+    # Positive companion in the same test: the identical declaration WITH a
+    # roster is not refused, so this cannot pass by refusing every resample.
+    assert "E-STATS-RESAMPLE-UNITS" not in codes(
+        write_config(
+            {
+                "data.units": {"from": "index.csv", "key": "patient_id"},
+                "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
+            }
+        )
+    )
+
+
+def test_an_unresolvable_roster_does_not_earn_a_second_resample_finding(write_config):
+    """`roster` is `None` for a declared-but-unresolvable `data.units` too, and
+    that fault already has `_check_units`' own finding. Gating on the DECLARATION
+    rather than on `roster is None` is what keeps this from reporting a derived
+    fault on top of the one the reader has to fix anyway."""
+    c = Collector()
+    validate_config(
+        write_config(
+            {
+                "data.units": {"from": "nope.csv", "key": "patient_id"},
+                "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
+            }
+        ),
+        c,
+    )
+    found = {f.code for f in c.findings}
+    assert "E-STATS-RESAMPLE-UNITS" not in found
+    # The positive half: the real fault IS reported, so the test cannot pass by
+    # the config being clean.
+    assert any(code.startswith("E-UNITS-") or code.startswith("E-DATA-") for code in found)

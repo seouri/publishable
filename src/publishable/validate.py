@@ -5016,6 +5016,33 @@ def _check_resample(doc: dict[str, Any], roster: UnitList | None, c: Collector) 
     resample = statistics.get("resample")
     if not isinstance(resample, dict) or not resample:
         return
+    # No roster at all, which is a different fault from every check below and
+    # the one they all presuppose away. `reference.md` § The one config file
+    # marks `units:` "required by fold, resample, null_test", and § Where units
+    # come from says resample "isn't available" without one. The precedent is
+    # `_check_replication`'s fold-without-basis check (`E-REPL-FOLD-K`), for the
+    # same reason: a declaration that cannot operate on anything is refused
+    # rather than accepted and silently skipped.
+    #
+    # Read from the DECLARATION, not from `roster is None`: the roster is also
+    # `None` when `data.units` is declared and failed to resolve, and that fault
+    # already has `_check_units`' own finding. A second, derived fault on top of
+    # the one the reader has to fix anyway is what `validate_config`'s
+    # `usable_cluster` guard avoids by the same argument. Every later check in
+    # this function returns after this one, since each of them presupposes a
+    # roster it would have nothing to read.
+    units_declared = ((doc.get("data") or {}).get("units")) or {}
+    if not units_declared:
+        c.error(
+            "E-STATS-RESAMPLE-UNITS",
+            "statistics.resample",
+            "is declared and `data.units` is not, so there is no unit table to draw "
+            "from and no metric core could recompute on a draw — a declaration that "
+            "changes no behavior. Declare `data.units`, or drop `resample` and report "
+            "over repeats, which is honest for a design whose executions are the "
+            "observations",
+        )
+        return
     method = resample.get("method")
     # `None`/absent means the documented default, `bootstrap` — § Statistical
     # reporting: declaring `resample` "changes the method or the count rather
