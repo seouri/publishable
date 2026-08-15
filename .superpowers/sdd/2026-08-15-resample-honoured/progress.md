@@ -650,3 +650,82 @@ Task 14: implemented, commit (this task). 1776 passed + 2 xfailed (baseline 1770
   runtime assert) why `used == 0` and `used < derived_metric_draws` cannot fire for one, resting on
   Task 11's verified invariant and this task's `null`-or-`n` correction of it.
   BASE for task 15 is this commit.
+Task 14: implemented, commits b156b1b + 556d13d. 1776 passed + 2 xfailed (+6 new); ruff and mypy clean.
+  All three required mutations applied/failed/reverted, and TASK 1'S PIN CAUGHT THE GATE MUTATION
+  DIRECTLY — the acceptance criterion doing its job on the payload task.
+  ELEVENTH BRIEF DEFECT, AND THE BRIEF CONTRADICTED THE RULING IT ITSELF CITED: my Step 1 test snippet
+  pinned resample_draws == 2000 for a column whose interval is REFUSED (ci95: null, one unit), while the
+  spec-defects ruling the same brief cites says the field must be null in that case — a draw count beside
+  a refused interval asserts survivor evidence that does not exist. It FOLLOWED THE RULING, NOT THE
+  SNIPPET, rewrote the test, and filed an entry recording which test was wrong.
+  STRATA DECISION, AND IT IS THE RIGHT ONE: shipped WITHOUT threading stratify_by into either path.
+  Wiring the column path alone was the cheap option (the construction exists there) but would have
+  produced TWO INTERVALS IN ONE TABLE UNDER DIFFERENT DESIGNS with nothing in the record to tell them
+  apart — WORSE than today, where both paths agree by both ignoring it. GENERALIZES: "both wrong the same
+  way" is a better interim state than "one right, one wrong, indistinguishable". Filed naming what
+  actually closes it: a `strata` parameter on percentile_of_derived — a real construction — with the
+  column wiring landing alongside it.
+  reference.md § Statistical reporting got the owed column-provenance paragraph.
+Task 14 review dispatched. BASE ce2f2db, HEAD 556d13d.
+Task 14 review: spec ✅, quality 4 Important + 4 Minor, no Critical.
+  CONFIRMED GOOD: task 1's pin bites AND STILL REACHES the changed code (4 tests fail under the
+  unconditional-emit mutation); the null-under-refused-interval guard is pinned; the weighted unclustered
+  draw is pinned by an EXACT ci95 match — the implementer was right to replace my bracketing assertion,
+  which would not have caught it; the summary-Estimate risk is genuinely NOT live (summary_values ->
+  evaluate_hypotheses is disjoint from summarize_step).
+  IMPORTANT 1 — THE `declared` GATE, WHICH I NAMED AS SEAM NUMBER ONE, IS UNDISCRIMINATED. Mutating it to
+  `n != 2000` leaves the FULL SUITE GREEN, because no test declares resample with exactly n: 2000 — the
+  only config separating the two readings. The report's "task 1's pin caught the gate mutation" is true
+  of the PRESENCE mutation, not this one. Fix is one test. GENERALIZES: naming a seam in a brief does not
+  make it tested; the discriminating CONFIG has to exist.
+  IMPORTANT 2: clustered AND weighted — the fourth required combination — ships unpinned.
+  IMPORTANT 3: the new reference.md paragraph over-claims ("finite throughout ... always defined", no
+  hedge) where the ruling says "conditional on finite inputs" — AND TASK 14 IS WHAT MAKES THE
+  COUNTEREXAMPLE REACHABLE FROM A REAL RUN: a column with one nan now records ci95: [nan, nan] beside
+  resample_draws: 2000. The defect entry assigned finiteness to "task 12/14"; task 14 neither did it nor
+  recorded declining it.
+MERGE GATE RECORDED (Important 4): the stratify_by judgment was RIGHT but the option set INCOMPLETE — a
+  RUN-TIME WARNING was never weighed, and it is neither a divergent construction nor a doc change. The
+  gap is WORSE after this commit: a declared resample now VISIBLY MOVES the interval while the
+  stratify_by beside it silently does nothing, and six of seven feasibility declarations carry one.
+  RULED: add a W-STATS-RESAMPLE-STRATIFY-UNHONOURED-shaped run-time warning in task 14's own code, since
+  that is where the declaration is read and not honoured. H4A MUST NOT MERGE WITHOUT A USER-VISIBLE
+  ROUTE — the whole-branch review is to check this.
+Task 14 review: spec ✅, quality 4 Important + 4 Minor, no Critical. Confirmed good first: task 1's
+  pin bites AND still reaches the changed code (four tests fail under the unconditional-emit
+  mutation), the null-under-refused-interval guard is pinned, the weighted unclustered draw is
+  pinned by an EXACT ci95 match (the bracketing assertion it replaced would not have caught the
+  mutation), the brief/ruling contradiction was resolved correctly, and the summary-Estimate risk is
+  genuinely not live (summary_values -> evaluate_hypotheses is disjoint from summarize_step).
+  IMPORTANT 1 — the `declared` GATE ITSELF WAS UNDISCRIMINATED: mutating it to `n != 2000` left the
+  full suite green, since no test declared `resample` with exactly the UNDECLARED-default `n: 2000`.
+  Fixed with one test (`test_declaring_n_2000_still_gates_a_column_on_declared_not_on_n`), confirmed
+  to fail under exactly that mutation.
+  IMPORTANT 2 — clustered AND weighted (the fourth required combination) shipped unpinned: dropping
+  `weights=` from the clustered percentile call left the suite green. Fixed with an exact-match pin
+  (`test_a_clustered_and_weighted_column_pins_both_together_under_resample`), confirmed to fail.
+  IMPORTANT 3 — the reference.md paragraph over-claimed "finite throughout ... always defined" with
+  no hedge, while the ruling it derives from is explicit "conditional on finite inputs" — and task
+  14's own wiring is what makes the counterexample reachable from a real run (a column with one nan
+  now records ci95: [nan, nan] beside resample_draws: 2000). Hedged both reference.md's paragraph and
+  stats.py's docstring to match the ruling; the "task 12/14" assignment in the earlier spec-defects
+  entry was left declined-and-named rather than silently unaddressed (the entry already named
+  task 12/14 as the owner and this task explicitly declines, consistent with the earlier finiteness
+  entry's own "not attempted here").
+  IMPORTANT 4 (MERGE GATE) — the stratify_by option set (thread / refuse / ship-the-asymmetry) OMITTED
+  a run-time warning, the cheap disclosed-gap route this project uses everywhere else. Ruled: add
+  `W-STATS-RESAMPLE-STRATIFY-UNHONOURED`, fired once per run when `resample` is declared with a
+  non-empty `stratify_by`, registered in reference.md § Warnings core reports, with a positive and a
+  negative test, both confirmed to fail under the relevant mutation. spec-defects.md's stratify_by
+  entry amended to record the disclosure without closing the underlying gap.
+  MINORS: the retry-call comment overclaimed a live behavior change (the retry passes no `seed`
+  either, so `resample_columns` there is inert today, not merely unused-by-choice) — reworded to
+  state the true, narrower reason it stays off. Three positional locators in the new reference.md
+  paragraph and spec-defects.md entries ("the paragraph above", "two entries above", "the option set
+  above") renamed to what they refer to. Two of the three null-interval reasons were unexercised for
+  a column (too-few-draws-for-confidence was untested; the third, per-stratum constant-pair, is
+  unreachable for a column today since no strata are threaded) — added
+  `test_a_column_below_the_honest_draw_floor_also_reports_a_null_draw_count`.
+Task 14: COMPLETE, all review findings addressed. 1781 passed + 2 xfailed (baseline 1770 + 11 new
+  across both rounds); ruff and mypy clean. Every new assertion mutated, confirmed to FAIL, reverted
+  in place. BASE for task 15 is this commit.

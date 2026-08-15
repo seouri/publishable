@@ -7003,3 +7003,67 @@ def test_an_undeclared_resample_leaves_a_column_untouched_end_to_end(tmp_path, c
     aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
     assert aggregated["pred"]["method"] == "t_over_units"
     assert "resample_draws" not in aggregated["pred"]
+
+
+def test_declaring_n_2000_still_gates_a_column_on_declared_not_on_n(tmp_path, capsys):
+    """The discriminating case `_resolved_resample`'s docstring argues for, which
+    `test_a_declared_resample_gives_every_column_a_percentile_interval` (n: 500)
+    and `test_an_undeclared_resample_leaves_a_column_untouched_end_to_end` (no
+    declaration at all) cannot tell apart: `n: 2000` is also the UNDECLARED
+    default (`resample_spec["n"]` resolves to 2000 either way), so a gate read
+    off `n != 2000` would agree with `resample_spec["declared"]` on every other
+    fixture in this file and only disagree here. A config that
+    declares `resample: {method: bootstrap, n: 2000}` explicitly must still turn
+    a recorded column's interval into a percentile one, because `declared` — not
+    `n` — is what `reference.md` § Statistical reporting's asymmetry rests on."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        aggregate_returns="mean_pred",
+        units=40,
+        statistics={"correction": "holm",
+                    "resample": {"method": "bootstrap", "n": 2000}},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert aggregated["pred"]["method"] == "percentile_over_units"
+    assert aggregated["pred"]["resample_draws"] == 2000
+
+
+def test_a_declared_stratify_by_warns_that_no_construction_honours_it(tmp_path, capsys):
+    """§ Weighted samples documents `resample.stratify_by` with a worked YAML,
+    and `validate` checks it for real (`_check_resample`'s *Resample strata
+    exist* row) — a config declaring it validates clean and looks accepted.
+    Task 14 decided, deliberately, not to thread `stratify_by` into either the
+    column or the derived percentile construction (`docs/superpowers/
+    spec-defects.md`), and that decision is materially worse silently after
+    this task than before it: a declared `resample` now visibly moves a
+    column's interval, so a `stratify_by` beside it doing nothing needs its
+    own disclosure rather than inheriting the column wiring's. This is that
+    disclosure, once per run."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        aggregate_returns="mean_pred",
+        units=40,
+        unit_attributes=["cohort"],
+        statistics={"resample": {"method": "bootstrap", "n": 500,
+                                  "stratify_by": "cohort"}},
+    )
+    assert "W-STATS-RESAMPLE-STRATIFY-UNHONOURED" in doc["stdout"]
+    assert "'cohort'" in doc["stdout"]
+
+
+def test_an_undeclared_stratify_by_warns_of_nothing(tmp_path, capsys):
+    """The negative control
+    `test_a_declared_stratify_by_warns_that_no_construction_honours_it` needs: a
+    declared `resample` with no `stratify_by` at all must not trip the new
+    warning — it exists for the declaration, not for `resample` in general."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        aggregate_returns="mean_pred",
+        units=40,
+        statistics={"resample": {"method": "bootstrap", "n": 500}},
+    )
+    assert "W-STATS-RESAMPLE-STRATIFY-UNHONOURED" not in doc["stdout"]

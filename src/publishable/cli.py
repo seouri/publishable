@@ -1564,8 +1564,8 @@ def command_run(config_path: Path) -> int:
             # own — a config asking for exactly 2000 draws and a config asking
             # for nothing both resolve to `n: 2000`. `method` stays unread
             # (`validate.RESAMPLE_METHODS` is `("bootstrap",)` only, so there
-            # is nothing yet to choose between). **`stratify_by` stays
-            # resolved and unread by this commit too** — `percentile_of_derived`
+            # is nothing yet to choose between). **`stratify_by` is read only
+            # to WARN, never to change a draw** — `percentile_of_derived`
             # takes no `strata` parameter, and wiring it into the column path
             # alone (which `percentile_over_units`/`_clustered` could honour)
             # would put two intervals in one table under different designs
@@ -1576,6 +1576,31 @@ def command_run(config_path: Path) -> int:
             # only a survivor count sits beside a derived metric's interval.
             resample_spec = _resolved_resample(doc)
             derived_metric_draws = resample_spec["n"]
+            # A declared `resample.stratify_by` validates clean
+            # (`_check_resample`'s *Resample strata exist* row) and looks
+            # honoured — `resample_spec["stratify_by"]` is a real, checked
+            # value sitting right beside `n`, which is honoured. It isn't:
+            # no construction below draws within a stratum (H4a task 14's own
+            # spec-defects.md entry). Before this task neither a column's nor
+            # a derived metric's interval moved under a declared `resample` at
+            # all, so the gap was invisible in exactly the way an unbuilt
+            # feature's gap always is. Now a declared `resample` visibly moves
+            # a column's interval, so a `stratify_by` beside it that silently
+            # does nothing is a materially worse silence than before this
+            # commit landed — warned once per run, here, rather than left for
+            # a reader to discover by comparing two `run.yaml`s.
+            if resample_spec["declared"] and resample_spec["stratify_by"]:
+                aggregate_c.warn(
+                    "W-STATS-RESAMPLE-STRATIFY-UNHONOURED",
+                    "statistics.resample.stratify_by",
+                    f"names {', '.join(repr(n) for n in resample_spec['stratify_by'])}, "
+                    "but no interval construction in this build draws within a "
+                    "stratum: every `percentile_over_units`/"
+                    "`percentile_over_units_clustered` draw in this run is "
+                    "unstratified, for both recorded columns and derived metrics, "
+                    "regardless of this declaration. See "
+                    "`docs/superpowers/spec-defects.md`",
+                )
             aggregate_where = f"{doc.get('experiment_type', '')}.aggregate"
             # `aggregate` is user code in exactly the sense `runner.py`'s own
             # step execution is — "a failed execution never stops the run" —
@@ -1773,16 +1798,21 @@ def command_run(config_path: Path) -> int:
                         # arrive here: `attrition` above gates the same mapping
                         # through `kish_effective_n`, outside any `try`.)
                         # `resample_columns` deliberately NOT passed here (H4a
-                        # task 14): this retry passes no `derived`, `seed` or
-                        # `draws` either — its job is to reproduce the recorded
-                        # columns exactly as the first call built them, after a
-                        # derived-key fault, not to change their construction.
-                        # Passing `resample_columns=resample_spec["declared"]`
-                        # here would flip a column's interval to a percentile
-                        # one on the containment path only, so the same run
-                        # would record two different constructions for the
-                        # same column depending on whether its derived metrics
-                        # happened to collide.
+                        # task 14). Today this retry already passes no `seed`,
+                        # so `resample_columns`'s own gate
+                        # (`resample_columns and seed is not None`) would stay
+                        # closed regardless — passing it here is inert right
+                        # now, not a live behavior change, and the suite
+                        # cannot tell the two apart. It is still left off on
+                        # purpose: this call's job is to reproduce the
+                        # recorded columns exactly as the first call built
+                        # them, after a derived-key fault, not to change their
+                        # construction — so if a future change ever threads a
+                        # `seed` through here too, `resample_columns` must not
+                        # come along with it, or the same run would record two
+                        # different constructions for the same column
+                        # depending on whether its derived metrics happened to
+                        # collide.
                         step_summary = summarize_step(
                             collapsed,
                             counts,

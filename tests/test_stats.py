@@ -3439,6 +3439,36 @@ def test_a_clustered_column_takes_the_clustered_percentile_under_resample():
     assert drawn["pred"]["resample_draws"] == 2000
 
 
+def test_a_clustered_and_weighted_column_pins_both_together_under_resample():
+    """The fourth of the four required combinations, and the one a bracketing
+    assertion cannot discriminate (§ Three things this task's brief itself
+    names): a weighted mean stays close to the unweighted one on many
+    fixtures, so `low < value < high` alone would still pass with `weights`
+    silently dropped from the clustered draw. Pinned instead with an EXACT
+    `ci95` match against calling `percentile_over_units_clustered` directly
+    with the same weight vector — the same discriminating standard
+    `test_a_weighted_column_keeps_its_weighted_value_and_kish_size_under_resample`
+    uses for the unclustered case."""
+    collapsed = _ragged_collapsed(40)
+    clusters = {f"u{i}": f"c{i % 8}" for i in range(40)}
+    weights = {f"u{i}": 1.0 + (i % 4) for i in range(40)}
+    counts = {"resolved": 40, "completed": 40, "failed": 0}
+    drawn = summarize_step(
+        collapsed, counts, seed=5, draws=2000,
+        clusters=clusters, weights=weights, resample_columns=True,
+    )
+    assert drawn["pred"]["method"] == "percentile_over_units_clustered"
+    assert drawn["pred"]["n"]["clusters"] == 8
+    values = [float(i) for i in range(40)]
+    keys = [f"u{i}" for i in range(40)]
+    column_weights = [weights[k] for k in keys]
+    expected = percentile_over_units_clustered(
+        values, keys, clusters, seed=5, draws=2000, weights=column_weights
+    )
+    assert expected is not None
+    assert drawn["pred"]["ci95"] == [expected.low, expected.high]
+
+
 def test_a_weighted_column_keeps_its_weighted_value_and_kish_size_under_resample():
     """Three things move together or the declaration is half-delivered: the
     value stays the WEIGHTED mean, `n.effective` stays Kish's size, and only the
@@ -3487,6 +3517,26 @@ def test_a_column_below_two_units_reports_a_null_draw_count_under_resample():
     got = summarize_step(
         {"u0": {"pred": 1.0}}, counts, seed=5, draws=2000, resample_columns=True
     )
+    assert got["pred"]["ci95"] is None
+    assert got["pred"]["method"] is None
+    assert "resample_draws" in got["pred"]
+    assert got["pred"]["resample_draws"] is None
+
+
+def test_a_column_below_the_honest_draw_floor_also_reports_a_null_draw_count():
+    """A second, DISTINCT reason `percentile_over_units` returns `None`: not too
+    few units (40 here, plenty), but too few DRAWS for either percentile rank
+    to be interior (`min_honest_draws()` is 80 at the default confidence, and
+    `draws=10` is below it).
+    `test_a_column_below_two_units_reports_a_null_draw_count_under_resample` and
+    this one exercise two of the three ways a column's interval can come back
+    refused; the third
+    (the per-stratum constant-pair refusal) is unreachable for a column today,
+    since no stratification is threaded into the column path
+    (`docs/superpowers/spec-defects.md`)."""
+    collapsed = _ragged_collapsed(40)
+    counts = {"resolved": 40, "completed": 40, "failed": 0}
+    got = summarize_step(collapsed, counts, seed=5, draws=10, resample_columns=True)
     assert got["pred"]["ci95"] is None
     assert got["pred"]["method"] is None
     assert "resample_draws" in got["pred"]

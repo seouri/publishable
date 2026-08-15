@@ -1587,14 +1587,17 @@ def summarize_step(
     draws for the confidence level — the same reasons `percentile_over_units`
     returns `None` at all) — there is no interval for a draw count to describe,
     so recording one would assert survivor evidence for a refused draw — and
-    otherwise the *requested* `draws`, never a survivor count. A column's draw
-    statistic is a mean (or weighted mean) over a non-empty, finite sample, which
-    is always defined once an interval exists at all, so unlike
-    `percentile_of_derived` there is no per-draw failure to filter and no `0`
-    bucket ("attempted, every draw individually degenerate") for a column to
-    reach — see `docs/superpowers/spec-defects.md` for the non-finite-input gap
-    this leaves open, which is a known, separately filed defect and not this
-    docstring's claim.
+    otherwise the *requested* `draws`, never a survivor count — **given finite
+    recorded values and finite weights**. Under that condition a column's draw
+    statistic (a mean, or a weighted mean, over a non-empty sample) is always
+    defined once an interval exists at all, so unlike `percentile_of_derived`
+    there is no per-draw failure to filter and no `0` bucket ("attempted,
+    every draw individually degenerate") for a column to reach. **Nothing on
+    this path checks that condition**: a `nan` among `values`, or a weight
+    vector whose sum overflows, is not refused here and reaches `ci95` and
+    `resample_draws: draws` exactly as a clean sample would — a known, unfixed
+    gap filed in `docs/superpowers/spec-defects.md`, not a guarantee this
+    docstring is making.
     """
     columns: list[str] = []
     for cols in collapsed.values():

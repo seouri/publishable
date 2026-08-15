@@ -5171,12 +5171,29 @@ together so the two constructions never disagree about whether stratification ha
 a fact stated in `_resolved_resample`'s own docstring and in `cli.py`'s comment beside the primary
 `summarize_step` call, so a future reader hits the citation before hitting the gap.
 
+**AMENDED 2026-08-15 (task 14 merge-gate review): the gap is now DISCLOSED at run time, not only in
+this record.** The review that found this entry also found the option set this entry's "Why task 14
+didn't close it" paragraph weighed (threading, refusing, shipping the asymmetry) incomplete — a
+run-time warning is neither a divergent construction (the threading option) nor a document change
+(the refusal option), and is the cheap, user-visible route every other unbuilt-but-declared gap in
+this project takes. Before this amendment a declared `resample` moved nothing, so a `stratify_by`
+beside it doing nothing was consistent with the rest of the declaration also doing nothing; after
+task 14 landed, `resample` visibly moves a column's interval, which makes the silence beside
+`stratify_by` a materially worse gap than the one this entry originally described — six of seven
+non-null `resample` declarations in `docs/feasibility-llm-growth-studies.md` carry a `stratify_by`.
+`cli.command_run` now warns `W-STATS-RESAMPLE-STRATIFY-UNHONOURED` once per run whenever `resample`
+is declared with a non-empty `stratify_by`, naming every stratum and stating plainly that no
+construction in this build honours it — registered in `reference.md` § Warnings core reports. The
+gap itself (no construction stratifies either path) is unchanged and still owed to whichever slice
+gives `percentile_of_derived` a `strata` parameter, per this entry's own "What is owed, and by whom"
+paragraph; only its visibility changed.
+
 ## A column's `resample_draws` under a refused (too-few-units) interval is `null`, not the requested `n`
 
 Found during task 14's implementation (2026-08-15, H4a, `ce2f2db`), reviewing the brief's own Step 1
-test against the ruling two entries above ("`resample_draws` records the requested `n`, not a
-survivor count"). That entry's own text rules: **"`resample_draws` is `null` whenever `ci95` is
-`null`, for any of the three reasons [`percentile_over_units` returns `None`]."** The brief's fourth
+test against the ruling in "A column metric's `resample_draws` records the requested `n`, not a
+survivor count" (this file). That entry's own text rules: **"`resample_draws` is `null` whenever
+`ci95` is `null`, for any of the three reasons [`percentile_over_units` returns `None`]."** The brief's fourth
 test (`test_a_column_below_two_units_reports_no_interval_under_resample`) asserted
 `got["pred"]["resample_draws"] == 2000` for a one-unit column under a declared resample — an
 interval that is `None`, so `ci95` is `null` — which is the exact case the ruling calls out by name
