@@ -11,6 +11,7 @@ from publishable.errors import (
 from publishable.estimate import Estimate
 from publishable.param import Param
 from publishable.templates.base import BaseTemplate
+from publishable.templates.discovery import register_template
 from publishable.units import Unit
 
 __all__ = [
@@ -24,5 +25,6 @@ __all__ = [
     "Param",
     "PublishableError",
     "Unit",
+    "register_template",
 ]
 __version__ = "0.1.0"

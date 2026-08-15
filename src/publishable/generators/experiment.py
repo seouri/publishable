@@ -5,7 +5,7 @@ from pathlib import Path
 from publishable.errors import ContractError
 from publishable.materialize import materialize_config
 from publishable.provenance import resolves_inside_repo
-from publishable.templates.registry import get_template
+from publishable.templates.registry import resolve_template, unknown_template_message
 
 STARTER_STEP = '''\
 # src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
@@ -49,10 +49,13 @@ def class_name(experiment: str) -> str:
 def generate_experiment(
     *, repo_root: Path, name: str, template_name: str, input_dir: str, output_dir: str
 ) -> Path:
-    template = get_template(template_name)
+    # One merge for both halves — the resolution and the known-name list the
+    # message prints — so a repo's `templates/` is imported once here too.
+    template, known = resolve_template(template_name, repo_root)
     if template is None:
         raise ContractError(
-            f"no installed template registers `{template_name}`", code="E-TEMPLATE-UNKNOWN"
+            unknown_template_message(template_name, known),
+            code="E-TEMPLATE-UNKNOWN",
         )
     root = repo_root.resolve()
     for label, raw in (("input_dir", input_dir), ("output_dir", output_dir)):

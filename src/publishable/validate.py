@@ -32,7 +32,8 @@ from publishable.sweep import (
     selector_paths,
 )
 from publishable.templates.base import BaseTemplate
-from publishable.templates.registry import get_template, template_names
+from publishable.templates.discovery import is_local_template
+from publishable.templates.registry import resolve_template, unknown_template_message
 from publishable.units import (
     COLLAPSE_RULES,
     DRAWN_ASSIGN_METHODS,
@@ -492,25 +493,41 @@ def validate_config(
         return None  # every later check indexes into a block already known malformed
 
     name = doc.get("experiment_type", "")
-    template = get_template(name)
+    try:
+        repo_root: Path | None = find_repo_root(config_path)
+    except ContractError:
+        # No repo at all. That is `_check_data`'s finding to make (or not), and
+        # there is no `templates/` to discover locally, so local discovery is
+        # skipped rather than reported here — `generic` still resolves as a
+        # core template regardless.
+        repo_root = None
+    try:
+        # One merge, so one local discovery: the known-name list the unknown-name
+        # finding prints comes back from the same call that resolved the name.
+        # Asking for it separately would import every `templates/*.py` a second
+        # time — every user top level executed twice — and, since the message is
+        # built after this guard closes, a `ContractError` from that second
+        # import would escape `validate_config` and discard every other finding.
+        template, known = resolve_template(name, repo_root)
+    except ContractError as exc:
+        # The load-time refusals resolving a template can make — two today,
+        # `E-TEMPLATE-LOAD` and `E-TEMPLATE-COLLISION`. Reported under the code
+        # the raise carries rather than a code chosen here, so the two surfaces
+        # stay one fault, and reported at all because `validate` is contracted
+        # never to raise. Nothing later can run: which template a name means is
+        # exactly what either leaves unanswered.
+        c.error(exc.code, "experiment_type", str(exc))
+        return None
     if template is None:
         c.error(
             "E-TEMPLATE-UNKNOWN",
             "experiment_type",
-            f"names `{name}`, which no installed template registers "
-            f"(known: {', '.join(template_names())})",
+            unknown_template_message(name, known),
         )
         return None  # every later check reads the spec
 
     entrypoint = doc.get("entrypoint")
     if experiment is None and isinstance(entrypoint, str) and entrypoint:
-        try:
-            repo_root: Path | None = find_repo_root(config_path)
-        except ContractError:
-            # No repo at all. That is `_check_data`'s finding to make (or not), and
-            # there is no `src/` to import from, so the entrypoint check is skipped
-            # rather than reported as an import failure it did not cause.
-            repo_root = None
         try:
             if repo_root is not None:
                 experiment = load_experiment(repo_root, entrypoint)
@@ -692,7 +709,16 @@ def _check_versions(doc: dict[str, Any], template: Any, c: Collector) -> None:
     defaults and this config does not set. Core cannot tell that apart from one
     the author deliberately left at its default, and asserting which it is would
     be a claim the declaration does not carry.
+
+    A local template is skipped regardless of what `template_version` declares.
+    `TEMPLATE_VERSION` is core's own constant — comparing a config's declared
+    string against it is meaningless for a template core did not write, whether
+    that string happens to match, differ, or was never set at all: `docs/
+    reference.md` § Three hashes says `template_version` "isn't the answer for
+    a local template — it's a string its author remembers to bump."
     """
+    if is_local_template(type(template)):
+        return
     declared = doc.get("template_version")
     if not declared or declared == TEMPLATE_VERSION:
         return

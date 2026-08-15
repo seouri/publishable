@@ -441,6 +441,188 @@ def test_an_uninstalled_template_is_fatal(write_config):
     assert "E-TEMPLATE-UNKNOWN" in codes(write_config({"experiment_type": "llm_diagnostic"}))
 
 
+def test_an_unknown_template_still_reports_exactly_one_finding(write_config):
+    """§ Errors: the check "returns immediately after", so none of the other
+    rows appear. Assert the exact set, not that the code is present."""
+    assert codes(write_config({"experiment_type": "llm_diagnostic"})) == {"E-TEMPLATE-UNKNOWN"}
+
+
+def test_a_missing_or_empty_experiment_type_is_the_same_unknown_template(write_config):
+    """§ Errors' `E-TEMPLATE-UNKNOWN` row now states its condition as "missing,
+    empty, or names a template ... registers" — `name = doc.get("experiment_type", "")`
+    defaults an absent key to the same empty string an explicit `""` writes, so
+    both routes through `get_template("", repo_root)` finding nothing, and both
+    draw the code with an empty backtick pair in the message rather than some
+    earlier schema check intercepting either shape first."""
+    assert codes(write_config({"experiment_type": ""})) == {"E-TEMPLATE-UNKNOWN"}
+    assert codes(write_config({"experiment_type": _DELETE})) == {"E-TEMPLATE-UNKNOWN"}
+    assert "names ``," in messages_by_code(write_config({"experiment_type": ""}))[
+        "E-TEMPLATE-UNKNOWN"
+    ]
+
+
+def test_the_unknown_message_lists_local_templates_among_the_known(
+    git_repo: Path, write_config
+):
+    """The known-list is `template_names()`, which must be called with the repo
+    root or a local template never appears in it. Distinct names throughout:
+    the local template `cohort_local` is never the one asked for, and the
+    unknown name `not_anywhere` is never the one registered — so neither
+    assertion could pass by an interpolated name coinciding with itself."""
+    templates = git_repo / "templates"
+    templates.mkdir()
+    (templates / "cohort_local.py").write_text(
+        "from publishable import BaseTemplate, register_template\n\n\n"
+        '@register_template("cohort_local")\n'
+        "class CohortLocal(BaseTemplate):\n"
+        "    pass\n"
+    )
+
+    messages = messages_by_code(write_config({"experiment_type": "not_anywhere"}))
+    assert messages["E-TEMPLATE-UNKNOWN"] == (
+        "names `not_anywhere`, which no template — core's, an installed plugin's, "
+        "or this project's own `templates/` — registers "
+        "(known: cohort_local, generic)"
+    )
+
+
+def test_one_validate_discovers_local_templates_once_on_the_unknown_name_path(
+    git_repo: Path, write_config, monkeypatch: pytest.MonkeyPatch
+):
+    """Discovery is eager, so each call imports and executes **every** file under
+    `templates/`. `reference.md` § Creating a plugin widens `validate`'s import
+    exception from one named module to a whole directory, once — so a `validate`
+    that resolves the name and a `validate` that reports it unknown must both
+    cost one discovery, the unknown-name finding's known-list being read from the
+    merge that already happened rather than from a second one.
+
+    THE ASSERTION IS THE COUNT, not the wording: a message built from a fresh
+    discovery reads identically. `registry.discover_local` is the patch target
+    because `registry` imported the name — patching `discovery.discover_local`
+    would never fire — and the real function is called through, so behaviour is
+    unchanged and the resolvable-name case below still resolves.
+
+    The resolvable-name case is the control: it pins the baseline at one, so a
+    count of one on the unknown path is a comparison rather than a bare number.
+    """
+    from publishable.templates import registry
+
+    templates = git_repo / "templates"
+    templates.mkdir()
+    (templates / "cohort_local.py").write_text(
+        "from publishable import BaseTemplate, register_template\n\n\n"
+        '@register_template("cohort_local")\n'
+        "class CohortLocal(BaseTemplate):\n"
+        "    pass\n"
+    )
+
+    calls: list[Path] = []
+    real = registry.discover_local
+
+    def counting(repo_root: Path):
+        calls.append(repo_root)
+        return real(repo_root)
+
+    monkeypatch.setattr(registry, "discover_local", counting)
+
+    assert codes(write_config({"experiment_type": "not_anywhere"})) == {"E-TEMPLATE-UNKNOWN"}
+    assert len(calls) == 1
+
+    calls.clear()
+    assert "E-TEMPLATE-UNKNOWN" not in codes(write_config({"experiment_type": "cohort_local"}))
+    assert len(calls) == 1
+
+
+def test_a_template_whose_import_is_not_idempotent_survives_an_unknown_name(
+    git_repo: Path, tmp_path: Path, write_config
+):
+    """The behavioural half of the count above, and the one that catches the class
+    rather than this path: re-executing a user top level is not merely wasteful,
+    it can raise. A template registering into any object that outlives the
+    `sys.modules` restore — a `Base` imported from `src/**`, a third-party
+    registry refusing a duplicate name — raises deterministically on a second
+    import, with no mistake on its author's part.
+
+    Here that shape is a sentinel file the top level refuses to pass twice. Under
+    a second discovery the `ContractError` it becomes is raised while the message
+    is being built, which is **outside** `validate_config`'s guard: the contract
+    that `validate` never raises breaks, and every other finding in the pass is
+    discarded with it. So the assertions are that the call returns and that the
+    finding it returns is the unknown-name one.
+    """
+    sentinel = tmp_path / "imported-once"
+    templates = git_repo / "templates"
+    templates.mkdir()
+    (templates / "once_only.py").write_text(
+        "from pathlib import Path\n"
+        f"_sentinel = Path({str(sentinel)!r})\n"
+        "if _sentinel.exists():\n"
+        "    raise RuntimeError('this template was imported twice in one process')\n"
+        "_sentinel.write_text('ran')\n"
+        "from publishable import BaseTemplate, register_template\n\n\n"
+        '@register_template("once_only")\n'
+        "class OnceOnly(BaseTemplate):\n"
+        "    pass\n"
+    )
+
+    assert codes(write_config({"experiment_type": "not_anywhere"})) == {"E-TEMPLATE-UNKNOWN"}
+    # The template did import — otherwise the test would pass on a build that
+    # stopped discovering local templates altogether.
+    assert sentinel.exists()
+
+
+def test_a_local_template_validates_through_the_real_path(git_repo: Path, write_config):
+    """End to end: a config naming a local template no longer draws
+    E-TEMPLATE-UNKNOWN. THE CONTROL: a config naming a template that exists
+    nowhere still draws it, so a check that stopped reporting entirely fails."""
+    templates = git_repo / "templates"
+    templates.mkdir()
+    (templates / "my_assay.py").write_text(
+        "from publishable import BaseTemplate, register_template\n\n\n"
+        '@register_template("my_assay")\n'
+        "class MyAssay(BaseTemplate):\n"
+        "    pass\n"
+    )
+
+    found = codes(write_config({"experiment_type": "my_assay", "parameters": {}}))
+    assert "E-TEMPLATE-UNKNOWN" not in found
+
+    still_missing = codes(write_config({"experiment_type": "nowhere_at_all"}))
+    assert "E-TEMPLATE-UNKNOWN" in still_missing
+
+
+def test_no_repo_means_local_discovery_is_skipped_and_generic_still_resolves(
+    write_config, monkeypatch
+):
+    """A config outside any repo. `find_repo_root` raises; the hoist must
+    swallow it. Assert the exact finding set — an added finding here would
+    break the documented early-return order.
+
+    Isolated from `_check_data`'s own `find_repo_root` call, which reads the
+    same module-level name and would otherwise make this indistinguishable
+    from `test_the_genuine_no_repo_case_returns_quietly`: only the *first*
+    call (the hoist, which runs before every other check) is made to raise;
+    later calls (`_check_data`'s) hit the real implementation and find the
+    real repo `write_config` writes into. A finding added only on the
+    hoisted path, or the `ContractError` escaping only there, shows up here
+    without needing every other `find_repo_root` call site to fail too."""
+    import publishable.validate as validate_mod
+    from publishable.errors import ContractError
+    from publishable.provenance import find_repo_root as real_find_repo_root
+
+    calls = []
+
+    def _first_call_no_repo(path):
+        calls.append(path)
+        if len(calls) == 1:
+            raise ContractError("no git repository found", code="E-GIT-NO-REPO")
+        return real_find_repo_root(path)
+
+    monkeypatch.setattr(validate_mod, "find_repo_root", _first_call_no_repo)
+    assert codes(write_config()) == set()
+    assert len(calls) > 1  # confirms a later call site really was reached and passed
+
+
 def test_data_may_not_resolve_inside_the_repo(write_config, git_repo: Path):
     inside = str(git_repo / "results")
     assert "E-DATA-IN-REPO" in codes(write_config({"data.output_dir": inside}))
@@ -453,6 +635,90 @@ def test_an_unreadable_input_dir_is_reported(write_config, tmp_path: Path):
 def test_a_moved_template_version_warns_rather_than_failing(write_config):
     found = codes(write_config({"template_version": "0.9.0"}))
     assert "W-TEMPLATE-VERSION" in found
+
+
+def test_a_local_templates_declared_version_draws_no_warning(git_repo: Path, write_config):
+    """`_check_versions` opens `if not declared or declared == TEMPLATE_VERSION:
+    return` — "no warning for a config that declares nothing" is already true
+    through that falsy branch, so the only shape that proves the *local* skip
+    is doing anything is a config that DECLARES a `template_version` and
+    declares one that DIFFERS from core's `TEMPLATE_VERSION`. `docs/
+    reference.md` § Three hashes: that string "isn't the answer for a local
+    template", so it must draw no warning whatever it says — not because it
+    happens to be unset.
+
+    THE CONTROL: the identical declared-and-differing shape under `generic`
+    still warns, so a change suppressing the warning for every template
+    passes the local half here and fails the control.
+    """
+    templates = git_repo / "templates"
+    templates.mkdir()
+    (templates / "my_assay.py").write_text(
+        "from publishable import BaseTemplate, register_template\n\n\n"
+        '@register_template("my_assay")\n'
+        "class MyAssay(BaseTemplate):\n"
+        "    pass\n"
+    )
+
+    local_found = codes(
+        write_config(
+            {"experiment_type": "my_assay", "parameters": {}, "template_version": "0.9.0"}
+        )
+    )
+    assert "W-TEMPLATE-VERSION" not in local_found
+
+    control_found = codes(write_config({"template_version": "0.9.0"}))
+    assert "W-TEMPLATE-VERSION" in control_found
+
+
+def test_a_generated_local_config_validates_with_no_version_finding(
+    git_repo: Path, tmp_path: Path
+):
+    """The other half of task 10: the test above hand-writes a differing
+    `template_version` to make the skip provable, but the config
+    `materialize_config` actually produces against a local template carries
+    no `template_version` key at all. Running that generated file through
+    `validate_config` end to end must draw neither `W-TEMPLATE-VERSION` nor
+    any other version-shaped finding — only the ordinary placeholder gaps
+    every `init`-written config leaves empty (`metadata.description`,
+    `metadata.authors`), never chased down before now.
+    """
+    from publishable.materialize import materialize_config
+    from publishable.templates.registry import get_template
+
+    (tmp_path / "input").mkdir()
+    (tmp_path / "input" / "index.csv").write_text("patient_id\np1\n")
+
+    templates = git_repo / "templates"
+    templates.mkdir()
+    (templates / "my_assay.py").write_text(
+        "from publishable import BaseTemplate, register_template\n\n\n"
+        '@register_template("my_assay")\n'
+        "class MyAssay(BaseTemplate):\n"
+        "    pass\n"
+    )
+    template = get_template("my_assay", git_repo)
+    assert template is not None
+    text = materialize_config(
+        template=template,
+        template_name="my_assay",
+        name="cohort-pilot",
+        input_dir=str(tmp_path / "input"),
+        output_dir=str(tmp_path / "results"),
+        entrypoint="cohort_pilot.experiment:CohortPilotExperiment",
+    )
+    assert "template_version" not in yaml.safe_load(text)  # the fact this test rests on
+
+    config_path = git_repo / "configs" / "cohort-pilot" / "config.yaml"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(text)
+
+    c = Collector()
+    validate_config(config_path, c)
+    found = {f.code for f in c.findings}
+    assert "W-TEMPLATE-VERSION" not in found
+    assert not any("VERSION" in code for code in found)
+    assert found == {"E-META-REQUIRED"}
 
 
 def test_a_repeat_count_below_one_executes_nothing_and_is_an_error(write_config):
@@ -3269,7 +3535,11 @@ def test_a_template_cross_field_rule_is_reported(write_config, monkeypatch):
         def validate(self, config):
             return ["a cross-field rule was broken"]
 
-    monkeypatch.setattr(validate_mod, "get_template", lambda name: RuleBreaker())
+    monkeypatch.setattr(
+        validate_mod,
+        "resolve_template",
+        lambda name, repo_root=None: (RuleBreaker(), ["generic"]),
+    )
     assert "E-TEMPLATE-RULE" in codes(write_config())
 
 

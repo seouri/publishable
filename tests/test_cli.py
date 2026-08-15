@@ -18,13 +18,14 @@ from publishable.cli import (
     _wide_swept_paths,
     main,
 )
-from publishable.diagnostics import EXIT_INVOCATION, EXIT_OK, EXIT_PARTIAL, EXIT_WRONG
+from publishable.diagnostics import EXIT_INVOCATION, EXIT_OK, EXIT_PARTIAL, EXIT_WRONG, Collector
 from publishable.errors import ContractError
 from publishable.generators.experiment import generate_experiment
 from publishable.generators.step import generate_step
 from publishable.replication import LABEL_JOIN
 from publishable.runner import attrition
 from publishable.scope import Execution
+from publishable.validate import validate_config
 
 Ran = namedtuple("Ran", ["condition_index", "repeat_label"])
 
@@ -273,6 +274,442 @@ def test_an_unwritable_output_dir_is_a_diagnostic_not_a_traceback(tmp_path: Path
     assert main(["run", str(cfg)]) == EXIT_WRONG
     err = capsys.readouterr().err
     assert "E-IO-FAILED" in err
+
+
+def test_generate_experiment_resolves_a_project_local_template(tmp_path: Path):
+    """`generate_experiment` draws its template through `get_template`, same as
+    `validate`. A project holding `templates/my_assay.py` must let
+    `generate experiment --template my_assay` succeed instead of raising
+    `E-TEMPLATE-UNKNOWN` — the probe named in the scoping.
+
+    THE CONTROL: `--template nope`, naming nothing anywhere, must still raise
+    it — otherwise a fix that stopped checking entirely would pass too.
+    """
+    root = tmp_path / "proj"
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "index.csv").write_text("patient_id\np1\n")
+
+    assert main(["new", str(root)]) == EXIT_OK
+    (root / "templates" / "my_assay.py").write_text(
+        "from publishable import BaseTemplate, Param, register_template\n\n\n"
+        '@register_template("my_assay")\n'
+        "class MyAssay(BaseTemplate):\n"
+        '    parameter_spec = {"assay.tag": Param(str, default="my-assay-fingerprint")}\n'
+    )
+
+    cfg = generate_experiment(
+        repo_root=root,
+        name="my-experiment",
+        template_name="my_assay",
+        input_dir=str(data),
+        output_dir=str(tmp_path / "results"),
+    )
+    assert cfg.exists()
+    doc = yaml.safe_load(cfg.read_text())
+    assert doc["experiment_type"] == "my_assay"
+    # THE IDENTITY CHECK: `assay.tag`'s default is a fingerprint no other
+    # template — `generic` or an unrelated empty-`parameter_spec` local one —
+    # produces, so this pins that `my_assay` itself resolved rather than
+    # merely that some template answered to that name.
+    assert doc["parameters"] == {"assay": {"tag": "my-assay-fingerprint"}}
+
+    with pytest.raises(ContractError) as excinfo:
+        generate_experiment(
+            repo_root=root,
+            name="another-experiment",
+            template_name="nope",
+            input_dir=str(data),
+            output_dir=str(tmp_path / "results"),
+        )
+    assert excinfo.value.code == "E-TEMPLATE-UNKNOWN"
+
+
+def test_generate_experiments_unknown_template_message_matches_validates(tmp_path: Path):
+    """`E-TEMPLATE-UNKNOWN` is one code with two emitters — this raise and
+    `validate_config`'s finding — and `reference.md`'s one § Errors row
+    describes both, so the wording must agree. Nothing pins the two
+    *identical* just because each test happens to spell the same literal:
+    that would pass even if the two sites had quietly diverged, since a
+    hard-coded string can drift from the code it was copied from without
+    either test noticing. So this drives both surfaces from the same repo
+    and the same unknown name and asserts the **live outputs equal each
+    other**, not each against its own separately maintained literal.
+
+    Distinct names throughout: the local template is `cohort_local`, the
+    unknown name is `not_anywhere` — neither assertion could pass by an
+    interpolated name coinciding with the other."""
+    root = tmp_path / "proj"
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "index.csv").write_text("patient_id\np1\n")
+
+    assert main(["new", str(root)]) == EXIT_OK
+    (root / "templates" / "cohort_local.py").write_text(
+        "from publishable import BaseTemplate, register_template\n\n\n"
+        '@register_template("cohort_local")\n'
+        "class CohortLocal(BaseTemplate):\n"
+        "    pass\n"
+    )
+
+    cfg = generate_experiment(
+        repo_root=root,
+        name="a-pilot",
+        template_name="cohort_local",
+        input_dir=str(data),
+        output_dir=str(tmp_path / "results"),
+    )
+    doc = yaml.safe_load(cfg.read_text())
+    doc["experiment_type"] = "not_anywhere"
+    cfg.write_text(yaml.safe_dump(doc))
+
+    validate_collector = Collector()
+    validate_config(cfg, validate_collector)
+    validate_message = next(
+        f.message for f in validate_collector.findings if f.code == "E-TEMPLATE-UNKNOWN"
+    )
+
+    with pytest.raises(ContractError) as excinfo:
+        generate_experiment(
+            repo_root=root,
+            name="another-experiment",
+            template_name="not_anywhere",
+            input_dir=str(data),
+            output_dir=str(tmp_path / "results"),
+        )
+    assert excinfo.value.code == "E-TEMPLATE-UNKNOWN"
+
+    # THE ACTUAL GUARANTEE: the two live messages equal each other.
+    assert str(excinfo.value) == validate_message
+
+    # Pinned wording too, so a change to either is a deliberate edit here.
+    assert str(excinfo.value) == (
+        "names `not_anywhere`, which no template — core's, an installed "
+        "plugin's, or this project's own `templates/` — registers "
+        "(known: cohort_local, generic)"
+    )
+
+
+def test_generate_experiment_cli_resolves_a_project_local_template(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    """The literal probe: `publishable generate experiment --template my_assay`
+    through `main`, not `generate_experiment` called directly — exercising
+    `_dispatch_generate`'s `find_repo_root(Path.cwd())` too.
+
+    THE CONTROL: `--template nope` still returns `EXIT_WRONG` carrying
+    `E-TEMPLATE-UNKNOWN` specifically — not just some refusal.
+    """
+    root = tmp_path / "proj"
+    data = tmp_path / "data"
+    results_dir = tmp_path / "results"
+    data.mkdir()
+    (data / "index.csv").write_text("patient_id\np1\n")
+
+    assert main(["new", str(root)]) == EXIT_OK
+    (root / "templates" / "my_assay.py").write_text(
+        "from publishable import BaseTemplate, register_template\n\n\n"
+        '@register_template("my_assay")\n'
+        "class MyAssay(BaseTemplate):\n"
+        "    pass\n"
+    )
+    monkeypatch.chdir(root)
+
+    assert main(
+        [
+            "generate", "experiment", "my-experiment",
+            "--template", "my_assay",
+            "--input-dir", str(data),
+            "--output-dir", str(results_dir),
+        ]
+    ) == EXIT_OK
+    assert (root / "configs" / "my-experiment" / "config.yaml").exists()
+
+    assert main(
+        [
+            "generate", "experiment", "another-experiment",
+            "--template", "nope",
+            "--input-dir", str(data),
+            "--output-dir", str(results_dir),
+        ]
+    ) == EXIT_WRONG
+    assert "E-TEMPLATE-UNKNOWN" in capsys.readouterr().err
+
+
+# `generate template` — the file it writes has to *register*, so every check
+# below goes through `get_template`/`generate_experiment` rather than through
+# `Path.exists`: a stub that is syntactically valid and registers nothing would
+# satisfy a file-existence check and fail the product.
+
+GENERATED_TEMPLATE = "templates/my_assay.py"
+
+
+def _new_project_with_a_generated_template(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    name: str = "my_assay",
+    project: str = "proj",
+) -> Path:
+    root = tmp_path / project
+    assert main(["new", str(root)]) == EXIT_OK
+    monkeypatch.chdir(root)
+    assert main(["generate", "template", name]) == EXIT_OK
+    return root
+
+
+def test_generate_template_writes_a_template_that_resolves_by_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The round trip, not a file-existence check: what `generate template`
+    wrote must come back out of `get_template(name, repo_root)` — the same
+    call `validate`, `run` and `generate experiment` resolve a template
+    through — and come back as *itself*.
+
+    THE IDENTITY CHECK, which is what a file-existence check cannot see: the
+    stub declares one real `Param` whose path is derived from the name, so a
+    merge that handed back core's `GenericTemplate`, or a stub that registered
+    a bare `BaseTemplate`, fails here rather than passing on a truthy result.
+    That exact shape shipped twice in this slice already.
+    """
+    from publishable import BaseTemplate
+    from publishable.templates.registry import get_template, template_names
+
+    root = _new_project_with_a_generated_template(tmp_path, monkeypatch)
+    assert (root / GENERATED_TEMPLATE).is_file()
+
+    template = get_template("my_assay", root)
+    assert template is not None
+    assert isinstance(template, BaseTemplate)
+    assert type(template).__name__ == "MyAssayTemplate"
+    assert type(template) is not type(get_template("generic", root))
+    assert set(template.parameter_spec) == {"my_assay.threshold"}
+    assert template.parameter_spec["my_assay.threshold"].default == 0.5
+    assert "my_assay" in template_names(root)
+
+    # THE SECOND NAME, in its own project, which is what proves the four
+    # derivations are derivations rather than one hard-coded example: the
+    # filename, the registered name, the class, and the parameter path all
+    # move together. `plate_wells` has two segments on purpose — a class name
+    # built by capitalizing the whole string reads `Plate_wellsTemplate` and
+    # dies here. That the first project's name does NOT resolve in the second
+    # is the same assertion read the other way.
+    other = _new_project_with_a_generated_template(
+        tmp_path, monkeypatch, name="plate_wells", project="other"
+    )
+    assert (other / "templates" / "plate_wells.py").is_file()
+    second = get_template("plate_wells", other)
+    assert second is not None
+    assert type(second).__name__ == "PlateWellsTemplate"
+    assert set(second.parameter_spec) == {"plate_wells.threshold"}
+    assert get_template("my_assay", other) is None
+
+
+def test_a_generated_template_materializes_a_config(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The stub is usable, not merely importable: `generate experiment
+    --template my_assay` materializes its declared parameter with its default.
+
+    This is what proves the generated `parameter_spec`'s dotted path is one
+    `materialize_config` renders and `validate` accepts — a stub declaring a
+    path either of them rejected would still register, so the round-trip test
+    above cannot see it.
+    """
+    data = tmp_path / "data"
+    data.mkdir()
+    (data / "index.csv").write_text("patient_id\np1\n")
+    root = _new_project_with_a_generated_template(tmp_path, monkeypatch)
+
+    cfg = generate_experiment(
+        repo_root=root,
+        name="my-experiment",
+        template_name="my_assay",
+        input_dir=str(data),
+        output_dir=str(tmp_path / "results"),
+    )
+    doc = yaml.safe_load(cfg.read_text())
+    assert doc["experiment_type"] == "my_assay"
+    assert doc["parameters"] == {"my_assay": {"threshold": 0.5}}
+
+
+def test_generate_template_refuses_an_existing_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    """Greenfield only, the same line `generate experiment` and `generate step`
+    draw: an existing `templates/<name>.py` is refused and left byte-for-byte
+    alone, rather than overwritten. The file's whole text is asserted, so a
+    generator that wrote the stub anyway fails here even though the refusal
+    printed."""
+    root = tmp_path / "proj"
+    assert main(["new", str(root)]) == EXIT_OK
+    mine = root / GENERATED_TEMPLATE
+    mine.write_text("# hand-written, and worth more than a stub\n")
+    monkeypatch.chdir(root)
+
+    assert main(["generate", "template", "my_assay"]) == EXIT_WRONG
+    printed = capsys.readouterr().err
+    assert "E-TEMPLATE-EXISTS" in printed
+    # The message names the file it refused: a refusal that said only "already
+    # exists" would pass the code assertion while leaving the reader to guess
+    # which of `templates/` stopped it.
+    assert "templates/my_assay.py" in printed
+    assert mine.read_text() == "# hand-written, and worth more than a stub\n"
+
+
+def test_the_generated_stub_declares_only_the_live_members(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """`BaseTemplate` declares nine members and only five are read by anything:
+    `parameter_spec`, `validate`, `aggregate`, `naming_pattern` and
+    `default_repeats`. A stub emitting the other four teaches its reader to set
+    fields that have no effect, so it emits the five and none of the four.
+
+    THE CONTROL is the first assertion: a stub that emitted nothing at all
+    would satisfy the absence check by itself.
+
+    Both dimensions, because neither check sees the other's failure. An `ast`
+    parse of the class body cannot tell that a member was emitted **commented
+    out** — comments are not in the tree at all, and a commented-out
+    `apparatus_probe` teaches its reader exactly what this test exists to
+    prevent. A substring check over the text cannot tell a declaration from a
+    mention, so it would accept a `parameter_spec` that appears only inside a
+    comment and never as a field. So the tree pins the declared set exactly,
+    and the text pins that the four dead names appear nowhere at all.
+    """
+    import ast
+
+    root = _new_project_with_a_generated_template(tmp_path, monkeypatch)
+    text = (root / GENERATED_TEMPLATE).read_text()
+    tree = ast.parse(text)
+    body = next(n for n in tree.body if isinstance(n, ast.ClassDef)).body
+    declared = {
+        node.target.id if isinstance(node, ast.AnnAssign) else node.name
+        for node in body
+        if isinstance(node, ast.AnnAssign | ast.FunctionDef)
+    } | {
+        t.id
+        for node in body
+        if isinstance(node, ast.Assign)
+        for t in node.targets
+        if isinstance(t, ast.Name)
+    }
+
+    assert declared == {
+        "parameter_spec", "validate", "aggregate", "naming_pattern", "default_repeats"
+    }, declared
+    for dead in ("field_convention", "required_env", "apparatus_probe", "apparatus_facts"):
+        assert dead not in text, dead
+
+
+def test_generate_template_takes_exactly_one_name_and_writes_nothing_otherwise(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+):
+    """A wrong invocation is exit 2 with a diagnostic, and — the half that
+    matters — nothing reaches disk. The CLI-table test probes every built
+    generator with two junk positionals inside this very repository, so an
+    arity check made after the write would scaffold `templates/_probe_a.py`
+    into the working tree and hand it to every later `discover_local`.
+
+    A name that is not an importable module stem is refused for the same
+    reason one prefixed with `__` is: `discover_local` skips the second, so a
+    generator that wrote either would write a file that never registers.
+    """
+    root = tmp_path / "proj"
+    assert main(["new", str(root)]) == EXIT_OK
+    monkeypatch.chdir(root)
+    templates = root / "templates"
+    before = sorted(p.name for p in templates.iterdir())
+
+    assert main(["generate", "template", "_probe_a", "_probe_b"]) == EXIT_INVOCATION
+    assert capsys.readouterr().err == (
+        "`generate template` takes one template name — "
+        "see docs/reference.md § Generators\n"
+    )
+    assert main(["generate", "template"]) == EXIT_INVOCATION
+    assert capsys.readouterr().err == (
+        "`generate template` takes one template name — "
+        "see docs/reference.md § Generators\n"
+    )
+
+    for rejected in ("my-assay", "__helper", "sub/dir"):
+        assert main(["generate", "template", rejected]) == EXIT_INVOCATION
+        assert capsys.readouterr().err == (
+            f"`{rejected}` cannot name a project-local template — `templates/{rejected}.py` "
+            "must be an importable module name that discovery does not skip; "
+            "see docs/reference.md § Generators\n"
+        )
+    assert sorted(p.name for p in templates.iterdir()) == before
+
+
+def test_command_run_aggregate_resolves_a_project_local_template(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """`command_run`'s `aggregate` block draws the template through the same
+    `get_template` core uses elsewhere. A project-local template registered
+    under a name no built-in template holds must have its own `aggregate`
+    invoked when a config's `experiment_type` names it — not silently fall
+    back to a template that returns nothing.
+
+    The recording step is `_AGGREGATE_STEP` — the same `pred` column
+    `test_a_derived_metric_reaches_run_yaml_with_a_resampled_interval` uses —
+    rather than the scaffold's default step, which records a bare `True` that
+    a resampled `aggregate` cannot draw fractional resamples from cleanly.
+
+    `MyAssay` subclasses `publishable.BaseTemplate` directly, not
+    `GenericTemplate` — the one import root a plugin writes against — so
+    `parameters` is reset to `{}` alongside the `experiment_type` override:
+    `BaseTemplate.parameter_spec` is empty, and the generic-materialized
+    `analysis.*` keys would otherwise draw `E-PARAM-UNKNOWN`.
+    """
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+
+    root = tmp_path / "proj"
+    data = tmp_path / "data"
+    results_dir = tmp_path / "results"
+    data.mkdir()
+    (data / "index.csv").write_text("patient_id\np1\np2\np3\n")
+
+    assert main(["new", str(root)]) == EXIT_OK
+    (root / "templates" / "my_assay.py").write_text(
+        "from publishable import BaseTemplate, register_template\n\n\n"
+        '@register_template("my_assay")\n'
+        "class MyAssay(BaseTemplate):\n"
+        "    def aggregate(self, units, cfg):\n"
+        "        return {\n"
+        '            "n_units_seen": float(sum(1 for _ in units))\n'
+        "        }\n"
+    )
+
+    cfg = generate_experiment(
+        repo_root=root,
+        name="cohort-pilot",
+        template_name="generic",
+        input_dir=str(data),
+        output_dir=str(results_dir),
+    )
+    doc = yaml.safe_load(cfg.read_text())
+    doc["metadata"]["description"] = "a local-template aggregate run"
+    doc["metadata"]["authors"] = ["Kyungjoon Lee"]
+    doc["experiment_type"] = "my_assay"
+    doc["parameters"] = {}
+    cfg.write_text(yaml.safe_dump(doc))
+
+    subprocess.run(["git", "add", "."], cwd=root, check=True)
+    subprocess.run(
+        ["git", "-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "assay"],
+        cwd=root,
+        check=True,
+    )
+
+    assert main(["run", str(cfg)]) == EXIT_OK
+    run_dir = next(results_dir.glob("run_*"))
+    run = yaml.safe_load((run_dir / "run.yaml").read_text())
+    metric = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"][
+        "n_units_seen"
+    ]
+    assert metric["value"] == 3.0
 
 
 RANDOMIZED_ACROSS_CONDITIONS: dict[str, Any] = {

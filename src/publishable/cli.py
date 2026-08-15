@@ -33,6 +33,7 @@ from publishable.errors import ContractError, PublishableError
 from publishable.estimate import Estimate
 from publishable.generators.experiment import generate_experiment
 from publishable.generators.step import generate_step
+from publishable.generators.template import generate_template, is_usable_name
 from publishable.hashes import code_hash, design_digest, parameters_hash
 from publishable.hypotheses import evaluate as evaluate_hypotheses
 from publishable.manifest import build_manifest, manifest_hash, verify_manifest
@@ -129,10 +130,9 @@ NOT_BUILT_COMMANDS: dict[str, str] = {
 }
 
 # The same, for `generate`'s kinds: `docs/reference.md` § Generators names four
-# and this build materializes two.
+# and this build materializes three.
 NOT_BUILT_GENERATORS: dict[str, str] = {
     "report": "A report override renders one experiment's own figures",
-    "template": "Generators",
 }
 
 
@@ -1488,7 +1488,7 @@ def command_run(config_path: Path) -> int:
             # each condition and never pools across conditions — an unguarded
             # filter would let a same-named step from another condition mark this
             # one as having a recording step it never ran.
-            template = get_template(doc.get("experiment_type", ""))
+            template = get_template(doc.get("experiment_type", ""), repo_root)
             resample_seed_value = resample_seed(digest)
             # The roster is resolved once per run and shared across every
             # condition, so this mapping is built once too — it is the same
@@ -2291,6 +2291,30 @@ def _dispatch_generate(command: str, rest: list[str]) -> int:
         if len(positional) != 2:
             return EXIT_INVOCATION
         generate_step(repo_root=repo_root, experiment=positional[0], step_name=positional[1])
+        return EXIT_OK
+    if kind == "template":
+        # Both checks are made before anything reaches disk, and the arity one
+        # has a second reason to be: the CLI-table test probes every built
+        # generator with two junk positionals, inside this repository, so a
+        # generator that wrote first would scaffold a template into the working
+        # tree that every later `discover_local` then reads.
+        if len(positional) != 1:
+            print(
+                "`generate template` takes one template name — "
+                "see docs/reference.md § Generators",
+                file=sys.stderr,
+            )
+            return EXIT_INVOCATION
+        name = positional[0]
+        if not is_usable_name(name):
+            print(
+                f"`{name}` cannot name a project-local template — `templates/{name}.py` "
+                "must be an importable module name that discovery does not skip; "
+                "see docs/reference.md § Generators",
+                file=sys.stderr,
+            )
+            return EXIT_INVOCATION
+        generate_template(repo_root=repo_root, name=name)
         return EXIT_OK
     if kind in NOT_BUILT_GENERATORS:
         return _report_not_built(f"generate {kind}", NOT_BUILT_GENERATORS[kind])

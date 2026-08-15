@@ -1,6 +1,15 @@
+import sys
+from pathlib import Path
+
+import pytest
+
 from publishable import BaseTemplate, Param
+from publishable.diagnostics import Collector
+from publishable.errors import ContractError
 from publishable.stats import UnitTable
-from publishable.templates.registry import get_template
+from publishable.templates.discovery import discover_local, is_local_template
+from publishable.templates.registry import get_template, template_names
+from publishable.validate import validate_config
 
 
 def test_generic_is_registered_and_declares_its_conventions():
@@ -28,6 +37,326 @@ def test_an_unknown_template_is_not_resolved():
     assert get_template("llm_diagnostic") is None
 
 
+def test_registering_a_class_a_repo_does_not_own_does_not_mark_it_local(tmp_path: Path):
+    """The stamp `discover_local` sets on a class it accepts must not spread to a
+    class the repo merely imported and registered under a new name — core's own
+    `GenericTemplate`, here. Stamping whatever `@register_template` was called on,
+    with no check that the class was *defined* under this repo's `templates/`,
+    marks `GenericTemplate` local **permanently, for the rest of the process**:
+    every other repo resolved afterward would then see core's own template
+    skip `template_version` entirely. Proven process-wide rather than only
+    against this one `tmp_path`'s result, because a class-level stamp on a
+    shared, importable object is exactly the leak `design-principles.md`'s
+    registry warning is about — a fact recorded on an object that outlives
+    the repo that recorded it.
+    """
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    assert is_local_template(GenericTemplate) is False  # true regardless of this test's order
+
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "my_assay.py").write_text(
+        "from publishable.templates.builtin.generic import GenericTemplate\n"
+        "from publishable import register_template\n\n\n"
+        'register_template("sneaky")(GenericTemplate)\n'
+    )
+    found = discover_local(tmp_path)
+    assert found["sneaky"].cls is GenericTemplate  # the same shared class object
+
+    assert is_local_template(GenericTemplate) is False
+
+
+def test_a_local_template_resolves_by_name(tmp_path: Path):
+    """The headline. THE CONTROL: `generic` still resolves from the same call,
+    so a change that replaced builtins with locals fails here."""
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "my_assay.py").write_text(
+        "from publishable import BaseTemplate, register_template\n\n\n"
+        '@register_template("my_assay")\n'
+        "class MyAssay(BaseTemplate):\n"
+        "    pass\n"
+    )
+
+    resolved = get_template("my_assay", tmp_path)
+    assert resolved is not None
+    assert type(resolved).__name__ == "MyAssay"
+    assert get_template("generic", tmp_path) is not None
+
+
+def test_without_a_repo_root_only_builtins_resolve(tmp_path: Path):
+    """No root -> local discovery is skipped, `generic` still resolves. This is
+    the behaviour task 4's hoist depends on. The local file genuinely exists on
+    disk so this is a claim about the root argument, not about the file being
+    absent."""
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "my_assay.py").write_text(
+        "from publishable import BaseTemplate, register_template\n\n\n"
+        '@register_template("my_assay")\n'
+        "class MyAssay(BaseTemplate):\n"
+        "    pass\n"
+    )
+
+    assert get_template("my_assay") is None
+    assert get_template("generic") is not None
+
+
+def test_a_repo_root_does_not_fabricate_an_unknown_name(tmp_path: Path):
+    """`get_template("llm_diagnostic") is None` used to assert the closed set by
+    name; with a repo root that is no longer a statement about the world, since
+    a project could define it locally. What survives: a repo root does not
+    invent names it was never given. THE CONTROL: a real local template
+    (`real_one`) resolves from the same call, so a discovery that silently
+    returned {} for everything would fail here rather than passing both
+    assertions."""
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "real.py").write_text(
+        "from publishable import BaseTemplate, register_template\n\n\n"
+        '@register_template("real_one")\n'
+        "class RealOne(BaseTemplate):\n"
+        "    pass\n"
+    )
+
+    assert get_template("llm_diagnostic", tmp_path) is None
+    assert get_template("real_one", tmp_path) is not None
+
+
+def test_template_names_includes_locals_and_stays_sorted(tmp_path: Path):
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "my_assay.py").write_text(
+        "from publishable import BaseTemplate, register_template\n\n\n"
+        '@register_template("my_assay")\n'
+        "class MyAssay(BaseTemplate):\n"
+        "    pass\n"
+    )
+
+    assert template_names(tmp_path) == ["generic", "my_assay"]
+    assert template_names() == ["generic"]
+
+
+def test_per_call_merge_does_not_leak_between_two_roots(tmp_path: Path):
+    """Two projects in one process must never see each other's `templates/` —
+    a module-global merged mapping would leak `alpha` from `root_a` into the
+    call for `root_b`. This is the dimension none of the tests above can see:
+    each of them uses at most one root per test."""
+    root_a = tmp_path / "a"
+    root_b = tmp_path / "b"
+    (root_a / "templates").mkdir(parents=True)
+    (root_b / "templates").mkdir(parents=True)
+    (root_a / "templates" / "alpha.py").write_text(
+        "from publishable import BaseTemplate, register_template\n\n\n"
+        '@register_template("alpha")\n'
+        "class Alpha(BaseTemplate):\n"
+        "    pass\n"
+    )
+
+    assert get_template("alpha", root_a) is not None
+    assert get_template("alpha", root_b) is None
+
+
+def _modules_under(directory: Path) -> list[str]:
+    """Every `sys.modules` key whose module was loaded out of `directory`.
+
+    Computed rather than enumerated by name. Listing the two helper names by
+    hand would pass a defect that evicted `plain` but left `plain.data`, and
+    `import plain.data` consults `sys.modules["plain.data"]` first — so a stale
+    submodule is a leak on its own, and one no hand-written list would have
+    thought to include.
+    """
+    root = directory.resolve()
+
+    def under(candidate: str) -> bool:
+        here = Path(candidate).resolve()
+        return root == here or root in here.parents
+
+    leaked = []
+    for key, module in list(sys.modules.items()):
+        origin = getattr(module, "__file__", None)
+        paths = list(getattr(module, "__path__", ()))
+        if (origin and under(origin)) or any(under(entry) for entry in paths):
+            leaked.append(key)
+    return sorted(leaked)
+
+
+def _two_repos_each_holding_my_assay(tmp_path: Path) -> tuple[Path, Path]:
+    """Repo A and repo B, both with `templates/my_assay.py` registering `my_assay`.
+
+    Each file imports helpers from its own `templates/`, in both shapes a
+    helper directory comes in — `support/` with an `__init__.py`, and `plain/`
+    without one, which Python makes a *namespace* package with no `__file__` at
+    all. Both, because a restore that tested only `__file__` would leave the
+    namespace package cached and leak it to the next repo; and directories
+    rather than sibling `.py` files, because every `templates/*.py` is itself
+    imported by discovery, so a sibling would be re-imported per repo by
+    accident and no leak would show.
+
+    `plain.data` carries a `__file__` and is evicted either way, so the value
+    it holds is not what the namespace package costs. What it costs is the
+    *parent* surviving in `sys.modules` with the previous repo's submodules
+    still attached to it — which a file saying `import plain` and reading
+    `plain.data` is then handed, silently and with the wrong repo's data. That
+    file cannot be written as a fixture here, because once the residue is gone
+    it is an `AttributeError` rather than a value; the residue's absence is
+    asserted directly instead.
+    """
+    roots = []
+    for tag in ("a", "b"):
+        root = tmp_path / tag
+        (root / "templates" / "support").mkdir(parents=True)
+        (root / "templates" / "plain").mkdir(parents=True)
+        (root / "templates" / "support" / "__init__.py").write_text(f'ORIGIN = "{tag.upper()}"\n')
+        (root / "templates" / "plain" / "data.py").write_text(f'ORIGIN = "{tag.upper()}"\n')
+        (root / "templates" / "my_assay.py").write_text(
+            "import support\n"
+            "import plain.data\n"
+            "from publishable import BaseTemplate, register_template\n\n\n"
+            '@register_template("my_assay")\n'
+            "class MyAssay(BaseTemplate):\n"
+            f'    """{tag.upper()}\'s"""\n\n'
+            "    origin = support.ORIGIN\n"
+            "    namespaced_origin = plain.data.ORIGIN\n"
+        )
+        roots.append(root)
+    return roots[0], roots[1]
+
+
+def test_two_repos_in_one_process_do_not_cross_contaminate(tmp_path: Path):
+    """Both repos hold `templates/my_assay.py`, registering the same name but
+    different classes. Resolving from repo A then repo B must give B's class —
+    asserted by class identity (`__doc__`, and `origin` carried from the repo's
+    own helper), never by the name, which is identical either way and so proves
+    nothing.
+
+    Three claims, each dying to a different defect:
+
+    - `origin` — repo B's `import support` served repo A's package from
+      `sys.modules`, so B's class silently carries A's data. This is the one
+      that fails today, and it dies to dropping the `sys.modules` restore.
+    - no `plain` or `support` left in `sys.modules` — the restore must catch a
+      helper directory with no `__init__.py` too, which has no `__file__` to
+      test. Dies to a restore that looks at `__file__` alone.
+    - `__module__` inequality — the two files are not one `sys.modules` entry.
+      Dies to keying the synthetic module name on the file stem alone.
+
+    `namespaced_origin` is a control rather than a claim: it holds under every
+    one of those defects, and it is here so a fix that made the namespace
+    helper unimportable fails rather than passing the residue assertion."""
+    repo_a, repo_b = _two_repos_each_holding_my_assay(tmp_path)
+
+    a = get_template("my_assay", repo_a)
+    b = get_template("my_assay", repo_b)
+
+    assert a is not None and b is not None
+    assert type(a).__doc__ == "A's"
+    assert type(b).__doc__ == "B's"
+    assert type(a).origin == "A"
+    assert type(b).origin == "B"
+    assert type(a).namespaced_origin == "A"
+    assert type(b).namespaced_origin == "B"
+    assert type(a) is not type(b)
+    assert type(a).__module__ != type(b).__module__
+    assert _modules_under(tmp_path) == []
+
+
+def test_a_repos_own_templates_are_reachable_from_a_second_call(tmp_path: Path):
+    """THE CONTROL for the test above: naming a module per repo must not make a
+    repo resolvable only once. Nothing is cached, so the same root asked twice
+    re-imports and answers identically — with the same class *identity*, since
+    two separate imports of one file give two unequal classes."""
+    repo_a, _ = _two_repos_each_holding_my_assay(tmp_path)
+
+    first = get_template("my_assay", repo_a)
+    second = get_template("my_assay", repo_a)
+
+    assert first is not None and second is not None
+    assert type(first).__doc__ == type(second).__doc__ == "A's"
+    assert type(first).origin == type(second).origin == "A"
+
+
+def test_a_template_that_mutates_sys_path_does_not_leak_to_the_next_repo(tmp_path: Path):
+    """A template whose top level touches `sys.path` — itself, or through any
+    library it imports — must not move the entry discovery is about to take
+    back off. Taking it by the index captured before the import deletes an
+    unrelated entry instead (`.../publishable/src`, measured) and leaves this
+    repo's `templates/` on `sys.path` for good, which is how repo B ends up
+    served repo A's helper: `origin` is the assertion that catches that, and
+    `sys.path` being unchanged is the assertion that catches the entry lost on
+    the way.
+
+    A `remove` of the string is no better and fails the other way round, which
+    is why each template here appends its *own* directory as well: `remove`
+    takes the first occurrence, which is discovery's, and leaves the
+    template's copy behind — same permanent entry, same leak. Only putting
+    `sys.path` back whole survives both.
+
+    The helper is `__helperx.py` rather than `helperx.py`: task 8 makes a
+    non-dunder top-level `templates/*.py` that registers nothing an
+    `E-TEMPLATE-LOAD` fault, so a sibling helper that is not itself a template
+    must carry the same `__`-prefix `__init__.py` already does — and, being
+    `__`-prefixed, `discover_local`'s own loop no longer imports it directly.
+    This makes the `sys.modules` restore's job strictly harder than before:
+    the module reaches `sys.modules` only through `my_assay.py`'s own nested
+    `import`, the same route the helper *directory* case exercises, rather
+    than being popped a second time by discovery's own glob."""
+    for tag in ("a", "b"):
+        templates = tmp_path / tag / "templates"
+        templates.mkdir(parents=True)
+        (templates / "__helperx.py").write_text(f'ORIGIN = "{tag.upper()}"\n')
+        (templates / "my_assay.py").write_text(
+            "import os\n"
+            "import sys\n"
+            "sys.path.insert(0, '/zzz')\n"
+            "sys.path.append(os.path.dirname(__file__))\n"
+            "import __helperx as helperx\n"
+            "from publishable import BaseTemplate, register_template\n\n\n"
+            '@register_template("my_assay")\n'
+            "class MyAssay(BaseTemplate):\n"
+            "    origin = helperx.ORIGIN\n"
+        )
+    before = list(sys.path)
+
+    a = get_template("my_assay", tmp_path / "a")
+    b = get_template("my_assay", tmp_path / "b")
+
+    assert a is not None and b is not None
+    assert type(a).origin == "A"
+    assert type(b).origin == "B"
+    assert sys.path == before
+    assert _modules_under(tmp_path) == []
+
+
+def test_a_template_named_for_a_stdlib_module_does_not_import_itself(tmp_path: Path):
+    """`templates/json.py` whose own top level says `import json`. Bound as
+    `json` in `sys.modules` it gets *itself* back — deterministically, on every
+    call, single-threaded — and the stdlib `json` is evicted from the process
+    for good afterwards. `publishable` itself imports `io`, so `templates/io.py`
+    carries the same hazard; it is named here rather than tested, because
+    clobbering `sys.modules["io"]` mid-suite is worse than the bug.
+
+    THE CONTROL is `saw_stdlib_json`: a fix that merely skipped files named
+    after a stdlib module would leave the template unresolved and fail it."""
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "json.py").write_text(
+        "import json\n"
+        "from publishable import BaseTemplate, register_template\n\n\n"
+        '@register_template("jsonish")\n'
+        "class Jsonish(BaseTemplate):\n"
+        "    saw_stdlib_json = hasattr(json, 'loads')\n"
+    )
+
+    resolved = get_template("jsonish", tmp_path)
+
+    assert resolved is not None
+    assert type(resolved).__name__ == "Jsonish"
+    assert type(resolved).saw_stdlib_json is True
+    assert hasattr(sys.modules["json"], "loads")
+
+
 def test_validate_defaults_to_no_cross_field_rules():
     class Bare(BaseTemplate):
         parameter_spec: dict[str, Param] = {}
@@ -49,3 +378,640 @@ def test_a_subclass_can_derive_from_the_table():
     assert T().aggregate(UnitTable({"u1": {"pred": 1.0}, "u2": {"pred": 2.0}}), None) == {
         "total": 3.0
     }
+
+
+def test_register_template_returns_the_class_and_records_the_name():
+    """§ Creating a plugin: a local template's `@register_template` argument
+    "is therefore the whole of its registration". The decorator must return the
+    class unchanged — a decorator that returned the registration record would
+    break `class X(BaseTemplate)` for every later reference to X."""
+    from publishable import register_template
+    from publishable.templates.discovery import drain_pending
+
+    @register_template("my_assay")
+    class MyAssay(BaseTemplate):
+        pass
+
+    assert MyAssay.__name__ == "MyAssay"          # returned unchanged
+    assert issubclass(MyAssay, BaseTemplate)
+    assert drain_pending() == [("my_assay", MyAssay)]
+    assert drain_pending() == []                  # draining empties it
+
+
+ALPHA_TEMPLATE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("alpha")
+class Alpha(BaseTemplate):
+    pass
+"""
+
+BETA_TEMPLATE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("beta")
+class Beta(BaseTemplate):
+    pass
+"""
+
+REAL_ONE_TEMPLATE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("real_one")
+class RealOne(BaseTemplate):
+    pass
+"""
+
+DUNDER_TEMPLATE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("should_not_be_found")
+class ShouldNotBeFound(BaseTemplate):
+    pass
+"""
+
+
+def test_discovery_imports_every_file_not_only_the_named_one(tmp_path: Path):
+    """Two files, and the config names neither. Both must register, or a
+    collision between them could not be detected — which is the whole reason
+    discovery is eager rather than lazy."""
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "alpha.py").write_text(ALPHA_TEMPLATE)
+    (templates / "beta.py").write_text(BETA_TEMPLATE)
+
+    found = discover_local(tmp_path)
+
+    assert sorted(found) == ["alpha", "beta"]
+    assert found["alpha"].cls.__name__ == "Alpha"
+    assert found["beta"].cls.__name__ == "Beta"
+    assert issubclass(found["alpha"].cls, BaseTemplate)
+    assert issubclass(found["beta"].cls, BaseTemplate)
+
+
+def test_discovery_ignores_non_python_and_dunder_files(tmp_path: Path):
+    """The scaffold puts `.gitkeep` in `templates/`. THE CONTROL: a real
+    template beside it must still be found, so a discovery that returned {}
+    for everything fails here rather than passing both assertions.
+
+    `__init__.py` registers a name of its own here — an empty `__init__.py`
+    would make the skip untestable, since importing it would register nothing
+    either way, and `sorted(found) == ["real_one"]` would pass whether or not
+    the skip existed.
+    """
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / ".gitkeep").write_text("")
+    (templates / "__init__.py").write_text(DUNDER_TEMPLATE)
+    (templates / "notes.md").write_text("# not a template\n")
+    (templates / "real.py").write_text(REAL_ONE_TEMPLATE)
+
+    found = discover_local(tmp_path)
+
+    assert sorted(found) == ["real_one"]
+    assert found["real_one"].cls.__name__ == "RealOne"
+
+
+def test_discovery_with_no_templates_directory_is_empty_not_an_error(tmp_path: Path):
+    assert discover_local(tmp_path) == {}
+
+
+def test_discovery_leaves_no_stale_pending_registration_behind(tmp_path: Path):
+    """A registration pending from before `discover_local` was called (a prior
+    `@register_template` in the same process) must not leak into the result,
+    and must not still be sitting in the buffer afterward — `discover_local`
+    "returns what *they* [the files] registered", not what was already queued."""
+    from publishable import register_template
+    from publishable.templates.discovery import drain_pending
+
+    @register_template("stale")
+    class Stale(BaseTemplate):
+        pass
+
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "alpha.py").write_text(ALPHA_TEMPLATE)
+
+    found = discover_local(tmp_path)
+
+    assert sorted(found) == ["alpha"]
+    assert drain_pending() == []
+
+
+def test_a_repo_with_no_templates_directory_still_discards_a_stale_registration(
+    tmp_path: Path,
+):
+    """The sibling above on the path that finds no directory: `discover_local`
+    promises to discard what the buffer already held, and the `templates/`
+    check must not be able to skip that promise. A repo with no `templates/`
+    is reachable with something queued — `cli` imports the experiment package
+    before `validate_config` runs, so a module-scope `@register_template`
+    under `src/**` queues an entry with no `templates/` in sight.
+
+    The buffer *is* the promise here, so it is what is asserted, not a proxy:
+    no return value can carry it, the early return's mapping being empty
+    either way. The empty mapping is asserted too, as the control — a
+    `discover_local` that had raised or resolved something would satisfy the
+    drain assertion for the wrong reason.
+
+    `finally` because the buffer is module-level: leaving it dirty would
+    poison whatever test runs next."""
+    from publishable import register_template
+    from publishable.templates.discovery import drain_pending
+
+    try:
+
+        @register_template("stale")
+        class Stale(BaseTemplate):
+            pass
+
+        without = tmp_path / "no_templates"
+        without.mkdir()
+
+        assert discover_local(without) == {}
+        assert drain_pending() == []
+    finally:
+        drain_pending()  # never leave this session's buffer dirty
+
+
+CLAIMS_DUPLICATED_A = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("duplicated")
+class FirstClaimant(BaseTemplate):
+    pass
+"""
+
+CLAIMS_DUPLICATED_B = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("duplicated")
+class SecondClaimant(BaseTemplate):
+    pass
+"""
+
+CLAIMS_TWICE_ON_ONE_CLASS = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("duplicated")
+@register_template("duplicated")
+class OnlyClaimant(BaseTemplate):
+    pass
+"""
+
+CLAIMS_GENERIC = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("generic")
+class LocalGeneric(BaseTemplate):
+    pass
+"""
+
+CLAIMS_TWICE_IN_ONE_FILE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("duplicated")
+class FirstClaimant(BaseTemplate):
+    pass
+
+
+@register_template("duplicated")
+class SecondClaimant(BaseTemplate):
+    pass
+"""
+
+
+def test_two_local_files_claiming_one_name_are_refused_naming_both(tmp_path: Path):
+    """`reference.md` § Creating a plugin: a collision "fails at load, naming
+    both providers", because import order is a property of a machine.
+
+    The third file is what makes the naming assertions mean something: an
+    implementation that dumped every file it globbed into the message would
+    satisfy "both paths appear" while naming a file that claims nothing. The
+    control this test needs — two files claiming *different* names resolving
+    cleanly — is `test_discovery_imports_every_file_not_only_the_named_one`
+    above, which a refusal firing on any two files would break.
+    """
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "one.py").write_text(CLAIMS_DUPLICATED_A)
+    (templates / "two.py").write_text(CLAIMS_DUPLICATED_B)
+    (templates / "three.py").write_text(BETA_TEMPLATE)
+
+    with pytest.raises(ContractError) as excinfo:
+        discover_local(tmp_path)
+
+    assert excinfo.value.code == "E-TEMPLATE-COLLISION"
+    message = str(excinfo.value)
+    assert "duplicated" in message
+    assert f"{templates / 'one.py'}::FirstClaimant" in message
+    assert f"{templates / 'two.py'}::SecondClaimant" in message
+    assert str(templates / "three.py") not in message
+
+
+def test_the_colliding_name_reported_is_the_first_in_name_order(tmp_path: Path):
+    """`discover_local` walks `sorted(claims)` rather than the dict's insertion
+    order, and the docstring gives the reason: import order is a property of a
+    machine, so it may not decide which fault a user is shown either.
+
+    More than one colliding name is what makes that observable at all. Every
+    other collision fixture in this file has exactly one, so the iteration
+    order is a dimension no assertion in them can see — replacing
+    `sorted(claims)` with the raw insertion order, or with its reverse, leaves
+    them all green.
+
+    **Three**, claimed in the order `zzz`, `aaa`, `mmm`, because two cannot
+    separate the two wrong answers: with two names the reverse of the
+    insertion order is the sorted order for one arrangement and the insertion
+    order is for the other, so one fixture kills only one mutant. Here the
+    name reported under insertion order is `zzz`, under its reverse `mmm`, and
+    under name order `aaa` — three distinct answers, so both mutants fail.
+    """
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    claims = (
+        "from publishable import BaseTemplate, register_template\n\n\n"
+        '@register_template("zzz")\n'
+        "class Zzz{tag}(BaseTemplate):\n"
+        "    pass\n\n\n"
+        '@register_template("aaa")\n'
+        "class Aaa{tag}(BaseTemplate):\n"
+        "    pass\n\n\n"
+        '@register_template("mmm")\n'
+        "class Mmm{tag}(BaseTemplate):\n"
+        "    pass\n"
+    )
+    (templates / "one.py").write_text(claims.format(tag="FirstFile"))
+    (templates / "two.py").write_text(claims.format(tag="SecondFile"))
+
+    with pytest.raises(ContractError) as excinfo:
+        discover_local(tmp_path)
+
+    assert excinfo.value.code == "E-TEMPLATE-COLLISION"
+    message = str(excinfo.value)
+    assert "`aaa`" in message
+    assert "`zzz`" not in message
+    assert "`mmm`" not in message
+    # Both `aaa` claimants named, and no class claiming another name — the
+    # message is about the name it reported, not a dump of everything that
+    # collided.
+    assert f"{templates / 'one.py'}::AaaFirstFile" in message
+    assert f"{templates / 'two.py'}::AaaSecondFile" in message
+    assert "ZzzFirstFile" not in message
+    assert "MmmSecondFile" not in message
+
+
+def test_one_file_claiming_one_name_twice_names_both_classes(tmp_path: Path):
+    """The degenerate collision: both providers are the same file, so a message
+    built from paths alone would print one path twice and name no second
+    provider at all. The class is the other half of a provider's identity, and
+    it is what distinguishes the two here."""
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "one.py").write_text(CLAIMS_TWICE_IN_ONE_FILE)
+
+    with pytest.raises(ContractError) as excinfo:
+        discover_local(tmp_path)
+
+    assert excinfo.value.code == "E-TEMPLATE-COLLISION"
+    message = str(excinfo.value)
+    assert f"{templates / 'one.py'}::FirstClaimant" in message
+    assert f"{templates / 'one.py'}::SecondClaimant" in message
+
+
+def test_stacked_decorators_are_refused_without_naming_one_provider_twice(tmp_path: Path):
+    """Two decorators on **one class** is the case `<path>::<ClassName>` cannot
+    tell apart, both claims having the same provider. Still refused — a name
+    claimed twice is refused however it was claimed — but the message says the
+    one thing that is true of it, and the remedy is to delete a line rather
+    than to rename anything."""
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "one.py").write_text(CLAIMS_TWICE_ON_ONE_CLASS)
+
+    with pytest.raises(ContractError) as excinfo:
+        discover_local(tmp_path)
+
+    assert excinfo.value.code == "E-TEMPLATE-COLLISION"
+    message = str(excinfo.value)
+    provider = f"{templates / 'one.py'}::OnlyClaimant"
+    assert message.count(provider) == 1
+    assert "same class" in message
+    assert "Remove one." in message
+    assert "Rename one." not in message
+
+
+def test_a_local_template_may_not_shadow_a_core_name(tmp_path: Path):
+    """"A plugin that could redefine `generic` could change what a config means
+    without changing the config." Refused at the merge, and the second provider
+    named is core's own class — the thing a user cannot rename."""
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "mine.py").write_text(CLAIMS_GENERIC)
+
+    with pytest.raises(ContractError) as excinfo:
+        get_template("generic", tmp_path)
+
+    assert excinfo.value.code == "E-TEMPLATE-COLLISION"
+    message = str(excinfo.value)
+    assert "generic" in message
+    assert f"{templates / 'mine.py'}::LocalGeneric" in message
+    assert "publishable.templates.builtin.generic.GenericTemplate" in message
+
+
+def test_the_shadow_is_refused_however_the_registry_is_asked(tmp_path: Path):
+    """The refusal is of the *repo*, not of one lookup: a config naming some
+    other template, or a `template_names` listing, must not resolve past a
+    `templates/` core cannot merge. Discovery alone accepts the file — the name
+    is core's to know about, and `discover_local` is not where core's names
+    live."""
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "mine.py").write_text(CLAIMS_GENERIC)
+
+    with pytest.raises(ContractError) as excinfo:
+        template_names(tmp_path)
+    assert excinfo.value.code == "E-TEMPLATE-COLLISION"
+
+    with pytest.raises(ContractError) as other:
+        get_template("something_else", tmp_path)
+    assert other.value.code == "E-TEMPLATE-COLLISION"
+
+    assert sorted(discover_local(tmp_path)) == ["generic"]
+
+
+def test_validate_reports_a_collision_rather_than_raising(tmp_path: Path):
+    """`validate` collects findings and never raises, so the load-time refusal
+    reaches it as a finding. THE CONTROL: the same config in the same repo
+    without the colliding file validates past `experiment_type` — reporting
+    neither this code nor `E-TEMPLATE-UNKNOWN`."""
+    repo = tmp_path / "repo"
+    (repo / "templates").mkdir(parents=True)
+    (repo / ".git").mkdir()
+    (repo / "configs" / "cohort-pilot").mkdir(parents=True)
+    config = repo / "configs" / "cohort-pilot" / "config.yaml"
+    config.write_text(
+        "experiment_type: generic\nentrypoint: cohort_pilot.experiment:experiment\n"
+    )
+
+    clean = Collector()
+    validate_config(config, clean)
+    assert "E-TEMPLATE-COLLISION" not in clean.render()
+    assert "E-TEMPLATE-UNKNOWN" not in clean.render()
+
+    (repo / "templates" / "mine.py").write_text(CLAIMS_GENERIC)
+    reported = Collector()
+    validate_config(config, reported)
+    rendered = reported.render()
+    assert "E-TEMPLATE-COLLISION" in rendered
+    assert "E-TEMPLATE-UNKNOWN" not in rendered
+    assert str(repo / "templates" / "mine.py") in rendered
+
+
+RAISES_ON_IMPORT = "raise RuntimeError('kaboom')\n"
+
+REGISTERS_NOTHING = "x = 1\n"
+
+REGISTERS_A_NON_BASE_TEMPLATE = """\
+from publishable import register_template
+
+
+@register_template("impostor")
+class Impostor:
+    pass
+"""
+
+
+def test_a_file_that_raises_on_import_is_a_finding_not_a_traceback(tmp_path: Path):
+    """Shape 1 of 3. `discover_local` must not let the raise propagate — it is
+    user code, and `validate` is contracted never to raise. `sys.path` and
+    `sys.modules` are asserted unchanged as a hygiene check on top of that:
+    task 6's own `finally` in `_import_file` restores both regardless of
+    where the catch sits, so this does not by itself distinguish a catch
+    placed around `_import_file`'s call from one placed inside it (around
+    `exec_module`) — that distinction is what
+    `test_a_partial_registration_before_a_raise_does_not_leak_into_the_buffer`
+    below actually pins, since only a catch at the call site sees the raise
+    before any second `drain_pending()` could run."""
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "broken.py").write_text(RAISES_ON_IMPORT)
+    before = list(sys.path)
+
+    with pytest.raises(ContractError) as excinfo:
+        discover_local(tmp_path)
+
+    assert excinfo.value.code == "E-TEMPLATE-LOAD"
+    assert str(templates / "broken.py") in str(excinfo.value)
+    assert sys.path == before
+    assert _modules_under(tmp_path) == []
+
+
+def test_a_file_that_calls_sys_exit_is_a_finding_not_a_process_exit(tmp_path: Path):
+    """`SystemExit` is a `BaseException`, not an `Exception` — the same hazard
+    `validate_config`'s own entrypoint-import handler already guards against,
+    eight lines away in a different file, for the same reason: a
+    `templates/*.py` calling `sys.exit()` at module scope (or building an
+    `argparse` parser at import) would otherwise end the whole process with
+    the user's own exit code and no diagnostic at all, which is the one
+    outcome `validate` is contracted never to produce. Not one of the three
+    canonical shapes, but the same fault class, and `validate`'s own stated
+    goal for this task."""
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "exits.py").write_text("raise SystemExit(3)\n")
+
+    with pytest.raises(ContractError) as excinfo:
+        discover_local(tmp_path)
+
+    assert excinfo.value.code == "E-TEMPLATE-LOAD"
+    assert str(templates / "exits.py") in str(excinfo.value)
+
+
+def test_a_file_that_registers_nothing_is_a_finding(tmp_path: Path):
+    """Shape 2 of 3. A well-formed, non-dunder `templates/*.py` is a
+    contribution to what this repo's `templates/` offers, so one that imports
+    cleanly and never calls `@register_template` at all is as much a fault as
+    one that raises — the escape hatch for a genuine helper file is the same
+    `__`-prefix `__init__.py` already uses, not silence."""
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "empty.py").write_text(REGISTERS_NOTHING)
+
+    with pytest.raises(ContractError) as excinfo:
+        discover_local(tmp_path)
+
+    assert excinfo.value.code == "E-TEMPLATE-LOAD"
+    assert str(templates / "empty.py") in str(excinfo.value)
+
+
+def test_a_file_that_registers_a_non_base_template_is_a_finding(tmp_path: Path):
+    """Shape 3 of 3. `@register_template`'s decorator records `(name, cls)`
+    without checking `cls` at all — the type hint is not enforced — so a class
+    that never subclasses `BaseTemplate` reaches `discover_local` with a name
+    and a class, neither of which is a `BaseTemplate` a template resolution
+    can use.
+
+    The file is named `shape3.py` rather than `impostor.py` on purpose: the
+    registered name and the class are both `impostor`/`Impostor`, and a file
+    named after either would let `assert "impostor" in message` pass on the
+    interpolated *path* alone, testing nothing about what the message says
+    was registered."""
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "shape3.py").write_text(REGISTERS_A_NON_BASE_TEMPLATE)
+
+    with pytest.raises(ContractError) as excinfo:
+        discover_local(tmp_path)
+
+    assert excinfo.value.code == "E-TEMPLATE-LOAD"
+    message = str(excinfo.value)
+    assert str(templates / "shape3.py") in message
+    assert "impostor" in message  # the registered name
+    assert "Impostor" in message  # the offending class
+
+
+def test_a_broken_file_does_not_abandon_discovery_of_the_rest_of_the_directory(
+    tmp_path: Path,
+):
+    """THE CONTROL for all three shapes above: an earlier-sorting broken file
+    must not stop the loop from importing files after it, or a genuinely
+    well-formed template elsewhere in the same directory would never be
+    reached. What the eagerness does *not* buy is a collision verdict as well:
+    a load fault preempts one — see
+    `test_a_load_failure_is_reported_before_a_collision_in_the_same_directory`.
+    Proved by a side effect the
+    broken file's own raise cannot fake: `zzz_good.py` writes a sentinel file
+    at import time, which exists only if its `exec_module` actually ran. A
+    loop that raises from inside the `except`, or that returns as soon as one
+    file breaks, both leave the sentinel missing."""
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    sentinel = tmp_path / "sentinel"
+    (templates / "aaa_broken.py").write_text(RAISES_ON_IMPORT)
+    (templates / "zzz_good.py").write_text(
+        f"from pathlib import Path\n"
+        f"Path({str(sentinel)!r}).write_text('ran')\n"
+        "from publishable import BaseTemplate, register_template\n\n\n"
+        '@register_template("good")\n'
+        "class Good(BaseTemplate):\n"
+        "    pass\n"
+    )
+
+    with pytest.raises(ContractError) as excinfo:
+        discover_local(tmp_path)
+
+    assert excinfo.value.code == "E-TEMPLATE-LOAD"
+    assert str(templates / "aaa_broken.py") in str(excinfo.value)
+    assert str(templates / "zzz_good.py") not in str(excinfo.value)
+    assert sentinel.exists()
+
+
+def test_the_broken_file_reported_is_the_first_in_the_sorted_walk(tmp_path: Path):
+    """`reference.md` § Errors `validate` reports, the `E-TEMPLATE-LOAD` row:
+    "reported for the first such file in `discover_local`'s sorted walk of the
+    directory". **Two** broken files are what make that observable — every
+    other load-fault fixture in this file has exactly one, so both
+    `sorted(…, reverse=True)` on the walk and `load_faults[-1]` on the report
+    leave them green.
+
+    The two assertions are one guarantee seen from both ends: the earlier name
+    is reported, and the later one is not."""
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "aaa_broken.py").write_text(RAISES_ON_IMPORT)
+    (templates / "zzz_broken.py").write_text(RAISES_ON_IMPORT)
+
+    with pytest.raises(ContractError) as excinfo:
+        discover_local(tmp_path)
+
+    assert excinfo.value.code == "E-TEMPLATE-LOAD"
+    assert str(templates / "aaa_broken.py") in str(excinfo.value)
+    assert str(templates / "zzz_broken.py") not in str(excinfo.value)
+
+
+def test_a_partial_registration_before_a_raise_does_not_leak_into_the_buffer(
+    tmp_path: Path,
+):
+    """A file that registers a name and *then* raises leaves that name in the
+    pending buffer unless the exception handler drains it — and undrained, the
+    next file's own `drain_pending()` would inherit it and misattribute it to
+    the wrong provider, the exact identity/attribution class this slice has
+    shipped six times already. `partial` must not survive the raise it was
+    declared beside."""
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "broken.py").write_text(
+        "from publishable import BaseTemplate, register_template\n\n\n"
+        '@register_template("partial")\n'
+        "class Partial(BaseTemplate):\n"
+        "    pass\n\n\n"
+        "raise RuntimeError('boom')\n"
+    )
+
+    with pytest.raises(ContractError) as excinfo:
+        discover_local(tmp_path)
+
+    assert excinfo.value.code == "E-TEMPLATE-LOAD"
+    from publishable.templates.discovery import drain_pending
+
+    assert drain_pending() == []
+
+
+def test_a_load_failure_is_reported_before_a_collision_in_the_same_directory(
+    tmp_path: Path,
+):
+    """Both faults come out of `discover_local`, and `validate_config` reports
+    whichever `ContractError` it catches first — so precedence between the two
+    is a real decision. A collision verdict computed over a directory holding
+    a file that failed to load would be computed over a partial set of claims,
+    since the file that didn't load might have been a third claimant. LOAD
+    wins."""
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "aaa_broken.py").write_text(RAISES_ON_IMPORT)
+    (templates / "one.py").write_text(CLAIMS_DUPLICATED_A)
+    (templates / "two.py").write_text(CLAIMS_DUPLICATED_B)
+
+    with pytest.raises(ContractError) as excinfo:
+        discover_local(tmp_path)
+
+    assert excinfo.value.code == "E-TEMPLATE-LOAD"
+
+
+def test_validate_reports_a_load_failure_rather_than_raising(tmp_path: Path):
+    """`validate` collects findings and never raises, so this load-time
+    refusal reaches it as a finding, the same route `E-TEMPLATE-COLLISION`
+    takes. THE CONTROL: the same config in the same repo without the broken
+    file validates past `experiment_type` — reporting neither this code nor
+    `E-TEMPLATE-UNKNOWN`."""
+    repo = tmp_path / "repo"
+    (repo / "templates").mkdir(parents=True)
+    (repo / ".git").mkdir()
+    (repo / "configs" / "cohort-pilot").mkdir(parents=True)
+    config = repo / "configs" / "cohort-pilot" / "config.yaml"
+    config.write_text(
+        "experiment_type: generic\nentrypoint: cohort_pilot.experiment:experiment\n"
+    )
+
+    clean = Collector()
+    validate_config(config, clean)
+    assert "E-TEMPLATE-LOAD" not in clean.render()
+    assert "E-TEMPLATE-UNKNOWN" not in clean.render()
+
+    (repo / "templates" / "broken.py").write_text(RAISES_ON_IMPORT)
+    reported = Collector()
+    validate_config(config, reported)
+    rendered = reported.render()
+    assert "E-TEMPLATE-LOAD" in rendered
+    assert "E-TEMPLATE-UNKNOWN" not in rendered
+    assert str(repo / "templates" / "broken.py") in rendered
