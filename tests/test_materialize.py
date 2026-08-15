@@ -98,6 +98,46 @@ def test_a_local_template_carries_no_core_template_version(tmp_path: Path):
     )
 
 
+def test_a_template_class_defined_in_a_dunder_helper_is_still_local(tmp_path: Path):
+    """`is_local_template` must not be fooled by `__module__` alone. `MyAssay`
+    is *defined* in `templates/__helper.py` — a dunder-prefixed file
+    `discover_local` never imports directly, so its `__module__` carries the
+    helper's own real name rather than the `_publishable_local_*` synthetic
+    one `_module_name` gives a directly-imported file — and only *registered*
+    from `templates/my_assay.py`, the file discover_local does walk. A
+    predicate reading the module-name prefix would call this class
+    non-local and let core's `template_version` be written and compared
+    against it: exactly the false claim this task removes. `discover_local`
+    stamps the class itself as local at registration, regardless of where it
+    was defined, so this must still carry no `template_version`.
+    """
+    templates = tmp_path / "templates"
+    templates.mkdir()
+    (templates / "__helper.py").write_text(
+        "from publishable import BaseTemplate\n\n\n"
+        "class MyAssay(BaseTemplate):\n"
+        "    pass\n"
+    )
+    (templates / "my_assay.py").write_text(
+        "from publishable import register_template\n"
+        "from __helper import MyAssay\n\n\n"
+        'register_template("my_assay")(MyAssay)\n'
+    )
+    local = get_template("my_assay", tmp_path)
+    assert local is not None
+    assert type(local).__name__ == "MyAssay"
+    text = materialize_config(
+        template=local,
+        template_name="my_assay",
+        name="cohort-pilot",
+        input_dir="/secure/data/cohort-2026",
+        output_dir="/secure/results/cohort-pilot",
+        entrypoint="cohort_pilot.experiment:CohortPilotExperiment",
+    )
+    doc = yaml.safe_load(text)
+    assert "template_version" not in doc
+
+
 def test_constraints_arrive_as_inline_comments():
     text = rendered()
     assert "# choices: pearson | spearman | kendall" in text

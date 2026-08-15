@@ -547,6 +547,56 @@ def test_a_local_templates_declared_version_draws_no_warning(git_repo: Path, wri
     assert "W-TEMPLATE-VERSION" in control_found
 
 
+def test_a_generated_local_config_validates_with_no_version_finding(
+    git_repo: Path, tmp_path: Path
+):
+    """The other half of task 10: the test above hand-writes a differing
+    `template_version` to make the skip provable, but the config
+    `materialize_config` actually produces against a local template carries
+    no `template_version` key at all. Running that generated file through
+    `validate_config` end to end must draw neither `W-TEMPLATE-VERSION` nor
+    any other version-shaped finding — only the ordinary placeholder gaps
+    every `init`-written config leaves empty (`metadata.description`,
+    `metadata.authors`), never chased down before now.
+    """
+    from publishable.materialize import materialize_config
+    from publishable.templates.registry import get_template
+
+    (tmp_path / "input").mkdir()
+    (tmp_path / "input" / "index.csv").write_text("patient_id\np1\n")
+
+    templates = git_repo / "templates"
+    templates.mkdir()
+    (templates / "my_assay.py").write_text(
+        "from publishable import BaseTemplate, register_template\n\n\n"
+        '@register_template("my_assay")\n'
+        "class MyAssay(BaseTemplate):\n"
+        "    pass\n"
+    )
+    template = get_template("my_assay", git_repo)
+    assert template is not None
+    text = materialize_config(
+        template=template,
+        template_name="my_assay",
+        name="cohort-pilot",
+        input_dir=str(tmp_path / "input"),
+        output_dir=str(tmp_path / "results"),
+        entrypoint="cohort_pilot.experiment:CohortPilotExperiment",
+    )
+    assert "template_version" not in yaml.safe_load(text)  # the fact this test rests on
+
+    config_path = git_repo / "configs" / "cohort-pilot" / "config.yaml"
+    config_path.parent.mkdir(parents=True, exist_ok=True)
+    config_path.write_text(text)
+
+    c = Collector()
+    validate_config(config_path, c)
+    found = {f.code for f in c.findings}
+    assert "W-TEMPLATE-VERSION" not in found
+    assert not any("VERSION" in code for code in found)
+    assert found == {"E-META-REQUIRED"}
+
+
 def test_a_repeat_count_below_one_executes_nothing_and_is_an_error(write_config):
     assert "E-REPL-N" in codes(write_config({"replication.repeats": [{"kind": "seed", "n": 0}]}))
 

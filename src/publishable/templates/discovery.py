@@ -80,17 +80,31 @@ def _module_name(repo_root: Path, stem: str) -> str:
     return f"_publishable_local_{token}_{stem}"
 
 
-def is_local_template(cls: type[BaseTemplate]) -> bool:
-    """Whether `cls` came from a repo's `templates/`, judged by the synthetic
-    module name `_module_name` gave it when it was imported.
+_LOCAL_MARKER = "_publishable_local_template"
 
-    This is the one place that knows the naming scheme, so it is also the one
-    place that answers "is this local?" — anything that instead called
-    `discover_local` again to find out would re-import every file under
-    `templates/` a second time, re-running arbitrary user top-level code for a
-    question the already-resolved class can answer for free.
+
+def is_local_template(cls: type[BaseTemplate]) -> bool:
+    """Whether `cls` is one `discover_local` accepted as a repo's own —
+    judged by a marker `discover_local` stamps directly onto every class it
+    keeps, not by where the class happens to be *defined*.
+
+    A registered class's `__module__` is not always the file that claimed its
+    name: `_module_name`'s `_publishable_local_` prefix is only ever applied
+    to the non-`__`-prefixed file `discover_local` imports directly, so a
+    `BaseTemplate` subclass defined in a `__`-prefixed helper (`templates/
+    __helper.py`) and merely imported and `@register_template`-ed from
+    `templates/my_assay.py` carries the *helper's* real module name, not the
+    synthetic one — a prefix check on `__module__` would call that class
+    non-local and let core's `template_version` be written and compared
+    against it, the exact false claim this predicate exists to prevent. The
+    marker instead records the one fact that matters — `discover_local`
+    itself decided this class is local — directly on the class, at the one
+    site that already knows: `GenericTemplate` and every other builtin are
+    never stamped, so they read `False` by default, and the stamp is set
+    fresh on every `discover_local` call (new class objects each import), so
+    nothing carries over between repos in one process.
     """
-    return cls.__module__.startswith("_publishable_local_")
+    return bool(getattr(cls, _LOCAL_MARKER, False))
 
 
 def _import_file(path: Path, module_name: str, templates_dir: Path) -> None:
@@ -288,6 +302,10 @@ def discover_local(repo_root: Path) -> dict[str, LocalTemplate]:
             )
             continue
         for name, cls in registered:
+            # Stamped here, not inferred later from `__module__`: this is the
+            # one site that has just decided `cls` is a repo's own, whatever
+            # module it happens to be defined in — see `is_local_template`.
+            setattr(cls, _LOCAL_MARKER, True)
             provider = f"{path}::{cls.__name__}"
             claims.setdefault(name, []).append(provider)
             found.setdefault(name, LocalTemplate(cls, provider))
