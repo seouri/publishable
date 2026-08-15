@@ -1137,11 +1137,12 @@ def stratum_names(stratify_by: Any) -> tuple[str, ...]:
     `validate._check_resample` rather than re-read there** — `auto_block_size`'s
     own reason, one field over: `validate`'s *Allocation strata exist* and
     *Resample strata exist* rows each check the names this returns. `assign`'s
-    own draw already balances on the names this returns; a resample draw does
-    not exist yet in this build (`E-STATS-RESAMPLE-UNSUPPORTED` still refuses
-    the block wholesale), but when it is built it has to read the same
-    declaration this way too, or two independent readings of one declaration
-    would be pinned in agreement by nothing. A bare string read as one name
+    own draw already balances on the names this returns; a resample draw is
+    built (`stats.percentile_over_units`'s stratified branch) but not yet
+    wired to a config's declaration — `cli.command_run` doesn't resolve
+    `statistics.resample` into a call here yet — and when it is wired it has
+    to read the same declaration this way too, or two independent readings of
+    one declaration would be pinned in agreement by nothing. A bare string read as one name
     here and as a sequence of characters there is exactly the
     validate-clean-then-disagree shape that costs.
     """

@@ -36,9 +36,9 @@ from typing import Any
 # in, the same way `measurements` is — its three keys (`method`, `n`,
 # `stratify_by`) are fixed, so leaving the block whole would make a typo among
 # them unreachable by any check. Unlike `measurements`, `resample` is closed
-# before its own wholesale refusal (`E-STATS-RESAMPLE-UNSUPPORTED`) retires,
-# not after — see the comment at its `LEAF_TYPES` entry for why validating the
-# shape has to precede honouring the values.
+# before its own wholesale refusal retired (H4a task 12), not after — see
+# the comment at its `LEAF_TYPES` entry for why validating the shape had to
+# precede honouring the values.
 #
 # The table stopping at a key is the end of the line for everything under it:
 # the closure below never descends into a known leaf, and `_check_shape`
@@ -92,14 +92,15 @@ LEAF_TYPES: dict[str, type | tuple[type, ...]] = {
     "statistics.contrasts": list,
     "statistics.resample": dict,
     # Closed one level in, the arrangement `data.units.measurements` above has
-    # and for its reason: these three names are fixed. `E-STATS-RESAMPLE-UNSUPPORTED`
-    # still refuses the block wholesale at this commit — unlike `holdout` above,
-    # this is deliberately closed *before* that refusal retires, not after: the
-    # slice that honours `resample` needs the shape checked before it can read
-    # the values, so validate-before-honour means these three names go in now
-    # rather than waiting for the wholesale refusal to lift. `assign`'s separate
-    # `_check_assign_axis_keys` is not the precedent: it exists because an axis
-    # NAME is user-chosen and no fixed dotted path reaches it. `stratify_by` is
+    # and for its reason: these three names are fixed. The block's own
+    # wholesale refusal stood until H4a task 12 retired it — unlike `holdout`
+    # above, this was deliberately closed *before* that refusal retired, not
+    # after: the slice that honours `resample` needs the shape checked before
+    # it can read the values, so validate-before-honour meant these three
+    # names went in first, ahead of the wholesale refusal lifting. `assign`'s
+    # separate `_check_assign_axis_keys` is not the precedent: it exists
+    # because an axis NAME is user-chosen and no fixed dotted path reaches it.
+    # `stratify_by` is
     # `(str, list)` because `units.stratum_names` — the single authority the
     # draw balances on — reads a bare `stratify_by: site` as one name exactly as
     # `[site]` is; typing it `list` alone would make the envelope and the draw

@@ -1499,11 +1499,15 @@ def command_run(config_path: Path) -> int:
             # `data.units.attributes`, so `_attributed`'s early return actually
             # fires and such a project never rebuilds a row list at all.
             unit_attributes = {u.key: dict(u.attributes) for u in roster if u.attributes}
-            # `statistics.resample` isn't honored yet (`E-STATS-RESAMPLE-UNSUPPORTED`
-            # refuses a declared one), so this is the one place the default
-            # `reference.md` § How a metric becomes a number documents — bootstrap
-            # at 2000 — is a real, passed value rather than `summarize_step`'s own
-            # default taking effect unseen at every call site that forgets it.
+            # `statistics.resample` is no longer refused wholesale (H4a task
+            # 12 retired that refusal), but nothing here reads a declared one
+            # yet — that lands in the two tasks after it, which resolve the
+            # block in `cli.command_run` and thread it into every interval
+            # construction. Until then this is the one place the default
+            # `reference.md` § How a metric becomes a number documents —
+            # bootstrap at 2000 — is a real, passed value rather than
+            # `summarize_step`'s own default taking effect unseen at every
+            # call site that forgets it.
             derived_metric_draws = 2000
             aggregate_where = f"{doc.get('experiment_type', '')}.aggregate"
             # `aggregate` is user code in exactly the sense `runner.py`'s own

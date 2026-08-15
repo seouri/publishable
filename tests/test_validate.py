@@ -3201,12 +3201,6 @@ def test_a_contrast_with_a_declared_within_attribute_validates_clean(write_confi
     assert "E-STATS-CONTRAST-UNKNOWN" not in found
 
 
-def test_a_declared_resample_is_refused(write_config):
-    assert "E-STATS-RESAMPLE-UNSUPPORTED" in codes(
-        write_config({"statistics": {"resample": {"method": "bootstrap", "n": 2000}}})
-    )
-
-
 _RESAMPLE_UNITS = {"from": "index.csv", "key": "patient_id"}
 # No `attributes` declared: `write_config`'s default `index.csv` is `patient_id`
 # only, so an `attributes: ["cohort"]` here would fail roster resolution
@@ -3312,37 +3306,46 @@ def test_a_resample_method_of_the_wrong_type_is_a_type_fault_not_a_second_findin
     without the `isinstance` guard would still fire `E-STATS-RESAMPLE-METHOD`
     on top of `E-CONFIG-TYPE` — reporting the same wrong-typed leaf twice under
     two codes. The guard is what keeps this method's own code silent for a
-    value that was never a candidate string to begin with."""
+    value that was never a candidate string to begin with. `n: 79` — below
+    the honest floor — rides beside the bad `method` leaf so this test still
+    proves validation continued past it: an `E-STATS-RESAMPLE-N` finding must
+    come from this same function running to completion, not from the retired
+    wholesale refusal that used to stand in for that proof."""
     found = codes(
         write_config(
             {
                 "data.units": _RESAMPLE_UNITS,
-                "statistics": {"resample": {"method": 5, "n": 2000}},
+                "statistics": {"resample": {"method": 5, "n": 79}},
             }
         )
     )
     assert "E-CONFIG-TYPE" in found
     assert "E-STATS-RESAMPLE-METHOD" not in found
-    # Validation continued past the bad leaf: the wholesale refusal still fires.
-    assert "E-STATS-RESAMPLE-UNSUPPORTED" in found
+    # Validation continued past the bad leaf: a second, independent
+    # `_check_resample` finding on the same declaration still fires.
+    assert "E-STATS-RESAMPLE-N" in found
 
 
 def test_a_resample_n_of_the_wrong_type_is_a_type_fault_not_a_traceback(write_config):
     """`n: "many"` is `E-CONFIG-TYPE`; a bare `n >= 80` raises `TypeError` on a
     string and would take out the entire `validate` call, not just this
-    check. This test must fail if the `isinstance` guard is removed."""
+    check. This test must fail if the `isinstance` guard is removed. `method:
+    "bootstap"` rides beside the bad `n` leaf so this test still proves
+    validation continued past it, on a finding from `_check_resample` itself
+    rather than the retired wholesale refusal."""
     found = codes(
         write_config(
             {
                 "data.units": _RESAMPLE_UNITS,
-                "statistics": {"resample": {"method": "bootstrap", "n": "many"}},
+                "statistics": {"resample": {"method": "bootstap", "n": "many"}},
             }
         )
     )
     assert "E-CONFIG-TYPE" in found
     assert "E-STATS-RESAMPLE-N" not in found
-    # Validation continued past the bad leaf: the wholesale refusal still fires.
-    assert "E-STATS-RESAMPLE-UNSUPPORTED" in found
+    # Validation continued past the bad leaf: a second, independent
+    # `_check_resample` finding on the same declaration still fires.
+    assert "E-STATS-RESAMPLE-METHOD" in found
 
 
 def test_a_resample_n_of_bool_type_is_a_type_fault_not_a_floor_violation(write_config):
@@ -3351,46 +3354,51 @@ def test_a_resample_n_of_bool_type_is_a_type_fault_not_a_floor_violation(write_c
     `E-CONFIG-TYPE` from the envelope already; this pins that it does NOT also
     earn `E-STATS-RESAMPLE-N` — the same double-report shape the `method`
     fix (task 4's post-review commit) corrected, on the field that motivated
-    the correction in the first place."""
+    the correction in the first place. `method: "bootstap"` rides beside the
+    bool `n` so this test still proves validation continued past it, on a
+    finding from `_check_resample` itself rather than the retired wholesale
+    refusal."""
     found = codes(
         write_config(
             {
                 "data.units": _RESAMPLE_UNITS,
-                "statistics": {"resample": {"method": "bootstrap", "n": True}},
+                "statistics": {"resample": {"method": "bootstap", "n": True}},
             }
         )
     )
     assert "E-CONFIG-TYPE" in found
     assert "E-STATS-RESAMPLE-N" not in found
-    assert "E-STATS-RESAMPLE-UNSUPPORTED" in found
+    assert "E-STATS-RESAMPLE-METHOD" in found
 
 
 def test_resample_method_null_or_absent_takes_the_documented_default(write_config):
     """§ Errors `validate` reports promises `E-STATS-RESAMPLE-METHOD`'s row:
     "Unset (`null`) is accepted and takes the documented default." Pinned for
     both spellings — an explicit `method: null` and `method` absent entirely —
-    since either could regress independently of the other."""
+    since either could regress independently of the other. `n: 79`, below the
+    honest floor, rides beside each so the test still proves `_check_resample`
+    ran to completion rather than leaning on the retired wholesale refusal."""
     explicit_null = codes(
         write_config(
             {
                 "data.units": _RESAMPLE_UNITS,
-                "statistics": {"resample": {"method": None, "n": 2000}},
+                "statistics": {"resample": {"method": None, "n": 79}},
             }
         )
     )
     assert "E-STATS-RESAMPLE-METHOD" not in explicit_null
-    assert "E-STATS-RESAMPLE-UNSUPPORTED" in explicit_null
+    assert "E-STATS-RESAMPLE-N" in explicit_null
 
     absent = codes(
         write_config(
             {
                 "data.units": _RESAMPLE_UNITS,
-                "statistics": {"resample": {"n": 2000}},
+                "statistics": {"resample": {"n": 79}},
             }
         )
     )
     assert "E-STATS-RESAMPLE-METHOD" not in absent
-    assert "E-STATS-RESAMPLE-UNSUPPORTED" in absent
+    assert "E-STATS-RESAMPLE-N" in absent
 
 
 def _resample_stratum_table(tmp_path: Path) -> None:
@@ -11189,27 +11197,31 @@ def test_the_family_bound_applies_to_an_unset_n_too(write_config):
 
 def test_a_resample_with_no_unit_roster_is_refused(write_config):
     """`reference.md` marks `data.units` "required by fold, resample,
-    null_test". Once `E-STATS-RESAMPLE-UNSUPPORTED` retires, this shape would
-    otherwise validate clean and do nothing — the exact failure
+    null_test". With the wholesale refusal retired (H4a task 12), this shape
+    would otherwise validate clean and do nothing — the exact failure
     `_check_unimplemented`'s own `E-SWEEP-SAMPLE-BASELINE` comment records."""
     found = codes(
         write_config({"statistics": {"resample": {"method": "bootstrap", "n": 2000}}})
     )
     assert "E-STATS-RESAMPLE-UNITS" in found
     # Positive companion in the same test: the identical declaration WITH a real
-    # roster is refused only by the still-wholesale `-UNSUPPORTED` code, so this
-    # cannot pass by a broken companion (e.g. `data.units: 5`, which would die at
-    # the fatal `E-CONFIG-SHAPE` before ever reaching this check) leaving the set
-    # merely absent-of-UNITS. Pinning the whole set, not just one code's absence,
-    # is what proves the companion actually resolved a roster.
-    assert codes(
-        write_config(
-            {
-                "data.units": {"from": "index.csv", "key": "patient_id"},
-                "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
-            }
+    # roster validates completely clean now that the wholesale refusal has
+    # retired, so this cannot pass by a broken companion (e.g. `data.units: 5`,
+    # which would die at the fatal `E-CONFIG-SHAPE` before ever reaching this
+    # check) leaving the set merely absent-of-UNITS. Pinning the whole set,
+    # not just one code's absence, is what proves the companion actually
+    # resolved a roster.
+    assert (
+        codes(
+            write_config(
+                {
+                    "data.units": {"from": "index.csv", "key": "patient_id"},
+                    "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
+                }
+            )
         )
-    ) == {"E-STATS-RESAMPLE-UNSUPPORTED"}
+        == set()
+    )
 
 
 def test_a_missing_roster_does_not_swallow_the_roster_independent_resample_faults(write_config):
@@ -11249,3 +11261,52 @@ def test_an_unresolvable_roster_does_not_earn_a_second_resample_finding(write_co
     # a broad prefix, so the test cannot pass by the config being clean or by
     # some unrelated `E-UNITS-`/`E-DATA-` finding standing in for it.
     assert "E-UNITS-SOURCE-MISSING" in found
+
+
+def test_a_declared_resample_is_no_longer_refused_wholesale(write_config):
+    """H4a implements it, so the blanket refusal retires with the slice — the
+    same way `E-STATS-CONTRASTS-UNSUPPORTED` and `E-STATS-REPORTBY-UNSUPPORTED`
+    retired with theirs."""
+    found = codes(
+        write_config(
+            {
+                "data.units": {"from": "index.csv", "key": "patient_id"},
+                "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
+            }
+        )
+    )
+    assert "E-STATS-RESAMPLE-UNSUPPORTED" not in found
+    # The positive companion, in the same test: the config is now CLEAN of every
+    # resample finding, so this cannot pass by the refusal having been renamed.
+    assert not [code for code in found if code.startswith("E-STATS-RESAMPLE")]
+
+
+def test_a_declared_null_test_is_still_refused_h4a(write_config):
+    """The sibling entry in the same loop is H4d's and does not retire here. A
+    single-key retirement that deleted the whole loop would pass the test
+    above and fail this one — the control that keeps the sibling honest."""
+    assert "E-STATS-NULLTEST-UNSUPPORTED" in codes(
+        write_config(
+            {
+                "data.units": {"from": "index.csv", "key": "patient_id"},
+                "statistics": {
+                    "null_test": {"method": "permutation", "n": 5000, "shuffle": "cohort"}
+                },
+            }
+        )
+    )
+
+
+def test_the_retired_resample_code_appears_nowhere_in_src():
+    """A retired `-UNSUPPORTED` code is retired wholesale. Filtering the FILE
+    LIST rather than the sweep's output, because a matching line can itself
+    contain whatever you would have excluded. Scanned from `__file__` rather
+    than a bare relative `Path("src")`, and guarded against an empty scan, so
+    the assertion cannot pass vacuously by finding nothing to look at."""
+    import pathlib
+
+    src_root = pathlib.Path(__file__).resolve().parent.parent / "src"
+    files = list(src_root.rglob("*.py"))
+    assert len(files) > 20
+    hits = [path for path in files if "E-STATS-RESAMPLE-UNSUPPORTED" in path.read_text()]
+    assert hits == []

@@ -581,10 +581,11 @@ def percentile_over_units(
     for this decision — recorded on its own in `docs/superpowers/spec-defects.md`
     rather than fixed here. Under the finiteness condition, though, a column's
     `resample_draws` — once a later slice wires `statistics.resample` for
-    recorded columns into `summarize_step` (today's build still refuses a
-    declared `resample` with `E-STATS-RESAMPLE-UNSUPPORTED`, and the
-    recorded-column branch there carries no `resample_draws` key at all) — can
-    safely be the REQUESTED `n` rather than a survivor count, and
+    recorded columns into `summarize_step` (the wholesale refusal retired with
+    H4a task 12, but `cli.command_run` does not yet resolve the block into a
+    call here, so the recorded-column branch there still carries no
+    `resample_draws` key at all) — can safely be the REQUESTED `n` rather than
+    a survivor count, and
     `percentile_over_units`'s return type need not change to carry one: a
     non-finite draw statistic would not be caught by a survivor filter either,
     since nothing here treats `nan`/`inf` as a failed draw to exclude, so

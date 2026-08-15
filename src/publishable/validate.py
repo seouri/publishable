@@ -3006,10 +3006,19 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     kind, and `E-REPL-LEVEL-DEPTH` past two levels, and
     `E-REPL-LEVEL-BATCH-INNER` for a `batch` that is not the outermost level.
     `batch` and `fold` themselves are no longer refused — both are supported
-    kinds. `statistics.resample` and `.null_test`, and a top-level `hypotheses`
-    block, are refused the same way — a declared 2000-draw bootstrap or
-    a pre-registered hypothesis that runs and reports success while honoring
-    neither is the same silent-no-op class. `statistics.contrasts` is no longer in
+    kinds. `statistics.resample` is no longer in this family: `_check_resample`
+    checks the declaration for real — the method enum, the 80-draw floor, the
+    strata against `data.units.attributes`, the roster's absence, and the
+    cluster count — so a fault in the block is named on its own terms rather
+    than the whole block being refused. The *honouring* — resolving the block
+    in `cli.command_run` and threading it into the interval constructions —
+    lands in the two tasks after this one, and until it does a declared
+    `resample` changes no interval. `.null_test` is still refused the same way
+    the whole family used to be: a declared 5000-draw permutation that runs
+    and reports nothing is the silent-no-op class, and `p_value` exists
+    nowhere in this build. A top-level `hypotheses` block is refused the same
+    way too — a pre-registered hypothesis that runs and reports success while
+    honoring neither is the same silent-no-op class. `statistics.contrasts` is no longer in
     this family: `_check_contrasts` now resolves and checks each declared entry
     instead of refusing the block wholesale. Neither is `statistics.report_by`,
     which `_check_report_by` now checks for real instead of refusing wholesale.
@@ -3135,8 +3144,10 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
                 "refusal exists to prevent; it will be honored in a later slice",
             )
 
-    # `statistics.resample`/`.null_test` validate clean today and are read by
-    # nothing — the same silent-no-op class as the fields above.
+    # `statistics.null_test` validates clean today and is read by nothing —
+    # the same silent-no-op class as the fields above. `statistics.resample`
+    # left this loop with H4a: `_check_resample` now checks its declaration
+    # for real instead of refusing the block wholesale.
     # `statistics.contrasts`, `statistics.report_by` and the top-level
     # `hypotheses` block used to be in this list too; they are now checked for
     # real by `_check_contrasts`, `_check_report_by` and `_check_hypotheses`
@@ -3146,32 +3157,20 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     # reason: `cli.py` applies it, so a declared correction changes the record —
     # the correction checks further down this module check its *value* instead,
     # and warn only on `none`, which corrects nothing by request.
-    # `materialize.py` writes only two of these keys into a generated config —
-    # `statistics.correction` and a top-level `hypotheses: []` — so `resample`
-    # and `null_test` are simply absent there; each check below fires on a real
+    # `materialize.py` writes only one of these keys into a generated config —
+    # `statistics.correction` — plus a top-level `hypotheses: []`, so
+    # `null_test` is simply absent there; the check below fires on a real
     # declaration either way, never on a key's mere presence or on the empty
     # list `hypotheses` is generated as.
     statistics = doc.get("statistics") or {}
-    for field, code, what in (
-        (
-            "resample",
-            "E-STATS-RESAMPLE-UNSUPPORTED",
-            "no resampling scheme runs",
-        ),
-        (
-            "null_test",
+    if statistics.get("null_test"):
+        c.error(
             "E-STATS-NULLTEST-UNSUPPORTED",
-            "no null distribution is computed",
-        ),
-    ):
-        if statistics.get(field):
-            c.error(
-                code,
-                f"statistics.{field}",
-                f"is specified but not implemented in this build — {what}, and a "
-                "declaration that changes no behavior is the failure this refusal "
-                "exists to prevent; it will be honored in a later slice",
-            )
+            "statistics.null_test",
+            "is specified but not implemented in this build — no null distribution is "
+            "computed, and a declaration that changes no behavior is the failure this "
+            "refusal exists to prevent; it will be honored in a later slice",
+        )
 
 
 def _repeat_total(doc: dict[str, Any], fold_basis: int | None) -> int | None:
@@ -4997,11 +4996,15 @@ def _check_resample(doc: dict[str, Any], roster: UnitList | None, c: Collector) 
     declared at all, and — the one check here that reads the roster —
     `limits.min_clusters` against the resolved cluster count.
 
-    `E-STATS-RESAMPLE-UNSUPPORTED` (`_check_unimplemented`) still refuses any
-    declared `resample` wholesale in this build — resampling itself is not yet
-    honored — but a shape fault inside the block is worth reporting on its own
-    terms rather than only as "unsupported", the same way a malformed
-    `report_by` entry is worth naming even though `report_by` runs for real.
+    `_check_unimplemented`'s wholesale refusal of a declared `resample`
+    retired with H4a task 12 — a shape fault inside the block is worth
+    reporting on its own terms rather than only as "unsupported", the same way
+    a malformed `report_by` entry is worth naming even though `report_by`
+    runs for real.
+    Resampling itself is not honored by `cli.command_run` yet at that same
+    commit; the two tasks after it resolve the block and thread it into the
+    interval constructions, so a declared `resample` validates clean here
+    before it changes any interval.
 
     Every check here presupposes the declaration is a mapping; a scalar or a
     list is `check_envelope`'s `E-CONFIG-TYPE` (`statistics.resample` is typed
