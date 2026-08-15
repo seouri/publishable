@@ -502,6 +502,43 @@ def test_discovery_leaves_no_stale_pending_registration_behind(tmp_path: Path):
     assert drain_pending() == []
 
 
+def test_a_repo_with_no_templates_directory_still_discards_a_stale_registration(
+    tmp_path: Path,
+):
+    """The sibling above on the path that finds no directory: `discover_local`
+    promises to discard what the buffer already held, and the `templates/`
+    check must not be able to skip that promise. A repo with no `templates/`
+    is reachable with something queued — `cli` imports the experiment package
+    before `validate_config` runs, so a module-scope `@register_template`
+    under `src/**` queues an entry with no `templates/` in sight — and the
+    entry would then be left for whatever drains next.
+
+    The buffer *is* the promise here, so it is what is asserted, not a proxy:
+    no return value can carry it, the early return's mapping being empty
+    either way. The empty mapping is asserted too, as the control — a
+    `discover_local` that had raised or resolved something would satisfy the
+    drain assertion for the wrong reason.
+
+    `finally` because the buffer is module-level: leaving it dirty would
+    poison whatever test runs next."""
+    from publishable import register_template
+    from publishable.templates.discovery import drain_pending
+
+    try:
+
+        @register_template("stale")
+        class Stale(BaseTemplate):
+            pass
+
+        without = tmp_path / "no_templates"
+        without.mkdir()
+
+        assert discover_local(without) == {}
+        assert drain_pending() == []
+    finally:
+        drain_pending()  # never leave this session's buffer dirty
+
+
 CLAIMS_DUPLICATED_A = """\
 from publishable import BaseTemplate, register_template
 

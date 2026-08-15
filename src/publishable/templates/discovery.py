@@ -251,7 +251,9 @@ def discover_local(repo_root: Path) -> dict[str, LocalTemplate]:
 
     Discards whatever the pending buffer already held before this call — the
     return value is what *these files* registered, not a leftover from an
-    earlier `@register_template` in the same process.
+    earlier `@register_template` in the same process — and does so on every
+    path out, including the one that finds no `templates/` at all and returns
+    an empty mapping.
 
     Two local registrations of one name raise `ContractError` ·
     `E-TEMPLATE-COLLISION` naming every provider that claimed it. A local name
@@ -260,11 +262,18 @@ def discover_local(repo_root: Path) -> dict[str, LocalTemplate]:
     does, so the shadow is refused where the two are merged — see
     `registry._merged`.
     """
+    # Before the `templates/` check, not after, so the promise above holds on
+    # every path out of this function rather than only on the one that finds a
+    # directory. A repo with no `templates/` is the case that inherits without
+    # discarding, and something is there to inherit: `cli` imports the
+    # experiment package before `validate_config` runs, so a module-scope
+    # `@register_template` anywhere under `src/**` queues an entry with no
+    # `templates/` in sight, and it would be left for whatever drains next.
+    drain_pending()  # discard anything queued before this call — not ours to return
     templates_dir = repo_root / "templates"
     if not templates_dir.is_dir():
         return {}
 
-    drain_pending()  # discard anything queued before this call — not ours to return
     found: dict[str, LocalTemplate] = {}
     claims: dict[str, list[str]] = {}
     load_faults: list[ContractError] = []
