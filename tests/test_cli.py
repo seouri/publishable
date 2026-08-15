@@ -38,6 +38,7 @@ def run_a_project(
     extra_steps: list[str] | None = None,
     extra_step_source: str | None = None,
     aggregate_returns: str | None = None,
+    _starter_step: str | None = None,
     units: int = 10,
     unit_attributes: list[str] | None = None,
     roster_csv: str | None = None,
@@ -81,6 +82,15 @@ def run_a_project(
     above, self-contained and undone before this function returns. The
     source still goes through `STEP_PY.format(step_name=step_name)`, so a
     literal `{` in it must be doubled unless it names `step_name` itself.
+
+    `_starter_step` overrides the scaffolded step's own source, the same way
+    `extra_step_source` overrides an `extra_steps` entry's — monkeypatched onto
+    `publishable.generators.experiment.STARTER_STEP` inside the same
+    `pytest.MonkeyPatch.context()` block `aggregate_returns` uses, and undone
+    before this function returns. Distinct from `aggregate_returns`: that
+    parameter also monkeypatches the template's `aggregate`, while this one
+    only changes what the scaffolded step records, leaving the caller free to
+    monkeypatch `aggregate` itself with whatever formula the test needs.
 
     `aggregate_returns` names a derived metric to produce end to end: when set,
     the scaffolded step records a `pred` column (one float per unit, `0.0`..
@@ -155,6 +165,10 @@ def run_a_project(
                     _name: sum(units.pred) / len(units)
                 },
             )
+        if _starter_step is not None:
+            import publishable.generators.experiment as experiment_gen
+
+            mp.setattr(experiment_gen, "STARTER_STEP", _starter_step)
         cfg = generate_experiment(
             repo_root=root,
             name="cohort-pilot",
@@ -6661,3 +6675,143 @@ def test_a_command_group_answers_for_its_unbuilt_subcommands(capsys):
         "`publishable study` is specified but not built in this version — "
         "see docs/reference.md § Creation commands\n"
     )
+
+
+# --- Task 1 (resample-honoured): regression pin — the undeclared-`resample`
+# shape, absent key and explicit null, pinned separately before H4a wires
+# `percentile_over_units` into `summarize_step` -----------------------------
+
+
+_CONDITION_SCALED_STEP = '''\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        # The recorded column VARIES with the swept axis. `_AGGREGATE_STEP`
+        # records `float(i)` regardless of `cfg`, which makes every per-unit
+        # difference zero: `paired_t_over_units` then returns a zero-width
+        # interval and `cohens_dz` returns `None`, so a contrast pin over it
+        # asserts nothing and every width comparison is `0 > 0`. Scaled by
+        # `analysis.method` so both the differences and the draw pool have real
+        # dispersion under every comparison this file builds.
+        scale = {{"pearson": 1.0, "spearman": 2.0, "kendall": 3.0}}[
+            cfg.parameters.analysis.method
+        ]
+        units = list(io.units)
+        for i, unit in enumerate(units):
+            io.record(unit.key, {{"pred": float(i) * scale}})
+        return {{"n_units": len(units)}}
+'''
+
+
+def _assert_undeclared_resample_shape(run: dict[str, Any]) -> None:
+    """The full shape an undeclared `statistics.resample` produces, which H4a
+    must not move. Shared by the absent-key and the explicit-`null` pins because
+    the two configs are different documents that must produce one shape:
+    `materialize.py` writes neither key, and `_check_unimplemented`'s
+    `if statistics.get(field)` is false for both — so a resolution step that read
+    `.get("resample", DEFAULT)` instead of `.get("resample") or DEFAULT` would
+    separate them, and nothing else in the suite would notice."""
+    assert run["status"] == "completed"
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    # A recorded column: the t-interval, and NO `resample_draws` key at all.
+    column = aggregated["pred"]
+    assert column["basis"] == "units"
+    assert column["method"] == "t_over_units"
+    assert column["ci95"] is not None
+    assert "resample_draws" not in column
+    # A derived metric: resampled whether or not `resample` is declared, at the
+    # documented default of 2000 draws, and never carrying an effect size.
+    derived = aggregated["mean_pred"]
+    assert derived["basis"] == "units"
+    assert derived["method"] == "percentile_over_units"
+    assert derived["resample_draws"] == 2000
+    assert derived["cohens_d"] is None
+    assert derived["ci95"] is not None
+    # A column contrast: Student's t on the per-unit differences, with Cohen's dz.
+    col_contrast = _named_contrast(run, "method=spearman", "pred")
+    assert col_contrast is not None
+    assert col_contrast["method"] == "paired_t_over_units"
+    assert col_contrast["cohens_d"] is not None
+    assert "resample_draws" not in col_contrast
+    # A derived contrast: the joint percentile, and no effect size.
+    derived_contrast = _named_contrast(run, "method=spearman", "mean_pred")
+    assert derived_contrast is not None
+    assert derived_contrast["method"] == "paired_percentile_over_units"
+    assert derived_contrast["cohens_d"] is None
+    # The correction family, which a replaced `statistics` block would move:
+    # two metrics over one comparison is a family of 2, and holm's rank-1 level
+    # is ALPHA/2. Asserted on both pins so an override that dropped
+    # `correction: holm` cannot pass.
+    assert col_contrast["family"] == {"comparisons": 1, "metrics": 2}
+    assert col_contrast["family_size"] == 2
+    assert col_contrast["correction"] == "holm"
+    assert col_contrast["correction_level"] in (
+        pytest.approx(0.05 / 2), pytest.approx(0.05 / 1)
+    )
+    # Holm ranks on the point estimate over HALF THE RAW ci95 WIDTH, never on a
+    # p-value — the family often carries none. Both members' levels come from
+    # that ranking, so the two distinct levels must both be present exactly once.
+    levels = sorted(
+        m["correction_level"]
+        for m in (col_contrast, derived_contrast)
+    )
+    assert levels == [pytest.approx(0.025), pytest.approx(0.05)]
+
+
+_PIN_SWEEP = {
+    "baseline": {"analysis.method": "pearson"},
+    "grid": {"analysis.method": ["spearman"]},
+}
+
+
+def _pinned_run(tmp_path, capsys, monkeypatch, **overrides):
+    """One run carrying both a recorded column and a derived metric under one
+    baseline comparison. `_starter_step` rather than `aggregate_returns`,
+    because that shorthand's step records `float(i)` regardless of `cfg` and a
+    contrast over it is degenerate."""
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    monkeypatch.setattr(
+        GenericTemplate,
+        "aggregate",
+        lambda self, units, cfg: {"mean_pred": sum(units.pred) / len(units)},
+    )
+    return run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        sweep=_PIN_SWEEP,
+        _starter_step=_CONDITION_SCALED_STEP,
+        **overrides,
+    )
+
+
+def test_the_undeclared_resample_shape_is_pinned_absent_key(tmp_path, capsys, monkeypatch):
+    """`materialize.py` writes no `resample` key at all, so this is the shape a
+    generated config actually produces. Pinned before H4a wires
+    `percentile_over_units` into `summarize_step`, because after that there is
+    nothing left to compare against."""
+    doc = _pinned_run(tmp_path, capsys, monkeypatch)
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert "resample" not in (run["config"].get("statistics") or {})
+    _assert_undeclared_resample_shape(run)
+
+
+def test_the_undeclared_resample_shape_is_pinned_explicit_null(tmp_path, capsys, monkeypatch):
+    """`resample: null` is a DIFFERENT document from the absent key and must
+    produce the identical shape. `correction: holm` is restated here because
+    `run_a_project` merges overrides with `doc.update`, a top-level replace: a
+    bare `statistics={"resample": None}` would delete the correction
+    `materialize.py` writes and move every `correction_level` below."""
+    doc = _pinned_run(
+        tmp_path, capsys, monkeypatch,
+        statistics={"correction": "holm", "resample": None},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["config"]["statistics"]["resample"] is None
+    _assert_undeclared_resample_shape(run)
