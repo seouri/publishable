@@ -65,10 +65,25 @@ a boundary. Two document changes were in fact needed and were made by task 16:
   prevention actually rests on `validate` checking every key against a closed schema, which is what
   it now says. The prevented mistake is not weakened: an unknown key still fails validation.
 
-**Open residual, routed:** whether `init` should materialize the optional `statistics` sub-blocks
-at all is a design decision, not a reconciliation, and is left open. **Owner: H4 Statistics** (it
-owns `resample` and `null_test`, the last two that are refused; whatever it decides for those
-decides the shape for all four).
+**Residual — CLOSED by H4a (2026-08-15).** Whether `init` should materialize the optional
+`statistics` sub-blocks: **no.** Three grounds, in the order they bind.
+
+1. `parameter_spec` is the single source of truth for what `init` writes, and none of these is a
+   parameter. `materialize.py` writes `statistics.correction` and a top-level `hypotheses: []`
+   and nothing else under `statistics`.
+2. `reference.md` § The one config file already resolves it for `contrasts` and `report_by` —
+   its fenced example is "the complete config *schema*, which is a wider thing than the literal
+   output of `init`; a materialized file that does not carry them is not an incomplete config" —
+   and `resample` and `null_test` inherit that sentence rather than needing their own.
+3. **The argument only this slice could make:** now that `resample` is honored, a materialized
+   `resample: {method: bootstrap, n: 2000}` would be a *declared* resample, so every generated
+   project would give every recorded column a percentile interval by default — reversing
+   § Statistical reporting's asymmetry, which is that a column has a t-interval available so
+   resampling it is a **choice** and `resample` is what makes it. A materialized `resample: null`
+   would be inert but would need its own inline comment and would invite the
+   `.get("resample", DEFAULT)` reading that separates the absent key from the explicit null.
+
+No `materialize.py` change and no `reference.md` change. Recorded so the absence is a decision.
 
 ## The specification's error registry does not cover step-name collisions
 
