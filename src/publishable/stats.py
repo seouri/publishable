@@ -543,6 +543,15 @@ def percentile_over_units(
     reproduce the unstratified path digit for digit. Sorting values and stratum
     labels as separate sequences would preserve every invariance and silently
     re-pair them — the mistake equal-sized strata cannot see.
+
+    Returns `None` rather than a zero-width interval when every stratum's own
+    (value, weight) pairs are all identical — a singleton stratum is the
+    special case of this, but a larger stratum whose rows all carry one
+    repeated pair guarantees the same zero freedom. That is a structural
+    guarantee, true whatever the repeated pair's value is, unlike a single
+    constant stratum among others that still vary — which keeps its interval,
+    the same way `percentile_over_units_clustered` reports a point rather than
+    a zero-width interval at `G < 2`.
     """
     if len(values) < 2:
         return None
@@ -567,14 +576,31 @@ def percentile_over_units(
             strict=True,
         )
         for value, stratum, weight in pairs_in:
-            pools.setdefault(stratum, []).append((float(value), weight))
-        ordered = sorted(sorted(pool) for pool in pools.values())
+            pools.setdefault(stratum, []).append((value, weight))
+        ordered = sorted(sorted(group) for group in pools.values())
+        # If every stratum's own (value, weight) pairs are all identical, no
+        # draw can ever come out different from any other: a singleton
+        # stratum is the special case of this (one pair, trivially "all
+        # identical"), but the same guarantee holds for a larger stratum whose
+        # rows all happen to carry one repeated pair. That is a structural
+        # guarantee — true for whatever the repeated pair's value is — and not
+        # a data coincidence the way "one of several strata is constant while
+        # the others vary" is: the latter still draws its variance from the
+        # strata that aren't constant, and stays a reportable interval.
+        # `percentile_over_units_clustered` refuses its own zero-freedom case
+        # (`G < 2`) for the same reason `reference.md` § Statistical reporting
+        # gives: "reporting a point with no interval is honest; a zero-width
+        # 95 % interval is not."
+        if all(len(set(group)) <= 1 for group in ordered):
+            return None
         means_out: list[float] = []
         for _ in range(draws):
             # Each stratum contributes exactly as many rows as it holds: that
             # is the composition the design ruled the alternatives out of.
             drawn = [
-                pool[rng.randrange(len(pool))] for pool in ordered for _ in range(len(pool))
+                group[rng.randrange(len(group))]
+                for group in ordered
+                for _ in range(len(group))
             ]
             if carried is None:
                 means_out.append(sum(v for v, _ in drawn) / len(drawn))

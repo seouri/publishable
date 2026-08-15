@@ -2912,7 +2912,12 @@ def test_a_stratified_draw_is_invariant_to_row_order():
     `percentile_over_units_clustered` gets from ordering its pools by contents."""
     values, strata = _banded_strata()
     pairs = list(zip(values, strata, strict=True))
-    shuffled = pairs[7:] + pairs[:7]
+    # Rotate by 28, not 7: a rotation by 7 leaves the first-seen stratum order
+    # (low, mid, high) unchanged, so it cannot tell "ordered by sorted
+    # contents" apart from "ordered by first appearance" — a mutation to
+    # insertion-order pooling would still pass. Rotating by 28 changes which
+    # stratum is seen first.
+    shuffled = pairs[28:] + pairs[:28]
     a = percentile_over_units(values, seed=11, draws=2000, strata=strata)
     b = percentile_over_units(
         [v for v, _ in shuffled], seed=11, draws=2000, strata=[s for _, s in shuffled]
@@ -2953,10 +2958,10 @@ def test_a_stratified_weighted_draw_keeps_each_value_with_its_weight():
     assert got is not None
     expected = sum(v * w for v, w in zip(values, weights, strict=True)) / sum(weights)
     assert got.low < expected < got.high
-    # The weighted centre (≈ 39.5) is far from the unweighted one (≈ 9.83), so a
-    # re-pairing or a dropped weight lands outside this interval rather than
+    # The weighted centre (≈ 65.325) is far from the unweighted one (≈ 9.83), so
+    # a re-pairing or a dropped weight lands outside this interval rather than
     # inside it.
-    assert got.low > 20.0
+    assert got.low > 50.0
 
 
 def test_a_stratified_draw_refuses_a_misaligned_stratum_vector():
@@ -2971,41 +2976,62 @@ def test_a_stratified_draw_refuses_a_misaligned_stratum_vector():
 def test_a_size_one_stratum_is_drawn_deterministically_every_time():
     """A singleton stratum has exactly one candidate index on every draw, so it
     contributes its one value to every replicate with no variance of its own —
-    it neither breaks the draw nor gets skipped."""
+    it neither breaks the draw nor gets skipped, and removing the last bit of
+    freedom the "high" band had (as a 2-row stratum) only narrows things
+    further relative to the pooled draw."""
     values, strata = _banded_strata()
     # The two-value "high" stratum becomes two singleton strata.
     strata = strata[:-2] + ["high_a", "high_b"]
     got = percentile_over_units(values, seed=13, draws=2000, strata=strata)
-    assert got is not None
-    # Both singleton values (100.0 and 100.5) are fixed contributions on every
-    # draw, so the interval still centres near the same overall mean.
+    plain = percentile_over_units(values, seed=13, draws=2000)
+    assert got is not None and plain is not None
     expected = sum(values) / len(values)
     assert got.low < expected < got.high
+    # A pooled-path substitution would give the wide, undifferentiated draw —
+    # this must stay much narrower, the same margin the base stratified test
+    # uses, so a pooled swap here fails too.
+    assert (got.high - got.low) < (plain.high - plain.low) / 2.0
 
 
 def test_a_stratum_of_identical_values_contributes_no_variance_of_its_own():
     """A stratum whose values are all identical draws different indices but the
     same number every time — it cannot widen the interval, only the varying
-    strata can."""
+    strata can, and the result must still be the narrow stratified interval,
+    not the pooled one."""
     values, strata = _banded_strata()
     # Replace the "mid" band (indices 20:28) with a single repeated value.
     values = list(values)
     for i in range(20, 28):
         values[i] = 50.0
     got = percentile_over_units(values, seed=17, draws=2000, strata=strata)
-    assert got is not None
+    plain = percentile_over_units(values, seed=17, draws=2000)
+    assert got is not None and plain is not None
     expected = sum(values) / len(values)
     assert got.low < expected < got.high
+    assert (got.high - got.low) < (plain.high - plain.low) / 2.0
 
 
-def test_more_strata_than_two_units_gives_a_zero_width_interval():
+def test_all_strata_internally_constant_gives_no_interval_at_all():
+    """Two strata (sizes 10 and 4), each internally constant. This is the
+    structural case, not the data-caused one a single constant stratum among
+    varying ones settles for: with EVERY stratum's rows all carrying one
+    repeated (value, weight) pair, no draw can ever differ from any other,
+    for whatever constants those strata hold — so this must never be pinned as
+    a zero-width `ci95`, the same principle
+    `percentile_over_units_clustered` applies at `G < 2`
+    ("reporting a point with no interval is honest; a zero-width 95 %
+    interval is not.")."""
+    values = [1.0] * 10 + [5.0] * 4
+    strata = ["a"] * 10 + ["b"] * 4
+    assert percentile_over_units(values, seed=23, draws=2000, strata=strata) is None
+
+
+def test_every_unit_its_own_stratum_gives_no_interval_at_all():
     """Every unit its own singleton stratum: each draw reproduces every value
-    exactly once, so the resample has no freedom left and the interval
-    collapses to a point at the sample mean — not an error, just uninformative,
-    which is why `E-STATS-RESAMPLE-*` validation (not this function) is where a
-    design that does this should be refused."""
+    exactly once, so the resample has no freedom left anywhere. This is the
+    singleton special case of the constant-stratum refusal above, not a
+    zero-width point to report."""
     values = [1.0, 2.0, 3.0, 4.0]
     strata = ["a", "b", "c", "d"]
     got = percentile_over_units(values, seed=19, draws=2000, strata=strata)
-    assert got is not None
-    assert got.low == got.high == sum(values) / len(values)
+    assert got is None
