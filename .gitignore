@@ -220,5 +220,7 @@ __marimo__/
 # macOS
 .DS_Store
 
-# Working design docs, not part of the published document set
-docs/superpowers/
+# `docs/superpowers/` and the SDD workspace under `.superpowers/sdd/` are TRACKED —
+# they are the development record. See CLAUDE.md § The development record.
+# Only the derived artifacts inside the workspace are ignored, by
+# `.superpowers/sdd/.gitignore`.
