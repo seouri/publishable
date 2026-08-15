@@ -1582,8 +1582,16 @@ def command_run(config_path: Path) -> int:
             # LABEL into `run.yaml` today (a future task records the attribute
             # names), but a NUL byte in a string PyYAML is later asked to emit
             # raises, and a printable one costs nothing to choose now.
+            #
+            # Gated on BOTH `declared` and `stratify_by`, not on `stratify_by`
+            # alone: they cannot disagree today (`_resolved_resample` reads
+            # `stratify_by` off the same `declared` dict `declared` itself is
+            # `bool()`-ed from, so a non-empty `stratify_by` implies `declared`
+            # is true), but writing both is what pins that agreement rather
+            # than leaving a reader to re-derive it — the identical reason
+            # `resample_columns` below reads `declared`, not `n`.
             resample_strata: dict[str, str] | None = None
-            if resample_spec["stratify_by"]:
+            if resample_spec["declared"] and resample_spec["stratify_by"]:
                 resample_strata = {
                     u.key: "|".join(
                         "<absent>" if u.attributes.get(name) is None

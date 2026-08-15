@@ -978,10 +978,13 @@ def percentile_of_derived(
     the same invariance `percentile_over_units` keeps for exactly the same
     reason: a relabelled stratum must draw the identical sequence of tables.
     `strata` is indexed by key, not `.get`-ed, the same discipline `weights`
-    and `clusters` follow elsewhere in this module: every key `collapsed`
-    holds must have an entry, or a unit the caller could not otherwise
-    stratify would silently draw as if it were unstratified. This does not
-    add the constant-pool refusal `percentile_over_units` applies to a
+    and `clusters` follow elsewhere in this module: `strata` must be total
+    over `collapsed`'s keys, or a unit the caller could not otherwise
+    stratify would silently draw as if it were unstratified. It need not be
+    exactly `collapsed`'s key set — a caller resampling a subset of a larger
+    roster (a `report_by` level, say) can pass the roster-wide mapping
+    unfiltered, and any extra entry it carries is simply never looked up.
+    This does not add the constant-pool refusal `percentile_over_units` applies to a
     degenerate stratum — a derived metric's `compute` may still return the
     same value on every draw of a constant pool, and that reaches
     `min_honest_draws` the same way any other run of identical survivors
@@ -1615,15 +1618,17 @@ def summarize_step(
     of the interval around it.
 
     `strata` is unit key → that unit's `statistics.resample.stratify_by` label,
-    over the whole roster, supplied only when the declaration carries one —
-    built in `cli.py` the same way `weights` and `clusters` are, from the same
-    place. **The keys the strata are looked up by are the column's own**, taken
+    supplied only when the declaration carries one — built in `cli.py` the same
+    way `weights` and `clusters` are, typically over the whole roster (though
+    what this function requires is narrower: total over the collapsed table's
+    keys, a roster-wide mapping being the common way a caller supplies that).
+    **The keys the strata are looked up by are the column's own**, taken
     in the same pass as its values, for the identical reason the weights and
     clusters paragraphs above give: a vector filtered or ordered differently
     would stratify the wrong unit and produce a plausible number rather than an
     error. Indexed rather than `.get`-ed for the same reason those two are: every
-    key in the collapsed table came from the roster `cli.py` built `strata`
-    from, so a default would quietly invent a stratum instead of failing. It
+    key in the collapsed table must have an entry in `strata`, so a default
+    would quietly invent a stratum instead of failing. It
     reaches both interval constructions this function can produce, and the
     DERIVED metrics below the same call: `percentile_over_units`/
     `percentile_over_units_clustered` draw within each stratum for a recorded

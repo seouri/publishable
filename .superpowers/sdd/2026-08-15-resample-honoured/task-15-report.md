@@ -23,5 +23,11 @@ Concerns:
   blank-cell fixture assuming it triggers the `None` path.
 - The report_by level call site (`cli.py`, `level_summary = summarize_step(...)`) still does not pass
   `resample_columns`, so a level's own recorded-column interval stays `t_over_units` even under a
-  declared `resample`; `strata` reaches only that level's *derived* metrics there. That asymmetry
-  predates this task and is out of this task's scope, but is worth a future task's attention.
+  declared `resample`; `strata` reaches only that level's *derived* metrics there. **This is the same
+  defect class task 14 declined to create, one layer in**: under a declared `resample` with
+  `stratify_by`, a `report_by` level block holds an unresampled `t_over_units` column interval beside a
+  *stratified* `percentile_over_units_derived` interval — two designs in one table with nothing in the
+  record distinguishing them. It predates this task (the level path never got `resample_columns` at
+  all, in task 14 or here) and passing it there is outside this task's scoped call sites, but it should
+  be weighed at the merge gate as a live gap of the same shape this slice exists to close, not filed as
+  routine tidiness.
