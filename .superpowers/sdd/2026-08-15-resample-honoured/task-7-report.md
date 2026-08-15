@@ -1,0 +1,16 @@
+## Task 7 report
+
+**Status:** done.
+
+**Commit:**
+- `d280f86` feat: E-STATS-RESAMPLE-UNITS, so retiring the refusal cannot open a silent no-op
+
+**Tests:** `uv run pytest` — 1721 passed, 2 xfailed (baseline 1719 + 2 xfailed; 2 new tests added). `uv run ruff check .` clean. `uv run mypy` clean. Mutation (`if not units_declared:` → `if roster is None:`) confirmed `test_an_unresolvable_roster_does_not_earn_a_second_resample_finding` FAIL while `test_a_resample_with_no_unit_roster_is_refused` stayed PASS, then reverted in place (`__pycache__` cleared between).
+
+**Judgment call the brief flagged as open:** gate on `not units_declared` (i.e. `(doc.get("data") or {}).get("units")` truthy), not on `roster is None`. Confirmed empirically: with `data.units: {from: nope.csv, key: patient_id}` (a real file that doesn't exist), `roster` is `None` but `units_declared` is truthy, so gating on `roster is None` would fire `E-STATS-RESAMPLE-UNITS` on top of `E-UNITS-SOURCE-MISSING` — the exact double-fault the brief's `usable_cluster` precedent warns against. Gating on the declaration reports only the pre-existing `_check_units` finding in that case, and still refuses the true no-roster shape (no `data.units` block at all). Both tests distinguish the two cases as required — one config with no `data.units` key at all, the other with `data.units` declared but pointing at a nonexistent file.
+
+**No disagreement with the brief found this time** — the six-implementers framing in my instructions expected one, but the brief's own "Gate on the declaration, not on `roster is None`" instruction matched what the code needed exactly, and the precedent (`_check_replication`'s fold-without-basis shape) was a clean fit with no adaptation required. I looked for a mismatch specifically (re-read `_check_resample`'s existing four checks, `_check_replication`'s `E-REPL-FOLD-K` site, and the `usable_cluster` guard in `validate_config`) and found none worth reporting.
+
+**Interface delivered, unchanged from the brief:** the new check sits at the top of `_check_resample`, right after the `not isinstance(resample, dict) or not resample` guard, and returns before any of the four existing checks (method enum, `n` floor, family bound, strata names) — none of which read `units_declared`, so the ordering only affects whether they run at all when there's no roster to check. `E-STATS-RESAMPLE-UNSUPPORTED` still fires wholesale from `_check_unimplemented` regardless (verified: the "no roster" test's positive-companion config still carries `-UNSUPPORTED` alongside the new code, since neither test asserts uniqueness of findings). Registered in `docs/reference.md` § Errors `validate` reports (alphabetically last among the `E-STATS-RESAMPLE-*` rows, after `-STRATIFY-UNKNOWN`) and § Validation (new row *Resample has a roster*, placed immediately before *Clusters enough to resample* since it's the precondition that check and the `n`-floor/family-bound checks all presuppose). No count-phrase near either table needed updating — grepped both tables' surrounding prose for row-count phrasing and found none, matching task 4's prior finding.
+
+**Concerns:** none. The two new tests are the fixture-distinguishing pair the brief asked for, and the mutation confirmed they actually distinguish the two cases rather than both passing under either gate.
