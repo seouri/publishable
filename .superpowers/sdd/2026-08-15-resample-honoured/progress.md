@@ -278,3 +278,21 @@ RESIDUE RULING — I ADOPTED THE REVIEWER'S ANSWER OVER MY OWN QUESTION. I asked
   claim in the present tense, independent of the refusal still standing until task 12.
   Reviewer also found the residue OMITS A SECOND FAMILY — hypotheses.py corrects the same pools at α/H
   and is not safely boundable either, since the declared hypothesis count is an upper bound.
+Task 6: COMPLETE (commits 5c744bd, 8a973f1). 1719 passed + 2 xfailed. Both Importants and all 5 Minors
+  closed. The reviewer's residue ruling was adopted: the SIZING RULE (size resample.n against
+  comparisons × metrics, ~80m draws) now lives in § Statistical reporting beside the correction-level
+  table. The fix also made an ABSENT `n` check against cli.py's real 2000-draw default rather than being
+  silently skipped — a gap neither the brief nor I had seen.
+INFRASTRUCTURE, at the user's direction (commits 6c529c7, 4547bed): THE DEVELOPMENT RECORD IS NOW
+  TRACKED IN GIT. 217 files / 66.6k lines — docs/superpowers/{specs,plans,*-SCOPING.md,spec-defects.md}
+  and .superpowers/sdd/*/{progress.md,task-N-report.md,task-N-review.md}. Still ignored: task briefs
+  (extracted from the plan by scripts/task-brief) and every .diff (regenerable from the two commits in
+  its filename).
+  CLAUDE.md gained § The development record and lost the two claims tracking made false — "docs/
+  superpowers/ is gitignored and a decision recorded only there is recorded nowhere" and "slice ledgers
+  ... are gitignored". THOSE SENTENCES WERE THE REASON CLAUDE.md KEPT DUPLICATING RULINGS; it can cite
+  now. Also pinned: the consistency passes govern the four documents, CLAUDE.md and the feasibility
+  analyses ONLY — a spec records what was decided when written and a scoping what was measured on its
+  date, so corrections are APPENDED, never retro-edited. spec-defects.md is the exception, a live list.
+  Consequence for sweeps: `*.md` no longer means the four documents, so a sweep must NAME them.
+Task 7: dispatched. BASE 4547bed.

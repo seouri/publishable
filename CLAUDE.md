@@ -84,6 +84,8 @@ The four documents say what `publishable` **is**. These say how it got there, an
 
 Two things stay untracked because git already holds them: task briefs (extracted from the plan by `scripts/task-brief`) and every `.diff` (regenerable from the two commits in its filename).
 
+**`scripts/sdd-workspace` rewrites `.superpowers/sdd/.gitignore` to a bare `*` every time it runs, and `task-brief` calls it.** Already-tracked files stay tracked, so the damage is only to records created after a clobber. Restore that file's content when you notice, and use `git add -f` when committing new records.
+
 ## Invariants a change must not quietly break
 
 These are load-bearing across all four documents; contradicting one in a single section creates a real inconsistency, not a wording nit.
