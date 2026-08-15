@@ -5187,6 +5187,32 @@ def _check_resample(doc: dict[str, Any], roster: UnitList | None, c: Collector) 
                 "units they hold",
             )
 
+    # The composition rule, from the declarations plus the roster — the same
+    # shape *Fold strata survive clustering* and *Holdout strata survive
+    # clustering* already have, and reusing `units.stratum_varies_within_cluster`
+    # rather than minting a second notion of constancy is the point: a resample
+    # draws whole clusters, so it inherits the rule rather than inventing one.
+    if roster is not None and isinstance(cluster_by, str) and cluster_by:
+        for name in stratum_names(resample.get("stratify_by")):
+            if not isinstance(name, str) or name not in declared:
+                continue  # already refused above
+            try:
+                offender = stratum_varies_within_cluster(roster, cluster_by, name)
+            except ContractError:
+                # A unit with no cluster value (`E-DATA-CLUSTER-UNKNOWN`),
+                # already reported beside this. This module collects.
+                break
+            if offender is not None:
+                cluster, seen = offender
+                c.error(
+                    "E-STATS-RESAMPLE-STRATIFY-VARIES",
+                    "statistics.resample.stratify_by",
+                    f"names `{name}`, which varies within `{cluster_by}` {cluster} — it "
+                    f"carries {', '.join(seen)}. A resample draws whole clusters, so a "
+                    "cluster cannot be drawn within one stratum while carrying two; "
+                    "stratify on an attribute constant within a cluster",
+                )
+
     # The comparisons-only lower bound. Holm's tightest level is `ALPHA / m` at
     # rank 1, and a corrected interval is read off the same pool the raw one
     # was — true of every pool-backed member today; a future construction that

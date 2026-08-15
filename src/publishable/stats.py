@@ -639,6 +639,7 @@ def percentile_over_units_clustered(
     draws: int = 2000,
     confidence: float = 0.95,
     weights: Sequence[Any] | None = None,
+    strata: Sequence[Any] | None = None,
 ) -> Interval | None:
     """A percentile interval that resamples whole CLUSTERS, not rows.
 
@@ -717,6 +718,25 @@ def percentile_over_units_clustered(
     `strict=True` on the zip, for the reason `_weighted_mean` uses it: a
     keys/values length mismatch is a misaligned cluster vector, and it would
     produce a plausible number rather than an error.
+
+    **With `strata`, a stratum must be constant within a cluster, and the draw
+    is a cluster drawn within its stratum.** `stratify_by` says what an
+    independent draw is; `cluster_by` says the draw IS a cluster — composed,
+    `reference.md` § Clustered units already requires exactly this constancy
+    for `fold`, `holdout` and `assign`, so this is the same rule taken again
+    rather than a second one invented for `resample`. A cluster carrying two
+    stratum values cannot be dealt to either, being indivisible, and is refused
+    as `E-STATS-RESAMPLE-STRATIFY-VARIES` — `validate` reports the declaration
+    form of the same fault from the roster, through
+    `units.stratum_varies_within_cluster`, and this is the run-time half of
+    that dual listing, the shape `E-DATA-WEIGHT-INVALID` already has: a public
+    function handed a stratum vector and a membership map directly cannot
+    silently pick one over the other. Each stratum then draws exactly as many
+    clusters, with replacement, as it holds — preserving each stratum's own
+    cluster count the way the unstratified draw preserves `G` — and, when every
+    stratum holds fewer than two clusters, no draw can differ from any other:
+    the same "a zero-width 95% interval is not honest" refusal `G < 2` and
+    every-stratum-identical both already give, so this returns `None` too.
     """
     if len(values) < 2:
         return None
@@ -735,11 +755,65 @@ def percentile_over_units_clustered(
     pools: dict[str, list[tuple[float, float]]] = {}
     for value, key, weight in zip(values, keys, carried, strict=True):
         pools.setdefault(membership[key], []).append((float(value), weight))
+    # A stratum must be CONSTANT within a cluster, and this is a composition of
+    # two declarations rather than a third rule: `stratify_by` says what an
+    # independent draw is, `cluster_by` says the draw IS a cluster, and a cluster
+    # carrying two stratum values cannot be dealt to either, being indivisible.
+    # § Clustered units already imposes exactly this on `fold`, `holdout` and
+    # `assign`; `validate` reports it from the declaration through
+    # `units.stratum_varies_within_cluster`, and this is the run-time half of the
+    # same dual listing `E-DATA-WEIGHT-INVALID` has — a public function handed
+    # both vectors directly cannot silently pick one of them.
+    cluster_stratum: dict[str, Any] = {}
+    if strata is not None:
+        for key, stratum in zip(keys, strata, strict=True):
+            cluster = membership[key]
+            if cluster in cluster_stratum and cluster_stratum[cluster] != stratum:
+                raise ContractError(
+                    f"cluster {cluster!r} carries stratum values "
+                    f"{cluster_stratum[cluster]!r} and {stratum!r}. A resample draws "
+                    "whole clusters, so a cluster cannot be drawn within one stratum "
+                    "while carrying two; stratify on an attribute that is constant "
+                    "within a cluster, or drop `cluster_by` if the units really are "
+                    "independent",
+                    code="E-STATS-RESAMPLE-STRATIFY-VARIES",
+                )
+            cluster_stratum[cluster] = stratum
     ordered = sorted(sorted(pool) for pool in pools.values())
     rng = random.Random(seed)
+    if strata is None:
+        stratum_pools = [ordered]
+    else:
+        # Cluster pools grouped by the stratum their cluster carries, then each
+        # group ordered by its own sorted contents — the same label-independence
+        # the unstratified `ordered` gets, one level up.
+        by_stratum: dict[Any, list[list[tuple[float, float]]]] = {}
+        for cluster, pool in pools.items():
+            by_stratum.setdefault(cluster_stratum[cluster], []).append(sorted(pool))
+        stratum_pools = [sorted(group) for group in by_stratum.values()]
+        stratum_pools.sort()
+        # If every stratum holds fewer than two clusters, no draw can come out
+        # different from any other: each stratum always redraws its one
+        # cluster, so the resampled mean is the same value on every replicate.
+        # That is the same degenerate shape `groups < 2` refuses above, one
+        # level down — a stratum boundary can only ever narrow the pool a
+        # cluster is drawn from, never widen it, so a singleton-everywhere
+        # stratification is strictly more degenerate than the unstratified
+        # draw over the same clusters, which already passed `groups >= 2`.
+        if all(len(group) < 2 for group in stratum_pools):
+            return None
     means: list[float] = []
     for _ in range(draws):
-        drawn = [pair for _ in range(groups) for pair in ordered[rng.randrange(groups)]]
+        # Each stratum contributes exactly as many CLUSTERS as it holds — the
+        # composition of "the draw is a cluster" with "each stratum keeps its
+        # size". With no strata this is one group holding every cluster, which
+        # is the unstratified draw digit for digit.
+        drawn = [
+            pair
+            for group in stratum_pools
+            for _ in range(len(group))
+            for pair in group[rng.randrange(len(group))]
+        ]
         if weights is None:
             means.append(sum(v for v, _ in drawn) / len(drawn))
         else:

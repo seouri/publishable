@@ -2348,6 +2348,137 @@ def test_the_same_seed_reproduces_the_clustered_percentile():
     ) != percentile_over_units_clustered(values, keys, membership, seed=99)
 
 
+def _clustered_banded() -> tuple[list[float], list[str], dict[str, str], list[str]]:
+    """Six clusters of unequal size across three strata, with disjoint value
+    bands per stratum — so a cluster draw ignoring the strata, a correct
+    stratified cluster draw, and a row-level draw all give different intervals.
+
+    Stratum `low`  : clusters c0 (4 units), c1 (3) — values in [0, 1)
+    Stratum `mid`  : clusters c2 (3), c3 (2)       — values in [10, 11)
+    Stratum `high` : clusters c4 (2), c5 (1)       — values in [100, 101)
+    """
+    values: list[float] = []
+    keys: list[str] = []
+    membership: dict[str, str] = {}
+    strata: list[str] = []
+    plan = [
+        ("c0", "low", 4, 0.0), ("c1", "low", 3, 0.5),
+        ("c2", "mid", 3, 10.0), ("c3", "mid", 2, 10.5),
+        ("c4", "high", 2, 100.0), ("c5", "high", 1, 100.5),
+    ]
+    for cluster, stratum, size, base in plan:
+        for i in range(size):
+            key = f"{cluster}_u{i}"
+            values.append(base + i / 100.0)
+            keys.append(key)
+            membership[key] = cluster
+            strata.append(stratum)
+    return values, keys, membership, strata
+
+
+def test_a_clustered_stratified_draw_takes_clusters_within_strata():
+    """`stratify_by` says what an independent draw is; `cluster_by` says the
+    draw IS a cluster. Composed: two clusters are drawn from each stratum
+    (each stratum holds two), so every replicate carries all three bands and the
+    interval is far narrower than the unstratified cluster draw, where a single
+    replicate can hold six `high` clusters."""
+    values, keys, membership, strata = _clustered_banded()
+    stratified = percentile_over_units_clustered(
+        values, keys, membership, seed=13, draws=2000, strata=strata
+    )
+    plain = percentile_over_units_clustered(values, keys, membership, seed=13, draws=2000)
+    assert stratified is not None and plain is not None
+    assert (stratified.high - stratified.low) < (plain.high - plain.low) / 2.0
+    assert stratified.method == "percentile_over_units_clustered"
+
+
+class _CountingRandom(random.Random):
+    """Wraps `random.Random` to count `randrange` calls, catching a mutation the
+    width-ratio test above cannot. Substituting a constant 1 for `len(group)` in
+    the draw loop still narrows the interval on this fixture — each stratum
+    still contributes one cluster from its own band, and `_clustered_banded`'s
+    extremes are single-cluster values that a one-cluster-per-stratum draw
+    reaches exactly as surely as a two-cluster one, since pooling several
+    picks of the SAME extreme cluster reproduces that cluster's own mean. No
+    interval-shaped assertion on this fixture tells the two apart; the number
+    of clusters actually drawn does."""
+
+    calls = 0
+
+    def randrange(self, *args: object, **kwargs: object) -> int:
+        type(self).calls += 1
+        return super().randrange(*args, **kwargs)  # type: ignore[arg-type]
+
+
+def test_a_clustered_stratified_draw_spends_one_pick_per_cluster_the_stratum_holds(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Structural pin for the composition rule: each of the 2000 replicates must
+    draw exactly as many clusters as the strata hold IN TOTAL — 2 (`low`) + 2
+    (`mid`) + 2 (`high`) = 6 here, the same total `G` the unstratified draw over
+    this same roster uses — not a smaller constant such as one per stratum.
+    `_CountingRandom`'s docstring says why an interval-shaped assertion cannot
+    tell that mutation apart from the correct draw on this fixture."""
+    monkeypatch.setattr("publishable.stats.random.Random", _CountingRandom)
+    values, keys, membership, strata = _clustered_banded()
+    _CountingRandom.calls = 0
+    percentile_over_units_clustered(
+        values, keys, membership, seed=13, draws=2000, strata=strata
+    )
+    assert _CountingRandom.calls == 2000 * 6
+
+
+def test_a_clustered_stratified_draw_refuses_a_stratum_that_varies_within_a_cluster():
+    """A cluster is indivisible, so it cannot be dealt to two strata. The same
+    rule § Clustered units already imposes on `fold`, `holdout` and `assign`,
+    reported under this construction's own code because `stats.py` is handed the
+    two vectors directly and cannot pick one."""
+    values, keys, membership, strata = _clustered_banded()
+    strata[0] = "mid"  # c0_u0 now disagrees with the rest of c0
+    with pytest.raises(ContractError) as exc:
+        percentile_over_units_clustered(
+            values, keys, membership, seed=13, draws=2000, strata=strata
+        )
+    assert exc.value.code == "E-STATS-RESAMPLE-STRATIFY-VARIES"
+    assert "c0" in str(exc.value)
+    # Positive companion: the UNMUTATED vector does not raise, so this cannot
+    # pass by the construction refusing every stratified clustered draw.
+    _, _, _, clean = _clustered_banded()
+    assert percentile_over_units_clustered(
+        values, keys, membership, seed=13, draws=2000, strata=clean
+    ) is not None
+
+
+def test_a_clustered_stratified_draw_refuses_a_zero_width_interval_too():
+    """Each stratum holding fewer than two clusters is the stratified path's own
+    degenerate case, not the unstratified `groups < 2` guard's — three clusters
+    overall passes that guard, but if every stratum owns exactly one of them,
+    each stratum always redraws its single cluster and every replicate is the
+    same multiset. `percentile_over_units`'s own strata branch returns `None`
+    for the analogous all-strata-constant shape (`reference.md` § Statistical
+    reporting: "a zero-width 95% interval is not honest"), and this is the same
+    answer, not a second rule."""
+    values = [0.0, 1.0, 10.0, 11.0, 20.0, 21.0]
+    keys = ["c0_u0", "c0_u1", "c1_u0", "c1_u1", "c2_u0", "c2_u1"]
+    membership = {
+        "c0_u0": "c0", "c0_u1": "c0",
+        "c1_u0": "c1", "c1_u1": "c1",
+        "c2_u0": "c2", "c2_u1": "c2",
+    }
+    one_cluster_each = ["a", "a", "b", "b", "c", "c"]
+    assert percentile_over_units_clustered(
+        values, keys, membership, seed=1, draws=2000, strata=one_cluster_each
+    ) is None
+    # Positive companion: the same roster, but `a` now holds two of the three
+    # clusters — one stratum can vary, so the interval is reportable again,
+    # which is what tells this apart from a construction that refuses every
+    # stratified clustered draw regardless of shape.
+    two_in_one_stratum = ["a", "a", "a", "a", "b", "b"]
+    assert percentile_over_units_clustered(
+        values, keys, membership, seed=1, draws=2000, strata=two_in_one_stratum
+    ) is not None
+
+
 def test_resample_seed_depends_on_the_digest():
     assert resample_seed("a") != resample_seed("b")
     assert resample_seed("a") == resample_seed("a")

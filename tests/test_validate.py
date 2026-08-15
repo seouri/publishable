@@ -3525,6 +3525,58 @@ def test_a_resample_stratum_naming_a_real_but_undeclared_column_is_refused(
     assert "E-STATS-RESAMPLE-STRATIFY-UNKNOWN" in found
 
 
+_VARYING_STRATUM = (
+    "patient_id,animal_id,label\n"
+    "p0,a0,x\np1,a0,y\n"          # animal a0 carries two labels
+    + "".join(f"p{i},a{i},x\n" for i in range(2, 14))
+)
+
+
+def test_a_resample_stratum_varying_within_a_cluster_is_refused(write_config, tmp_path):
+    """The composition rule, checked from the declaration plus the roster the
+    way *Fold strata survive clustering* already is — `validate` reuses
+    `units.stratum_varies_within_cluster` rather than minting a second notion of
+    constancy."""
+    (tmp_path / "input" / "index.csv").write_text(_VARYING_STRATUM)
+    found = codes(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv", "key": "patient_id",
+                    "attributes": ["animal_id", "label"], "cluster_by": "animal_id",
+                },
+                "limits": {"min_clusters": 2},
+                "statistics": {"resample": {"method": "bootstrap", "n": 2000,
+                                            "stratify_by": ["label"]}},
+            }
+        )
+    )
+    assert "E-STATS-RESAMPLE-STRATIFY-VARIES" in found
+
+
+def test_a_constant_stratum_within_clusters_is_accepted(write_config, tmp_path):
+    """Positive companion: the same declaration over a roster where `label` IS
+    constant within each animal is clean, so the check reads the roster rather
+    than refusing the combination."""
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id,animal_id,label\n" + "".join(f"p{i},a{i // 2},x\n" for i in range(28))
+    )
+    found = codes(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv", "key": "patient_id",
+                    "attributes": ["animal_id", "label"], "cluster_by": "animal_id",
+                },
+                "limits": {"min_clusters": 2},
+                "statistics": {"resample": {"method": "bootstrap", "n": 2000,
+                                            "stratify_by": ["label"]}},
+            }
+        )
+    )
+    assert "E-STATS-RESAMPLE-STRATIFY-VARIES" not in found
+
+
 def test_a_bare_string_resample_stratum_is_read_as_one_name(write_config, tmp_path: Path):
     """`units.stratum_names` reads `stratify_by: site` as one name exactly as
     `[site]` is — the same normalization the draw balances on. Read as a
