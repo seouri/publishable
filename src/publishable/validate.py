@@ -4986,7 +4986,8 @@ documented change rather than a silent one."""
 
 
 def _check_resample(doc: dict[str, Any], roster: UnitList | None, c: Collector) -> None:
-    """`statistics.resample`'s `method` enum and its `n` floor.
+    """`statistics.resample`'s `method` enum, its `n` floor, and its
+    `stratify_by` names.
 
     `E-STATS-RESAMPLE-UNSUPPORTED` (`_check_unimplemented`) still refuses any
     declared `resample` wholesale in this build — resampling itself is not yet
@@ -5042,6 +5043,51 @@ def _check_resample(doc: dict[str, Any], roster: UnitList | None, c: Collector) 
             "all, so this would null `ci95` on every metric in the run rather than "
             "narrowing one",
         )
+    # The declared set, `data.units.attributes` — the same reference
+    # `_check_report_by` reads, and for its reason: `strata.levels_for` and the
+    # draw both read the attribute per unit, so a typo and an attribute no unit
+    # carries are indistinguishable downstream. NOT `units._stratum_groups`,
+    # which is `assign`-specific: it admits a `sweep.groups` axis name as a
+    # legal target and raises `E-DATA-ASSIGN-STRATIFY-UNKNOWN`, and a resample
+    # draws from the roster rather than from an allocation, so neither applies.
+    #
+    # Read through `units.stratum_names`, the same normalization the draw
+    # balances on: a bare `stratify_by: site` is one name to both. Two
+    # independent readings of one declaration is the validate-clean-then-
+    # disagree shape that function's own docstring exists to prevent.
+    #
+    # Filtered to strings the same way `_check_report_by` filters `attributes`:
+    # a non-string item there is `_check_units`' own finding (`E-UNITS-ATTR-
+    # MISSING`), and `set(...)` over the raw list would raise on an unhashable
+    # one before that finding is ever reached.
+    declared = {
+        a
+        for a in (((doc.get("data") or {}).get("units") or {}).get("attributes") or [])
+        if isinstance(a, str)
+    }
+    stratify_by = resample.get("stratify_by")
+    # The container itself IS an envelope leaf (`(str, list)`), unlike
+    # `assign.<axis>.stratify_by`, which has no `LEAF_TYPES` entry at all — so a
+    # wrong-typed container (`stratify_by: 5`) is already `E-CONFIG-TYPE` from
+    # the envelope, and `stratum_names` would otherwise wrap it as a one-name
+    # tuple and report it a second time under this code. Skipped here the same
+    # way `method`/`n` skip a wrong-typed leaf above.
+    if stratify_by is not None and not isinstance(stratify_by, (str, list)):
+        stratify_by = None
+    for name in stratum_names(stratify_by):
+        # One finding per offending name, not one naming only the first: the
+        # declaration is a list and each entry is separately fixable, the same
+        # rule `E-DATA-ASSIGN-STRATIFY-UNKNOWN` already follows. A non-string
+        # entry is absorbed here rather than left silent — it names no
+        # attribute either, and `stratify_by`'s LEAF type is the container's,
+        # not each item's.
+        if not isinstance(name, str) or name not in declared:
+            c.error(
+                "E-STATS-RESAMPLE-STRATIFY-UNKNOWN",
+                "statistics.resample.stratify_by",
+                f"names `{name}`, which is not in `data.units.attributes` — a stratum "
+                "is read per unit when the draw is taken, so it has to be one",
+            )
 
 
 def _check_report_by(doc: dict[str, Any], c: Collector, roster: UnitList | None) -> None:

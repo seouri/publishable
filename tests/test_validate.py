@@ -3207,7 +3207,15 @@ def test_a_declared_resample_is_refused(write_config):
     )
 
 
-_RESAMPLE_UNITS = {"from": "index.csv", "key": "patient_id", "attributes": ["cohort"]}
+_RESAMPLE_UNITS = {"from": "index.csv", "key": "patient_id"}
+# No `attributes` declared: `write_config`'s default `index.csv` is `patient_id`
+# only, so an `attributes: ["cohort"]` here would fail roster resolution
+# (`E-UNITS-ATTR-MISSING`) on every test below, none of which reads the roster —
+# they check `method`/`n` from the declaration alone. Fixed rather than left
+# roster-broken: the next check to need a resolved roster over this constant
+# would otherwise inherit a fixture that validates clean and silently proves
+# nothing, the exact vacuity Task 5 was warned about. A test that DOES need a
+# real attribute uses `_resample_stratum_table` below instead.
 
 
 def test_an_unknown_resample_method_is_refused(write_config):
@@ -3383,6 +3391,191 @@ def test_resample_method_null_or_absent_takes_the_documented_default(write_confi
     )
     assert "E-STATS-RESAMPLE-METHOD" not in absent
     assert "E-STATS-RESAMPLE-UNSUPPORTED" in absent
+
+
+def _resample_stratum_table(tmp_path: Path) -> None:
+    """Write the roster `resample.stratify_by`'s checks read, into the directory
+    `write_config` points `data.input_dir` at — the same reason `_weighted_table`
+    exists. `_RESAMPLE_UNITS`/`write_config`'s own default `index.csv` is
+    `patient_id` only, so a config declaring `data.units.attributes: ["cohort"]`
+    against it fails roster resolution (`E-UNITS-ATTR-MISSING`) before this
+    check ever sees a resolved roster; writing `cohort` as a real column is what
+    lets the declaration actually resolve."""
+    (tmp_path / "input" / "index.csv").write_text("patient_id,cohort\np1,a\n")
+
+
+def test_a_resample_stratum_must_be_a_declared_attribute(write_config, tmp_path: Path):
+    """§ Validation's *Resample strata exist* row has never had an identifier.
+    The reference set is `data.units.attributes`, the declared one — the same set
+    `_check_report_by` reads, and for its reason: a stratum is read per unit when
+    the draw is taken, so it has to survive resolution as an attribute."""
+    _resample_stratum_table(tmp_path)
+    found = codes(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv",
+                    "key": "patient_id",
+                    "attributes": ["cohort"],
+                },
+                "statistics": {
+                    "resample": {"method": "bootstrap", "n": 2000,
+                                 "stratify_by": ["count_stratum"]}
+                },
+            }
+        )
+    )
+    assert "E-STATS-RESAMPLE-STRATIFY-UNKNOWN" in found
+    # Positive companion, same test: a DECLARED name is not refused, so this
+    # cannot pass by the check refusing every stratum it is handed.
+    assert "E-STATS-RESAMPLE-STRATIFY-UNKNOWN" not in codes(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv",
+                    "key": "patient_id",
+                    "attributes": ["cohort"],
+                },
+                "statistics": {
+                    "resample": {"method": "bootstrap", "n": 2000, "stratify_by": ["cohort"]}
+                },
+            }
+        )
+    )
+
+
+def test_a_resample_declaration_earns_one_finding_per_offending_stratum(
+    write_config, tmp_path: Path
+):
+    """Two undeclared names, two findings — not one naming only the first. The
+    count is the assertion: a check that `break`s after the first offender passes
+    a membership test and fails this."""
+    _resample_stratum_table(tmp_path)
+    c = Collector()
+    validate_config(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv",
+                    "key": "patient_id",
+                    "attributes": ["cohort"],
+                },
+                "statistics": {
+                    "resample": {
+                        "method": "bootstrap",
+                        "n": 2000,
+                        "stratify_by": ["dx_status", "count_stratum", "cohort"],
+                    }
+                },
+            }
+        ),
+        c,
+    )
+    offenders = [f for f in c.findings if f.code == "E-STATS-RESAMPLE-STRATIFY-UNKNOWN"]
+    assert len(offenders) == 2
+    named = " ".join(f.message for f in offenders)
+    assert "dx_status" in named and "count_stratum" in named
+    # `cohort` IS declared and must not be among them — three names, two
+    # offenders, so a check that reported all three would also fail the count.
+    assert "cohort" not in named
+
+
+def test_a_bare_string_resample_stratum_is_read_as_one_name(write_config, tmp_path: Path):
+    """`units.stratum_names` reads `stratify_by: site` as one name exactly as
+    `[site]` is — the same normalization the draw balances on. Read as a
+    sequence of characters instead, this would report four findings (`s`, `i`,
+    `t`, `e`) rather than one, which is what the count catches."""
+    _resample_stratum_table(tmp_path)
+    c = Collector()
+    validate_config(
+        write_config(
+            {
+                "data.units": {"from": "index.csv", "key": "patient_id",
+                               "attributes": ["cohort"]},
+                "statistics": {"resample": {"method": "bootstrap", "n": 2000,
+                                            "stratify_by": "site"}},
+            }
+        ),
+        c,
+    )
+    offenders = [f for f in c.findings if f.code == "E-STATS-RESAMPLE-STRATIFY-UNKNOWN"]
+    assert len(offenders) == 1
+    assert "site" in offenders[0].message
+
+
+def test_an_empty_resample_stratify_by_is_not_refused(write_config):
+    """`stratify_by: []` is what a full expansion shows and what most designs
+    carry; it names no stratum and sends the draw down its unstratified path.
+    `stratum_names` returns `()` for it, so there is nothing to refuse."""
+    found = codes(
+        write_config(
+            {
+                "data.units": {"from": "index.csv", "key": "patient_id"},
+                "statistics": {"resample": {"method": "bootstrap", "n": 2000,
+                                            "stratify_by": []}},
+            }
+        )
+    )
+    assert "E-STATS-RESAMPLE-STRATIFY-UNKNOWN" not in found
+
+
+def test_a_wrong_typed_resample_stratify_by_is_a_type_fault_not_a_second_finding(
+    write_config, tmp_path: Path
+):
+    """`stratify_by: 5` is `E-CONFIG-TYPE` from the envelope (`statistics.resample
+    .stratify_by` is typed `(str, list)`) — a leaf fault this repo treats as
+    non-fatal, so validation continues and hands this check the still-wrong-typed
+    5. `stratum_names(5)` wraps it as a one-name tuple (`(5,)`) rather than
+    raising, so an unguarded read would report the same wrong-typed leaf a
+    second time under this code — the same double-report `method`'s own
+    `isinstance` guard prevents. This test must fail if that guard is removed."""
+    _resample_stratum_table(tmp_path)
+    found = codes(
+        write_config(
+            {
+                "data.units": {"from": "index.csv", "key": "patient_id",
+                               "attributes": ["cohort"]},
+                "statistics": {"resample": {"method": "bootstrap", "n": 2000,
+                                            "stratify_by": 5}},
+            }
+        )
+    )
+    assert "E-UNITS-ATTR-MISSING" not in found
+    assert "E-CONFIG-TYPE" in found
+    assert "E-STATS-RESAMPLE-STRATIFY-UNKNOWN" not in found
+
+
+def test_a_non_string_resample_stratum_entry_is_absorbed_not_left_silent(
+    write_config, tmp_path: Path
+):
+    """`stratify_by: [3, "cohort"]` — the container is a legal `list`, so no
+    `E-CONFIG-TYPE` guards this one; `3` is a non-string ITEM, which names no
+    unit attribute either way and is this check's own finding to make, exactly
+    the absorption `E-DATA-ASSIGN-STRATIFY-UNKNOWN` performs for the same shape.
+    `cohort` is declared and real, so exactly one offender — naming `3` — is
+    the count that proves the absorption fires rather than being silently
+    skipped or crashing on an unhashable comparison."""
+    _resample_stratum_table(tmp_path)
+    c = Collector()
+    validate_config(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv",
+                    "key": "patient_id",
+                    "attributes": ["cohort"],
+                },
+                "statistics": {
+                    "resample": {"method": "bootstrap", "n": 2000,
+                                 "stratify_by": [3, "cohort"]}
+                },
+            }
+        ),
+        c,
+    )
+    offenders = [f for f in c.findings if f.code == "E-STATS-RESAMPLE-STRATIFY-UNKNOWN"]
+    assert len(offenders) == 1
+    assert "3" in offenders[0].message
 
 
 def test_a_declared_null_test_is_refused(write_config):
