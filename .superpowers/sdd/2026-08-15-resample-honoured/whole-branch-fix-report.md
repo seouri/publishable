@@ -32,18 +32,17 @@ would have resampled the column 2000 times beside an echo saying 500 — the sam
 field over. The four arguments are passed together for that reason.
 
 **The crash risk was checked, not assumed.** `stats.py`'s `E-STEP-KEY-COLLISION` comment states as
-an invariant that the retry must not re-raise. The only `ContractError` the column loop can raise on
-this path is the run-time `E-STATS-RESAMPLE-STRATIFY-VARIES` from
-`percentile_over_units_clustered`. Verified by probe that it fires from the **column** loop, ahead
-of the derived block — so the *first* call raises it before the fault this `except` contains, and
-the `except` is never entered for it. `validate` refuses the same composition from the roster
-(`units.stratum_varies_within_cluster`, per declared name) and `command_run` returns `EXIT_WRONG`
-on any validate error, so a run that starts cannot reach it. That argument depends on the run-time
-check being no *stricter* than the validate-time one: it is looser, because `cli.resample_strata`
-joins the declared names into one label and a label collision can only merge two strata, never
-split one. The dependency, and the already-filed gap it rests on
-(`cli.resample_strata`'s composed label), are named in the new comment as a dependency rather than
-as coverage.
+an invariant that the retry must not re-raise, and widening its arguments must not cost that. The
+argument is local to `summarize_step`: **every `ContractError` this `except` can catch is raised
+from its `if derived:` block, which runs after its column loop has completed.** The two faults the
+column loop itself can raise — `E-STATS-RESAMPLE-STRATIFY-VARIES` from
+`percentile_over_units_clustered` (confirmed by probe to fire from the column loop, ahead of the
+derived block) and `E-DATA-WEIGHT-INVALID` from `checked_weights` — surface on the **first** call
+and never enter the handler at all. So reaching the handler means the column loop already succeeded
+with these very arguments, and the retry replays it over identical inputs. `validate` refusing the
+strata composition from the roster before `run` starts, and `attrition` gating the weights outside
+any `try`, are second lines of defence recorded as such — the argument does not rest on them, and so
+does not rest on the filed `cli.resample_strata` label-collision gap either.
 
 **The retry-site comment is rewritten** and no longer claims reproduction it does not perform.
 
