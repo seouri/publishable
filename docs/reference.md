@@ -891,7 +891,8 @@ from publishable import BaseStep, Estimate, Unit, register_resolver
 | `Unit` | construct | built | What a resolver yields: `key`, `paths`, `attributes` — see [Where units come from](#where-units-come-from) |
 | `Apparatus` | construct | not yet built | What a probe returns: `facts` — see [The apparatus core can only observe](#the-apparatus-core-can-only-observe) |
 | `Estimate` | construct | built | An interval a `summary` step computed itself — see [`Estimate`](#estimate-carries-your-interval-without-core-claiming-it) |
-| `register_template` · `register_resolver` · `register_probe` · `register_writer` | decorator | not yet built | The four plugin registries — see [Creating a plugin](#creating-a-plugin-publishable-plugin-new) |
+| `register_template` | decorator | built | One of the four plugin registries — see [Creating a plugin](#creating-a-plugin-publishable-plugin-new) |
+| `register_resolver` · `register_probe` · `register_writer` | decorator | not yet built | The other three of the four plugin registries — see [Creating a plugin](#creating-a-plugin-publishable-plugin-new) |
 | `PublishableError` · `ContractError` · `ArtifactError` · `ArtifactExistsError` | exception | built | Everything core raises — see below |
 
 **One root, and no second path to any name.** `from publishable.templates import BaseTemplate` is not a supported spelling even where it happens to work, because two import paths for one class is the [defaults-file problem](#there-is-no-separate-defaults-file) in Python: a plugin written against the deeper one breaks when core reorganizes a module it never promised to hold still. `publishable/__init__.py` is the promise; everything under it is an implementation detail, and [§ Package layout](#package-layout) is a map of core's own source rather than a second index of this table.
