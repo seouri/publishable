@@ -2,7 +2,7 @@
 
 Status: COMPLETE.
 
-Commit: (recorded below after `git commit` — supersedes `7160e16`, the pre-review commit).
+Commit: `b20349e` (branch `h4a-resample-honoured`; supersedes `7160e16`, the pre-review commit).
 
 Tests: `uv run pytest` — 1798 passed + 2 xfailed (baseline 1795 + 3 new tests: the brief's two, plus a
 third added during review round 1 for the `report_by` combination). `uv run mypy` and `uv run ruff
