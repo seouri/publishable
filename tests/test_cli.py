@@ -87,10 +87,17 @@ def run_a_project(
     `extra_step_source` overrides an `extra_steps` entry's — monkeypatched onto
     `publishable.generators.experiment.STARTER_STEP` inside the same
     `pytest.MonkeyPatch.context()` block `aggregate_returns` uses, and undone
-    before this function returns. Distinct from `aggregate_returns`: that
-    parameter also monkeypatches the template's `aggregate`, while this one
-    only changes what the scaffolded step records, leaving the caller free to
-    monkeypatch `aggregate` itself with whatever formula the test needs.
+    before this function returns. The source still goes through
+    `STARTER_STEP.format(pkg=pkg)`, so a literal `{` in it must be doubled the
+    same way `extra_step_source` documents above. Distinct from
+    `aggregate_returns`: that parameter also monkeypatches the template's
+    `aggregate`, while this one only changes what the scaffolded step records,
+    leaving the caller free to monkeypatch `aggregate` itself with whatever
+    formula the test needs. If both are passed, `_starter_step`'s `mp.setattr`
+    runs second and so wins for `STARTER_STEP` — the scaffolded step's source
+    is this parameter's, not `_AGGREGATE_STEP` — while `aggregate_returns`'s
+    `GenericTemplate.aggregate` patch still applies on top of whatever column
+    that source records; no caller in this file combines them today.
 
     `aggregate_returns` names a derived metric to produce end to end: when set,
     the scaffolded step records a `pred` column (one float per unit, `0.0`..
@@ -6697,10 +6704,22 @@ class Step(BaseStep):
         # interval and `cohens_dz` returns `None`, so a contrast pin over it
         # asserts nothing and every width comparison is `0 > 0`. Scaled by
         # `analysis.method` so both the differences and the draw pool have real
-        # dispersion under every comparison this file builds.
-        scale = {{"pearson": 1.0, "spearman": 2.0, "kendall": 3.0}}[
-            cfg.parameters.analysis.method
-        ]
+        # dispersion under every comparison this file builds. The scales are
+        # 1.0/3.0/5.0, NOT 1.0/2.0/3.0: a spearman-pearson ratio of 2.0 makes
+        # the paired delta (19.5 * (scale_spearman - scale_pearson)) come out
+        # to exactly 19.5 again — the same number as the baseline column's own
+        # mean — so a pin that dropped the subtraction entirely and reported
+        # the baseline's raw value as "delta" would still read 19.5 and pass.
+        # At ratio 2.0 (3.0 - 1.0) the two numbers are 39.0 and 19.5: distinct,
+        # so an assertion on the actual delta has something to catch.
+        scale_by_method = {{"pearson": 1.0, "spearman": 3.0, "kendall": 5.0}}
+        method = cfg.parameters.analysis.method
+        if method not in scale_by_method:
+            raise ValueError(
+                f"_CONDITION_SCALED_STEP has no scale for analysis.method "
+                f"{{method!r}}; add one alongside pearson/spearman/kendall"
+            )
+        scale = scale_by_method[method]
         units = list(io.units)
         for i, unit in enumerate(units):
             io.record(unit.key, {{"pred": float(i) * scale}})
@@ -6719,29 +6738,52 @@ def _assert_undeclared_resample_shape(run: dict[str, Any]) -> None:
     assert run["status"] == "completed"
     aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
     # A recorded column: the t-interval, and NO `resample_draws` key at all.
+    # `pearson`'s scale is 1.0, so the recorded values are 0.0..39.0 and the
+    # mean is 19.5 — pinned as a number, not merely "not None", because the
+    # baseline column's own value is the quantity the two mutations below
+    # would otherwise let a wrong delta collide with unnoticed.
     column = aggregated["pred"]
     assert column["basis"] == "units"
     assert column["method"] == "t_over_units"
-    assert column["ci95"] is not None
+    assert column["value"] == pytest.approx(19.5)
+    assert column["ci95"] == pytest.approx((15.761212085024908, 23.23878791497509))
     assert "resample_draws" not in column
     # A derived metric: resampled whether or not `resample` is declared, at the
     # documented default of 2000 draws, and never carrying an effect size.
+    # `mean_pred` is `mean(pred)` under the monkeypatched `aggregate`, so its
+    # baseline value is the same 19.5 the column reports.
     derived = aggregated["mean_pred"]
     assert derived["basis"] == "units"
     assert derived["method"] == "percentile_over_units"
     assert derived["resample_draws"] == 2000
+    assert derived["value"] == pytest.approx(19.5)
     assert derived["cohens_d"] is None
-    assert derived["ci95"] is not None
+    assert derived["ci95"] == pytest.approx((16.025, 23.025))
     # A column contrast: Student's t on the per-unit differences, with Cohen's dz.
+    # `spearman`'s scale is 3.0 against `pearson`'s 1.0, chosen so the paired
+    # delta (39.0 = 19.5 * (3.0 - 1.0)) is a DIFFERENT number from the
+    # baseline column's own value (19.5) above — at a 2.0/1.0 ratio the two
+    # numbers coincide, and a delta computation that dropped the subtraction
+    # entirely (reporting the baseline side's raw mean as "delta") would read
+    # 19.5 and pass unnoticed. Pinning the actual number closes that gap.
     col_contrast = _named_contrast(run, "method=spearman", "pred")
     assert col_contrast is not None
     assert col_contrast["method"] == "paired_t_over_units"
+    assert col_contrast["delta"] == pytest.approx(39.0)
+    assert col_contrast["ci95"] == pytest.approx((31.522424170049817, 46.47757582995018))
     assert col_contrast["cohens_d"] is not None
     assert "resample_draws" not in col_contrast
-    # A derived contrast: the joint percentile, and no effect size.
+    # A derived contrast: the joint percentile, and no effect size. Its `ci95`
+    # is pinned to the exact resampled bounds, not merely "not None" — a
+    # resample seed off by one moves this interval (`[16.025, 23.025]` on the
+    # column side moves to `[15.825, 22.925]` under a `seed + 1` mutation
+    # against the derived metric above) while every other field here is
+    # unchanged, so only a numeric `ci95` assertion catches it.
     derived_contrast = _named_contrast(run, "method=spearman", "mean_pred")
     assert derived_contrast is not None
     assert derived_contrast["method"] == "paired_percentile_over_units"
+    assert derived_contrast["delta"] == pytest.approx(39.0)
+    assert derived_contrast["ci95"] == pytest.approx((32.050000000000004, 46.050000000000004))
     assert derived_contrast["cohens_d"] is None
     # The correction family, which a replaced `statistics` block would move:
     # two metrics over one comparison is a family of 2, and holm's rank-1 level
@@ -6750,17 +6792,18 @@ def _assert_undeclared_resample_shape(run: dict[str, Any]) -> None:
     assert col_contrast["family"] == {"comparisons": 1, "metrics": 2}
     assert col_contrast["family_size"] == 2
     assert col_contrast["correction"] == "holm"
-    assert col_contrast["correction_level"] in (
-        pytest.approx(0.05 / 2), pytest.approx(0.05 / 1)
-    )
     # Holm ranks on the point estimate over HALF THE RAW ci95 WIDTH, never on a
-    # p-value — the family often carries none. Both members' levels come from
-    # that ranking, so the two distinct levels must both be present exactly once.
-    levels = sorted(
-        m["correction_level"]
-        for m in (col_contrast, derived_contrast)
-    )
-    assert levels == [pytest.approx(0.025), pytest.approx(0.05)]
+    # p-value — the family often carries none. Both deltas are 39.0, but the
+    # derived contrast's 2000-draw percentile interval is narrower than the
+    # column contrast's t-interval over 40 paired diffs (half-widths 7.0 vs.
+    # ~7.478), so the derived contrast has the stronger evidence ratio, ranks
+    # first, and is corrected by ALPHA/2; the column contrast ranks second, at
+    # ALPHA/1 — i.e. uncorrected. Pinned per member, not merely as an unordered
+    # pair, because an unordered pin cannot see the two members' levels
+    # swapping — exactly what a ranking change from this slice's draw/strata
+    # work could do.
+    assert col_contrast["correction_level"] == pytest.approx(0.05)
+    assert derived_contrast["correction_level"] == pytest.approx(0.025)
 
 
 _PIN_SWEEP = {
