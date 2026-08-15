@@ -108,6 +108,14 @@ def is_local_template(cls: type[BaseTemplate]) -> bool:
     other builtin are never stamped, so they read `False` by default, and the
     stamp is set fresh on every `discover_local` call (new class objects each
     import), so nothing carries over between repos in one process.
+
+    The boundary that predicate draws: a `BaseTemplate` subclass **defined**
+    under `src/**` and merely registered from a `templates/*.py` reads
+    non-local, so `init` writes core's `template_version` for it and
+    `_check_versions` compares it — the same treatment an installed plugin's
+    template gets. Stated as what the predicate does, not as the right answer
+    for that class; it fails closed, which is the direction the two earlier
+    fail-opens make the safe one.
     """
     return bool(getattr(cls, _LOCAL_MARKER, False))
 
@@ -119,9 +127,14 @@ def _import_file(
     and return what it registered.
 
     `templates_dir` goes on the *end* of `sys.path` so a file may import a
-    sibling helper, without that directory shadowing a stdlib or site-packages
-    name for the duration, and `sys.path` is snapshotted and put back whole —
-    the same shape as the `sys.modules` snapshot, and for the same reason.
+    sibling helper **at import time**, without that directory shadowing a
+    stdlib or site-packages name for the duration, and `sys.path` is
+    snapshotted and put back whole — the same shape as the `sys.modules`
+    snapshot, and for the same reason. Only at import time: the restore runs
+    before any method of the class this file registered is ever called, so a
+    helper imported from inside `aggregate` rather than at module scope is not
+    on the path when `aggregate` runs, and raises `ModuleNotFoundError` there
+    with no diagnostic of core's around it.
     Neither an index captured before `exec_module` nor a `remove` of the string
     survives a template that mutates `sys.path` on its own top level, whether
     itself or through a library it imports: one deletes an unrelated entry and
