@@ -10775,3 +10775,98 @@ def test_the_assignment_checks_are_total_over_malformed_declarations(doc, units)
     c = Collector()
     _check_assign(doc, units, None, c)
     assert all(f.code.startswith("E-DATA-") for f in c.findings)
+
+
+def _resample_family_config(write_config, *, n, correction, levels):
+    return write_config(
+        {
+            "data.units": {"from": "index.csv", "key": "patient_id"},
+            "sweep": {
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {"analysis.method": levels},
+            },
+            "statistics": {"correction": correction,
+                           "resample": {"method": "bootstrap", "n": n}},
+        }
+    )
+
+
+def test_a_resample_n_too_small_for_the_comparison_family_warns(write_config):
+    """Three comparisons put Holm's tightest level at ALPHA/3, whose interval
+    needs `min_honest_draws(1 - 0.05/3)` = 240 draws. `n: 200` clears the 80-draw
+    floor and still cannot support the corrected interval, which is the whole
+    gap this warning covers.
+
+    The metric count is deliberately NOT in the bound: `correction.family_shape`
+    derives it from `Member`s built after the run out of `io.record` keys and
+    `aggregate`'s return, neither of which the config declares, and core never
+    inspects the body of user Python. So this is a LOWER bound — always true when
+    it fires."""
+    found = codes(
+        _resample_family_config(
+            write_config, n=200, correction="holm", levels=["spearman", "kendall", "theil"]
+        )
+    )
+    assert "W-STATS-RESAMPLE-FAMILY" in found
+    assert "E-STATS-RESAMPLE-N" not in found  # 200 is above the 80 floor
+
+
+def test_the_family_bound_is_silent_when_n_clears_it(write_config):
+    """The positive companion to the test above, and the one that makes the
+    threshold real rather than a warning that always fires: the same three
+    comparisons with `n: 240` — exactly `min_honest_draws(1 - 0.05/3)` — are
+    silent. 239 and 240 is the boundary pair."""
+    assert "W-STATS-RESAMPLE-FAMILY" in codes(
+        _resample_family_config(
+            write_config, n=239, correction="holm", levels=["spearman", "kendall", "theil"]
+        )
+    )
+    assert "W-STATS-RESAMPLE-FAMILY" not in codes(
+        _resample_family_config(
+            write_config, n=240, correction="holm", levels=["spearman", "kendall", "theil"]
+        )
+    )
+
+
+def test_the_family_bound_scales_with_the_comparison_count(write_config):
+    """One comparison needs 80 draws and three need 240, so an `n: 100` that is
+    fine under one is not under three. A bound that read a constant rather than
+    the resolved family passes one of these and fails the other."""
+    assert "W-STATS-RESAMPLE-FAMILY" not in codes(
+        _resample_family_config(write_config, n=100, correction="holm", levels=["spearman"])
+    )
+    assert "W-STATS-RESAMPLE-FAMILY" in codes(
+        _resample_family_config(
+            write_config, n=100, correction="holm", levels=["spearman", "kendall", "theil"]
+        )
+    )
+
+
+@pytest.mark.parametrize("correction", ["none", "fdr_bh"])
+def test_the_family_bound_is_not_reported_where_no_level_exists(write_config, correction):
+    """`fdr_bh` implies no per-comparison level (`correction._level_for` returns
+    `None`) and `none` corrects nothing, so under either `ci95_corrected` is null
+    whatever `n` is and this warning would be a false positive."""
+    assert "W-STATS-RESAMPLE-FAMILY" not in codes(
+        _resample_family_config(
+            write_config, n=100, correction=correction,
+            levels=["spearman", "kendall", "theil"],
+        )
+    )
+
+
+def test_the_family_bound_applies_when_correction_is_unset(write_config):
+    """`cli` reads `(statistics.correction) or "holm"`, so an unset correction is
+    holm and its family is corrected. A check gated on the key being present
+    would leave every generated-but-edited config unwarned."""
+    path = write_config(
+        {
+            "data.units": {"from": "index.csv", "key": "patient_id"},
+            "sweep": {
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {"analysis.method": ["spearman", "kendall", "theil"]},
+            },
+            "statistics": {"resample": {"method": "bootstrap", "n": 100}},
+        }
+    )
+    assert "W-STATS-RESAMPLE-FAMILY" in codes(path)

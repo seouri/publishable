@@ -10,6 +10,7 @@ import yaml
 
 from publishable.base_experiment import load_experiment
 from publishable.contrasts import differing_axes, resolve_contrasts, units_matching
+from publishable.correction import ALPHA
 from publishable.diagnostics import Collector
 from publishable.envelope import check_envelope
 from publishable.errors import ContractError
@@ -5091,6 +5092,57 @@ def _check_resample(doc: dict[str, Any], roster: UnitList | None, c: Collector) 
                 f"per unit when the draw is taken, so it has to be one. "
                 f"`data.units.attributes` declares {', '.join(sorted(declared)) or 'none'}",
             )
+
+    # The comparisons-only lower bound. Holm's tightest level is `ALPHA / m` at
+    # rank 1, and a corrected interval is read off the SAME pool the raw one was
+    # (`stats.interval_at`, which `correction` calls), so a pool below `min_honest_draws(1 - level)`
+    # yields `ci95_corrected: null` with only `W-STATS-CORRECTED-THIN` at run
+    # time to say why. `m` is `comparisons × metrics` and the metric count is
+    # unknowable here BY DESIGN — `correction.family_shape` derives it from
+    # `Member`s built after the run, out of `io.record` keys and `aggregate`'s
+    # return, and core never inspects the body of user Python. So this bounds
+    # against `comparisons` alone: always true when it fires, silent when it
+    # might not be. The residue — a config with many metrics that still nulls
+    # every corrected bound — is filed in `spec-defects.md` as a run-time
+    # disclosure that already exists, not a check to build.
+    #
+    # `expand(doc)` re-derived behind the same guard `_check_sweep`,
+    # `_check_contrasts` and `_check_hypotheses` each use, rather than hoisted
+    # into `validate_config` the way `fold_basis` is: that hoist exists because
+    # two checks BOUND declarations against one number and must not disagree,
+    # where this only sets a warning threshold.
+    correction_method = statistics.get("correction") or "holm"
+    # `fdr_bh` implies no per-comparison level at all and `none` corrects
+    # nothing, so under either `ci95_corrected` is null whatever `n` is and this
+    # would be a false positive. Unset is `holm`, the same default `cli` applies.
+    if correction_method not in ("holm", "bonferroni"):
+        return
+    if not isinstance(n, int) or isinstance(n, bool) or n < floor:
+        return  # already refused above, or defaulted; nothing to bound
+    try:
+        conditions = expand(doc)
+    except Exception:
+        conditions = []
+    try:
+        comparisons = len(resolve_contrasts(doc, conditions))
+    except (TypeError, KeyError, AttributeError, ValueError):
+        comparisons = 0
+    if comparisons < 1:
+        return
+    needed = min_honest_draws(1.0 - ALPHA / comparisons)
+    if n < needed:
+        plural = "" if comparisons == 1 else "s"
+        c.warn(
+            "W-STATS-RESAMPLE-FAMILY",
+            "statistics.resample.n",
+            f"is {n}, and this design resolves to {comparisons} comparison{plural}, so "
+            f"`{correction_method}` puts the tightest corrected level at "
+            f"{ALPHA / comparisons:.5f} — an interval at that level needs at least "
+            f"{needed} draws, so `ci95_corrected` would be null rather than reported "
+            "too narrow. This is a lower bound: the family is comparisons × metrics "
+            "and the metric count is not knowable before the run, so the real "
+            "requirement is at least this",
+        )
 
 
 def _check_report_by(doc: dict[str, Any], c: Collector, roster: UnitList | None) -> None:
