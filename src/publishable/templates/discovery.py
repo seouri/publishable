@@ -281,7 +281,7 @@ def discover_local(repo_root: Path) -> dict[str, LocalTemplate]:
     # discarding, and something is there to inherit: `cli` imports the
     # experiment package before `validate_config` runs, so a module-scope
     # `@register_template` anywhere under `src/**` queues an entry with no
-    # `templates/` in sight, and it would be left for whatever drains next.
+    # `templates/` in sight.
     drain_pending()  # discard anything queued before this call — not ours to return
     templates_dir = repo_root / "templates"
     if not templates_dir.is_dir():

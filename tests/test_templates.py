@@ -510,8 +510,7 @@ def test_a_repo_with_no_templates_directory_still_discards_a_stale_registration(
     check must not be able to skip that promise. A repo with no `templates/`
     is reachable with something queued — `cli` imports the experiment package
     before `validate_config` runs, so a module-scope `@register_template`
-    under `src/**` queues an entry with no `templates/` in sight — and the
-    entry would then be left for whatever drains next.
+    under `src/**` queues an entry with no `templates/` in sight.
 
     The buffer *is* the promise here, so it is what is asserted, not a proxy:
     no return value can carry it, the early return's mapping being empty
