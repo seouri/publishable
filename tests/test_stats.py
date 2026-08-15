@@ -2213,6 +2213,29 @@ def test_two_clusters_still_report_a_percentile():
     assert got.high > got.low
 
 
+def test_two_content_identical_clusters_refuse_a_zero_width_interval():
+    """`groups < 2` is a COUNT floor and answers a different question from
+    whether the draw can ever vary: two clusters both holding the single value
+    0.5 pass that floor (`G == 2`) but every achievable replicate pools some
+    multiset of two identical numbers, so the mean is 0.5 on every draw and the
+    interval would be `Interval(0.5, 0.5)` — the same "a zero-width 95%
+    interval is not honest" shape `percentile_over_units`'s own strata branch
+    already refuses for content-identical strata (`reference.md` § Statistical
+    reporting). The row-level sibling's check is content-based, not
+    count-based, and this construction now asks the same question one level
+    up, over clusters rather than over values."""
+    values = [0.5, 0.5, 0.5, 0.5]
+    keys = ["a1", "a2", "b1", "b2"]
+    membership = {"a1": "A", "a2": "A", "b1": "B", "b2": "B"}
+    assert (
+        percentile_over_units_clustered(values, keys, membership, seed=1, draws=2000)
+        is None
+    )
+    # Positive companion: `test_two_clusters_still_report_a_percentile` above is
+    # the same `G == 2` shape with clusters that differ in content, and it must
+    # keep reporting — this is a content check, not a second count floor.
+
+
 @pytest.mark.parametrize("values", [[], [1.0]])
 def test_the_clustered_percentile_needs_two_values(values):
     """`percentile_over_units`' own floor, kept in front of the cluster one so the
@@ -2392,40 +2415,99 @@ def test_a_clustered_stratified_draw_takes_clusters_within_strata():
     assert stratified.method == "percentile_over_units_clustered"
 
 
-class _CountingRandom(random.Random):
-    """Wraps `random.Random` to count `randrange` calls, catching a mutation the
-    width-ratio test above cannot. Substituting a constant 1 for `len(group)` in
-    the draw loop still narrows the interval on this fixture — each stratum
-    still contributes one cluster from its own band, and `_clustered_banded`'s
-    extremes are single-cluster values that a one-cluster-per-stratum draw
-    reaches exactly as surely as a two-cluster one, since pooling several
-    picks of the SAME extreme cluster reproduces that cluster's own mean. No
-    interval-shaped assertion on this fixture tells the two apart; the number
-    of clusters actually drawn does."""
-
-    calls = 0
-
-    def randrange(self, *args: object, **kwargs: object) -> int:
-        type(self).calls += 1
-        return super().randrange(*args, **kwargs)  # type: ignore[arg-type]
-
-
-def test_a_clustered_stratified_draw_spends_one_pick_per_cluster_the_stratum_holds(
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Structural pin for the composition rule: each of the 2000 replicates must
-    draw exactly as many clusters as the strata hold IN TOTAL — 2 (`low`) + 2
-    (`mid`) + 2 (`high`) = 6 here, the same total `G` the unstratified draw over
-    this same roster uses — not a smaller constant such as one per stratum.
-    `_CountingRandom`'s docstring says why an interval-shaped assertion cannot
-    tell that mutation apart from the correct draw on this fixture."""
-    monkeypatch.setattr("publishable.stats.random.Random", _CountingRandom)
+def test_a_clustered_stratified_draw_weights_the_pooled_units_not_the_pick():
+    """`weight_by`, `cluster_by` and `stratify_by` are three independently
+    declarable fields, so a config naming all three is an ordinary shape, not
+    an edge case — § Weighted samples' composition (the draw moves to
+    clusters, the weights stay in the estimate) has to survive stratification
+    too. `c5` (the lone `high` cluster) carries weight 9 here; pinned
+    digit-for-digit at seed=13, both endpoints move up from the unweighted
+    stratified interval because that heavy cluster now drags every replicate
+    that draws it further than an equal weight would."""
     values, keys, membership, strata = _clustered_banded()
-    _CountingRandom.calls = 0
-    percentile_over_units_clustered(
+    weights = [9.0 if membership[k] == "c5" else 1.0 for k in keys]
+    weighted = percentile_over_units_clustered(
+        values, keys, membership, seed=13, draws=2000, strata=strata, weights=weights
+    )
+    unweighted = percentile_over_units_clustered(
         values, keys, membership, seed=13, draws=2000, strata=strata
     )
-    assert _CountingRandom.calls == 2000 * 6
+    assert weighted is not None and unweighted is not None
+    assert weighted.low == 26.54
+    assert weighted.high == 64.2448275862069
+    assert weighted.low > unweighted.low
+    assert weighted.high > unweighted.high
+
+
+class _RecordingRandom(random.Random):
+    """Wraps `random.Random` to record the `n` argument of every `randrange`
+    call, in order — catching two mutations an interval-shaped assertion
+    cannot. First: substituting a constant 1 for `len(group)` in the draw loop
+    still narrows the interval on `_clustered_banded` (three strata of two
+    clusters each), because that fixture's extremes are single-cluster values
+    a one-cluster-per-stratum draw reaches exactly as surely as a two-cluster
+    one — pooling several picks of the SAME extreme cluster reproduces that
+    cluster's own mean. Second, and the reason a bare call COUNT is not
+    enough either: a mutation that makes every stratum draw the FIRST
+    stratum's cluster count is invisible to a total on a fixture whose strata
+    all hold the same count, and even an unevenly-sized fixture can still sum
+    to the right total under some reordering. Recording each call's `n` in
+    sequence, over a fixture whose three strata hold DIFFERENT counts (1, 2,
+    3), pins the exact per-stratum composition rather than a total that
+    several wrong constructions could also produce."""
+
+    calls: list[int] = []
+
+    def randrange(self, n: int, *args: object, **kwargs: object) -> int:
+        type(self).calls.append(n)
+        return super().randrange(n, *args, **kwargs)  # type: ignore[arg-type]
+
+
+def _clustered_uneven_stratum_counts() -> tuple[
+    list[float], list[str], dict[str, str], list[str]
+]:
+    """Three strata holding a DIFFERENT number of clusters each — 1, 2, 3 — so a
+    mutation that draws every stratum's own count correctly is distinguishable
+    from one that draws some OTHER stratum's count, or a constant, even when a
+    coincidental total would otherwise hide it (`_clustered_banded`'s 2/2/2
+    cannot: "draw the first stratum's count" sums to 6 either way there)."""
+    values: list[float] = []
+    keys: list[str] = []
+    membership: dict[str, str] = {}
+    strata: list[str] = []
+    plan = [
+        ("c0", "low", 4, 0.0),
+        ("c1", "mid", 3, 10.0), ("c2", "mid", 2, 10.5),
+        ("c3", "high", 2, 100.0), ("c4", "high", 1, 100.5), ("c5", "high", 1, 100.75),
+    ]
+    for cluster, stratum, size, base in plan:
+        for i in range(size):
+            key = f"{cluster}_u{i}"
+            values.append(base + i / 100.0)
+            keys.append(key)
+            membership[key] = cluster
+            strata.append(stratum)
+    return values, keys, membership, strata
+
+
+def test_a_clustered_stratified_draw_gives_each_stratum_exactly_its_own_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The composition rule pinned by SEQUENCE, not by total: `low` holds 1
+    cluster, `mid` holds 2, `high` holds 3, and the value bands keep
+    `stratum_pools` sorted in that order, so one replicate's calls to
+    `randrange` must read `n = 1, 2, 2, 3, 3, 3` in that exact order — one
+    stratum contributing its own count, not the first stratum's count applied
+    everywhere (which would read `1, 1, 1, 1, 1, 1` here and still total the
+    wrong number honestly, rather than hiding behind a coincidental match)."""
+    monkeypatch.setattr("publishable.stats.random.Random", _RecordingRandom)
+    values, keys, membership, strata = _clustered_uneven_stratum_counts()
+    _RecordingRandom.calls = []
+    percentile_over_units_clustered(
+        values, keys, membership, seed=1, draws=80, strata=strata
+    )
+    assert _RecordingRandom.calls[:6] == [1, 2, 2, 3, 3, 3]
+    assert _RecordingRandom.calls == [1, 2, 2, 3, 3, 3] * 80
 
 
 def test_a_clustered_stratified_draw_refuses_a_stratum_that_varies_within_a_cluster():
@@ -2447,6 +2529,29 @@ def test_a_clustered_stratified_draw_refuses_a_stratum_that_varies_within_a_clus
     assert percentile_over_units_clustered(
         values, keys, membership, seed=13, draws=2000, strata=clean
     ) is not None
+
+
+def test_a_clustered_stratified_draws_constancy_check_agrees_with_validates():
+    """`validate` reads a cluster's stratum values through
+    `units.stratum_varies_within_cluster`, which renders each as `"no value"` for
+    `None` and `str(value)` otherwise before comparing — so a column read back as
+    `1` for one unit and `"1"` for another (a real possibility across a resolver
+    and a table-sourced attribute) is ONE value to that check. `stats.py` cannot
+    import `units.py` to share that predicate, so it re-implements the identical
+    normalization — this is the case that would disagree if it compared raw
+    values instead: `c0`'s two units carry `1` and `"1"`, which raw `!=` calls a
+    variation and `str()`-equality does not."""
+    values = [0.0, 1.0, 2.0, 3.0, 10.0, 11.0, 12.0, 13.0]
+    keys = ["c0_u0", "c0_u1", "c1_u0", "c1_u1", "c2_u0", "c2_u1", "c3_u0", "c3_u1"]
+    membership = {
+        "c0_u0": "c0", "c0_u1": "c0", "c1_u0": "c1", "c1_u1": "c1",
+        "c2_u0": "c2", "c2_u1": "c2", "c3_u0": "c3", "c3_u1": "c3",
+    }
+    strata = [1, "1", "1", "1", "a", "a", "a", "a"]
+    got = percentile_over_units_clustered(
+        values, keys, membership, seed=1, draws=2000, strata=strata
+    )
+    assert got is not None
 
 
 def test_a_clustered_stratified_draw_refuses_a_zero_width_interval_too():
@@ -2476,6 +2581,36 @@ def test_a_clustered_stratified_draw_refuses_a_zero_width_interval_too():
     two_in_one_stratum = ["a", "a", "a", "a", "b", "b"]
     assert percentile_over_units_clustered(
         values, keys, membership, seed=1, draws=2000, strata=two_in_one_stratum
+    ) is not None
+
+
+def test_a_clustered_stratified_draw_refuses_content_identical_strata_too():
+    """The COUNT check above (each stratum owning fewer than two clusters) does
+    not cover every degenerate shape: two strata, each holding TWO clusters
+    whose content is identical within the stratum, pass that count check but
+    still cannot vary — drawing either of a stratum's two identical clusters
+    with replacement reproduces the same pooled contribution every time, so
+    the interval would be `Interval(0.5, 5.5)` on every draw, not honest as a
+    95% interval. This is the content-based check one level up from
+    `percentile_over_units`'s own ("every stratum's own (value, weight) pairs
+    are all identical"), and it must not regress to the count-only form."""
+    values = [0.5, 0.5, 0.5, 0.5, 5.5, 5.5, 5.5, 5.5]
+    keys = ["a1", "a2", "b1", "b2", "c1", "c2", "d1", "d2"]
+    membership = {
+        "a1": "A", "a2": "A", "b1": "B", "b2": "B",
+        "c1": "C", "c2": "C", "d1": "D", "d2": "D",
+    }
+    identical_within_stratum = ["x", "x", "x", "x", "y", "y", "y", "y"]
+    assert percentile_over_units_clustered(
+        values, keys, membership, seed=1, draws=2000, strata=identical_within_stratum
+    ) is None
+    # Positive companion: giving stratum `y`'s two clusters different content
+    # restores real variance, so this cannot pass by refusing every
+    # two-cluster-per-stratum shape regardless of content.
+    values_varying = [0.5, 0.5, 0.5, 0.5, 5.5, 5.5, 9.5, 9.5]
+    assert percentile_over_units_clustered(
+        values_varying, keys, membership, seed=1, draws=2000,
+        strata=identical_within_stratum,
     ) is not None
 
 

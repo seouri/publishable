@@ -728,15 +728,31 @@ def percentile_over_units_clustered(
     stratum values cannot be dealt to either, being indivisible, and is refused
     as `E-STATS-RESAMPLE-STRATIFY-VARIES` — `validate` reports the declaration
     form of the same fault from the roster, through
-    `units.stratum_varies_within_cluster`, and this is the run-time half of
-    that dual listing, the shape `E-DATA-WEIGHT-INVALID` already has: a public
-    function handed a stratum vector and a membership map directly cannot
-    silently pick one over the other. Each stratum then draws exactly as many
-    clusters, with replacement, as it holds — preserving each stratum's own
-    cluster count the way the unstratified draw preserves `G` — and, when every
-    stratum holds fewer than two clusters, no draw can differ from any other:
-    the same "a zero-width 95% interval is not honest" refusal `G < 2` and
-    every-stratum-identical both already give, so this returns `None` too.
+    `units.stratum_varies_within_cluster`. This is the run-time half of that
+    dual listing, but **not by sharing one authority the way
+    `E-DATA-WEIGHT-INVALID` does** — `stats.py` cannot import `units.py`, so
+    this re-implements the equality over plain sequences instead of calling
+    that function over a roster, and is normalized the identical way it is
+    ("no value" for `None`, `str()` otherwise) so the two independent checks
+    cannot disagree over a stratum read back as `1` in one place and `"1"` in
+    the other. Each stratum then draws exactly as many clusters, with
+    replacement, as it holds — preserving each stratum's own cluster count the
+    way the unstratified draw preserves `G`.
+
+    **The degenerate case is content, not count.** When every stratum's own
+    clusters are pairwise identical (a singleton stratum trivially so),
+    drawing any of a stratum's clusters with replacement reproduces the same
+    pooled contribution on every replicate, so if this holds for every stratum
+    the whole draw is invariant — the same "a zero-width 95% interval is not
+    honest" refusal `percentile_over_units`'s own strata branch already gives
+    for content-identical values, one level up over clusters rather than over
+    values, and this returns `None` too. A COUNT floor alone (every stratum
+    holding fewer than two clusters) is not sufficient: two clusters per
+    stratum with identical content pass a count floor and are still
+    degenerate, which is why this checks content and applies whether or not
+    `strata` was given — the unstratified path had the identical hole at
+    `G == 2`, since `groups < 2` alone answers a different question from
+    whether the draw can vary.
     """
     if len(values) < 2:
         return None
@@ -760,25 +776,32 @@ def percentile_over_units_clustered(
     # independent draw is, `cluster_by` says the draw IS a cluster, and a cluster
     # carrying two stratum values cannot be dealt to either, being indivisible.
     # § Clustered units already imposes exactly this on `fold`, `holdout` and
-    # `assign`; `validate` reports it from the declaration through
-    # `units.stratum_varies_within_cluster`, and this is the run-time half of the
-    # same dual listing `E-DATA-WEIGHT-INVALID` has — a public function handed
-    # both vectors directly cannot silently pick one of them.
-    cluster_stratum: dict[str, Any] = {}
+    # `assign`; `validate` reports the declaration form of the identical fault
+    # through `units.stratum_varies_within_cluster`, and this is the run-time
+    # half — but, unlike `E-DATA-WEIGHT-INVALID`'s single `usable_weight`
+    # authority shared by both call sites, `stats.py` cannot import `units.py`
+    # and so cannot call that function; this re-implements its equality over
+    # plain sequences instead of a roster. Normalized the SAME WAY that
+    # function is — "no value" for `None`, `str()` otherwise — so the two
+    # independent checks cannot disagree over a stratum read as `1` in one
+    # place and `"1"` in the other, which raw `!=` would have called a
+    # violation.
+    cluster_stratum: dict[str, str] = {}
     if strata is not None:
         for key, stratum in zip(keys, strata, strict=True):
             cluster = membership[key]
-            if cluster in cluster_stratum and cluster_stratum[cluster] != stratum:
+            rendered = "no value" if stratum is None else str(stratum)
+            if cluster in cluster_stratum and cluster_stratum[cluster] != rendered:
                 raise ContractError(
                     f"cluster {cluster!r} carries stratum values "
-                    f"{cluster_stratum[cluster]!r} and {stratum!r}. A resample draws "
+                    f"{cluster_stratum[cluster]!r} and {rendered!r}. A resample draws "
                     "whole clusters, so a cluster cannot be drawn within one stratum "
                     "while carrying two; stratify on an attribute that is constant "
                     "within a cluster, or drop `cluster_by` if the units really are "
                     "independent",
                     code="E-STATS-RESAMPLE-STRATIFY-VARIES",
                 )
-            cluster_stratum[cluster] = stratum
+            cluster_stratum[cluster] = rendered
     ordered = sorted(sorted(pool) for pool in pools.values())
     rng = random.Random(seed)
     if strata is None:
@@ -787,21 +810,28 @@ def percentile_over_units_clustered(
         # Cluster pools grouped by the stratum their cluster carries, then each
         # group ordered by its own sorted contents — the same label-independence
         # the unstratified `ordered` gets, one level up.
-        by_stratum: dict[Any, list[list[tuple[float, float]]]] = {}
+        by_stratum: dict[str, list[list[tuple[float, float]]]] = {}
         for cluster, pool in pools.items():
             by_stratum.setdefault(cluster_stratum[cluster], []).append(sorted(pool))
         stratum_pools = [sorted(group) for group in by_stratum.values()]
         stratum_pools.sort()
-        # If every stratum holds fewer than two clusters, no draw can come out
-        # different from any other: each stratum always redraws its one
-        # cluster, so the resampled mean is the same value on every replicate.
-        # That is the same degenerate shape `groups < 2` refuses above, one
-        # level down — a stratum boundary can only ever narrow the pool a
-        # cluster is drawn from, never widen it, so a singleton-everywhere
-        # stratification is strictly more degenerate than the unstratified
-        # draw over the same clusters, which already passed `groups >= 2`.
-        if all(len(group) < 2 for group in stratum_pools):
-            return None
+    # Content-based, not count-based, and checked whether or not `strata` was
+    # given: if every stratum's own clusters are pairwise IDENTICAL in content
+    # (a stratum holding a single cluster is trivially so), drawing any of them
+    # with replacement reproduces the same pooled contribution every time, so
+    # no draw can ever come out different from any other — whatever count of
+    # clusters that stratum holds. `percentile_over_units`'s own strata branch
+    # refuses the analogous shape ("every stratum's own (value, weight) pairs
+    # are all identical") for the identical reason, `reference.md` §
+    # Statistical reporting: "a zero-width 95% interval is not honest" — this
+    # is that same check one level up, over CLUSTERS rather than over values.
+    # With no strata this is one group holding every cluster, so two
+    # content-identical clusters at `G == 2` are refused here too, which
+    # `groups < 2` alone does not catch — a count floor and a content check
+    # answer different questions, and this construction had only asked the
+    # first.
+    if all(len({tuple(cluster) for cluster in group}) <= 1 for group in stratum_pools):
+        return None
     means: list[float] = []
     for _ in range(draws):
         # Each stratum contributes exactly as many CLUSTERS as it holds — the
