@@ -10778,12 +10778,20 @@ def test_the_assignment_checks_are_total_over_malformed_declarations(doc, units)
 
 
 def _resample_family_config(write_config, *, n, correction, levels):
+    """`levels` sweeps `analysis.min_samples` rather than `analysis.method`:
+    `GenericTemplate.parameter_spec` closes `method` to exactly
+    `{pearson, spearman, kendall}`, three values total, so a 3-comparison
+    fixture built from it needs a value outside the enum and reports a
+    spurious `E-PARAM-VALUE` alongside the finding under test.
+    `min_samples` (`Param(int, default=30, ge=2)`) takes any integer at least
+    2, so `levels` can be sized to whatever comparison count a test needs
+    without noise the assertions never look at."""
     return write_config(
         {
             "data.units": {"from": "index.csv", "key": "patient_id"},
             "sweep": {
-                "baseline": {"analysis.method": "pearson"},
-                "grid": {"analysis.method": levels},
+                "baseline": {"analysis.min_samples": 30},
+                "grid": {"analysis.min_samples": levels},
             },
             "statistics": {"correction": correction,
                            "resample": {"method": "bootstrap", "n": n}},
@@ -10804,7 +10812,7 @@ def test_a_resample_n_too_small_for_the_comparison_family_warns(write_config):
     it fires."""
     found = codes(
         _resample_family_config(
-            write_config, n=200, correction="holm", levels=["spearman", "kendall", "theil"]
+            write_config, n=200, correction="holm", levels=[31, 32, 33]
         )
     )
     assert "W-STATS-RESAMPLE-FAMILY" in found
@@ -10818,12 +10826,12 @@ def test_the_family_bound_is_silent_when_n_clears_it(write_config):
     silent. 239 and 240 is the boundary pair."""
     assert "W-STATS-RESAMPLE-FAMILY" in codes(
         _resample_family_config(
-            write_config, n=239, correction="holm", levels=["spearman", "kendall", "theil"]
+            write_config, n=239, correction="holm", levels=[31, 32, 33]
         )
     )
     assert "W-STATS-RESAMPLE-FAMILY" not in codes(
         _resample_family_config(
-            write_config, n=240, correction="holm", levels=["spearman", "kendall", "theil"]
+            write_config, n=240, correction="holm", levels=[31, 32, 33]
         )
     )
 
@@ -10833,11 +10841,11 @@ def test_the_family_bound_scales_with_the_comparison_count(write_config):
     fine under one is not under three. A bound that read a constant rather than
     the resolved family passes one of these and fails the other."""
     assert "W-STATS-RESAMPLE-FAMILY" not in codes(
-        _resample_family_config(write_config, n=100, correction="holm", levels=["spearman"])
+        _resample_family_config(write_config, n=100, correction="holm", levels=[31])
     )
     assert "W-STATS-RESAMPLE-FAMILY" in codes(
         _resample_family_config(
-            write_config, n=100, correction="holm", levels=["spearman", "kendall", "theil"]
+            write_config, n=100, correction="holm", levels=[31, 32, 33]
         )
     )
 
@@ -10850,7 +10858,7 @@ def test_the_family_bound_is_not_reported_where_no_level_exists(write_config, co
     assert "W-STATS-RESAMPLE-FAMILY" not in codes(
         _resample_family_config(
             write_config, n=100, correction=correction,
-            levels=["spearman", "kendall", "theil"],
+            levels=[31, 32, 33],
         )
     )
 
@@ -10863,10 +10871,62 @@ def test_the_family_bound_applies_when_correction_is_unset(write_config):
         {
             "data.units": {"from": "index.csv", "key": "patient_id"},
             "sweep": {
-                "baseline": {"analysis.method": "pearson"},
-                "grid": {"analysis.method": ["spearman", "kendall", "theil"]},
+                "baseline": {"analysis.min_samples": 30},
+                "grid": {"analysis.min_samples": [31, 32, 33]},
             },
             "statistics": {"resample": {"method": "bootstrap", "n": 100}},
         }
     )
     assert "W-STATS-RESAMPLE-FAMILY" in codes(path)
+
+
+def test_the_family_bound_is_silent_once_n_is_already_refused(write_config):
+    """`n: 50` is below the 80-draw floor, so `E-STATS-RESAMPLE-N` already
+    covers it — this bound must not pile a second, family-shaped finding on a
+    value already reported broken. Three comparisons make the family bound's
+    own threshold (240) clearly exceed the floor (80), so a version of the
+    code that skipped straight to the family check without an `n < floor`
+    return would fire here too."""
+    found = codes(
+        _resample_family_config(write_config, n=50, correction="holm", levels=[31, 32, 33])
+    )
+    assert "E-STATS-RESAMPLE-N" in found
+    assert "W-STATS-RESAMPLE-FAMILY" not in found
+
+
+def test_the_family_bound_applies_to_an_unset_n_too(write_config):
+    """`n` absent from a declared `resample` block is not `E-CONFIG-TYPE`'s
+    finding — `resample.get("n")` returns `None`, a legal absence — and `cli`
+    passes the hardcoded `2000` in that case (`derived_metric_draws = 2000`),
+    so a large enough family still underprovisions the very default this
+    check would otherwise call "nothing to bound". 26 comparisons need 2080
+    draws, above the 2000 default; one comparison needs only 80, nowhere near
+    it — the second assertion is the control that shows the first isn't just
+    "always warns once n is unset"."""
+    many = codes(
+        write_config(
+            {
+                "data.units": {"from": "index.csv", "key": "patient_id"},
+                "sweep": {
+                    "baseline": {"analysis.min_samples": 30},
+                    "grid": {"analysis.min_samples": list(range(31, 57))},  # 26 levels
+                },
+                "statistics": {"resample": {"method": "bootstrap"}},
+            }
+        )
+    )
+    assert "W-STATS-RESAMPLE-FAMILY" in many
+
+    few = codes(
+        write_config(
+            {
+                "data.units": {"from": "index.csv", "key": "patient_id"},
+                "sweep": {
+                    "baseline": {"analysis.min_samples": 30},
+                    "grid": {"analysis.min_samples": [31]},
+                },
+                "statistics": {"resample": {"method": "bootstrap"}},
+            }
+        )
+    )
+    assert "W-STATS-RESAMPLE-FAMILY" not in few

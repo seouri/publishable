@@ -4987,8 +4987,8 @@ documented change rather than a silent one."""
 
 
 def _check_resample(doc: dict[str, Any], roster: UnitList | None, c: Collector) -> None:
-    """`statistics.resample`'s `method` enum, its `n` floor, and its
-    `stratify_by` names.
+    """`statistics.resample`'s `method` enum, its `n` floor, the comparison-family
+    lower bound on that same `n`, and its `stratify_by` names.
 
     `E-STATS-RESAMPLE-UNSUPPORTED` (`_check_unimplemented`) still refuses any
     declared `resample` wholesale in this build — resampling itself is not yet
@@ -5094,31 +5094,50 @@ def _check_resample(doc: dict[str, Any], roster: UnitList | None, c: Collector) 
             )
 
     # The comparisons-only lower bound. Holm's tightest level is `ALPHA / m` at
-    # rank 1, and a corrected interval is read off the SAME pool the raw one was
-    # (`stats.interval_at`, which `correction` calls), so a pool below `min_honest_draws(1 - level)`
-    # yields `ci95_corrected: null` with only `W-STATS-CORRECTED-THIN` at run
-    # time to say why. `m` is `comparisons × metrics` and the metric count is
-    # unknowable here BY DESIGN — `correction.family_shape` derives it from
-    # `Member`s built after the run, out of `io.record` keys and `aggregate`'s
-    # return, and core never inspects the body of user Python. So this bounds
-    # against `comparisons` alone: always true when it fires, silent when it
-    # might not be. The residue — a config with many metrics that still nulls
-    # every corrected bound — is filed in `spec-defects.md` as a run-time
-    # disclosure that already exists, not a check to build.
+    # rank 1, and a corrected interval is read off the same pool the raw one
+    # was — true of every pool-backed member today; a future construction that
+    # reads a different pool for the corrected number is not this check's to
+    # anticipate — (`stats.interval_at`, which `correction` calls), so a pool
+    # below `min_honest_draws(1 - level)` yields `ci95_corrected: null` with
+    # only `W-STATS-CORRECTED-THIN` at run time to say why. `m` is
+    # `comparisons × metrics` and the metric count is unknowable here BY
+    # DESIGN — `correction.family_shape` derives it from `Member`s built after
+    # the run, out of `io.record` keys and `aggregate`'s return, and core never
+    # inspects the body of user Python. So this bounds against `comparisons`
+    # alone: always true when it fires, silent when it might not be. The
+    # residue — a config with many metrics that still nulls every corrected
+    # bound, and the separate hypothesis family that has the same shape of gap
+    # — is filed in `spec-defects.md` as a run-time disclosure that already
+    # exists, not a check to build.
     #
-    # `expand(doc)` re-derived behind the same guard `_check_sweep`,
-    # `_check_contrasts` and `_check_hypotheses` each use, rather than hoisted
-    # into `validate_config` the way `fold_basis` is: that hoist exists because
-    # two checks BOUND declarations against one number and must not disagree,
-    # where this only sets a warning threshold.
+    # `expand(doc)` re-derived behind the same guard `_check_sweep` and
+    # `_check_contrasts` each use directly — `_check_hypotheses` is not a third
+    # precedent here; it goes through `_condition_labels`, which wraps its own
+    # `expand(doc)` in the same shape of guard but is a different call site —
+    # rather than hoisted into `validate_config` the way `fold_basis` is: that
+    # hoist exists because two checks BOUND declarations against one number and
+    # must not disagree, where this only sets a warning threshold.
     correction_method = statistics.get("correction") or "holm"
     # `fdr_bh` implies no per-comparison level at all and `none` corrects
     # nothing, so under either `ci95_corrected` is null whatever `n` is and this
     # would be a false positive. Unset is `holm`, the same default `cli` applies.
     if correction_method not in ("holm", "bonferroni"):
         return
-    if not isinstance(n, int) or isinstance(n, bool) or n < floor:
-        return  # already refused above, or defaulted; nothing to bound
+    # An absent `n` is not "nothing to bound": `cli.py`'s `derived_metric_draws
+    # = 2000` is the value actually used whenever `n` goes undeclared — the
+    # documented default (§ How a metric becomes a number) — so a large enough
+    # family still underprovisions it. Only a value already reported —
+    # wrong-typed (`E-CONFIG-TYPE`) or below the honest floor
+    # (`E-STATS-RESAMPLE-N`, checked above) — has nothing left for this bound
+    # to add.
+    if n is None:
+        effective_n = 2000
+    elif isinstance(n, int) and not isinstance(n, bool):
+        if n < floor:
+            return
+        effective_n = n
+    else:
+        return
     try:
         conditions = expand(doc)
     except Exception:
@@ -5130,12 +5149,13 @@ def _check_resample(doc: dict[str, Any], roster: UnitList | None, c: Collector) 
     if comparisons < 1:
         return
     needed = min_honest_draws(1.0 - ALPHA / comparisons)
-    if n < needed:
+    if effective_n < needed:
         plural = "" if comparisons == 1 else "s"
+        n_desc = f"is {n}" if n is not None else "is unset, so defaults to 2000,"
         c.warn(
             "W-STATS-RESAMPLE-FAMILY",
             "statistics.resample.n",
-            f"is {n}, and this design resolves to {comparisons} comparison{plural}, so "
+            f"{n_desc} and this design resolves to {comparisons} comparison{plural}, so "
             f"`{correction_method}` puts the tightest corrected level at "
             f"{ALPHA / comparisons:.5f} — an interval at that level needs at least "
             f"{needed} draws, so `ci95_corrected` would be null rather than reported "
