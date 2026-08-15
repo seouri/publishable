@@ -7399,3 +7399,138 @@ def test_no_resample_block_is_recorded_when_none_was_declared(tmp_path, capsys):
     # documented default, so the block really did run.
     assert aggregated["mean_pred"]["resample_draws"] == 2000
     assert aggregated["mean_pred"]["method"] == "percentile_over_units"
+
+
+
+
+def test_a_report_by_level_resamples_without_joining_the_correction_family(
+    tmp_path, capsys
+):
+    """`Member`s are built in one place, `_comparison_step_blocks`'s per-metric
+    loop, which excludes the `by` key the whole strata block lives under. That
+    property already holds — Task 15's review confirmed it live (level blocks
+    carry no `family`, `family_size`, or `correction` key, beside a level's
+    derived metric genuinely carrying `resample_draws: 2000` and a real
+    `ci95`). This test keeps it holding now that H4a has landed a declared
+    `resample`.
+
+    A real disagreement with this test's original brief, found and fixed here:
+    the brief expected a `report_by` level's *recorded column* (`pred`) to
+    carry `method: percentile_over_units` under a declared `resample`. It does
+    not — `cli.command_run`'s level call to `summarize_step`
+    (`src/publishable/cli.py`, the `report_by` block) never passes
+    `resample_columns`, so a level's own recorded-column interval stays
+    `t_over_units` regardless of what the run declares. This is not a live bug:
+    it is `docs/superpowers/spec-defects.md`'s "`percentile_of_derived` reported
+    a zero-width interval..." entry, Finding 2, deferred with a named owner
+    (H4 Statistics) as of 2026-08-15. So the positive companion here is the
+    level's own DERIVED metric (`mean_pred`), which — unlike the column —
+    resamples inside `report_by` unconditionally whenever a seed and a
+    callable exist, `resample_columns` or not; that is what actually executed
+    inside the code path this test is pinning.
+
+    The absence assertion has a positive companion IN THE SAME TEST: the level
+    genuinely produced a percentile interval, so the test cannot pass by
+    nothing having been stratified. And `family` is asserted to the exact shape
+    a strata-free run would have, so a level joining the family shows up as an
+    inflated metric count rather than as a silence."""
+    doc = run_a_project(
+        tmp_path, capsys=capsys, units=40, unit_attributes=["cohort"],
+        aggregate_returns="mean_pred",
+        _starter_step=_METHOD_VARYING_STEP,
+        sweep={"baseline": {"analysis.method": "pearson"},
+               "grid": {"analysis.method": ["spearman"]}},
+        statistics={"correction": "holm", "report_by": ["cohort"],
+                    "resample": {"method": "bootstrap", "n": 2000}},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    # Positive companion: the level exists and carries a real percentile
+    # interval over its own units, resampled by the same code path this test
+    # is pinning.
+    level = aggregated["by"]["cohort"]["a"]["mean_pred"]
+    assert level["method"] == "percentile_over_units"
+    assert level["ci95"] is not None
+    assert level["resample_draws"] == 2000
+    assert level["n"]["completed"] < aggregated["mean_pred"]["n"]["completed"]
+    # The absence: no `family`, `family_size`, or `correction` key at all on a
+    # level block — a `report_by` level never joins the correction family.
+    for level_name in ("a", "b"):
+        level_block = aggregated["by"]["cohort"][level_name]
+        assert "family" not in level_block
+        assert "family_size" not in level_block
+        assert "correction" not in level_block
+    # And the family a REAL contrast holds is exactly the strata-free shape:
+    # one comparison, two metrics (the recorded `pred` and the derived
+    # `mean_pred`) — `by` is not a metric and neither are its levels, so the
+    # family stays 1 x 2 rather than growing with the number of `cohort`
+    # levels the `by` block holds.
+    entry = _named_contrast(run, "method=spearman", "mean_pred")
+    assert entry is not None
+    assert entry["family"] == {"comparisons": 1, "metrics": 2}
+    assert entry["family_size"] == 2
+    # And there is no contrast entry for `by` at all.
+    for condition in run["results"]["conditions"]:
+        for step_block in condition.get("vs_baseline", {}).values():
+            assert "by" not in step_block
+
+
+_SUMMARY_ESTIMATE_STEP = '''\
+# generated, and runnable as-is
+from publishable import BaseStep, Estimate
+
+
+class Step(BaseStep):
+    scope = "summary"
+
+    def run(self, cfg, io):
+        return {{
+            "site_adjusted_delta": Estimate(
+                value=0.041, ci95=[0.012, 0.070], n=228, method="mixed_model"
+            ),
+            "converged": True,
+        }}
+'''
+
+
+def test_a_summary_estimate_is_not_recomputed_by_the_resample_pass(tmp_path, capsys):
+    """A `summary`-step `Estimate` is `reported: true`, outside the correction
+    family, and never recomputed — and H4a's column pass walks every metric
+    block, so this is a boundary the slice OWES a test for rather than one it
+    merely respects. Structural: an `Estimate` reaches `results.summary` through
+    `run_record.summary_values`, never through `summarize_step`
+    (`src/publishable/run_record.py`, `summary_values`) — `summarize_step`
+    (`src/publishable/stats.py`) is never called on a `summary`-scope step's
+    return at all, so there is no shared code for a resample pass to walk into.
+
+    The positive companion is in the same test: a recorded column in the same
+    run DID take a percentile interval, so this cannot pass by the resample
+    having done nothing at all."""
+    doc = run_a_project(
+        tmp_path, capsys=capsys, units=40,
+        extra_steps=["report"],
+        extra_step_source=_SUMMARY_ESTIMATE_STEP,
+        aggregate_returns="mean_pred",
+        statistics={"correction": "holm",
+                    "resample": {"method": "bootstrap", "n": 2000}},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    estimate = run["results"]["summary"]["step02_report"]["site_adjusted_delta"]
+    assert estimate == {
+        "value": 0.041,
+        "reported": True,
+        "ci95": [0.012, 0.070],
+        "n": 228,
+        "method": "mixed_model",
+    }
+    # Nothing the resample pass writes has been added to it.
+    assert "resample_draws" not in estimate
+    assert "resample" not in estimate
+    assert "basis" not in estimate
+    assert "correction" not in estimate
+    # The non-Estimate return is untouched too.
+    assert run["results"]["summary"]["step02_report"]["converged"] is True
+    # Positive companion: a column in the same run IS resampled.
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert aggregated["mean_pred"]["method"] == "percentile_over_units"
+    assert aggregated["mean_pred"]["resample"]["n"] == 2000
