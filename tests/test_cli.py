@@ -2986,6 +2986,7 @@ def test_a_comparison_reads_its_own_condition_not_condition_zero():
             0: Condition(index=0, label="baseline", is_baseline=True),
             2: Condition(index=2, label="method=kendall", values={"analysis.method": "kendall"}),
         },
+        resample_columns=False,
     )
     assert block["s"]["r"]["ci95"] is not None
     assert [(m.where, m.step, m.metric) for m in members] == [("cond:2", "s", "r")]
@@ -7151,3 +7152,148 @@ def test_a_declared_stratify_by_reaches_the_column_and_the_derived_interval_toge
     strat_column_width, strat_derived_width = widths(doc_strat)
     assert strat_column_width < plain_column_width
     assert strat_derived_width < plain_derived_width
+
+
+_RAGGED_COLUMN_STEP = '''\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        # Scaled by the swept axis for the reason `_CONDITION_SCALED_STEP` is:
+        # an identical column under both conditions makes every per-unit
+        # difference zero, and a zero-variance contrast asserts nothing.
+        scale = {{"pearson": 1.0, "spearman": 2.0, "kendall": 3.0}}[
+            cfg.parameters.analysis.method
+        ]
+        units = list(io.units)
+        for i, unit in enumerate(units):
+            values = {{"always": float(i) * scale}}
+            # A QUARTER of the roster does not carry `sometimes`. Sized that way
+            # deliberately: with one unit missing, ~36 % of draws still survive
+            # and a `base_keys` bug would produce an interval anyway; at a
+            # quarter, survival is ~1e-5 and the interval is null.
+            if i % 4 != 0:
+                values["sometimes"] = float(i) * 2.0 * scale
+            io.record(unit.key, values)
+        return {{"n_units": len(units)}}
+'''
+
+
+def test_a_column_contrast_takes_the_paired_percentile_under_resample(tmp_path, capsys):
+    """§ Statistical reporting: `paired_percentile_over_units` is "Every derived
+    metric, and a column metric under `resample`". Cohen's dz survives — it
+    differences a per-unit value, which a column has.
+
+    `_CONDITION_SCALED_STEP`, not `aggregate_returns`: an identical column under
+    both conditions gives zero differences, and `cohens_dz` of those is `None`,
+    so `cohens_d is not None` would fail under the correct implementation."""
+    doc = run_a_project(
+        tmp_path, capsys=capsys, units=40,
+        _starter_step=_CONDITION_SCALED_STEP,
+        sweep={"baseline": {"analysis.method": "pearson"},
+               "grid": {"analysis.method": ["spearman"]}},
+        statistics={"correction": "holm",
+                    "resample": {"method": "bootstrap", "n": 2000}},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    entry = _named_contrast(run, "method=spearman", "pred")
+    assert entry is not None
+    assert entry["method"] == "paired_percentile_over_units"
+    assert entry["cohens_d"] is not None      # a column HAS a per-unit value
+    assert entry["paired"] is True            # still hard-coded; H4c owns it
+    assert entry["ci95"] is not None
+
+
+def test_a_column_contrast_corrects_off_its_own_pool_not_a_t_interval(
+    tmp_path, capsys
+):
+    """THE test this task exists for. `_corrected_bounds` tests
+    `member.diffs is not None` FIRST, so a `Member` still carrying diffs yields
+    `ci95` from a percentile and `ci95_corrected` from `paired_t_over_units` on
+    the same row — nothing raises, and no other test sees it.
+
+    Two comparisons, so `family_size` is 2 × 1 = 2 and holm's rank-1 level is
+    0.025 → confidence 0.975 → 160 draws needed, which 2000 clears. At
+    `family_size` 1 the level is 0.05, `interval_at` reads the SAME ranks as the
+    raw interval, and this assertion could not fail."""
+    import math
+
+    from publishable.stats import paired_t_over_units
+
+    doc = run_a_project(
+        tmp_path, capsys=capsys, units=40,
+        _starter_step=_CONDITION_SCALED_STEP,
+        sweep={"baseline": {"analysis.method": "pearson"},
+               "grid": {"analysis.method": ["spearman", "kendall"]}},
+        statistics={"correction": "holm",
+                    "resample": {"method": "bootstrap", "n": 2000}},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    entry = _named_contrast(run, "method=spearman", "pred")
+    assert entry is not None
+    # Both comparisons carry an interval — `family_members` drops one with
+    # `ci95: None`, which would shrink this to 1 and quietly weaken every
+    # assertion below by loosening the corrected level from 0.025 to 0.05.
+    assert entry["family_size"] == 2
+    assert entry["family"] == {"comparisons": 2, "metrics": 1}
+    assert entry["method"] == "paired_percentile_over_units"
+    raw_low, raw_high = entry["ci95"]
+    corr_low, corr_high = entry["ci95_corrected"]
+    # A corrected interval is at a SMALLER alpha off the same evidence, so it
+    # contains the raw one. Never narrower — that is the number a reader cannot
+    # tell is wrong. Strictly wider is assertable only because
+    # `_CONDITION_SCALED_STEP` gives the pool real dispersion: over an
+    # all-zero pool `interval_at` returns (0.0, 0.0) at every alpha and this
+    # would be `0 > 0`, failing under the CORRECT implementation.
+    assert corr_low <= raw_low and corr_high >= raw_high
+    assert (corr_high - corr_low) > (raw_high - raw_low)
+    # And it is NOT the t-interval. Recompute the bound the buggy path would
+    # have produced, from the same per-unit differences the step's own scaling
+    # determines — `_CONDITION_SCALED_STEP`'s own scales are pearson: 1.0,
+    # spearman: 3.0, kendall: 5.0 (not 1.0/2.0/3.0 — a different fixture in
+    # this file uses that progression), so `pred` is `float(i)` at pearson and
+    # `3 * float(i)` at spearman, and the difference for unit `i` is
+    # `2 * float(i)`. Getting this wrong (e.g. assuming a 1.0/2.0/3.0 scale)
+    # makes this assertion pass under both the correct and the mutated code,
+    # since it would then compare against a t-interval built from the wrong
+    # evidence entirely — verified against the mutation in Step 5.
+    level = 0.05 / entry["family_size"]
+    diffs = [2.0 * float(i) for i in range(40)]
+    t_bound = paired_t_over_units(diffs, confidence=1.0 - level)
+    assert t_bound is not None      # non-degenerate, unlike an all-zero column
+    assert not (
+        math.isclose(corr_low, t_bound.low) and math.isclose(corr_high, t_bound.high)
+    )
+
+
+def test_a_column_contrast_draws_from_the_columns_own_keys(tmp_path, capsys):
+    """`paired_percentile_of_derived` builds its `UnitTable`s from WHOLE ROWS, so
+    `base_keys` feeds `compute` rows missing the column — `UnitTable.__getattr__`
+    pads with `None`, and the closure's `sum(...)` raises `TypeError`, which the
+    construction catches as a degenerate draw and drops. A quarter of the roster
+    missing makes survival ~1e-5, so the interval is null under the bug and real
+    under the fix. One unit missing would leave ~720 survivors and pass either
+    way."""
+    doc = run_a_project(
+        tmp_path, capsys=capsys, units=40,
+        sweep={"baseline": {"analysis.method": "pearson"},
+               "grid": {"analysis.method": ["spearman"]}},
+        statistics={"correction": "holm",
+                    "resample": {"method": "bootstrap", "n": 2000}},
+        _starter_step=_RAGGED_COLUMN_STEP,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    ragged = _named_contrast(run, "method=spearman", "sometimes")
+    assert ragged is not None
+    assert ragged["method"] == "paired_percentile_over_units"
+    assert ragged["ci95"] is not None
+    assert ragged["n_paired"] == 30           # 40 units, every 4th missing
+    # The full column is unaffected, so this cannot pass by both being broken.
+    full = _named_contrast(run, "method=spearman", "always")
+    assert full is not None
+    assert full["ci95"] is not None
+    assert full["n_paired"] == 40

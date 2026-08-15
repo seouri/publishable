@@ -668,13 +668,17 @@ def _comparison_step_blocks(
     where: str,
     where_id: str,
     conditions_by_index: dict[int, "Condition"],
+    resample_columns: bool,
 ) -> tuple[dict[str, dict[str, Any]], list[Member]]:
     """One comparison's delta, per recording step and per metric already in
     `aggregated` — the computation `vs_baseline` and `results.contrasts` both
     rest on, factored out so the two record shapes don't duplicate it.
 
     A recorded column takes `paired_t_over_units` over the per-unit
-    differences, with `cohens_d = cohens_dz(diffs)`. A derived metric — one
+    differences, with `cohens_d = cohens_dz(diffs)` — unless `resample_columns`
+    is set, when it instead takes `paired_percentile_of_derived` over its own
+    column mean, the same construction a derived metric uses, while `cohens_d`
+    keeps computing from the local `diffs` list regardless. A derived metric — one
     `aggregate` computed, absent any per-unit value to difference — takes
     `paired_delta_of_derived` and `paired_percentile_of_derived` instead, both
     over `base_keys`: the point estimate is `aggregate` evaluated on each side
@@ -823,15 +827,58 @@ def _comparison_step_blocks(
                     of_collapsed[k][metric_key] - against_collapsed[k][metric_key]
                     for k in col_keys
                 ]
-                interval = paired_t_over_units(diffs)
                 n_paired = len(col_keys)
+                resampled = None
+                if resample_columns and n_paired >= 2:
+                    # `col_keys`, NOT `base_keys`. The derived branch above uses
+                    # `base_keys` because a derived metric has no column to be
+                    # ragged about; a recorded column does.
+                    # `paired_percentile_of_derived` builds its `UnitTable`s from
+                    # whole rows, so `base_keys` here would feed `compute` rows
+                    # missing this column — `UnitTable.__getattr__` pads with
+                    # `None` and the mean below raises, which the construction
+                    # catches as a degenerate draw and silently drops. A quarter
+                    # of a roster missing the column nulls the interval; one unit
+                    # missing leaves it looking fine, which is why this is a
+                    # correctness rule and not a tidiness one.
+                    #
+                    # The same callable twice: both sides compute the mean of the
+                    # same column, which is a normal call rather than the
+                    # shared-closure cancellation `paired_percentile_of_derived`
+                    # warns about — that one is about a SWEPT AXIS changing which
+                    # formula `aggregate` runs, and a column mean is one formula.
+                    def _column_mean(table: UnitTable, _name: str = metric_key) -> float:
+                        column: list[float] = getattr(table, _name)
+                        return float(sum(column) / len(column))
+
+                    resampled = paired_percentile_of_derived(
+                        of_collapsed,
+                        against_collapsed,
+                        col_keys,
+                        _column_mean,
+                        _column_mean,
+                        seed,
+                        draws=draws,
+                    )
+                    interval = resampled.interval
+                else:
+                    interval = paired_t_over_units(diffs)
                 metric_block[metric_key] = {
+                    # The mean of the per-unit differences over `col_keys` — the
+                    # same unit set the interval is drawn from, and identical to
+                    # the difference of the two column means over that set, so
+                    # the point estimate and the pool cannot drift onto
+                    # different rosters.
                     "delta": mean_of(diffs),
                     "basis": "units",
                     "paired": True,
                     "method": interval.method if interval else None,
                     "n_paired": n_paired,
                     "ci95": [interval.low, interval.high] if interval else None,
+                    # Cohen's dz survives the switch: it differences a PER-UNIT
+                    # value, which a column has and a derived metric does not,
+                    # and it is computed from the local `diffs` list rather than
+                    # from anything the `Member` carries.
                     "cohens_d": cohens_dz(diffs),
                     "correction": None,
                 }
@@ -846,6 +893,16 @@ def _comparison_step_blocks(
             # off, or the per-unit differences a *t* interval was computed
             # from. An entry with no `ci95` carries neither and is dropped by
             # `family_members` before either is read.
+            #
+            # **A column contrast under a declared `resample` carries the POOL
+            # and sets `diffs=None`.** `_corrected_bounds` tests `diffs` FIRST
+            # and only then falls through to `pool`, so leaving `diffs` set here
+            # — the natural thing to do, since `cohens_dz` still needs them —
+            # would give this row a `ci95` from a percentile and a
+            # `ci95_corrected` from `paired_t_over_units`. Nothing raises and no
+            # reader can tell. `cohens_dz` is computed above from the local list,
+            # which is why the `Member` does not need it.
+            corrected_from_pool = is_derived or resample_columns
             members.append(
                 Member(
                     where=where_id,
@@ -853,8 +910,8 @@ def _comparison_step_blocks(
                     metric=metric_key,
                     delta=metric_block[metric_key]["delta"] or 0.0,
                     ci95=(interval.low, interval.high) if interval else None,
-                    pool=tuple(resampled.pool) if is_derived and resampled else None,
-                    diffs=None if is_derived else tuple(diffs),
+                    pool=tuple(resampled.pool) if corrected_from_pool and resampled else None,
+                    diffs=None if corrected_from_pool else tuple(diffs),
                     # Placeholder: this function only sees one comparison, not
                     # the whole family. The caller that concatenates
                     # `vs_baseline_members` and `contrast_members` reassigns
@@ -889,6 +946,7 @@ def _compute_vs_baseline(
     seed: int,
     draws: int,
     findings: Collector,
+    resample_columns: bool,
 ) -> tuple[dict[int, dict[str, dict[str, dict[str, Any]]]] | None, list[Member]]:
     """Every non-baseline condition's own delta against the baseline, per
     recording step and per metric already in `aggregated` — see
@@ -928,6 +986,7 @@ def _compute_vs_baseline(
             where=f"condition {comp.of} ({comp.id!r}) vs baseline",
             where_id=f"cond:{comp.of}",
             conditions_by_index=conditions_by_index,
+            resample_columns=resample_columns,
         )
         if block:
             out[comp.of] = block
@@ -949,6 +1008,7 @@ def _compute_declared_contrasts(
     seed: int,
     draws: int,
     findings: Collector,
+    resample_columns: bool,
 ) -> tuple[list[dict[str, Any]] | None, list[Member]]:
     """Every declared `statistics.contrasts` entry's delta, as `results.contrasts`
     — `reference.md` § Contrasts: claims that aren't condition-vs-baseline: "a
@@ -996,6 +1056,7 @@ def _compute_declared_contrasts(
             where=f"contrast {comp.id!r}",
             where_id=f"contrast:{comp.id}",
             conditions_by_index=conditions_by_index,
+            resample_columns=resample_columns,
         )
         members.extend(block_members)
         entry: dict[str, Any] = {
@@ -2210,6 +2271,7 @@ def command_run(config_path: Path) -> int:
                 seed=resample_seed_value,
                 draws=derived_metric_draws,
                 findings=aggregate_c,
+                resample_columns=resample_spec["declared"],
             )
             contrasts_out, contrast_members = _compute_declared_contrasts(
                 doc=doc,
@@ -2222,6 +2284,7 @@ def command_run(config_path: Path) -> int:
                 seed=resample_seed_value,
                 draws=derived_metric_draws,
                 findings=aggregate_c,
+                resample_columns=resample_spec["declared"],
             )
             # Every interval a reader is shown is corrected against the family
             # it belongs to, and both record shapes are in the same family:

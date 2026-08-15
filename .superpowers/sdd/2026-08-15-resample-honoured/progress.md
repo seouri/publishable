@@ -757,3 +757,50 @@ RULING — TASK 15 IS AMENDED, BECAUSE ITS PLAN TEXT PREDATES TASK 14'S DECISION
   COST IF WRONG: task 15 grows from wiring to wiring-plus-one-construction and may need splitting. The
   dispatch tells the implementer to report rather than push through if the derived construction turns
   out large.
+Task 15: implemented per the amendment, commits 8c4bcbb + 6267120 + d715e08. 1787 passed + 2 xfailed
+  (+6 net); ruff and mypy clean. BOTH PATHS NOW HONOUR strata: percentile_of_derived gained a real
+  construction (draws KEYS with replacement within each stratum, preserving stratum size), summarize_step
+  threads strata into both branches, and cli composes resample_strata ONCE from the roster gated on
+  `declared and stratify_by`. W-STATS-RESAMPLE-STRATIFY-UNHONOURED IS RETIRED — emit site, warnings row
+  and both tests — and the spec-defects entry marked CLOSED. The amendment's judgment held: the derived
+  construction was contained, as predicted, and the implementer did not need the escape hatch.
+NEW ASYMMETRY FOUND BY THE IMPLEMENTER, ONE LAYER IN — RAISED FOR THE MERGE GATE, NOT FILED AS ROUTINE:
+  the report_by level call site still does not pass `resample_columns`, so under a declared resample a
+  LEVEL'S RECORDED COLUMN STAYS UNRESAMPLED while its derived metrics are now stratified. That is the
+  same class task 14 declined to create — two intervals under different designs in one table — one layer
+  down, and it PREDATES this task and sits outside its scoped call sites. Within a single run this means
+  top-level column = percentile while level column = t_over_units. The task 15 review is asked to assess
+  whether this is a merge blocker or a legitimate deferral.
+  Also flagged for future fixtures: a blank CSV cell yields "" and NOT None, so testing the
+  missing-attribute sentinel needs a genuinely SHORT CSV ROW rather than a blank field.
+Task 15 review dispatched. BASE a6fe234, HEAD d715e08.
+Task 15 review: spec ✅, quality approved with findings — 2 Important, 5 Minor, no Critical.
+  STATISTICS VERIFIED INDEPENDENTLY AND EXACT: replicates preserve per-stratum KEY counts (one distinct
+  composition {low:20, mid:8, high:2} over 50 replicates); an independent reference draw reproduces
+  Interval(290.45, 296.55) TO THE DIGIT against a pooled (82.8, 602.2) and an equal-weighted-stratum-
+  means answer of 1111.6. Both paths move together in one run, confirmed at stats level, CLI level, and
+  on a crossed report_by/stratify_by run. Warning retirement complete on every surface. Task 1's pin
+  green AND reaching the new branch.
+  IMPORTANT 1 — THE ZERO-WIDTH FAULT, THIRD OCCURRENCE. percentile_of_derived has no constant-pool
+  refusal, so singleton strata (any near-unique attribute, validates clean) put a column ci95: null
+  beside a derived ci95: [50.4875, 50.4875] with resample_draws: 2000, in one table, no warning. Task 9
+  shipped this (the slice's first ❌), task 10 shipped it on the clustered path, and BOTH SIBLINGS NOW
+  REFUSE IT. A third construction that does not is three answers to one question inside one module.
+  IMPORTANT 2 — the clustered x stratified WIRING is invisible: replacing strata=column_strata with None
+  in the clustered call leaves ALL 1787 TESTS PASSING. Same shape as task 14's undiscriminated gate — a
+  seam named in the design and instantiated by no fixture. That is now TWICE in this slice.
+ADJUDICATED — report_by ASYMMETRY: DEFER, and the argument is worth keeping. It is NOT task 14's class
+  in the load-bearing respect: a level's column and its derived metric carry DIFFERENT method strings and
+  differ on resample_draws presence, so run.yaml DISCLOSES the difference — where task 14's case would
+  have been two identical method strings with nothing to separate them. THE TEST FOR THIS CLASS IS NOT
+  "do two intervals differ in design" BUT "can a reader TELL". It also predates the slice, and the fix is
+  a task (level-thin min_honest_draws, per-level two-valued draws, tests), not a line. Filed with a named
+  owner. Raising it for the merge gate rather than filing it as routine was the right call.
+Task 15: COMPLETE (commits 8c4bcbb, 6267120, d715e08, c1286bb). 1792 passed + 2 xfailed; ruff and mypy
+  clean. Both Importants and all 5 Minors closed. percentile_of_derived now refuses a constant-pool draw
+  the same content-based way both siblings do — THE ZERO-WIDTH FAULT IS NOW CLOSED ON ALL THREE
+  CONSTRUCTIONS. The clustered x stratified wiring has an end-to-end pin at summarize_step's own call
+  site. The report_by asymmetry is filed with a named owner (H4's report_by hardening), merged into the
+  same spec-defects entry. BASE for task 16 is c1286bb.
+Task 16: dispatched — THE DANGEROUS ONE. The spec names it "the one place H4a can produce a wrong number
+  with a green suite", and both of its traps were found by measurement rather than reading.
