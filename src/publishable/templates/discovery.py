@@ -80,6 +80,19 @@ def _module_name(repo_root: Path, stem: str) -> str:
     return f"_publishable_local_{token}_{stem}"
 
 
+def is_local_template(cls: type[BaseTemplate]) -> bool:
+    """Whether `cls` came from a repo's `templates/`, judged by the synthetic
+    module name `_module_name` gave it when it was imported.
+
+    This is the one place that knows the naming scheme, so it is also the one
+    place that answers "is this local?" — anything that instead called
+    `discover_local` again to find out would re-import every file under
+    `templates/` a second time, re-running arbitrary user top-level code for a
+    question the already-resolved class can answer for free.
+    """
+    return cls.__module__.startswith("_publishable_local_")
+
+
 def _import_file(path: Path, module_name: str, templates_dir: Path) -> None:
     """Execute one `templates/*.py` under `module_name`, leaving `sys.modules` as found.
 

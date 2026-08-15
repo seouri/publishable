@@ -32,6 +32,7 @@ from publishable.sweep import (
     selector_paths,
 )
 from publishable.templates.base import BaseTemplate
+from publishable.templates.discovery import is_local_template
 from publishable.templates.registry import get_template, template_names
 from publishable.units import (
     COLLAPSE_RULES,
@@ -703,7 +704,16 @@ def _check_versions(doc: dict[str, Any], template: Any, c: Collector) -> None:
     defaults and this config does not set. Core cannot tell that apart from one
     the author deliberately left at its default, and asserting which it is would
     be a claim the declaration does not carry.
+
+    A local template is skipped regardless of what `template_version` declares.
+    `TEMPLATE_VERSION` is core's own constant — comparing a config's declared
+    string against it is meaningless for a template core did not write, whether
+    that string happens to match, differ, or was never set at all: `docs/
+    reference.md` § Three hashes says `template_version` "isn't the answer for
+    a local template — it's a string its author remembers to bump."
     """
+    if is_local_template(type(template)):
+        return
     declared = doc.get("template_version")
     if not declared or declared == TEMPLATE_VERSION:
         return

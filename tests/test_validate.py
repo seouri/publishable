@@ -513,6 +513,40 @@ def test_a_moved_template_version_warns_rather_than_failing(write_config):
     assert "W-TEMPLATE-VERSION" in found
 
 
+def test_a_local_templates_declared_version_draws_no_warning(git_repo: Path, write_config):
+    """`_check_versions` opens `if not declared or declared == TEMPLATE_VERSION:
+    return` — "no warning for a config that declares nothing" is already true
+    through that falsy branch, so the only shape that proves the *local* skip
+    is doing anything is a config that DECLARES a `template_version` and
+    declares one that DIFFERS from core's `TEMPLATE_VERSION`. `docs/
+    reference.md` § Three hashes: that string "isn't the answer for a local
+    template", so it must draw no warning whatever it says — not because it
+    happens to be unset.
+
+    THE CONTROL: the identical declared-and-differing shape under `generic`
+    still warns, so a change suppressing the warning for every template
+    passes the local half here and fails the control.
+    """
+    templates = git_repo / "templates"
+    templates.mkdir()
+    (templates / "my_assay.py").write_text(
+        "from publishable import BaseTemplate, register_template\n\n\n"
+        '@register_template("my_assay")\n'
+        "class MyAssay(BaseTemplate):\n"
+        "    pass\n"
+    )
+
+    local_found = codes(
+        write_config(
+            {"experiment_type": "my_assay", "parameters": {}, "template_version": "0.9.0"}
+        )
+    )
+    assert "W-TEMPLATE-VERSION" not in local_found
+
+    control_found = codes(write_config({"template_version": "0.9.0"}))
+    assert "W-TEMPLATE-VERSION" in control_found
+
+
 def test_a_repeat_count_below_one_executes_nothing_and_is_an_error(write_config):
     assert "E-REPL-N" in codes(write_config({"replication.repeats": [{"kind": "seed", "n": 0}]}))
 
