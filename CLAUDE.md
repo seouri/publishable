@@ -48,9 +48,8 @@ for a design that needs folds inside cells.
 
 The cost is that H3d now precedes the cells work it was scheduled to consume, so **H3c-3 owns
 retrofitting the holdout to cells** — acceptable only because no experiment in that analysis declares a
-group axis. The reasoning lives in the spine design's *Order, amended against outside evidence*; it is
-repeated here because `docs/superpowers/` is gitignored and a decision recorded only there is recorded
-nowhere.
+group axis. The reasoning lives in the spine design's *Order, amended against outside evidence*, which
+is now tracked — cite it rather than restating it.
 
 ## The documents
 
@@ -65,6 +64,25 @@ nowhere.
 The first four are *the four documents* everywhere below: the invariants, the consistency passes, and the worked example govern those and only those. A `feasibility-*.md` is analysis output, not specification, and nothing in it is authoritative over them.
 
 `design-principles.md` is the tiebreaker. Read it before proposing a change to any rule — if a rule looks arbitrary, that file explains it, and if it doesn't, that gap is itself worth fixing.
+
+## The development record
+
+The four documents say what `publishable` **is**. These say how it got there, and they are **tracked** — read them before re-deriving anything.
+
+| Where | What it is | Read it when |
+|---|---|---|
+| `docs/superpowers/specs/<date>-<slice>-design.md` | A slice's design: its decisions, each with grounds, and what it refuses | Before planning or changing that slice |
+| `docs/superpowers/plans/<date>-<slice>.md` | The same slice as numbered tasks, with code and per-task mutations | While executing it |
+| `docs/superpowers/*-SCOPING.md` | What was **measured against the code**, dated and pinned to a commit | Before trusting any charter |
+| `docs/superpowers/spec-defects.md` | Gaps found and deliberately not closed, with the owner | Before filing a "new" gap |
+| `.superpowers/sdd/<plan>/progress.md` | The ledger: every ruling, its reason, and what it costs if wrong | To learn why something is the way it is |
+| `.superpowers/sdd/<plan>/task-N-report.md`, `task-N-review.md` | What was built, what the brief got wrong, what each finding was verified by | Before repeating a task's work |
+
+**A scoping expires; a spec does not.** Every charter re-scoped so far was stale **in the same direction** — under-counted and missing surface — so a scoping is dated and pinned to a commit, and a claim carried from one without re-checking is worse than one omitted. Re-measure rather than trust.
+
+**The plan argues from the spec, and the code outranks both.** Where they disagree, the code wins and the *document changes first* — six of six implementers on the most recent slice found a real disagreement, so finding one is expected, not exceptional.
+
+Two things stay untracked because git already holds them: task briefs (extracted from the plan by `scripts/task-brief`) and every `.diff` (regenerable from the two commits in its filename).
 
 ## Invariants a change must not quietly break
 
@@ -89,7 +107,8 @@ The stated non-promises — adaptive/sequential designs, per-condition pipeline 
 
 Every one of these was made by someone competent, reading carefully, more than once. They are not
 carelessness — each is a reasonable reading that happens to be wrong here, so knowing the rule is what
-prevents it. Slice ledgers record the instances but are gitignored; this section is the durable copy.
+prevents it. The slice ledgers hold the instances; this section is the short form worth carrying into
+every session.
 
 ### Reading the documents
 
@@ -163,7 +182,9 @@ class's module is gone, while an external one is still cached.
 
 - **Never filter the output of a sweep whose job is to find a string** — filter the file list. A reviewer
   checking this exact rule lost a true hit to `grep -v superpowers`, because the matching line contained
-  that path. Prove each sweep can fail by running it against a string known to be present.
+  that path. Prove each sweep can fail by running it against a string known to be present. This matters
+  more now that the [development record](#the-development-record) is tracked: a sweep over the four
+  documents must **name** them, since `*.md` no longer means what it used to.
 - **`git checkout -- <file>` destroys uncommitted work**, twice mistaken for reverting a mutation. Keep a
   copy before mutating, and verify a revert by **behaviour**, never by `git status`.
 
@@ -171,7 +192,9 @@ class's module is gone, while an external one is still cached.
 
 Editing one document is almost never a one-file change. Both passes below run before an edit is finished; the second is the one that catches real defects, and no tooling substitutes for it. The **cross-document** pass governs the four documents only — a [feasibility analysis](#feasibility-analyses) is exempt from it and subject to the mechanical pass in full.
 
-**Mechanical.** Write these as throwaway greps or a short script each time rather than keeping a checker around — the repo ships no tooling, and each pass wants slightly different checks. Verify that every relative link and `#anchor` resolves, that no two headings in a file produce the same anchor, that every table's rows match its header's column count and no row is empty, and that no line carries trailing whitespace, a tab, or invisible unicode. Skip fenced code blocks in all of these: the docs contain markdown inside markdown, and a `##` or `|` there is content, not structure. After removing or renaming any string, grep every tracked `*.md` — the four documents, this file, and any feasibility analysis — for what should no longer exist.
+**Mechanical.** Write these as throwaway greps or a short script each time rather than keeping a checker around — the repo ships no tooling, and each pass wants slightly different checks. Verify that every relative link and `#anchor` resolves, that no two headings in a file produce the same anchor, that every table's rows match its header's column count and no row is empty, and that no line carries trailing whitespace, a tab, or invisible unicode. Skip fenced code blocks in all of these: the docs contain markdown inside markdown, and a `##` or `|` there is content, not structure. After removing or renaming any string, grep the four documents, this file, and any feasibility analysis for what should no longer exist.
+
+**Both passes govern those files only — never the [development record](#the-development-record).** A spec records what was decided when it was written and a scoping what was measured on its date; retro-editing either destroys the evidence they exist to hold. Correct one the way this repo corrects a published claim: append the correction and say what it replaces. The one exception is `spec-defects.md`, a live list, where a closed gap is struck rather than left to mislead.
 
 **Cross-document.** These are the classes that actually drift, and none of them is visible to a mechanical check:
 
