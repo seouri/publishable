@@ -3320,12 +3320,15 @@ def test_a_column_resample_refuses_a_bad_weight_before_any_draw(bad):
     assert exc.value.code == "E-DATA-WEIGHT-INVALID"
 
 
-def test_a_column_resample_is_never_degenerate_across_adversarial_columns():
+def test_a_column_resample_is_never_degenerate_across_adversarial_columns_of_finite_values():
     """The positive half, and the one that would catch a `(Interval, int)`
-    requirement appearing: over columns chosen to be as degenerate as a column
-    can be — zero variance, a single repeated value, extreme weight spread,
-    a one-unit stratum — the interval is always produced, so no survivor count
-    ever differs from the requested draws."""
+    requirement appearing: over columns chosen to be as degenerate as a
+    FINITE column can be — zero variance, a single repeated value, extreme
+    weight spread, a one-unit stratum — the interval is always produced, so
+    no survivor count ever differs from the requested draws. This is
+    conditional on finiteness: it says nothing about `nan`/`inf` values or an
+    overflowing weight sum, which are a separate, real gap pinned (not fixed)
+    by the tests below and recorded in `docs/superpowers/spec-defects.md`."""
     cases: list[tuple[list[float], dict]] = [
         ([5.0, 5.0, 5.0, 5.0], {}),                                  # zero variance
         ([0.0, 0.0, 0.0, 1e-12], {}),                                # near-zero spread
@@ -3341,10 +3344,60 @@ def test_a_column_resample_is_never_degenerate_across_adversarial_columns():
         assert got.low <= got.high
 
 
+def test_a_column_resample_refuses_the_constant_one_stratum_case_the_unstratified_path_does_not():
+    """The docstring's "one-stratum case reproduces the unstratified path digit
+    for digit" claim has an exception: when every value is identical, the
+    stratified path refuses (`None`, task 9/10's constant-pair check) while the
+    unstratified path over the same values returns a zero-width `Interval`
+    rather than refusing. The two paths apply different refusal criteria to the
+    same degenerate input and so diverge here — not a contradiction of the
+    docstring's claim, but a real, pinned exception to it."""
+    values = [5.0, 5.0, 5.0, 5.0]
+    unstratified = percentile_over_units(values, seed=5, draws=2000)
+    stratified = percentile_over_units(values, seed=5, draws=2000, strata=["only"] * 4)
+    assert unstratified == Interval(low=5.0, high=5.0, method="percentile_over_units")
+    assert stratified is None
+
+
+def test_a_column_resample_over_non_finite_values_is_a_known_unfixed_gap():
+    """NOT a pin of correct behavior — a pin of a known, unfixed defect, so a
+    future reader who "fixes" this by making the assertion pass differently
+    knows to update `docs/superpowers/spec-defects.md` too. `values` is never
+    checked for finiteness on this path, so a `nan` among them silently reaches
+    `Interval(nan, nan)`: decision 2's "always defined" invariant holds only
+    given finite inputs, and this is the reachable counterexample without that
+    condition. `low <= high` is `False` for `nan`, which is exactly what the
+    adversarial test above would have caught immediately had it varied value
+    DOMAIN rather than only column shape."""
+    got = percentile_over_units([1.0, 2.0, 3.0, float("nan")], seed=1, draws=100)
+    assert got is not None
+    assert math.isnan(got.low) and math.isnan(got.high)
+
+
+def test_a_column_resample_with_an_overflowing_weight_sum_is_a_known_unfixed_gap():
+    """NOT a pin of correct behavior — a pin of a known, unfixed defect. Every
+    weight here individually passes `checked_weights` (each is finite and
+    positive), so decision 2's premise ("Σw is strictly positive") is satisfied
+    letter for letter — but Σw over these four weights overflows `float`, and
+    the resulting weighted mean is `nan`. Finite-and-positive per weight is not
+    the same fact as finite-when-summed, and the docstring's argument silently
+    assumed the latter followed from the former."""
+    got = percentile_over_units(
+        [1.0, 2.0, 3.0, 4.0], seed=1, draws=100, weights=[1e308, 1e308, 1e308, 1e308]
+    )
+    assert got is not None
+    assert math.isnan(got.low) and math.isnan(got.high)
+
+
 def test_percentile_over_units_still_returns_a_bare_interval():
     """Pinned deliberately: ~20 tests read this return, and decision 2 is that
     it does NOT become `(Interval, int)`. A slice that changed it would have to
     change this test, which is where the decision gets re-argued rather than
-    drifted past."""
+    drifted past. Confirmed separately (see the two "known unfixed gap" tests
+    above) that `(Interval, int)` would not even be the right remedy for the
+    non-finite gap: nothing on this path treats a `nan`/`inf` draw statistic as
+    a failed draw to exclude, so a survivor filter would count it as a survivor
+    and report `(Interval(nan, nan), n)` — the same false claim with an extra
+    field."""
     got = percentile_over_units([1.0, 2.0, 3.0, 4.0], seed=1, draws=100)
     assert isinstance(got, Interval)

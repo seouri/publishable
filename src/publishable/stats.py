@@ -540,9 +540,18 @@ def percentile_over_units(
     keeps its stratum and its weight; the strata are then ordered by their own
     sorted contents rather than by label, which is what makes a relabelled
     stratum give the identical interval and what makes the one-stratum case
-    reproduce the unstratified path digit for digit. Sorting values and stratum
-    labels as separate sequences would preserve every invariance and silently
-    re-pair them — the mistake equal-sized strata cannot see.
+    reproduce the unstratified path digit for digit **when neither path is
+    itself refused**. A one-stratum roster whose values are all identical is
+    refused (`None`) by the constant-pair check below, while the unstratified
+    path over that same roster returns a zero-width `Interval` rather than
+    `None` — the two paths apply different refusal criteria to the identical
+    degenerate input, so they diverge there rather than reproducing each other;
+    that is not a contradiction of this paragraph, but it is a real exception to
+    it and is pinned as such by
+    `test_a_column_resample_refuses_the_constant_one_stratum_case_the_unstratified_path_does_not`.
+    Sorting values and stratum labels as separate sequences would preserve every
+    invariance and silently re-pair them — the mistake equal-sized strata cannot
+    see.
 
     Returns `None` rather than a zero-width interval when every stratum's own
     (value, weight) pairs are all identical — a singleton stratum is the
@@ -554,21 +563,34 @@ def percentile_over_units(
     a zero-width interval at `G < 2`.
 
     **This returns a bare `Interval`, with no survivor count, and that is a
-    decision rather than an omission.** `percentile_of_derived` returns
-    `(Interval, int)` because a derived metric's `compute` can fail on a
-    degenerate draw — `nan`, `None`, or a raise — so how many draws survived is
-    a real fact about the interval. A column metric's draw statistic is a mean
-    over a non-empty sample, which is always defined: the unweighted branch
-    divides by `n >= 2`, the weighted branch's Σw is strictly positive because
+    decision rather than an omission — conditional on finite inputs.**
+    `percentile_of_derived` returns `(Interval, int)` because a derived metric's
+    `compute` can fail on a degenerate draw — `nan`, `None`, or a raise — so how
+    many draws survived is a real fact about the interval. A column metric's
+    draw statistic is a mean over a non-empty sample of FINITE values with
+    FINITE weights, which is always defined: the unweighted branch divides by
+    `n >= 2`, the weighted branch's Σw is strictly positive because
     `checked_weights` refuses a zero, negative, non-finite or non-numeric weight
     before any draw is taken, and the stratified branch draws `len(pool) >= 1`
-    rows from each non-empty pool. So a column's `resample_draws` — once a later
-    slice wires `statistics.resample` for recorded columns into `summarize_step`
-    (today's build still refuses a declared `resample` with
-    `E-STATS-RESAMPLE-UNSUPPORTED`, and the recorded-column branch there carries
-    no `resample_draws` key at all) — can safely be the REQUESTED `n` rather than
-    a survivor count, and `percentile_over_units`'s return type need not change to
-    carry one. The invariant is pinned by
+    rows from each non-empty pool. **The condition is load-bearing and does not
+    hold unconditionally**: neither `values` nor a weight vector is checked for
+    finiteness anywhere on this path — a `nan` or `inf` among `values`, or a
+    weight vector whose checked-finite entries sum past `float`'s range (e.g.
+    `[1e308] * 4`), each produce `Interval(nan, nan)` today, reachable by calling
+    this function directly. That gap is real, pre-existing, and out of scope
+    for this decision — recorded on its own in `docs/superpowers/spec-defects.md`
+    rather than fixed here. Under the finiteness condition, though, a column's
+    `resample_draws` — once a later slice wires `statistics.resample` for
+    recorded columns into `summarize_step` (today's build still refuses a
+    declared `resample` with `E-STATS-RESAMPLE-UNSUPPORTED`, and the
+    recorded-column branch there carries no `resample_draws` key at all) — can
+    safely be the REQUESTED `n` rather than a survivor count, and
+    `percentile_over_units`'s return type need not change to carry one: a
+    non-finite draw statistic would not be caught by a survivor filter either,
+    since nothing here treats `nan`/`inf` as a failed draw to exclude, so
+    `(Interval, int)` would report `(Interval(nan, nan), n)` — the identical
+    false claim with an extra field. The invariant is pinned, under that
+    condition, by
     `test_a_column_resample_is_never_degenerate_across_adversarial_columns`
     rather than asserted here.
     """

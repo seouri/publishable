@@ -5040,18 +5040,51 @@ Decided in H4a (2026-08-15). `stats.percentile_over_units` returns a bare `Inter
 `percentile_of_derived` returns `(Interval, int)`, so a recorded column under a declared
 `statistics.resample` has no survivor count to record beside its interval.
 
-**Ruling: record the requested `n`.** A column's draw statistic is a mean over a non-empty
-sample and is always defined — the unweighted branch divides by `n >= 2`, `checked_weights`
-refuses a non-positive or non-finite weight before any draw, and a stratified pool is non-empty
-by construction — so `draws_used == n` always and the return type need not change (~20 existing
-tests read it). Verified rather than assumed, by
-`tests/test_stats.py::test_a_column_resample_is_never_degenerate_across_adversarial_columns`
-and the parametrized weight refusal beside it.
+**Ruling: record the requested `n`, and only when an interval is actually produced — conditional
+on finite inputs.** A column's draw statistic is a mean over a non-empty sample of *finite*
+values with *finite* weights, and under that condition it is always defined — the unweighted
+branch divides by `n >= 2`, `checked_weights` refuses a non-positive or non-finite weight before
+any draw, and a stratified pool is non-empty by construction — so `draws_used == n` whenever
+`ci95` is non-null, and the return type need not change (~20 existing tests read it). Verified
+rather than assumed, by
+`tests/test_stats.py::test_a_column_resample_is_never_degenerate_across_adversarial_columns_of_finite_values`
+and the parametrized weight refusal beside it. **The finiteness condition does not hold
+unconditionally** — see the separate entry below, filed rather than fixed here.
+
+**The `None` case, worked out rather than left unanswered.** `percentile_over_units` returns
+`None` for three reasons: too few values, too few draws for the confidence level, or (as of
+tasks 9/10) a structural constant-pair refusal. In every one of those, `ci95` is `null` and there
+is no interval for `resample_draws` to describe — recording the requested `n` there would assert
+survivor evidence for a refused interval, which is incoherent. **Ruling: `resample_draws` is
+`null` whenever `ci95` is `null`, for any of the three reasons.** This repurposes the derived
+metric's "`null` = resampling never attempted" bucket to also cover "attempted, but structurally
+refused before a single draw" — a fourth case in truth (the roster *was* declared, resampling
+*was* requested, yet nothing was drawn), collapsed onto the same `null` symbol because its
+observable effect is identical: no interval, no evidence. **The consequence for the existing
+three-way scheme:** the derived metric's `0` bucket ("attempted, every draw individually
+degenerate") is structurally unreachable for a column given finite inputs, because nothing on
+this path can make one draw's mean fail while another succeeds — a column's degeneracy, if any,
+is a fact about the whole sample before any draw runs, never about one draw among many. So a
+column's field is genuinely two-valued (`null` or the requested `n`), not three-valued, and that
+asymmetry with the derived metric's field is real and should be named wherever `resample_draws`
+is documented for columns, not smoothed over. This is new content `reference.md` § Statistical
+reporting does not state today (see below) and is owed as part of whichever slice (task 12/14)
+wires column resample into `summarize_step`.
 
 **Consequence to keep in view:** `W-STATS-RESAMPLE-THIN` fires on `used < requested`, so it can
-never fire for a column. That is correct — the warning exists for a template's `aggregate`
-producing nothing on some draws — but it means the two metric kinds carry the same field with
-subtly different provenance, which `reference.md` § Statistical reporting states.
+never fire for a column (a column's `resample_draws` is only ever `null` or the full `n`, per the
+ruling above — there is no partial-survivor state to be "thin"). That is correct — the warning
+exists for a template's `aggregate` producing nothing on some draws — but it means the two metric
+kinds carry the same field with subtly different provenance.
+
+**Correcting this entry's own citation, per review.** An earlier draft of this entry cited
+`reference.md` § Statistical reporting as already stating that provenance split. It does not: the
+section's `resample_draws` paragraph says the field is "recorded beside every derived metric" and
+never mentions columns at all. That was this entry citing a document for a claim the document
+does not make — the exact inversion `CLAUDE.md` warns about ("the document changes first").
+**Corrected: § Statistical reporting has no column-provenance language yet, and adding it —
+including the `null`-only-or-`n` two-way scheme ruled on above — is owed to whichever slice wires
+`statistics.resample` for columns (task 12/14), not claimed as already written.**
 
 **Task 11's own docstring text was itself an instance of the trap this section warns about.**
 The brief's Step 3 text read "a column's `resample_draws` is the requested `n` and is recorded as
@@ -5064,3 +5097,42 @@ end to end. The docstring landed in `stats.py` was reworded to say the invariant
 whenever that wiring lands, rather than asserting current behavior the code does not have — the
 same "comment claiming a guarantee the code does not provide" failure mode this repo has hit at
 least eight times before.
+
+## A column resample is only ever defined given finite inputs, and nothing checks that today
+
+Found during task 11's review (2026-08-15, H4a, `d5f6b6b`). The entry above rules that a column's
+`resample_draws` can safely be the requested `n` because a column's draw statistic — a mean — is
+"always defined." That is true only given finite `values` and finite weights, and nothing on
+`percentile_over_units`'s path checks either:
+
+- **A `nan`/`inf` among `values`** passes straight through every branch — nothing here parses or
+  validates `values` for finiteness (that is `summarize_step`'s `_is_numeric`'s job upstream, and
+  it never checks `math.isfinite`, only that the value is an `int`/`float` and not `bool`) — and
+  produces `Interval(nan, nan)` today, reachable by calling `percentile_over_units` directly:
+  `percentile_over_units([1.0, 2.0, 3.0, float("nan")], seed=1, draws=100)`.
+- **A weight vector that is individually finite-and-positive can still overflow when summed.**
+  `checked_weights`/`usable_weight` gate each weight alone; `[1e308] * 4` passes that gate letter
+  for letter (every entry is finite and positive) yet Σw overflows `float`, and the weighted mean
+  comes out `nan`.
+
+Both are pinned as *known, unfixed* defects (not correct behavior) by
+`tests/test_stats.py::test_a_column_resample_over_non_finite_values_is_a_known_unfixed_gap` and
+`tests/test_stats.py::test_a_column_resample_with_an_overflowing_weight_sum_is_a_known_unfixed_gap`
+— a future change that fixes either must update those tests and this entry together, rather than
+silently making the gap disappear from the record.
+
+**Why `(Interval, int)` is not the remedy either**, confirmed rather than assumed: nothing on this
+path treats a `nan`/`inf` draw statistic as a failed draw to filter out — there is no per-draw
+survivor check anywhere in `percentile_over_units`, unlike `percentile_of_derived`, which can
+observe an individual draw's `compute` fail. Adding a survivor count here would report
+`(Interval(nan, nan), n)`: the identical false claim, with an extra field implying it was
+checked.
+
+**Proposed resolution, not attempted here:** whichever slice wires column resample into
+`summarize_step` (task 12/14) should validate `values` and any weight vector for finiteness
+before drawing — plausibly reusing `is_measurement_numeric`/`usable_weight`'s existing finite
+checks, extended to also catch a weight sum that overflows once accumulated — and route a
+failure to a real refusal (`ci95: null`, `resample_draws: null` per the ruling above) rather than
+publishing `nan` under a false `resample_draws: n`. This is bigger than task 11's scope: it likely
+also affects the unweighted and clustered percentile constructions and the `t_over_units` family,
+none of which check finiteness either, and none of which this entry claims to have surveyed.
