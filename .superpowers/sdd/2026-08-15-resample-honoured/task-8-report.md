@@ -50,10 +50,9 @@ broader, riskier change against a shared fixture that this task's scope doesn't 
 
 ## Commit
 
-`cf9f022` was the branch tip at start; this task's commit is on top of it:
+`21214d8` on `h4a-resample-honoured` (parent `cf9f022`, the branch tip at start of this task):
 `feat: W-STATS-RESAMPLE-CLUSTERS, and fix the docstring citing limits.min_clusters as
-statistics.min_clusters` (see `git log -1` on `h4a-resample-honoured` after this report lands —
-committed in the same pass as this report).
+statistics.min_clusters`.
 
 ## Concerns
 
