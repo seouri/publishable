@@ -10941,16 +10941,36 @@ def test_a_resample_with_no_unit_roster_is_refused(write_config):
         write_config({"statistics": {"resample": {"method": "bootstrap", "n": 2000}}})
     )
     assert "E-STATS-RESAMPLE-UNITS" in found
-    # Positive companion in the same test: the identical declaration WITH a
-    # roster is not refused, so this cannot pass by refusing every resample.
-    assert "E-STATS-RESAMPLE-UNITS" not in codes(
+    # Positive companion in the same test: the identical declaration WITH a real
+    # roster is refused only by the still-wholesale `-UNSUPPORTED` code, so this
+    # cannot pass by a broken companion (e.g. `data.units: 5`, which would die at
+    # the fatal `E-CONFIG-SHAPE` before ever reaching this check) leaving the set
+    # merely absent-of-UNITS. Pinning the whole set, not just one code's absence,
+    # is what proves the companion actually resolved a roster.
+    assert codes(
         write_config(
             {
                 "data.units": {"from": "index.csv", "key": "patient_id"},
                 "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
             }
         )
+    ) == {"E-STATS-RESAMPLE-UNSUPPORTED"}
+
+
+def test_a_missing_roster_does_not_swallow_the_roster_independent_resample_faults(write_config):
+    """`E-STATS-RESAMPLE-UNITS` must not `return` after reporting: `method` and `n` are read from
+    `resample` itself, not from the roster, so both remain checkable with no `data.units` declared
+    at all. The precedent, `_check_replication`'s `E-REPL-FOLD-NO-UNITS`, reports and lets its
+    sibling checks keep running for the identical reason — a missing roster does not make a
+    roster-independent check unsafe to run. A version that `return`s after the units finding would
+    report only `E-STATS-RESAMPLE-UNITS` here and silently drop the other two, so the reader who
+    fixes the declaration then meets two more faults nobody told them about."""
+    found = codes(
+        write_config({"statistics": {"resample": {"method": "bootstap", "n": 50}}})
     )
+    assert "E-STATS-RESAMPLE-UNITS" in found
+    assert "E-STATS-RESAMPLE-METHOD" in found
+    assert "E-STATS-RESAMPLE-N" in found
 
 
 def test_an_unresolvable_roster_does_not_earn_a_second_resample_finding(write_config):
@@ -10970,6 +10990,7 @@ def test_an_unresolvable_roster_does_not_earn_a_second_resample_finding(write_co
     )
     found = {f.code for f in c.findings}
     assert "E-STATS-RESAMPLE-UNITS" not in found
-    # The positive half: the real fault IS reported, so the test cannot pass by
-    # the config being clean.
-    assert any(code.startswith("E-UNITS-") or code.startswith("E-DATA-") for code in found)
+    # The positive half: the real fault IS reported, named exactly rather than by
+    # a broad prefix, so the test cannot pass by the config being clean or by
+    # some unrelated `E-UNITS-`/`E-DATA-` finding standing in for it.
+    assert "E-UNITS-SOURCE-MISSING" in found

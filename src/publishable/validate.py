@@ -5016,21 +5016,25 @@ def _check_resample(doc: dict[str, Any], roster: UnitList | None, c: Collector) 
     resample = statistics.get("resample")
     if not isinstance(resample, dict) or not resample:
         return
-    # No roster at all, which is a different fault from every check below and
-    # the one they all presuppose away. `reference.md` § The one config file
-    # marks `units:` "required by fold, resample, null_test", and § Where units
-    # come from says resample "isn't available" without one. The precedent is
-    # `_check_replication`'s fold-without-basis check (`E-REPL-FOLD-K`), for the
-    # same reason: a declaration that cannot operate on anything is refused
-    # rather than accepted and silently skipped.
+    # No roster at all, worth its own finding independent of everything below.
+    # `reference.md` § The one config file marks `units:` "required by fold,
+    # resample, null_test", and § Where units come from says resample "isn't
+    # available" without one. The precedent is `_check_replication`'s own
+    # `E-REPL-FOLD-NO-UNITS` — the same `not (doc.get("data") or {}).get("units")`
+    # expression, refusing a `fold` level for the identical reason. (Not
+    # `E-REPL-FOLD-K`: that is the unrelated `k: all`-basis-unknowable fault.)
     #
     # Read from the DECLARATION, not from `roster is None`: the roster is also
     # `None` when `data.units` is declared and failed to resolve, and that fault
     # already has `_check_units`' own finding. A second, derived fault on top of
     # the one the reader has to fix anyway is what `validate_config`'s
-    # `usable_cluster` guard avoids by the same argument. Every later check in
-    # this function returns after this one, since each of them presupposes a
-    # roster it would have nothing to read.
+    # `usable_cluster` guard avoids by the same argument.
+    #
+    # No `return` here, matching the `E-REPL-FOLD-NO-UNITS` twin: `roster` is
+    # unused by every check below (`method`, `n`, the family bound, and
+    # `stratify_by` all read `resample`/`doc` alone), so a missing roster does
+    # not make any of them unsafe to run. Stopping here would silently swallow
+    # a `method`/`n` fault the reader would only meet on their next pass.
     units_declared = ((doc.get("data") or {}).get("units")) or {}
     if not units_declared:
         c.error(
@@ -5042,7 +5046,6 @@ def _check_resample(doc: dict[str, Any], roster: UnitList | None, c: Collector) 
             "over repeats, which is honest for a design whose executions are the "
             "observations",
         )
-        return
     method = resample.get("method")
     # `None`/absent means the documented default, `bootstrap` — § Statistical
     # reporting: declaring `resample` "changes the method or the count rather

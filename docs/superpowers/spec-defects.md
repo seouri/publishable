@@ -5016,3 +5016,20 @@ correction pressure comes from `hypotheses`. Same proposed resolution as above: 
 hypothesis family's own `W-STATS-CORRECTED-THIN` at run time is where this is honestly caught,
 and a validate-time version would need to know which declared hypotheses survive to `H`, which is
 run-time knowledge by the same argument as the metric count above.
+
+## `statistics.null_test` has no no-units check, unlike `fold` and `resample`
+
+Found during task 7's review (2026-08-15, H4a, `01b2b97`). Task 7 gave `resample` a
+declared-with-no-`data.units` refusal, `E-STATS-RESAMPLE-UNITS`, matching the existing
+`E-REPL-FOLD-NO-UNITS` precedent for `fold`. `reference.md`'s "required by fold, resample,
+null_test" line names all three, but only two now have the check: `null_test` is still refused
+wholesale by `E-STATS-NULLTEST-UNSUPPORTED` with nothing underneath it, so the moment that
+refusal retires, a bare `null_test: {shuffle: status}` with no `data.units` validates clean and
+runs nothing — the identical hole task 7 closed for `resample`, reopened one field over.
+
+Proposed resolution: whichever slice retires `E-STATS-NULLTEST-UNSUPPORTED` (H4d, per the current
+plan) adds the same declaration-gated check `_check_resample` and `_check_replication` both use —
+`not (doc.get("data") or {}).get("units")` — under its own code (`E-STATS-NULLTEST-UNITS`, to
+match the naming this task settled on rather than the `E-REPL-FOLD-K` name once miscited for it),
+reporting without returning, so a roster-independent `null_test` shape fault (its own `shuffle`
+checks) still surfaces in the same pass.

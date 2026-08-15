@@ -296,3 +296,34 @@ INFRASTRUCTURE, at the user's direction (commits 6c529c7, 4547bed): THE DEVELOPM
   date, so corrections are APPENDED, never retro-edited. spec-defects.md is the exception, a live list.
   Consequence for sweeps: `*.md` no longer means the four documents, so a sweep must NAME them.
 Task 7: dispatched. BASE 4547bed.
+Task 7: implemented, commits d280f86 + 01b2b97 (report, now a tracked artifact). 1721 passed + 2
+  xfailed; ruff and mypy clean. E-STATS-RESAMPLE-UNITS minted.
+  THE JUDGMENT CALL I LEFT OPEN WAS DECIDED WELL AND PROVED BY MUTATION. I told it a config can declare
+  data.units and still fail to resolve a roster — different faults, different remedies — and required a
+  deliberate choice plus a test distinguishing them. It gated on the DECLARATION (`units_declared`),
+  not on `roster is None`, and proved the distinction by mutating one into the other: the
+  unresolvable-roster test then FAILED with a double fault (because _check_units already reports that
+  case) while the no-roster test still passed. That is the right seam — a missing declaration is this
+  check's fault; an unresolvable source is _check_units'.
+  First task in this slice where the implementer found NO disagreement with its brief.
+Task 7 review: spec ✅, quality APPROVED WITH FINDINGS — 2 Important, 3 Minor. THE JUDGMENT CALL WAS
+  VERIFIED CORRECT AT EVERY SHAPE: absent / null / {} all fire; a non-mapping data.units dies upstream as
+  fatal E-CONFIG-SHAPE so the .get walk cannot raise; all three declared-but-unresolvable shapes get
+  actionable E-UNITS-* findings from _check_units, so silence there is right. Tests confirmed NOT
+  vacuous on the old refusal — deleting the call site fails the acceptance test.
+  IMPORTANT 1 — THE MISCITED PRECEDENT IS MINE, AND IT TRAVELLED THREE HOPS. My spec's trap table said
+  "_check_replication's fold-without-basis shape is the precedent", pointing at E-REPL-FOLD-K. The real
+  twin is E-REPL-FOLD-NO-UNITS, twelve lines away: SAME `not (doc.get("data") or {}).get("units")`
+  expression, likewise silent for an unresolvable roster. E-REPL-FOLD-K is the different k:all fault.
+  Spec -> brief -> shipped comment. FIXED IN THE SPEC so the next brief cannot regenerate it. The twin
+  also STRENGTHENS the implementer's judgment call from a novel decision into house pattern.
+  IMPORTANT 2 — and the twin DOES NOT RETURN. The comment claimed the checks below the gate "each
+  presuppose a roster"; false, `roster` is an unused parameter across the whole function and the
+  method/n checks are roster-independent. Measured consequence: `{method: bootstap, n: 50}` with no
+  data.units reports ONLY the new code, silently swallowing E-STATS-RESAMPLE-METHOD and -N. A user fixes
+  one fault and meets two more. RULED: drop the return, follow the twin, surface all three in one pass.
+  GENERALIZES: a false comment can have a BEHAVIOURAL consequence, not just a documentary one — this one
+  justified a `return` that suppressed two real findings. When a comment explains why control flow
+  stops, check the explanation before trusting the stop.
+Out of scope, recorded for its owner: null_test has NO equivalent no-units check, so whichever slice
+  retires E-STATS-NULLTEST-UNSUPPORTED (H4d) inherits exactly this hole.
