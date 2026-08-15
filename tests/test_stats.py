@@ -3401,3 +3401,93 @@ def test_percentile_over_units_still_returns_a_bare_interval():
     field."""
     got = percentile_over_units([1.0, 2.0, 3.0, 4.0], seed=1, draws=100)
     assert isinstance(got, Interval)
+
+
+def _ragged_collapsed(n: int = 40) -> dict[str, dict[str, float]]:
+    return {f"u{i}": {"pred": float(i)} for i in range(n)}
+
+
+def test_a_recorded_column_takes_a_percentile_interval_under_resample():
+    """§ Statistical reporting: a column metric has a t-interval available, so
+    resampling it is a CHOICE and `resample` is what makes it. The value is
+    unchanged — the draw changes the interval, not the estimate."""
+    collapsed = _ragged_collapsed()
+    counts = {"resolved": 40, "completed": 40, "failed": 0}
+    plain = summarize_step(collapsed, counts, seed=5, draws=2000)
+    drawn = summarize_step(collapsed, counts, seed=5, draws=2000, resample_columns=True)
+    assert plain["pred"]["method"] == "t_over_units"
+    assert "resample_draws" not in plain["pred"]
+    assert drawn["pred"]["method"] == "percentile_over_units"
+    assert drawn["pred"]["resample_draws"] == 2000
+    assert drawn["pred"]["value"] == plain["pred"]["value"]
+    assert drawn["pred"]["ci95"] is not None
+    low, high = drawn["pred"]["ci95"]
+    assert low < drawn["pred"]["value"] < high
+
+
+def test_a_clustered_column_takes_the_clustered_percentile_under_resample():
+    """`cluster_by` decides the draw when both are declared, so the construction
+    is the `_clustered` one and `n.clusters` still reports the cluster count."""
+    collapsed = _ragged_collapsed(40)
+    clusters = {f"u{i}": f"c{i % 8}" for i in range(40)}
+    counts = {"resolved": 40, "completed": 40, "failed": 0}
+    drawn = summarize_step(
+        collapsed, counts, seed=5, draws=2000, clusters=clusters, resample_columns=True
+    )
+    assert drawn["pred"]["method"] == "percentile_over_units_clustered"
+    assert drawn["pred"]["n"]["clusters"] == 8
+    assert drawn["pred"]["resample_draws"] == 2000
+
+
+def test_a_weighted_column_keeps_its_weighted_value_and_kish_size_under_resample():
+    """Three things move together or the declaration is half-delivered: the
+    value stays the WEIGHTED mean, `n.effective` stays Kish's size, and only the
+    interval becomes a percentile. § Weighted samples puts the weights "in the
+    estimate rather than in the drawing"."""
+    collapsed = _ragged_collapsed(40)
+    weights = {f"u{i}": 1.0 + (i % 4) for i in range(40)}
+    counts = {"resolved": 40, "completed": 40, "failed": 0}
+    plain = summarize_step(collapsed, counts, seed=5, draws=2000, weights=weights)
+    drawn = summarize_step(
+        collapsed, counts, seed=5, draws=2000, weights=weights, resample_columns=True
+    )
+    assert plain["pred"]["method"] == "weighted_t_over_units"
+    assert drawn["pred"]["method"] == "percentile_over_units"
+    assert drawn["pred"]["value"] == plain["pred"]["value"]
+    assert drawn["pred"]["n"]["effective"] == plain["pred"]["n"]["effective"]
+    # The weighted centre differs from the unweighted one on this fixture, but
+    # that alone doesn't discriminate a dropped `weights=` in the DRAW: both
+    # intervals are wide enough on 40 units to bracket either centre. The
+    # assertion that actually catches a dropped `weights=` in the percentile
+    # construction is the exact `ci95` match against calling
+    # `percentile_over_units` directly with the same weight vector — a
+    # construction the interval must reproduce digit for digit, the same
+    # standard `test_percentile_over_units_...` pins elsewhere in this file.
+    column_weights = [weights[f"u{i}"] for i in range(40)]
+    values = [float(i) for i in range(40)]
+    expected = percentile_over_units(values, seed=5, draws=2000, weights=column_weights)
+    assert expected is not None
+    assert drawn["pred"]["ci95"] == [expected.low, expected.high]
+    unweighted = summarize_step(collapsed, counts, seed=5, draws=2000)
+    assert drawn["pred"]["value"] != unweighted["pred"]["value"]
+
+
+def test_a_column_below_two_units_reports_a_null_draw_count_under_resample():
+    """`percentile_over_units` returns `None` below two units exactly as
+    `t_over_units` does, so the degenerate case does not change shape. Unlike
+    the brief's first draft of this test, `resample_draws` is NOT the requested
+    `n` here: `docs/superpowers/spec-defects.md`'s ruling is that a column's
+    draw count is `null` whenever `ci95` is `null` — there is no interval for a
+    draw count to describe, and recording the requested `n` beside a refused
+    interval would assert survivor evidence for a draw that never produced
+    one. It is still PRESENT (not absent) — a resample was declared and
+    attempted, it just came back with nothing, which is a different fact from
+    `resample_columns=False`'s "never asked" and must not collapse onto it."""
+    counts = {"resolved": 1, "completed": 1, "failed": 0}
+    got = summarize_step(
+        {"u0": {"pred": 1.0}}, counts, seed=5, draws=2000, resample_columns=True
+    )
+    assert got["pred"]["ci95"] is None
+    assert got["pred"]["method"] is None
+    assert "resample_draws" in got["pred"]
+    assert got["pred"]["resample_draws"] is None

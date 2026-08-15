@@ -370,3 +370,283 @@ Task 8 review: spec ✅, quality APPROVED WITH FINDINGS — 3 Important, 5 Minor
   Minor worth carrying: the min_clusters miscitation SURVIVES at tests/test_stats.py:2206 — the
   implementer's sweep covered src/ and docs/ only. The "filter the file list" rule is necessary but not
   sufficient; the SCOPE of the file list is the other half.
+Task 8: COMPLETE (commits 21214d8, f75078b, fbae604). 1732 passed + 2 xfailed; ruff and mypy clean.
+  All 3 Importants and all 5 Minors closed. The roster-guard mutation REPRODUCED A REAL TypeError,
+  confirming it guards an actual crash rather than a wrong message. Both copy-paste-propagated
+  except-ContractError comments rewritten. Miscitation finally dead in tests/ too.
+  SCHEMA AND VALIDATION (tasks 2-8) ARE COMPLETE. _check_resample now carries six checks.
+  BASE for task 9 is fbae604.
+Task 9: dispatched — the STRATIFIED DRAW. First construction task of the slice; stats.py has been
+  byte-identical to cb96c7d until now.
+Task 9: implemented, commits f69055a + 0866fa2. 1741 passed + 2 xfailed (baseline 1732 + 9 new — the
+  brief's 6 plus 3 the implementer added for degenerate shapes: size-1 stratum, all-identical-value
+  stratum, more strata than groupable units). ruff and mypy clean. Both required mutations (draw-count,
+  pool-ordering) failed the named test and were reverted in place. Degenerate-shape decisions recorded
+  for tasks 14/15: a misaligned strata/values length RAISES ValueError; size-1, identical-value and
+  all-singleton strata all work without error.
+  Second task with NO brief/code disagreement (after seven of eight that had one).
+Task 9 review dispatched. HIGHEST-STAKES REVIEW OF THE SLICE — the first task to touch stats.py, and the
+  first whose output is a NUMBER THAT GOES IN A PAPER rather than a refusal.
+Task 9 review: spec ❌ (FIRST OF THE SLICE), quality FINDINGS — 3 Important. The ❌ is narrow and the
+  statistics around it are RIGHT, VERIFIED INDEPENDENTLY: the reviewer built its own reference
+  implementation and the draw matched to ~5e-4, matched the analytic normal approximation (width 0.2067
+  vs 0.204), and came out ~80x narrower than pooled — what theory requires when between-stratum variance
+  is large. Weights compose against an independent weighted reference. Regression boundary byte-identical
+  over 300 RANDOMIZED CASES against fbae604.
+  IMPORTANT 1 / THE ❌ — A ZERO-WIDTH ci95 PRODUCED AND PINNED AS CORRECT. strata=["a"]*10+["b"]*4 over
+  internally constant strata returns Interval(2.142857, 2.142857). The sibling
+  percentile_over_units_clustered REFUSES EXACTLY THIS at one cluster, quoting § Statistical reporting:
+  "Reporting a point with no interval is honest; a zero-width 95 % interval is not." This case is WORSE
+  than the sibling's because it is STRUCTURAL, not data-caused — the design guarantees it whatever the
+  values. And a test the implementer added asserts it is correct: A TEST PINNING WRONG BEHAVIOUR, which
+  is harder to find later than no test at all. RULED: follow the sibling, return None, invert the test.
+  Two answers to one question inside one module is the drift this project refuses everywhere.
+  IMPORTANT 2 — a mutation SURVIVES ALL TEN TESTS: pooling in insertion order rather than sorted-contents
+  order. The rotation-by-7 fixture leaves first-seen stratum order unchanged. Fix is the fixture, not the
+  assertions: rotate by 28 (reviewer verified the real code stays invariant under it).
+  IMPORTANT 3 — the two degenerate tests assert only low < mean < high and BOTH PASS under the
+  pooled-swap mutation. They test non-crash, not the property their docstrings name.
+SLICE-LEVEL GAP FOUND, ROUTED TO TASKS 13-15: percentile_of_derived TAKES NO `strata`. Once the wiring
+  lands, a declared stratify_by would stratify COLUMN metrics and silently NOT derived ones IN THE SAME
+  RUN — two intervals in one table computed under different designs, invisible until someone compares
+  them. Tasks 13/14/15 dispatches must carry this; it may be additional construction rather than wiring.
+Task 9: COMPLETE (commits f69055a, 0866fa2, 79ae219, 4f62117). 1742 passed + 2 xfailed; ruff and mypy
+  clean. All 3 Importants closed. percentile_over_units now returns None when every stratum's own
+  (value, weight) pairs are identical — mirroring percentile_over_units_clustered's refusal at G < 2 —
+  and the test that pinned the zero-width interval as correct was inverted. The rotation-by-28 fixture
+  now kills the insertion-order mutation that had survived all ten tests, and both degenerate tests
+  assert the stratified interval is under half the pooled width rather than merely not crashing.
+  BASE for task 10 is 4f62117.
+Task 10: dispatched — the stratified x clustered composition rule, stated then implemented. Carries the
+  routed percentile_of_derived gap as context, though its owner is tasks 13-15.
+Task 10: implemented, commits 97c911c + 3af1e5a. 1748 passed + 2 xfailed (baseline 1742 + 6 new); ruff
+  and mypy clean. percentile_over_units_clustered gained `strata`, enforcing decision 3 — a stratum must
+  be constant within a cluster, the draw is a cluster drawn within its stratum — raising
+  E-STATS-RESAMPLE-STRATIFY-VARIES on violation and returning None when every stratum holds fewer than
+  two clusters, mirroring the existing groups<2 and all-strata-constant refusals. validate gained the
+  roster-side check via units.stratum_varies_within_cluster.
+  THE BRIEF'S OWN MUTATION INSTRUCTION WAS NON-DISCRIMINATING, AND THE IMPLEMENTER PROVED IT. My
+  specified width-ratio test does NOT fail under the `range(len(group)) -> range(1)` mutation on that
+  fixture, because the interval's extremes are single-cluster values reachable identically whether a
+  stratum draws 1 or its own cluster count. It built a call-count spy (_CountingRandom) that does catch
+  it. This is the SECOND time in the slice a proposed mutation could not discriminate (the first was a
+  reviewer's in task 5) — the rule now has both halves: a MUTATION, like a fixture, must be checked for
+  whether its two branches can actually differ.
+  SYSTEMATIC PLAN DEFECT, SECOND OCCURRENCE: the brief again used dotted overrides
+  (`"limits.min_clusters": 2`) against write_config, which only assigns the final leaf and never creates
+  intermediates, and base_config has no top-level "limits" — KeyError before the check runs. Task 8 hit
+  the identical defect. EVERY REMAINING TASK TOUCHING `limits` MUST BE TOLD to use the nested form.
+Task 10 review dispatched. BASE 4f62117, HEAD 3af1e5a.
+Task 10 review: spec ✅, quality FINDINGS — 3 Important, 3 Minor. STATISTICS VERIFIED INDEPENDENTLY AND
+  EXACTLY: the reviewer wrote its own reference implementation from the spec sentence — own ordering,
+  own seed, 200k draws — and reproduced the interval TO THE DIGIT. Instrumenting the real draw loop,
+  500/500 replicates hold exactly two clusters per stratum across 27 distinct multisets. All three
+  candidate answers distinguishable (13.46 clustered-stratified / 57.30 clustered-only / 0.26
+  stratified-rows), both theory directions correct, task 1's pin digit-identical over 200 randomized
+  fixtures. Both halves of the implementer's mutation diagnosis confirmed, and the spy proved
+  NON-VACUOUS JOINTLY with the width test.
+  IMPORTANT 1: weights untested on the stratified-clustered path — dropping the weight passes all 1748
+  tests and moves the interval [15.462,24.972] -> [16.811,30.275]. weight_by + cluster_by + stratify_by
+  are independently declarable, so an ordinary config reaches it.
+  IMPORTANT 2: every stratum drawing the FIRST stratum's cluster count passes all 1748 tests — the
+  fixture is 2/2/2 and the spy pins only the TOTAL. THE FIX IS NOT A FIXTURE RESHUFFLE: stratum_pools[0]
+  sorts by content, so even 3/2/1 totals 6 and stays invisible. Requires a PER-STRATUM COMPOSITION
+  assertion. Generalizes: when a spy counts an aggregate, an allocation among the parts is exactly what
+  it cannot see.
+  IMPORTANT 3: a zero-width interval is reachable — content-identical clusters in every stratum give
+  Interval(0.5, 0.5) where the row-level sibling returns None. TASK 9'S ❌ IN A NEW PLACE. Inherited (the
+  unstratified path has it at G=2) but stratification makes it EVERYDAY-REACHABLE WITH BINARY METRICS.
+  Ruled: fix the stratified path to match the sibling; fix the pre-existing case too IF one line away,
+  but STOP AND REPORT rather than moving any behaviour an existing test pins.
+  Minor worth carrying: validate compares str(value) while stats compares RAW values, so the
+  dual-listed error disagrees on 1 vs "1" — two enforcement points for one rule giving different answers.
+Task 10: COMPLETE (commits 97c911c, 3af1e5a, 2348477, c5de085). 1752 passed + 2 xfailed; ruff and mypy
+  clean. All 3 Importants and all 3 Minors closed.
+  ON IMPORTANT 3 IT DID EXACTLY WHAT THE RULING ASKED: checked FIRST whether any existing test pinned
+  the wrong zero-width behaviour, found none, and therefore fixed BOTH the stratified and the
+  pre-existing unstratified path — replacing the count-based degenerate check (len(group) < 2) with a
+  CONTENT-based one. Had a test pinned it, the ruling required stopping instead.
+  The total-count spy became a SEQUENCE-RECORDING spy over a 1/2/3 fixture, which catches both the
+  original range(1) mutation and the every-stratum-draws-the-first-count mutation the total-only test
+  could not see. The str()/"no value" normalization went VALIDATE's way, since
+  units.stratum_varies_within_cluster is the established shared authority elsewhere.
+  CONSTRUCTIONS (tasks 9-10) COMPLETE. stats.py now carries the stratified draw and the clustered x
+  stratified composition, both verified against independent reference implementations.
+  BASE for task 11 is c5de085.
+Task 11: dispatched — resample_draws for a column metric. A VERIFY-AND-PIN task: decision 2 rests on the
+  invariant that a column draw is never degenerate, and this task is where that invariant is proved
+  rather than assumed.
+Task 11: implemented, commit d5f6b6b. 1762 passed + 2 xfailed (baseline 1752 + 10 new); ruff and mypy
+  clean. THE INVARIANT DECISION 2 RESTS ON IS VERIFIED, NOT ASSUMED: no reachable degenerate column draw
+  in the unweighted, weighted or stratified branches, gated respectively by n >= 2, checked_weights /
+  usable_weight's finite-positive guard, and non-empty stratum pools by construction. PROVED BY MUTATION
+  rather than argued — relaxing usable_weight's guard from <= 0 to < 0 (admitting a zero weight) makes
+  the 0/0.0 weight-refusal parameters FAIL WITH ZeroDivisionError, so the pin rests on that guard rather
+  than on luck.
+  EIGHTH BRIEF DEFECT, AND IT IS THE FALSE-TENSE CLASS AGAIN. My brief's docstring text claimed, PRESENT
+  TENSE, that summarize_step already records resample_draws for column metrics as "the requested n". It
+  does not — summarize_step's recorded-column branch carries NO resample_draws key at all; that wiring
+  is task 12/14's, and E-STATS-RESAMPLE-UNSUPPORTED still refuses a declared resample end to end.
+  Writing the sentence verbatim would have shipped a docstring claiming a guarantee the code does not
+  provide. It reworded to state the invariant CONDITIONALLY for whenever the wiring lands, and recorded
+  the distinction in spec-defects.md. The spec decision itself is unaffected — only the tense was wrong.
+  RUNNING COUNT: this is the fourth time in the slice that prose written from the FINISHED slice's point
+  of view landed in a brief and would have shipped as a present-tense claim. The pattern is now
+  well-established enough to belong in CLAUDE.md at merge.
+Task 11 review dispatched. BASE c5de085, HEAD d5f6b6b.
+Task 11 review: spec ❌, quality 1 CRITICAL, 3 Important, 2 Minor. THE TASK WORKED — its job was to test
+  an invariant, and the invariant turned out FALSE.
+  CRITICAL — "a column draw is always defined" IS FALSE. Non-finite column values are reachable END TO
+  END: coerce_scalars accepts nan/inf, summarize_step's _is_numeric never checks finiteness, and the
+  column branch passes them through — TODAY, ALREADY PRODUCING ci95: [NaN, NaN]. Once 12/14 wires the
+  column path the record would claim resample_draws: 2000 where the DERIVED SIBLING ON THE SAME DATA
+  SAYS 0. A second instance needs no user nan at all: usable_weight gates each weight finite-positive
+  but Σw CAN OVERFLOW — weights=[1e308]*4 gives Interval(nan, nan).
+  AND (Interval, int) IS NOT THE REMEDY — percentile_over_units has no survivor filter, so the tuple
+  returns (Interval(nan,nan), 2000): the same false claim with more ceremony. DECISION 2'S CONCLUSION
+  SURVIVES; ITS PROOF DOES NOT. Ruled: name the finiteness CONDITION in docstring and defect entry, and
+  FILE THE NON-FINITE-COLUMN GAP SEPARATELY with its own owner — it is pre-existing, bigger than this
+  task, and produces a wrong published number today.
+  THE ❌ TRIGGER: the defect entry cites reference.md § Statistical reporting for a two-provenance split
+  THAT SECTION DOES NOT STATE (it says the field is "recorded beside every derived metric" and never
+  mentions columns). The ruling CONTRADICTS the document rather than resting on it, and in this project
+  the document changes first.
+  IMPORTANT: the None question is now demonstrably incoherent — a column refused by 9/10's rule writes
+  resample_draws: 2000 beside ci95: null, a positive evidence count for a REFUSED interval, while the
+  draws<min_honest_draws path reads correctly. reference.md's three-way scheme (null / 0 / survivors)
+  PREDATES REFUSALS and may need a fourth case rather than being forced.
+  MINOR THAT EXPLAINS THE WHOLE FAILURE: the adversarial set varied CONFIG SHAPE, not VALUE DOMAIN. ONE
+  nan CASE WOULD HAVE CAUGHT THE CRITICAL IMMEDIATELY (low <= high is False for nan). That is CLAUDE.md's
+  own named trap — "Varying config shape when the property is about roster content" — in new clothes,
+  and it is why the invariant survived ten tests.
+Task 11: COMPLETE (commits d5f6b6b, 30e8d03). 1765 passed + 2 xfailed; ruff and mypy clean. Critical,
+  all 3 Importants and both Minors closed. The non-finite gap is FILED SEPARATELY owned by task 12/14,
+  with two tests pinning current behaviour EXPLICITLY AS A KNOWN UNFIXED GAP rather than as correctness —
+  the right shape, given task 9 shipped a test pinning wrong behaviour as correct.
+  RULED BY THE IMPLEMENTER AND ACCEPTED: resample_draws is `null` whenever ci95 is `null` (all three
+  refusal reasons), otherwise the requested n. That makes the COLUMN field genuinely TWO-VALUED against
+  the derived metric's THREE-valued scheme — an asymmetry it named explicitly as owed content for
+  reference.md rather than smuggling in.
+OWED TO reference.md, ROUTED TO TASK 14 (the column percentile wiring, which is where the behaviour
+  lands): § Statistical reporting currently says resample_draws is "recorded beside every derived
+  metric" and never mentions columns. It owes (a) the column provenance, and (b) the two-valued vs
+  three-valued asymmetry above.
+Task 12: dispatched — THE RETIREMENT. Carries four items recorded earlier: drop `NOT BUILT; ` leaving
+  `# bootstrap`; add the E-STATS-RESAMPLE-METHOD reference to § Statistical reporting now that task 4
+  registered it; "Four declarations are not yet built" -> "Three"; and RE-DATE the feasibility doc's
+  § Executability rather than editing it in place. BASE 30e8d03.
+Task 12: implemented, commits 2fdc957 + 9fa2366 + ef8880f. 1767 passed + 2 xfailed; ruff and mypy clean.
+  E-STATS-RESAMPLE-UNSUPPORTED IS RETIRED. Both required mutations confirmed (re-adding the resample
+  tuple; deleting the whole loop, which must fail the null_test control).
+  NINTH AND TENTH BRIEF DEFECTS, BOTH FALSE-TENSE: (1) my step 3(b) said "Task 2 already removed
+  `NOT BUILT;`" — false, task 2 DELIBERATELY KEPT it per my own pre-flight ruling, and the brief's own
+  top-matter item 1 said so; the brief contradicted itself. (2) step 3(a)'s prescribed docstring claimed
+  cli.command_run ALREADY threads a declared resample into every interval construction — false at this
+  commit; cli.py still hardcodes derived_metric_draws = 2000 and that wiring is tasks 13-14. It called
+  advisor() before writing anything and wrote the true statement instead.
+  IT ALSO REPAIRED FOUR PRE-EXISTING TESTS THAT USED THE RETIRED CODE AS THEIR POSITIVE COMPANION —
+  exactly the weakening I asked it to look for. They now use a second, independent _check_resample
+  finding. One now-contradicted test deleted. It also fixed a vacuity risk in the brief's OWN acceptance
+  test (cwd-relative rglob path, no non-empty guard).
+  CAREFUL SEQUENCING WORTH KEEPING: it split into two commits so the feasibility doc's re-dated table
+  is measured against a tree where the refusal is ACTUALLY GONE, rather than against the brief-specified
+  parent sha which still carries it.
+Task 12 review dispatched. BASE 30e8d03, HEAD ef8880f.
+Task 12 review: spec ✅, quality 1 Important + 3 Minor. Retirement clean and wholesale; both brief
+  defects confirmed; the two-commit split confirmed correct reasoning.
+  THE OPEN WINDOW IS SILENT, NOT WRONG — the question I most wanted settled. statistics.resample is read
+  at exactly ONE place in src/, nothing echoes the declared values, and resample_draws plus the emitted
+  method strings report WHAT ACTUALLY HAPPENED. So a declared n: 5000 sits beside resample_draws: 2000
+  in run.yaml: DETECTABLE, not hidden. That is the right state for a two-task window.
+  IMPORTANT — A FALSE BEHAVIOUR CLAIM INTRODUCED INTO THE RE-DATED SECTION, which is the worst place for
+  one because the section is dated and reads as measured. It said the plugin registry "gates every one of
+  them before any other check runs". validate COLLECTS — probed, a config declaring a resolver + holdout
+  + faulty resample reports ALL FOUR codes together. Told to re-read the whole section against the same
+  standard: anything phrased as what HAPPENS must be OBSERVED, not inferred from the code's shape.
+  MINOR WORTH THE NAME: the two repaired n-side tests use `method: "bootstap"` as companion, which is
+  checked UPSTREAM of the n leaf — a return after the n check leaves both green while the docstrings
+  claim otherwise. The implementer was repairing exactly this failure mode in four other tests and then
+  reproduced it in its own.
+Task 12: COMPLETE (commits 2fdc957, 9fa2366, ef8880f, 462de50, a6407c0). 1766 passed + 2 xfailed; ruff
+  and mypy clean. The false "gates every one of them" claim is reworded after PROBING validate directly;
+  the upstream companion replaced with a downstream stratify_by one and mutation-confirmed; the
+  duplicate null_test control dropped after re-verifying the pre-existing one still catches the
+  whole-loop mutation alone; and five perishable comments ANCHORED TO COMMIT 2fdc957 with readers
+  pointed at cli.command_run/derived_metric_draws to check current state directly rather than trust
+  prose that goes stale at tasks 13-14. BASE for task 13 is a6407c0.
+Task 13: dispatched — THE LIVE REGRESSION HAZARD. Replacing the literal derived_metric_draws = 2000 with
+  a resolved value is exactly where an undeclared config could silently acquire a different draw count,
+  and task 1's two-document pin exists for this task and no other.
+Task 13: implemented, commits 220744b + 8b34b19. 1769 passed + 2 xfailed (+3 new); ruff and mypy clean.
+  TASK 1'S PIN IS STILL GREEN — the acceptance criterion this whole slice's first task existed to
+  provide, eighteen tasks later. Both required mutations applied/failed/reverted.
+  The stratify_by-for-derived gap was handled by STORING IT UNUSED on resample_spec for task 14 to
+  consume — the gap stays open but NOTHING IN THE RECORD IMPLIES IT IS CLOSED, which was the constraint.
+  First task in a while with no substantive brief/code disagreement (only six lines of line-number drift).
+Task 13 review dispatched. BASE a6407c0, HEAD 8b34b19. THE REGRESSION-HAZARD REVIEW.
+Task 13 review: spec ✅, quality 1 Important + 3 Minor, no Critical. THE DANGEROUS PART CAME OUT RIGHT
+  AND WAS VERIFIED, NOT ASSUMED. .get("resample", …) fails the ABSENT-KEY pin while the explicit-null pin
+  passes — the two-document distinction intact, which is the whole reason task 1 wrote two tests.
+  Deriving `declared` from n != 2000 fails specifically at the {"n": 2000} assertion. A mutation the
+  implementer did NOT run — resolver call left in, derived_metric_draws hardcoded — fails the declared-n
+  test, so the resolved value really reaches all six sites.
+  DECISIVE: TASK 1'S PIN STILL REACHES THE CHANGED CODE. It pins the derived ci95 NUMERICALLY and it fell
+  to the first mutation. A green pin is not evidence on its own — a pin can survive by no longer reaching
+  what it guarded — and this one was checked for exactly that.
+  The stratify_by decision met its constraint UNDER TEST: with stratify_by declared, run.yaml carries
+  only the verbatim config echo plus percentile_over_units / resample_draws. Nothing implies a stratified
+  derived draw.
+  IMPORTANT: the new threading comment sits at the ONE LINE three other files point readers to, and it
+  (a) says "statistics.resample is honored as of H4a" unqualified when ONLY `n` is honored, (b) quotes
+  § Statistical reporting's "resolved values are recorded beside the interval" AS A REQUIREMENT THIS
+  COMMIT MEETS when it does not (that is task 17), and (c) REPLACED A COMMENT THAT WAS SCRUPULOUS ABOUT
+  NAMING ITS OWN OPEN GAP — undoing task 12's anchoring discipline at the site that most needs it.
+  MINOR RAISED IN PRIORITY BECAUSE TASKS 14-17 WORSEN IT: test_the_resample_block_is_resolved_once does
+  NOT distinguish "resolved once" from "read seven times" — it calls the resolver directly and would pass
+  if seven sites resolved independently. ONCE-NESS IS GUARDED BY NOTHING IN THE SUITE, immediately before
+  four tasks add read sites. The false docstring text was verbatim from MY brief.
+Task 13: COMPLETE (commits 220744b, 8b34b19, ce2f2db). 1770 passed + 2 xfailed; ruff and mypy clean.
+  All four findings closed. THE ONCE-NESS TEST IS NOW REAL — a call-counting monkeypatch around a full
+  run_a_project, confirmed to fail when a redundant resolver call is inserted. That guarantee now holds
+  for tasks 14-17, which are the tasks that add read sites. The threading comment states only what is
+  true at this commit and names task 17 for the recorded-values requirement.
+  BASE for task 14 is ce2f2db.
+Task 14: dispatched — THE PAYLOAD. Where a declared resample finally changes a recorded column's
+  interval, and where the partly-honoured window opened by task 12 CLOSES. Carries the two reference.md
+  amendments owed from task 11 and the percentile_of_derived strata gap routed from tasks 9/13.
+Task 14: implemented, commit (this task). 1776 passed + 2 xfailed (baseline 1770 + 6 new); ruff and
+  mypy clean. All three required mutations (dropped `weights=` in the unclustered percentile call,
+  emitting `resample_draws` unconditionally, and gating `resample_columns` on anything but
+  `resample_spec["declared"]`) applied, confirmed FAIL against a named test, `__pycache__` cleared,
+  reverted in place, confirmed PASS. Task 1's acceptance pin caught the gate mutation directly.
+  BRIEF/CODE DISAGREEMENT FOUND (as flagged): the brief's own Step 1 test asserted
+  `resample_draws == 2000` for a one-unit column under a declared resample — a refused (`ci95: null`)
+  interval. The spec-defects.md ruling this brief itself cites says the field must be `null` whenever
+  `ci95` is, for exactly this reason ("recording the requested `n` there would assert survivor
+  evidence for a refused interval"). Implemented per the ruling, not the brief's literal snippet;
+  the test was rewritten and renamed
+  (`test_a_column_below_two_units_reports_a_null_draw_count_under_resample`) to assert `None`, and a
+  new spec-defects.md entry ("A column's resample_draws under a refused interval is null, not the
+  requested n") records which test was wrong and why. Caught before implementing via `advisor()`,
+  which cross-checked the brief's test against spec-defects.md's own text before any code was written.
+  STRATA DECISION: shipped WITHOUT threading `stratify_by` into either the column or the derived path.
+  Threading it into the column path alone (the only one cheap enough for this task, since
+  `percentile_over_units`/`_clustered` already accept `strata`) would have put two intervals in one
+  table under different designs with `method` reading identically either way — worse than today's
+  status quo, where both paths agree by both ignoring it. A new spec-defects.md entry
+  ("statistics.resample.stratify_by is checked by validate and honoured by nothing") records the gap
+  and names what closing it needs: `percentile_of_derived` gaining a `strata` parameter first (a real
+  construction — the derived draw has no per-unit value to stratify directly), with the column wiring
+  landing alongside it rather than ahead of it. `cli.py`'s stale "task 14 wires stratified column
+  resampling" / "declared is unread until task 14" comments (written by tasks 12-13) were rewritten to
+  state what this commit actually does.
+  `reference.md` § Statistical reporting gained the column-provenance paragraph task 11 named as owed:
+  absent when undeclared, `null` when declared but `ci95` is, otherwise the requested `n` — two-valued
+  against the derived metric's three-valued scheme, named as a real asymmetry rather than smoothed over.
+  The retry `summarize_step` call (post derived-key-collision) deliberately does NOT receive
+  `resample_columns`, so a column's construction cannot depend on whether its sibling derived metrics
+  happened to collide — commented at the call site.
+  The `cli.py` warning loop now reads `resample_draws` off recorded columns too; commented (not a
+  runtime assert) why `used == 0` and `used < derived_metric_draws` cannot fire for one, resting on
+  Task 11's verified invariant and this task's `null`-or-`n` correction of it.
+  BASE for task 15 is this commit.

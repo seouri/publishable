@@ -5136,3 +5136,61 @@ failure to a real refusal (`ci95: null`, `resample_draws: null` per the ruling a
 publishing `nan` under a false `resample_draws: n`. This is bigger than task 11's scope: it likely
 also affects the unweighted and clustered percentile constructions and the `t_over_units` family,
 none of which check finiteness either, and none of which this entry claims to have surveyed.
+
+## `statistics.resample.stratify_by` is checked by `validate` and honoured by nothing
+
+Found during task 14's review (2026-08-15, H4a, `ce2f2db`). `validate._check_resample` refuses a
+`stratify_by` naming an undeclared attribute (§ Validation's *Resample strata exist* /
+*Resample strata survive clustering* rows), and `cli._resolved_resample` normalizes and carries it
+on `resample_spec`, so a config declaring it validates clean and looks accepted. Nothing downstream
+reads it: `percentile_over_units`/`percentile_over_units_clustered` accept a `strata` parameter
+(built and verified in tasks 9–10) but task 14's column-resample wiring does not pass one, and
+`percentile_of_derived` has no `strata` parameter to pass one to at all. So a declared
+`resample.stratify_by` changes no arithmetic anywhere today — a stratified bootstrap by name, an
+unstratified one by construction.
+
+**Why task 14 didn't close it, deliberately rather than by oversight.** Threading `strata` into
+the column path alone (the cheaper of the two, since the construction already exists) would put two
+intervals in one `aggregated` block computed under different designs — a stratified column's
+`percentile_over_units` beside an unstratified derived metric's `percentile_of_derived` — with
+`method` reading identically either way (`percentile_over_units` doesn't encode whether `strata`
+was passed) and nothing else in the record to tell a reader which is which. That is worse than the
+status quo, not better: today both paths agree (neither honours it), so no divergence is visible
+even though neither is doing what the config asked. Refusing the combination outright was
+considered and rejected too — `reference.md` § Weighted samples documents `resample.stratify_by`
+with a worked YAML as an accepted, ordinary declaration, so refusing it retroactively is a document
+change `CLAUDE.md` puts far outside a single task's scope.
+
+**What is owed, and by whom.** Threading `strata` into `percentile_of_derived` — recomputing
+`aggregate` on a within-stratum resample rather than an unconditional one — is a real construction,
+not wiring: the derived case has no per-unit value to stratify directly, so the draw itself has to
+change shape (stratified indices into the collapsed table, then the same per-draw `compute` call).
+Only once that exists can a slice safely wire `strata` into the column path too, landing both
+together so the two constructions never disagree about whether stratification happened. Until then,
+`stratify_by` remains resolved and carried on `resample_spec` but read by no interval construction —
+a fact stated in `_resolved_resample`'s own docstring and in `cli.py`'s comment beside the primary
+`summarize_step` call, so a future reader hits the citation before hitting the gap.
+
+## A column's `resample_draws` under a refused (too-few-units) interval is `null`, not the requested `n`
+
+Found during task 14's implementation (2026-08-15, H4a, `ce2f2db`), reviewing the brief's own Step 1
+test against the ruling two entries above ("`resample_draws` records the requested `n`, not a
+survivor count"). That entry's own text rules: **"`resample_draws` is `null` whenever `ci95` is
+`null`, for any of the three reasons [`percentile_over_units` returns `None`]."** The brief's fourth
+test (`test_a_column_below_two_units_reports_no_interval_under_resample`) asserted
+`got["pred"]["resample_draws"] == 2000` for a one-unit column under a declared resample — an
+interval that is `None`, so `ci95` is `null` — which is the exact case the ruling calls out by name
+and the exact incoherence its own prose warns against: "recording the requested `n` there would
+assert survivor evidence for a refused interval." This is the "one test pinned wrong behaviour as
+correct" the task's own "Where this goes wrong" guidance named without identifying which one.
+
+**Resolution:** implemented per the ruling. `summarize_step`'s emitted `resample_draws` is
+`draws if interval else None` (not unconditionally `draws`) whenever `resample_columns` is true and
+a `seed` is given; absent entirely otherwise. The test was rewritten as
+`test_a_column_below_two_units_reports_a_null_draw_count_under_resample`, asserting the key is
+present (a resample was declared and attempted) and `None` (nothing was produced to describe a draw
+count for) — distinct from the absent-key case, which means no resample was ever asked for. Both
+mutations — dropping the `if interval else None` guard, and gating the key's presence on anything
+but `resample_columns and seed is not None` — are pinned by this test and by
+`test_the_undeclared_resample_shape_is_pinned_absent_key` respectively; both were run and confirmed
+to fail before being reverted.

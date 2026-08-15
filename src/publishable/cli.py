@@ -1023,7 +1023,8 @@ def _resolved_resample(doc: dict[str, Any]) -> dict[str, Any]:
     the first turns a RECORDED COLUMN into a percentile interval — a column has
     a t-interval available, so resampling it is a choice and `resample` is what
     makes it, while a derived metric has no such fallback. Reading `declared`
-    off `n != 2000` would silently make that sentence false.
+    off `n != 2000` would silently make that sentence false. `command_run` reads
+    `declared` (H4a task 14) to gate `summarize_step`'s `resample_columns`.
 
     **`.get("resample") or {}`, never `.get("resample", …)`**: `materialize.py`
     writes no `resample` key at all and a hand-written config may write
@@ -1033,12 +1034,18 @@ def _resolved_resample(doc: dict[str, Any]) -> dict[str, Any]:
     `stratify_by` goes through `units.stratum_names`, the same normalization the
     draw balances on and `validate._check_resample` checks names against, so a
     bare `stratify_by: site` is one name to all three. Resolved here and carried
-    on the returned dict; nothing in `command_run` reads it as of this commit.
-    `percentile_of_derived` takes no `strata` parameter today, so even once a
-    caller starts reading `stratify_by`, a derived metric has no construction
-    that could honor it yet — only a later task's column-metric wiring could.
-    That is a fact about `stats.py` today, not a commitment about which future
-    task closes it.
+    on the returned dict; **nothing in `command_run` reads it, including after
+    task 14** — `percentile_over_units`/`percentile_over_units_clustered` accept
+    a `strata` parameter and could honour it for a recorded column, but
+    `percentile_of_derived` takes none, and wiring stratification into the
+    column path alone would leave one table holding two intervals computed
+    under different designs (a stratified column beside an unstratified
+    derived metric) with nothing in the record to tell a reader which is
+    which. Left unwired on both paths instead, deliberately, so a declared
+    `stratify_by` today changes no arithmetic anywhere — see
+    `docs/superpowers/spec-defects.md` for the open gap. That is a fact about
+    both `stats.py` and this function today, not a commitment about which
+    future task closes it.
     """
     declared = ((doc.get("statistics") or {}).get("resample")) or {}
     if not isinstance(declared, dict):
@@ -1548,19 +1555,25 @@ def command_run(config_path: Path) -> int:
             # `statistics.resample` is resolved ONCE here (H4a task 13) rather
             # than at each read site, so the record and the arithmetic cannot
             # come to disagree by two sites resolving the same declaration
-            # independently. As of this commit only `resample_spec["n"]` is
-            # read — threaded below to the six existing `derived_metric_draws`
-            # sites, unchanged from before this task. `method` and
-            # `stratify_by` are resolved and carried on `resample_spec` but
-            # nothing yet reads them: `method` is unread until a second method
-            # exists to choose between (`validate.RESAMPLE_METHODS` is
-            # `("bootstrap",)` only), `stratify_by` is unread until task 14
-            # wires stratified column resampling, and `declared` is unread
-            # until task 14 gates the column-percentile switch on it. None of
-            # `reference.md` § Statistical reporting's "resolved values ...
-            # recorded beside the interval" is met yet — task 17 is what
-            # writes that record; today only a survivor count sits beside the
-            # interval.
+            # independently. `resample_spec["n"]` is threaded below to the six
+            # existing `derived_metric_draws` sites, unchanged from before
+            # task 13. `resample_spec["declared"]` gates `summarize_step`'s
+            # `resample_columns` at the primary call below (H4a task 14): a
+            # declared `resample` is what turns a recorded column's interval
+            # from `t_over_units` into `percentile_over_units`, not `n` on its
+            # own — a config asking for exactly 2000 draws and a config asking
+            # for nothing both resolve to `n: 2000`. `method` stays unread
+            # (`validate.RESAMPLE_METHODS` is `("bootstrap",)` only, so there
+            # is nothing yet to choose between). **`stratify_by` stays
+            # resolved and unread by this commit too** — `percentile_of_derived`
+            # takes no `strata` parameter, and wiring it into the column path
+            # alone (which `percentile_over_units`/`_clustered` could honour)
+            # would put two intervals in one table under different designs
+            # with nothing in the record distinguishing them; see
+            # `docs/superpowers/spec-defects.md`. None of `reference.md` §
+            # Statistical reporting's "resolved values ... recorded beside the
+            # interval" is met yet — task 17 is what writes that record; today
+            # only a survivor count sits beside a derived metric's interval.
             resample_spec = _resolved_resample(doc)
             derived_metric_draws = resample_spec["n"]
             aggregate_where = f"{doc.get('experiment_type', '')}.aggregate"
@@ -1740,6 +1753,7 @@ def command_run(config_path: Path) -> int:
                             beside_n=cond_beside_n,
                             weights=weights,
                             clusters=clusters,
+                            resample_columns=resample_spec["declared"],
                         )
                     except ContractError as exc:
                         prefix = f"{exc.code} " if exc.code else ""
@@ -1758,6 +1772,17 @@ def command_run(config_path: Path) -> int:
                         # containment path. (A weight core cannot use cannot
                         # arrive here: `attrition` above gates the same mapping
                         # through `kish_effective_n`, outside any `try`.)
+                        # `resample_columns` deliberately NOT passed here (H4a
+                        # task 14): this retry passes no `derived`, `seed` or
+                        # `draws` either — its job is to reproduce the recorded
+                        # columns exactly as the first call built them, after a
+                        # derived-key fault, not to change their construction.
+                        # Passing `resample_columns=resample_spec["declared"]`
+                        # here would flip a column's interval to a percentile
+                        # one on the containment path only, so the same run
+                        # would record two different constructions for the
+                        # same column depending on whether its derived metrics
+                        # happened to collide.
                         step_summary = summarize_step(
                             collapsed,
                             counts,
@@ -1795,6 +1820,28 @@ def command_run(config_path: Path) -> int:
                     # bootstrap draw duplicates units by construction, and a
                     # template whose `aggregate` assumes distinct ones will
                     # raise on every draw rather than some.
+                    #
+                    # This loop now reads a RECORDED COLUMN's `resample_draws`
+                    # too (H4a task 14, once `resample_spec["declared"]` gates
+                    # `resample_columns` above) — before this task a column
+                    # carried no such key and `used is None` skipped it
+                    # silently. Neither branch below can fire for one:
+                    # `used == 0` would name `aggregate_where` — `aggregate`,
+                    # user code — as the source of a failure `aggregate` never
+                    # touched, since a column's interval never calls it. A
+                    # column's `resample_draws` is `null` (skipping both
+                    # branches, same as before) whenever `ci95` is, and
+                    # otherwise the *requested* `draws` exactly — never a
+                    # lesser survivor count — because a column's mean is a
+                    # statistic over a finite, non-empty sample and is always
+                    # defined once an interval exists at all, unlike a
+                    # template's recompute, which can fail draw by draw.
+                    # `used == derived_metric_draws` (not `<`) is what that
+                    # buys: the `elif` below can't fire either. See
+                    # `docs/superpowers/spec-defects.md` for the one gap this
+                    # rests on — non-finite recorded values or weights, which
+                    # nothing here checks — filed rather than silently
+                    # depended on.
                     for metric_key, metric in step_summary.items():
                         used = metric.get("resample_draws")
                         if used == 0:

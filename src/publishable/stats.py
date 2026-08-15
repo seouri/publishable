@@ -1392,6 +1392,7 @@ def summarize_step(
     beside_n: dict[str, Any] | None = None,
     weights: dict[str, Any] | None = None,
     clusters: dict[str, str] | None = None,
+    resample_columns: bool = False,
 ) -> dict[str, dict[str, Any]]:
     """Per-column value, basis, `n`, and interval over the collapsed unit table.
 
@@ -1565,6 +1566,35 @@ def summarize_step(
     A DERIVED metric takes the condition-wide figure from `counts` instead, as it
     does for `effective`: `aggregate` returned one number over the whole collapsed
     table, so there is no per-column carrier set to recompute over.
+
+    `resample_columns` is the gate a RECORDED COLUMN's interval construction reads
+    (H4a task 14). A column always has a `t_over_units` fallback available, so
+    resampling it is a *choice* — unlike a derived metric, which has no fallback
+    and is resampled whenever `resample`/`seed` let it be, whether or not
+    `statistics.resample` was ever declared. `resample_columns=True` (only when
+    `cli.py`'s `_resolved_resample(doc)["declared"]` is true) switches a column's
+    interval from `t_over_units`/`weighted_t_over_units` (or their `_clustered`
+    forms) to `percentile_over_units`/`percentile_over_units_clustered`, over the
+    same `values`/`column_weights`/`column_keys`/`clusters` the unresampled branch
+    already assembled — the `value` itself does not move, only the construction
+    of the interval around it.
+
+    `resample_draws` is **absent** from a column's block when `resample_columns`
+    is `False` (or `seed` is `None`): no resample was attempted, and a `null`
+    there would claim otherwise. When `resample_columns` is `True` it is present
+    and **two-valued**, not the derived metric's three-valued `null`/`0`/*n*
+    scheme: `null` when `interval is None` (fewer than two units, or too few
+    draws for the confidence level — the same reasons `percentile_over_units`
+    returns `None` at all) — there is no interval for a draw count to describe,
+    so recording one would assert survivor evidence for a refused draw — and
+    otherwise the *requested* `draws`, never a survivor count. A column's draw
+    statistic is a mean (or weighted mean) over a non-empty, finite sample, which
+    is always defined once an interval exists at all, so unlike
+    `percentile_of_derived` there is no per-draw failure to filter and no `0`
+    bucket ("attempted, every draw individually degenerate") for a column to
+    reach — see `docs/superpowers/spec-defects.md` for the non-finite-input gap
+    this leaves open, which is a known, separately filed defect and not this
+    docstring's claim.
     """
     columns: list[str] = []
     for cols in collapsed.values():
@@ -1589,17 +1619,41 @@ def summarize_step(
             n_block["clusters"] = cluster_count_of(clusters, column_keys)
         interval: Interval | None
         value: float | None
+        column_weights: list[Any] | None = None
         if weights is None:
             value = mean_of(values)
+        else:
+            column_weights = [weights[key] for key, _ in carried]
+            value = weighted_mean_of(values, column_weights)
+            n_block["effective"] = kish_effective_n(column_weights)
+        # A recorded column has a `t_over_units` fallback available, so
+        # resampling it is a CHOICE and `statistics.resample` is what makes
+        # it — the asymmetry with a derived metric, which has no fallback and
+        # is resampled either way, below. The VALUE computed above is
+        # unchanged in every branch: § Weighted samples puts the weights "in
+        # the estimate rather than in the drawing", and § Clustered units
+        # makes the cluster the draw while `n.clusters` (set above) still
+        # reports the count. Only the interval's construction moves.
+        if resample_columns and seed is not None:
+            interval = (
+                percentile_over_units(values, seed, draws=draws, weights=column_weights)
+                if clusters is None
+                else percentile_over_units_clustered(
+                    values, column_keys, clusters, seed, draws=draws, weights=column_weights
+                )
+            )
+        elif weights is None:
             interval = (
                 t_over_units(values)
                 if clusters is None
                 else t_over_units_clustered(values, column_keys, clusters)
             )
         else:
-            column_weights = [weights[key] for key, _ in carried]
-            value = weighted_mean_of(values, column_weights)
-            n_block["effective"] = kish_effective_n(column_weights)
+            # `weights is not None` here (the `elif` above took the `None`
+            # case), so `column_weights` was assigned in the first `if` block
+            # above — mypy can't see that across the two separate
+            # `if`-statements, hence the assert.
+            assert column_weights is not None
             interval = (
                 weighted_t_over_units(values, column_weights)
                 if clusters is None
@@ -1614,6 +1668,24 @@ def summarize_step(
             "n": n_block,
             "ci95": [interval.low, interval.high] if interval else None,
             "method": interval.method if interval else None,
+            # Present only under a declared resample (`resample_columns` true
+            # and a `seed` given), and then TWO-valued rather than a survivor
+            # count: `null` when `interval is None` (too few units, or too
+            # few draws for the confidence level) — there is no interval for
+            # a draw count to describe, and recording one would assert
+            # survivor evidence for a draw that never happened — otherwise
+            # the REQUESTED `draws`, since a column's mean is always defined
+            # once an interval exists at all and so has no per-draw failure
+            # to survive-count the way a derived metric's recompute does.
+            # ABSENT rather than `null` when no resample is declared at
+            # all — `null` already means "declared, but the interval came
+            # back empty", and reusing it for "never asked" would erase that
+            # distinction (`docs/superpowers/spec-defects.md`).
+            **(
+                {"resample_draws": draws if interval else None}
+                if resample_columns and seed is not None
+                else {}
+            ),
             # `W-STATS-FAMILY` warns the person; this null tells the record. The
             # generated config declares `statistics.correction: holm` by default,
             # so a metric that said nothing here could be misread as corrected —

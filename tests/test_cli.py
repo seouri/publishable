@@ -6960,3 +6960,46 @@ def test_the_resample_block_is_resolved_exactly_once(tmp_path, capsys, monkeypat
         statistics={"correction": "holm", "resample": {"n": 500}},
     )
     assert len(calls) == 1
+
+
+def test_a_declared_resample_gives_every_column_a_percentile_interval(tmp_path, capsys):
+    """End to end, and the assertion the `resample_draws` warning loop needs:
+    `cli`'s loop over `step_summary` reads `resample_draws` on EVERY metric, and
+    a column's is now present. `used == 0` would emit
+    `W-STATS-AGGREGATE-FAILED` naming the template's `aggregate`, which never
+    touched a recorded column — a lie. A column's `used` is the requested `n`
+    (whenever its `ci95` is non-null) and `n >= 80` is enforced at validate
+    time (`E-STATS-RESAMPLE-N`), so neither branch can fire, and this pins it."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        aggregate_returns="mean_pred",
+        units=40,
+        statistics={"correction": "holm",
+                    "resample": {"method": "bootstrap", "n": 500}},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert aggregated["pred"]["method"] == "percentile_over_units"
+    assert aggregated["pred"]["resample_draws"] == 500
+    assert aggregated["pred"]["ci95"] is not None
+    # The derived metric still resamples, at the same resolved count.
+    assert aggregated["mean_pred"]["method"] == "percentile_over_units"
+    assert aggregated["mean_pred"]["resample_draws"] == 500
+    # Neither warning fires for the column.
+    assert "W-STATS-AGGREGATE-FAILED" not in doc["stdout"]
+    assert "W-STATS-RESAMPLE-THIN" not in doc["stdout"]
+
+
+def test_an_undeclared_resample_leaves_a_column_untouched_end_to_end(tmp_path, capsys):
+    """The negative half of the test above, and the acceptance criterion this
+    task must not disturb: with no `statistics.resample` declared, a recorded
+    column keeps its `t_over_units` interval and no `resample_draws` key at
+    all, byte-identical to before this task's wiring landed."""
+    doc = run_a_project(
+        tmp_path, capsys=capsys, aggregate_returns="mean_pred", units=40,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert aggregated["pred"]["method"] == "t_over_units"
+    assert "resample_draws" not in aggregated["pred"]
