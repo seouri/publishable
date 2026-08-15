@@ -33,7 +33,7 @@ from publishable.sweep import (
 )
 from publishable.templates.base import BaseTemplate
 from publishable.templates.discovery import is_local_template
-from publishable.templates.registry import get_template, template_names
+from publishable.templates.registry import get_template, unknown_template_message
 from publishable.units import (
     COLLAPSE_RULES,
     DRAWN_ASSIGN_METHODS,
@@ -516,9 +516,7 @@ def validate_config(
         c.error(
             "E-TEMPLATE-UNKNOWN",
             "experiment_type",
-            f"names `{name}`, which no template — core's, an installed plugin's, "
-            f"or this project's own `templates/` — registers "
-            f"(known: {', '.join(template_names(repo_root))})",
+            unknown_template_message(name, repo_root),
         )
         return None  # every later check reads the spec
 

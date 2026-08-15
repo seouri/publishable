@@ -447,6 +447,20 @@ def test_an_unknown_template_still_reports_exactly_one_finding(write_config):
     assert codes(write_config({"experiment_type": "llm_diagnostic"})) == {"E-TEMPLATE-UNKNOWN"}
 
 
+def test_a_missing_or_empty_experiment_type_is_the_same_unknown_template(write_config):
+    """§ Errors' `E-TEMPLATE-UNKNOWN` row now states its condition as "missing,
+    empty, or names a template ... registers" — `name = doc.get("experiment_type", "")`
+    defaults an absent key to the same empty string an explicit `""` writes, so
+    both routes through `get_template("", repo_root)` finding nothing, and both
+    draw the code with an empty backtick pair in the message rather than some
+    earlier schema check intercepting either shape first."""
+    assert codes(write_config({"experiment_type": ""})) == {"E-TEMPLATE-UNKNOWN"}
+    assert codes(write_config({"experiment_type": _DELETE})) == {"E-TEMPLATE-UNKNOWN"}
+    assert "names ``," in messages_by_code(write_config({"experiment_type": ""}))[
+        "E-TEMPLATE-UNKNOWN"
+    ]
+
+
 def test_the_unknown_message_lists_local_templates_among_the_known(
     git_repo: Path, write_config
 ):

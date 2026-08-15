@@ -18,13 +18,14 @@ from publishable.cli import (
     _wide_swept_paths,
     main,
 )
-from publishable.diagnostics import EXIT_INVOCATION, EXIT_OK, EXIT_PARTIAL, EXIT_WRONG
+from publishable.diagnostics import EXIT_INVOCATION, EXIT_OK, EXIT_PARTIAL, EXIT_WRONG, Collector
 from publishable.errors import ContractError
 from publishable.generators.experiment import generate_experiment
 from publishable.generators.step import generate_step
 from publishable.replication import LABEL_JOIN
 from publishable.runner import attrition
 from publishable.scope import Execution
+from publishable.validate import validate_config
 
 Ran = namedtuple("Ran", ["condition_index", "repeat_label"])
 
@@ -327,11 +328,17 @@ def test_generate_experiment_resolves_a_project_local_template(tmp_path: Path):
 def test_generate_experiments_unknown_template_message_matches_validates(tmp_path: Path):
     """`E-TEMPLATE-UNKNOWN` is one code with two emitters — this raise and
     `validate_config`'s finding — and `reference.md`'s one § Errors row
-    describes both, so the wording must agree. Assert the exact message
-    rather than a substring the template name would satisfy either way:
-    the local template is named `cohort_local` and the unknown name is
-    `not_anywhere`, so neither could pass by an interpolated name coinciding
-    with the other."""
+    describes both, so the wording must agree. Nothing pins the two
+    *identical* just because each test happens to spell the same literal:
+    that would pass even if the two sites had quietly diverged, since a
+    hard-coded string can drift from the code it was copied from without
+    either test noticing. So this drives both surfaces from the same repo
+    and the same unknown name and asserts the **live outputs equal each
+    other**, not each against its own separately maintained literal.
+
+    Distinct names throughout: the local template is `cohort_local`, the
+    unknown name is `not_anywhere` — neither assertion could pass by an
+    interpolated name coinciding with the other."""
     root = tmp_path / "proj"
     data = tmp_path / "data"
     data.mkdir()
@@ -345,6 +352,23 @@ def test_generate_experiments_unknown_template_message_matches_validates(tmp_pat
         "    pass\n"
     )
 
+    cfg = generate_experiment(
+        repo_root=root,
+        name="a-pilot",
+        template_name="cohort_local",
+        input_dir=str(data),
+        output_dir=str(tmp_path / "results"),
+    )
+    doc = yaml.safe_load(cfg.read_text())
+    doc["experiment_type"] = "not_anywhere"
+    cfg.write_text(yaml.safe_dump(doc))
+
+    validate_collector = Collector()
+    validate_config(cfg, validate_collector)
+    validate_message = next(
+        f.message for f in validate_collector.findings if f.code == "E-TEMPLATE-UNKNOWN"
+    )
+
     with pytest.raises(ContractError) as excinfo:
         generate_experiment(
             repo_root=root,
@@ -354,6 +378,11 @@ def test_generate_experiments_unknown_template_message_matches_validates(tmp_pat
             output_dir=str(tmp_path / "results"),
         )
     assert excinfo.value.code == "E-TEMPLATE-UNKNOWN"
+
+    # THE ACTUAL GUARANTEE: the two live messages equal each other.
+    assert str(excinfo.value) == validate_message
+
+    # Pinned wording too, so a change to either is a deliberate edit here.
     assert str(excinfo.value) == (
         "names `not_anywhere`, which no template — core's, an installed "
         "plugin's, or this project's own `templates/` — registers "

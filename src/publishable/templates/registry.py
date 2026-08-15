@@ -52,3 +52,15 @@ def get_template(name: str, repo_root: Path | None = None) -> BaseTemplate | Non
 
 def template_names(repo_root: Path | None = None) -> list[str]:
     return sorted(_merged(repo_root))
+
+
+def unknown_template_message(name: str, repo_root: Path | None) -> str:
+    """The one wording for a name neither `get_template` call site resolved —
+    `validate`'s finding and `generate_experiment`'s raise both read this
+    rather than each keeping its own copy, so the two surfaces cannot drift
+    the way two hard-coded literals eventually would."""
+    return (
+        f"names `{name}`, which no template — core's, an installed plugin's, "
+        f"or this project's own `templates/` — registers "
+        f"(known: {', '.join(template_names(repo_root))})"
+    )
