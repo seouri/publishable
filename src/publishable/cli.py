@@ -1032,18 +1032,21 @@ def _resolved_resample(doc: dict[str, Any]) -> dict[str, Any]:
 
     `stratify_by` goes through `units.stratum_names`, the same normalization the
     draw balances on and `validate._check_resample` checks names against, so a
-    bare `stratify_by: site` is one name to all three. Resolved here and stored
-    for Tasks 14-15: `percentile_of_derived` takes no `strata` parameter today,
-    so a declared stratification is not yet honored for a derived metric — only
-    for a column, once Task 14 wires it in. Nothing downstream in this task
-    reads this field, so that gap stays exactly where it already was.
+    bare `stratify_by: site` is one name to all three. Resolved here and carried
+    on the returned dict; nothing in `command_run` reads it as of this commit.
+    `percentile_of_derived` takes no `strata` parameter today, so even once a
+    caller starts reading `stratify_by`, a derived metric has no construction
+    that could honor it yet — only a later task's column-metric wiring could.
+    That is a fact about `stats.py` today, not a commitment about which future
+    task closes it.
     """
     declared = ((doc.get("statistics") or {}).get("resample")) or {}
     if not isinstance(declared, dict):
         declared = {}
     n = declared.get("n")
+    method = declared.get("method")
     return {
-        "method": declared.get("method") or "bootstrap",
+        "method": method if isinstance(method, str) and method else "bootstrap",
         "n": n if isinstance(n, int) and not isinstance(n, bool) else 2000,
         "stratify_by": stratum_names(declared.get("stratify_by")),
         "declared": bool(declared),
@@ -1542,12 +1545,22 @@ def command_run(config_path: Path) -> int:
             # `data.units.attributes`, so `_attributed`'s early return actually
             # fires and such a project never rebuilds a row list at all.
             unit_attributes = {u.key: dict(u.attributes) for u in roster if u.attributes}
-            # `statistics.resample` is honored as of H4a: the block is resolved
-            # ONCE here and threaded to every read site, rather than each site
-            # reading the config for itself. `reference.md` § Statistical
-            # reporting requires the resolved values be recorded beside the
-            # interval, and two sites resolving the same declaration
-            # independently is how the record and the arithmetic disagree.
+            # `statistics.resample` is resolved ONCE here (H4a task 13) rather
+            # than at each read site, so the record and the arithmetic cannot
+            # come to disagree by two sites resolving the same declaration
+            # independently. As of this commit only `resample_spec["n"]` is
+            # read — threaded below to the six existing `derived_metric_draws`
+            # sites, unchanged from before this task. `method` and
+            # `stratify_by` are resolved and carried on `resample_spec` but
+            # nothing yet reads them: `method` is unread until a second method
+            # exists to choose between (`validate.RESAMPLE_METHODS` is
+            # `("bootstrap",)` only), `stratify_by` is unread until task 14
+            # wires stratified column resampling, and `declared` is unread
+            # until task 14 gates the column-percentile switch on it. None of
+            # `reference.md` § Statistical reporting's "resolved values ...
+            # recorded beside the interval" is met yet — task 17 is what
+            # writes that record; today only a survivor count sits beside the
+            # interval.
             resample_spec = _resolved_resample(doc)
             derived_metric_draws = resample_spec["n"]
             aggregate_where = f"{doc.get('experiment_type', '')}.aggregate"

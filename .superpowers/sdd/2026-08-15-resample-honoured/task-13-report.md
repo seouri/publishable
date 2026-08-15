@@ -1,18 +1,50 @@
 # Task 13 report — resolve `statistics.resample` once and thread it
 
-**Status:** done.
-**Commit:** `220744b` — feat: resolve statistics.resample once in command_run and thread it.
+**Status:** done, including a review-round fix pass.
+**Commits:** `220744b` (initial), plus a follow-up addressing coordinator review (see below).
 
-**Tests:** `uv run pytest` → 1769 passed, 2 xfailed (baseline 1766 passed + 2 xfailed, +3 new tests
-from this task); `uv run mypy` clean (42 source files); `uv run ruff check .` clean. Task 1's two
-pins (`test_the_undeclared_resample_shape_is_pinned_absent_key`,
-`test_the_undeclared_resample_shape_is_pinned_explicit_null`) still pass unmodified. Both named
-mutations applied, confirmed FAIL, reverted in place, confirmed PASS:
+**Tests:** `uv run pytest` → 1770 passed, 2 xfailed; `uv run mypy` clean (42 source files);
+`uv run ruff check .` clean. Task 1's two pins
+(`test_the_undeclared_resample_shape_is_pinned_absent_key`,
+`test_the_undeclared_resample_shape_is_pinned_explicit_null`) still pass unmodified. Mutations
+applied, confirmed FAIL, reverted in place, confirmed PASS:
 1. `.get("resample", {"n": 500})` in place of `.get("resample") or {}` → failed the absent-key case
    of `test_an_undeclared_resample_still_draws_two_thousand` (and Task 1's absent-key pin) while
    passing the explicit-`null` case, exactly the asymmetry the brief predicted.
 2. `"declared": n != 2000` in place of `"declared": bool(declared)` → failed
-   `test_the_resample_block_is_resolved_once`.
+   `test_the_resolver_fills_every_default_and_separates_declared_from_n`.
+3. (review round) `"method": method or "bootstrap"` in place of the type-guarded form → failed the
+   same test's non-`str`-`method` case.
+4. (review round) a duplicated `_resolved_resample(doc)` call right after the real one → failed
+   `test_the_resample_block_is_resolved_exactly_once`, confirming that test can actually detect
+   double-resolution rather than only asserting shape.
+
+## Review round (coordinator: 1 Important, 3 Minor, no Critical)
+
+1. **Important — the threading-site comment overclaimed.** It said `statistics.resample` "is
+   honored as of H4a" unqualified, and quoted § Statistical reporting's "resolved values ...
+   recorded beside the interval" as met, when only `n` is read and threaded; `method`,
+   `stratify_by`, and `declared` are resolved but unread, and no recording happens until task 17.
+   Rewrote the comment at `cli.py` (just above `resample_spec = _resolved_resample(doc)`) to say
+   plainly what's true now — `n` threaded to the six existing sites, `method`/`stratify_by`/
+   `declared` resolved-but-unread, naming why each is unread (no second method exists yet; task 14
+   wires stratified column resampling; task 14 gates the percentile switch on `declared`) — and that
+   the "recorded beside the interval" requirement is task 17's, not met yet.
+2. **Minor — `test_the_resample_block_is_resolved_once` didn't test once-ness.** It called the
+   resolver directly and would pass unchanged under seven independent call sites. Renamed it to
+   `test_the_resolver_fills_every_default_and_separates_declared_from_n` (shape-only, docstring says
+   so explicitly) and added a real once-ness test,
+   `test_the_resample_block_is_resolved_exactly_once`, which monkeypatches `cli._resolved_resample`
+   with a call-counting wrapper around a full `run_a_project` and asserts exactly one call. Verified
+   this new test fails when a second (redundant) call is inserted at the threading site (mutation 4
+   above).
+3. **Minor — the resolver's docstring forecast task 14 as a guarantee.** Reworded the `stratify_by`
+   paragraph to state only what's true today (`percentile_of_derived` takes no `strata` param, so no
+   construction could honor it yet) without naming which future task closes it.
+4. **Minor — `method` had no type guard**, unlike `n` and the non-dict case. Added
+   `method if isinstance(method, str) and method else "bootstrap"`, and a case in the renamed
+   resolver test (`{"method": 123, "n": 10}` → `"method": "bootstrap"`), confirmed by mutation 3
+   above.
 
 ## What changed
 
@@ -31,7 +63,8 @@ mutations applied, confirmed FAIL, reverted in place, confirmed PASS:
 - Added three tests to `tests/test_cli.py`, verbatim from the brief:
   `test_a_declared_resample_n_changes_the_derived_draw_count`,
   `test_an_undeclared_resample_still_draws_two_thousand`,
-  `test_the_resample_block_is_resolved_once`.
+  `test_the_resample_block_is_resolved_once` (later renamed and supplemented — see review round
+  below).
 
 ## The stratify_by gap (routed by the brief to Tasks 13-15)
 

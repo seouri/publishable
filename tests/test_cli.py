@@ -6903,12 +6903,18 @@ def test_an_undeclared_resample_still_draws_two_thousand(tmp_path, capsys):
         assert column["method"] == "t_over_units"
 
 
-def test_the_resample_block_is_resolved_once():
-    """A unit test on the resolver itself, because the end-to-end tests above
-    cannot distinguish 'resolved once and threaded' from 'read seven times'.
-    Every field has a documented default and `declared` is separate from `n`:
-    a config asking for exactly 2000 draws is still a DECLARED resample, which
-    is what turns a recorded column into a percentile."""
+def test_the_resolver_fills_every_default_and_separates_declared_from_n():
+    """A unit test on the resolver's own shape. Every field has a documented
+    default; `declared` is separate from `n` — a config asking for exactly
+    2000 draws is still a DECLARED resample, which is what will let a later
+    task turn a recorded column into a percentile; and a non-`str` `method`
+    (unreachable through `command_run` today, since `validate` runs first and
+    rejects it, but read directly by tasks 14-17 off this dict) falls back to
+    `"bootstrap"` rather than being threaded uncoerced.
+
+    This test does NOT show the resolver is called once per run — see
+    `test_the_resample_block_is_resolved_exactly_once` for that guarantee,
+    which needs a real `command_run` to check at all."""
     from publishable.cli import _resolved_resample
 
     assert _resolved_resample({}) == {
@@ -6924,3 +6930,33 @@ def test_the_resample_block_is_resolved_once():
         {"statistics": {"resample": {"method": "bootstrap", "n": 500,
                                      "stratify_by": "site"}}}
     ) == {"method": "bootstrap", "n": 500, "stratify_by": ("site",), "declared": True}
+    assert _resolved_resample(
+        {"statistics": {"resample": {"method": 123, "n": 10}}}
+    ) == {"method": "bootstrap", "n": 10, "stratify_by": (), "declared": True}
+
+
+def test_the_resample_block_is_resolved_exactly_once(tmp_path, capsys, monkeypatch):
+    """The guarantee the other resolver tests cannot show: `command_run` calls
+    `_resolved_resample` exactly once per run, not once per read site. Six
+    read sites resolving the same declaration independently would still make
+    every assertion above pass — this is the one test that would fail if a
+    future task threading `method` or `stratify_by` reached for the config
+    again instead of the already-resolved `resample_spec`."""
+    import publishable.cli as cli_mod
+
+    calls: list[dict[str, Any]] = []
+    real = cli_mod._resolved_resample
+
+    def counting(doc: dict[str, Any]) -> dict[str, Any]:
+        calls.append(doc)
+        return real(doc)
+
+    monkeypatch.setattr(cli_mod, "_resolved_resample", counting)
+    run_a_project(
+        tmp_path,
+        capsys=capsys,
+        aggregate_returns="mean_pred",
+        units=40,
+        statistics={"correction": "holm", "resample": {"n": 500}},
+    )
+    assert len(calls) == 1
