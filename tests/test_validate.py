@@ -3284,14 +3284,14 @@ def test_the_resample_floor_message_names_the_number_and_the_consequence(write_c
     assert "no interval" in message
 
 
-def test_a_resample_method_of_the_wrong_type_is_a_type_fault_not_a_traceback(write_config):
+def test_a_resample_method_of_the_wrong_type_is_a_type_fault_not_a_second_finding(write_config):
     """`method: 5` is `E-CONFIG-TYPE` from the envelope, a leaf fault this repo
-    treats as non-fatal — reported, and validation continues. A bare
-    `method not in RESAMPLE_METHODS` comparison does not raise on an int, but a
-    naive `method not in (...)` check written without the `isinstance` guard
-    this house pattern requires would still need a guard once `method` can be
-    anything the leaf checker lets through, so this test pins that no
-    traceback occurs and everything else still gets reported."""
+    treats as non-fatal — reported, and validation continues. `5 not in
+    RESAMPLE_METHODS` is `True` for an int too, so a bare membership check
+    without the `isinstance` guard would still fire `E-STATS-RESAMPLE-METHOD`
+    on top of `E-CONFIG-TYPE` — reporting the same wrong-typed leaf twice under
+    two codes. The guard is what keeps this method's own code silent for a
+    value that was never a candidate string to begin with."""
     found = codes(
         write_config(
             {
@@ -3301,6 +3301,7 @@ def test_a_resample_method_of_the_wrong_type_is_a_type_fault_not_a_traceback(wri
         )
     )
     assert "E-CONFIG-TYPE" in found
+    assert "E-STATS-RESAMPLE-METHOD" not in found
     # Validation continued past the bad leaf: the wholesale refusal still fires.
     assert "E-STATS-RESAMPLE-UNSUPPORTED" in found
 

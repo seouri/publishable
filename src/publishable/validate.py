@@ -4984,20 +4984,29 @@ documented change rather than a silent one."""
 
 
 def _check_resample(doc: dict[str, Any], roster: UnitList | None, c: Collector) -> None:
-    """`statistics.resample`, once it is honored rather than refused.
+    """`statistics.resample`'s `method` enum and its `n` floor.
+
+    `E-STATS-RESAMPLE-UNSUPPORTED` (`_check_unimplemented`) still refuses any
+    declared `resample` wholesale in this build — resampling itself is not yet
+    honored — but a shape fault inside the block is worth reporting on its own
+    terms rather than only as "unsupported", the same way a malformed
+    `report_by` entry is worth naming even though `report_by` runs for real.
 
     Every check here presupposes the declaration is a mapping; a scalar or a
     list is `check_envelope`'s `E-CONFIG-TYPE` (`statistics.resample` is typed
-    `dict`), and a wrong-typed child is the same, because Task 3 closed the
-    block one level in. So this reads values rather than re-testing types, the
-    same division `_check_report_by` keeps with the envelope.
+    `dict`), and a wrong-typed child (`method`, `n`) is the same, because Task 3
+    closed the block one level in. A leaf type fault is deliberately non-fatal
+    in this module — reported, and validation continues — so each value read
+    here is `isinstance`-guarded and quietly skipped when it is not the type
+    `E-CONFIG-TYPE` already flagged, the same division `_check_report_by` keeps
+    with the envelope: this checks values, not types.
 
     **The `n` floor is the load-bearing one.** `stats.percentile_over_units`
     returns `None` below `min_honest_draws(confidence)` draws — 80 at 95 % — so
     a declared `n: 50` would null `ci95` on every recorded column in the run,
     silently and with nothing in the record saying why. Refusing it here is why
-    `validate` learns about `n` in the same slice that teaches `summarize_step`
-    to honor it, rather than a slice later.
+    `validate` learns about `n` in the same slice that will teach
+    `summarize_step` to honor it, rather than a slice later.
     """
     statistics = doc.get("statistics") or {}
     resample = statistics.get("resample")
@@ -5007,12 +5016,13 @@ def _check_resample(doc: dict[str, Any], roster: UnitList | None, c: Collector) 
     # `None`/absent means the documented default, `bootstrap` — § Statistical
     # reporting: declaring `resample` "changes the method or the count rather
     # than switching the behaviour on". Only a value actually named is checked.
-    if method is not None and (not isinstance(method, str) or method not in RESAMPLE_METHODS):
-        shown = f"`{method}`" if isinstance(method, str) else type(method).__name__
+    # A wrong-typed `method` is `E-CONFIG-TYPE`'s finding already; skipped here
+    # rather than reported a second time under this code.
+    if method is not None and isinstance(method, str) and method not in RESAMPLE_METHODS:
         c.error(
             "E-STATS-RESAMPLE-METHOD",
             "statistics.resample.method",
-            f"is {shown}, not one of {', '.join(f'`{m}`' for m in RESAMPLE_METHODS)}",
+            f"is `{method}`, not one of {', '.join(f'`{m}`' for m in RESAMPLE_METHODS)}",
         )
     n = resample.get("n")
     floor = min_honest_draws()
