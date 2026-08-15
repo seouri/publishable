@@ -93,6 +93,7 @@ from publishable.units import (
     fold_basis,
     partition_units,
     resolve_units,
+    stratum_names,
     units_hash,
 )
 from publishable.uv_support import uv_lock_info
@@ -1007,6 +1008,48 @@ def _compute_declared_contrasts(
     return out or None, members
 
 
+def _resolved_resample(doc: dict[str, Any]) -> dict[str, Any]:
+    """`statistics.resample` with every default filled in, resolved once.
+
+    `reference.md` § Statistical reporting: "A derived metric is resampled
+    whether or not you declare `statistics.resample`" — declaring it "changes
+    the method or the count rather than switching the behaviour on, and the
+    resolved values are recorded in `run.yaml` beside the interval". So the
+    defaults are real values here rather than `summarize_step`'s own defaults
+    taking effect unseen at a call site that forgot them.
+
+    **`declared` is separate from `n` on purpose.** A config asking for exactly
+    2000 draws and a config asking for nothing both resolve to 2000, but only
+    the first turns a RECORDED COLUMN into a percentile interval — a column has
+    a t-interval available, so resampling it is a choice and `resample` is what
+    makes it, while a derived metric has no such fallback. Reading `declared`
+    off `n != 2000` would silently make that sentence false.
+
+    **`.get("resample") or {}`, never `.get("resample", …)`**: `materialize.py`
+    writes no `resample` key at all and a hand-written config may write
+    `resample: null`, and the two are different documents that must resolve to
+    one answer.
+
+    `stratify_by` goes through `units.stratum_names`, the same normalization the
+    draw balances on and `validate._check_resample` checks names against, so a
+    bare `stratify_by: site` is one name to all three. Resolved here and stored
+    for Tasks 14-15: `percentile_of_derived` takes no `strata` parameter today,
+    so a declared stratification is not yet honored for a derived metric — only
+    for a column, once Task 14 wires it in. Nothing downstream in this task
+    reads this field, so that gap stays exactly where it already was.
+    """
+    declared = ((doc.get("statistics") or {}).get("resample")) or {}
+    if not isinstance(declared, dict):
+        declared = {}
+    n = declared.get("n")
+    return {
+        "method": declared.get("method") or "bootstrap",
+        "n": n if isinstance(n, int) and not isinstance(n, bool) else 2000,
+        "stratify_by": stratum_names(declared.get("stratify_by")),
+        "declared": bool(declared),
+    }
+
+
 def _entry_for(
     vs_baseline: dict[int, dict[str, dict[str, dict[str, Any]]]] | None,
     contrasts: list[dict[str, Any]] | None,
@@ -1499,18 +1542,14 @@ def command_run(config_path: Path) -> int:
             # `data.units.attributes`, so `_attributed`'s early return actually
             # fires and such a project never rebuilds a row list at all.
             unit_attributes = {u.key: dict(u.attributes) for u in roster if u.attributes}
-            # `statistics.resample` is no longer refused wholesale (H4a task
-            # 12, commit `2fdc957`, retired that refusal), but this line still
-            # does not read a declared one as of that commit — the two tasks
-            # after it resolve the block here and thread it into every
-            # interval construction. If this line still reads a literal 2000
-            # rather than a resolved value, that gap is still open; this
-            # comment describes its own line, so update both together. Until
-            # resolved, this is the one place the default `reference.md` §
-            # How a metric becomes a number documents — bootstrap at 2000 —
-            # is a real, passed value rather than `summarize_step`'s own
-            # default taking effect unseen at every call site that forgets it.
-            derived_metric_draws = 2000
+            # `statistics.resample` is honored as of H4a: the block is resolved
+            # ONCE here and threaded to every read site, rather than each site
+            # reading the config for itself. `reference.md` § Statistical
+            # reporting requires the resolved values be recorded beside the
+            # interval, and two sites resolving the same declaration
+            # independently is how the record and the arithmetic disagree.
+            resample_spec = _resolved_resample(doc)
+            derived_metric_draws = resample_spec["n"]
             aggregate_where = f"{doc.get('experiment_type', '')}.aggregate"
             # `aggregate` is user code in exactly the sense `runner.py`'s own
             # step execution is — "a failed execution never stops the run" —

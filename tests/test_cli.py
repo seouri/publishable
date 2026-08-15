@@ -6858,3 +6858,69 @@ def test_the_undeclared_resample_shape_is_pinned_explicit_null(tmp_path, capsys,
     run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
     assert run["config"]["statistics"]["resample"] is None
     _assert_undeclared_resample_shape(run)
+
+
+def test_a_declared_resample_n_changes_the_derived_draw_count(tmp_path, capsys):
+    """The threading, end to end: the literal 2000 becomes the resolved `n`.
+    `500` rather than `100` because `W-STATS-RESAMPLE-THIN` fires on
+    `used < requested` and a small count makes degenerate draws likely — the
+    assertion here is about the requested count, not about survivors."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        aggregate_returns="mean_pred",
+        units=40,
+        statistics={"correction": "holm",
+                    "resample": {"method": "bootstrap", "n": 500}},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    metric = _first_metric(run, "mean_pred")
+    assert metric["resample_draws"] == 500
+    assert metric["ci95"] is not None  # 500 clears the 80-draw floor
+
+
+def test_an_undeclared_resample_still_draws_two_thousand(tmp_path, capsys):
+    """The regression Task 1 pinned, restated at the point it can break: the
+    resolution must read `.get("resample") or {}`, never
+    `.get("resample", DEFAULT)`, because `materialize.py` writes no key at all
+    and a hand-written config may write `resample: null` — one answer for two
+    different documents."""
+    for statistics in ({}, {"correction": "holm", "resample": None}):
+        doc = run_a_project(
+            tmp_path / f"case{len(statistics)}",
+            capsys=capsys,
+            aggregate_returns="mean_pred",
+            units=40,
+            **({"statistics": statistics} if statistics else {}),
+        )
+        run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+        metric = _first_metric(run, "mean_pred")
+        assert metric["resample_draws"] == 2000
+        # Positive companion: the column is still a t-interval, so this cannot
+        # pass by nothing having been resampled at all.
+        column = run["results"]["conditions"][0]["aggregated"][
+            "step01_summarize_units"]["pred"]
+        assert column["method"] == "t_over_units"
+
+
+def test_the_resample_block_is_resolved_once():
+    """A unit test on the resolver itself, because the end-to-end tests above
+    cannot distinguish 'resolved once and threaded' from 'read seven times'.
+    Every field has a documented default and `declared` is separate from `n`:
+    a config asking for exactly 2000 draws is still a DECLARED resample, which
+    is what turns a recorded column into a percentile."""
+    from publishable.cli import _resolved_resample
+
+    assert _resolved_resample({}) == {
+        "method": "bootstrap", "n": 2000, "stratify_by": (), "declared": False,
+    }
+    assert _resolved_resample({"statistics": {"resample": None}}) == {
+        "method": "bootstrap", "n": 2000, "stratify_by": (), "declared": False,
+    }
+    assert _resolved_resample({"statistics": {"resample": {"n": 2000}}}) == {
+        "method": "bootstrap", "n": 2000, "stratify_by": (), "declared": True,
+    }
+    assert _resolved_resample(
+        {"statistics": {"resample": {"method": "bootstrap", "n": 500,
+                                     "stratify_by": "site"}}}
+    ) == {"method": "bootstrap", "n": 500, "stratify_by": ("site",), "declared": True}
