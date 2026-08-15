@@ -94,7 +94,7 @@ def test_a_non_string_nested_key_is_reported_not_raised() -> None:
     assert [(f[0], f[1]) for f in findings] == [("E-CONFIG-KEY-UNKNOWN", "metadata.1")]
 
 
-def test_a_misspelled_resample_key_is_reported_rather_than_ignored():
+def test_a_misspelled_resample_key_is_reported_rather_than_ignored() -> None:
     """`statistics.resample` is now both a leaf and a container, the same
     arrangement `data.units.measurements` has: typed a mapping by the loop in
     `check_envelope`, and descended into by `_check_unknown_keys`, which checks
@@ -105,6 +105,11 @@ def test_a_misspelled_resample_key_is_reported_rather_than_ignored():
     )
     by_code = [(code, path) for code, path, _ in findings]
     assert ("E-CONFIG-KEY-UNKNOWN", "statistics.resample.stratifyy_by") in by_code
+    assert any(
+        path == "statistics.resample.stratifyy_by" and "stratify_by" in msg
+        for code, path, msg in findings
+        if code == "E-CONFIG-KEY-UNKNOWN"
+    )
     # The positive companion: the three real keys are NOT reported, so the test
     # cannot pass by the closure rejecting everything under the block.
     assert not any(
@@ -113,9 +118,14 @@ def test_a_misspelled_resample_key_is_reported_rather_than_ignored():
     )
 
 
-def test_the_three_resample_leaves_are_typed():
-    """A wrong-typed child now has an `E-CONFIG-TYPE` backstop, which is what
-    lets `_check_resample` read each value without its own isinstance ladder."""
+def test_the_three_resample_leaves_are_typed() -> None:
+    """A wrong-typed child now gets a REPORTED `E-CONFIG-TYPE` finding instead
+    of being silently ignored — this pass never raises and never stops a
+    reader downstream from being reached with the still-malformed value, since
+    `validate.py` treats a leaf fault as deliberately non-fatal to the pass
+    (see e.g. `_check_metadata`'s guard on `metadata.name`). Task 4's
+    `_check_resample` still has to guard before it reads `n` for comparison,
+    the same way that guard does for `name`."""
     findings = check_envelope(
         {"statistics": {"resample": {"method": 3, "n": "many", "stratify_by": 7}}}
     )
@@ -127,7 +137,7 @@ def test_the_three_resample_leaves_are_typed():
     }
 
 
-def test_a_bare_string_stratify_by_is_accepted_by_the_envelope():
+def test_a_bare_string_stratify_by_is_accepted_by_the_envelope() -> None:
     """`units.stratum_names` reads a bare `stratify_by: site` as one name, the
     same as `[site]`. Typing this `list` alone would make the two readings
     disagree — `E-CONFIG-TYPE` here while the draw balances on it there."""
