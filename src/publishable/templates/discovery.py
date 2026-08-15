@@ -213,8 +213,11 @@ def discover_local(repo_root: Path) -> dict[str, LocalTemplate]:
     Eager rather than lazy — every file is imported, not only the one a config
     names — because a collision between two local templates can only be
     detected between files a config never mentions. Import order therefore
-    never decides which template wins; both are found and the collision is
-    named. See `reference.md` § Creating a plugin.
+    never decides which template wins: every file is imported before any
+    verdict is reached, so both claimants are found, and both are named —
+    unless a file in the same directory failed to load, which preempts the
+    collision verdict entirely (see the load-fault paragraph below). See
+    `reference.md` § Creating a plugin.
 
     Imports by path, for the reason `base_experiment.load_experiment` gives —
     a cached module from another project would silently hand back the wrong
@@ -234,14 +237,16 @@ def discover_local(repo_root: Path) -> dict[str, LocalTemplate]:
     a `BaseTemplate` subclass is a fault named `E-TEMPLATE-LOAD` — none of
     these stops the loop: every later file is still imported, so a genuinely
     well-formed template elsewhere in the same directory still resolves into
-    the fault this function raises, and a collision among the files that
-    *did* load cleanly is still found rather than masked by the first file
-    that didn't. Reported for the first such file in sorted order once the
-    whole directory has been walked, and ahead of any collision: a collision
-    verdict computed while a file failed to load is computed over a partial
-    set of claims — the file that didn't load might have been a third
-    claimant. Any registration a raising file made *before* raising is
-    drained and discarded rather than left for the next file's
+    the fault this function raises rather than being silently skipped.
+    Reported for the first such file in sorted order once the whole directory
+    has been walked, and **preempting** any collision rather than accompanying
+    it: the raise below happens before the collision loop runs at all, so a
+    directory holding both faults reports `E-TEMPLATE-LOAD` and no collision —
+    the claims are collected and then not used. Deliberate, and the reason is
+    that a collision verdict computed while a file failed to load would be
+    computed over a partial set of claims: the file that didn't load might
+    have been a third claimant. Any registration a raising file made *before*
+    raising is drained and discarded rather than left for the next file's
     `drain_pending()` to inherit and misattribute.
 
     Discards whatever the pending buffer already held before this call — the

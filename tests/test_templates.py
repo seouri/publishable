@@ -850,8 +850,10 @@ def test_a_broken_file_does_not_abandon_discovery_of_the_rest_of_the_directory(
     """THE CONTROL for all three shapes above: an earlier-sorting broken file
     must not stop the loop from importing files after it, or a genuinely
     well-formed template elsewhere in the same directory would never be
-    reached — and a collision among the files that *do* load would be masked
-    by whichever file happened to break first. Proved by a side effect the
+    reached. What the eagerness does *not* buy is a collision verdict as well:
+    a load fault preempts one — see
+    `test_a_load_failure_is_reported_before_a_collision_in_the_same_directory`.
+    Proved by a side effect the
     broken file's own raise cannot fake: `zzz_good.py` writes a sentinel file
     at import time, which exists only if its `exec_module` actually ran. A
     loop that raises from inside the `except`, or that returns as soon as one
