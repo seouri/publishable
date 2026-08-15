@@ -614,7 +614,7 @@ def percentile_over_units_clustered(
 
     **There is deliberately no higher threshold on `G` here.** A three-cluster
     resample reports, and the judgment that it is too few belongs to
-    `statistics.min_clusters` — `reference.md` § The one config file:
+    `limits.min_clusters` — `reference.md` § The one config file:
     "`validate` warns when `resample` would draw fewer than this". A second
     threshold in this module would be a competing authority for one judgment.
 

@@ -3638,6 +3638,106 @@ def test_a_non_string_resample_stratum_entry_is_absorbed_not_left_silent(
     assert "3" in offenders[0].message
 
 
+_FOUR_ANIMALS = "patient_id,animal_id\n" + "".join(
+    f"p{i},a{i % 4}\n" for i in range(12)
+)
+
+
+def test_a_clustered_resample_below_min_clusters_warns(write_config, tmp_path):
+    """§ Validation's *Clusters enough to resample* row, which has had no emit
+    site since it was written: 12 units in 4 animals bootstraps 4 draws, and
+    `limits.min_clusters` is 10 in every generated config."""
+    (tmp_path / "input" / "index.csv").write_text(_FOUR_ANIMALS)
+    found = codes(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv",
+                    "key": "patient_id",
+                    "attributes": ["animal_id"],
+                    "cluster_by": "animal_id",
+                },
+                "limits": {"min_clusters": 10},
+                "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
+            }
+        )
+    )
+    assert "W-STATS-RESAMPLE-CLUSTERS" in found
+
+
+def test_the_cluster_warning_counts_clusters_not_units(write_config, tmp_path):
+    """12 units and 4 clusters: a check reading `len(roster)` sees 12, clears a
+    floor of 10, and is silent. The fixture is sized so unit count and cluster
+    count fall on OPPOSITE sides of the same threshold, which a 12-unit /
+    12-cluster fixture could not distinguish."""
+    (tmp_path / "input" / "index.csv").write_text(_FOUR_ANIMALS)
+    found = codes(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv", "key": "patient_id",
+                    "attributes": ["animal_id"], "cluster_by": "animal_id",
+                },
+                "limits": {"min_clusters": 10},
+                "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
+            }
+        )
+    )
+    assert "W-STATS-RESAMPLE-CLUSTERS" in found
+    messages = messages_by_code(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv", "key": "patient_id",
+                    "attributes": ["animal_id"], "cluster_by": "animal_id",
+                },
+                "limits": {"min_clusters": 10},
+                "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
+            }
+        )
+    )
+    assert "4" in messages["W-STATS-RESAMPLE-CLUSTERS"]
+    assert "12" not in messages["W-STATS-RESAMPLE-CLUSTERS"]
+
+
+def test_the_cluster_warning_is_silent_above_the_floor(write_config, tmp_path):
+    """The positive companion: the same roster with `min_clusters: 3` is silent,
+    so the warning reads the declared floor rather than firing on any cluster
+    count at all."""
+    (tmp_path / "input" / "index.csv").write_text(_FOUR_ANIMALS)
+    found = codes(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv", "key": "patient_id",
+                    "attributes": ["animal_id"], "cluster_by": "animal_id",
+                },
+                "limits": {"min_clusters": 3},
+                "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
+            }
+        )
+    )
+    assert "W-STATS-RESAMPLE-CLUSTERS" not in found
+
+
+def test_no_cluster_warning_without_a_declared_resample(write_config, tmp_path):
+    """`cluster_by` alone decides each condition's own interval and draws
+    nothing; the row scopes the warning to `resample` with `cluster_by`."""
+    (tmp_path / "input" / "index.csv").write_text(_FOUR_ANIMALS)
+    found = codes(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv", "key": "patient_id",
+                    "attributes": ["animal_id"], "cluster_by": "animal_id",
+                },
+                "limits": {"min_clusters": 10},
+            }
+        )
+    )
+    assert "W-STATS-RESAMPLE-CLUSTERS" not in found
+
+
 def test_a_declared_null_test_is_refused(write_config):
     assert "E-STATS-NULLTEST-UNSUPPORTED" in codes(
         write_config({"statistics": {"null_test": {"method": "permutation", "n": 5000}}})

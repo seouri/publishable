@@ -327,3 +327,10 @@ Task 7 review: spec ✅, quality APPROVED WITH FINDINGS — 2 Important, 3 Minor
   stops, check the explanation before trusting the stop.
 Out of scope, recorded for its owner: null_test has NO equivalent no-units check, so whichever slice
   retires E-STATS-NULLTEST-UNSUPPORTED (H4d) inherits exactly this hole.
+Task 7: COMPLETE (commits d280f86, 01b2b97, cf9f022). 1722 passed + 2 xfailed; ruff and mypy clean.
+  The `return` is gone — all three faults now surface in one pass — the precedent citation is corrected
+  to E-REPL-FOLD-NO-UNITS, and the null_test equivalent gap is recorded for H4d in spec-defects.md.
+  Two existing assertions were tightened from an absence and a broad prefix to exact code sets.
+  BASE for task 8 is cf9f022.
+Task 8: dispatched. IT IS THE FIRST REAL ROSTER CONSUMER in this slice — limits.min_clusters needs the
+  cluster count — so it must NOT reuse task 5's _resample_stratum_table, which writes ONE unit row.

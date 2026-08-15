@@ -5123,6 +5123,46 @@ def _check_resample(doc: dict[str, Any], roster: UnitList | None, c: Collector) 
                 f"`data.units.attributes` declares {', '.join(sorted(declared)) or 'none'}",
             )
 
+    # `limits.min_clusters`: materialized in every generated config, typed by
+    # `envelope.py`, and — until this slice — read by nothing. § Validation's
+    # *Clusters enough to resample*: "`statistics.resample` with `cluster_by:
+    # animal_id` over 4 animals bootstraps 4 draws; below `limits.min_clusters`
+    # (warning)". Scoped to `resample` WITH `cluster_by`, because `cluster_by`
+    # alone decides each condition's own interval and draws nothing.
+    #
+    # Counted through `units.fold_basis`, the single counting expression
+    # `_check_replication` and `_check_sweep` already share: it resolves to the
+    # cluster count when `cluster_by` is a non-empty string. A second expression
+    # for "how many clusters are there" is the drift one derivation removes, and
+    # the number a reader compares against `n.clusters` in `run.yaml` has to be
+    # the same number.
+    cluster_by = units_declared.get("cluster_by")
+    min_clusters = (doc.get("limits") or {}).get("min_clusters")
+    if (
+        roster is not None
+        and isinstance(cluster_by, str)
+        and cluster_by
+        and isinstance(min_clusters, int)
+        and not isinstance(min_clusters, bool)
+    ):
+        try:
+            groups = fold_basis(roster, cluster_by)
+        except ContractError:
+            # A unit carrying no value for the cluster attribute
+            # (`E-DATA-CLUSTER-UNKNOWN`), already reported beside this by
+            # `_check_cluster_by` or by the resolution `_check_units` performed.
+            # This module collects rather than raises.
+            groups = None
+        if groups is not None and groups < min_clusters:
+            c.warn(
+                "W-STATS-RESAMPLE-CLUSTERS",
+                "limits.min_clusters",
+                f"is {min_clusters}, and `data.units.cluster_by: {cluster_by}` puts this "
+                f"roster in {groups} clusters — `resample` draws whole clusters, so the "
+                f"percentile interval rests on {groups} independent draws however many "
+                "units they hold",
+            )
+
     # The comparisons-only lower bound. Holm's tightest level is `ALPHA / m` at
     # rank 1, and a corrected interval is read off the same pool the raw one
     # was — true of every pool-backed member today; a future construction that
