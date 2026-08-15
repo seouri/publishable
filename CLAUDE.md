@@ -25,17 +25,17 @@ This repository holds both the normative specification and the tool it specifies
 Modules not yet built are still planned, and the slices that build them are listed in
 `docs/superpowers/specs/2026-08-08-implementation-spine-design.md`.
 
-**Order of the slices that remain: H7a → H4a → H3d (+3) → H4b → H7b → the rest.** Amended twice on 2026-08-14
+**Order of the slices that remain: H4a → H3d (+3) → H4b → H7b → the rest.** Amended twice on 2026-08-14
 against outside evidence — all nine experiments in
 [the feasibility analysis](docs/feasibility-llm-growth-studies.md) were run through `validate`, and
-**none executes**. The gate is the **template registry**, not the plugin system: `get_template` reads a
-builtin dict, so every config stops at `E-TEMPLATE-UNKNOWN` before any other check — but § Templates
+**none executed**. The gate was the **template registry**, not the plugin system: `get_template` read a
+builtin dict, so every config stopped at `E-TEMPLATE-UNKNOWN` before any other check — but § Templates
 gives a template three homes, and a **project-local** one in `templates/` is *discovered by path*, not
-through an entry point. **H7a** is that subset — export `register_template`, discover `templates/**` by
-path, add `generate template` — and it needs none of entry-point resolution, probes or the change gate.
-H4a (`resample`) and H3d (`holdout`) then unblock six, and H4b (weighted contrasts) the last three —
-**but only for configs sourcing their roster from a table**; all nine as the analysis writes them declare
-a resolver, so *as written* none runs until H7b.
+through an entry point. **H7a was that subset** — `register_template` exported, `templates/**` discovered
+by path, `generate template` — and it needed none of entry-point resolution, probes or the change gate.
+**It merged on 2026-08-15 and that gate is gone.** H4a (`resample`) and H3d (`holdout`) then unblock six,
+and H4b (weighted contrasts) the last three — **but only for configs sourcing their roster from a
+table**; all nine as the analysis writes them declare a resolver, so *as written* none runs until H7b.
 
 A second amendment the same day scoped all five remaining slices against the code. **Every charter was
 stale in the same direction**: H4 is ~54 tasks split four ways, H7's remainder 38 split three ways, H3d
@@ -100,12 +100,14 @@ prevents it. Slice ledgers record the instances but are gitignored; this section
 | Citing a sentence whose job is to **contrast** as if it supported the claim | "An arm no unit resolves to is already refused" exists to distinguish that case from `min_units_per_cell`'s thin-but-nonzero gap. It was read as licence to route a hard refusal into a warning-shaped gap |
 | Assuming a documented rule has code behind it | Five § Validation rows described checks with no emit site, no check and no test. **Grep for the code before building on the row**; a row and a code are the same check seen from two ends, and either end can be missing |
 | Reading a temporary refusal as permanent, or the reverse | A `-UNSUPPORTED` suffix is the undocumented build family, retired wholesale and absent from the registry. A *narrow* refusal of a combination is documented, carries rows, and outlives the slice that minted it |
+| Scoping a diagnostic by the helper it calls | `E-TEMPLATE-UNKNOWN` had **two** emit sites; a task scoped by `template_names()`'s single call site missed the second, which went on claiming "no installed template registers" under a § Errors row just rewritten to say otherwise. **§ Errors carries one row per code, not per emit site**, so a diagnostic's unit of work is every site that raises *or* reports it |
+| Reading an unbuilt reader as a defect | An unbuilt reader of an **unbuilt** surface is specification — present tense is correct, and § Package layout's `— not yet built` carries it. An unbuilt reader of a **shipped** surface is a defect: `BaseTemplate.required_env` is declarable today on a class that ships, and nothing reads it |
 
 ### Writing checks that can fail
 
-**Sixteen checks across the two H3c slices could not fail**, every one caught by a mutation and none by
-reading. Run the mutation before believing the test, **and run it where the behaviour lives** — not where
-the test happens to look. The shapes, each seen more than once:
+**Sixteen checks across the two H3c slices could not fail**, and roughly a dozen more in H7a — every one
+caught by a mutation and none by reading. Run the mutation before believing the test, **and run it where
+the behaviour lives** — not where the test happens to look. The shapes, each seen more than once:
 
 | Shape | Why it passes anyway |
 |---|---|
@@ -117,13 +119,41 @@ the test happens to look. The shapes, each seen more than once:
 | Testing the refusal, never the honouring | `validate` refused bad `block_size` values while nothing checked the draw *used* a good one, so ignoring it entirely passed the suite |
 | A mutation applied to a proxy | The extracted helper's body rather than the call site; the fixture rather than the wiring |
 | Varying config **shape** when the property is about roster **content** | Nineteen adversary configs over one roster made every refusal roster-incidental. **A refusal that happens to fire must be attributed before it is counted** |
+| A test whose **name** claims the guarantee | `test_..._message_matches_validates` compared each of two messages against **its own** hard-coded literal, so mutating one site failed one test and nothing compared the two. The name and docstring asserted an agreement no assertion made — and a reader greps for exactly that name and stops looking |
+| A fixture with too few elements to distinguish the candidate orderings | Both documented orderings survived reversal with the suite green: one colliding name and one broken file cannot tell name order from import order. **Two elements only ever distinguish two answers** — with two names the reverse of insertion order *is* sorted order for one arrangement. Count the orderings you must rule out, then size the fixture so each yields a different answer |
+| A monkeypatch left aimed at a name the code no longer calls | Rerouting a call site through a new helper silently defused a patch on the old name; the test kept passing while testing nothing. **When you move a call site, grep the suite for patches aimed at what you moved** |
 
-### Two habits that cost real work
+### Answering a question with a proxy
 
-- **A comment or docstring claiming a guarantee the code does not provide** — at least eight instances,
+Both fail-opens in H7a's "is this template local?" predicate came from the same move: answering with
+something *correlated* rather than with the fact. First the class's module-name prefix — a scheme built
+for **anti-aliasing** (two repos both holding `templates/my_assay.py`) and applied only to non-`__`
+files, so a class defined in a sibling helper read as foreign and got core's `template_version` written
+against it. Then a marker stamped on the class — right about where the class was *defined*, wrong about
+who *owns* it, so registering a class the repo merely imported stamped a **shared** object process-wide
+and permanently. **When a predicate keeps failing open, the proxy is the bug, not the guard.** Both were
+closed by asking the direct question — does this class's defining file sit under *this* repo's
+`templates/` — with a helper that already existed.
+
+A corollary that cost its own round: **state read at the wrong moment is a third proxy.** The first fix
+was placed where `sys.modules` had already been restored, which inverts the answer — a genuinely local
+class's module is gone, while an external one is still cached.
+
+### Habits that cost real work
+
+- **A comment or docstring claiming a guarantee the code does not provide** — at least a dozen instances,
   including one that explicitly promised "any other `method` string takes the `by_attribute` path" (the
   fail-open defect written down as if intended), and three overreaching claims inside a single commit
-  that was itself fixing overreaching claims. When you change a guard, re-read its justification.
+  that was itself fixing overreaching claims. When you change a guard, re-read its justification. A
+  sentence can also contradict **the argument that justifies the thing it describes**: "a collision among
+  the files that *did* load is still found rather than masked" appeared at four sites including a
+  normative § Errors row, while the reason load-failure is checked first is precisely that a collision
+  verdict computed then would be computed over a partial set of claims. Both properties cannot hold.
+- **Rewriting a sentence when a table row was the thing that was wrong.** "Importing one raises
+  `ImportError` today" was false only while `register_template` sat in a row marked `not yet built` —
+  splitting the row repaired it, because the sentence **derives** its claim from the `Status` column.
+  Replacing it with an enumeration of names would have converted a self-maintaining statement into a
+  maintenance obligation nobody owns, and a second source of truth for build state.
 - **Locating a table row by position** ("the two rows above", "further up") — at least seven instances,
   wrong twice, once in a row no diff touched, falsified by an insertion that moved it. Name what a
   sibling row *does*. When you insert or remove a row, check every row it **moved**, and every count
