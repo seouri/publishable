@@ -676,8 +676,9 @@ def _comparison_step_blocks(
 
     A recorded column takes `paired_t_over_units` over the per-unit
     differences, with `cohens_d = cohens_dz(diffs)` — unless `resample_columns`
-    is set, when it instead takes `paired_percentile_of_derived` over its own
-    column mean, the same construction a derived metric uses, while `cohens_d`
+    is set **and the pairing has at least two units**, when it instead takes
+    `paired_percentile_of_derived` over its own column mean, the same
+    construction a derived metric uses, while `cohens_d`
     keeps computing from the local `diffs` list regardless. A derived metric — one
     `aggregate` computed, absent any per-unit value to difference — takes
     `paired_delta_of_derived` and `paired_percentile_of_derived` instead, both
@@ -704,7 +705,9 @@ def _comparison_step_blocks(
     The second return value is the correction family's raw material: one
     `Member` per metric entry, carrying the evidence its interval was read from
     — the draw pool for a derived metric, the per-unit differences for a
-    recorded column. It travels beside the block rather than inside it because
+    recorded column **unless a `resample` is declared, when a column carries
+    the draw pool too** (`resample_columns`, below). It travels beside the
+    block rather than inside it because
     a `run.yaml` carrying 2000 floats per metric is unreadable, and `io` never
     promised to serialize one. `where_id` is the caller's own addressing for
     this comparison (`cond:<index>` or `contrast:<id>`, see `_entry_for`), so
@@ -891,8 +894,13 @@ def _comparison_step_blocks(
             # `Member` requires exactly one of `pool`/`diffs` wherever there is
             # an interval to correct: the draws a percentile interval was read
             # off, or the per-unit differences a *t* interval was computed
-            # from. An entry with no `ci95` carries neither and is dropped by
-            # `family_members` before either is read.
+            # from. An entry with no `ci95` is dropped by `family_members`
+            # before either field is ever read — but it does not necessarily
+            # carry neither: a column contrast whose resample ran but produced
+            # too few surviving draws for the confidence level still carries
+            # its (too-short) `pool` alongside a `None` `ci95`, and
+            # `Member.__post_init__` exempts that case rather than requiring
+            # `pool`/`diffs` to be `None` too.
             #
             # **A column contrast under a declared `resample` carries the POOL
             # and sets `diffs=None`.** `_corrected_bounds` tests `diffs` FIRST

@@ -7261,7 +7261,16 @@ def test_a_column_contrast_corrects_off_its_own_pool_not_a_t_interval(
     # makes this assertion pass under both the correct and the mutated code,
     # since it would then compare against a t-interval built from the wrong
     # evidence entirely — verified against the mutation in Step 5.
-    level = 0.05 / entry["family_size"]
+    #
+    # `level` is read off the recorded `correction_level`, not recomputed from
+    # `family_size` and an assumed rank: kendall's pool is element-wise 2× this
+    # comparison's own (same seed, same draw indices, and kendall's scale is
+    # 2× spearman's relative to the shared pearson baseline), so the two
+    # members' evidence ratios — delta over half the raw width — are exactly
+    # equal and rank 1 vs. rank 2 is a tie-break on declaration order, not a
+    # strength difference. Assuming this comparison is rank 1 would be an
+    # assumption identical in kind to the scale-factor one just above.
+    level = entry["correction_level"]
     diffs = [2.0 * float(i) for i in range(40)]
     t_bound = paired_t_over_units(diffs, confidence=1.0 - level)
     assert t_bound is not None      # non-degenerate, unlike an all-zero column

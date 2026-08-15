@@ -5311,3 +5311,46 @@ The fix is a task, not a line: a level's own two-valued `resample_draws`, a leve
 `min_honest_draws` check (a level with fewer units than the floor should refuse the same way the
 whole-condition case does), and end-to-end tests crossing `report_by` with a declared `resample` —
 not something to improvise inside this task's already-amended scope.
+
+## The contrast path discloses nothing about its resample, and `paired_percentile_of_derived` never got the zero-width sweep
+
+Found by the **task 16 review** (H4a, `2026-08-15-resample-honoured`), at commit `b06079c`. Two
+findings, both **deferred with a named owner — H4's contrast-side hardening** — because both are
+disclosure/refusal gaps on a path task 16 widened rather than created, and neither is a regression.
+
+**Finding 1 — a declared `resample` can silently remove a column contrast's interval.** Task 16
+routes a recorded column's contrast through `stats.paired_percentile_of_derived` under a declared
+`statistics.resample`. When the surviving draws fall below `min_honest_draws(confidence)` — a ragged
+column, a degenerate closure — the construction returns `interval=None` and the entry publishes
+`ci95: null` where it previously published a `paired_t_over_units` interval over the same
+`col_keys`. **Nothing warns.** `W-STATS-RESAMPLE-THIN` is emitted from exactly one site,
+`cli.py`'s per-condition `summarize_step` loop; `_comparison_step_blocks` emits no resample finding
+at all, so neither `vs_baseline` nor `results.contrasts` can say a contrast's interval was lost to a
+thin pool rather than to a thin intersection. Pre-existing for **derived** contrasts, which have had
+this shape since they were built; task 16 widens it to every recorded column under a declared
+`resample`. The fix is a task, not a line — a contrast-scope thin finding needs a `where` that names
+the comparison (`cond:<index>` / `contrast:<id>`, which `_comparison_step_blocks` already carries as
+`where_id`) and a registry row, and it should be built alongside Finding 2 rather than separately.
+
+**Finding 2 — `paired_percentile_of_derived` carries none of the content-based degenerate
+refusals its three siblings now have.** `percentile_over_units` (strata branch),
+`percentile_over_units_clustered` (cluster-content branch) and — as of task 15, recorded one entry
+above this one — `percentile_of_derived` each refuse a draw whose structure cannot vary, on the
+stated authority of `reference.md` § Statistical reporting: "a zero-width 95 % interval is not
+[honest]; reporting a point with no interval is honest." The paired construction has no such check.
+Verified end to end at `b06079c`: a column recorded identically under both conditions
+(`tests/test_cli.py`'s `_AGGREGATE_STEP`, whose `pred = float(i)` ignores `cfg`) under
+`resample: {method: bootstrap, n: 2000}` publishes
+`method: paired_percentile_over_units, delta: 0.0, ci95: [0.0, 0.0], ci95_corrected: [0.0, 0.0]`.
+
+**Why this is deferred and not a task-16 defect.** It is **not a regression**:
+`paired_t_over_units([0.0] * 40)` already returns `Interval(0.0, 0.0)`, so the same design published
+the same zero-width interval before task 16 under a different `method` string. It is also **not** the
+"plausible but wrong" case `paired_percentile_of_derived`'s own docstring warns about — that one is a
+*nonzero* point-estimate delta beside a zero-width interval at zero, produced when a shared closure
+cancels across two identical tables; here the delta is `0.0` beside it, so the record is internally
+consistent and a reader can see what happened. Task 16's own decision to pass `_column_mean` twice is
+sound for the same reason: the two tables are the two conditions' own collapsed data, not one table
+seen twice, so nothing cancels. What is owed is consistency — the paired construction is now the
+fourth reachable from a recorded column and the only one the zero-width sweep never touched, and the
+sweep should finish rather than stop at three.

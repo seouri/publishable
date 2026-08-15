@@ -804,3 +804,39 @@ Task 15: COMPLETE (commits 8c4bcbb, 6267120, d715e08, c1286bb). 1792 passed + 2 
   same spec-defects entry. BASE for task 16 is c1286bb.
 Task 16: dispatched — THE DANGEROUS ONE. The spec names it "the one place H4a can produce a wrong number
   with a green suite", and both of its traps were found by measurement rather than reading.
+Task 16: implemented, commit b06079c. 1795 passed + 2 xfailed (+3 new); ruff and mypy clean. Both named
+  mutations confirmed FAIL then reverted — forgetting the Member (the genuinely silent path) and
+  col_keys -> base_keys. Performance MEASURED rather than assumed: 0.18s per column-comparison at n=240 /
+  2000 draws, so the cheap direct index-vector construction was not needed.
+  TWELFTH BRIEF DEFECT, AND IT IS THE FIXTURE-AGREES-WITH-THE-BUG CLASS IN MY OWN BRIEF. My test
+  recomputed the expected t-bound assuming _CONDITION_SCALED_STEP scales pearson/spearman as 1.0/2.0 —
+  but the fixture that ACTUALLY EXISTS, built by task 1 and revised during ITS review, scales 1.0/3.0.
+  Copying my line verbatim made the "not the t-interval" assertion PASS UNDER BOTH CORRECT AND MUTATED
+  CODE. It used the correct diff (2.0 * float(i)) and verified the mutation now genuinely fails.
+  GENERALIZES: task 1's review CHANGED that scale precisely to break a numeric coincidence, and my brief
+  for task 16 was written against the pre-review value. A BRIEF WRITTEN BEFORE A REVIEW LANDS CAN CARRY
+  NUMBERS THE REVIEW DELIBERATELY MOVED — and the failure mode is silent, because the stale number still
+  produces a passing test.
+Task 16 review dispatched. BASE c1286bb, HEAD b06079c. HIGHEST-RISK TASK OF THE SLICE.
+Task 16 review: spec ✅, quality approved with findings — 1 Important, 6 Minor. BOTH TRAPS VERIFIED BY
+  MUTATION *AND ATTRIBUTED*: the col_keys -> base_keys mutation fails the ragged test BECAUSE OF THE
+  RAGGED UNITS (sometimes -> ci95: None, n_paired: 30 against always -> [16.025, 23.025], n_paired: 40),
+  not incidentally. The vacuous-test fix confirmed genuine — with the brief's [float(i)] the assertion
+  passes under BOTH codes; with [2.0*float(i)] the mutation reproduces t_bound exactly. The `declared`
+  seam IS tested here, so this is NOT a third instance of the untested-seam pattern.
+  IMPORTANT — MY SWEEP SCOPE WAS WRONG AGAIN, SECOND TIME THIS SLICE. _comparison_step_blocks's own
+  docstring still says the Member carries "the per-unit differences for a recorded column" — THE EXACT
+  SENTENCE THIS TASK FALSIFIES, IN THE FUNCTION IT CHANGED. My brief's sweep fixed the identical sentence
+  in correction.py and STOPPED ONE FILE SHORT. Task 8's sweep covered src/ and docs/ but not tests/.
+  GENERALIZES: when a change falsifies a sentence, the sweep must be for THE CLAIM, not for the file the
+  claim was first noticed in.
+  Minor worth keeping (M3): the flagship test recomputes Holm's rank-1 level instead of reading
+  entry["correction_level"] from run.yaml — and the two family members are EXACTLY TIED on the ranking
+  statistic (kendall's pool is element-wise 2x spearman's at the same seed, so the same index draws), so
+  spearman's rank-1 position is a TIE-BREAK. Loud rather than silent if it broke, but the same
+  assumption-derived class as the defect fixed one line above.
+  M4: perf conclusion right, number understated — 1 column 0.19s, TEN columns 0.32s, so a 10x5 family is
+  ~16s not ~9s. Still far under threshold; keeping the construction was correct.
+  M6/M7 FILED with owner H4 contrast-side hardening: a declared resample can silently null a column
+  contrast's interval (W-STATS-RESAMPLE-THIN fires only from the per-condition path), and
+  paired_percentile_of_derived never got the zero-width sweep its three siblings have.
