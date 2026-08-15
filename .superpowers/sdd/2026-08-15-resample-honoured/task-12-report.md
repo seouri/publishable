@@ -23,3 +23,17 @@
 **Sweep verification:** `grep -rln 'E-STATS-RESAMPLE-UNSUPPORTED' src/ docs/ tests/` (filtering the file list, not the sweep output, scope including `tests/` as instructed) turns up only `docs/superpowers/**` (gitignored, historical, out of scope), `tests/test_validate.py` (the new acceptance test's own assertions), and `docs/feasibility-llm-growth-studies.md` (one historical, dated mention explaining what retired — permitted since that section is exempt from the cross-document pass and states its own date/sha). No hits in any `src/*.py`.
 
 **Concerns for tasks 13-14:** `stats.py:583-587`'s docstring (about a column metric's `resample_draws` invariant) and `units.py:1136-1146`'s docstring (about `stratum_names` being read consistently by `assign` and a future resample draw) both needed rewording since they previously named the retired code as their justification — worth a second look when 13/14 land, since both describe the *current* gap (no wiring yet) and should be revisited once the wiring exists rather than left as stale forward-references.
+
+## Review round (commit `462de50`)
+
+**Spec ✅, 1 Important + 3 Minor, all closed.**
+
+1. **Important — a false behaviour claim in the re-dated section.** The rewritten § Executability paragraph said the plugin registry "gates every one of them before any other check runs." Probed directly against a config declaring a resolver, a holdout, and a faulty resample together: `validate` reports all four codes (`E-DATA-RESOLVER-UNSUPPORTED`, `E-DATA-HOLDOUT-UNSUPPORTED`, `E-STATS-RESAMPLE-METHOD`, `E-STATS-RESAMPLE-N`) in one pass — it collects, it does not gate. Reworded to state only what the probe showed, and re-read the rest of the section against the same "measured, not inferred" standard; nothing else in it made an unverified behavioural claim.
+
+2. **Minor — two `n`-side test companions were upstream of what they claimed to prove.** `test_a_resample_n_of_the_wrong_type_is_a_type_fault_not_a_traceback` and `test_a_resample_n_of_bool_type_is_a_type_fault_not_a_floor_violation` used a bad `method` as the "validation continued past the bad `n` leaf" companion, but `method` is checked *before* `n` in `_check_resample`'s source order, so a `return` inserted right after the `n` check would leave both green without ever being caught. Replaced the companion with an unknown `stratify_by` name (checked after `n`) and confirmed by mutation: inserting an unconditional `return` right after the `n`-floor check now fails both tests; deleted `__pycache__`, reverted in place, confirmed PASS.
+
+3. **Minor — a duplicate control.** `test_a_declared_null_test_is_still_refused_h4a` (this task's addition) duplicated the pre-existing `test_a_declared_null_test_is_refused`, which already fails under the "delete the whole loop" mutation. Dropped the new one rather than keeping both; re-verified the pre-existing test alone still fails that mutation before reverting.
+
+4. **Minor — perishable "not yet"/"at that same commit" phrasing across five comments.** `validate.py` (×2), `cli.py`, `units.py`, `stats.py` each said a gap was open with no commit named, which reads as present tense forever and goes stale silently once tasks 13-14 land. Anchored each to commit `2fdc957` (this task's retirement commit) and pointed the reader at `cli.command_run`/`derived_metric_draws` to check the current state directly rather than trust the prose.
+
+**Tests after this round:** 1766 passed + 2 xfailed (one fewer than the first report, from dropping the duplicate control). `ruff check .` and `mypy` clean.
