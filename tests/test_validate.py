@@ -447,6 +447,31 @@ def test_an_unknown_template_still_reports_exactly_one_finding(write_config):
     assert codes(write_config({"experiment_type": "llm_diagnostic"})) == {"E-TEMPLATE-UNKNOWN"}
 
 
+def test_the_unknown_message_lists_local_templates_among_the_known(
+    git_repo: Path, write_config
+):
+    """The known-list is `template_names()`, which must be called with the repo
+    root or a local template never appears in it. Distinct names throughout:
+    the local template `cohort_local` is never the one asked for, and the
+    unknown name `not_anywhere` is never the one registered — so neither
+    assertion could pass by an interpolated name coinciding with itself."""
+    templates = git_repo / "templates"
+    templates.mkdir()
+    (templates / "cohort_local.py").write_text(
+        "from publishable import BaseTemplate, register_template\n\n\n"
+        '@register_template("cohort_local")\n'
+        "class CohortLocal(BaseTemplate):\n"
+        "    pass\n"
+    )
+
+    messages = messages_by_code(write_config({"experiment_type": "not_anywhere"}))
+    assert messages["E-TEMPLATE-UNKNOWN"] == (
+        "names `not_anywhere`, which no template — core's, an installed plugin's, "
+        "or this project's own `templates/` — registers "
+        "(known: cohort_local, generic)"
+    )
+
+
 def test_a_local_template_validates_through_the_real_path(git_repo: Path, write_config):
     """End to end: a config naming a local template no longer draws
     E-TEMPLATE-UNKNOWN. THE CONTROL: a config naming a template that exists

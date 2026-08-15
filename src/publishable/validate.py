@@ -516,8 +516,9 @@ def validate_config(
         c.error(
             "E-TEMPLATE-UNKNOWN",
             "experiment_type",
-            f"names `{name}`, which no installed template registers "
-            f"(known: {', '.join(template_names())})",
+            f"names `{name}`, which no template — core's, an installed plugin's, "
+            f"or this project's own `templates/` — registers "
+            f"(known: {', '.join(template_names(repo_root))})",
         )
         return None  # every later check reads the spec
 
