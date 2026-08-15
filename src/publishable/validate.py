@@ -19,6 +19,7 @@ from publishable.param import MISSING
 from publishable.provenance import find_repo_root, resolves_inside_repo
 from publishable.replication import resolve_repeats
 from publishable.scope import step_name as _step_name
+from publishable.stats import min_honest_draws
 from publishable.strata import levels_for
 from publishable.sweep import (
     NAMEABLE_CHAR,
@@ -624,6 +625,13 @@ def validate_config(
     )
     _check_unimplemented(doc, c)
     _check_sweep(doc, template, c, fold_basis=basis)
+    # After `_check_sweep`, not before it, and this is the one ordering question
+    # H4a inherits from H7a's prologue reshuffle: the strata check needs the
+    # resolved roster and the declared attributes, and the `n` bound needs the
+    # resolved comparison family, which `_check_sweep` is the first thing to
+    # compute. Before `_check_contrasts`, which reports the shape faults in a
+    # `statistics.contrasts` block this one only counts.
+    _check_resample(doc, roster, c)
     _check_contrasts(doc, c, roster)
     _check_hypotheses(doc, c, experiment, template)
     _check_report_by(doc, c, roster)
@@ -4959,6 +4967,69 @@ def _check_hypotheses(
                 "— that quantity only exists per condition, so the hypothesis must say which "
                 "conditions it compares",
             )
+
+
+RESAMPLE_METHODS = ("bootstrap",)
+"""Every value `statistics.resample.method` may take — `reference.md`
+§ Statistical reporting's *Resample methods* table, which is the enum this
+tuple enforces.
+
+**A closed, one-value enum on purpose.** `bootstrap` is the only value the
+schema shows and the only construction `stats.py` has, and § Statistical
+reporting's construction tables enumerate the method strings core *emits*
+(`percentile_over_units`, `paired_percentile_over_units`) — outputs, not inputs
+a config may name. Stating the enum is what makes `method: bootstap` a
+diagnostic rather than a shrug, and what makes adding a second value a
+documented change rather than a silent one."""
+
+
+def _check_resample(doc: dict[str, Any], roster: UnitList | None, c: Collector) -> None:
+    """`statistics.resample`, once it is honored rather than refused.
+
+    Every check here presupposes the declaration is a mapping; a scalar or a
+    list is `check_envelope`'s `E-CONFIG-TYPE` (`statistics.resample` is typed
+    `dict`), and a wrong-typed child is the same, because Task 3 closed the
+    block one level in. So this reads values rather than re-testing types, the
+    same division `_check_report_by` keeps with the envelope.
+
+    **The `n` floor is the load-bearing one.** `stats.percentile_over_units`
+    returns `None` below `min_honest_draws(confidence)` draws — 80 at 95 % — so
+    a declared `n: 50` would null `ci95` on every recorded column in the run,
+    silently and with nothing in the record saying why. Refusing it here is why
+    `validate` learns about `n` in the same slice that teaches `summarize_step`
+    to honor it, rather than a slice later.
+    """
+    statistics = doc.get("statistics") or {}
+    resample = statistics.get("resample")
+    if not isinstance(resample, dict) or not resample:
+        return
+    method = resample.get("method")
+    # `None`/absent means the documented default, `bootstrap` — § Statistical
+    # reporting: declaring `resample` "changes the method or the count rather
+    # than switching the behaviour on". Only a value actually named is checked.
+    if method is not None and (not isinstance(method, str) or method not in RESAMPLE_METHODS):
+        shown = f"`{method}`" if isinstance(method, str) else type(method).__name__
+        c.error(
+            "E-STATS-RESAMPLE-METHOD",
+            "statistics.resample.method",
+            f"is {shown}, not one of {', '.join(f'`{m}`' for m in RESAMPLE_METHODS)}",
+        )
+    n = resample.get("n")
+    floor = min_honest_draws()
+    # `bool` excluded explicitly: `isinstance(True, int)` is `True` in Python,
+    # and `resample: {n: true}` is already `E-CONFIG-TYPE` from the envelope —
+    # a value flagged wrong-typed there must not also drive this check.
+    if n is not None and isinstance(n, int) and not isinstance(n, bool) and n < floor:
+        c.error(
+            "E-STATS-RESAMPLE-N",
+            "statistics.resample.n",
+            f"is {n}; a percentile interval needs at least {floor} draws before both "
+            "of its ranks are interior, so below that the lower endpoint IS the "
+            "smallest draw while the upper keeps shrinking — low-biased and "
+            f"systematically too narrow. Under {floor} core reports no interval at "
+            "all, so this would null `ci95` on every metric in the run rather than "
+            "narrowing one",
+        )
 
 
 def _check_report_by(doc: dict[str, Any], c: Collector, roster: UnitList | None) -> None:

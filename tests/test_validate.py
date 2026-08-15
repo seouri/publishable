@@ -3207,6 +3207,122 @@ def test_a_declared_resample_is_refused(write_config):
     )
 
 
+_RESAMPLE_UNITS = {"from": "index.csv", "key": "patient_id", "attributes": ["cohort"]}
+
+
+def test_an_unknown_resample_method_is_refused(write_config):
+    """`bootstrap` is the whole enum. An unstated one-value enum makes
+    `method: bootstap` a shrug; a stated one makes it a diagnostic."""
+    found = codes(
+        write_config(
+            {
+                "data.units": _RESAMPLE_UNITS,
+                "statistics": {"resample": {"method": "bootstap", "n": 2000}},
+            }
+        )
+    )
+    assert "E-STATS-RESAMPLE-METHOD" in found
+    # The positive companion, in the same test: the legal spelling is NOT
+    # refused, so this cannot pass by the check rejecting every method string.
+    assert "E-STATS-RESAMPLE-METHOD" not in codes(
+        write_config(
+            {
+                "data.units": _RESAMPLE_UNITS,
+                "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
+            }
+        )
+    )
+
+
+@pytest.mark.parametrize("n", [0, -1, 79])
+def test_a_resample_n_below_the_honest_floor_is_refused(write_config, n):
+    """`percentile_over_units` returns `None` below `min_honest_draws(0.95)` = 80
+    draws, so a declared `n: 50` would null `ci95` on EVERY column in the run
+    with no diagnostic. The floor is what makes that impossible, and it lands
+    before any code honours `n` — validate-before-honour, inside the slice.
+
+    Three values, not one: `0` and `-1` are the not-a-positive-count fault and
+    `79` is the floor itself, and a check written as `n < 1` passes the first two
+    while letting the third through. `79`/`80` is the boundary pair, so an
+    off-by-one (`n <= 80`) fails the companion below rather than passing."""
+    found = codes(
+        write_config(
+            {
+                "data.units": _RESAMPLE_UNITS,
+                "statistics": {"resample": {"method": "bootstrap", "n": n}},
+            }
+        )
+    )
+    assert "E-STATS-RESAMPLE-N" in found
+
+
+def test_a_resample_n_at_the_floor_is_accepted(write_config):
+    """The positive companion `79` above needs: exactly 80 is honest, so an
+    off-by-one in either direction fails one of the two."""
+    found = codes(
+        write_config(
+            {
+                "data.units": _RESAMPLE_UNITS,
+                "statistics": {"resample": {"method": "bootstrap", "n": 80}},
+            }
+        )
+    )
+    assert "E-STATS-RESAMPLE-N" not in found
+
+
+def test_the_resample_floor_message_names_the_number_and_the_consequence(write_config):
+    messages = messages_by_code(
+        write_config(
+            {
+                "data.units": _RESAMPLE_UNITS,
+                "statistics": {"resample": {"method": "bootstrap", "n": 50}},
+            }
+        )
+    )
+    message = messages["E-STATS-RESAMPLE-N"]
+    assert "80" in message
+    assert "no interval" in message
+
+
+def test_a_resample_method_of_the_wrong_type_is_a_type_fault_not_a_traceback(write_config):
+    """`method: 5` is `E-CONFIG-TYPE` from the envelope, a leaf fault this repo
+    treats as non-fatal — reported, and validation continues. A bare
+    `method not in RESAMPLE_METHODS` comparison does not raise on an int, but a
+    naive `method not in (...)` check written without the `isinstance` guard
+    this house pattern requires would still need a guard once `method` can be
+    anything the leaf checker lets through, so this test pins that no
+    traceback occurs and everything else still gets reported."""
+    found = codes(
+        write_config(
+            {
+                "data.units": _RESAMPLE_UNITS,
+                "statistics": {"resample": {"method": 5, "n": 2000}},
+            }
+        )
+    )
+    assert "E-CONFIG-TYPE" in found
+    # Validation continued past the bad leaf: the wholesale refusal still fires.
+    assert "E-STATS-RESAMPLE-UNSUPPORTED" in found
+
+
+def test_a_resample_n_of_the_wrong_type_is_a_type_fault_not_a_traceback(write_config):
+    """`n: "many"` is `E-CONFIG-TYPE`; a bare `n >= 80` raises `TypeError` on a
+    string and would take out the entire `validate` call, not just this
+    check. This test must fail if the `isinstance` guard is removed."""
+    found = codes(
+        write_config(
+            {
+                "data.units": _RESAMPLE_UNITS,
+                "statistics": {"resample": {"method": "bootstrap", "n": "many"}},
+            }
+        )
+    )
+    assert "E-CONFIG-TYPE" in found
+    assert "E-STATS-RESAMPLE-N" not in found
+    # Validation continued past the bad leaf: the wholesale refusal still fires.
+    assert "E-STATS-RESAMPLE-UNSUPPORTED" in found
+
+
 def test_a_declared_null_test_is_refused(write_config):
     assert "E-STATS-NULLTEST-UNSUPPORTED" in codes(
         write_config({"statistics": {"null_test": {"method": "permutation", "n": 5000}}})
