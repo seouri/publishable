@@ -1931,29 +1931,29 @@ def command_run(config_path: Path) -> int:
                         # config declaring `n: 500` would resample the column
                         # at 2000 draws beside an echo saying 500.
                         #
-                        # This retry cannot raise a second time on the strata
-                        # path, which is what would turn a contained fault into
-                        # a crash after every execution is spent (`stats.py`'s
-                        # `E-STEP-KEY-COLLISION` comment states that
-                        # non-re-raise as the invariant): the run-time
-                        # `E-STATS-RESAMPLE-STRATIFY-VARIES` in
-                        # `percentile_over_units_clustered` fires from the
-                        # COLUMN loop, ahead of the derived block, so the first
-                        # call above raises it before the fault this `except`
-                        # contains — and `validate` refuses the same
-                        # composition from the roster
-                        # (`stratum_varies_within_cluster`, per declared name)
-                        # before `run` starts. This depends on the run-time
-                        # check being no stricter than the validate-time one:
-                        # it is looser, because `resample_strata` above joins
-                        # the declared names into one label, and a label
-                        # collision can only merge two strata into one — never
-                        # split one into two. That composition's own gap
-                        # (`<absent>` and `|` colliding with a real attribute
-                        # value) is filed in
-                        # `docs/superpowers/spec-defects.md`; it is named here
-                        # as the dependency this argument rests on, not as
-                        # coverage this code provides.
+                        # **This retry cannot raise**, which is the property
+                        # `stats.py`'s `E-STEP-KEY-COLLISION` comment states as
+                        # an invariant ("the caller's retry passes the same
+                        # `collapsed` and would re-raise uncontained") and which
+                        # widening the arguments must not cost — a second raise
+                        # here is a crash after every execution is already
+                        # spent. The argument is local to `summarize_step`:
+                        # every `ContractError` this `except` can catch is
+                        # raised from its `if derived:` block, which runs AFTER
+                        # its column loop has completed. The two faults raised
+                        # inside the column loop —
+                        # `E-STATS-RESAMPLE-STRATIFY-VARIES` from
+                        # `percentile_over_units_clustered`, and
+                        # `E-DATA-WEIGHT-INVALID` from `checked_weights` —
+                        # surface on the FIRST call and so never enter this
+                        # handler at all. Reaching here therefore means that
+                        # loop already succeeded, and the retry replays it over
+                        # the identical `collapsed`/`counts`/`weights`/
+                        # `clusters`/`seed`/`draws`/`resample_columns`/`strata`.
+                        # (`validate` also refuses the strata composition from
+                        # the roster before `run` starts, and `attrition` gates
+                        # the weights outside any `try` — second lines of
+                        # defence, not what this rests on.)
                         step_summary = summarize_step(
                             collapsed,
                             counts,

@@ -6214,8 +6214,8 @@ def test_a_contained_aggregate_fault_does_not_downgrade_a_declared_column_resamp
     `cli.py`'s retry after `E-DATA-CLUSTER-DERIVED` re-summarizes without the
     derived metrics. Until this fix it also dropped `resample_columns`/`strata`/
     `seed`/`draws`, so `pred` came back `weighted_t_over_units_clustered` with no
-    `resample_draws` key — which `reference.md` § How a metric becomes a number
-    makes the shape of a run that declared NO resample — while `beside_n` went on
+    `resample_draws` key — which `reference.md` § Statistical reporting makes
+    the shape of a run that declared NO resample — while `beside_n` went on
     carrying the `resample` echo beside it. One block cannot say both.
 
     `n: 500` rather than the 2000 default on purpose: `draws` is a separate

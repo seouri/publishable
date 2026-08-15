@@ -5168,7 +5168,7 @@ into `summarize_step` (task 12/14)" — **was H4a**, and both tasks landed witho
 deliberate decline, not an oversight: H4a task 14's ledger entry records the choice, and the
 disclosure it took instead is live in two places — `stats.summarize_step`'s docstring, which says
 in terms that "nothing on this path checks that condition", and `reference.md`
-§ How a metric becomes a number. The two `*_is_a_known_unfixed_gap` tests below still pin it.
+§ Statistical reporting. The two `*_is_a_known_unfixed_gap` tests below still pin it.
 H4b is the successor because it builds the weighted and clustered paired constructions, which is
 where the same unchecked finiteness assumption lands next.
 
@@ -5471,28 +5471,39 @@ disclosure gaps, and a `where` that names the comparison is the thing Finding 1 
 would reuse. Not a regression — no contrast entry ever carried the echo, the echo itself being H4a
 task 17's own addition.
 
-## Five code comments cite a `reference.md` section that has never existed
+## `reference.md` § *How a metric becomes a number* is cited across the repo and does not exist
 
 Found by the **H4a whole-branch fix pass** (2026-08-15, at `d59316d`), while adding a citation to
-the same phantom section and checking that the anchor resolved. `stats.py` (four sites),
-`validate.py` (one) cite "`reference.md` § How a metric becomes a number". **There is no such
-heading**, in `reference.md` or in any of the four documents, and `git log -S` over
-`docs/reference.md` finds no commit that ever removed one — the name was invented in a comment and
-copied. A sixth site in `cli.py` was written by this pass and corrected before it landed.
+that section and checking that its anchor resolved. It does not: **no heading of that name exists**
+in `reference.md` or in any of the four documents, and no commit in this repo's history ever
+removed one (`git log -S` over `docs/reference.md`). The name is nonetheless in wide, consistent
+use — **eighteen files name it**: five sites in `src/` (four in `stats.py`, one in `validate.py`),
+both scoping documents, four plans, four specs, five files of the development record (this pass's
+own report among them), and this file, whose `W-STATS-AGGREGATE-FAILED` entry proposes to "add
+`resample_draws` to the § How a metric becomes a number derived-metric shape once that section next
+changes". Nothing anywhere records it
+as a section that is *owed*; every use reads as a citation of something already written. Two further
+instances were written by this pass and corrected before they landed.
 
-The material each citation means is real and is all under § Statistical reporting — the
-`basis`/`method` table, the `resample_draws` three-valued scheme, and the recorded-column paragraph
-that states a column's `resample_draws` is "absent entirely — not `null` — when no `resample` is
-declared". Two of the five could equally mean its `#### The unit table is the inference base`
-subsection, which is why this is filed rather than fixed by sed: each site needs reading to see
-which section it is actually leaning on, and one of them (`stats.py`'s
-`percentile_of_derived`-is-the-only-construction quotation) quotes text whose home should be
-confirmed before the pointer is changed.
+**Where the cited material actually lives, checked by locating the quotations rather than assumed:**
+`stats.py`'s "can do only for a metric it knows how to compute" is under `#### What isn't a repeat`;
+the `resample_draws` `null`/`0`/*n* scheme and the recorded-column paragraph are under
+`### Statistical reporting` → `#### The unit table is the inference base`. So the phantom name spans
+at least two real sections, which is why this is not a `sed`: each site has to be read to see which
+one it leans on.
 
-Not a behaviour defect, and no reader is misled about a rule — every quoted sentence is true, only the
-address is wrong. It is filed because `CLAUDE.md` § Documentation conventions makes section
-citations the one durable way to point between files ("never by line number"), and a cited section
-that does not exist is the failure that convention exists to prevent.
+**Two readings, and the fix differs.** Either the citations are misaddressed and should each be
+repointed at the real section — or the repo has been describing a section `reference.md` genuinely
+lacks, in which case the fix is to write it: a single place saying how a metric gets from a step
+return or an `aggregate` to a value, a basis, and an interval, which is what those eighteen files
+have been pointing at. The second is the more likely reading given how uniform the usage is, and it
+is a documentation change of real size, which is why nothing is repointed here.
 
-**Owner: unassigned** — it is five one-line edits in `src/`, and any slice touching `stats.py`'s
-interval constructions (H4b next) can close it in passing.
+Not a behaviour defect, and no reader is misled about a *rule* — every quoted sentence is true and
+resolves somewhere in `reference.md`; only the address is wrong. Filed because `CLAUDE.md`
+§ Documentation conventions makes section citation the one durable way to point between files
+("never by line number"), and a cited section that does not exist is precisely the failure that
+convention exists to prevent.
+
+**Owner: unassigned.** Any slice editing `reference.md` § Statistical reporting can settle which
+reading is right; H4b is next to touch that material.

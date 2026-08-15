@@ -120,15 +120,28 @@ The other three deferrals were **not** re-opened.
 
 ## New finding, filed not fixed
 
-**Five code comments cite `reference.md` § *How a metric becomes a number*, a section that has never
-existed.** Found while writing M4's cross-reference and checking that the anchor resolved: four
-sites in `stats.py`, one in `validate.py`. No such heading exists in any of the four documents and
-`git log -S` over `docs/reference.md` finds no commit that removed one — the name was invented in a
-comment and copied. The material meant is real and lives under § Statistical reporting (two sites
-could equally mean its `#### The unit table is the inference base` subsection, which is why this is
-filed rather than sed-ed: each site needs reading). Filed in `spec-defects.md` with owner
-unassigned. The sixth instance — in the comment this pass wrote — was corrected before it landed,
-and the review's own citation of that section is the same slip.
+**`reference.md` § *How a metric becomes a number* is cited across the repo and does not exist.**
+Found while writing M4's cross-reference and checking that the anchor resolved. No heading of that
+name exists in any of the four documents, and no commit in this repo's history removed one — yet
+**eighteen files name it**: five sites in `src/` (four `stats.py`, one `validate.py`), both scoping
+documents, four plans, four specs, five development-record files, and `spec-defects.md` itself,
+whose `W-STATS-AGGREGATE-FAILED` entry proposes to "add `resample_draws` to the § How a metric
+becomes a number derived-metric shape once that section next changes".
+
+The sweep behind that count was run **filtering the file list, never the output** — the first
+attempt used `grep -v superpowers` and lost every hit inside `spec-defects.md`, which is the trap
+`CLAUDE.md` § Two mechanical traps describes verbatim; caught and re-run before the entry was
+written, and the re-run is what turned up the prior mentions.
+
+The quotations were located rather than assumed: `stats.py`'s "can do only for a metric it knows how
+to compute" is under `#### What isn't a repeat`; the `resample_draws` scheme and the
+recorded-column paragraph are under `### Statistical reporting` → `#### The unit table is the
+inference base`. The phantom name spans at least two real sections, so it is not a `sed`. Filed with
+**both readings stated** — the citations are misaddressed, or the document genuinely owes the
+section that uniform usage implies — because nothing in the record settles which, and the second
+reading is a documentation change of real size. Owner unassigned. Two instances written by this pass
+(one in `spec-defects.md`, one in the new test's docstring) were corrected before landing; the entry
+does **not** claim the name was "invented", which the record does not support.
 
 ## Mechanical pass
 
