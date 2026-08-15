@@ -1931,29 +1931,48 @@ def command_run(config_path: Path) -> int:
                         # config declaring `n: 500` would resample the column
                         # at 2000 draws beside an echo saying 500.
                         #
-                        # **This retry cannot raise**, which is the property
-                        # `stats.py`'s `E-STEP-KEY-COLLISION` comment states as
-                        # an invariant ("the caller's retry passes the same
-                        # `collapsed` and would re-raise uncontained") and which
-                        # widening the arguments must not cost — a second raise
-                        # here is a crash after every execution is already
-                        # spent. The argument is local to `summarize_step`:
-                        # every `ContractError` this `except` can catch is
-                        # raised from its `if derived:` block, which runs AFTER
-                        # its column loop has completed. The two faults raised
-                        # inside the column loop —
-                        # `E-STATS-RESAMPLE-STRATIFY-VARIES` from
-                        # `percentile_over_units_clustered`, and
-                        # `E-DATA-WEIGHT-INVALID` from `checked_weights` —
-                        # surface on the FIRST call and so never enter this
-                        # handler at all. Reaching here therefore means that
-                        # loop already succeeded, and the retry replays it over
-                        # the identical `collapsed`/`counts`/`weights`/
-                        # `clusters`/`seed`/`draws`/`resample_columns`/`strata`.
-                        # (`validate` also refuses the strata composition from
-                        # the roster before `run` starts, and `attrition` gates
-                        # the weights outside any `try` — second lines of
-                        # defence, not what this rests on.)
+                        # **THIS RETRY CAN RAISE, AND A RAISE HERE IS
+                        # UNCONTAINED** — no `run.yaml`, no run directory, every
+                        # execution spent. `stats.py`'s `E-STEP-KEY-COLLISION`
+                        # comment names that as the reason the recorded-column
+                        # half of that fault is warned about rather than raised.
+                        # The `try` above wraps the FIRST call, so a fault from
+                        # `summarize_step`'s COLUMN loop lands in this handler
+                        # too, and the retry then replays that same loop over
+                        # the same inputs and raises again. There is no
+                        # "reaching here means the columns already succeeded":
+                        # the handler cannot tell a column fault from a derived
+                        # one.
+                        #
+                        # **So what holds the line is upstream gating, not this
+                        # handler**, and each column-loop raise needs its own
+                        # gate named:
+                        #
+                        # - `E-DATA-WEIGHT-INVALID` (`checked_weights`) —
+                        #   `attrition` above puts the same mapping through
+                        #   `kish_effective_n` outside any `try`, and `validate`
+                        #   checks the column against `usable_weight`. Already
+                        #   the situation before this change: `weights` was
+                        #   always passed on the retry.
+                        # - `E-STATS-RESAMPLE-STRATIFY-VARIES`
+                        #   (`percentile_over_units_clustered`) — reachable here
+                        #   ONLY because this call now passes `strata` and
+                        #   `resample_columns`. Gated by `validate`'s own
+                        #   `E-STATS-RESAMPLE-STRATIFY-VARIES` over the roster,
+                        #   per declared name, which `command_run` returns
+                        #   `EXIT_WRONG` on before any execution runs. Per-name
+                        #   constancy within a cluster implies constancy of the
+                        #   `|`-joined cross `resample_strata` builds, so the
+                        #   composed label cannot violate where the per-name
+                        #   check passed; the composition's own filed gap
+                        #   (`<absent>`, `|`) can only MERGE two strata into
+                        #   one, never split one into two.
+                        #
+                        # A future change adding a new raise to that loop — or
+                        # widening this call again — must name its gate the
+                        # same way, or wrap this call and fall back. The suite
+                        # cannot see any of this: it is a property of what
+                        # `validate` refuses, not of what this handler does.
                         step_summary = summarize_step(
                             collapsed,
                             counts,

@@ -958,3 +958,44 @@ Tasks 18+19 review: spec ✅, quality 5 Important + 1 Minor, nothing Critical. T
   falsifies it.
   Also corrected: the ruff format --check count is 62, not the ~39 my dispatches have been quoting since
   early in the slice. Pre-existing, still out of scope, but the number was stale and I kept repeating it.
+WHOLE-BRANCH REVIEW: findings, NO CRITICAL — 3 Important, 4 Minor. THE ACCEPTANCE PROPERTY HOLDS,
+  verified by running configs in a git worktree at eaf3605 against the branch across three shapes; every
+  differing line volatile (run_id, timestamps, hashes). ZERO YAML ALIASES across six generated run.yaml
+  files, including the report_by shape that aliased 5x before task 17's fix.
+WHOLE-BRANCH FIX: commits 3acb38e, 85be4e7, d5bfca2, 20347d9. 1801 passed + 2 xfailed. All 3 Importants
+  and all 4 Minors closed. I1 fixed IN CODE — the retry after a contained summarize_step fault now passes
+  seed/draws/resample_columns/strata, chosen over suppressing the echo because the retry's own `weights`
+  argument exists for exactly that reason and suppression would need a reference.md amendment. Both
+  deferrals now durably filed: the non-finite gap re-ownered to H4b with task 14's decline recorded as
+  deliberate, and the contrast-echo gap filed as Finding 3 on the task-16 entry.
+CONCERN 3 FROM THE FIX ROUND IS UNFOUNDED — CONTROLLER-VERIFIED. It reported CLAUDE.md still says
+  docs/superpowers/ is gitignored. It does not; that claim was removed in commit 4547bed. The only
+  surviving gitignore sentence is the sdd-workspace clobber warning, which is true.
+NEW FINDING, PRE-EXISTING, FILED NOT FIXED, AND NOT A MERGE BLOCKER: reference.md § "How a metric
+  becomes a number" DOES NOT EXIST — zero occurrences in that file — yet it is cited by EIGHTEEN files,
+  including src/publishable/stats.py and validate.py, two scoping documents, four specs, four plans and
+  spec-defects.md. Quotations attributed to it resolve under two REAL sections, so the phantom name spans
+  both. It predates H4a by many slices.
+  WORTH RECORDING: THE WHOLE-BRANCH REVIEWER ITSELF CITED IT AS REAL. A phantom citation repeated across
+  eighteen files reads as authoritative to every subsequent reader, including one specifically hunting
+  false claims — which is why the fix round's own investigator initially mis-asserted its origin and had
+  to re-sweep. Filed with both readings (misaddressed citations, or a section the documents owe).
+FIX RE-REVIEW: findings — blocks merge TRIVIALLY (both prose, no code/test change). I2, I3(a), I3(b) and
+  all four Minors verified closed, with M4's count phrases RE-DERIVED FROM THE FENCED BLOCK rather than
+  trusted, and I3(a)'s new pointer checked to exist — "since a phantom pointer would be the same defect
+  recursing", which is the right instinct given the § How a metric becomes a number finding.
+  IMPORTANT, NEW: THE FIX ROUND'S OWN NON-RAISE ARGUMENT IS FALSE, AND IT WAS PROVED BY MUTATION. The new
+  comment says column-loop faults "surface on the FIRST call and so never enter this handler at all" —
+  BUT THE FIRST CALL IS INSIDE THE TRY. A column-loop raise is caught by exactly that except, and the
+  retry replays the loop. Measured at the behaviour site with percentile_over_units_clustered patched to
+  raise: at 20347d9 `run` returns 1 with NO run.yaml and NO run directory — every execution spent, record
+  lost; with only resample_columns=/strata= removed from the RETRY, the run completes, exit 0. THE
+  WIDENING IS WHAT FLIPS IT.
+  Trigger is LATENT not live: the only new column-loop raise is E-STATS-RESAMPLE-STRATIFY-VARIES, which
+  validate gates (per-name constancy implies constancy of the |-joined cross; the "no value"/"<absent>"
+  divergence needs a genuinely absent attribute no roster path produces). RULED: KEEP THE CODE, REWRITE
+  THE COMMENT — the code is right and the trigger is gated, but what holds the line is validate and
+  attrition, THE TWO SECOND LINES OF DEFENCE THE FIX REPORT EXPLICITLY DISCLAIMS RESTING ON.
+  GENERALIZES, AND IT IS THE SLICE'S SHARPEST INSTANCE: A SAFETY ARGUMENT IN A COMMENT IS ITSELF A CLAIM
+  THAT NEEDS A MUTATION. This one was written by a fixer closing findings about false comments, reviewed
+  once, and survived until someone patched a function to raise and watched the run lose its record.

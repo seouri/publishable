@@ -31,18 +31,25 @@ the comment claimed is the cheaper and the more honest of the two.
 would have resampled the column 2000 times beside an echo saying 500 — the same defect class one
 field over. The four arguments are passed together for that reason.
 
-**The crash risk was checked, not assumed.** `stats.py`'s `E-STEP-KEY-COLLISION` comment states as
-an invariant that the retry must not re-raise, and widening its arguments must not cost that. The
-argument is local to `summarize_step`: **every `ContractError` this `except` can catch is raised
-from its `if derived:` block, which runs after its column loop has completed.** The two faults the
-column loop itself can raise — `E-STATS-RESAMPLE-STRATIFY-VARIES` from
-`percentile_over_units_clustered` (confirmed by probe to fire from the column loop, ahead of the
-derived block) and `E-DATA-WEIGHT-INVALID` from `checked_weights` — surface on the **first** call
-and never enter the handler at all. So reaching the handler means the column loop already succeeded
-with these very arguments, and the retry replays it over identical inputs. `validate` refusing the
-strata composition from the roster before `run` starts, and `attrition` gating the weights outside
-any `try`, are second lines of defence recorded as such — the argument does not rest on them, and so
-does not rest on the filed `cli.resample_strata` label-collision gap either.
+**The crash risk, and a wrong argument corrected by the scoped re-review.** The first version of
+this comment claimed the retry "cannot raise" because every catchable `ContractError` comes from
+`summarize_step`'s `if derived:` block. **That is false: the `try` wraps the first call, so a fault
+from the column loop lands in this handler too, and the retry replays the loop and raises again,
+uncontained — no `run.yaml`, no run directory, every execution spent.** Confirmed by monkeypatching
+`stats.percentile_over_units_clustered` to raise and running this fix's own pin config: exit `1`,
+`run_dir` never created. The widening is what makes that path reachable at all.
+
+**The code stands; what holds the line is upstream gating, and the comment now names it per path.**
+`E-DATA-WEIGHT-INVALID` (`checked_weights`) is gated by `attrition`'s `kish_effective_n` outside any
+`try` and by `validate`'s `usable_weight` check — unchanged by this fix, since `weights` was always
+passed on the retry. `E-STATS-RESAMPLE-STRATIFY-VARIES` (`percentile_over_units_clustered`) is
+reachable here **only** because this call now passes `strata`/`resample_columns`, and is gated by
+`validate`'s roster-side check per declared name, on which `command_run` returns `EXIT_WRONG` before
+any execution runs: per-name constancy within a cluster implies constancy of the `|`-joined cross,
+and the composed-label gap can only merge two strata, never split one. The comment says explicitly
+that a future change adding a raise to that loop, or widening this call again, must name its gate or
+wrap the call — and that the suite cannot see any of this, because the safety property lives in what
+`validate` refuses rather than in what this handler does.
 
 **The retry-site comment is rewritten** and no longer claims reproduction it does not perform.
 
@@ -111,7 +118,10 @@ The other three deferrals were **not** re-opened.
 - **M4.** `reference.md` § The one config file: `measurements` is now "the one *built* block `init`
   **materializes** as a `null`", with a clause saying `statistics.resample` is *shown* that way too
   since H4a but is written by `init` not at all — and why that difference is load-bearing rather
-  than incidental. **Every count phrase in the paragraph was re-checked**, not only the two the
+  than incidental. Corrected after the scoped re-review: it is materializing the block **at its
+  default expansion** that would make percentile intervals the silent default, not materializing it
+  as `null`, since an explicit `null` resolves as undeclared exactly as an absent key does (task 1's
+  pin covers both shapes). **Every count phrase in the paragraph was re-checked**, not only the two the
   review named: "four optional `statistics` sub-blocks" (contrasts/resample/null_test/report_by ✓),
   "Three declarations above are not yet built" (three `NOT BUILT` markers in the fenced block ✓),
   "Its two sub-fields, `by` and `collapse`" (✓ against the inline comment), and the six-key closed
