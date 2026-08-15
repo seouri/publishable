@@ -7431,9 +7431,38 @@ def test_a_report_by_level_resamples_without_joining_the_correction_family(
 
     The absence assertion has a positive companion IN THE SAME TEST: the level
     genuinely produced a percentile interval, so the test cannot pass by
-    nothing having been stratified. And `family` is asserted to the exact shape
-    a strata-free run would have, so a level joining the family shows up as an
-    inflated metric count rather than as a silence."""
+    nothing having been stratified.
+
+    What each absence assertion below actually detects, stated plainly rather
+    than claimed uniformly, because a review found the claim below did not
+    hold for all three:
+
+    - **The three `"family"`/`"family_size"`/`"correction"` NOT IN level_block
+      assertions are a STRUCTURAL fact with no failing mutation found in the
+      reachable code.** A level block lives in `aggregated[...]["by"]`, a tree
+      the correction pass never reads at all — `_entry_for` (the one place a
+      corrected field is written) only ever indexes `vs_baseline`/
+      `contrasts_out`. Flipping this would mean inventing a new code path, not
+      mutating an existing one, so — per this slice's own rule that an
+      absence-shaped pin needs a mutation or an admission — this is recorded
+      as a structural invariant, the same treatment `test_a_summary_estimate_
+      is_not_recomputed_by_the_resample_pass` gives the `summary`-step
+      `Estimate` boundary below, not a mutation-pinned assertion.
+    - **The `entry["family"] == {"comparisons": 1, "metrics": 2}` assertion
+      does NOT catch `_comparison_step_blocks`'s `- {"by"}` exclusion being
+      removed, in THIS fixture.** Verified: under that mutation, `"by"` does
+      join `_comparison_step_blocks`'s per-metric loop and gets its own
+      `Member` — but `"by"` holds a dict (the strata mapping), not a scalar,
+      so the paired computation over it produces `ci95: None`, and
+      `family_members` (`src/publishable/correction.py`) filters out any
+      `Member` whose `ci95 is None` *before* counting — so `metrics` stays 2
+      rather than becoming 3, and this assertion passes unchanged whether or
+      not the exclusion exists. It is kept as a sanity check on the
+      unmutated shape, not as that mutation's detector.
+    - **The mutation-confirmed detector for the `- {"by"}` exclusion is the
+      final loop below** (`assert "by" not in step_block`): removing the
+      exclusion mints a genuine `"by"` entry in `vs_baseline`, which that
+      assertion catches directly."""
     doc = run_a_project(
         tmp_path, capsys=capsys, units=40, unit_attributes=["cohort"],
         aggregate_returns="mean_pred",
@@ -7460,11 +7489,13 @@ def test_a_report_by_level_resamples_without_joining_the_correction_family(
         assert "family" not in level_block
         assert "family_size" not in level_block
         assert "correction" not in level_block
-    # And the family a REAL contrast holds is exactly the strata-free shape:
-    # one comparison, two metrics (the recorded `pred` and the derived
-    # `mean_pred`) — `by` is not a metric and neither are its levels, so the
-    # family stays 1 x 2 rather than growing with the number of `cohort`
-    # levels the `by` block holds.
+    # A sanity check on the unmutated shape — one comparison, two metrics (the
+    # recorded `pred` and the derived `mean_pred`), which is what a strata-free
+    # run would also show. NOT the detector for `_comparison_step_blocks`'s
+    # `- {"by"}` exclusion (see the docstring above): `"by"` holds a dict, not
+    # a scalar, so a Member built for it carries `ci95: None` and is filtered
+    # by `family_members` before the count, so this assertion is unchanged by
+    # that exclusion either way.
     entry = _named_contrast(run, "method=spearman", "mean_pred")
     assert entry is not None
     assert entry["family"] == {"comparisons": 1, "metrics": 2}
@@ -7530,7 +7561,19 @@ def test_a_summary_estimate_is_not_recomputed_by_the_resample_pass(tmp_path, cap
     assert "correction" not in estimate
     # The non-Estimate return is untouched too.
     assert run["results"]["summary"]["step02_report"]["converged"] is True
-    # Positive companion: a column in the same run IS resampled.
+    # Positive companion: a RECORDED COLUMN in the same run IS resampled —
+    # `pred`, not the derived `mean_pred` beside it. The distinction matters:
+    # a derived metric always resamples once a seed and a callable exist
+    # (`resample_columns` or not), so `mean_pred["method"]` would read
+    # `percentile_over_units` whether or not `statistics.resample` were
+    # declared at all — a companion that could not fail. `pred["method"]`
+    # genuinely depends on the declaration (verified: with `resample` removed
+    # from this fixture, `pred` reports `t_over_units` while `mean_pred`
+    # stays `percentile_over_units`), so it is the one that proves this run's
+    # resample pass actually ran rather than merely being present in the
+    # config.
     aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
-    assert aggregated["mean_pred"]["method"] == "percentile_over_units"
-    assert aggregated["mean_pred"]["resample"]["n"] == 2000
+    assert aggregated["pred"]["method"] == "percentile_over_units"
+    assert aggregated["pred"]["resample"]["n"] == 2000
+
+
