@@ -20,8 +20,13 @@ class Member:
     """One correctable interval, and the evidence it was built from.
 
     `pool` and `diffs` are how the corrected interval is built from the *same*
-    evidence as the raw one — the stored draws for a derived metric, the stored
-    per-unit differences for a recorded column. Exactly one of them is set.
+    evidence as the raw one — the stored draws for a percentile interval, the
+    stored per-unit differences for a *t* one. Exactly one of them is set.
+    **A recorded column carries `diffs` by default and `pool` under a declared
+    `statistics.resample`**, which is what makes a percentile raw interval and a
+    percentile corrected one the same construction; a reader meeting
+    `diffs=None` on a column contrast is meeting that, not an omission. Cohen's
+    *dz* is computed at the call site from its own list and does not travel here.
     Neither may reach `run.yaml`: they are tuples so a member cannot be mutated
     into the record by accident. `pool` must already be sorted ascending —
     `interval_at` reads fixed ranks off it and does not sort.
@@ -148,12 +153,21 @@ def _level_for(method: str, family_size: int, rank: int) -> float | None:
 def _corrected_bounds(member: Member, level: float) -> tuple[float, float] | None:
     """The interval at `level`, from the same evidence as the raw one.
 
-    A recorded column re-runs `paired_t_over_units` over the stored per-unit
-    differences — exact at any α. A derived metric reads a second rank pair off
-    its stored draw pool. Neither redraws: a fresh resample at the corrected
-    level could land *inside* the raw interval, and a corrected interval
-    narrower than its raw one is precisely the number a reader cannot tell is
-    wrong.
+    **What decides the construction is which field the member carries, not what
+    kind of metric it is.** A member carrying per-unit differences re-runs
+    `paired_t_over_units` over them — exact at any α. A member carrying a draw
+    pool reads a second rank pair off it. A derived metric always carries a
+    pool; a recorded column carries differences by default and **carries a pool
+    instead under a declared `statistics.resample`**, because its raw interval
+    was then a percentile and a *t* corrected bound would be its counterpart in
+    name only — narrower or wider than the truth by construction rather than by
+    evidence. `Member.__post_init__` enforces exactly one of the two, so this
+    order is a preference among impossible-to-have-both fields rather than a
+    tie-break.
+
+    Neither redraws: a fresh resample at the corrected level could land *inside*
+    the raw interval, and a corrected interval narrower than its raw one is
+    precisely the number a reader cannot tell is wrong.
     """
     if member.diffs is not None:
         got = paired_t_over_units(member.diffs, confidence=1.0 - level)

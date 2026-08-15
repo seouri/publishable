@@ -3201,10 +3201,713 @@ def test_a_contrast_with_a_declared_within_attribute_validates_clean(write_confi
     assert "E-STATS-CONTRAST-UNKNOWN" not in found
 
 
-def test_a_declared_resample_is_refused(write_config):
-    assert "E-STATS-RESAMPLE-UNSUPPORTED" in codes(
-        write_config({"statistics": {"resample": {"method": "bootstrap", "n": 2000}}})
+_RESAMPLE_UNITS = {"from": "index.csv", "key": "patient_id"}
+# No `attributes` declared: `write_config`'s default `index.csv` is `patient_id`
+# only, so an `attributes: ["cohort"]` here would fail roster resolution
+# (`E-UNITS-ATTR-MISSING`) on every test below, none of which reads the roster —
+# they check `method`/`n` from the declaration alone. Fixed rather than left
+# roster-broken: the next check to need a resolved roster over this constant
+# would otherwise inherit a fixture that validates clean and silently proves
+# nothing, the exact vacuity Task 5 was warned about. A test that DOES need a
+# real attribute uses `_resample_stratum_table` below instead.
+
+
+def test_an_unknown_resample_method_is_refused(write_config):
+    """`bootstrap` is the whole enum. An unstated one-value enum makes
+    `method: bootstap` a shrug; a stated one makes it a diagnostic."""
+    found = codes(
+        write_config(
+            {
+                "data.units": _RESAMPLE_UNITS,
+                "statistics": {"resample": {"method": "bootstap", "n": 2000}},
+            }
+        )
     )
+    assert "E-STATS-RESAMPLE-METHOD" in found
+    # The positive companion, in the same test: the legal spelling is NOT
+    # refused, so this cannot pass by the check rejecting every method string.
+    assert "E-STATS-RESAMPLE-METHOD" not in codes(
+        write_config(
+            {
+                "data.units": _RESAMPLE_UNITS,
+                "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
+            }
+        )
+    )
+
+
+@pytest.mark.parametrize("n", [0, -1, 79])
+def test_a_resample_n_below_the_honest_floor_is_refused(write_config, n):
+    """`percentile_over_units` returns `None` below `min_honest_draws(0.95)` = 80
+    draws, so a declared `n: 50` would null `ci95` on EVERY column in the run
+    with no diagnostic. The floor is what makes that impossible, and it lands
+    before any code honours `n` — validate-before-honour, inside the slice.
+
+    Three values, not one: `0` and `-1` are the not-a-positive-count fault and
+    `79` is the floor itself, and a check written as `n < 1` passes the first two
+    while letting the third through. `79`/`80` is the boundary pair, so an
+    off-by-one (`n <= 80`) fails the companion below rather than passing."""
+    found = codes(
+        write_config(
+            {
+                "data.units": _RESAMPLE_UNITS,
+                "statistics": {"resample": {"method": "bootstrap", "n": n}},
+            }
+        )
+    )
+    assert "E-STATS-RESAMPLE-N" in found
+
+
+def test_a_resample_n_at_the_floor_is_accepted(write_config):
+    """The positive companion `79` above needs: exactly 80 is honest, so an
+    off-by-one in either direction fails one of the two. The refusal at `79`
+    is asserted in the same test, beside the acceptance at `80` — an
+    absence-only assertion on `80` alone would still pass with
+    `_check_resample` deleted outright; pairing it with a value that must
+    report is what a control on the same code, not an unrelated one, requires."""
+    accepted = codes(
+        write_config(
+            {
+                "data.units": _RESAMPLE_UNITS,
+                "statistics": {"resample": {"method": "bootstrap", "n": 80}},
+            }
+        )
+    )
+    assert "E-STATS-RESAMPLE-N" not in accepted
+    refused = codes(
+        write_config(
+            {
+                "data.units": _RESAMPLE_UNITS,
+                "statistics": {"resample": {"method": "bootstrap", "n": 79}},
+            }
+        )
+    )
+    assert "E-STATS-RESAMPLE-N" in refused
+
+
+def test_the_resample_floor_message_names_the_number_and_the_consequence(write_config):
+    messages = messages_by_code(
+        write_config(
+            {
+                "data.units": _RESAMPLE_UNITS,
+                "statistics": {"resample": {"method": "bootstrap", "n": 50}},
+            }
+        )
+    )
+    message = messages["E-STATS-RESAMPLE-N"]
+    assert "80" in message
+    assert "no interval" in message
+
+
+def test_a_resample_method_of_the_wrong_type_is_a_type_fault_not_a_second_finding(write_config):
+    """`method: 5` is `E-CONFIG-TYPE` from the envelope, a leaf fault this repo
+    treats as non-fatal — reported, and validation continues. `5 not in
+    RESAMPLE_METHODS` is `True` for an int too, so a bare membership check
+    without the `isinstance` guard would still fire `E-STATS-RESAMPLE-METHOD`
+    on top of `E-CONFIG-TYPE` — reporting the same wrong-typed leaf twice under
+    two codes. The guard is what keeps this method's own code silent for a
+    value that was never a candidate string to begin with. `n: 79` — below
+    the honest floor — rides beside the bad `method` leaf so this test still
+    proves validation continued past it: an `E-STATS-RESAMPLE-N` finding must
+    come from this same function running to completion, not from the retired
+    wholesale refusal that used to stand in for that proof."""
+    found = codes(
+        write_config(
+            {
+                "data.units": _RESAMPLE_UNITS,
+                "statistics": {"resample": {"method": 5, "n": 79}},
+            }
+        )
+    )
+    assert "E-CONFIG-TYPE" in found
+    assert "E-STATS-RESAMPLE-METHOD" not in found
+    # Validation continued past the bad leaf: a second, independent
+    # `_check_resample` finding on the same declaration still fires.
+    assert "E-STATS-RESAMPLE-N" in found
+
+
+def test_a_resample_n_of_the_wrong_type_is_a_type_fault_not_a_traceback(write_config):
+    """`n: "many"` is `E-CONFIG-TYPE`; a bare `n >= 80` raises `TypeError` on a
+    string and would take out the entire `validate` call, not just this
+    check. This test must fail if the `isinstance` guard is removed. An
+    unknown `stratify_by` name rides beside the bad `n` leaf — checked
+    DOWNSTREAM of the `n` floor in `_check_resample`'s source order, unlike
+    a `method` fault, which runs upstream of `n` and so would not catch a
+    `return` inserted right after the `n` check — so this test proves
+    validation continued PAST the `n` leaf specifically, on a finding from
+    `_check_resample` itself rather than the retired wholesale refusal."""
+    found = codes(
+        write_config(
+            {
+                "data.units": _RESAMPLE_UNITS,
+                "statistics": {
+                    "resample": {"method": "bootstrap", "n": "many", "stratify_by": ["nope"]}
+                },
+            }
+        )
+    )
+    assert "E-CONFIG-TYPE" in found
+    assert "E-STATS-RESAMPLE-N" not in found
+    # Validation continued past the `n` leaf: a second, independent
+    # `_check_resample` finding that runs AFTER `n` in source order still fires.
+    assert "E-STATS-RESAMPLE-STRATIFY-UNKNOWN" in found
+
+
+def test_a_resample_n_of_bool_type_is_a_type_fault_not_a_floor_violation(write_config):
+    """`isinstance(True, int)` is `True` in Python, so a bare `isinstance(n, int)`
+    guard would let `n: true` reach the floor comparison. `n: true` is
+    `E-CONFIG-TYPE` from the envelope already; this pins that it does NOT also
+    earn `E-STATS-RESAMPLE-N` — the same double-report shape the `method`
+    fix (task 4's post-review commit) corrected, on the field that motivated
+    the correction in the first place. An unknown `stratify_by` name rides
+    beside the bool `n`, checked downstream of `n` in source order for the
+    same reason the sibling test above uses it rather than `method`, so this
+    test still proves validation continued past the `n` leaf specifically,
+    on a finding from `_check_resample` itself rather than the retired
+    wholesale refusal."""
+    found = codes(
+        write_config(
+            {
+                "data.units": _RESAMPLE_UNITS,
+                "statistics": {
+                    "resample": {"method": "bootstrap", "n": True, "stratify_by": ["nope"]}
+                },
+            }
+        )
+    )
+    assert "E-CONFIG-TYPE" in found
+    assert "E-STATS-RESAMPLE-N" not in found
+    assert "E-STATS-RESAMPLE-STRATIFY-UNKNOWN" in found
+
+
+def test_resample_method_null_or_absent_takes_the_documented_default(write_config):
+    """§ Errors `validate` reports promises `E-STATS-RESAMPLE-METHOD`'s row:
+    "Unset (`null`) is accepted and takes the documented default." Pinned for
+    both spellings — an explicit `method: null` and `method` absent entirely —
+    since either could regress independently of the other. `n: 79`, below the
+    honest floor, rides beside each so the test still proves `_check_resample`
+    ran to completion rather than leaning on the retired wholesale refusal."""
+    explicit_null = codes(
+        write_config(
+            {
+                "data.units": _RESAMPLE_UNITS,
+                "statistics": {"resample": {"method": None, "n": 79}},
+            }
+        )
+    )
+    assert "E-STATS-RESAMPLE-METHOD" not in explicit_null
+    assert "E-STATS-RESAMPLE-N" in explicit_null
+
+    absent = codes(
+        write_config(
+            {
+                "data.units": _RESAMPLE_UNITS,
+                "statistics": {"resample": {"n": 79}},
+            }
+        )
+    )
+    assert "E-STATS-RESAMPLE-METHOD" not in absent
+    assert "E-STATS-RESAMPLE-N" in absent
+
+
+def _resample_stratum_table(tmp_path: Path) -> None:
+    """Write into the directory `write_config` points `data.input_dir` at — the
+    same reason `_weighted_table` exists. `_check_resample`'s `stratify_by`
+    check reads `data.units.attributes` from the declaration alone; it never
+    reads `roster`. This table exists for two other reasons instead:
+    `write_config`'s own default `index.csv` is `patient_id` only, so a config
+    declaring `data.units.attributes: ["cohort"]` against it fails roster
+    resolution (`E-UNITS-ATTR-MISSING`) — a stray finding in every test using
+    this fixture, and one this module's tests otherwise assert the absence of;
+    and `_RESAMPLE_UNITS` (task 4) carried that same roster-broken shape
+    forward as a trap for the tasks after this one that will need a roster
+    that actually resolves.
+
+    **One unit row.** Enough for every check in this task, none of which reads
+    cluster membership or counts anything over the roster — but not enough for
+    a task needing cluster counts (task 8's `limits.min_clusters`), which
+    needs more than one row to have more than one cluster to count."""
+    (tmp_path / "input" / "index.csv").write_text("patient_id,cohort\np1,a\n")
+
+
+def test_a_resample_stratum_must_be_a_declared_attribute(write_config, tmp_path: Path):
+    """§ Validation's *Resample strata exist* row has never had an identifier.
+    The reference set is `data.units.attributes`, the declared one — the same set
+    `_check_report_by` reads, and for its reason: a stratum is read per unit when
+    the draw is taken, so it has to survive resolution as an attribute."""
+    _resample_stratum_table(tmp_path)
+    found = codes(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv",
+                    "key": "patient_id",
+                    "attributes": ["cohort"],
+                },
+                "statistics": {
+                    "resample": {"method": "bootstrap", "n": 2000,
+                                 "stratify_by": ["count_stratum"]}
+                },
+            }
+        )
+    )
+    assert "E-STATS-RESAMPLE-STRATIFY-UNKNOWN" in found
+    # Positive companion, same test: a DECLARED name is not refused, so this
+    # cannot pass by the check refusing every stratum it is handed.
+    assert "E-STATS-RESAMPLE-STRATIFY-UNKNOWN" not in codes(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv",
+                    "key": "patient_id",
+                    "attributes": ["cohort"],
+                },
+                "statistics": {
+                    "resample": {"method": "bootstrap", "n": 2000, "stratify_by": ["cohort"]}
+                },
+            }
+        )
+    )
+
+
+def test_a_resample_declaration_earns_one_finding_per_offending_stratum(
+    write_config, tmp_path: Path
+):
+    """Two undeclared names, two findings — not one naming only the first. The
+    count is the assertion: a check that `break`s after the first offender passes
+    a membership test and fails this."""
+    _resample_stratum_table(tmp_path)
+    c = Collector()
+    validate_config(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv",
+                    "key": "patient_id",
+                    "attributes": ["cohort"],
+                },
+                "statistics": {
+                    "resample": {
+                        "method": "bootstrap",
+                        "n": 2000,
+                        "stratify_by": ["dx_status", "count_stratum", "cohort"],
+                    }
+                },
+            }
+        ),
+        c,
+    )
+    offenders = [f for f in c.findings if f.code == "E-STATS-RESAMPLE-STRATIFY-UNKNOWN"]
+    assert len(offenders) == 2
+    offending_names = {f.message.split("`")[1] for f in offenders}
+    # Each offender names itself, not the other — a check reporting both
+    # offending names in every finding would still pass a bare `in` test.
+    assert offending_names == {"dx_status", "count_stratum"}
+    # `cohort` IS declared and must not be reported as an offender — three
+    # names, two offenders, so a check that reported all three would also
+    # fail the count above. It DOES appear in each message as a candidate
+    # (`_check_report_by`'s siblings, `E-DATA-ASSIGN-STRATIFY-UNKNOWN` and
+    # `E-DATA-WEIGHT-UNKNOWN`, both enumerate the declared set the same way),
+    # so a reader who typed `dx_stat` sees what they could have typed instead.
+    for f in offenders:
+        assert "cohort" in f.message
+
+
+def test_a_resample_stratum_naming_a_real_but_undeclared_column_is_refused(
+    write_config, tmp_path: Path
+):
+    """The reference set is `data.units.attributes` — **not** the source's real
+    columns, which `reference.md`'s registry row promises explicitly. Every
+    other fixture in this file makes the declared set and the CSV's columns
+    coincide, so no assertion here could tell "read from the declaration" and
+    "read from whatever the roster resolved" apart. This is the one that can:
+    `extra_col` is a real column `cohort_table.csv` carries, `data.units.attributes`
+    does not name it, and it must be refused all the same."""
+    (tmp_path / "input" / "index.csv").write_text("patient_id,cohort,extra_col\np1,a,x\n")
+    found = codes(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv",
+                    "key": "patient_id",
+                    "attributes": ["cohort"],
+                },
+                "statistics": {
+                    "resample": {"method": "bootstrap", "n": 2000,
+                                 "stratify_by": ["extra_col"]}
+                },
+            }
+        )
+    )
+    assert "E-STATS-RESAMPLE-STRATIFY-UNKNOWN" in found
+
+
+_VARYING_STRATUM = (
+    "patient_id,animal_id,label\n"
+    "p0,a0,x\np1,a0,y\n"          # animal a0 carries two labels
+    + "".join(f"p{i},a{i},x\n" for i in range(2, 14))
+)
+
+
+def test_a_resample_stratum_varying_within_a_cluster_is_refused(write_config, tmp_path):
+    """The composition rule, checked from the declaration plus the roster the
+    way *Fold strata survive clustering* already is — `validate` reuses
+    `units.stratum_varies_within_cluster` rather than minting a second notion of
+    constancy."""
+    (tmp_path / "input" / "index.csv").write_text(_VARYING_STRATUM)
+    found = codes(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv", "key": "patient_id",
+                    "attributes": ["animal_id", "label"], "cluster_by": "animal_id",
+                },
+                "limits": {"min_clusters": 2},
+                "statistics": {"resample": {"method": "bootstrap", "n": 2000,
+                                            "stratify_by": ["label"]}},
+            }
+        )
+    )
+    assert "E-STATS-RESAMPLE-STRATIFY-VARIES" in found
+
+
+def test_a_constant_stratum_within_clusters_is_accepted(write_config, tmp_path):
+    """Positive companion: the same declaration over a roster where `label` IS
+    constant within each animal is clean, so the check reads the roster rather
+    than refusing the combination."""
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id,animal_id,label\n" + "".join(f"p{i},a{i // 2},x\n" for i in range(28))
+    )
+    found = codes(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv", "key": "patient_id",
+                    "attributes": ["animal_id", "label"], "cluster_by": "animal_id",
+                },
+                "limits": {"min_clusters": 2},
+                "statistics": {"resample": {"method": "bootstrap", "n": 2000,
+                                            "stratify_by": ["label"]}},
+            }
+        )
+    )
+    assert "E-STATS-RESAMPLE-STRATIFY-VARIES" not in found
+
+
+def test_a_bare_string_resample_stratum_is_read_as_one_name(write_config, tmp_path: Path):
+    """`units.stratum_names` reads `stratify_by: site` as one name exactly as
+    `[site]` is — the same normalization the draw balances on. Read as a
+    sequence of characters instead, this would report four findings (`s`, `i`,
+    `t`, `e`) rather than one, which is what the count catches."""
+    _resample_stratum_table(tmp_path)
+    c = Collector()
+    validate_config(
+        write_config(
+            {
+                "data.units": {"from": "index.csv", "key": "patient_id",
+                               "attributes": ["cohort"]},
+                "statistics": {"resample": {"method": "bootstrap", "n": 2000,
+                                            "stratify_by": "site"}},
+            }
+        ),
+        c,
+    )
+    offenders = [f for f in c.findings if f.code == "E-STATS-RESAMPLE-STRATIFY-UNKNOWN"]
+    assert len(offenders) == 1
+    assert "site" in offenders[0].message
+
+
+def test_an_empty_resample_stratify_by_is_not_refused(write_config):
+    """`stratify_by: []` is what a full expansion shows and what most designs
+    carry; it names no stratum and sends the draw down its unstratified path.
+    `stratum_names` returns `()` for it, so there is nothing to refuse.
+
+    `n: 50` is deliberately wrong, and `E-STATS-RESAMPLE-N` is asserted alongside
+    the absence above: `_check_resample` deleted outright would also leave
+    `E-STATS-RESAMPLE-STRATIFY-UNKNOWN` absent, so an absence-only assertion
+    proves nothing about this check in particular. A finding that MUST fire,
+    from the same function, is what makes the absence meaningful."""
+    found = codes(
+        write_config(
+            {
+                "data.units": {"from": "index.csv", "key": "patient_id"},
+                "statistics": {"resample": {"method": "bootstrap", "n": 50,
+                                            "stratify_by": []}},
+            }
+        )
+    )
+    assert "E-STATS-RESAMPLE-STRATIFY-UNKNOWN" not in found
+    assert "E-STATS-RESAMPLE-N" in found
+
+
+def test_a_wrong_typed_resample_stratify_by_is_a_type_fault_not_a_second_finding(
+    write_config, tmp_path: Path
+):
+    """`stratify_by: 5` is `E-CONFIG-TYPE` from the envelope (`statistics.resample
+    .stratify_by` is typed `(str, list)`) — a leaf fault this repo treats as
+    non-fatal, so validation continues and hands this check the still-wrong-typed
+    5. `stratum_names(5)` wraps it as a one-name tuple (`(5,)`) rather than
+    raising, so an unguarded read would report the same wrong-typed leaf a
+    second time under this code — the same double-report `method`'s own
+    `isinstance` guard prevents. This test must fail if that guard is removed.
+
+    `E-CONFIG-TYPE` is a real finding, but it comes from `check_envelope`, not
+    from `_check_resample` — the function under test — so it proves this test
+    ran, not that this check behaved. `n: 50` is deliberately wrong too, and
+    `E-STATS-RESAMPLE-N` (which DOES come from `_check_resample`) is asserted
+    alongside it, so validation-continued-past-the-bad-leaf is pinned by a
+    finding this function itself produces."""
+    _resample_stratum_table(tmp_path)
+    found = codes(
+        write_config(
+            {
+                "data.units": {"from": "index.csv", "key": "patient_id",
+                               "attributes": ["cohort"]},
+                "statistics": {"resample": {"method": "bootstrap", "n": 50,
+                                            "stratify_by": 5}},
+            }
+        )
+    )
+    assert "E-UNITS-ATTR-MISSING" not in found
+    assert "E-CONFIG-TYPE" in found
+    assert "E-STATS-RESAMPLE-STRATIFY-UNKNOWN" not in found
+    assert "E-STATS-RESAMPLE-N" in found
+
+
+def test_a_non_string_resample_stratum_entry_is_absorbed_not_left_silent(
+    write_config, tmp_path: Path
+):
+    """`stratify_by: [3, "cohort"]` — the container is a legal `list`, so no
+    `E-CONFIG-TYPE` guards this one; `3` is a non-string ITEM, which names no
+    unit attribute either way and is this check's own finding to make, exactly
+    the absorption `E-DATA-ASSIGN-STRATIFY-UNKNOWN` performs for the same shape.
+    `cohort` is declared and real, so exactly one offender — naming `3` — is
+    the count that proves the absorption fires rather than being silently
+    skipped or crashing on an unhashable comparison."""
+    _resample_stratum_table(tmp_path)
+    c = Collector()
+    validate_config(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv",
+                    "key": "patient_id",
+                    "attributes": ["cohort"],
+                },
+                "statistics": {
+                    "resample": {"method": "bootstrap", "n": 2000,
+                                 "stratify_by": [3, "cohort"]}
+                },
+            }
+        ),
+        c,
+    )
+    offenders = [f for f in c.findings if f.code == "E-STATS-RESAMPLE-STRATIFY-UNKNOWN"]
+    assert len(offenders) == 1
+    assert "3" in offenders[0].message
+
+
+_FOUR_ANIMALS = "patient_id,animal_id\n" + "".join(
+    f"p{i},a{i % 4}\n" for i in range(12)
+)
+
+
+def test_a_clustered_resample_below_min_clusters_warns(write_config, tmp_path):
+    """§ Validation's *Clusters enough to resample* row, which has had no emit
+    site since it was written: 12 units in 4 animals bootstraps 4 draws, and
+    `limits.min_clusters` is 10 in every generated config."""
+    (tmp_path / "input" / "index.csv").write_text(_FOUR_ANIMALS)
+    found = codes(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv",
+                    "key": "patient_id",
+                    "attributes": ["animal_id"],
+                    "cluster_by": "animal_id",
+                },
+                "limits": {"min_clusters": 10},
+                "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
+            }
+        )
+    )
+    assert "W-STATS-RESAMPLE-CLUSTERS" in found
+
+
+def test_the_cluster_warning_counts_clusters_not_units(write_config, tmp_path):
+    """12 units and 4 clusters: a check reading `len(roster)` sees 12, clears a
+    floor of 10, and is silent. The fixture is sized so unit count and cluster
+    count fall on OPPOSITE sides of the same threshold, which a 12-unit /
+    12-cluster fixture could not distinguish. One `write_config` call, read
+    both ways — `codes`/`messages_by_code` each re-run `validate_config` on the
+    same path, so a second write bought nothing but a second parse."""
+    (tmp_path / "input" / "index.csv").write_text(_FOUR_ANIMALS)
+    path = write_config(
+        {
+            "data.units": {
+                "from": "index.csv", "key": "patient_id",
+                "attributes": ["animal_id"], "cluster_by": "animal_id",
+            },
+            "limits": {"min_clusters": 10},
+            "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
+        }
+    )
+    messages = messages_by_code(path)
+    assert "W-STATS-RESAMPLE-CLUSTERS" in messages
+    assert "4" in messages["W-STATS-RESAMPLE-CLUSTERS"]
+    assert "12" not in messages["W-STATS-RESAMPLE-CLUSTERS"]
+
+
+def test_the_cluster_warning_is_silent_above_the_floor(write_config, tmp_path):
+    """The positive companion: the same roster with `min_clusters: 3` is silent,
+    so the warning reads the declared floor rather than firing on any cluster
+    count at all."""
+    (tmp_path / "input" / "index.csv").write_text(_FOUR_ANIMALS)
+    found = codes(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv", "key": "patient_id",
+                    "attributes": ["animal_id"], "cluster_by": "animal_id",
+                },
+                "limits": {"min_clusters": 3},
+                "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
+            }
+        )
+    )
+    assert "W-STATS-RESAMPLE-CLUSTERS" not in found
+
+
+def test_no_cluster_warning_without_a_declared_resample(write_config, tmp_path):
+    """`cluster_by` alone decides each condition's own interval and draws
+    nothing; the row scopes the warning to `resample` with `cluster_by`."""
+    (tmp_path / "input" / "index.csv").write_text(_FOUR_ANIMALS)
+    found = codes(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv", "key": "patient_id",
+                    "attributes": ["animal_id"], "cluster_by": "animal_id",
+                },
+                "limits": {"min_clusters": 10},
+            }
+        )
+    )
+    assert "W-STATS-RESAMPLE-CLUSTERS" not in found
+
+
+def test_an_unresolved_roster_does_not_crash_the_cluster_check(write_config):
+    """`roster is not None` is load-bearing, not decorative: `data.units.from`
+    naming a file that does not exist leaves `roster` unresolved (`None`) while
+    `data.units` itself is still a truthy declaration, `cluster_by` is a real
+    string and `limits.min_clusters` is a real int — every OTHER guard in the
+    condition is satisfied. Without this one, `fold_basis(None, "animal_id")`
+    reaches `units.clusters_of`, which iterates the roster, and raises
+    `TypeError` out of `validate`, which is contracted to collect diagnostics
+    and never raise. `validate_config` (via `codes`) completing at all, rather
+    than raising, is the assertion."""
+    found = codes(
+        write_config(
+            {
+                "data.units": {
+                    "from": "does-not-exist.csv",
+                    "key": "patient_id",
+                    "cluster_by": "animal_id",
+                },
+                "limits": {"min_clusters": 10},
+                "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
+            }
+        )
+    )
+    # The roster never resolved, so `E-UNITS-SOURCE-MISSING` is `_check_units`'
+    # own finding for the missing file — proof this test reached the unresolved-
+    # roster path rather than short-circuiting somewhere else.
+    assert "E-UNITS-SOURCE-MISSING" in found
+    assert "W-STATS-RESAMPLE-CLUSTERS" not in found
+
+
+def test_no_cluster_warning_when_cluster_by_is_undeclared(write_config, tmp_path):
+    """The default fixture is a single unit — below any `min_clusters` floor if
+    counted as a unit count. `cluster_by` undeclared means `fold_basis` would
+    fall back to `len(roster)` (a unit count, not a cluster count) if this
+    guard were missing, producing the nonsense a plain unit-count read would
+    give: a warning on an unclustered design, naming `cluster_by: None`."""
+    found = codes(
+        write_config(
+            {
+                "data.units": {"from": "index.csv", "key": "patient_id"},
+                "limits": {"min_clusters": 10},
+                "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
+            }
+        )
+    )
+    assert "W-STATS-RESAMPLE-CLUSTERS" not in found
+
+
+@pytest.mark.parametrize("bad_min_clusters", ["ten", True, 10.0])
+def test_a_wrong_typed_min_clusters_is_a_type_fault_not_a_warning(
+    write_config, tmp_path, bad_min_clusters
+):
+    """`limits.min_clusters: "ten"` / `true` / `10.0` are each `E-CONFIG-TYPE`
+    from the envelope — a leaf fault this module treats as non-fatal and never
+    reports a second time under its own code. `True` is the sharpest case:
+    `isinstance(True, int)` is `True` in Python, so a bare `isinstance` guard
+    would let it reach the floor comparison; excluded the same way `n`'s own
+    bool guard is."""
+    (tmp_path / "input" / "index.csv").write_text(_FOUR_ANIMALS)
+    found = codes(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv", "key": "patient_id",
+                    "attributes": ["animal_id"], "cluster_by": "animal_id",
+                },
+                "limits": {"min_clusters": bad_min_clusters},
+                "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
+            }
+        )
+    )
+    assert "E-CONFIG-TYPE" in found
+    assert "W-STATS-RESAMPLE-CLUSTERS" not in found
+
+
+def test_the_cluster_warning_tracks_the_cluster_count_at_a_fixed_floor(write_config, tmp_path):
+    """The floor stays put at 10 across both configs; only the cluster count
+    moves — 4 animals below it, 12 above. Companion to the tests above, which
+    fix the roster and vary the floor instead; both directions are cheap, and
+    a reader comparing this row's example to a run's `n.clusters` expects the
+    warning to track the roster's own cluster count, not just the declared
+    number some other value happens to sit near."""
+    (tmp_path / "input" / "index.csv").write_text(_FOUR_ANIMALS)
+    below = codes(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv", "key": "patient_id",
+                    "attributes": ["animal_id"], "cluster_by": "animal_id",
+                },
+                "limits": {"min_clusters": 10},
+                "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
+            }
+        )
+    )
+    assert "W-STATS-RESAMPLE-CLUSTERS" in below
+
+    twelve_clusters = "patient_id,animal_id\n" + "".join(f"p{i},a{i}\n" for i in range(12))
+    (tmp_path / "input" / "index.csv").write_text(twelve_clusters)
+    above = codes(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv", "key": "patient_id",
+                    "attributes": ["animal_id"], "cluster_by": "animal_id",
+                },
+                "limits": {"min_clusters": 10},
+                "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
+            }
+        )
+    )
+    assert "W-STATS-RESAMPLE-CLUSTERS" not in above
 
 
 def test_a_declared_null_test_is_refused(write_config):
@@ -10344,3 +11047,259 @@ def test_the_assignment_checks_are_total_over_malformed_declarations(doc, units)
     c = Collector()
     _check_assign(doc, units, None, c)
     assert all(f.code.startswith("E-DATA-") for f in c.findings)
+
+
+def _resample_family_config(write_config, *, n, correction, levels):
+    """`levels` sweeps `analysis.min_samples` rather than `analysis.method`:
+    `GenericTemplate.parameter_spec` closes `method` to exactly
+    `{pearson, spearman, kendall}`, three values total, so a 3-comparison
+    fixture built from it needs a value outside the enum and reports a
+    spurious `E-PARAM-VALUE` alongside the finding under test.
+    `min_samples` (`Param(int, default=30, ge=2)`) takes any integer at least
+    2, so `levels` can be sized to whatever comparison count a test needs
+    without noise the assertions never look at."""
+    return write_config(
+        {
+            "data.units": {"from": "index.csv", "key": "patient_id"},
+            "sweep": {
+                "baseline": {"analysis.min_samples": 30},
+                "grid": {"analysis.min_samples": levels},
+            },
+            "statistics": {"correction": correction,
+                           "resample": {"method": "bootstrap", "n": n}},
+        }
+    )
+
+
+def test_a_resample_n_too_small_for_the_comparison_family_warns(write_config):
+    """Three comparisons put Holm's tightest level at ALPHA/3, whose interval
+    needs `min_honest_draws(1 - 0.05/3)` = 240 draws. `n: 200` clears the 80-draw
+    floor and still cannot support the corrected interval, which is the whole
+    gap this warning covers.
+
+    The metric count is deliberately NOT in the bound: `correction.family_shape`
+    derives it from `Member`s built after the run out of `io.record` keys and
+    `aggregate`'s return, neither of which the config declares, and core never
+    inspects the body of user Python. So this is a LOWER bound — always true when
+    it fires."""
+    found = codes(
+        _resample_family_config(
+            write_config, n=200, correction="holm", levels=[31, 32, 33]
+        )
+    )
+    assert "W-STATS-RESAMPLE-FAMILY" in found
+    assert "E-STATS-RESAMPLE-N" not in found  # 200 is above the 80 floor
+
+
+def test_the_family_bound_is_silent_when_n_clears_it(write_config):
+    """The positive companion to the test above, and the one that makes the
+    threshold real rather than a warning that always fires: the same three
+    comparisons with `n: 240` — exactly `min_honest_draws(1 - 0.05/3)` — are
+    silent. 239 and 240 is the boundary pair."""
+    assert "W-STATS-RESAMPLE-FAMILY" in codes(
+        _resample_family_config(
+            write_config, n=239, correction="holm", levels=[31, 32, 33]
+        )
+    )
+    assert "W-STATS-RESAMPLE-FAMILY" not in codes(
+        _resample_family_config(
+            write_config, n=240, correction="holm", levels=[31, 32, 33]
+        )
+    )
+
+
+def test_the_family_bound_scales_with_the_comparison_count(write_config):
+    """One comparison needs 80 draws and three need 240, so an `n: 100` that is
+    fine under one is not under three. A bound that read a constant rather than
+    the resolved family passes one of these and fails the other."""
+    assert "W-STATS-RESAMPLE-FAMILY" not in codes(
+        _resample_family_config(write_config, n=100, correction="holm", levels=[31])
+    )
+    assert "W-STATS-RESAMPLE-FAMILY" in codes(
+        _resample_family_config(
+            write_config, n=100, correction="holm", levels=[31, 32, 33]
+        )
+    )
+
+
+@pytest.mark.parametrize("correction", ["none", "fdr_bh"])
+def test_the_family_bound_is_not_reported_where_no_level_exists(write_config, correction):
+    """`fdr_bh` implies no per-comparison level (`correction._level_for` returns
+    `None`) and `none` corrects nothing, so under either `ci95_corrected` is null
+    whatever `n` is and this warning would be a false positive."""
+    assert "W-STATS-RESAMPLE-FAMILY" not in codes(
+        _resample_family_config(
+            write_config, n=100, correction=correction,
+            levels=[31, 32, 33],
+        )
+    )
+
+
+def test_the_family_bound_applies_when_correction_is_unset(write_config):
+    """`cli` reads `(statistics.correction) or "holm"`, so an unset correction is
+    holm and its family is corrected. A check gated on the key being present
+    would leave every generated-but-edited config unwarned."""
+    path = write_config(
+        {
+            "data.units": {"from": "index.csv", "key": "patient_id"},
+            "sweep": {
+                "baseline": {"analysis.min_samples": 30},
+                "grid": {"analysis.min_samples": [31, 32, 33]},
+            },
+            "statistics": {"resample": {"method": "bootstrap", "n": 100}},
+        }
+    )
+    assert "W-STATS-RESAMPLE-FAMILY" in codes(path)
+
+
+def test_the_family_bound_is_silent_once_n_is_already_refused(write_config):
+    """`n: 50` is below the 80-draw floor, so `E-STATS-RESAMPLE-N` already
+    covers it — this bound must not pile a second, family-shaped finding on a
+    value already reported broken. Three comparisons make the family bound's
+    own threshold (240) clearly exceed the floor (80), so a version of the
+    code that skipped straight to the family check without an `n < floor`
+    return would fire here too."""
+    found = codes(
+        _resample_family_config(write_config, n=50, correction="holm", levels=[31, 32, 33])
+    )
+    assert "E-STATS-RESAMPLE-N" in found
+    assert "W-STATS-RESAMPLE-FAMILY" not in found
+
+
+def test_the_family_bound_applies_to_an_unset_n_too(write_config):
+    """`n` absent from a declared `resample` block is not `E-CONFIG-TYPE`'s
+    finding — `resample.get("n")` returns `None`, a legal absence — and `cli`
+    passes the hardcoded `2000` in that case (`derived_metric_draws = 2000`),
+    so a large enough family still underprovisions the very default this
+    check would otherwise call "nothing to bound". 26 comparisons need 2080
+    draws, above the 2000 default; one comparison needs only 80, nowhere near
+    it — the second assertion is the control that shows the first isn't just
+    "always warns once n is unset"."""
+    many = codes(
+        write_config(
+            {
+                "data.units": {"from": "index.csv", "key": "patient_id"},
+                "sweep": {
+                    "baseline": {"analysis.min_samples": 30},
+                    "grid": {"analysis.min_samples": list(range(31, 57))},  # 26 levels
+                },
+                "statistics": {"resample": {"method": "bootstrap"}},
+            }
+        )
+    )
+    assert "W-STATS-RESAMPLE-FAMILY" in many
+
+    few = codes(
+        write_config(
+            {
+                "data.units": {"from": "index.csv", "key": "patient_id"},
+                "sweep": {
+                    "baseline": {"analysis.min_samples": 30},
+                    "grid": {"analysis.min_samples": [31]},
+                },
+                "statistics": {"resample": {"method": "bootstrap"}},
+            }
+        )
+    )
+    assert "W-STATS-RESAMPLE-FAMILY" not in few
+
+
+def test_a_resample_with_no_unit_roster_is_refused(write_config):
+    """`reference.md` marks `data.units` "required by fold, resample,
+    null_test". With the wholesale refusal retired (H4a task 12), this shape
+    would otherwise validate clean and do nothing — the exact failure
+    `_check_unimplemented`'s own `E-SWEEP-SAMPLE-BASELINE` comment records."""
+    found = codes(
+        write_config({"statistics": {"resample": {"method": "bootstrap", "n": 2000}}})
+    )
+    assert "E-STATS-RESAMPLE-UNITS" in found
+    # Positive companion in the same test: the identical declaration WITH a real
+    # roster validates completely clean now that the wholesale refusal has
+    # retired, so this cannot pass by a broken companion (e.g. `data.units: 5`,
+    # which would die at the fatal `E-CONFIG-SHAPE` before ever reaching this
+    # check) leaving the set merely absent-of-UNITS. Pinning the whole set,
+    # not just one code's absence, is what proves the companion actually
+    # resolved a roster.
+    assert (
+        codes(
+            write_config(
+                {
+                    "data.units": {"from": "index.csv", "key": "patient_id"},
+                    "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
+                }
+            )
+        )
+        == set()
+    )
+
+
+def test_a_missing_roster_does_not_swallow_the_roster_independent_resample_faults(write_config):
+    """`E-STATS-RESAMPLE-UNITS` must not `return` after reporting: `method` and `n` are read from
+    `resample` itself, not from the roster, so both remain checkable with no `data.units` declared
+    at all. The precedent, `_check_replication`'s `E-REPL-FOLD-NO-UNITS`, reports and lets its
+    sibling checks keep running for the identical reason — a missing roster does not make a
+    roster-independent check unsafe to run. A version that `return`s after the units finding would
+    report only `E-STATS-RESAMPLE-UNITS` here and silently drop the other two, so the reader who
+    fixes the declaration then meets two more faults nobody told them about."""
+    found = codes(
+        write_config({"statistics": {"resample": {"method": "bootstap", "n": 50}}})
+    )
+    assert "E-STATS-RESAMPLE-UNITS" in found
+    assert "E-STATS-RESAMPLE-METHOD" in found
+    assert "E-STATS-RESAMPLE-N" in found
+
+
+def test_an_unresolvable_roster_does_not_earn_a_second_resample_finding(write_config):
+    """`roster` is `None` for a declared-but-unresolvable `data.units` too, and
+    that fault already has `_check_units`' own finding. Gating on the DECLARATION
+    rather than on `roster is None` is what keeps this from reporting a derived
+    fault on top of the one the reader has to fix anyway."""
+    c = Collector()
+    validate_config(
+        write_config(
+            {
+                "data.units": {"from": "nope.csv", "key": "patient_id"},
+                "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
+            }
+        ),
+        c,
+    )
+    found = {f.code for f in c.findings}
+    assert "E-STATS-RESAMPLE-UNITS" not in found
+    # The positive half: the real fault IS reported, named exactly rather than by
+    # a broad prefix, so the test cannot pass by the config being clean or by
+    # some unrelated `E-UNITS-`/`E-DATA-` finding standing in for it.
+    assert "E-UNITS-SOURCE-MISSING" in found
+
+
+def test_a_declared_resample_is_no_longer_refused_wholesale(write_config):
+    """H4a implements it, so the blanket refusal retires with the slice — the
+    same way `E-STATS-CONTRASTS-UNSUPPORTED` and `E-STATS-REPORTBY-UNSUPPORTED`
+    retired with theirs."""
+    found = codes(
+        write_config(
+            {
+                "data.units": {"from": "index.csv", "key": "patient_id"},
+                "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
+            }
+        )
+    )
+    assert "E-STATS-RESAMPLE-UNSUPPORTED" not in found
+    # The positive companion, in the same test: the config is now CLEAN of every
+    # resample finding, so this cannot pass by the refusal having been renamed.
+    assert not [code for code in found if code.startswith("E-STATS-RESAMPLE")]
+
+
+def test_the_retired_resample_code_appears_nowhere_in_src():
+    """A retired `-UNSUPPORTED` code is retired wholesale. Filtering the FILE
+    LIST rather than the sweep's output, because a matching line can itself
+    contain whatever you would have excluded. Scanned from `__file__` rather
+    than a bare relative `Path("src")`, and guarded against an empty scan, so
+    the assertion cannot pass vacuously by finding nothing to look at."""
+    import pathlib
+
+    src_root = pathlib.Path(__file__).resolve().parent.parent / "src"
+    files = list(src_root.rglob("*.py"))
+    assert len(files) > 20
+    hits = [path for path in files if "E-STATS-RESAMPLE-UNSUPPORTED" in path.read_text()]
+    assert hits == []

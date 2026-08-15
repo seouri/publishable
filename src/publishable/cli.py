@@ -93,6 +93,7 @@ from publishable.units import (
     fold_basis,
     partition_units,
     resolve_units,
+    stratum_names,
     units_hash,
 )
 from publishable.uv_support import uv_lock_info
@@ -667,13 +668,18 @@ def _comparison_step_blocks(
     where: str,
     where_id: str,
     conditions_by_index: dict[int, "Condition"],
+    resample_columns: bool,
 ) -> tuple[dict[str, dict[str, Any]], list[Member]]:
     """One comparison's delta, per recording step and per metric already in
     `aggregated` — the computation `vs_baseline` and `results.contrasts` both
     rest on, factored out so the two record shapes don't duplicate it.
 
     A recorded column takes `paired_t_over_units` over the per-unit
-    differences, with `cohens_d = cohens_dz(diffs)`. A derived metric — one
+    differences, with `cohens_d = cohens_dz(diffs)` — unless `resample_columns`
+    is set **and the pairing has at least two units**, when it instead takes
+    `paired_percentile_of_derived` over its own column mean, the same
+    construction a derived metric uses, while `cohens_d`
+    keeps computing from the local `diffs` list regardless. A derived metric — one
     `aggregate` computed, absent any per-unit value to difference — takes
     `paired_delta_of_derived` and `paired_percentile_of_derived` instead, both
     over `base_keys`: the point estimate is `aggregate` evaluated on each side
@@ -699,7 +705,9 @@ def _comparison_step_blocks(
     The second return value is the correction family's raw material: one
     `Member` per metric entry, carrying the evidence its interval was read from
     — the draw pool for a derived metric, the per-unit differences for a
-    recorded column. It travels beside the block rather than inside it because
+    recorded column **unless a `resample` is declared, when a column carries
+    the draw pool too** (`resample_columns`, below). It travels beside the
+    block rather than inside it because
     a `run.yaml` carrying 2000 floats per metric is unreadable, and `io` never
     promised to serialize one. `where_id` is the caller's own addressing for
     this comparison (`cond:<index>` or `contrast:<id>`, see `_entry_for`), so
@@ -822,15 +830,58 @@ def _comparison_step_blocks(
                     of_collapsed[k][metric_key] - against_collapsed[k][metric_key]
                     for k in col_keys
                 ]
-                interval = paired_t_over_units(diffs)
                 n_paired = len(col_keys)
+                resampled = None
+                if resample_columns and n_paired >= 2:
+                    # `col_keys`, NOT `base_keys`. The derived branch above uses
+                    # `base_keys` because a derived metric has no column to be
+                    # ragged about; a recorded column does.
+                    # `paired_percentile_of_derived` builds its `UnitTable`s from
+                    # whole rows, so `base_keys` here would feed `compute` rows
+                    # missing this column — `UnitTable.__getattr__` pads with
+                    # `None` and the mean below raises, which the construction
+                    # catches as a degenerate draw and silently drops. A quarter
+                    # of a roster missing the column nulls the interval; one unit
+                    # missing leaves it looking fine, which is why this is a
+                    # correctness rule and not a tidiness one.
+                    #
+                    # The same callable twice: both sides compute the mean of the
+                    # same column, which is a normal call rather than the
+                    # shared-closure cancellation `paired_percentile_of_derived`
+                    # warns about — that one is about a SWEPT AXIS changing which
+                    # formula `aggregate` runs, and a column mean is one formula.
+                    def _column_mean(table: UnitTable, _name: str = metric_key) -> float:
+                        column: list[float] = getattr(table, _name)
+                        return float(sum(column) / len(column))
+
+                    resampled = paired_percentile_of_derived(
+                        of_collapsed,
+                        against_collapsed,
+                        col_keys,
+                        _column_mean,
+                        _column_mean,
+                        seed,
+                        draws=draws,
+                    )
+                    interval = resampled.interval
+                else:
+                    interval = paired_t_over_units(diffs)
                 metric_block[metric_key] = {
+                    # The mean of the per-unit differences over `col_keys` — the
+                    # same unit set the interval is drawn from, and identical to
+                    # the difference of the two column means over that set, so
+                    # the point estimate and the pool cannot drift onto
+                    # different rosters.
                     "delta": mean_of(diffs),
                     "basis": "units",
                     "paired": True,
                     "method": interval.method if interval else None,
                     "n_paired": n_paired,
                     "ci95": [interval.low, interval.high] if interval else None,
+                    # Cohen's dz survives the switch: it differences a PER-UNIT
+                    # value, which a column has and a derived metric does not,
+                    # and it is computed from the local `diffs` list rather than
+                    # from anything the `Member` carries.
                     "cohens_d": cohens_dz(diffs),
                     "correction": None,
                 }
@@ -843,8 +894,23 @@ def _comparison_step_blocks(
             # `Member` requires exactly one of `pool`/`diffs` wherever there is
             # an interval to correct: the draws a percentile interval was read
             # off, or the per-unit differences a *t* interval was computed
-            # from. An entry with no `ci95` carries neither and is dropped by
-            # `family_members` before either is read.
+            # from. An entry with no `ci95` is dropped by `family_members`
+            # before either field is ever read — but it does not necessarily
+            # carry neither: a column contrast whose resample ran but produced
+            # too few surviving draws for the confidence level still carries
+            # its (too-short) `pool` alongside a `None` `ci95`, and
+            # `Member.__post_init__` exempts that case rather than requiring
+            # `pool`/`diffs` to be `None` too.
+            #
+            # **A column contrast under a declared `resample` carries the POOL
+            # and sets `diffs=None`.** `_corrected_bounds` tests `diffs` FIRST
+            # and only then falls through to `pool`, so leaving `diffs` set here
+            # — the natural thing to do, since `cohens_dz` still needs them —
+            # would give this row a `ci95` from a percentile and a
+            # `ci95_corrected` from `paired_t_over_units`. Nothing raises and no
+            # reader can tell. `cohens_dz` is computed above from the local list,
+            # which is why the `Member` does not need it.
+            corrected_from_pool = is_derived or resample_columns
             members.append(
                 Member(
                     where=where_id,
@@ -852,8 +918,8 @@ def _comparison_step_blocks(
                     metric=metric_key,
                     delta=metric_block[metric_key]["delta"] or 0.0,
                     ci95=(interval.low, interval.high) if interval else None,
-                    pool=tuple(resampled.pool) if is_derived and resampled else None,
-                    diffs=None if is_derived else tuple(diffs),
+                    pool=tuple(resampled.pool) if corrected_from_pool and resampled else None,
+                    diffs=None if corrected_from_pool else tuple(diffs),
                     # Placeholder: this function only sees one comparison, not
                     # the whole family. The caller that concatenates
                     # `vs_baseline_members` and `contrast_members` reassigns
@@ -888,6 +954,7 @@ def _compute_vs_baseline(
     seed: int,
     draws: int,
     findings: Collector,
+    resample_columns: bool,
 ) -> tuple[dict[int, dict[str, dict[str, dict[str, Any]]]] | None, list[Member]]:
     """Every non-baseline condition's own delta against the baseline, per
     recording step and per metric already in `aggregated` — see
@@ -927,6 +994,7 @@ def _compute_vs_baseline(
             where=f"condition {comp.of} ({comp.id!r}) vs baseline",
             where_id=f"cond:{comp.of}",
             conditions_by_index=conditions_by_index,
+            resample_columns=resample_columns,
         )
         if block:
             out[comp.of] = block
@@ -948,6 +1016,7 @@ def _compute_declared_contrasts(
     seed: int,
     draws: int,
     findings: Collector,
+    resample_columns: bool,
 ) -> tuple[list[dict[str, Any]] | None, list[Member]]:
     """Every declared `statistics.contrasts` entry's delta, as `results.contrasts`
     — `reference.md` § Contrasts: claims that aren't condition-vs-baseline: "a
@@ -995,6 +1064,7 @@ def _compute_declared_contrasts(
             where=f"contrast {comp.id!r}",
             where_id=f"contrast:{comp.id}",
             conditions_by_index=conditions_by_index,
+            resample_columns=resample_columns,
         )
         members.extend(block_members)
         entry: dict[str, Any] = {
@@ -1005,6 +1075,53 @@ def _compute_declared_contrasts(
         entry.update(block)
         out.append(entry)
     return out or None, members
+
+
+def _resolved_resample(doc: dict[str, Any]) -> dict[str, Any]:
+    """`statistics.resample` with every default filled in, resolved once.
+
+    `reference.md` § Statistical reporting: "A derived metric is resampled
+    whether or not you declare `statistics.resample`" — declaring it "changes
+    the method or the count rather than switching the behaviour on, and the
+    resolved values are recorded in `run.yaml` beside the interval". So the
+    defaults are real values here rather than `summarize_step`'s own defaults
+    taking effect unseen at a call site that forgot them.
+
+    **`declared` is separate from `n` on purpose.** A config asking for exactly
+    2000 draws and a config asking for nothing both resolve to 2000, but only
+    the first turns a RECORDED COLUMN into a percentile interval — a column has
+    a t-interval available, so resampling it is a choice and `resample` is what
+    makes it, while a derived metric has no such fallback. Reading `declared`
+    off `n != 2000` would silently make that sentence false. `command_run` reads
+    `declared` (H4a task 14) to gate `summarize_step`'s `resample_columns`.
+
+    **`.get("resample") or {}`, never `.get("resample", …)`**: `materialize.py`
+    writes no `resample` key at all and a hand-written config may write
+    `resample: null`, and the two are different documents that must resolve to
+    one answer.
+
+    `stratify_by` goes through `units.stratum_names`, the same normalization the
+    draw balances on and `validate._check_resample` checks names against, so a
+    bare `stratify_by: site` is one name to all three. Resolved here and carried
+    on the returned dict; `command_run` reads it to compose the roster-wide
+    `resample_strata` mapping (H4a task 15) that reaches both
+    `summarize_step`'s recorded-column branch and its derived-metric one —
+    `percentile_over_units`/`percentile_over_units_clustered` and
+    `percentile_of_derived` all take a `strata` parameter now, so one declared
+    `stratify_by` moves both constructions the same way rather than leaving a
+    stratified column beside an unstratified derived metric in the same table.
+    """
+    declared = ((doc.get("statistics") or {}).get("resample")) or {}
+    if not isinstance(declared, dict):
+        declared = {}
+    n = declared.get("n")
+    method = declared.get("method")
+    return {
+        "method": method if isinstance(method, str) and method else "bootstrap",
+        "n": n if isinstance(n, int) and not isinstance(n, bool) else 2000,
+        "stratify_by": stratum_names(declared.get("stratify_by")),
+        "declared": bool(declared),
+    }
 
 
 def _entry_for(
@@ -1499,12 +1616,105 @@ def command_run(config_path: Path) -> int:
             # `data.units.attributes`, so `_attributed`'s early return actually
             # fires and such a project never rebuilds a row list at all.
             unit_attributes = {u.key: dict(u.attributes) for u in roster if u.attributes}
-            # `statistics.resample` isn't honored yet (`E-STATS-RESAMPLE-UNSUPPORTED`
-            # refuses a declared one), so this is the one place the default
-            # `reference.md` § How a metric becomes a number documents — bootstrap
-            # at 2000 — is a real, passed value rather than `summarize_step`'s own
-            # default taking effect unseen at every call site that forgets it.
-            derived_metric_draws = 2000
+            # `statistics.resample` is resolved ONCE here (H4a task 13) rather
+            # than at each read site, so the record and the arithmetic cannot
+            # come to disagree by two sites resolving the same declaration
+            # independently. `resample_spec["n"]` is threaded below to the six
+            # existing `derived_metric_draws` sites, unchanged from before
+            # task 13. `resample_spec["declared"]` gates `summarize_step`'s
+            # `resample_columns` at the primary call below (H4a task 14): a
+            # declared `resample` is what turns a recorded column's interval
+            # from `t_over_units` into `percentile_over_units`, not `n` on its
+            # own — a config asking for exactly 2000 draws and a config asking
+            # for nothing both resolve to `n: 2000`. `method` stays unread
+            # (`validate.RESAMPLE_METHODS` is `("bootstrap",)` only, so there
+            # is nothing yet to choose between).
+            resample_spec = _resolved_resample(doc)
+            derived_metric_draws = resample_spec["n"]
+            # The resolved block, beside the interval rather than joining `n` —
+            # `summarize_step`'s own rule for which carrier a fact takes, and
+            # `weighted_by` is the precedent: a key that names a declaration
+            # rather than reporting a figure. § Statistical reporting requires
+            # it be recorded "so the number is never the result of an
+            # undocumented default".
+            #
+            # ABSENT when nothing was declared, not null: a null would claim a
+            # resolution was performed. `stratify_by` is materialized as a list
+            # even where the config wrote a bare string, because the record
+            # resolves what the config abbreviates — the same rule `of`/`against`
+            # follow in `results.contrasts`.
+            #
+            # `n` here is what was REQUESTED; `resample_draws` beside it is what
+            # the interval rests on. Equal for a column by construction and
+            # different for a derived metric whenever a draw was degenerate,
+            # which is what `W-STATS-RESAMPLE-THIN` reports.
+            resample_beside = (
+                {
+                    "resample": {
+                        "method": resample_spec["method"],
+                        "n": resample_spec["n"],
+                        "stratify_by": list(resample_spec["stratify_by"]),
+                    }
+                }
+                if resample_spec["declared"]
+                else {}
+            )
+            # Merged into `weighted_beside` here, not left for the report_by
+            # level call to add on its own: the declaration is true of the run
+            # either way, the same argument already made for `weighted_by`
+            # above — a stratum's own units were resampled under the same
+            # declared `resample` as the whole roster.
+            weighted_beside.update(resample_beside)
+            # One stratum LABEL per unit, composed once for the run: several
+            # declared names mean the stratum is their cross — `reference.md`
+            # § Weighted samples' own `stratify_by: [dx_status, count_stratum]`
+            # — so the composition happens here, where the attributes live, and
+            # `stats.py` sees one label per unit and never learns how many
+            # attributes made it. Named `resample_strata` rather than `strata`:
+            # that name is already this function's own fold-partition mapping,
+            # a different stratification for a different purpose, in scope a
+            # few hundred lines above.
+            #
+            # A unit carrying no value for one of the names joins a stratum of
+            # its own rather than being dropped. `strata.levels_for` drops such
+            # a unit from every REPORTING level, because there is no honest
+            # level for "we don't know" — but a DRAW cannot drop it: the draw is
+            # over the completed table, and dropping would change `n` silently
+            # beneath an interval that claimed the full count. The sentinel is
+            # printable rather than a control character: nothing emits the
+            # composed `|`-joined stratum LABEL into `run.yaml` (the attribute
+            # NAMES that make it up are recorded instead, on `resample_beside`'s
+            # `resample.stratify_by`, H4a task 17 — a different, coarser fact
+            # than the per-unit label this sentinel guards), but a NUL byte in
+            # a string PyYAML is later asked to emit raises, and a printable
+            # one costs nothing to choose now.
+            #
+            # NOT ADDRESSED: `<absent>` and the `|` separator are both ordinary
+            # printable text, not reserved characters, so a real attribute value
+            # equal to `<absent>`, or two attribute combinations that happen to
+            # join into the identical `|`-separated string (one name's value
+            # containing `|`, say), collide with the sentinel or with each
+            # other and are read back as the same stratum. Recorded as a known
+            # gap (`docs/superpowers/spec-defects.md`) rather than fixed here —
+            # an unambiguous encoding is a bigger change than this task's own.
+            #
+            # Gated on BOTH `declared` and `stratify_by`, not on `stratify_by`
+            # alone: they cannot disagree today (`_resolved_resample` reads
+            # `stratify_by` off the same `declared` dict `declared` itself is
+            # `bool()`-ed from, so a non-empty `stratify_by` implies `declared`
+            # is true), but writing both is what pins that agreement rather
+            # than leaving a reader to re-derive it — the identical reason
+            # `resample_columns` below reads `declared`, not `n`.
+            resample_strata: dict[str, str] | None = None
+            if resample_spec["declared"] and resample_spec["stratify_by"]:
+                resample_strata = {
+                    u.key: "|".join(
+                        "<absent>" if u.attributes.get(name) is None
+                        else str(u.attributes.get(name))
+                        for name in resample_spec["stratify_by"]
+                    )
+                    for u in roster
+                }
             aggregate_where = f"{doc.get('experiment_type', '')}.aggregate"
             # `aggregate` is user code in exactly the sense `runner.py`'s own
             # step execution is — "a failed execution never stops the run" —
@@ -1544,7 +1754,10 @@ def command_run(config_path: Path) -> int:
                 # a few lines down: that two-step shape is exactly how the bug
                 # this task fixes happened — a narrowed roster computed and
                 # then not passed to `attrition`.
-                cond_beside_n = _condition_beside_n(beside_n, roster, cond.index, arm_members_map)
+                cond_beside_n = {
+                    **_condition_beside_n(beside_n, roster, cond.index, arm_members_map),
+                    **resample_beside,
+                }
                 for step_name in sorted(recording_steps):
                     collapsed = collapse_repeats(
                         results, step_name, cond.index, fold_members=fold_members
@@ -1682,6 +1895,8 @@ def command_run(config_path: Path) -> int:
                             beside_n=cond_beside_n,
                             weights=weights,
                             clusters=clusters,
+                            resample_columns=resample_spec["declared"],
+                            strata=resample_strata,
                         )
                     except ContractError as exc:
                         prefix = f"{exc.code} " if exc.code else ""
@@ -1700,12 +1915,74 @@ def command_run(config_path: Path) -> int:
                         # containment path. (A weight core cannot use cannot
                         # arrive here: `attrition` above gates the same mapping
                         # through `kish_effective_n`, outside any `try`.)
+                        # `seed`, `draws`, `resample_columns` and `strata` on
+                        # the retry for the same reason `weights` is on it, and
+                        # the four travel together because the column branch
+                        # reads all four (H4a whole-branch review, I1). Left
+                        # off — as they were until that review — a declared
+                        # `statistics.resample` was silently dropped from every
+                        # recorded column here while `beside_n` went on
+                        # carrying the `resample` echo, so one block claimed a
+                        # declaration and omitted the `resample_draws` key that
+                        # `reference.md` § Statistical reporting makes the mark
+                        # of an UNDECLARED resample ("absent entirely — not
+                        # `null` — when no `resample` is declared"). `draws` matters
+                        # as much as the gate does: at its 2000 default a
+                        # config declaring `n: 500` would resample the column
+                        # at 2000 draws beside an echo saying 500.
+                        #
+                        # **THIS RETRY CAN RAISE, AND A RAISE HERE IS
+                        # UNCONTAINED** — no `run.yaml`, no run directory, every
+                        # execution spent. `stats.py`'s `E-STEP-KEY-COLLISION`
+                        # comment names that as the reason the recorded-column
+                        # half of that fault is warned about rather than raised.
+                        # The `try` above wraps the FIRST call, so a fault from
+                        # `summarize_step`'s COLUMN loop lands in this handler
+                        # too, and the retry then replays that same loop over
+                        # the same inputs and raises again. There is no
+                        # "reaching here means the columns already succeeded":
+                        # the handler cannot tell a column fault from a derived
+                        # one.
+                        #
+                        # **So what holds the line is upstream gating, not this
+                        # handler**, and each column-loop raise needs its own
+                        # gate named:
+                        #
+                        # - `E-DATA-WEIGHT-INVALID` (`checked_weights`) —
+                        #   `attrition` above puts the same mapping through
+                        #   `kish_effective_n` outside any `try`, and `validate`
+                        #   checks the column against `usable_weight`. Already
+                        #   the situation before this change: `weights` was
+                        #   always passed on the retry.
+                        # - `E-STATS-RESAMPLE-STRATIFY-VARIES`
+                        #   (`percentile_over_units_clustered`) — reachable here
+                        #   ONLY because this call now passes `strata` and
+                        #   `resample_columns`. Gated by `validate`'s own
+                        #   `E-STATS-RESAMPLE-STRATIFY-VARIES` over the roster,
+                        #   per declared name, which `command_run` returns
+                        #   `EXIT_WRONG` on before any execution runs. Per-name
+                        #   constancy within a cluster implies constancy of the
+                        #   `|`-joined cross `resample_strata` builds, so the
+                        #   composed label cannot violate where the per-name
+                        #   check passed; the composition's own filed gap
+                        #   (`<absent>`, `|`) can only MERGE two strata into
+                        #   one, never split one into two.
+                        #
+                        # A future change adding a new raise to that loop — or
+                        # widening this call again — must name its gate the
+                        # same way, or wrap this call and fall back. The suite
+                        # cannot see any of this: it is a property of what
+                        # `validate` refuses, not of what this handler does.
                         step_summary = summarize_step(
                             collapsed,
                             counts,
+                            seed=resample_seed_value,
+                            draws=derived_metric_draws,
                             beside_n=cond_beside_n,
                             weights=weights,
                             clusters=clusters,
+                            resample_columns=resample_spec["declared"],
+                            strata=resample_strata,
                         )
                         # What the parent block dropped, every stratum of it
                         # drops too. A level's table carries the same columns as
@@ -1737,6 +2014,28 @@ def command_run(config_path: Path) -> int:
                     # bootstrap draw duplicates units by construction, and a
                     # template whose `aggregate` assumes distinct ones will
                     # raise on every draw rather than some.
+                    #
+                    # This loop now reads a RECORDED COLUMN's `resample_draws`
+                    # too (H4a task 14, once `resample_spec["declared"]` gates
+                    # `resample_columns` above) — before this task a column
+                    # carried no such key and `used is None` skipped it
+                    # silently. Neither branch below can fire for one:
+                    # `used == 0` would name `aggregate_where` — `aggregate`,
+                    # user code — as the source of a failure `aggregate` never
+                    # touched, since a column's interval never calls it. A
+                    # column's `resample_draws` is `null` (skipping both
+                    # branches, same as before) whenever `ci95` is, and
+                    # otherwise the *requested* `draws` exactly — never a
+                    # lesser survivor count — because a column's mean is a
+                    # statistic over a finite, non-empty sample and is always
+                    # defined once an interval exists at all, unlike a
+                    # template's recompute, which can fail draw by draw.
+                    # `used == derived_metric_draws` (not `<`) is what that
+                    # buys: the `elif` below can't fire either. See
+                    # `docs/superpowers/spec-defects.md` for the one gap this
+                    # rests on — non-finite recorded values or weights, which
+                    # nothing here checks — filed rather than silently
+                    # depended on.
                     for metric_key, metric in step_summary.items():
                         used = metric.get("resample_draws")
                         if used == 0:
@@ -1995,9 +2294,15 @@ def command_run(config_path: Path) -> int:
                                 # and its Kish size are its own, which is the
                                 # same reason `level_counts` is recomputed above
                                 # rather than copied down, and the same reason the
-                                # cluster mapping travels with it.
+                                # cluster mapping travels with it. `strata` the
+                                # same way: a level's own units carry the same
+                                # stratum labels the whole roster does, and
+                                # `summarize_step` filters the mapping down to
+                                # this level's own keys exactly as it does for
+                                # a ragged column.
                                 weights=weights,
                                 clusters=clusters,
+                                strata=resample_strata,
                             )
                             # At least one entry has to come from the level's own
                             # table. A block holding nothing but derived metrics
@@ -2054,6 +2359,7 @@ def command_run(config_path: Path) -> int:
                 seed=resample_seed_value,
                 draws=derived_metric_draws,
                 findings=aggregate_c,
+                resample_columns=resample_spec["declared"],
             )
             contrasts_out, contrast_members = _compute_declared_contrasts(
                 doc=doc,
@@ -2066,6 +2372,7 @@ def command_run(config_path: Path) -> int:
                 seed=resample_seed_value,
                 draws=derived_metric_draws,
                 findings=aggregate_c,
+                resample_columns=resample_spec["declared"],
             )
             # Every interval a reader is shown is corrected against the family
             # it belongs to, and both record shapes are in the same family:

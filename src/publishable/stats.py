@@ -7,6 +7,7 @@ entangled with I/O, and purity is what lets this be tested exhaustively.
 See docs/reference.md § Statistical reporting.
 """
 
+import copy
 import hashlib
 import math
 import random
@@ -491,6 +492,7 @@ def percentile_over_units(
     draws: int = 2000,
     confidence: float = 0.95,
     weights: Sequence[Any] | None = None,
+    strata: Sequence[Any] | None = None,
 ) -> Interval | None:
     """A percentile interval over the units, by resampling with replacement.
 
@@ -519,18 +521,142 @@ def percentile_over_units(
     is sorted for the row-order invariance the unweighted branch explains below,
     and sorting the two sequences separately would preserve that invariance while
     silently re-pairing them — a mistake equal weights cannot see.
+
+    With `strata`, each draw preserves **each stratum's own size** and draws with
+    replacement *within* it — `reference.md` § Weighted samples:
+    "`resample.stratify_by` says what an independent draw is, resampling within
+    each stratum so a bootstrap can't return a replicate whose stratum
+    composition the design ruled out." The two ways to get this wrong both
+    produce a plausible number: drawing `n` units and repairing the composition
+    afterwards is the unstratified interval however carefully the counts are
+    matched, and averaging the strata's own means gives every stratum equal say,
+    which is a different estimator entirely (for 20/8/2 units in three bands it
+    reports 37.2 where the sample mean is 9.8).
+
+    `strata` is aligned positionally to `values`, the same contract `weights`
+    has, and `strict=True` on the zip for the same reason: a length mismatch is
+    a misaligned vector and would produce a number rather than an error.
+
+    **Grouping happens before any sort and carries the pairs**, so each value
+    keeps its stratum and its weight; the strata are then ordered by their own
+    sorted contents rather than by label, which is what makes a relabelled
+    stratum give the identical interval and what makes the one-stratum case
+    reproduce the unstratified path digit for digit **when neither path is
+    itself refused**. A one-stratum roster whose values are all identical is
+    refused (`None`) by the constant-pair check below, while the unstratified
+    path over that same roster returns a zero-width `Interval` rather than
+    `None` — the two paths apply different refusal criteria to the identical
+    degenerate input, so they diverge there rather than reproducing each other;
+    that is not a contradiction of this paragraph, but it is a real exception to
+    it and is pinned as such by
+    `test_a_column_resample_refuses_the_constant_one_stratum_case_the_unstratified_path_does_not`.
+    Sorting values and stratum labels as separate sequences would preserve every
+    invariance and silently re-pair them — the mistake equal-sized strata cannot
+    see.
+
+    Returns `None` rather than a zero-width interval when every stratum's own
+    (value, weight) pairs are all identical — a singleton stratum is the
+    special case of this, but a larger stratum whose rows all carry one
+    repeated pair guarantees the same zero freedom. That is a structural
+    guarantee, true whatever the repeated pair's value is, unlike a single
+    constant stratum among others that still vary — which keeps its interval,
+    the same way `percentile_over_units_clustered` reports a point rather than
+    a zero-width interval at `G < 2`.
+
+    **This returns a bare `Interval`, with no survivor count, and that is a
+    decision rather than an omission — conditional on finite inputs.**
+    `percentile_of_derived` returns `(Interval, int)` because a derived metric's
+    `compute` can fail on a degenerate draw — `nan`, `None`, or a raise — so how
+    many draws survived is a real fact about the interval. A column metric's
+    draw statistic is a mean over a non-empty sample of FINITE values with
+    FINITE weights, which is always defined: the unweighted branch divides by
+    `n >= 2`, the weighted branch's Σw is strictly positive because
+    `checked_weights` refuses a zero, negative, non-finite or non-numeric weight
+    before any draw is taken, and the stratified branch draws `len(pool) >= 1`
+    rows from each non-empty pool. **The condition is load-bearing and does not
+    hold unconditionally**: neither `values` nor a weight vector is checked for
+    finiteness anywhere on this path — a `nan` or `inf` among `values`, or a
+    weight vector whose checked-finite entries sum past `float`'s range (e.g.
+    `[1e308] * 4`), each produce `Interval(nan, nan)` today, reachable by calling
+    this function directly. That gap is real, pre-existing, and out of scope
+    for this decision — recorded on its own in `docs/superpowers/spec-defects.md`
+    rather than fixed here. Under the finiteness condition, though, a column's
+    `resample_draws` — once a later slice wires `statistics.resample` for
+    recorded columns into `summarize_step` (the wholesale refusal retired with
+    H4a task 12, commit `2fdc957`; as of that commit `cli.command_run` did
+    not yet resolve the block into a call here, so the recorded-column branch
+    there still carried no `resample_draws` key at all — check
+    `cli.command_run` directly for whether that has since changed) — can
+    safely be the REQUESTED `n` rather than a survivor count, and
+    `percentile_over_units`'s return type need not change to carry one: a
+    non-finite draw statistic would not be caught by a survivor filter either,
+    since nothing here treats `nan`/`inf` as a failed draw to exclude, so
+    `(Interval, int)` would report `(Interval(nan, nan), n)` — the identical
+    false claim with an extra field. The invariant is pinned, under that
+    condition, by
+    `test_a_column_resample_is_never_degenerate_across_adversarial_columns`
+    rather than asserted here.
     """
     if len(values) < 2:
         return None
     if draws < min_honest_draws(confidence):
         return None
+    # One weight vector for every branch below, so a value and its weight are
+    # paired once. `checked_weights` gates before any draw rather than producing
+    # `draws` worth of `nan`, and it is the one authority `validate` and
+    # `kish_effective_n` also read.
+    carried = None if weights is None else checked_weights(weights)
     rng = random.Random(seed)
-    if weights is not None:
+    if strata is not None:
+        # Grouped BEFORE any sort, carrying (value, weight) pairs, then each
+        # group sorted and the groups ordered by their own sorted contents —
+        # so the interval depends on the multiset of (value, weight, stratum)
+        # triples and on nothing else, not on row order and not on the labels.
+        pools: dict[Any, list[tuple[float, float]]] = {}
+        pairs_in = zip(
+            values,
+            strata,
+            [1.0] * len(values) if carried is None else carried,
+            strict=True,
+        )
+        for value, stratum, weight in pairs_in:
+            pools.setdefault(stratum, []).append((value, weight))
+        ordered = sorted(sorted(group) for group in pools.values())
+        # If every stratum's own (value, weight) pairs are all identical, no
+        # draw can ever come out different from any other: a singleton
+        # stratum is the special case of this (one pair, trivially "all
+        # identical"), but the same guarantee holds for a larger stratum whose
+        # rows all happen to carry one repeated pair. That is a structural
+        # guarantee — true for whatever the repeated pair's value is — and not
+        # a data coincidence the way "one of several strata is constant while
+        # the others vary" is: the latter still draws its variance from the
+        # strata that aren't constant, and stays a reportable interval.
+        # `percentile_over_units_clustered` refuses its own zero-freedom case
+        # (`G < 2`) for the same reason `reference.md` § Statistical reporting
+        # gives: "reporting a point with no interval is honest; a zero-width
+        # 95 % interval is not."
+        if all(len(set(group)) <= 1 for group in ordered):
+            return None
+        means_out: list[float] = []
+        for _ in range(draws):
+            # Each stratum contributes exactly as many rows as it holds: that
+            # is the composition the design ruled the alternatives out of.
+            drawn = [
+                group[rng.randrange(len(group))]
+                for group in ordered
+                for _ in range(len(group))
+            ]
+            if carried is None:
+                means_out.append(sum(v for v, _ in drawn) / len(drawn))
+            else:
+                means_out.append(_weighted_mean([w for _, w in drawn], [v for v, _ in drawn]))
+        means = sorted(means_out)
+    elif carried is not None:
         # `sorted` over the pairs, so a value and its weight travel together; the
         # gate is `checked_weights`, the one authority `validate` and
         # `kish_effective_n` also read, and it runs before any draw rather than
         # producing 2000 draws' worth of `nan`.
-        pairs = sorted(zip(values, checked_weights(weights), strict=True))
+        pairs = sorted(zip(values, carried, strict=True))
         n = len(pairs)
         drawn_means = []
         for _ in range(draws):
@@ -557,6 +683,7 @@ def percentile_over_units_clustered(
     draws: int = 2000,
     confidence: float = 0.95,
     weights: Sequence[Any] | None = None,
+    strata: Sequence[Any] | None = None,
 ) -> Interval | None:
     """A percentile interval that resamples whole CLUSTERS, not rows.
 
@@ -614,7 +741,7 @@ def percentile_over_units_clustered(
 
     **There is deliberately no higher threshold on `G` here.** A three-cluster
     resample reports, and the judgment that it is too few belongs to
-    `statistics.min_clusters` — `reference.md` § The one config file:
+    `limits.min_clusters` — `reference.md` § The one config file:
     "`validate` warns when `resample` would draw fewer than this". A second
     threshold in this module would be a competing authority for one judgment.
 
@@ -635,6 +762,54 @@ def percentile_over_units_clustered(
     `strict=True` on the zip, for the reason `_weighted_mean` uses it: a
     keys/values length mismatch is a misaligned cluster vector, and it would
     produce a plausible number rather than an error.
+
+    **With `strata`, a stratum must be constant within a cluster, and the draw
+    is a cluster drawn within its stratum.** `stratify_by` says what an
+    independent draw is; `cluster_by` says the draw IS a cluster — composed,
+    `reference.md` § Clustered units already requires exactly this constancy
+    for `fold`, `holdout` and `assign`, so this is the same rule taken again
+    rather than a second one invented for `resample`. A cluster carrying two
+    stratum values cannot be dealt to either, being indivisible, and is refused
+    as `E-STATS-RESAMPLE-STRATIFY-VARIES` — `validate` reports the declaration
+    form of the same fault from the roster, through
+    `units.stratum_varies_within_cluster`. This is the run-time half of that
+    dual listing, but **not by sharing one authority the way
+    `E-DATA-WEIGHT-INVALID` does** — `stats.py` cannot import `units.py`, so
+    this re-implements the equality over plain sequences instead of calling
+    that function over a roster, and is normalized the identical way it is
+    ("no value" for `None`, `str()` otherwise) so the two independent checks
+    cannot disagree over a stratum read back as `1` in one place and `"1"` in
+    the other — **provided both are handed the same raw per-unit value**, which
+    is the case this equality was built for: a single undeclared-composition
+    `stratify_by` name, read straight off the roster. `cli.py`'s
+    `resample_strata` (H4a task 15) hands this function something already
+    transformed instead — a cross of every declared name joined by `|`, with a
+    missing name rendered `<absent>` rather than passed through as `None` — so
+    in production this function's own `stratum is None` branch is rarely if
+    ever what actually distinguishes an absent unit; `cli.py`'s sentinel
+    already has. The two normalizations no longer operate on one shared input,
+    and neither is checked against a real attribute value that happens to
+    collide with either sentinel string, or against two different attribute
+    combinations that happen to join into the identical `|`-separated label —
+    both are unaddressed here, and are gaps to record, not guarantees this
+    docstring is making. Each stratum then draws exactly as many clusters, with
+    replacement, as it holds — preserving each stratum's own cluster count the
+    way the unstratified draw preserves `G`.
+
+    **The degenerate case is content, not count.** When every stratum's own
+    clusters are pairwise identical (a singleton stratum trivially so),
+    drawing any of a stratum's clusters with replacement reproduces the same
+    pooled contribution on every replicate, so if this holds for every stratum
+    the whole draw is invariant — the same "a zero-width 95% interval is not
+    honest" refusal `percentile_over_units`'s own strata branch already gives
+    for content-identical values, one level up over clusters rather than over
+    values, and this returns `None` too. A COUNT floor alone (every stratum
+    holding fewer than two clusters) is not sufficient: two clusters per
+    stratum with identical content pass a count floor and are still
+    degenerate, which is why this checks content and applies whether or not
+    `strata` was given — the unstratified path had the identical hole at
+    `G == 2`, since `groups < 2` alone answers a different question from
+    whether the draw can vary.
     """
     if len(values) < 2:
         return None
@@ -653,11 +828,83 @@ def percentile_over_units_clustered(
     pools: dict[str, list[tuple[float, float]]] = {}
     for value, key, weight in zip(values, keys, carried, strict=True):
         pools.setdefault(membership[key], []).append((float(value), weight))
+    # A stratum must be CONSTANT within a cluster, and this is a composition of
+    # two declarations rather than a third rule: `stratify_by` says what an
+    # independent draw is, `cluster_by` says the draw IS a cluster, and a cluster
+    # carrying two stratum values cannot be dealt to either, being indivisible.
+    # § Clustered units already imposes exactly this on `fold`, `holdout` and
+    # `assign`; `validate` reports the declaration form of the identical fault
+    # through `units.stratum_varies_within_cluster`, and this is the run-time
+    # half — but, unlike `E-DATA-WEIGHT-INVALID`'s single `usable_weight`
+    # authority shared by both call sites, `stats.py` cannot import `units.py`
+    # and so cannot call that function; this re-implements its equality over
+    # plain sequences instead of a roster. Normalized the SAME WAY that
+    # function is — "no value" for `None`, `str()` otherwise — so the two
+    # independent checks cannot disagree over a stratum read as `1` in one
+    # place and `"1"` in the other, which raw `!=` would have called a
+    # violation — provided both see the same raw value. `cli.py`'s
+    # `resample_strata` (H4a task 15) pre-transforms what this function
+    # actually receives (a `|`-joined cross, `<absent>` for a missing name),
+    # so that provision no longer holds unconditionally in production; see the
+    # docstring above for what is and is not covered.
+    cluster_stratum: dict[str, str] = {}
+    if strata is not None:
+        for key, stratum in zip(keys, strata, strict=True):
+            cluster = membership[key]
+            rendered = "no value" if stratum is None else str(stratum)
+            if cluster in cluster_stratum and cluster_stratum[cluster] != rendered:
+                raise ContractError(
+                    f"cluster {cluster!r} carries stratum values "
+                    f"{cluster_stratum[cluster]!r} and {rendered!r}. A resample draws "
+                    "whole clusters, so a cluster cannot be drawn within one stratum "
+                    "while carrying two; stratify on an attribute that is constant "
+                    "within a cluster, or drop `cluster_by` if the units really are "
+                    "independent",
+                    code="E-STATS-RESAMPLE-STRATIFY-VARIES",
+                )
+            cluster_stratum[cluster] = rendered
     ordered = sorted(sorted(pool) for pool in pools.values())
     rng = random.Random(seed)
+    if strata is None:
+        stratum_pools = [ordered]
+    else:
+        # Cluster pools grouped by the stratum their cluster carries, then each
+        # group ordered by its own sorted contents — the same label-independence
+        # the unstratified `ordered` gets, one level up.
+        by_stratum: dict[str, list[list[tuple[float, float]]]] = {}
+        for cluster, pool in pools.items():
+            by_stratum.setdefault(cluster_stratum[cluster], []).append(sorted(pool))
+        stratum_pools = [sorted(group) for group in by_stratum.values()]
+        stratum_pools.sort()
+    # Content-based, not count-based, and checked whether or not `strata` was
+    # given: if every stratum's own clusters are pairwise IDENTICAL in content
+    # (a stratum holding a single cluster is trivially so), drawing any of them
+    # with replacement reproduces the same pooled contribution every time, so
+    # no draw can ever come out different from any other — whatever count of
+    # clusters that stratum holds. `percentile_over_units`'s own strata branch
+    # refuses the analogous shape ("every stratum's own (value, weight) pairs
+    # are all identical") for the identical reason, `reference.md` §
+    # Statistical reporting: "a zero-width 95% interval is not honest" — this
+    # is that same check one level up, over CLUSTERS rather than over values.
+    # With no strata this is one group holding every cluster, so two
+    # content-identical clusters at `G == 2` are refused here too, which
+    # `groups < 2` alone does not catch — a count floor and a content check
+    # answer different questions, and this construction had only asked the
+    # first.
+    if all(len({tuple(cluster) for cluster in group}) <= 1 for group in stratum_pools):
+        return None
     means: list[float] = []
     for _ in range(draws):
-        drawn = [pair for _ in range(groups) for pair in ordered[rng.randrange(groups)]]
+        # Each stratum contributes exactly as many CLUSTERS as it holds — the
+        # composition of "the draw is a cluster" with "each stratum keeps its
+        # size". With no strata this is one group holding every cluster, which
+        # is the unstratified draw digit for digit.
+        drawn = [
+            pair
+            for group in stratum_pools
+            for _ in range(len(group))
+            for pair in group[rng.randrange(len(group))]
+        ]
         if weights is None:
             means.append(sum(v for v, _ in drawn) / len(drawn))
         else:
@@ -675,6 +922,7 @@ def percentile_of_derived(
     seed: int,
     draws: int = 2000,
     confidence: float = 0.95,
+    strata: dict[str, str] | None = None,
 ) -> tuple[Interval | None, int]:
     """A percentile interval for a derived metric, by recomputing it, and the
     number of draws it actually rests on.
@@ -736,15 +984,85 @@ def percentile_of_derived(
     so the interval is `None` while the count returned alongside it stays
     real. `cli.py` warns on any shortfall, a count below the floor and a count
     merely reduced being the same event at two magnitudes.
+
+    **With `strata`, each draw preserves each stratum's own key count and draws
+    keys with replacement within it** — the same discipline
+    `percentile_over_units`'s stratified branch applies to *values*, applied
+    here to *key* selection instead: a derived metric has no per-unit value of
+    its own to stratify, so what stratifies is which units end up in the
+    resampled table `compute` is handed. Pools are built by walking the
+    already-sorted `keys`, so each pool's own contents come out sorted, and the
+    pools are then ordered by their own sorted contents rather than by label —
+    the same invariance `percentile_over_units` keeps for exactly the same
+    reason: a relabelled stratum must draw the identical sequence of tables.
+    `strata` is indexed by key, not `.get`-ed, the same discipline `weights`
+    and `clusters` follow elsewhere in this module: `strata` must be total
+    over `collapsed`'s keys, or the missing lookup raises `KeyError` rather
+    than quietly defaulting the unit into some invented stratum — a caller
+    whose roster and `strata` mapping have come to disagree about which units
+    exist is a core defect, not a silent extra stratum. It need not be
+    exactly `collapsed`'s key set — a caller resampling a subset of a larger
+    roster (a `report_by` level, say) can pass the roster-wide mapping
+    unfiltered, and any extra entry it carries is simply never looked up.
+
+    **The degenerate case is refused here too, content-based, the same check
+    `percentile_over_units`'s own strata branch and
+    `percentile_over_units_clustered`'s cluster-content branch both carry, one
+    level down over ROWS rather than over values or clusters.** If every key in
+    a stratum carries the identical recorded row (a singleton stratum — "any
+    near-unique attribute" — is the trivial case of this, and is exactly what
+    a near-unique `stratify_by` produces), every draw of that stratum picks
+    from an identical multiset of rows: the same units drawn every time, in
+    whatever order, so `compute` — assuming it is itself deterministic, which
+    every `aggregate` this module is handed is — returns the identical value on
+    every draw. If this holds for every stratum, the interval has zero width,
+    which § Statistical reporting refuses in those terms: "a zero-width 95 %
+    interval is not [honest]; reporting a point with no interval is honest."
+    Without this, a near-unique `stratify_by` would validate clean and publish
+    `ci95: [x, x]` — indistinguishable from a genuine 2000-draw interval — right
+    beside a recorded column's `ci95: null` for the identical degenerate
+    design, the exact disagreement `percentile_over_units`'s own strata branch
+    and `percentile_over_units_clustered`'s `G < 2` floor already refuse to
+    let happen for their own constructions. Checked whether or not the
+    resulting `compute` calls would agree in practice — this refuses on the
+    STRUCTURE of the draw, not on running it and comparing outputs, since
+    running it first would cost `draws` calls to `compute` for a refusal that
+    is knowable from `collapsed` and `strata` alone.
     """
     keys = sorted(collapsed)
     if len(keys) < 2:
         return None, 0
     rng = random.Random(seed)
     n = len(keys)
+    pools: dict[str, list[str]] | None = None
+    if strata is not None:
+        pools = {}
+        for key in keys:
+            pools.setdefault(strata[key], []).append(key)
+    ordered_pools = None if pools is None else sorted(pools.values())
+    if ordered_pools is not None and all(
+        len({tuple(sorted(collapsed[key].items())) for key in group}) <= 1
+        for group in ordered_pools
+    ):
+        # Content-based, over each stratum's own recorded ROW rather than a
+        # count: a singleton stratum is the trivial case (one key, so one
+        # possible row every draw), but a larger stratum whose members all
+        # carry the identical recorded row is the same zero-freedom fact,
+        # whatever its size. Refused before a single draw is taken, the same
+        # way the two sibling constructions refuse their own degenerate case
+        # — see the docstring's own paragraph for why this is checked on the
+        # DRAW's structure and not by running `compute` and comparing outputs.
+        return None, 0
     values: list[float] = []
     for _ in range(draws):
-        drawn = [keys[rng.randrange(n)] for _ in range(n)]
+        if ordered_pools is not None:
+            drawn = [
+                group[rng.randrange(len(group))]
+                for group in ordered_pools
+                for _ in range(len(group))
+            ]
+        else:
+            drawn = [keys[rng.randrange(n)] for _ in range(n)]
         table = unit_table_from_rows([{"unit": key, **collapsed[key]} for key in drawn])
         try:
             value = compute(table)
@@ -1153,6 +1471,37 @@ def repeat_spread(
     return entries
 
 
+def _beside_n_copy(beside_n: dict[str, Any] | None) -> dict[str, Any]:
+    """`beside_n`, fresh for one metric block rather than the same object
+    spread into every one.
+
+    `beside_n` is built once per run (or once per condition) and reused across
+    every metric block a call to `summarize_step` writes. Spreading the same
+    dict-valued entry — `technical_n`, and now `resample` — into more than one
+    block hands `yaml.safe_dump` the same object twice, and its default
+    aliasing writes the first occurrence as `&id001 {...}` and every other as
+    a bare `*id001` pointer. `hypotheses.py`'s `_observed_block` names the
+    consequence exactly: "the number … is no longer readable where it is
+    written" — a `run.yaml` a human opens must show the value at every block,
+    not a pointer to the first one. A scalar-valued entry (`weighted_by`, a
+    string) doesn't have this failure mode — a string is immutable and two
+    equal strings dumping identically costs nothing to a reader either way —
+    but copying every entry uniformly is simpler than deciding per key which
+    ones need it, and cheap at this size.
+
+    `copy.deepcopy`, not `dict(v)`: `resample`'s own `stratify_by` is a list
+    nested one level inside the dict, and a shallow `dict(v)` copies the outer
+    mapping while still pointing every copy's `stratify_by` at the one list
+    object `cli.py` built once — which aliases exactly the same way, one level
+    down, and a first attempt at this fix shipped that shallow version and
+    caught the bug only by tracing the actual emitted `run.yaml` byte for byte,
+    not by reasoning about the dict alone.
+    """
+    if not beside_n:
+        return {}
+    return {k: (copy.deepcopy(v) if isinstance(v, dict) else v) for k, v in beside_n.items()}
+
+
 def summarize_step(
     collapsed: dict[str, dict[str, float]],
     counts: dict[str, float],
@@ -1163,6 +1512,8 @@ def summarize_step(
     beside_n: dict[str, Any] | None = None,
     weights: dict[str, Any] | None = None,
     clusters: dict[str, str] | None = None,
+    resample_columns: bool = False,
+    strata: dict[str, str] | None = None,
 ) -> dict[str, dict[str, Any]]:
     """Per-column value, basis, `n`, and interval over the collapsed unit table.
 
@@ -1218,9 +1569,13 @@ def summarize_step(
     column's mean and a derived value.
 
     `beside_n` is core-supplied context copied verbatim into every metric block —
-    `technical_n` today. It is the second of two routes a count-shaped fact
-    travels, and which one a new fact takes is decided by where `reference.md`
-    shows it:
+    `technical_n`, `weighted_by`, and `resample` today (`_beside_n_copy`, not a
+    bare spread, is what makes "copied" true rather than "shared": a dict-valued
+    entry spread by reference into more than one block is one Python object
+    dumped twice, and `yaml.safe_dump`'s aliasing turns every occurrence after
+    the first into a pointer at the first). It is the second of two routes a
+    count-shaped fact travels, and which one a new fact takes is decided by
+    where `reference.md` shows it:
 
     - **A key that JOINS `n` travels in `counts`.** § What isn't a repeat says the
       three-part `n` is "joined by `clusters` … by `effective` … by `ineligible`",
@@ -1336,6 +1691,60 @@ def summarize_step(
     A DERIVED metric takes the condition-wide figure from `counts` instead, as it
     does for `effective`: `aggregate` returned one number over the whole collapsed
     table, so there is no per-column carrier set to recompute over.
+
+    `resample_columns` is the gate a RECORDED COLUMN's interval construction reads
+    (H4a task 14). A column always has a `t_over_units` fallback available, so
+    resampling it is a *choice* — unlike a derived metric, which has no fallback
+    and is resampled whenever `resample`/`seed` let it be, whether or not
+    `statistics.resample` was ever declared. `resample_columns=True` (only when
+    `cli.py`'s `_resolved_resample(doc)["declared"]` is true) switches a column's
+    interval from `t_over_units`/`weighted_t_over_units` (or their `_clustered`
+    forms) to `percentile_over_units`/`percentile_over_units_clustered`, over the
+    same `values`/`column_weights`/`column_keys`/`clusters` the unresampled branch
+    already assembled — the `value` itself does not move, only the construction
+    of the interval around it.
+
+    `strata` is unit key → that unit's `statistics.resample.stratify_by` label,
+    supplied only when the declaration carries one — built in `cli.py` the same
+    way `weights` and `clusters` are, typically over the whole roster (though
+    what this function requires is narrower: total over the collapsed table's
+    keys, a roster-wide mapping being the common way a caller supplies that).
+    **The keys the strata are looked up by are the column's own**, taken
+    in the same pass as its values, for the identical reason the weights and
+    clusters paragraphs above give: a vector filtered or ordered differently
+    would stratify the wrong unit and produce a plausible number rather than an
+    error. Indexed rather than `.get`-ed for the same reason those two are: every
+    key in the collapsed table must have an entry in `strata`, so a default
+    would quietly invent a stratum instead of failing. It
+    reaches both interval constructions this function can produce, and the
+    DERIVED metrics below the same call: `percentile_over_units`/
+    `percentile_over_units_clustered` draw within each stratum for a recorded
+    column, and `percentile_of_derived` draws unit keys within each stratum,
+    preserving each stratum's key count, for a derived one — the same
+    declaration honoured the same way on both paths, so one declared
+    `stratify_by` cannot leave a stratified column beside an unstratified
+    derived metric in the same table with nothing in the record to tell a
+    reader which is which.
+
+    `resample_draws` is **absent** from a column's block when `resample_columns`
+    is `False` (or `seed` is `None`): no resample was attempted, and a `null`
+    there would claim otherwise. When `resample_columns` is `True` it is present
+    and **two-valued**, not the derived metric's three-valued `null`/`0`/*n*
+    scheme: `null` when `interval is None` (fewer than two units, or too few
+    draws for the confidence level — the same reasons `percentile_over_units`
+    returns `None` at all) — there is no interval for a draw count to describe,
+    so recording one would assert survivor evidence for a refused draw — and
+    otherwise the *requested* `draws`, never a survivor count — **given finite
+    recorded values and finite weights**. Under that condition a column's draw
+    statistic (a mean, or a weighted mean, over a non-empty sample) is always
+    defined once an interval exists at all, so unlike `percentile_of_derived`
+    there is no per-draw failure to filter and no `0` bucket ("attempted,
+    every draw individually degenerate") for a column to reach. **Nothing on
+    this path checks that condition**: a `nan` among `values`, or a weight
+    vector whose sum overflows, is not refused here and reaches `ci95` and
+    `resample_draws: draws` exactly as a clean sample would — a known, unfixed
+    gap filed in `docs/superpowers/spec-defects.md`, not a guarantee this
+    docstring is making.
     """
     columns: list[str] = []
     for cols in collapsed.values():
@@ -1355,22 +1764,62 @@ def summarize_step(
         # cluster of a unit is looked up by key, so a vector filtered or ordered
         # differently would group the wrong unit and produce a plausible number.
         column_keys = [key for key, _ in carried]
+        # The column's OWN keys, the same one-pass discipline `weights` and
+        # `clusters` already follow and for the identical reason the docstring
+        # gives for both: a vector filtered or ordered differently draws the
+        # wrong composition and produces a plausible number rather than an
+        # error. Indexed rather than `.get`-ed — every key in `column_keys`
+        # came from the roster the caller built `strata` from, so a default
+        # would quietly invent a stratum instead of failing.
+        column_strata = None if strata is None else [strata[key] for key in column_keys]
         n_block: dict[str, Any] = {**counts, "completed": len(values)}
         if clusters is not None:
             n_block["clusters"] = cluster_count_of(clusters, column_keys)
         interval: Interval | None
         value: float | None
+        column_weights: list[Any] | None = None
         if weights is None:
             value = mean_of(values)
+        else:
+            column_weights = [weights[key] for key, _ in carried]
+            value = weighted_mean_of(values, column_weights)
+            n_block["effective"] = kish_effective_n(column_weights)
+        # A recorded column has a `t_over_units` fallback available, so
+        # resampling it is a CHOICE and `statistics.resample` is what makes
+        # it — the asymmetry with a derived metric, which has no fallback and
+        # is resampled either way, below. The VALUE computed above is
+        # unchanged in every branch: § Weighted samples puts the weights "in
+        # the estimate rather than in the drawing", and § Clustered units
+        # makes the cluster the draw while `n.clusters` (set above) still
+        # reports the count. Only the interval's construction moves.
+        if resample_columns and seed is not None:
+            interval = (
+                percentile_over_units(
+                    values, seed, draws=draws, weights=column_weights, strata=column_strata
+                )
+                if clusters is None
+                else percentile_over_units_clustered(
+                    values,
+                    column_keys,
+                    clusters,
+                    seed,
+                    draws=draws,
+                    weights=column_weights,
+                    strata=column_strata,
+                )
+            )
+        elif weights is None:
             interval = (
                 t_over_units(values)
                 if clusters is None
                 else t_over_units_clustered(values, column_keys, clusters)
             )
         else:
-            column_weights = [weights[key] for key, _ in carried]
-            value = weighted_mean_of(values, column_weights)
-            n_block["effective"] = kish_effective_n(column_weights)
+            # `weights is not None` here (the `elif` above took the `None`
+            # case), so `column_weights` was assigned in the first `if` block
+            # above — mypy can't see that across the two separate
+            # `if`-statements, hence the assert.
+            assert column_weights is not None
             interval = (
                 weighted_t_over_units(values, column_weights)
                 if clusters is None
@@ -1379,12 +1828,30 @@ def summarize_step(
                 )
             )
         out[column] = {
-            **(beside_n or {}),
+            **_beside_n_copy(beside_n),
             "value": value,
             "basis": "units",
             "n": n_block,
             "ci95": [interval.low, interval.high] if interval else None,
             "method": interval.method if interval else None,
+            # Present only under a declared resample (`resample_columns` true
+            # and a `seed` given), and then TWO-valued rather than a survivor
+            # count: `null` when `interval is None` (too few units, or too
+            # few draws for the confidence level) — there is no interval for
+            # a draw count to describe, and recording one would assert
+            # survivor evidence for a draw that never happened — otherwise
+            # the REQUESTED `draws`, since a column's mean is always defined
+            # once an interval exists at all and so has no per-draw failure
+            # to survive-count the way a derived metric's recompute does.
+            # ABSENT rather than `null` when no resample is declared at
+            # all — `null` already means "declared, but the interval came
+            # back empty", and reusing it for "never asked" would erase that
+            # distinction (`docs/superpowers/spec-defects.md`).
+            **(
+                {"resample_draws": draws if interval else None}
+                if resample_columns and seed is not None
+                else {}
+            ),
             # `W-STATS-FAMILY` warns the person; this null tells the record. The
             # generated config declares `statistics.correction: holm` by default,
             # so a metric that said nothing here could be misread as corrected —
@@ -1451,12 +1918,12 @@ def summarize_step(
             draws_used: int | None
             if compute is not None and seed is not None:
                 derived_interval, draws_used = percentile_of_derived(
-                    collapsed, compute, seed, draws=draws
+                    collapsed, compute, seed, draws=draws, strata=strata
                 )
             else:
                 derived_interval, draws_used = None, None
             out[key] = {
-                **(beside_n or {}),
+                **_beside_n_copy(beside_n),
                 "value": value,
                 "basis": "units",
                 "n": {**counts, "completed": len(collapsed)},

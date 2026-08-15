@@ -25,7 +25,7 @@ This repository holds both the normative specification and the tool it specifies
 Modules not yet built are still planned, and the slices that build them are listed in
 `docs/superpowers/specs/2026-08-08-implementation-spine-design.md`.
 
-**Order of the slices that remain: H4a → H3d (+3) → H4b → H7b → the rest.** Amended twice on 2026-08-14
+**Order of the slices that remain: H3d (+3) → H4b → H7b → the rest.** Amended twice on 2026-08-14
 against outside evidence — all nine experiments in
 [the feasibility analysis](docs/feasibility-llm-growth-studies.md) were run through `validate`, and
 **none executed**. The gate was the **template registry**, not the plugin system: `get_template` read a
@@ -33,9 +33,11 @@ builtin dict, so every config stopped at `E-TEMPLATE-UNKNOWN` before any other c
 gives a template three homes, and a **project-local** one in `templates/` is *discovered by path*, not
 through an entry point. **H7a was that subset** — `register_template` exported, `templates/**` discovered
 by path, `generate template` — and it needed none of entry-point resolution, probes or the change gate.
-**It merged on 2026-08-15 and that gate is gone.** H4a (`resample`) and H3d (`holdout`) then unblock six,
-and H4b (weighted contrasts) the last three — **but only for configs sourcing their roster from a
-table**; all nine as the analysis writes them declare a resolver, so *as written* none runs until H7b.
+**It merged on 2026-08-15 and that gate is gone.** **H4a (`resample`) merged the same day** — one refusal
+retired that 8 of 9 configs hit, a regression preserved, and **zero experiments newly executing**, which
+is the honest form of that number. H3d (`holdout`) then unblocks six and H4b (weighted contrasts) the
+last three — **but only for configs sourcing their roster from a table**; all nine as the analysis writes
+them declare a resolver, so *as written* none runs until H7b.
 
 A second amendment the same day scoped all five remaining slices against the code. **Every charter was
 stale in the same direction**: H4 is ~54 tasks split four ways, H7's remainder 38 split three ways, H3d
@@ -48,9 +50,8 @@ for a design that needs folds inside cells.
 
 The cost is that H3d now precedes the cells work it was scheduled to consume, so **H3c-3 owns
 retrofitting the holdout to cells** — acceptable only because no experiment in that analysis declares a
-group axis. The reasoning lives in the spine design's *Order, amended against outside evidence*; it is
-repeated here because `docs/superpowers/` is gitignored and a decision recorded only there is recorded
-nowhere.
+group axis. The reasoning lives in the spine design's *Order, amended against outside evidence*, which
+is now tracked — cite it rather than restating it.
 
 ## The documents
 
@@ -65,6 +66,27 @@ nowhere.
 The first four are *the four documents* everywhere below: the invariants, the consistency passes, and the worked example govern those and only those. A `feasibility-*.md` is analysis output, not specification, and nothing in it is authoritative over them.
 
 `design-principles.md` is the tiebreaker. Read it before proposing a change to any rule — if a rule looks arbitrary, that file explains it, and if it doesn't, that gap is itself worth fixing.
+
+## The development record
+
+The four documents say what `publishable` **is**. These say how it got there, and they are **tracked** — read them before re-deriving anything.
+
+| Where | What it is | Read it when |
+|---|---|---|
+| `docs/superpowers/specs/<date>-<slice>-design.md` | A slice's design: its decisions, each with grounds, and what it refuses | Before planning or changing that slice |
+| `docs/superpowers/plans/<date>-<slice>.md` | The same slice as numbered tasks, with code and per-task mutations | While executing it |
+| `docs/superpowers/*-SCOPING.md` | What was **measured against the code**, dated and pinned to a commit | Before trusting any charter |
+| `docs/superpowers/spec-defects.md` | Gaps found and deliberately not closed, with the owner | Before filing a "new" gap |
+| `.superpowers/sdd/<plan>/progress.md` | The ledger: every ruling, its reason, and what it costs if wrong | To learn why something is the way it is |
+| `.superpowers/sdd/<plan>/task-N-report.md`, `task-N-review.md` | What was built, what the brief got wrong, what each finding was verified by | Before repeating a task's work |
+
+**A scoping expires; a spec does not.** Every charter re-scoped so far was stale **in the same direction** — under-counted and missing surface — so a scoping is dated and pinned to a commit, and a claim carried from one without re-checking is worse than one omitted. Re-measure rather than trust.
+
+**The plan argues from the spec, and the code outranks both.** Where they disagree, the code wins and the *document changes first* — six of six implementers on the most recent slice found a real disagreement, so finding one is expected, not exceptional.
+
+Two things stay untracked because git already holds them: task briefs (extracted from the plan by `scripts/task-brief`) and every `.diff` (regenerable from the two commits in its filename).
+
+**`scripts/sdd-workspace` rewrites `.superpowers/sdd/.gitignore` to a bare `*` every time it runs, and `task-brief` calls it.** Already-tracked files stay tracked, so the damage is only to records created after a clobber. Restore that file's content when you notice, and use `git add -f` when committing new records.
 
 ## Invariants a change must not quietly break
 
@@ -89,7 +111,8 @@ The stated non-promises — adaptive/sequential designs, per-condition pipeline 
 
 Every one of these was made by someone competent, reading carefully, more than once. They are not
 carelessness — each is a reasonable reading that happens to be wrong here, so knowing the rule is what
-prevents it. Slice ledgers record the instances but are gitignored; this section is the durable copy.
+prevents it. The slice ledgers hold the instances; this section is the short form worth carrying into
+every session.
 
 ### Reading the documents
 
@@ -122,6 +145,9 @@ the behaviour lives** — not where the test happens to look. The shapes, each s
 | A test whose **name** claims the guarantee | `test_..._message_matches_validates` compared each of two messages against **its own** hard-coded literal, so mutating one site failed one test and nothing compared the two. The name and docstring asserted an agreement no assertion made — and a reader greps for exactly that name and stops looking |
 | A fixture with too few elements to distinguish the candidate orderings | Both documented orderings survived reversal with the suite green: one colliding name and one broken file cannot tell name order from import order. **Two elements only ever distinguish two answers** — with two names the reverse of insertion order *is* sorted order for one arrangement. Count the orderings you must rule out, then size the fixture so each yields a different answer |
 | A monkeypatch left aimed at a name the code no longer calls | Rerouting a call site through a new helper silently defused a patch on the old name; the test kept passing while testing nothing. **When you move a call site, grep the suite for patches aimed at what you moved** |
+| A seam named in the brief and instantiated by no fixture | Twice in one slice a distinction was described precisely — `declared` versus `n`, strata threaded into the clustered call — and **the mutation passed all 1700+ tests**, because no config made the two readings differ. Naming a seam is not testing it: ask what config separates the readings, then check it exists |
+| The test's **reader** normalising the defect away | A resolved-values echo shipped as a YAML alias — one anchor, five `*id001` pointers — and **both tests used `yaml.safe_load`, which resolves aliases**. The defect lived in the serialization and the reader undid it before the assertion. When a defect could live in *how* a value is written, assert on the raw text |
+| A **mutation** whose two branches cannot differ | A reviewer proposed proving a distinction by swapping to a value derived from the same source — a mathematical no-op no fixture could ever catch; a controller's proposed mutation was blind for a different reason. **A mutation is a claim too**: before trusting "this would prove X", check the two branches can actually produce different results |
 
 ### Answering a question with a proxy
 
@@ -149,6 +175,9 @@ class's module is gone, while an external one is still cached.
   the files that *did* load is still found rather than masked" appeared at four sites including a
   normative § Errors row, while the reason load-failure is checked first is precisely that a collision
   verdict computed then would be computed over a partial set of claims. Both properties cannot hold.
+- **A safety argument in a comment is a claim, and needs a mutation like any other.** A retry inside an `except` was widened, and its new comment argued the retry could never raise because the faults it handles "surface on the first call". **The first call was inside the `try`.** Patching the widened function to raise gave exit 1 with no `run.yaml` and no run directory — every execution paid for, the record lost. Written by someone whose task was closing findings about false comments, and it passed a review. If a comment says *this cannot happen*, make it happen.
+- **Sweep for the claim, not for the file the claim was first noticed in.** Three sweeps in one slice stopped one file short — one covered `src/` and `docs/` but not `tests/`, one fixed a sentence in `correction.py` and missed the same sentence in the function that falsified it, one stopped at the file its brief happened to name.
+- **A ledger line saying "filed" is not a filing.** A gap recorded as "registered against \<owner\>" existed only in the ledger; the defects file had no such entry. And an entry naming its owner as *"whichever slice does X"* points at a closed slice once X lands — **re-owner a deferral when the slice that filed it finishes**, or it reads as live work nobody holds.
 - **Rewriting a sentence when a table row was the thing that was wrong.** "Importing one raises
   `ImportError` today" was false only while `register_template` sat in a row marked `not yet built` —
   splitting the row repaired it, because the sentence **derives** its claim from the `Status` column.
@@ -163,7 +192,9 @@ class's module is gone, while an external one is still cached.
 
 - **Never filter the output of a sweep whose job is to find a string** — filter the file list. A reviewer
   checking this exact rule lost a true hit to `grep -v superpowers`, because the matching line contained
-  that path. Prove each sweep can fail by running it against a string known to be present.
+  that path. Prove each sweep can fail by running it against a string known to be present. This matters
+  more now that the [development record](#the-development-record) is tracked: a sweep over the four
+  documents must **name** them, since `*.md` no longer means what it used to.
 - **`git checkout -- <file>` destroys uncommitted work**, twice mistaken for reverting a mutation. Keep a
   copy before mutating, and verify a revert by **behaviour**, never by `git status`.
 
@@ -171,7 +202,9 @@ class's module is gone, while an external one is still cached.
 
 Editing one document is almost never a one-file change. Both passes below run before an edit is finished; the second is the one that catches real defects, and no tooling substitutes for it. The **cross-document** pass governs the four documents only — a [feasibility analysis](#feasibility-analyses) is exempt from it and subject to the mechanical pass in full.
 
-**Mechanical.** Write these as throwaway greps or a short script each time rather than keeping a checker around — the repo ships no tooling, and each pass wants slightly different checks. Verify that every relative link and `#anchor` resolves, that no two headings in a file produce the same anchor, that every table's rows match its header's column count and no row is empty, and that no line carries trailing whitespace, a tab, or invisible unicode. Skip fenced code blocks in all of these: the docs contain markdown inside markdown, and a `##` or `|` there is content, not structure. After removing or renaming any string, grep every tracked `*.md` — the four documents, this file, and any feasibility analysis — for what should no longer exist.
+**Mechanical.** Write these as throwaway greps or a short script each time rather than keeping a checker around — the repo ships no tooling, and each pass wants slightly different checks. Verify that every relative link and `#anchor` resolves, that no two headings in a file produce the same anchor, that every table's rows match its header's column count and no row is empty, and that no line carries trailing whitespace, a tab, or invisible unicode. Skip fenced code blocks in all of these: the docs contain markdown inside markdown, and a `##` or `|` there is content, not structure. After removing or renaming any string, grep the four documents, this file, and any feasibility analysis for what should no longer exist.
+
+**Both passes govern those files only — never the [development record](#the-development-record).** A spec records what was decided when it was written and a scoping what was measured on its date; retro-editing either destroys the evidence they exist to hold. Correct one the way this repo corrects a published claim: append the correction and say what it replaces. The one exception is `spec-defects.md`, a live list, where a closed gap is struck rather than left to mislead.
 
 **Cross-document.** These are the classes that actually drift, and none of them is visible to a mechanical check:
 

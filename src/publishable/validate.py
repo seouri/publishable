@@ -10,6 +10,7 @@ import yaml
 
 from publishable.base_experiment import load_experiment
 from publishable.contrasts import differing_axes, resolve_contrasts, units_matching
+from publishable.correction import ALPHA
 from publishable.diagnostics import Collector
 from publishable.envelope import check_envelope
 from publishable.errors import ContractError
@@ -19,6 +20,7 @@ from publishable.param import MISSING
 from publishable.provenance import find_repo_root, resolves_inside_repo
 from publishable.replication import resolve_repeats
 from publishable.scope import step_name as _step_name
+from publishable.stats import min_honest_draws
 from publishable.strata import levels_for
 from publishable.sweep import (
     NAMEABLE_CHAR,
@@ -603,11 +605,16 @@ def validate_config(
             # the difference matters.** `E-DATA-CLUSTER-UNKNOWN` raised here for a
             # unit with no value for the attribute has no validate-time reporter:
             # `_check_cluster_by` tests the declaration against `attributes`, not
-            # each unit's value. With no `fold` level nothing downstream needs the
-            # basis either, so a config in that shape validates clean and raises at
-            # `run`. The reachable case is `cluster_by` naming `measurements.by`
-            # where every unit has one measurement row; see `cli`'s note at the
-            # `clusters_of` call.
+            # each unit's value. The reachable case is `cluster_by` naming
+            # `measurements.by` where every unit has one measurement row; see
+            # `cli`'s note at the `clusters_of` call. With no `fold` level, this
+            # `basis` local itself goes unused — but `_check_resample`'s own
+            # `limits.min_clusters` check (below) resolves the identical
+            # roster/`cluster_by` pair a second time and meets the same
+            # `ContractError`, so "nothing downstream needs it" is no longer
+            # true in general, only true of this particular local. Either way
+            # the config validates clean here and meets `E-DATA-CLUSTER-UNKNOWN`
+            # for real at `run`.
             basis = None
     # A `fold` level's `stratify_by`, from the same usable-cluster local the basis
     # was resolved from: the name it declares, and — when a cluster is declared —
@@ -624,6 +631,15 @@ def validate_config(
     )
     _check_unimplemented(doc, c)
     _check_sweep(doc, template, c, fold_basis=basis)
+    # After `_check_sweep`, before `_check_contrasts`: `roster` is already in
+    # hand three calls earlier (`_check_fold_stratify_by` reads it too), so
+    # position here buys grouping with the other `statistics.*` checks and a
+    # sensible finding order, not roster availability. `_check_sweep` returns
+    # `None` and stores nothing on `doc` — it hands nothing forward — so a
+    # later check needing the resolved comparison family (task 6's `n` bound
+    # against it) must recompute that family locally rather than read it off
+    # this call site.
+    _check_resample(doc, roster, c)
     _check_contrasts(doc, c, roster)
     _check_hypotheses(doc, c, experiment, template)
     _check_report_by(doc, c, roster)
@@ -2990,10 +3006,21 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     kind, and `E-REPL-LEVEL-DEPTH` past two levels, and
     `E-REPL-LEVEL-BATCH-INNER` for a `batch` that is not the outermost level.
     `batch` and `fold` themselves are no longer refused — both are supported
-    kinds. `statistics.resample` and `.null_test`, and a top-level `hypotheses`
-    block, are refused the same way — a declared 2000-draw bootstrap or
-    a pre-registered hypothesis that runs and reports success while honoring
-    neither is the same silent-no-op class. `statistics.contrasts` is no longer in
+    kinds. `statistics.resample` is no longer in this family: `_check_resample`
+    checks the declaration for real — the method enum, the 80-draw floor, the
+    strata against `data.units.attributes`, the roster's absence, and the
+    cluster count — so a fault in the block is named on its own terms rather
+    than the whole block being refused. The *honouring* — resolving the block
+    in `cli.command_run` and threading it into the interval constructions —
+    had not landed as of commit `2fdc957` (H4a task 12, the wholesale
+    refusal's retirement): check `cli.command_run`'s `derived_metric_draws`
+    directly rather than trusting this sentence, since two tasks after that
+    commit close exactly this gap. `.null_test` is still refused the same way
+    the whole family used to be: a declared 5000-draw permutation that runs
+    and reports nothing is the silent-no-op class, and `p_value` exists
+    nowhere in this build. A top-level `hypotheses` block is refused the same
+    way too — a pre-registered hypothesis that runs and reports success while
+    honoring neither is the same silent-no-op class. `statistics.contrasts` is no longer in
     this family: `_check_contrasts` now resolves and checks each declared entry
     instead of refusing the block wholesale. Neither is `statistics.report_by`,
     which `_check_report_by` now checks for real instead of refusing wholesale.
@@ -3119,8 +3146,10 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
                 "refusal exists to prevent; it will be honored in a later slice",
             )
 
-    # `statistics.resample`/`.null_test` validate clean today and are read by
-    # nothing — the same silent-no-op class as the fields above.
+    # `statistics.null_test` validates clean today and is read by nothing —
+    # the same silent-no-op class as the fields above. `statistics.resample`
+    # left this loop with H4a: `_check_resample` now checks its declaration
+    # for real instead of refusing the block wholesale.
     # `statistics.contrasts`, `statistics.report_by` and the top-level
     # `hypotheses` block used to be in this list too; they are now checked for
     # real by `_check_contrasts`, `_check_report_by` and `_check_hypotheses`
@@ -3130,32 +3159,20 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     # reason: `cli.py` applies it, so a declared correction changes the record —
     # the correction checks further down this module check its *value* instead,
     # and warn only on `none`, which corrects nothing by request.
-    # `materialize.py` writes only two of these keys into a generated config —
-    # `statistics.correction` and a top-level `hypotheses: []` — so `resample`
-    # and `null_test` are simply absent there; each check below fires on a real
+    # `materialize.py` writes only one of these keys into a generated config —
+    # `statistics.correction` — plus a top-level `hypotheses: []`, so
+    # `null_test` is simply absent there; the check below fires on a real
     # declaration either way, never on a key's mere presence or on the empty
     # list `hypotheses` is generated as.
     statistics = doc.get("statistics") or {}
-    for field, code, what in (
-        (
-            "resample",
-            "E-STATS-RESAMPLE-UNSUPPORTED",
-            "no resampling scheme runs",
-        ),
-        (
-            "null_test",
+    if statistics.get("null_test"):
+        c.error(
             "E-STATS-NULLTEST-UNSUPPORTED",
-            "no null distribution is computed",
-        ),
-    ):
-        if statistics.get(field):
-            c.error(
-                code,
-                f"statistics.{field}",
-                f"is specified but not implemented in this build — {what}, and a "
-                "declaration that changes no behavior is the failure this refusal "
-                "exists to prevent; it will be honored in a later slice",
-            )
+            "statistics.null_test",
+            "is specified but not implemented in this build — no null distribution is "
+            "computed, and a declaration that changes no behavior is the failure this "
+            "refusal exists to prevent; it will be honored in a later slice",
+        )
 
 
 def _repeat_total(doc: dict[str, Any], fold_basis: int | None) -> int | None:
@@ -4959,6 +4976,335 @@ def _check_hypotheses(
                 "— that quantity only exists per condition, so the hypothesis must say which "
                 "conditions it compares",
             )
+
+
+RESAMPLE_METHODS = ("bootstrap",)
+"""Every value `statistics.resample.method` may take — `reference.md`
+§ Statistical reporting's *Resample methods* table, which is the enum this
+tuple enforces.
+
+**A closed, one-value enum on purpose.** `bootstrap` is the only value the
+schema shows and the only construction `stats.py` has, and § Statistical
+reporting's construction tables enumerate the method strings core *emits*
+(`percentile_over_units`, `paired_percentile_over_units`) — outputs, not inputs
+a config may name. Stating the enum is what makes `method: bootstap` a
+diagnostic rather than a shrug, and what makes adding a second value a
+documented change rather than a silent one."""
+
+
+def _check_resample(doc: dict[str, Any], roster: UnitList | None, c: Collector) -> None:
+    """Every check `statistics.resample` gets, seven findings in declaration
+    order — the enumeration is the list, not a sample of it:
+
+    - `E-STATS-RESAMPLE-UNITS` — a `resample` with no `data.units` at all.
+    - `E-STATS-RESAMPLE-METHOD` — the `method` enum.
+    - `E-STATS-RESAMPLE-N` — the `n` floor.
+    - `E-STATS-RESAMPLE-STRATIFY-UNKNOWN` — a `stratify_by` name that is not a
+      declared unit attribute.
+    - `W-STATS-RESAMPLE-CLUSTERS` — **reads the roster:** `limits.min_clusters`
+      against the resolved cluster count.
+    - `E-STATS-RESAMPLE-STRATIFY-VARIES` — **reads the roster too:** a stratum
+      that varies within a `cluster_by` cluster.
+    - `W-STATS-RESAMPLE-FAMILY` — the comparison-family lower bound on that
+      same `n`.
+
+    **Two of the seven read `roster`, not one**, and each carries its own
+    `roster is not None` guard rather than leaning on a caller or on the
+    no-`return` gate below. A check added here must state which side of that
+    line it is on; this list is what the next reader counts against, so an
+    eighth finding belongs in it.
+
+    `_check_unimplemented`'s wholesale refusal of a declared `resample`
+    retired with H4a task 12 (commit `2fdc957`) — a shape fault inside the
+    block is worth reporting on its own terms rather than only as
+    "unsupported", the same way a malformed `report_by` entry is worth
+    naming even though `report_by` runs for real. Resampling itself was not
+    honored by `cli.command_run` at that commit, so for two tasks a declared
+    `resample` validated clean here before it changed any interval; H4a tasks
+    13–15 closed that window, and `cli.command_run` now resolves the block
+    once and threads it into the column and derived constructions alike.
+
+    Every check here presupposes the declaration is a mapping; a scalar or a
+    list is `check_envelope`'s `E-CONFIG-TYPE` (`statistics.resample` is typed
+    `dict`), and a wrong-typed child (`method`, `n`, `stratify_by`) is the same, because Task 3
+    closed the block one level in. A leaf type fault is deliberately non-fatal
+    in this module — reported, and validation continues — so each value read
+    here is `isinstance`-guarded and quietly skipped when it is not a leaf the
+    envelope types — the same division `_check_report_by` keeps with its own
+    entries.
+
+    **The `n` floor is the load-bearing one.** `stats.percentile_over_units`
+    returns `None` below `min_honest_draws(confidence)` draws — 80 at 95 % — so
+    a declared `n: 50` would null `ci95` on every recorded column in the run,
+    silently and with nothing in the record saying why. Refusing it here is why
+    `validate` learns about `n` in the same slice that will teach
+    `summarize_step` to honor it, rather than a slice later.
+    """
+    statistics = doc.get("statistics") or {}
+    resample = statistics.get("resample")
+    if not isinstance(resample, dict) or not resample:
+        return
+    # No roster at all, worth its own finding independent of everything below.
+    # `reference.md` § The one config file marks `units:` "required by fold,
+    # resample, null_test", and § Where units come from says resample "isn't
+    # available" without one. The precedent is `_check_replication`'s own
+    # `E-REPL-FOLD-NO-UNITS` — the same `not (doc.get("data") or {}).get("units")`
+    # expression, refusing a `fold` level for the identical reason. (Not
+    # `E-REPL-FOLD-K`: that is the unrelated `k: all`-basis-unknowable fault.)
+    #
+    # Read from the DECLARATION, not from `roster is None`: the roster is also
+    # `None` when `data.units` is declared and failed to resolve, and that fault
+    # already has `_check_units`' own finding. A second, derived fault on top of
+    # the one the reader has to fix anyway is what `validate_config`'s
+    # `usable_cluster` guard avoids by the same argument.
+    #
+    # No `return` here, matching the `E-REPL-FOLD-NO-UNITS` twin. Of the checks
+    # below, `method`, `n`, the family bound, and `stratify_by`'s names read
+    # `resample`/`doc` alone and are safe with no roster at all. The two that
+    # DO read `roster` — `limits.min_clusters` and the stratum-varies-within-
+    # cluster composition, both enumerated in the docstring above — each
+    # require `roster is not None` themselves rather than leaning on this
+    # early-exit having not fired. So this comment's job is only to explain why
+    # there is no `return` here — not to promise every check below is
+    # roster-independent, which the next reader extending this function must
+    # re-verify against the docstring's list rather than assume from this
+    # sentence. Stopping here would silently swallow a `method`/`n` fault the
+    # reader would only meet on their next pass.
+    units_declared = ((doc.get("data") or {}).get("units")) or {}
+    if not units_declared:
+        c.error(
+            "E-STATS-RESAMPLE-UNITS",
+            "statistics.resample",
+            "is declared and `data.units` is not, so there is no unit table to draw "
+            "from and no metric core could recompute on a draw — a declaration that "
+            "changes no behavior. Declare `data.units`, or drop `resample` and report "
+            "over repeats, which is honest for a design whose executions are the "
+            "observations",
+        )
+    method = resample.get("method")
+    # `None`/absent means the documented default, `bootstrap` — § Statistical
+    # reporting: declaring `resample` "changes the method or the count rather
+    # than switching the behaviour on". Only a value actually named is checked.
+    # A wrong-typed `method` is `E-CONFIG-TYPE`'s finding already; skipped here
+    # rather than reported a second time under this code.
+    if method is not None and isinstance(method, str) and method not in RESAMPLE_METHODS:
+        c.error(
+            "E-STATS-RESAMPLE-METHOD",
+            "statistics.resample.method",
+            f"is `{method}`, not one of {', '.join(f'`{m}`' for m in RESAMPLE_METHODS)}",
+        )
+    n = resample.get("n")
+    floor = min_honest_draws()
+    # `bool` excluded explicitly: `isinstance(True, int)` is `True` in Python,
+    # and `resample: {n: true}` is already `E-CONFIG-TYPE` from the envelope —
+    # a value flagged wrong-typed there must not also drive this check.
+    if n is not None and isinstance(n, int) and not isinstance(n, bool) and n < floor:
+        c.error(
+            "E-STATS-RESAMPLE-N",
+            "statistics.resample.n",
+            f"is {n}; a percentile interval needs at least {floor} draws before both "
+            "of its ranks are interior, so below that the lower endpoint IS the "
+            "smallest draw while the upper keeps shrinking — low-biased and "
+            f"systematically too narrow. Under {floor} core reports no interval at "
+            "all, so this would null `ci95` on every metric in the run rather than "
+            "narrowing one",
+        )
+    # The declared set, `data.units.attributes` — the same reference
+    # `_check_report_by` reads, and for its reason: `strata.levels_for` and the
+    # draw both read the attribute per unit, so a typo and an attribute no unit
+    # carries are indistinguishable downstream. NOT `units._stratum_groups`,
+    # which is `assign`-specific: it admits a `sweep.groups` axis name as a
+    # legal target and raises a bare `NotImplementedError` for everything
+    # else (deliberately uncoded — its own docstring says why: the raise
+    # cannot tell which of two `validate`-time faults it is), and a resample
+    # draws from the roster rather than from an allocation, so neither applies.
+    #
+    # Read through `units.stratum_names`, the same normalization the draw
+    # balances on: a bare `stratify_by: site` is one name to both. Two
+    # independent readings of one declaration is the validate-clean-then-
+    # disagree shape that function's own docstring exists to prevent.
+    #
+    # Filtered to strings the same way `_check_report_by` filters `attributes`:
+    # a non-string item there is `_check_units`' own finding (`E-UNITS-ATTR-
+    # MISSING`), and `set(...)` over the raw list would raise on an unhashable
+    # one before that finding is ever reached.
+    declared = {
+        a
+        for a in (((doc.get("data") or {}).get("units") or {}).get("attributes") or [])
+        if isinstance(a, str)
+    }
+    stratify_by = resample.get("stratify_by")
+    # The container itself IS an envelope leaf (`(str, list)`), unlike
+    # `assign.<axis>.stratify_by`, which has no `LEAF_TYPES` entry at all — so a
+    # wrong-typed container (`stratify_by: 5`) is already `E-CONFIG-TYPE` from
+    # the envelope, and `stratum_names` would otherwise wrap it as a one-name
+    # tuple and report it a second time under this code. Skipped here the same
+    # way `method`/`n` skip a wrong-typed leaf above.
+    if stratify_by is not None and not isinstance(stratify_by, (str, list)):
+        stratify_by = None
+    for name in stratum_names(stratify_by):
+        # One finding per offending name, not one naming only the first: the
+        # declaration is a list and each entry is separately fixable, the same
+        # rule `E-DATA-ASSIGN-STRATIFY-UNKNOWN` already follows. A non-string
+        # entry is absorbed here rather than left silent — it names no
+        # attribute either, and `stratify_by`'s LEAF type is the container's,
+        # not each item's.
+        if not isinstance(name, str) or name not in declared:
+            c.error(
+                "E-STATS-RESAMPLE-STRATIFY-UNKNOWN",
+                "statistics.resample.stratify_by",
+                f"names `{name}`, which is not a unit attribute — a stratum is read "
+                f"per unit when the draw is taken, so it has to be one. "
+                f"`data.units.attributes` declares {', '.join(sorted(declared)) or 'none'}",
+            )
+
+    # `limits.min_clusters`: materialized in every generated config, typed by
+    # `envelope.py`, and — until this slice — read by nothing. § Validation's
+    # *Clusters enough to resample*: "`statistics.resample` with `cluster_by:
+    # animal_id` over 4 animals bootstraps 4 draws; below `limits.min_clusters`
+    # (warning)". Scoped to `resample` WITH `cluster_by`, because `cluster_by`
+    # alone decides each condition's own interval and draws nothing.
+    #
+    # Counted through `units.fold_basis`, the same function `_check_replication`
+    # and `_check_sweep` read — via `basis`, resolved once above this call and
+    # threaded through as their `fold_basis=` argument. This check calls it a
+    # second time on the same roster and `cluster_by` rather than being handed
+    # that value: a second call to one derivation is not a second derivation,
+    # but it IS a second `try`/`except ContractError` an edit to the first must
+    # not forget to mirror. Not threaded through as a parameter in this slice;
+    # doing so is a cheap follow-up, not a correctness gap today.
+    cluster_by = units_declared.get("cluster_by")
+    min_clusters = (doc.get("limits") or {}).get("min_clusters")
+    if (
+        roster is not None
+        and isinstance(cluster_by, str)
+        and cluster_by
+        and isinstance(min_clusters, int)
+        and not isinstance(min_clusters, bool)
+    ):
+        try:
+            groups = fold_basis(roster, cluster_by)
+        except ContractError:
+            # A unit carrying no value for the cluster attribute
+            # (`E-DATA-CLUSTER-UNKNOWN`). Sometimes reported beside this by
+            # `_check_cluster_by` (which tests the DECLARATION against
+            # `attributes`) or by `_check_units` (a column that never resolved
+            # at all) — but NOT always: `cluster_by: measurements.by`, naming a
+            # measurement rather than an input column, resolves the roster and
+            # `_check_units` cleanly, and `_check_cluster_by` has nothing to
+            # say about a name that isn't a unit attribute in the first place.
+            # That combination reaches here with no companion finding. Swallowed
+            # anyway, because this check cannot proceed without a readable
+            # grouping and `validate` collects rather than raises — a config in
+            # that shape validates clean today and meets `E-DATA-CLUSTER-UNKNOWN`
+            # for real at `run`, same as the `basis` computation above handles it.
+            groups = None
+        if groups is not None and groups < min_clusters:
+            c.warn(
+                "W-STATS-RESAMPLE-CLUSTERS",
+                "limits.min_clusters",
+                f"is {min_clusters}, and `data.units.cluster_by: {cluster_by}` puts this "
+                f"roster in {groups} clusters — `resample` draws whole clusters, so the "
+                f"percentile interval rests on {groups} independent draws however many "
+                "units they hold",
+            )
+
+    # The composition rule, from the declarations plus the roster — the same
+    # shape *Fold strata survive clustering* and *Holdout strata survive
+    # clustering* already have, and reusing `units.stratum_varies_within_cluster`
+    # rather than minting a second notion of constancy is the point: a resample
+    # draws whole clusters, so it inherits the rule rather than inventing one.
+    if roster is not None and isinstance(cluster_by, str) and cluster_by:
+        for name in stratum_names(resample.get("stratify_by")):
+            if not isinstance(name, str) or name not in declared:
+                continue  # already refused above
+            try:
+                offender = stratum_varies_within_cluster(roster, cluster_by, name)
+            except ContractError:
+                # A unit with no cluster value (`E-DATA-CLUSTER-UNKNOWN`),
+                # already reported beside this. This module collects.
+                break
+            if offender is not None:
+                cluster, seen = offender
+                c.error(
+                    "E-STATS-RESAMPLE-STRATIFY-VARIES",
+                    "statistics.resample.stratify_by",
+                    f"names `{name}`, which varies within `{cluster_by}` {cluster} — it "
+                    f"carries {', '.join(seen)}. A resample draws whole clusters, so a "
+                    "cluster cannot be drawn within one stratum while carrying two; "
+                    "stratify on an attribute constant within a cluster",
+                )
+
+    # The comparisons-only lower bound. Holm's tightest level is `ALPHA / m` at
+    # rank 1, and a corrected interval is read off the same pool the raw one
+    # was — true of every pool-backed member today; a future construction that
+    # reads a different pool for the corrected number is not this check's to
+    # anticipate — (`stats.interval_at`, which `correction` calls), so a pool
+    # below `min_honest_draws(1 - level)` yields `ci95_corrected: null` with
+    # only `W-STATS-CORRECTED-THIN` at run time to say why. `m` is
+    # `comparisons × metrics` and the metric count is unknowable here BY
+    # DESIGN — `correction.family_shape` derives it from `Member`s built after
+    # the run, out of `io.record` keys and `aggregate`'s return, and core never
+    # inspects the body of user Python. So this bounds against `comparisons`
+    # alone: always true when it fires, silent when it might not be. The
+    # residue — a config with many metrics that still nulls every corrected
+    # bound, and the separate hypothesis family that has the same shape of gap
+    # — is filed in `spec-defects.md` as a run-time disclosure that already
+    # exists, not a check to build.
+    #
+    # `expand(doc)` re-derived behind the same guard `_check_sweep` and
+    # `_check_contrasts` each use directly — `_check_hypotheses` is not a third
+    # precedent here; it goes through `_condition_labels`, which wraps its own
+    # `expand(doc)` in the same shape of guard but is a different call site —
+    # rather than hoisted into `validate_config` the way `fold_basis` is: that
+    # hoist exists because two checks BOUND declarations against one number and
+    # must not disagree, where this only sets a warning threshold.
+    correction_method = statistics.get("correction") or "holm"
+    # `fdr_bh` implies no per-comparison level at all and `none` corrects
+    # nothing, so under either `ci95_corrected` is null whatever `n` is and this
+    # would be a false positive. Unset is `holm`, the same default `cli` applies.
+    if correction_method not in ("holm", "bonferroni"):
+        return
+    # An absent `n` is not "nothing to bound": `cli.py`'s `derived_metric_draws
+    # = 2000` is the value actually used whenever `n` goes undeclared — the
+    # documented default (§ How a metric becomes a number) — so a large enough
+    # family still underprovisions it. Only a value already reported —
+    # wrong-typed (`E-CONFIG-TYPE`) or below the honest floor
+    # (`E-STATS-RESAMPLE-N`, checked above) — has nothing left for this bound
+    # to add.
+    if n is None:
+        effective_n = 2000
+    elif isinstance(n, int) and not isinstance(n, bool):
+        if n < floor:
+            return
+        effective_n = n
+    else:
+        return
+    try:
+        conditions = expand(doc)
+    except Exception:
+        conditions = []
+    try:
+        comparisons = len(resolve_contrasts(doc, conditions))
+    except (TypeError, KeyError, AttributeError, ValueError):
+        comparisons = 0
+    if comparisons < 1:
+        return
+    needed = min_honest_draws(1.0 - ALPHA / comparisons)
+    if effective_n < needed:
+        plural = "" if comparisons == 1 else "s"
+        n_desc = f"is {n}" if n is not None else "is unset, so defaults to 2000,"
+        c.warn(
+            "W-STATS-RESAMPLE-FAMILY",
+            "statistics.resample.n",
+            f"{n_desc} and this design resolves to {comparisons} comparison{plural}, so "
+            f"`{correction_method}` puts the tightest corrected level at "
+            f"{ALPHA / comparisons:.5f} — an interval at that level needs at least "
+            f"{needed} draws, so `ci95_corrected` would be null rather than reported "
+            "too narrow. This is a lower bound: the family is comparisons × metrics "
+            "and the metric count is not knowable before the run, so the real "
+            "requirement is at least this",
+        )
 
 
 def _check_report_by(doc: dict[str, Any], c: Collector, roster: UnitList | None) -> None:

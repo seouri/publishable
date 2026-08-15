@@ -2203,7 +2203,7 @@ def test_two_clusters_still_report_a_percentile():
     """The control that must report, immediately above the floor: G = 2 has three
     achievable replicates, so the interval has real width and is not refused.
     There is deliberately no higher threshold here — the judgment that a
-    cluster count is too small for a resample belongs to `statistics.min_clusters`,
+    cluster count is too small for a resample belongs to `limits.min_clusters`,
     which `validate` warns on."""
     membership = dict.fromkeys(_POOL_KEYS, "left")
     for key in ("c1", "c2", "c3", "d1", "d2"):
@@ -2211,6 +2211,29 @@ def test_two_clusters_still_report_a_percentile():
     got = percentile_over_units_clustered(_POOL_VALUES, _POOL_KEYS, membership, seed=7)
     assert got is not None
     assert got.high > got.low
+
+
+def test_two_content_identical_clusters_refuse_a_zero_width_interval():
+    """`groups < 2` is a COUNT floor and answers a different question from
+    whether the draw can ever vary: two clusters both holding the single value
+    0.5 pass that floor (`G == 2`) but every achievable replicate pools some
+    multiset of two identical numbers, so the mean is 0.5 on every draw and the
+    interval would be `Interval(0.5, 0.5)` — the same "a zero-width 95%
+    interval is not honest" shape `percentile_over_units`'s own strata branch
+    already refuses for content-identical strata (`reference.md` § Statistical
+    reporting). The row-level sibling's check is content-based, not
+    count-based, and this construction now asks the same question one level
+    up, over clusters rather than over values."""
+    values = [0.5, 0.5, 0.5, 0.5]
+    keys = ["a1", "a2", "b1", "b2"]
+    membership = {"a1": "A", "a2": "A", "b1": "B", "b2": "B"}
+    assert (
+        percentile_over_units_clustered(values, keys, membership, seed=1, draws=2000)
+        is None
+    )
+    # Positive companion: `test_two_clusters_still_report_a_percentile` above is
+    # the same `G == 2` shape with clusters that differ in content, and it must
+    # keep reporting — this is a content check, not a second count floor.
 
 
 @pytest.mark.parametrize("values", [[], [1.0]])
@@ -2346,6 +2369,249 @@ def test_the_same_seed_reproduces_the_clustered_percentile():
     assert percentile_over_units_clustered(
         values, keys, membership, seed=7
     ) != percentile_over_units_clustered(values, keys, membership, seed=99)
+
+
+def _clustered_banded() -> tuple[list[float], list[str], dict[str, str], list[str]]:
+    """Six clusters of unequal size across three strata, with disjoint value
+    bands per stratum — so a cluster draw ignoring the strata, a correct
+    stratified cluster draw, and a row-level draw all give different intervals.
+
+    Stratum `low`  : clusters c0 (4 units), c1 (3) — values in [0, 1)
+    Stratum `mid`  : clusters c2 (3), c3 (2)       — values in [10, 11)
+    Stratum `high` : clusters c4 (2), c5 (1)       — values in [100, 101)
+    """
+    values: list[float] = []
+    keys: list[str] = []
+    membership: dict[str, str] = {}
+    strata: list[str] = []
+    plan = [
+        ("c0", "low", 4, 0.0), ("c1", "low", 3, 0.5),
+        ("c2", "mid", 3, 10.0), ("c3", "mid", 2, 10.5),
+        ("c4", "high", 2, 100.0), ("c5", "high", 1, 100.5),
+    ]
+    for cluster, stratum, size, base in plan:
+        for i in range(size):
+            key = f"{cluster}_u{i}"
+            values.append(base + i / 100.0)
+            keys.append(key)
+            membership[key] = cluster
+            strata.append(stratum)
+    return values, keys, membership, strata
+
+
+def test_a_clustered_stratified_draw_takes_clusters_within_strata():
+    """`stratify_by` says what an independent draw is; `cluster_by` says the
+    draw IS a cluster. Composed: two clusters are drawn from each stratum
+    (each stratum holds two), so every replicate carries all three bands and the
+    interval is far narrower than the unstratified cluster draw, where a single
+    replicate can hold six `high` clusters."""
+    values, keys, membership, strata = _clustered_banded()
+    stratified = percentile_over_units_clustered(
+        values, keys, membership, seed=13, draws=2000, strata=strata
+    )
+    plain = percentile_over_units_clustered(values, keys, membership, seed=13, draws=2000)
+    assert stratified is not None and plain is not None
+    assert (stratified.high - stratified.low) < (plain.high - plain.low) / 2.0
+    assert stratified.method == "percentile_over_units_clustered"
+
+
+def test_a_clustered_stratified_draw_weights_the_pooled_units_not_the_pick():
+    """`weight_by`, `cluster_by` and `stratify_by` are three independently
+    declarable fields, so a config naming all three is an ordinary shape, not
+    an edge case — § Weighted samples' composition (the draw moves to
+    clusters, the weights stay in the estimate) has to survive stratification
+    too. `c5` (the lone `high` cluster) carries weight 9 here; pinned
+    digit-for-digit at seed=13, both endpoints move up from the unweighted
+    stratified interval because that heavy cluster now drags every replicate
+    that draws it further than an equal weight would."""
+    values, keys, membership, strata = _clustered_banded()
+    weights = [9.0 if membership[k] == "c5" else 1.0 for k in keys]
+    weighted = percentile_over_units_clustered(
+        values, keys, membership, seed=13, draws=2000, strata=strata, weights=weights
+    )
+    unweighted = percentile_over_units_clustered(
+        values, keys, membership, seed=13, draws=2000, strata=strata
+    )
+    assert weighted is not None and unweighted is not None
+    assert weighted.low == 26.54
+    assert weighted.high == 64.2448275862069
+    assert weighted.low > unweighted.low
+    assert weighted.high > unweighted.high
+
+
+class _RecordingRandom(random.Random):
+    """Wraps `random.Random` to record the `n` argument of every `randrange`
+    call, in order — catching two mutations an interval-shaped assertion
+    cannot. First: substituting a constant 1 for `len(group)` in the draw loop
+    still narrows the interval on `_clustered_banded` (three strata of two
+    clusters each), because that fixture's extremes are single-cluster values
+    a one-cluster-per-stratum draw reaches exactly as surely as a two-cluster
+    one — pooling several picks of the SAME extreme cluster reproduces that
+    cluster's own mean. Second, and the reason a bare call COUNT is not
+    enough either: a mutation that makes every stratum draw the FIRST
+    stratum's cluster count is invisible to a total on a fixture whose strata
+    all hold the same count, and even an unevenly-sized fixture can still sum
+    to the right total under some reordering. Recording each call's `n` in
+    sequence, over a fixture whose three strata hold DIFFERENT counts (1, 2,
+    3), pins the exact per-stratum composition rather than a total that
+    several wrong constructions could also produce."""
+
+    calls: list[int] = []
+
+    def randrange(self, n: int, *args: object, **kwargs: object) -> int:
+        type(self).calls.append(n)
+        return super().randrange(n, *args, **kwargs)  # type: ignore[arg-type]
+
+
+def _clustered_uneven_stratum_counts() -> tuple[
+    list[float], list[str], dict[str, str], list[str]
+]:
+    """Three strata holding a DIFFERENT number of clusters each — 1, 2, 3 — so a
+    mutation that draws every stratum's own count correctly is distinguishable
+    from one that draws some OTHER stratum's count, or a constant, even when a
+    coincidental total would otherwise hide it (`_clustered_banded`'s 2/2/2
+    cannot: "draw the first stratum's count" sums to 6 either way there)."""
+    values: list[float] = []
+    keys: list[str] = []
+    membership: dict[str, str] = {}
+    strata: list[str] = []
+    plan = [
+        ("c0", "low", 4, 0.0),
+        ("c1", "mid", 3, 10.0), ("c2", "mid", 2, 10.5),
+        ("c3", "high", 2, 100.0), ("c4", "high", 1, 100.5), ("c5", "high", 1, 100.75),
+    ]
+    for cluster, stratum, size, base in plan:
+        for i in range(size):
+            key = f"{cluster}_u{i}"
+            values.append(base + i / 100.0)
+            keys.append(key)
+            membership[key] = cluster
+            strata.append(stratum)
+    return values, keys, membership, strata
+
+
+def test_a_clustered_stratified_draw_gives_each_stratum_exactly_its_own_count(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The composition rule pinned by SEQUENCE, not by total: `low` holds 1
+    cluster, `mid` holds 2, `high` holds 3, and the value bands keep
+    `stratum_pools` sorted in that order, so one replicate's calls to
+    `randrange` must read `n = 1, 2, 2, 3, 3, 3` in that exact order — one
+    stratum contributing its own count, not the first stratum's count applied
+    everywhere (which would read `1, 1, 1, 1, 1, 1` here and still total the
+    wrong number honestly, rather than hiding behind a coincidental match)."""
+    monkeypatch.setattr("publishable.stats.random.Random", _RecordingRandom)
+    values, keys, membership, strata = _clustered_uneven_stratum_counts()
+    _RecordingRandom.calls = []
+    percentile_over_units_clustered(
+        values, keys, membership, seed=1, draws=80, strata=strata
+    )
+    assert _RecordingRandom.calls[:6] == [1, 2, 2, 3, 3, 3]
+    assert _RecordingRandom.calls == [1, 2, 2, 3, 3, 3] * 80
+
+
+def test_a_clustered_stratified_draw_refuses_a_stratum_that_varies_within_a_cluster():
+    """A cluster is indivisible, so it cannot be dealt to two strata. The same
+    rule § Clustered units already imposes on `fold`, `holdout` and `assign`,
+    reported under this construction's own code because `stats.py` is handed the
+    two vectors directly and cannot pick one."""
+    values, keys, membership, strata = _clustered_banded()
+    strata[0] = "mid"  # c0_u0 now disagrees with the rest of c0
+    with pytest.raises(ContractError) as exc:
+        percentile_over_units_clustered(
+            values, keys, membership, seed=13, draws=2000, strata=strata
+        )
+    assert exc.value.code == "E-STATS-RESAMPLE-STRATIFY-VARIES"
+    assert "c0" in str(exc.value)
+    # Positive companion: the UNMUTATED vector does not raise, so this cannot
+    # pass by the construction refusing every stratified clustered draw.
+    _, _, _, clean = _clustered_banded()
+    assert percentile_over_units_clustered(
+        values, keys, membership, seed=13, draws=2000, strata=clean
+    ) is not None
+
+
+def test_a_clustered_stratified_draws_constancy_check_agrees_with_validates():
+    """`validate` reads a cluster's stratum values through
+    `units.stratum_varies_within_cluster`, which renders each as `"no value"` for
+    `None` and `str(value)` otherwise before comparing — so a column read back as
+    `1` for one unit and `"1"` for another (a real possibility across a resolver
+    and a table-sourced attribute) is ONE value to that check. `stats.py` cannot
+    import `units.py` to share that predicate, so it re-implements the identical
+    normalization — this is the case that would disagree if it compared raw
+    values instead: `c0`'s two units carry `1` and `"1"`, which raw `!=` calls a
+    variation and `str()`-equality does not."""
+    values = [0.0, 1.0, 2.0, 3.0, 10.0, 11.0, 12.0, 13.0]
+    keys = ["c0_u0", "c0_u1", "c1_u0", "c1_u1", "c2_u0", "c2_u1", "c3_u0", "c3_u1"]
+    membership = {
+        "c0_u0": "c0", "c0_u1": "c0", "c1_u0": "c1", "c1_u1": "c1",
+        "c2_u0": "c2", "c2_u1": "c2", "c3_u0": "c3", "c3_u1": "c3",
+    }
+    strata = [1, "1", "1", "1", "a", "a", "a", "a"]
+    got = percentile_over_units_clustered(
+        values, keys, membership, seed=1, draws=2000, strata=strata
+    )
+    assert got is not None
+
+
+def test_a_clustered_stratified_draw_refuses_a_zero_width_interval_too():
+    """Each stratum holding fewer than two clusters is the stratified path's own
+    degenerate case, not the unstratified `groups < 2` guard's — three clusters
+    overall passes that guard, but if every stratum owns exactly one of them,
+    each stratum always redraws its single cluster and every replicate is the
+    same multiset. `percentile_over_units`'s own strata branch returns `None`
+    for the analogous all-strata-constant shape (`reference.md` § Statistical
+    reporting: "a zero-width 95% interval is not honest"), and this is the same
+    answer, not a second rule."""
+    values = [0.0, 1.0, 10.0, 11.0, 20.0, 21.0]
+    keys = ["c0_u0", "c0_u1", "c1_u0", "c1_u1", "c2_u0", "c2_u1"]
+    membership = {
+        "c0_u0": "c0", "c0_u1": "c0",
+        "c1_u0": "c1", "c1_u1": "c1",
+        "c2_u0": "c2", "c2_u1": "c2",
+    }
+    one_cluster_each = ["a", "a", "b", "b", "c", "c"]
+    assert percentile_over_units_clustered(
+        values, keys, membership, seed=1, draws=2000, strata=one_cluster_each
+    ) is None
+    # Positive companion: the same roster, but `a` now holds two of the three
+    # clusters — one stratum can vary, so the interval is reportable again,
+    # which is what tells this apart from a construction that refuses every
+    # stratified clustered draw regardless of shape.
+    two_in_one_stratum = ["a", "a", "a", "a", "b", "b"]
+    assert percentile_over_units_clustered(
+        values, keys, membership, seed=1, draws=2000, strata=two_in_one_stratum
+    ) is not None
+
+
+def test_a_clustered_stratified_draw_refuses_content_identical_strata_too():
+    """The COUNT check above (each stratum owning fewer than two clusters) does
+    not cover every degenerate shape: two strata, each holding TWO clusters
+    whose content is identical within the stratum, pass that count check but
+    still cannot vary — drawing either of a stratum's two identical clusters
+    with replacement reproduces the same pooled contribution every time, so
+    the interval would be `Interval(0.5, 5.5)` on every draw, not honest as a
+    95% interval. This is the content-based check one level up from
+    `percentile_over_units`'s own ("every stratum's own (value, weight) pairs
+    are all identical"), and it must not regress to the count-only form."""
+    values = [0.5, 0.5, 0.5, 0.5, 5.5, 5.5, 5.5, 5.5]
+    keys = ["a1", "a2", "b1", "b2", "c1", "c2", "d1", "d2"]
+    membership = {
+        "a1": "A", "a2": "A", "b1": "B", "b2": "B",
+        "c1": "C", "c2": "C", "d1": "D", "d2": "D",
+    }
+    identical_within_stratum = ["x", "x", "x", "x", "y", "y", "y", "y"]
+    assert percentile_over_units_clustered(
+        values, keys, membership, seed=1, draws=2000, strata=identical_within_stratum
+    ) is None
+    # Positive companion: giving stratum `y`'s two clusters different content
+    # restores real variance, so this cannot pass by refusing every
+    # two-cluster-per-stratum shape regardless of content.
+    values_varying = [0.5, 0.5, 0.5, 0.5, 5.5, 5.5, 9.5, 9.5]
+    assert percentile_over_units_clustered(
+        values_varying, keys, membership, seed=1, draws=2000,
+        strata=identical_within_stratum,
+    ) is not None
 
 
 def test_resample_seed_depends_on_the_digest():
@@ -2862,3 +3128,692 @@ def test_a_single_cluster_column_reports_its_point_with_no_interval():
     # interval, so the `None` above is the cluster count and not the shape.
     two = summarize_step(collapsed, counts, clusters={"u1": "a", "u2": "a", "u3": "b"})
     assert two["score"]["ci95"] is not None
+
+
+def _banded_strata() -> tuple[list[float], list[str]]:
+    """Three strata, unequal sizes, disjoint value bands. Sized so that the
+    three candidate constructions produce three DIFFERENT numbers:
+
+      correct stratified mean  (20·0.5 + 8·10.5 + 2·100.5) / 30  ≈  9.83
+      unstratified             same centre, several times wider
+      mean of stratum means    (0.5 + 10.5 + 100.5) / 3          ≈ 37.17
+
+    Two equal strata distinguish none of them, which is the fixture-sizing rule
+    this repo wrote into CLAUDE.md after an apportionment test matched a
+    reverse-order mutant by coincidence."""
+    values = (
+        [i / 20.0 for i in range(20)]
+        + [10.0 + i / 8.0 for i in range(8)]
+        + [100.0 + i / 2.0 for i in range(2)]
+    )
+    strata = ["low"] * 20 + ["mid"] * 8 + ["high"] * 2
+    return values, strata
+
+
+def test_a_stratified_draw_preserves_each_stratum_size():
+    """§ Weighted samples: resampling within each stratum "so a bootstrap can't
+    return a replicate whose stratum composition the design ruled out". The
+    two-value stratum contributes exactly 2 rows to every draw, which pins the
+    interval near 9.83 and makes it much narrower than the unstratified one."""
+    values, strata = _banded_strata()
+    stratified = percentile_over_units(values, seed=7, draws=2000, strata=strata)
+    plain = percentile_over_units(values, seed=7, draws=2000)
+    assert stratified is not None and plain is not None
+    expected = sum(values) / len(values)  # 9.83…
+    assert stratified.low < expected < stratified.high
+    stratified_width = stratified.high - stratified.low
+    plain_width = plain.high - plain.low
+    # Narrower, and by a lot: the whole point of the declaration is that the
+    # 2-unit stratum's contribution stops varying.
+    assert stratified_width < plain_width / 2.0
+    # And NOT the mean-of-stratum-means answer, which is 37.17 — a construction
+    # that gave each stratum equal say would put the interval there instead.
+    assert stratified.high < 20.0
+
+
+def test_a_stratified_draw_is_invariant_to_row_order():
+    """A fixed seed draws a fixed sequence of indices, so the multiset of
+    (value, stratum) pairs must be all that matters — the same invariance the
+    unstratified branch gets from sorting its pool, and the same one
+    `percentile_over_units_clustered` gets from ordering its pools by contents."""
+    values, strata = _banded_strata()
+    pairs = list(zip(values, strata, strict=True))
+    # Rotate by 28, not 7: a rotation by 7 leaves the first-seen stratum order
+    # (low, mid, high) unchanged, so it cannot tell "ordered by sorted
+    # contents" apart from "ordered by first appearance" — a mutation to
+    # insertion-order pooling would still pass. Rotating by 28 changes which
+    # stratum is seen first.
+    shuffled = pairs[28:] + pairs[:28]
+    a = percentile_over_units(values, seed=11, draws=2000, strata=strata)
+    b = percentile_over_units(
+        [v for v, _ in shuffled], seed=11, draws=2000, strata=[s for _, s in shuffled]
+    )
+    assert a == b
+
+
+def test_a_stratified_draw_is_invariant_to_stratum_labels():
+    """Strata ordered by their own sorted contents, not by label — so renaming
+    `low`/`mid`/`high` to `z`/`a`/`m` gives the identical interval."""
+    values, strata = _banded_strata()
+    renamed = {"low": "z", "mid": "a", "high": "m"}
+    a = percentile_over_units(values, seed=3, draws=2000, strata=strata)
+    b = percentile_over_units(
+        values, seed=3, draws=2000, strata=[renamed[s] for s in strata]
+    )
+    assert a == b
+
+
+def test_one_stratum_reproduces_the_unstratified_interval_digit_for_digit():
+    """The degenerate case is not a special case: with every unit in one
+    stratum, the stratified path draws n indices from one sorted pool, which is
+    exactly what the unstratified path does."""
+    values, _ = _banded_strata()
+    a = percentile_over_units(values, seed=5, draws=2000)
+    b = percentile_over_units(values, seed=5, draws=2000, strata=["only"] * len(values))
+    assert a == b
+
+
+def test_a_stratified_weighted_draw_keeps_each_value_with_its_weight():
+    """Weights travel with values through the grouping AND the sort. Sorting the
+    two sequences separately would preserve every invariance above and silently
+    re-pair them — a mistake equal weights cannot see, which is why the weights
+    here are as banded as the values."""
+    values, strata = _banded_strata()
+    weights = [1.0] * 20 + [5.0] * 8 + [50.0] * 2
+    got = percentile_over_units(values, seed=9, draws=2000, weights=weights, strata=strata)
+    assert got is not None
+    expected = sum(v * w for v, w in zip(values, weights, strict=True)) / sum(weights)
+    assert got.low < expected < got.high
+    # The weighted centre (≈ 65.325) is far from the unweighted one (≈ 9.83), so
+    # a re-pairing or a dropped weight lands outside this interval rather than
+    # inside it.
+    assert got.low > 50.0
+
+
+def test_a_stratified_draw_refuses_a_misaligned_stratum_vector():
+    """A length mismatch is a misaligned vector, and would produce a plausible
+    number rather than an error — the same reason `strict=True` guards the
+    clustered zip."""
+    values, strata = _banded_strata()
+    with pytest.raises(ValueError):
+        percentile_over_units(values, seed=1, draws=2000, strata=strata[:-1])
+
+
+def test_a_size_one_stratum_is_drawn_deterministically_every_time():
+    """A singleton stratum has exactly one candidate index on every draw, so it
+    contributes its one value to every replicate with no variance of its own —
+    it neither breaks the draw nor gets skipped, and removing the last bit of
+    freedom the "high" band had (as a 2-row stratum) only narrows things
+    further relative to the pooled draw."""
+    values, strata = _banded_strata()
+    # The two-value "high" stratum becomes two singleton strata.
+    strata = strata[:-2] + ["high_a", "high_b"]
+    got = percentile_over_units(values, seed=13, draws=2000, strata=strata)
+    plain = percentile_over_units(values, seed=13, draws=2000)
+    assert got is not None and plain is not None
+    expected = sum(values) / len(values)
+    assert got.low < expected < got.high
+    # A pooled-path substitution would give the wide, undifferentiated draw —
+    # this must stay much narrower, the same margin the base stratified test
+    # uses, so a pooled swap here fails too.
+    assert (got.high - got.low) < (plain.high - plain.low) / 2.0
+
+
+def test_a_stratum_of_identical_values_contributes_no_variance_of_its_own():
+    """A stratum whose values are all identical draws different indices but the
+    same number every time — it cannot widen the interval, only the varying
+    strata can, and the result must still be the narrow stratified interval,
+    not the pooled one."""
+    values, strata = _banded_strata()
+    # Replace the "mid" band (indices 20:28) with a single repeated value.
+    values = list(values)
+    for i in range(20, 28):
+        values[i] = 50.0
+    got = percentile_over_units(values, seed=17, draws=2000, strata=strata)
+    plain = percentile_over_units(values, seed=17, draws=2000)
+    assert got is not None and plain is not None
+    expected = sum(values) / len(values)
+    assert got.low < expected < got.high
+    assert (got.high - got.low) < (plain.high - plain.low) / 2.0
+
+
+def test_all_strata_internally_constant_gives_no_interval_at_all():
+    """Two strata (sizes 10 and 4), each internally constant. This is the
+    structural case, not the data-caused one a single constant stratum among
+    varying ones settles for: with EVERY stratum's rows all carrying one
+    repeated (value, weight) pair, no draw can ever differ from any other,
+    for whatever constants those strata hold — so this must never be pinned as
+    a zero-width `ci95`, the same principle
+    `percentile_over_units_clustered` applies at `G < 2`
+    ("reporting a point with no interval is honest; a zero-width 95 %
+    interval is not.")."""
+    values = [1.0] * 10 + [5.0] * 4
+    strata = ["a"] * 10 + ["b"] * 4
+    assert percentile_over_units(values, seed=23, draws=2000, strata=strata) is None
+
+
+def test_every_unit_its_own_stratum_gives_no_interval_at_all():
+    """Every unit its own singleton stratum: each draw reproduces every value
+    exactly once, so the resample has no freedom left anywhere. This is the
+    singleton special case of the constant-stratum refusal above, not a
+    zero-width point to report."""
+    values = [1.0, 2.0, 3.0, 4.0]
+    strata = ["a", "b", "c", "d"]
+    got = percentile_over_units(values, seed=19, draws=2000, strata=strata)
+    assert got is None
+
+
+@pytest.mark.parametrize(
+    "bad", [0, 0.0, -1.0, float("nan"), float("inf"), "heavy", None, True]
+)
+def test_a_column_resample_refuses_a_bad_weight_before_any_draw(bad):
+    """The invariant decision 2 rests on: a column metric's draw statistic is a
+    mean over a non-empty sample, so it is ALWAYS defined and
+    `resample_draws == n` always. What could break that is a weight of zero
+    making Σw zero on some draw — so the check is that `checked_weights`
+    (reading `units.usable_weight`, which requires a finite positive number)
+    refuses every such weight before a single draw is taken."""
+    values = [1.0, 2.0, 3.0, 4.0]
+    weights = [1.0, 1.0, 1.0, bad]
+    with pytest.raises(ContractError) as exc:
+        percentile_over_units(values, seed=1, draws=100, weights=weights)
+    assert exc.value.code == "E-DATA-WEIGHT-INVALID"
+
+
+def test_a_column_resample_is_never_degenerate_across_adversarial_columns_of_finite_values():
+    """The positive half, and the one that would catch a `(Interval, int)`
+    requirement appearing: over columns chosen to be as degenerate as a
+    FINITE column can be — zero variance, a single repeated value, extreme
+    weight spread, a one-unit stratum — the interval is always produced, so
+    no survivor count ever differs from the requested draws. This is
+    conditional on finiteness: it says nothing about `nan`/`inf` values or an
+    overflowing weight sum, which are a separate, real gap pinned (not fixed)
+    by the tests below and recorded in `docs/superpowers/spec-defects.md`."""
+    cases: list[tuple[list[float], dict]] = [
+        ([5.0, 5.0, 5.0, 5.0], {}),                                  # zero variance
+        ([0.0, 0.0, 0.0, 1e-12], {}),                                # near-zero spread
+        ([1.0, 2.0, 3.0, 4.0], {"weights": [1e-9, 1e-9, 1e-9, 1e9]}),  # extreme spread
+        ([1.0, 2.0, 3.0], {"strata": ["a", "b", "b"]}),               # one-unit stratum
+        ([1.0, 2.0, 3.0, 4.0], {"strata": ["a", "a", "b", "b"],
+                                "weights": [1.0, 2.0, 3.0, 4.0]}),
+    ]
+    for values, kwargs in cases:
+        got = percentile_over_units(values, seed=2, draws=100, **kwargs)
+        assert got is not None, (values, kwargs)
+        assert got.method == "percentile_over_units"
+        assert got.low <= got.high
+
+
+def test_a_column_resample_refuses_the_constant_one_stratum_case_the_unstratified_path_does_not():
+    """The docstring's "one-stratum case reproduces the unstratified path digit
+    for digit" claim has an exception: when every value is identical, the
+    stratified path refuses (`None`, task 9/10's constant-pair check) while the
+    unstratified path over the same values returns a zero-width `Interval`
+    rather than refusing. The two paths apply different refusal criteria to the
+    same degenerate input and so diverge here — not a contradiction of the
+    docstring's claim, but a real, pinned exception to it."""
+    values = [5.0, 5.0, 5.0, 5.0]
+    unstratified = percentile_over_units(values, seed=5, draws=2000)
+    stratified = percentile_over_units(values, seed=5, draws=2000, strata=["only"] * 4)
+    assert unstratified == Interval(low=5.0, high=5.0, method="percentile_over_units")
+    assert stratified is None
+
+
+def test_a_column_resample_over_non_finite_values_is_a_known_unfixed_gap():
+    """NOT a pin of correct behavior — a pin of a known, unfixed defect, so a
+    future reader who "fixes" this by making the assertion pass differently
+    knows to update `docs/superpowers/spec-defects.md` too. `values` is never
+    checked for finiteness on this path, so a `nan` among them silently reaches
+    `Interval(nan, nan)`: decision 2's "always defined" invariant holds only
+    given finite inputs, and this is the reachable counterexample without that
+    condition. `low <= high` is `False` for `nan`, which is exactly what the
+    adversarial test above would have caught immediately had it varied value
+    DOMAIN rather than only column shape."""
+    got = percentile_over_units([1.0, 2.0, 3.0, float("nan")], seed=1, draws=100)
+    assert got is not None
+    assert math.isnan(got.low) and math.isnan(got.high)
+
+
+def test_a_column_resample_with_an_overflowing_weight_sum_is_a_known_unfixed_gap():
+    """NOT a pin of correct behavior — a pin of a known, unfixed defect. Every
+    weight here individually passes `checked_weights` (each is finite and
+    positive), so decision 2's premise ("Σw is strictly positive") is satisfied
+    letter for letter — but Σw over these four weights overflows `float`, and
+    the resulting weighted mean is `nan`. Finite-and-positive per weight is not
+    the same fact as finite-when-summed, and the docstring's argument silently
+    assumed the latter followed from the former."""
+    got = percentile_over_units(
+        [1.0, 2.0, 3.0, 4.0], seed=1, draws=100, weights=[1e308, 1e308, 1e308, 1e308]
+    )
+    assert got is not None
+    assert math.isnan(got.low) and math.isnan(got.high)
+
+
+def test_percentile_over_units_still_returns_a_bare_interval():
+    """Pinned deliberately: ~20 tests read this return, and decision 2 is that
+    it does NOT become `(Interval, int)`. A slice that changed it would have to
+    change this test, which is where the decision gets re-argued rather than
+    drifted past. Confirmed separately (see the two "known unfixed gap" tests
+    above) that `(Interval, int)` would not even be the right remedy for the
+    non-finite gap: nothing on this path treats a `nan`/`inf` draw statistic as
+    a failed draw to exclude, so a survivor filter would count it as a survivor
+    and report `(Interval(nan, nan), n)` — the same false claim with an extra
+    field."""
+    got = percentile_over_units([1.0, 2.0, 3.0, 4.0], seed=1, draws=100)
+    assert isinstance(got, Interval)
+
+
+def _ragged_collapsed(n: int = 40) -> dict[str, dict[str, float]]:
+    return {f"u{i}": {"pred": float(i)} for i in range(n)}
+
+
+def test_a_recorded_column_takes_a_percentile_interval_under_resample():
+    """§ Statistical reporting: a column metric has a t-interval available, so
+    resampling it is a CHOICE and `resample` is what makes it. The value is
+    unchanged — the draw changes the interval, not the estimate."""
+    collapsed = _ragged_collapsed()
+    counts = {"resolved": 40, "completed": 40, "failed": 0}
+    plain = summarize_step(collapsed, counts, seed=5, draws=2000)
+    drawn = summarize_step(collapsed, counts, seed=5, draws=2000, resample_columns=True)
+    assert plain["pred"]["method"] == "t_over_units"
+    assert "resample_draws" not in plain["pred"]
+    assert drawn["pred"]["method"] == "percentile_over_units"
+    assert drawn["pred"]["resample_draws"] == 2000
+    assert drawn["pred"]["value"] == plain["pred"]["value"]
+    assert drawn["pred"]["ci95"] is not None
+    low, high = drawn["pred"]["ci95"]
+    assert low < drawn["pred"]["value"] < high
+
+
+def test_a_clustered_column_takes_the_clustered_percentile_under_resample():
+    """`cluster_by` decides the draw when both are declared, so the construction
+    is the `_clustered` one and `n.clusters` still reports the cluster count."""
+    collapsed = _ragged_collapsed(40)
+    clusters = {f"u{i}": f"c{i % 8}" for i in range(40)}
+    counts = {"resolved": 40, "completed": 40, "failed": 0}
+    drawn = summarize_step(
+        collapsed, counts, seed=5, draws=2000, clusters=clusters, resample_columns=True
+    )
+    assert drawn["pred"]["method"] == "percentile_over_units_clustered"
+    assert drawn["pred"]["n"]["clusters"] == 8
+    assert drawn["pred"]["resample_draws"] == 2000
+
+
+def test_a_clustered_and_weighted_column_pins_both_together_under_resample():
+    """The fourth of the four required combinations, and the one a bracketing
+    assertion cannot discriminate (§ Three things this task's brief itself
+    names): a weighted mean stays close to the unweighted one on many
+    fixtures, so `low < value < high` alone would still pass with `weights`
+    silently dropped from the clustered draw. Pinned instead with an EXACT
+    `ci95` match against calling `percentile_over_units_clustered` directly
+    with the same weight vector — the same discriminating standard
+    `test_a_weighted_column_keeps_its_weighted_value_and_kish_size_under_resample`
+    uses for the unclustered case."""
+    collapsed = _ragged_collapsed(40)
+    clusters = {f"u{i}": f"c{i % 8}" for i in range(40)}
+    weights = {f"u{i}": 1.0 + (i % 4) for i in range(40)}
+    counts = {"resolved": 40, "completed": 40, "failed": 0}
+    drawn = summarize_step(
+        collapsed, counts, seed=5, draws=2000,
+        clusters=clusters, weights=weights, resample_columns=True,
+    )
+    assert drawn["pred"]["method"] == "percentile_over_units_clustered"
+    assert drawn["pred"]["n"]["clusters"] == 8
+    values = [float(i) for i in range(40)]
+    keys = [f"u{i}" for i in range(40)]
+    column_weights = [weights[k] for k in keys]
+    expected = percentile_over_units_clustered(
+        values, keys, clusters, seed=5, draws=2000, weights=column_weights
+    )
+    assert expected is not None
+    assert drawn["pred"]["ci95"] == [expected.low, expected.high]
+
+
+def test_a_weighted_column_keeps_its_weighted_value_and_kish_size_under_resample():
+    """Three things move together or the declaration is half-delivered: the
+    value stays the WEIGHTED mean, `n.effective` stays Kish's size, and only the
+    interval becomes a percentile. § Weighted samples puts the weights "in the
+    estimate rather than in the drawing"."""
+    collapsed = _ragged_collapsed(40)
+    weights = {f"u{i}": 1.0 + (i % 4) for i in range(40)}
+    counts = {"resolved": 40, "completed": 40, "failed": 0}
+    plain = summarize_step(collapsed, counts, seed=5, draws=2000, weights=weights)
+    drawn = summarize_step(
+        collapsed, counts, seed=5, draws=2000, weights=weights, resample_columns=True
+    )
+    assert plain["pred"]["method"] == "weighted_t_over_units"
+    assert drawn["pred"]["method"] == "percentile_over_units"
+    assert drawn["pred"]["value"] == plain["pred"]["value"]
+    assert drawn["pred"]["n"]["effective"] == plain["pred"]["n"]["effective"]
+    # The weighted centre differs from the unweighted one on this fixture, but
+    # that alone doesn't discriminate a dropped `weights=` in the DRAW: both
+    # intervals are wide enough on 40 units to bracket either centre. The
+    # assertion that actually catches a dropped `weights=` in the percentile
+    # construction is the exact `ci95` match against calling
+    # `percentile_over_units` directly with the same weight vector — a
+    # construction the interval must reproduce digit for digit, the same
+    # standard `test_percentile_over_units_...` pins elsewhere in this file.
+    column_weights = [weights[f"u{i}"] for i in range(40)]
+    values = [float(i) for i in range(40)]
+    expected = percentile_over_units(values, seed=5, draws=2000, weights=column_weights)
+    assert expected is not None
+    assert drawn["pred"]["ci95"] == [expected.low, expected.high]
+    unweighted = summarize_step(collapsed, counts, seed=5, draws=2000)
+    assert drawn["pred"]["value"] != unweighted["pred"]["value"]
+
+
+def test_a_column_below_two_units_reports_a_null_draw_count_under_resample():
+    """`percentile_over_units` returns `None` below two units exactly as
+    `t_over_units` does, so the degenerate case does not change shape. Unlike
+    the brief's first draft of this test, `resample_draws` is NOT the requested
+    `n` here: `docs/superpowers/spec-defects.md`'s ruling is that a column's
+    draw count is `null` whenever `ci95` is `null` — there is no interval for a
+    draw count to describe, and recording the requested `n` beside a refused
+    interval would assert survivor evidence for a draw that never produced
+    one. It is still PRESENT (not absent) — a resample was declared and
+    attempted, it just came back with nothing, which is a different fact from
+    `resample_columns=False`'s "never asked" and must not collapse onto it."""
+    counts = {"resolved": 1, "completed": 1, "failed": 0}
+    got = summarize_step(
+        {"u0": {"pred": 1.0}}, counts, seed=5, draws=2000, resample_columns=True
+    )
+    assert got["pred"]["ci95"] is None
+    assert got["pred"]["method"] is None
+    assert "resample_draws" in got["pred"]
+    assert got["pred"]["resample_draws"] is None
+
+
+def test_a_column_below_the_honest_draw_floor_also_reports_a_null_draw_count():
+    """A second, DISTINCT reason `percentile_over_units` returns `None`: not too
+    few units (40 here, plenty), but too few DRAWS for either percentile rank
+    to be interior (`min_honest_draws()` is 80 at the default confidence, and
+    `draws=10` is below it).
+    `test_a_column_below_two_units_reports_a_null_draw_count_under_resample` and
+    this one exercise two of the three ways a column's interval can come back
+    refused; the third (the per-stratum constant-pair refusal) needs a declared
+    `strata` to reach at all, which neither fixture here carries."""
+    collapsed = _ragged_collapsed(40)
+    counts = {"resolved": 40, "completed": 40, "failed": 0}
+    got = summarize_step(collapsed, counts, seed=5, draws=10, resample_columns=True)
+    assert got["pred"]["ci95"] is None
+    assert got["pred"]["method"] is None
+    assert "resample_draws" in got["pred"]
+    assert got["pred"]["resample_draws"] is None
+
+
+def test_summarize_step_draws_within_the_strata_it_is_given():
+    """The stratified column interval, end of the thread. The fixture is the
+    banded one: 20 units in [0,1), 8 in [10,11), 2 in [100,101), so the
+    stratified interval is far narrower than the unstratified one and nowhere
+    near the mean-of-stratum-means answer."""
+    values = (
+        [i / 20.0 for i in range(20)]
+        + [10.0 + i / 8.0 for i in range(8)]
+        + [100.0 + i / 2.0 for i in range(2)]
+    )
+    collapsed = {f"u{i}": {"pred": v} for i, v in enumerate(values)}
+    strata = {f"u{i}": ("low" if i < 20 else "mid" if i < 28 else "high") for i in range(30)}
+    counts = {"resolved": 30, "completed": 30, "failed": 0}
+    plain = summarize_step(collapsed, counts, seed=7, draws=2000, resample_columns=True)
+    drawn = summarize_step(
+        collapsed, counts, seed=7, draws=2000, resample_columns=True, strata=strata
+    )
+    plain_low, plain_high = plain["pred"]["ci95"]
+    low, high = drawn["pred"]["ci95"]
+    assert (high - low) < (plain_high - plain_low) / 2.0
+    assert low < drawn["pred"]["value"] < high
+    assert high < 20.0  # not the 37.17 of equal-weighted stratum means
+
+
+def test_the_stratum_vector_is_aligned_to_the_columns_own_keys():
+    """A RAGGED column: only some units carry `late`, and its stratum vector
+    must be the subset those units carry, not the whole table's. A vector
+    filtered differently draws the wrong composition and produces a plausible
+    number rather than an error — the same reason `weights` and `clusters` are
+    both looked up per column key."""
+    collapsed: dict[str, dict[str, float]] = {}
+    for i in range(30):
+        row: dict[str, float] = {"early": float(i)}
+        if i >= 20:  # only the `high`/`mid` tail carries `late`
+            row["late"] = 100.0 + float(i)
+        collapsed[f"u{i}"] = row
+    strata = {f"u{i}": ("low" if i < 20 else "mid" if i < 28 else "high") for i in range(30)}
+    counts = {"resolved": 30, "completed": 30, "failed": 0}
+    got = summarize_step(
+        collapsed, counts, seed=7, draws=2000, resample_columns=True, strata=strata
+    )
+    # The ragged column's own `n.completed` is 10, and its interval exists —
+    # a whole-table stratum vector would zip against 30 labels and raise.
+    assert got["late"]["n"]["completed"] == 10
+    assert got["late"]["ci95"] is not None
+    assert got["late"]["method"] == "percentile_over_units"
+    # The full column is unaffected, so this cannot pass by both being broken.
+    assert got["early"]["n"]["completed"] == 30
+    assert got["early"]["ci95"] is not None
+
+
+def test_percentile_of_derived_draws_within_the_strata_it_is_given():
+    """The derived half of the amendment: `percentile_of_derived` recomputes
+    `aggregate` (here, `sum(units.pred)`) on each draw, so stratifying it means
+    drawing unit KEYS within each stratum rather than values — the banded
+    fixture makes the stratified interval measurably narrower than the plain
+    one, and nowhere near the mean-of-stratum-means answer, the same three-way
+    separation `percentile_over_units`'s own stratified tests use."""
+    values, strata_list = _banded_strata()
+    collapsed = {f"u{i}": {"pred": v} for i, v in enumerate(values)}
+    strata = {f"u{i}": s for i, s in enumerate(strata_list)}
+
+    def compute(units: UnitTable) -> float:
+        return sum(units.pred)
+
+    plain, plain_n = percentile_of_derived(collapsed, compute, seed=7, draws=2000)
+    drawn, drawn_n = percentile_of_derived(
+        collapsed, compute, seed=7, draws=2000, strata=strata
+    )
+    assert plain is not None and drawn is not None
+    assert plain_n == 2000 and drawn_n == 2000
+    plain_width = plain.high - plain.low
+    drawn_width = drawn.high - drawn.low
+    assert drawn_width < plain_width / 2.0
+    total = sum(values)
+    assert drawn.low < total < drawn.high
+    # Mean-of-stratum-means scaled up by 30 units would be nowhere close;
+    # the correct stratified sum sits near `total` (294.9), not there.
+    assert drawn.high < 700.0
+
+
+def test_percentile_of_derived_stratum_vector_is_indexed_not_defaulted():
+    """A key `collapsed` holds but `strata` does not is a core defect — the
+    caller built `strata` from the same roster `collapsed` was collapsed
+    from, so a missing entry means the two disagree about which units exist,
+    and inventing a stratum for it would draw a plausible-looking interval
+    over the wrong design instead of failing loudly."""
+    collapsed = {f"u{i}": {"pred": float(i)} for i in range(20)}
+    strata = {f"u{i}": "only" for i in range(19)}  # u19 missing on purpose
+
+    def compute(units: UnitTable) -> float:
+        return sum(units.pred)
+
+    with pytest.raises(KeyError):
+        percentile_of_derived(collapsed, compute, seed=7, draws=50, strata=strata)
+
+
+def test_summarize_step_stratifies_a_column_and_a_derived_metric_together():
+    """The amendment's own requirement: one declared `strata` mapping must move
+    BOTH a recorded column's interval and a derived metric's interval in the
+    same call, not just one of them — the asymmetry a single `stratify_by`
+    producing a stratified column beside an unstratified derived metric would
+    otherwise leave invisible in the record. Both are computed from the same
+    banded fixture (`pred` recorded per unit, `total` derived as its sum), and
+    both must come back narrower than their unstratified counterparts."""
+    values, strata_list = _banded_strata()
+    collapsed = {f"u{i}": {"pred": v} for i, v in enumerate(values)}
+    strata = {f"u{i}": s for i, s in enumerate(strata_list)}
+    counts = {"resolved": 30, "completed": 30, "failed": 0}
+
+    def compute(units: UnitTable) -> float:
+        return sum(units.pred)
+
+    plain = summarize_step(
+        collapsed,
+        counts,
+        derived={"total": sum(values)},
+        seed=7,
+        resample={"total": compute},
+        draws=2000,
+        resample_columns=True,
+    )
+    drawn = summarize_step(
+        collapsed,
+        counts,
+        derived={"total": sum(values)},
+        seed=7,
+        resample={"total": compute},
+        draws=2000,
+        resample_columns=True,
+        strata=strata,
+    )
+    plain_col_low, plain_col_high = plain["pred"]["ci95"]
+    col_low, col_high = drawn["pred"]["ci95"]
+    assert (col_high - col_low) < (plain_col_high - plain_col_low) / 2.0
+
+    plain_der_low, plain_der_high = plain["total"]["ci95"]
+    der_low, der_high = drawn["total"]["ci95"]
+    assert (der_high - der_low) < (plain_der_high - plain_der_low) / 2.0
+    # Neither happened to move by being byte-identical to the other's width —
+    # each was checked against its OWN unstratified counterpart above.
+    assert drawn["pred"]["ci95"] != plain["pred"]["ci95"]
+    assert drawn["total"]["ci95"] != plain["total"]["ci95"]
+
+
+def test_percentile_of_derived_refuses_the_singleton_stratum_case():
+    """A near-unique `stratify_by` — one stratum per unit — validates clean and
+    is exactly the fault this refusal exists for: every draw of a singleton
+    stratum picks the identical one key every time, so `compute` (deterministic
+    here, as every `aggregate` this module is handed must be) returns the
+    identical value on every draw and the interval would be zero-width — the
+    same "a zero-width 95% interval is not honest" refusal
+    `percentile_over_units`'s own strata branch and
+    `percentile_over_units_clustered`'s `G < 2` floor already give for their
+    own constructions. Before this fix, this returned `(Interval(x, x), 2000)`
+    instead — a plausible-looking interval a reader could not tell from a real
+    one, sitting right beside a recorded column's `ci95: null` on the identical
+    design."""
+    collapsed = {f"u{i}": {"pred": float(i)} for i in range(20)}
+    strata = {f"u{i}": f"u{i}" for i in range(20)}  # one stratum per unit
+
+    def compute(units: UnitTable) -> float:
+        return sum(units.pred)
+
+    interval, draws_used = percentile_of_derived(
+        collapsed, compute, seed=7, draws=2000, strata=strata
+    )
+    assert interval is None
+    assert draws_used == 0
+
+
+def test_percentile_of_derived_refuses_a_multi_key_stratum_of_identical_rows_too():
+    """Not just singletons: a 4-key stratum whose members all carry the
+    IDENTICAL recorded row is the same zero-freedom fact, whatever its size —
+    content-based, not count-based, mirroring
+    `percentile_over_units_clustered`'s own "content, not count" ruling for
+    clusters. Every key in stratum `const` carries `{"pred": 1.0}`."""
+    collapsed = {f"u{i}": {"pred": 1.0} for i in range(4)}
+    strata = {f"u{i}": "const" for i in range(4)}
+
+    def compute(units: UnitTable) -> float:
+        return sum(units.pred)
+
+    interval, draws_used = percentile_of_derived(
+        collapsed, compute, seed=7, draws=2000, strata=strata
+    )
+    assert interval is None
+    assert draws_used == 0
+
+
+def test_percentile_of_derived_does_not_over_refuse_one_constant_stratum_among_others():
+    """A single degenerate stratum among others that vary keeps its interval —
+    the `all(...)` gate, not `any(...)`: the varying strata still supply real
+    sampling variance, and refusing the whole draw because one of several
+    strata is constant would sink an otherwise-informative resample. Mirrors
+    `percentile_over_units`'s own "a single constant stratum among others still
+    varies" case for the column path."""
+    values, strata_list = _banded_strata()
+    collapsed = {f"u{i}": {"pred": v} for i, v in enumerate(values)}
+    # Collapse the two-unit "high" stratum to an identical row each — constant
+    # on its own — while "low" and "mid" keep their own genuine variation.
+    collapsed["u28"]["pred"] = collapsed["u29"]["pred"] = 50.0
+    strata = {f"u{i}": s for i, s in enumerate(strata_list)}
+
+    def compute(units: UnitTable) -> float:
+        return sum(units.pred)
+
+    interval, draws_used = percentile_of_derived(
+        collapsed, compute, seed=7, draws=2000, strata=strata
+    )
+    assert interval is not None
+    assert draws_used == 2000
+
+
+def test_summarize_step_threads_strata_into_the_clustered_column_call():
+    """Finding 2 of the task-15 review: the clustered × stratified construction
+    was covered at `percentile_over_units_clustered` function level, but
+    nothing pinned that `summarize_step` actually passes `strata` at ITS
+    clustered call site — replacing `strata=column_strata` with `strata=None`
+    there left the whole suite green. This is that end-to-end pin.
+
+    The banded fixture, paired into two-unit clusters so each cluster is
+    homogeneous (a stratum must be constant within a cluster): 10 `low`
+    clusters, 4 `mid` clusters, 1 `high` cluster, 15 in total. Stratified, the
+    draw preserves each stratum's own cluster count; unstratified, all 15 pool
+    together and the two large `high` values (each its own two-unit cluster)
+    dominate far more of the resampled mean's variance."""
+    values, band = _banded_strata()
+    collapsed = {f"u{i}": {"pred": v} for i, v in enumerate(values)}
+    strata = {f"u{i}": s for i, s in enumerate(band)}
+    clusters: dict[str, str] = {}
+    for i in range(20):
+        clusters[f"u{i}"] = f"c{i // 2}"  # c0..c9, 10 low clusters
+    for i in range(20, 28):
+        clusters[f"u{i}"] = f"c{10 + (i - 20) // 2}"  # c10..c13, 4 mid clusters
+    for i in range(28, 30):
+        clusters[f"u{i}"] = "c14"  # 1 high cluster
+    counts = {"resolved": 30, "completed": 30, "failed": 0}
+    plain = summarize_step(
+        collapsed, counts, seed=7, draws=2000, resample_columns=True, clusters=clusters
+    )
+    drawn = summarize_step(
+        collapsed,
+        counts,
+        seed=7,
+        draws=2000,
+        resample_columns=True,
+        clusters=clusters,
+        strata=strata,
+    )
+    assert plain["pred"]["method"] == "percentile_over_units_clustered"
+    plain_low, plain_high = plain["pred"]["ci95"]
+    drawn_low, drawn_high = drawn["pred"]["ci95"]
+    assert drawn["pred"]["method"] == "percentile_over_units_clustered"
+    assert (drawn_high - drawn_low) < (plain_high - plain_low)
+    assert drawn["pred"]["ci95"] != plain["pred"]["ci95"]
+
+
+def test_percentile_of_derived_is_invariant_to_stratum_labels():
+    """The derived path's own version of
+    `test_a_stratified_draw_is_invariant_to_stratum_labels`: pools are ordered
+    by their own sorted CONTENTS, not by label, so renaming `low`/`mid`/`high`
+    to `z`/`a`/`m` must draw the identical sequence of tables and so return the
+    identical interval and survivor count."""
+    values, band = _banded_strata()
+    collapsed = {f"u{i}": {"pred": v} for i, v in enumerate(values)}
+    strata = {f"u{i}": s for i, s in enumerate(band)}
+    renamed = {"low": "z", "mid": "a", "high": "m"}
+    strata_renamed = {key: renamed[s] for key, s in strata.items()}
+
+    def compute(units: UnitTable) -> float:
+        return sum(units.pred)
+
+    a = percentile_of_derived(collapsed, compute, seed=3, draws=2000, strata=strata)
+    b = percentile_of_derived(collapsed, compute, seed=3, draws=2000, strata=strata_renamed)
+    assert a == b

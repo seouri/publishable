@@ -38,6 +38,7 @@ def run_a_project(
     extra_steps: list[str] | None = None,
     extra_step_source: str | None = None,
     aggregate_returns: str | None = None,
+    _starter_step: str | None = None,
     units: int = 10,
     unit_attributes: list[str] | None = None,
     roster_csv: str | None = None,
@@ -81,6 +82,22 @@ def run_a_project(
     above, self-contained and undone before this function returns. The
     source still goes through `STEP_PY.format(step_name=step_name)`, so a
     literal `{` in it must be doubled unless it names `step_name` itself.
+
+    `_starter_step` overrides the scaffolded step's own source, the same way
+    `extra_step_source` overrides an `extra_steps` entry's — monkeypatched onto
+    `publishable.generators.experiment.STARTER_STEP` inside the same
+    `pytest.MonkeyPatch.context()` block `aggregate_returns` uses, and undone
+    before this function returns. The source still goes through
+    `STARTER_STEP.format(pkg=pkg)`, so a literal `{` in it must be doubled the
+    same way `extra_step_source` documents above. Distinct from
+    `aggregate_returns`: that parameter also monkeypatches the template's
+    `aggregate`, while this one only changes what the scaffolded step records,
+    leaving the caller free to monkeypatch `aggregate` itself with whatever
+    formula the test needs. If both are passed, `_starter_step`'s `mp.setattr`
+    runs second and so wins for `STARTER_STEP` — the scaffolded step's source
+    is this parameter's, not `_AGGREGATE_STEP` — while `aggregate_returns`'s
+    `GenericTemplate.aggregate` patch still applies on top of whatever column
+    that source records; no caller in this file combines them today.
 
     `aggregate_returns` names a derived metric to produce end to end: when set,
     the scaffolded step records a `pred` column (one float per unit, `0.0`..
@@ -155,6 +172,10 @@ def run_a_project(
                     _name: sum(units.pred) / len(units)
                 },
             )
+        if _starter_step is not None:
+            import publishable.generators.experiment as experiment_gen
+
+            mp.setattr(experiment_gen, "STARTER_STEP", _starter_step)
         cfg = generate_experiment(
             repo_root=root,
             name="cohort-pilot",
@@ -2965,6 +2986,7 @@ def test_a_comparison_reads_its_own_condition_not_condition_zero():
             0: Condition(index=0, label="baseline", is_baseline=True),
             2: Condition(index=2, label="method=kendall", values={"analysis.method": "kendall"}),
         },
+        resample_columns=False,
     )
     assert block["s"]["r"]["ci95"] is not None
     assert [(m.where, m.step, m.metric) for m in members] == [("cond:2", "s", "r")]
@@ -6182,6 +6204,50 @@ def test_the_same_derived_metric_unclustered_is_drawn_as_it_always_was(tmp_path,
     assert "E-DATA-CLUSTER-DERIVED" not in doc["stdout"]
 
 
+def test_a_contained_aggregate_fault_does_not_downgrade_a_declared_column_resample(
+    tmp_path, capsys
+):
+    """The contained fault costs the DERIVED mapping and nothing else — including
+    the construction a declared `statistics.resample` puts around every recorded
+    column (H4a whole-branch review, I1).
+
+    `cli.py`'s retry after `E-DATA-CLUSTER-DERIVED` re-summarizes without the
+    derived metrics. Until this fix it also dropped `resample_columns`/`strata`/
+    `seed`/`draws`, so `pred` came back `weighted_t_over_units_clustered` with no
+    `resample_draws` key — which `reference.md` § Statistical reporting makes
+    the shape of a run that declared NO resample — while `beside_n` went on
+    carrying the `resample` echo beside it. One block cannot say both.
+
+    `n: 500` rather than the 2000 default on purpose: `draws` is a separate
+    parameter from the gate, and at its default a declared 500 would be resampled
+    2000 times beside an echo saying 500."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
+        aggregate_returns="total",
+        roster_csv=_UNEVEN_CLUSTERS,
+        units_overrides={"attributes": ["site"], "cluster_by": "site"},
+        statistics={"correction": "holm", "resample": {"method": "bootstrap", "n": 500}},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    # The fault fired and cost exactly the derived mapping, as before.
+    assert "E-DATA-CLUSTER-DERIVED" in doc["stdout"]
+    assert set(aggregated) == {"pred"}
+    # And the recorded column came back with the construction the declaration
+    # asked for, at the number of draws it asked for.
+    assert aggregated["pred"]["method"] == "percentile_over_units_clustered"
+    assert aggregated["pred"]["resample_draws"] == 500
+    # The echo and the column now agree about what happened.
+    assert aggregated["pred"]["resample"] == {
+        "method": "bootstrap",
+        "n": 500,
+        "stratify_by": [],
+    }
+    assert run["status"] == "completed"
+
+
 def test_the_shipped_template_derives_nothing_so_no_generated_project_is_reached():
     """The blast radius of the refusal above, measured rather than asserted: core
     ships exactly one template, and `generic` does not override `aggregate` at all
@@ -6661,3 +6727,897 @@ def test_a_command_group_answers_for_its_unbuilt_subcommands(capsys):
         "`publishable study` is specified but not built in this version — "
         "see docs/reference.md § Creation commands\n"
     )
+
+
+# --- Task 1 (resample-honoured): regression pin — the undeclared-`resample`
+# shape, absent key and explicit null, pinned separately before H4a wires
+# `percentile_over_units` into `summarize_step` -----------------------------
+
+
+_CONDITION_SCALED_STEP = '''\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        # The recorded column VARIES with the swept axis. `_AGGREGATE_STEP`
+        # records `float(i)` regardless of `cfg`, which makes every per-unit
+        # difference zero: `paired_t_over_units` then returns a zero-width
+        # interval and `cohens_dz` returns `None`, so a contrast pin over it
+        # asserts nothing and every width comparison is `0 > 0`. Scaled by
+        # `analysis.method` so both the differences and the draw pool have real
+        # dispersion under every comparison this file builds. The scales are
+        # 1.0/3.0/5.0, NOT 1.0/2.0/3.0: a spearman-pearson ratio of 2.0 makes
+        # the paired delta (19.5 * (scale_spearman - scale_pearson)) come out
+        # to exactly 19.5 again — the same number as the baseline column's own
+        # mean — so a pin that dropped the subtraction entirely and reported
+        # the baseline's raw value as "delta" would still read 19.5 and pass.
+        # At ratio 2.0 (3.0 - 1.0) the two numbers are 39.0 and 19.5: distinct,
+        # so an assertion on the actual delta has something to catch.
+        scale_by_method = {{"pearson": 1.0, "spearman": 3.0, "kendall": 5.0}}
+        method = cfg.parameters.analysis.method
+        if method not in scale_by_method:
+            raise ValueError(
+                f"_CONDITION_SCALED_STEP has no scale for analysis.method "
+                f"{{method!r}}; add one alongside pearson/spearman/kendall"
+            )
+        scale = scale_by_method[method]
+        units = list(io.units)
+        for i, unit in enumerate(units):
+            io.record(unit.key, {{"pred": float(i) * scale}})
+        return {{"n_units": len(units)}}
+'''
+
+
+def _assert_undeclared_resample_shape(run: dict[str, Any]) -> None:
+    """The full shape an undeclared `statistics.resample` produces, which H4a
+    must not move. Shared by the absent-key and the explicit-`null` pins because
+    the two configs are different documents that must produce one shape:
+    `materialize.py` writes neither key, and `_check_unimplemented`'s
+    `if statistics.get(field)` is false for both — so a resolution step that read
+    `.get("resample", DEFAULT)` instead of `.get("resample") or DEFAULT` would
+    separate them, and nothing else in the suite would notice."""
+    assert run["status"] == "completed"
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    # A recorded column: the t-interval, and NO `resample_draws` key at all.
+    # `pearson`'s scale is 1.0, so the recorded values are 0.0..39.0 and the
+    # mean is 19.5 — pinned as a number, not merely "not None", because the
+    # baseline column's own value is the quantity the two mutations below
+    # would otherwise let a wrong delta collide with unnoticed.
+    column = aggregated["pred"]
+    assert column["basis"] == "units"
+    assert column["method"] == "t_over_units"
+    assert column["value"] == pytest.approx(19.5)
+    assert column["ci95"] == pytest.approx((15.761212085024908, 23.23878791497509))
+    assert "resample_draws" not in column
+    # A derived metric: resampled whether or not `resample` is declared, at the
+    # documented default of 2000 draws, and never carrying an effect size.
+    # `mean_pred` is `mean(pred)` under the monkeypatched `aggregate`, so its
+    # baseline value is the same 19.5 the column reports.
+    derived = aggregated["mean_pred"]
+    assert derived["basis"] == "units"
+    assert derived["method"] == "percentile_over_units"
+    assert derived["resample_draws"] == 2000
+    assert derived["value"] == pytest.approx(19.5)
+    assert derived["cohens_d"] is None
+    assert derived["ci95"] == pytest.approx((16.025, 23.025))
+    # A column contrast: Student's t on the per-unit differences, with Cohen's dz.
+    # `spearman`'s scale is 3.0 against `pearson`'s 1.0, chosen so the paired
+    # delta (39.0 = 19.5 * (3.0 - 1.0)) is a DIFFERENT number from the
+    # baseline column's own value (19.5) above — at a 2.0/1.0 ratio the two
+    # numbers coincide, and a delta computation that dropped the subtraction
+    # entirely (reporting the baseline side's raw mean as "delta") would read
+    # 19.5 and pass unnoticed. Pinning the actual number closes that gap.
+    col_contrast = _named_contrast(run, "method=spearman", "pred")
+    assert col_contrast is not None
+    assert col_contrast["method"] == "paired_t_over_units"
+    assert col_contrast["delta"] == pytest.approx(39.0)
+    assert col_contrast["ci95"] == pytest.approx((31.522424170049817, 46.47757582995018))
+    assert col_contrast["cohens_d"] is not None
+    assert "resample_draws" not in col_contrast
+    # A derived contrast: the joint percentile, and no effect size. Its `ci95`
+    # is pinned to the exact resampled bounds, not merely "not None" — a
+    # resample seed off by one moves this interval (`[16.025, 23.025]` on the
+    # column side moves to `[15.825, 22.925]` under a `seed + 1` mutation
+    # against the derived metric above) while every other field here is
+    # unchanged, so only a numeric `ci95` assertion catches it.
+    derived_contrast = _named_contrast(run, "method=spearman", "mean_pred")
+    assert derived_contrast is not None
+    assert derived_contrast["method"] == "paired_percentile_over_units"
+    assert derived_contrast["delta"] == pytest.approx(39.0)
+    assert derived_contrast["ci95"] == pytest.approx((32.050000000000004, 46.050000000000004))
+    assert derived_contrast["cohens_d"] is None
+    # The correction family, which a replaced `statistics` block would move:
+    # two metrics over one comparison is a family of 2, and holm's rank-1 level
+    # is ALPHA/2. Asserted on both pins so an override that dropped
+    # `correction: holm` cannot pass.
+    assert col_contrast["family"] == {"comparisons": 1, "metrics": 2}
+    assert col_contrast["family_size"] == 2
+    assert col_contrast["correction"] == "holm"
+    # Holm ranks on the point estimate over HALF THE RAW ci95 WIDTH, never on a
+    # p-value — the family often carries none. Both deltas are 39.0, but the
+    # derived contrast's 2000-draw percentile interval is narrower than the
+    # column contrast's t-interval over 40 paired diffs (half-widths 7.0 vs.
+    # ~7.478), so the derived contrast has the stronger evidence ratio, ranks
+    # first, and is corrected by ALPHA/2; the column contrast ranks second, at
+    # ALPHA/1 — i.e. uncorrected. Pinned per member, not merely as an unordered
+    # pair, because an unordered pin cannot see the two members' levels
+    # swapping — exactly what a ranking change from this slice's draw/strata
+    # work could do.
+    assert col_contrast["correction_level"] == pytest.approx(0.05)
+    assert derived_contrast["correction_level"] == pytest.approx(0.025)
+
+
+_PIN_SWEEP = {
+    "baseline": {"analysis.method": "pearson"},
+    "grid": {"analysis.method": ["spearman"]},
+}
+
+
+def _pinned_run(tmp_path, capsys, monkeypatch, **overrides):
+    """One run carrying both a recorded column and a derived metric under one
+    baseline comparison. `_starter_step` rather than `aggregate_returns`,
+    because that shorthand's step records `float(i)` regardless of `cfg` and a
+    contrast over it is degenerate."""
+    from publishable.templates.builtin.generic import GenericTemplate
+
+    monkeypatch.setattr(
+        GenericTemplate,
+        "aggregate",
+        lambda self, units, cfg: {"mean_pred": sum(units.pred) / len(units)},
+    )
+    return run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        sweep=_PIN_SWEEP,
+        _starter_step=_CONDITION_SCALED_STEP,
+        **overrides,
+    )
+
+
+def test_the_undeclared_resample_shape_is_pinned_absent_key(tmp_path, capsys, monkeypatch):
+    """`materialize.py` writes no `resample` key at all, so this is the shape a
+    generated config actually produces. Pinned before H4a wires
+    `percentile_over_units` into `summarize_step`, because after that there is
+    nothing left to compare against."""
+    doc = _pinned_run(tmp_path, capsys, monkeypatch)
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert "resample" not in (run["config"].get("statistics") or {})
+    _assert_undeclared_resample_shape(run)
+
+
+def test_the_undeclared_resample_shape_is_pinned_explicit_null(tmp_path, capsys, monkeypatch):
+    """`resample: null` is a DIFFERENT document from the absent key and must
+    produce the identical shape. `correction: holm` is restated here because
+    `run_a_project` merges overrides with `doc.update`, a top-level replace: a
+    bare `statistics={"resample": None}` would delete the correction
+    `materialize.py` writes and move every `correction_level` below."""
+    doc = _pinned_run(
+        tmp_path, capsys, monkeypatch,
+        statistics={"correction": "holm", "resample": None},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["config"]["statistics"]["resample"] is None
+    _assert_undeclared_resample_shape(run)
+
+
+def test_a_declared_resample_n_changes_the_derived_draw_count(tmp_path, capsys):
+    """The threading, end to end: the literal 2000 becomes the resolved `n`.
+    `500` rather than `100` because `W-STATS-RESAMPLE-THIN` fires on
+    `used < requested` and a small count makes degenerate draws likely — the
+    assertion here is about the requested count, not about survivors."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        aggregate_returns="mean_pred",
+        units=40,
+        statistics={"correction": "holm",
+                    "resample": {"method": "bootstrap", "n": 500}},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    metric = _first_metric(run, "mean_pred")
+    assert metric["resample_draws"] == 500
+    assert metric["ci95"] is not None  # 500 clears the 80-draw floor
+
+
+def test_an_undeclared_resample_still_draws_two_thousand(tmp_path, capsys):
+    """The regression Task 1 pinned, restated at the point it can break: the
+    resolution must read `.get("resample") or {}`, never
+    `.get("resample", DEFAULT)`, because `materialize.py` writes no key at all
+    and a hand-written config may write `resample: null` — one answer for two
+    different documents."""
+    for statistics in ({}, {"correction": "holm", "resample": None}):
+        doc = run_a_project(
+            tmp_path / f"case{len(statistics)}",
+            capsys=capsys,
+            aggregate_returns="mean_pred",
+            units=40,
+            **({"statistics": statistics} if statistics else {}),
+        )
+        run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+        metric = _first_metric(run, "mean_pred")
+        assert metric["resample_draws"] == 2000
+        # Positive companion: the column is still a t-interval, so this cannot
+        # pass by nothing having been resampled at all.
+        column = run["results"]["conditions"][0]["aggregated"][
+            "step01_summarize_units"]["pred"]
+        assert column["method"] == "t_over_units"
+
+
+def test_the_resolver_fills_every_default_and_separates_declared_from_n():
+    """A unit test on the resolver's own shape. Every field has a documented
+    default; `declared` is separate from `n` — a config asking for exactly
+    2000 draws is still a DECLARED resample, which is what will let a later
+    task turn a recorded column into a percentile; and a non-`str` `method`
+    (unreachable through `command_run` today, since `validate` runs first and
+    rejects it, but read directly by tasks 14-17 off this dict) falls back to
+    `"bootstrap"` rather than being threaded uncoerced.
+
+    This test does NOT show the resolver is called once per run — see
+    `test_the_resample_block_is_resolved_exactly_once` for that guarantee,
+    which needs a real `command_run` to check at all."""
+    from publishable.cli import _resolved_resample
+
+    assert _resolved_resample({}) == {
+        "method": "bootstrap", "n": 2000, "stratify_by": (), "declared": False,
+    }
+    assert _resolved_resample({"statistics": {"resample": None}}) == {
+        "method": "bootstrap", "n": 2000, "stratify_by": (), "declared": False,
+    }
+    assert _resolved_resample({"statistics": {"resample": {"n": 2000}}}) == {
+        "method": "bootstrap", "n": 2000, "stratify_by": (), "declared": True,
+    }
+    assert _resolved_resample(
+        {"statistics": {"resample": {"method": "bootstrap", "n": 500,
+                                     "stratify_by": "site"}}}
+    ) == {"method": "bootstrap", "n": 500, "stratify_by": ("site",), "declared": True}
+    assert _resolved_resample(
+        {"statistics": {"resample": {"method": 123, "n": 10}}}
+    ) == {"method": "bootstrap", "n": 10, "stratify_by": (), "declared": True}
+
+
+def test_the_resample_block_is_resolved_exactly_once(tmp_path, capsys, monkeypatch):
+    """The guarantee the other resolver tests cannot show: `command_run` calls
+    `_resolved_resample` exactly once per run, not once per read site. Six
+    read sites resolving the same declaration independently would still make
+    every assertion above pass — this is the one test that would fail if a
+    future task threading `method` or `stratify_by` reached for the config
+    again instead of the already-resolved `resample_spec`."""
+    import publishable.cli as cli_mod
+
+    calls: list[dict[str, Any]] = []
+    real = cli_mod._resolved_resample
+
+    def counting(doc: dict[str, Any]) -> dict[str, Any]:
+        calls.append(doc)
+        return real(doc)
+
+    monkeypatch.setattr(cli_mod, "_resolved_resample", counting)
+    run_a_project(
+        tmp_path,
+        capsys=capsys,
+        aggregate_returns="mean_pred",
+        units=40,
+        statistics={"correction": "holm", "resample": {"n": 500}},
+    )
+    assert len(calls) == 1
+
+
+def test_a_declared_resample_gives_every_column_a_percentile_interval(tmp_path, capsys):
+    """End to end, and the assertion the `resample_draws` warning loop needs:
+    `cli`'s loop over `step_summary` reads `resample_draws` on EVERY metric, and
+    a column's is now present. `used == 0` would emit
+    `W-STATS-AGGREGATE-FAILED` naming the template's `aggregate`, which never
+    touched a recorded column — a lie. A column's `used` is the requested `n`
+    (whenever its `ci95` is non-null) and `n >= 80` is enforced at validate
+    time (`E-STATS-RESAMPLE-N`), so neither branch can fire, and this pins it."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        aggregate_returns="mean_pred",
+        units=40,
+        statistics={"correction": "holm",
+                    "resample": {"method": "bootstrap", "n": 500}},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert aggregated["pred"]["method"] == "percentile_over_units"
+    assert aggregated["pred"]["resample_draws"] == 500
+    assert aggregated["pred"]["ci95"] is not None
+    # The derived metric still resamples, at the same resolved count.
+    assert aggregated["mean_pred"]["method"] == "percentile_over_units"
+    assert aggregated["mean_pred"]["resample_draws"] == 500
+    # Neither warning fires for the column.
+    assert "W-STATS-AGGREGATE-FAILED" not in doc["stdout"]
+    assert "W-STATS-RESAMPLE-THIN" not in doc["stdout"]
+
+
+def test_an_undeclared_resample_leaves_a_column_untouched_end_to_end(tmp_path, capsys):
+    """The negative half of the test above, and the acceptance criterion this
+    task must not disturb: with no `statistics.resample` declared, a recorded
+    column keeps its `t_over_units` interval and no `resample_draws` key at
+    all, byte-identical to before this task's wiring landed."""
+    doc = run_a_project(
+        tmp_path, capsys=capsys, aggregate_returns="mean_pred", units=40,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert aggregated["pred"]["method"] == "t_over_units"
+    assert "resample_draws" not in aggregated["pred"]
+
+
+def test_declaring_n_2000_still_gates_a_column_on_declared_not_on_n(tmp_path, capsys):
+    """The discriminating case `_resolved_resample`'s docstring argues for, which
+    `test_a_declared_resample_gives_every_column_a_percentile_interval` (n: 500)
+    and `test_an_undeclared_resample_leaves_a_column_untouched_end_to_end` (no
+    declaration at all) cannot tell apart: `n: 2000` is also the UNDECLARED
+    default (`resample_spec["n"]` resolves to 2000 either way), so a gate read
+    off `n != 2000` would agree with `resample_spec["declared"]` on every other
+    fixture in this file and only disagree here. A config that
+    declares `resample: {method: bootstrap, n: 2000}` explicitly must still turn
+    a recorded column's interval into a percentile one, because `declared` — not
+    `n` — is what `reference.md` § Statistical reporting's asymmetry rests on."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        aggregate_returns="mean_pred",
+        units=40,
+        statistics={"correction": "holm",
+                    "resample": {"method": "bootstrap", "n": 2000}},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert aggregated["pred"]["method"] == "percentile_over_units"
+    assert aggregated["pred"]["resample_draws"] == 2000
+
+
+_COHORT_BANDED_STEP = '''\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        units = list(io.units)
+        for i, unit in enumerate(units):
+            pred = (
+                float(i) / 40.0
+                if unit.attributes["cohort"] == "a"
+                else 100.0 + float(i) / 40.0
+            )
+            io.record(unit.key, {{"pred": pred}})
+        return {{"n_units": len(units)}}
+'''
+
+
+def test_a_declared_stratify_by_reaches_the_column_interval(tmp_path, capsys):
+    """The thread from `statistics.resample.stratify_by` through
+    `unit_attributes` to the draw. `cohort` alternates a/b across 40 units, and
+    the step records a `pred` that is banded by cohort, so the stratified
+    interval is measurably narrower than the unstratified one — a fixture where
+    the two cohorts held the same values could not tell them apart."""
+    doc_plain = run_a_project(
+        tmp_path / "plain", capsys=capsys, units=40, unit_attributes=["cohort"],
+        _starter_step=_COHORT_BANDED_STEP,
+        statistics={"correction": "holm", "resample": {"method": "bootstrap", "n": 2000}},
+    )
+    doc_strat = run_a_project(
+        tmp_path / "strat", capsys=capsys, units=40, unit_attributes=["cohort"],
+        _starter_step=_COHORT_BANDED_STEP,
+        statistics={"correction": "holm",
+                    "resample": {"method": "bootstrap", "n": 2000,
+                                 "stratify_by": ["cohort"]}},
+    )
+    def width(doc):
+        run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+        metric = run["results"]["conditions"][0]["aggregated"][
+            "step01_summarize_units"]["pred"]
+        assert metric["method"] == "percentile_over_units"
+        low, high = metric["ci95"]
+        return high - low
+    assert width(doc_strat) < width(doc_plain)
+
+
+def test_a_unit_missing_a_stratum_attribute_joins_a_stratum_of_its_own(
+    tmp_path, capsys
+):
+    """`strata.levels_for` drops such a unit from every reporting level, because
+    "there is no honest level for 'we don't know'". A DRAW cannot drop it — that
+    would change `n` silently — so it joins a stratum labelled from the absence.
+
+    A blank CSV cell will not do here: `csv.DictReader` reads it as `""`, a
+    real (if empty) value `u.attributes.get("cohort")` returns, and `""` is a
+    stratum of its own already, the same way `cli.py`'s own fold-strata
+    comment documents for a blank cell. To make `u.attributes.get("cohort")`
+    return `None` — the case the sentinel exists for — the row itself has to
+    be shorter than the header: with `cohort` the LAST column, a row that
+    omits it entirely leaves `DictReader`'s `restval` (`None`) in its place.
+    Asserted because a fixture with every attribute present cannot see it."""
+    header = "patient_id,arm,cohort\n"
+    rows = [
+        f"p{i},x" if i % 10 == 0 else f"p{i},x,{'a' if i % 2 else 'b'}"
+        for i in range(40)
+    ]
+    roster = header + "\n".join(rows) + "\n"
+    doc = run_a_project(
+        tmp_path, capsys=capsys, units=40, unit_attributes=["cohort"],
+        roster_csv=roster, _starter_step=_COHORT_BANDED_STEP,
+        statistics={"correction": "holm",
+                    "resample": {"method": "bootstrap", "n": 2000,
+                                 "stratify_by": ["cohort"]}},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    metric = run["results"]["conditions"][0]["aggregated"][
+        "step01_summarize_units"]["pred"]
+    # Every completed unit is still in `n` — the draw dropped nobody.
+    assert metric["n"]["completed"] == 40
+    assert metric["ci95"] is not None
+
+
+def test_a_declared_stratify_by_reaches_the_column_and_the_derived_interval_together(
+    tmp_path, capsys
+):
+    """The amendment this task was scoped against: a single declared
+    `stratify_by` must move a recorded column's interval AND a derived
+    metric's interval the same way in the same run, not just the column's.
+    `mean_pred` is `aggregate_returns`'s derived mean of the same banded
+    `pred` column the column-only test above uses, so both metrics are
+    computed from one design and neither can move by accident while the
+    other stays put."""
+    doc_plain = run_a_project(
+        tmp_path / "plain", capsys=capsys, units=40, unit_attributes=["cohort"],
+        _starter_step=_COHORT_BANDED_STEP, aggregate_returns="mean_pred",
+        statistics={"correction": "holm", "resample": {"method": "bootstrap", "n": 2000}},
+    )
+    doc_strat = run_a_project(
+        tmp_path / "strat", capsys=capsys, units=40, unit_attributes=["cohort"],
+        _starter_step=_COHORT_BANDED_STEP, aggregate_returns="mean_pred",
+        statistics={"correction": "holm",
+                    "resample": {"method": "bootstrap", "n": 2000,
+                                 "stratify_by": ["cohort"]}},
+    )
+    def widths(doc):
+        run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+        agg = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+        column, derived = agg["pred"], agg["mean_pred"]
+        assert column["method"] == "percentile_over_units"
+        assert derived["method"] == "percentile_over_units"
+        return (
+            column["ci95"][1] - column["ci95"][0],
+            derived["ci95"][1] - derived["ci95"][0],
+        )
+    plain_column_width, plain_derived_width = widths(doc_plain)
+    strat_column_width, strat_derived_width = widths(doc_strat)
+    assert strat_column_width < plain_column_width
+    assert strat_derived_width < plain_derived_width
+
+
+_RAGGED_COLUMN_STEP = '''\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        # Scaled by the swept axis for the reason `_CONDITION_SCALED_STEP` is:
+        # an identical column under both conditions makes every per-unit
+        # difference zero, and a zero-variance contrast asserts nothing.
+        scale = {{"pearson": 1.0, "spearman": 2.0, "kendall": 3.0}}[
+            cfg.parameters.analysis.method
+        ]
+        units = list(io.units)
+        for i, unit in enumerate(units):
+            values = {{"always": float(i) * scale}}
+            # A QUARTER of the roster does not carry `sometimes`. Sized that way
+            # deliberately: with one unit missing, ~36 % of draws still survive
+            # and a `base_keys` bug would produce an interval anyway; at a
+            # quarter, survival is ~1e-5 and the interval is null.
+            if i % 4 != 0:
+                values["sometimes"] = float(i) * 2.0 * scale
+            io.record(unit.key, values)
+        return {{"n_units": len(units)}}
+'''
+
+
+def test_a_column_contrast_takes_the_paired_percentile_under_resample(tmp_path, capsys):
+    """§ Statistical reporting: `paired_percentile_over_units` is "Every derived
+    metric, and a column metric under `resample`". Cohen's dz survives — it
+    differences a per-unit value, which a column has.
+
+    `_CONDITION_SCALED_STEP`, not `aggregate_returns`: an identical column under
+    both conditions gives zero differences, and `cohens_dz` of those is `None`,
+    so `cohens_d is not None` would fail under the correct implementation."""
+    doc = run_a_project(
+        tmp_path, capsys=capsys, units=40,
+        _starter_step=_CONDITION_SCALED_STEP,
+        sweep={"baseline": {"analysis.method": "pearson"},
+               "grid": {"analysis.method": ["spearman"]}},
+        statistics={"correction": "holm",
+                    "resample": {"method": "bootstrap", "n": 2000}},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    entry = _named_contrast(run, "method=spearman", "pred")
+    assert entry is not None
+    assert entry["method"] == "paired_percentile_over_units"
+    assert entry["cohens_d"] is not None      # a column HAS a per-unit value
+    assert entry["paired"] is True            # still hard-coded; H4c owns it
+    assert entry["ci95"] is not None
+
+
+def test_a_column_contrast_corrects_off_its_own_pool_not_a_t_interval(
+    tmp_path, capsys
+):
+    """THE test this task exists for. `_corrected_bounds` tests
+    `member.diffs is not None` FIRST, so a `Member` still carrying diffs yields
+    `ci95` from a percentile and `ci95_corrected` from `paired_t_over_units` on
+    the same row — nothing raises, and no other test sees it.
+
+    Two comparisons, so `family_size` is 2 × 1 = 2 and holm's rank-1 level is
+    0.025 → confidence 0.975 → 160 draws needed, which 2000 clears. At
+    `family_size` 1 the level is 0.05, `interval_at` reads the SAME ranks as the
+    raw interval, and this assertion could not fail."""
+    import math
+
+    from publishable.stats import paired_t_over_units
+
+    doc = run_a_project(
+        tmp_path, capsys=capsys, units=40,
+        _starter_step=_CONDITION_SCALED_STEP,
+        sweep={"baseline": {"analysis.method": "pearson"},
+               "grid": {"analysis.method": ["spearman", "kendall"]}},
+        statistics={"correction": "holm",
+                    "resample": {"method": "bootstrap", "n": 2000}},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    entry = _named_contrast(run, "method=spearman", "pred")
+    assert entry is not None
+    # Both comparisons carry an interval — `family_members` drops one with
+    # `ci95: None`, which would shrink this to 1 and quietly weaken every
+    # assertion below by loosening the corrected level from 0.025 to 0.05.
+    assert entry["family_size"] == 2
+    assert entry["family"] == {"comparisons": 2, "metrics": 1}
+    assert entry["method"] == "paired_percentile_over_units"
+    raw_low, raw_high = entry["ci95"]
+    corr_low, corr_high = entry["ci95_corrected"]
+    # A corrected interval is at a SMALLER alpha off the same evidence, so it
+    # contains the raw one. Never narrower — that is the number a reader cannot
+    # tell is wrong. Strictly wider is assertable only because
+    # `_CONDITION_SCALED_STEP` gives the pool real dispersion: over an
+    # all-zero pool `interval_at` returns (0.0, 0.0) at every alpha and this
+    # would be `0 > 0`, failing under the CORRECT implementation.
+    assert corr_low <= raw_low and corr_high >= raw_high
+    assert (corr_high - corr_low) > (raw_high - raw_low)
+    # And it is NOT the t-interval. Recompute the bound the buggy path would
+    # have produced, from the same per-unit differences the step's own scaling
+    # determines — `_CONDITION_SCALED_STEP`'s own scales are pearson: 1.0,
+    # spearman: 3.0, kendall: 5.0 (not 1.0/2.0/3.0 — a different fixture in
+    # this file uses that progression), so `pred` is `float(i)` at pearson and
+    # `3 * float(i)` at spearman, and the difference for unit `i` is
+    # `2 * float(i)`. Getting this wrong (e.g. assuming a 1.0/2.0/3.0 scale)
+    # makes this assertion pass under both the correct and the mutated code,
+    # since it would then compare against a t-interval built from the wrong
+    # evidence entirely — verified against the mutation in Step 5.
+    #
+    # `level` is read off the recorded `correction_level`, not recomputed from
+    # `family_size` and an assumed rank: kendall's pool is element-wise 2× this
+    # comparison's own (same seed, same draw indices, and kendall's scale is
+    # 2× spearman's relative to the shared pearson baseline), so the two
+    # members' evidence ratios — delta over half the raw width — are exactly
+    # equal and rank 1 vs. rank 2 is a tie-break on declaration order, not a
+    # strength difference. Assuming this comparison is rank 1 would be an
+    # assumption identical in kind to the scale-factor one just above.
+    level = entry["correction_level"]
+    diffs = [2.0 * float(i) for i in range(40)]
+    t_bound = paired_t_over_units(diffs, confidence=1.0 - level)
+    assert t_bound is not None      # non-degenerate, unlike an all-zero column
+    assert not (
+        math.isclose(corr_low, t_bound.low) and math.isclose(corr_high, t_bound.high)
+    )
+
+
+def test_a_column_contrast_draws_from_the_columns_own_keys(tmp_path, capsys):
+    """`paired_percentile_of_derived` builds its `UnitTable`s from WHOLE ROWS, so
+    `base_keys` feeds `compute` rows missing the column — `UnitTable.__getattr__`
+    pads with `None`, and the closure's `sum(...)` raises `TypeError`, which the
+    construction catches as a degenerate draw and drops. A quarter of the roster
+    missing makes survival ~1e-5, so the interval is null under the bug and real
+    under the fix. One unit missing would leave ~720 survivors and pass either
+    way."""
+    doc = run_a_project(
+        tmp_path, capsys=capsys, units=40,
+        sweep={"baseline": {"analysis.method": "pearson"},
+               "grid": {"analysis.method": ["spearman"]}},
+        statistics={"correction": "holm",
+                    "resample": {"method": "bootstrap", "n": 2000}},
+        _starter_step=_RAGGED_COLUMN_STEP,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    ragged = _named_contrast(run, "method=spearman", "sometimes")
+    assert ragged is not None
+    assert ragged["method"] == "paired_percentile_over_units"
+    assert ragged["ci95"] is not None
+    assert ragged["n_paired"] == 30           # 40 units, every 4th missing
+    # The full column is unaffected, so this cannot pass by both being broken.
+    full = _named_contrast(run, "method=spearman", "always")
+    assert full is not None
+    assert full["ci95"] is not None
+    assert full["n_paired"] == 40
+
+
+def test_the_resolved_resample_is_recorded_beside_every_interval(tmp_path, capsys):
+    """§ Statistical reporting: "the resolved values are recorded in `run.yaml`
+    beside the interval so the number is never the result of an undocumented
+    default". Carried on `beside_n`, the documented route for a key that sits
+    beside `n` rather than joining it — the same position `weighted_by` takes.
+
+    The raw-text assertion is not decorative: `resample_beside`'s inner dict is
+    one Python object shared into every metric block's `beside_n`/
+    `weighted_beside`, and `yaml.safe_dump`'s default aliasing writes the first
+    occurrence as `resample: &id001 {...}` and every other as a bare `*id001`
+    pointer — invisible to `yaml.safe_load`, which resolves aliases before this
+    test's own assertions ever see the data. `test_acceptance_the_verdict_record
+    _carries_every_field` names the identical failure mode for `_observed_block`
+    and `hypotheses.py` fixed it by copying rather than sharing; `stats.py`'s
+    `_beside_n_copy` is the same fix for this carrier.
+    """
+    doc = run_a_project(
+        tmp_path, capsys=capsys, aggregate_returns="mean_pred", units=40,
+        unit_attributes=["cohort"],
+        statistics={"correction": "holm",
+                    "resample": {"method": "bootstrap", "n": 500,
+                                 "stratify_by": ["cohort"]}},
+    )
+    text = (doc["run_dir"] / "run.yaml").read_text()
+    assert "&id" not in text
+    assert "*id" not in text
+    run = yaml.safe_load(text)
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    for name in ("pred", "mean_pred"):
+        assert aggregated[name]["resample"] == {
+            "method": "bootstrap", "n": 500, "stratify_by": ["cohort"]
+        }
+    # `n` is what was REQUESTED; `resample_draws` is what the interval rests on.
+    # Equal for a column by construction, and equal here for the derived metric
+    # because no draw was degenerate — but they are different facts and both are
+    # recorded.
+    assert aggregated["pred"]["resample_draws"] == 500
+    assert aggregated["mean_pred"]["resample_draws"] == 500
+
+
+def test_the_resolved_resample_survives_report_by_without_aliasing(
+    tmp_path, capsys, monkeypatch
+):
+    """The `report_by` level path carries `weighted_beside`, not the parent's
+    `beside_n` — the one call site the first test above never reaches, since it
+    only reads `conditions[0]["aggregated"]` at the top level. Combining
+    `report_by` with a declared `resample` puts the shared `resample_beside`
+    dict into three metric blocks at once (the parent's `pred`, and each of the
+    two `cohort` levels' own `pred`), which is exactly the shape that produces
+    an anchor and two aliases if `_beside_n_copy` is ever bypassed."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
+    doc = run_a_project(
+        tmp_path, capsys=capsys, units=40,
+        unit_attributes=["cohort"],
+        statistics={"correction": "holm", "report_by": ["cohort"],
+                    "resample": {"method": "bootstrap", "n": 500,
+                                 "stratify_by": ["cohort"]}},
+    )
+    text = (doc["run_dir"] / "run.yaml").read_text()
+    assert "&id" not in text
+    assert "*id" not in text
+    run = yaml.safe_load(text)
+    step_block = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    expected = {"method": "bootstrap", "n": 500, "stratify_by": ["cohort"]}
+    assert step_block["pred"]["resample"] == expected
+    by = step_block["by"]["cohort"]
+    assert by["a"]["pred"]["resample"] == expected
+    assert by["b"]["pred"]["resample"] == expected
+    # Not the same object as the parent's, even though it compares equal — a
+    # mutation of one must never reach the other, and this is the assertion a
+    # `dict(v)` copy passes and a bare reuse of `beside_n["resample"]` would not.
+    assert by["a"]["pred"]["resample"] is not step_block["pred"]["resample"]
+
+
+def test_no_resample_block_is_recorded_when_none_was_declared(tmp_path, capsys):
+    """Absent, not null: an explicit null would claim a resolution was performed.
+    Paired with a positive assertion in the same test so it cannot pass by
+    nothing having run."""
+    doc = run_a_project(
+        tmp_path, capsys=capsys, aggregate_returns="mean_pred", units=40
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert "resample" not in aggregated["pred"]
+    assert "resample" not in aggregated["mean_pred"]
+    # The positive companion: the derived metric IS still resampled at the
+    # documented default, so the block really did run.
+    assert aggregated["mean_pred"]["resample_draws"] == 2000
+    assert aggregated["mean_pred"]["method"] == "percentile_over_units"
+
+
+
+
+def test_a_report_by_level_resamples_without_joining_the_correction_family(
+    tmp_path, capsys
+):
+    """`Member`s are built in one place, `_comparison_step_blocks`'s per-metric
+    loop, which excludes the `by` key the whole strata block lives under. That
+    property already holds — Task 15's review confirmed it live (level blocks
+    carry no `family`, `family_size`, or `correction` key, beside a level's
+    derived metric genuinely carrying `resample_draws: 2000` and a real
+    `ci95`). This test keeps it holding now that H4a has landed a declared
+    `resample`.
+
+    A real disagreement with this test's original brief, found and fixed here:
+    the brief expected a `report_by` level's *recorded column* (`pred`) to
+    carry `method: percentile_over_units` under a declared `resample`. It does
+    not — `cli.command_run`'s level call to `summarize_step`
+    (`src/publishable/cli.py`, the `report_by` block) never passes
+    `resample_columns`, so a level's own recorded-column interval stays
+    `t_over_units` regardless of what the run declares. This is not a live bug:
+    it is `docs/superpowers/spec-defects.md`'s "`percentile_of_derived` reported
+    a zero-width interval..." entry, Finding 2, deferred with a named owner
+    (H4 Statistics) as of 2026-08-15. So the positive companion here is the
+    level's own DERIVED metric (`mean_pred`), which — unlike the column —
+    resamples inside `report_by` unconditionally whenever a seed and a
+    callable exist, `resample_columns` or not; that is what actually executed
+    inside the code path this test is pinning.
+
+    The absence assertion has a positive companion IN THE SAME TEST: the level
+    genuinely produced a percentile interval, so the test cannot pass by
+    nothing having been stratified.
+
+    What each absence assertion below actually detects, stated plainly rather
+    than claimed uniformly, because a review found the claim below did not
+    hold for all three:
+
+    - **The three `"family"`/`"family_size"`/`"correction"` NOT IN level_block
+      assertions are a STRUCTURAL fact with no failing mutation found in the
+      reachable code.** A level block lives in `aggregated[...]["by"]`, a tree
+      the correction pass never reads at all — `_entry_for` (the one place a
+      corrected field is written) only ever indexes `vs_baseline`/
+      `contrasts_out`. Flipping this would mean inventing a new code path, not
+      mutating an existing one, so — per this slice's own rule that an
+      absence-shaped pin needs a mutation or an admission — this is recorded
+      as a structural invariant, the same treatment `test_a_summary_estimate_
+      is_not_recomputed_by_the_resample_pass` gives the `summary`-step
+      `Estimate` boundary below, not a mutation-pinned assertion.
+    - **The `entry["family"] == {"comparisons": 1, "metrics": 2}` assertion
+      does NOT catch `_comparison_step_blocks`'s `- {"by"}` exclusion being
+      removed, in THIS fixture.** Verified: under that mutation, `"by"` does
+      join `_comparison_step_blocks`'s per-metric loop and gets its own
+      `Member` — but `"by"` holds a dict (the strata mapping), not a scalar,
+      so the paired computation over it produces `ci95: None`, and
+      `family_members` (`src/publishable/correction.py`) filters out any
+      `Member` whose `ci95 is None` *before* counting — so `metrics` stays 2
+      rather than becoming 3, and this assertion passes unchanged whether or
+      not the exclusion exists. It is kept as a sanity check on the
+      unmutated shape, not as that mutation's detector.
+    - **The mutation-confirmed detector for the `- {"by"}` exclusion is the
+      final loop below** (`assert "by" not in step_block`): removing the
+      exclusion mints a genuine `"by"` entry in `vs_baseline`, which that
+      assertion catches directly."""
+    doc = run_a_project(
+        tmp_path, capsys=capsys, units=40, unit_attributes=["cohort"],
+        aggregate_returns="mean_pred",
+        _starter_step=_METHOD_VARYING_STEP,
+        sweep={"baseline": {"analysis.method": "pearson"},
+               "grid": {"analysis.method": ["spearman"]}},
+        statistics={"correction": "holm", "report_by": ["cohort"],
+                    "resample": {"method": "bootstrap", "n": 2000}},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    # Positive companion: the level exists and carries a real percentile
+    # interval over its own units, resampled by the same code path this test
+    # is pinning.
+    level = aggregated["by"]["cohort"]["a"]["mean_pred"]
+    assert level["method"] == "percentile_over_units"
+    assert level["ci95"] is not None
+    assert level["resample_draws"] == 2000
+    assert level["n"]["completed"] < aggregated["mean_pred"]["n"]["completed"]
+    # The absence: no `family`, `family_size`, or `correction` key at all on a
+    # level block — a `report_by` level never joins the correction family.
+    for level_name in ("a", "b"):
+        level_block = aggregated["by"]["cohort"][level_name]
+        assert "family" not in level_block
+        assert "family_size" not in level_block
+        assert "correction" not in level_block
+    # A sanity check on the unmutated shape — one comparison, two metrics (the
+    # recorded `pred` and the derived `mean_pred`), which is what a strata-free
+    # run would also show. NOT the detector for `_comparison_step_blocks`'s
+    # `- {"by"}` exclusion (see the docstring above): `"by"` holds a dict, not
+    # a scalar, so a Member built for it carries `ci95: None` and is filtered
+    # by `family_members` before the count, so this assertion is unchanged by
+    # that exclusion either way.
+    entry = _named_contrast(run, "method=spearman", "mean_pred")
+    assert entry is not None
+    assert entry["family"] == {"comparisons": 1, "metrics": 2}
+    assert entry["family_size"] == 2
+    # And there is no contrast entry for `by` at all.
+    for condition in run["results"]["conditions"]:
+        for step_block in condition.get("vs_baseline", {}).values():
+            assert "by" not in step_block
+
+
+_SUMMARY_ESTIMATE_STEP = '''\
+# generated, and runnable as-is
+from publishable import BaseStep, Estimate
+
+
+class Step(BaseStep):
+    scope = "summary"
+
+    def run(self, cfg, io):
+        return {{
+            "site_adjusted_delta": Estimate(
+                value=0.041, ci95=[0.012, 0.070], n=228, method="mixed_model"
+            ),
+            "converged": True,
+        }}
+'''
+
+
+def test_a_summary_estimate_is_not_recomputed_by_the_resample_pass(tmp_path, capsys):
+    """A `summary`-step `Estimate` is `reported: true`, outside the correction
+    family, and never recomputed — and H4a's column pass walks every metric
+    block, so this is a boundary the slice OWES a test for rather than one it
+    merely respects. Structural: an `Estimate` reaches `results.summary` through
+    `run_record.summary_values`, never through `summarize_step`
+    (`src/publishable/run_record.py`, `summary_values`) — `summarize_step`
+    (`src/publishable/stats.py`) is never called on a `summary`-scope step's
+    return at all, so there is no shared code for a resample pass to walk into.
+
+    The positive companion is in the same test: a recorded column in the same
+    run DID take a percentile interval, so this cannot pass by the resample
+    having done nothing at all."""
+    doc = run_a_project(
+        tmp_path, capsys=capsys, units=40,
+        extra_steps=["report"],
+        extra_step_source=_SUMMARY_ESTIMATE_STEP,
+        aggregate_returns="mean_pred",
+        statistics={"correction": "holm",
+                    "resample": {"method": "bootstrap", "n": 2000}},
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    estimate = run["results"]["summary"]["step02_report"]["site_adjusted_delta"]
+    assert estimate == {
+        "value": 0.041,
+        "reported": True,
+        "ci95": [0.012, 0.070],
+        "n": 228,
+        "method": "mixed_model",
+    }
+    # Nothing the resample pass writes has been added to it.
+    assert "resample_draws" not in estimate
+    assert "resample" not in estimate
+    assert "basis" not in estimate
+    assert "correction" not in estimate
+    # The non-Estimate return is untouched too.
+    assert run["results"]["summary"]["step02_report"]["converged"] is True
+    # Positive companion: a RECORDED COLUMN in the same run IS resampled —
+    # `pred`, not the derived `mean_pred` beside it. The distinction matters:
+    # a derived metric always resamples once a seed and a callable exist
+    # (`resample_columns` or not), so `mean_pred["method"]` would read
+    # `percentile_over_units` whether or not `statistics.resample` were
+    # declared at all — a companion that could not fail. `pred["method"]`
+    # genuinely depends on the declaration (verified: with `resample` removed
+    # from this fixture, `pred` reports `t_over_units` while `mean_pred`
+    # stays `percentile_over_units`), so it is the one that proves this run's
+    # resample pass actually ran rather than merely being present in the
+    # config.
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert aggregated["pred"]["method"] == "percentile_over_units"
+    assert aggregated["pred"]["resample"]["n"] == 2000
+
+
