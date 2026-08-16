@@ -3311,19 +3311,23 @@ def test_the_clustered_and_unclustered_constructions_are_not_the_same_draw():
     """The relation between the two constructions, pinned — H3c-2's own
     experience is that a fixture cannot tell them apart unless it is built to.
 
-    With one cluster per unit the two agree on SIZES and differ on MEMBERSHIP:
-    the unclustered path shuffles unit keys and cuts two consecutive slices,
-    while the clustered path shuffles cluster names, sorts largest-first, and
-    deals each to the bucket furthest below its own target share — which
-    interleaves by ratio rather than slicing. A fixture asserting only the
-    sizes would pass under either construction for either call."""
+    The unclustered path shuffles unit keys and cuts two consecutive slices;
+    the clustered path shuffles cluster names, sorts largest-first, and deals
+    each to the bucket furthest below its own target share — which
+    interleaves by ratio rather than slicing. **Even with one cluster per
+    unit, no agreement between the two on SIZE is promised** (a sweep found
+    90 disagreements over n x frac, some outright legality disagreements —
+    see `holdout_for`'s docstring); the only difference this fixture can
+    assert without pinning a coincidence is MEMBERSHIP. `len(plain.test) == 4`
+    is this seed's realized size, asserted as a fact, not compared against
+    the clustered draw's own (possibly different) realized size."""
     roster = _holdout_roster(10, animal=lambda i: f"u{i}")
     singleton = {f"u{i}": f"u{i}" for i in range(10)}
     plain = holdout_for(roster, {"method": "random", "frac": 0.4}, seed=5)
     clustered = holdout_for(
         roster, {"method": "random", "frac": 0.4}, seed=5, clusters=singleton
     )
-    assert len(plain.test) == len(clustered.test) == 4
+    assert len(plain.test) == 4
     assert set(plain.test) != set(clustered.test)
 
 
@@ -3372,13 +3376,24 @@ def test_a_stratified_clustered_holdout_composes_both_rules():
         seed=23,
         clusters=clusters,
     )
+    assert plan.strata == ("band",)
     train, test = set(plan.train), set(plan.test)
     for cluster in {f"a{i}" for i in range(8)}:
         members = {k for k, c in clusters.items() if c == cluster}
         assert members <= train or members <= test, cluster
+    # Counts, not only "some of each" — forced by 4 whole clusters of 2 units
+    # per band at equal weights, so an implementation that dropped the strata
+    # entirely and dealt clusters over the whole 16-unit roster would still
+    # put both bands on both sides by chance (this exact fixture does, at
+    # `frac: 0.5` over two equal-sized 8-unit bands) but could not produce a
+    # clean 4/4 split for BOTH bands.
     for band in ("x", "y"):
         members = {f"u{i}" for i, lab in enumerate(labels) if lab == band}
-        assert members & train and members & test, band
+        assert len(members & test) == 4 and len(members & train) == 4, band
+    # PINNED LITERAL — derived by running the implementation (see the task-11
+    # fix report), catching a composition that ignores strata even when it
+    # happens to produce a 4/4 count for both bands by coincidence.
+    assert test == {"u4", "u5", "u6", "u7", "u12", "u13", "u14", "u15"}
 
 
 def test_a_stratified_holdout_that_leaves_a_side_empty_across_every_stratum_raises():
@@ -3394,6 +3409,52 @@ def test_a_stratified_holdout_that_leaves_a_side_empty_across_every_stratum_rais
             roster, {"method": "random", "frac": 0.2, "stratify_by": ["band"]}, seed=1
         )
     assert exc.value.code == "E-DATA-HOLDOUT-EMPTY"
+    # The full message, not only the code — pins the `", drawn within N stratum
+    # declaration(s)"` fragment, unpinned by any test before this one.
+    assert (
+        "leaves the test side empty, drawn within 1 stratum declaration(s)"
+        in str(exc.value)
+    )
+    assert "over whole clusters" not in str(exc.value)
+
+
+def test_a_single_cluster_holdout_leaves_the_test_side_empty_over_whole_clusters():
+    """The second half of the deleted `NotImplementedError` test's coverage —
+    a single cluster spanning the whole roster cannot split, so the whole
+    roster is dealt to one bucket (ties break to the earlier-declared level,
+    `train`) and the test side is empty. Pins the `" over whole clusters"`
+    suffix, unpinned by any test until now, and is the clustered branch of
+    `E-DATA-HOLDOUT-EMPTY` that no earlier test reaches."""
+    roster = _holdout_roster(10)
+    clusters = {f"u{i}": "c0" for i in range(10)}
+    with pytest.raises(ContractError) as exc:
+        holdout_for(
+            roster, {"method": "random", "frac": 0.2}, seed=1, clusters=clusters
+        )
+    assert exc.value.code == "E-DATA-HOLDOUT-EMPTY"
+    assert "leaves the test side empty" in str(exc.value)
+    assert "over whole clusters" in str(exc.value)
+    assert "stratum declaration" not in str(exc.value)
+
+
+def test_a_holdout_stratify_by_naming_no_attribute_names_the_holdout_path():
+    """The first half of the deleted `NotImplementedError` test's coverage,
+    and Step 3(a)'s own deliverable: the `declaration` argument
+    `holdout_for` hands `_stratum_groups` must read
+    `data.units.holdout.stratify_by`, the path a holdout's config actually
+    has — not an assign-shaped path built by interpolating an axis name into
+    a fixed `data.units.assign.<...>` template, which would print
+    `data.units.assign.holdout.stratify_by`, a path no config can hold."""
+    with pytest.raises(NotImplementedError) as exc:
+        holdout_for(
+            _holdout_roster(10),
+            {"method": "random", "frac": 0.2, "stratify_by": ["x"]},
+            seed=1,
+        )
+    assert "`data.units.holdout.stratify_by` names 'x'" in str(exc.value)
+    assert "`E-DATA-HOLDOUT-STRATIFY-UNKNOWN`" in str(exc.value)
+    assert "E-DATA-ASSIGN-STRATIFY-FORWARD" not in str(exc.value)
+    assert "E-DATA-ASSIGN-STRATIFY-UNKNOWN" not in str(exc.value)
 
 
 def test_a_thin_stratum_alone_does_not_raise():
@@ -3408,7 +3469,12 @@ def test_a_thin_stratum_alone_does_not_raise():
     )
     assert plan.test and plan.train
     tiny = {"u9"}
+    # `tiny <= set(plan.train)` is forced by `holdout_sizes(1, 0.2) == (1, 0)`
+    # under ANY correct per-stratum apportionment, so it cannot distinguish a
+    # construction — the "big" stratum's actual membership is what can.
+    # PINNED LITERAL — derived by running the implementation.
     assert tiny <= set(plan.train)
+    assert set(plan.test) == {"u2", "u3"}
 
 
 def test_a_by_attribute_holdout_with_no_from_raises_not_realized():

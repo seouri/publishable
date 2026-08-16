@@ -1360,10 +1360,20 @@ def holdout_for(
     bit-identical.** The unclustered draw shuffles unit keys and cuts two
     consecutive slices; the clustered draw shuffles cluster names, sorts
     largest-first and deals each cluster to the bucket furthest below its own
-    target share. With one cluster per unit the two agree on the SIZES and
-    differ on the MEMBERSHIP — the second interleaves by ratio where the first
-    slices — so a fixture that cannot tell them apart proves nothing about
-    either. `_assign_whole_clusters_by_ratio` takes a non-optional `Mapping`
+    target share — the second interleaves by ratio where the first slices, and
+    that is a difference in MEMBERSHIP, not only in mechanism. **Singleton
+    clusters are not exempt from the SIZE disagreement either**: a sweep of
+    every `n` in 2..39 against twelve `frac` values found 90 seeds where the
+    unclustered and singleton-clustered draws realize different sizes,
+    including cases where one refuses outright while the other does not
+    (`n=2, frac=0.1`: unclustered raises `E-DATA-HOLDOUT-EMPTY`; clustered
+    returns a 1/1 split). No size agreement is promised at any cluster size —
+    `_assign_whole_clusters_by_ratio`'s own "no bound on that deviation is
+    promised" already says so — so a fixture pinning equal sizes for both
+    constructions is pinning that seed's coincidence, not a property; what a
+    fixture comparing the two can rely on is that they draw different
+    MEMBERSHIP, whatever sizes each realizes. `_assign_whole_clusters_by_ratio`
+    takes a non-optional `Mapping`
     and indexes it, unlike `_assign_whole_clusters`, which is why this is two
     paths rather than one with a `clusters or singletons` default.
 
@@ -1464,9 +1474,12 @@ def holdout_for(
         # apportioned nothing is fine while another stratum covered it, and
         # only a side empty across the whole draw leaves one half of the split
         # with no units. Also the one refusal the unclustered and clustered
-        # paths share: a cluster is the smallest thing that can move, so a
-        # clustered draw reaches an empty side more easily rather than being
-        # exempt from the refusal.
+        # paths share: with clusters larger than one, a cluster is a bigger
+        # thing to move than a unit, which is why a clustered draw reaches an
+        # empty side more easily rather than being exempt from the refusal —
+        # a claim this docstring does not extend to singleton clusters, where
+        # the two constructions' realized sizes can disagree in either
+        # direction (see the paragraph above).
         if not train_keys or not test_keys:
             side = "train" if not train_keys else "test"
             raise ContractError(
@@ -1639,7 +1652,12 @@ def _stratum_groups(
     raises names the config path a reader has to go and fix. An axis name
     interpolated into a fixed `data.units.assign.<...>` template would print
     `data.units.assign.holdout.stratify_by` for a holdout — a path no config
-    can hold.
+    can hold. **The tail of the "every other name" raise is caller-aware too**:
+    a holdout's `stratify_by` admits only a unit attribute — no already-drawn
+    `sweep.groups` axis, since `E-DATA-HOLDOUT-CELLS` refuses a holdout beside
+    a group axis outright — so a holdout reader is sent to
+    `E-DATA-HOLDOUT-STRATIFY-UNKNOWN` and told nothing about a forward
+    declaration or a `sweep.groups` path their declaration cannot take.
     """
     plans = resolved or {}
     sources: list[Mapping[str, str] | None] = []
@@ -1653,6 +1671,15 @@ def _stratum_groups(
                 {key: level for level, keys in plan.members.items() for key in keys}
             )
             continue
+        if declaration.startswith("data.units.holdout"):
+            raise NotImplementedError(
+                f"`{declaration}` names {name!r}, which no resolved unit carries "
+                "as an attribute — a holdout's `stratify_by` admits only a unit "
+                "attribute, never a `sweep.groups` axis (a holdout beside one is "
+                "refused outright, as `E-DATA-HOLDOUT-CELLS`), so there is no "
+                "forward-declared axis this could instead be naming. `validate` "
+                "refuses this as `E-DATA-HOLDOUT-STRATIFY-UNKNOWN`"
+            )
         raise NotImplementedError(
             f"`{declaration}` names {name!r}, which no resolved "
             "unit carries as an attribute and no already-drawn `sweep.groups` axis "
