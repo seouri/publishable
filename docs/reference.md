@@ -426,7 +426,7 @@ already commits to deleting on a schedule neither this table nor its author cont
 
 Each row states the condition, not the wording.
 
-Five faults return `validate_config` early, in this order: a config that does not parse
+Five codes return `validate_config` early, in this order: a config that does not parse
 (`E-CONFIG-PARSE`), a container-shaped `E-CONFIG-SHAPE` fault, a `templates/*.py` that fails
 to load (`E-TEMPLATE-LOAD`), a `templates/` core cannot merge (`E-TEMPLATE-COLLISION`), and an
 unresolvable `experiment_type` (`E-TEMPLATE-UNKNOWN`). That is five *codes*. `E-TEMPLATE-LOAD`
@@ -434,8 +434,8 @@ covers three shapes — a file that raises while importing, one that imports cle
 nothing, one that registers a non-`BaseTemplate` — and a `Param` whose construction raises is the
 first of them, so a bad `default=None` or a
 [`requires_env`](#a-credential-can-belong-to-a-parameter-value) mapping that is not total over
-`choices` adds a fault to this list without adding a row to the table below or a sixth to this
-count. Each returns because every check after it reads what it just found wrong, and each is
+`choices` adds a shape to `E-TEMPLATE-LOAD` without adding a row to the table below or a sixth
+code to this count. Each returns because every check after it reads what it just found wrong, and each is
 what triggers its own return rather than sitting behind it. Every other row in this table fires only once all five have passed — except
 `E-CONFIG-TYPE` and `E-CONFIG-KEY-UNKNOWN`, which `check_envelope` finds as the document
 loads, before any of the later four returns is possible, and except the one non-container

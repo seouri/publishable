@@ -71,3 +71,15 @@ source files.
 
 None with the brief or spec. The brief's prediction ("both counts stay as they are") was confirmed
 by direct enumeration, not assumed.
+
+## Correction (task 2 review, 2026-08-16), replacing this report's `return None` justification
+
+The report justifies "five codes" by "the five `return None` sites in `validate_config`". There are
+**four** (the reviewer counted them: two of the five codes share one `return None`). The count of
+five is right and the enumeration of codes is right; the correspondence to `return None` statements
+is not one-to-one, and citing it as the reason invites the next reader to recount the wrong thing.
+
+The reviewer also strengthened the two-codes result beyond what this report established:
+`discovery.py`'s broad `except Exception` **relabels**, so even a template raising its own coded
+`ContractError` arrives as `E-TEMPLATE-LOAD`. That makes "two" not merely the current count but the
+only count that guard can produce, which is a stronger claim than enumeration alone supports.

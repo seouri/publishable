@@ -73,3 +73,37 @@ Task 1: reviewed (opus). Spec compliance PASS; task quality FAIL with three Impo
   `ValueError` -> `discovery.py`'s broad catch -> `E-TEMPLATE-LOAD` — rather than taken from the spec.
   One emit site per code, so neither needs a second row. Task 2's two count phrases are unaffected.
 Task 1: complete. 1957 passed + 2 xfailed; ruff check, format and mypy clean. BASE for task 2 is below.
+
+Task 2: dispatched — the two load-refusal count phrases. The dispatch made the point that the brief's
+  prediction (both counts hold) was a PREDICTION and Step 1 was the measurement, with an explicit
+  instruction not to adjust a count to match the prediction.
+Task 2: implemented at af84611 / 10b488d. 1957 passed + 2 xfailed. Both counts measured by enumeration
+  and both held. It also checked, unprompted, that task 1's two new rows do not cover the
+  `requires_env`-totality fault — confirming the new sentence complements those rows rather than
+  conflicting with them.
+Task 2: reviewed (opus). Spec compliance PASS; task quality FAIL with one Important and three Minor.
+  The reviewer rebuilt both counts from source rather than checking the implementer's arithmetic
+  against the implementer's list, and returned a STRONGER result than the task had: `discovery.py`'s
+  broad `except Exception` **relabels**, so even a template raising its own coded `ContractError`
+  arrives as `E-TEMPLATE-LOAD`. "Two" is therefore not the current count but the ONLY count that guard
+  can produce. That is the difference between enumerating today's raise sites and establishing a
+  property, and it is worth carrying: the comment is now true of any future raise site too.
+  Important 1, and it is the same origin as all three of task 1's: **plan-supplied text.** The
+  paragraph kept "Five *faults*", then said "That is five *codes*", then "adds a *fault* to this list
+  ... without a sixth to this count" — three nouns for one set, and the new sentence made the noun
+  load-bearing. `validate.py`'s comment had been fixed to say "codes"; `reference.md`'s had not.
+  Now "Five codes" / "five *codes*" / "adds a **shape** to `E-TEMPLATE-LOAD` ... without a sixth
+  **code**", which is both internally consistent and true.
+  Ruling: three of four review findings across two tasks now trace to text my plan supplied rather
+  than to implementer error. That is not a complaint about the plan author — it is the expected rate
+  for prose written ahead of the code, and it is exactly what the per-task review is for. Recorded so
+  the pattern is visible if it continues past the document-only tasks.
+  Ruling: Minor 1 corrected by appending to the report — it justified "five codes" by "five `return
+  None` sites" and there are FOUR, since two codes share one return. The count is right, the
+  correspondence is not one-to-one, and citing it invites the next reader to recount the wrong thing.
+  OBLIGATION ON TASK 3, from Minor 2: `validate.py`'s amended comment now asserts a
+  `requires_env`-totality `Param` fault, and `grep -rn "requires_env" src/publishable/` returns ONLY
+  that comment at this commit. The claim is a forward reference that task 3 makes true. **Task 3's
+  reviewer must confirm it became true**, or the comment is an unbuilt reader of a shipped surface —
+  the defect shape this very slice exists to close elsewhere.
+Task 2: complete. 1957 passed + 2 xfailed; ruff check, format and mypy clean. BASE for task 3 is below.
