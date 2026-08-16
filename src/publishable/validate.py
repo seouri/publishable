@@ -766,7 +766,7 @@ def _check_required_env(doc: dict[str, Any], template: Any, c: Collector) -> Non
     Read from the class, so it needs no roster and no expansion: a `required_env`
     list says what an experiment *type* always needs, which is the wrong shape
     exactly when the credential follows a choice. That case belongs to
-    `_check_requires_env`, which the next task in this slice adds.
+    `_check_requires_env`, below.
 
     Reported at `experiment_type`, the field that decided which template's list
     applies. The value is never printed — the message names the variable and
