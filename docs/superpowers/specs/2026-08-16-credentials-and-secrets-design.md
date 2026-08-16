@@ -113,3 +113,43 @@ slice except task 3. The apparatus probe and its credential — **H7d**. `io.reu
 and unowned by any H7 sub-slice, which is a gap this slice files rather than closes. The README
 `credentials` region and its `cp .env.example .env` line — **filed** under decision 7, owned by
 whichever slice next edits `new`'s README emission.
+
+---
+
+## Corrections from planning — appended 2026-08-16, replacing nothing above but qualifying it
+
+The plan author found four disagreements with this spec or the scoping, and a fifth surfaced when
+the controller checked the first. All five are carried in the plan; the two that change what gets
+built are recorded here.
+
+1. **Decision 3's "the two record-writing sites" is wrong in both directions, and the correction
+   improves it.** The plan measured **one** construction site and proposed redacting there; the
+   controller then measured **five** — `runner.py`'s step-error text, three
+   `W-STATS-AGGREGATE-FAILED` warnings in `cli.py` carrying a template's exception, and
+   `validate.py`'s entrypoint-import failure. Verified that `run_record.py` mentions diagnostics
+   nowhere, so the three warnings do **not** reach `run.yaml` — but task 12's leak sweep covers
+   **stdout and stderr**, so they are in scope by this slice's own definition of a leak.
+   **Ruling: redact at the two serialization boundaries, not at any construction site.**
+   `Diagnostic.render()` is the chokepoint every diagnostic's text passes through, and the
+   step-error path is the other. Two edits cover all five constructions and cannot diverge as a
+   sixth is added; five edits at construction are five places for the next one to be forgotten.
+   This is the same argument that put `holdout_values_fault` behind one authority in H3d.
+2. **`draft` and `resume` are in `cli.NOT_BUILT_COMMANDS`.** The scoping's task 8 names them as
+   load sites. Only `command_run` is buildable, so one site is built, the document's sentence is
+   written as specification, and the inheritance is recorded — the same treatment the scoping
+   itself gave `dry-run`. No stub.
+3. **`command_run` binds no template before `execute_plan`**, and its only `get_template` call
+   sits after it, without `repo_root` — which resolves no project-local template. Left unfixed,
+   the redaction would silently no-op for exactly the templates this slice serves while every
+   `GenericTemplate` fixture stayed green. The plan resolves the template before `execute_plan`
+   and pins the defect with a mutation that drops `repo_root`.
+4. **Three prescribed mutations could not discriminate and were replaced**, with the reasons
+   written into the plan: the scoping's own leak mutation was a *fixture* change rather than a
+   mutation; a `condition.selectors` deletion was blind because a group axis's name is not a
+   `parameter_spec` path; and a redact-by-pattern mutation was blind against a `sk-`-prefixed
+   sentinel.
+5. **`field_convention` is the survivor for `CLAUDE.md`'s example** — verified unread, where
+   `apparatus_probe` is H7b's and `apparatus_facts` H7d's.
+
+**Task count is unchanged at 14.** Decision 3's correction changes where task 12 edits, not how
+many tasks there are.
