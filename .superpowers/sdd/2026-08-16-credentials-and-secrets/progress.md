@@ -340,3 +340,35 @@ Task 9: reviewed (opus). Spec compliance PASS; task quality FAIL on one Importan
   It also probed the security property directly and found it holds STRUCTURALLY: the emit site never
   obtains a value, so task 9 cannot violate it. Task 12 is where it is actually pinned.
 Task 9: complete. 1977 passed + 2 xfailed; ruff check, format and mypy clean. BASE for task 10 is below.
+
+Task 10: implemented at 2852ea0. 1982 passed + 2 xfailed. The union — the feature's whole point — is
+  correct, and the three candidate readings were confirmed to DIFFER on the fixture rather than assumed
+  to: A gives `{OPENAI_TEST_KEY}`, B adds `OLLAMA_TEST_KEY` and mis-attributes, C gives `{}`.
+Task 10: reviewed (opus). Spec compliance PASS; task quality FAIL with three Important, all real.
+  1. **Attribution to the FIRST condition — a normative § Errors claim — was pinned by nothing.**
+  `setdefault` -> plain assignment left all 693 `test_validate.py` tests green, and the test meant to
+  cover it had a docstring claiming an assertion that did not exist while its dedup job was doubly
+  enforced. Now asserted by condition label, mutation proven.
+  2. **The `except TypeError` guard is REACHABLE and load-bearing**, where the task's report called it
+  unreachable: `_check_requires_env` runs BEFORE `_check_parameters`, so a list-valued parameter
+  reaches `.get(list)` and, without the guard, `validate` TRACEBACKS instead of reporting
+  `E-PARAM-VALUE` — with the whole suite green. It stays, and is now pinned.
+  3. **The `condition.selectors` skip is pinnable, and both the plan author and the implementer had
+  concluded otherwise.** The reviewer built the fixture. The reasoning that failed on both sides was
+  that `E-SWEEP-PATH-DUPLICATE` refuses the config shape — but **`validate` COLLECTS rather than
+  aborting**, so a refusal elsewhere does not make a later code path unreachable. Appended to the spec
+  as a correction to its own correction 4, which had recorded the mutation as blind.
+  Ruling: that is the sharper lesson and it is narrower than "check your mutations". Two independent
+  readers reasoned from "this config is refused" to "this code does not run", and in a collector-shaped
+  validator that inference is simply invalid. Worth carrying into H7b, which adds more `validate` paths.
+  Minors closed: an order guarantee unpinned (now sized so insertion and sorted order diverge, mutation
+  proven); a docstring sentence that contradicted the line before it and invented an owner
+  `reference.md` does not name; and a stale test count replaced with a DESCRIPTION of the set rather
+  than a new number — the third such replacement this slice.
+  ROUTED TO TASK 14, a real defect the fix round found and correctly declined to fix: a **dict-valued**
+  parameter (`parameters.llm.provider: {a: 1}`) is flattened by `_flatten` into `llm.provider.a`, so
+  `llm.provider` is absent from `resolved`, the check falls back to the TEMPLATE DEFAULT, and reports
+  `E-CRED-PARAM-MISSING` for a credential belonging to a value the config never wrote. Cosmetic — the
+  config is refused either way — but the message asserts a resolution that never happened.
+Task 10: fix round. Commit 18e1ede. All six closed. 1985 passed + 2 xfailed; all gates clean.
+Task 10: complete. BASE for task 11 is below.

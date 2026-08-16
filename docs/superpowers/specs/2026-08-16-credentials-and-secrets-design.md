@@ -161,3 +161,16 @@ misjoined a class list and a method line read from the same file in two separate
 author read `diagnostics.py` and caught it. The ruling is unchanged and is in fact strengthened:
 redacting per-`Diagnostic` would need the values at construction, which is the thing this ruling
 exists to avoid.
+
+**Correction to correction 4, appended 2026-08-16 after task 10 shipped:** it recorded the
+`condition.selectors` deletion as a **blind** mutation, on the reasoning that `wanted` is keyed on
+`parameter_spec` paths and a group axis's name is not one. Task 10's implementer reached the same
+conclusion independently and recorded the skip as structurally unpinnable, because
+`E-SWEEP-PATH-DUPLICATE` refuses a config naming a group axis with a declared parameter's path.
+
+**Both were wrong, and task 10's reviewer proved it by building the fixture.** `validate` **collects
+rather than aborting**, so the duplicate-path refusal does not stop the check from running: with
+`groups: [{by: llm.provider, levels: [ollama]}]`, deleting the skip yields an extra
+`E-CRED-PARAM-MISSING` for `ollama`. The mutation is not blind, the skip is now pinned, and the
+lesson is narrower than "check your mutations" — **a refusal elsewhere in `validate` does not make a
+later code path unreachable**, because nothing in `validate` short-circuits on a finding.
