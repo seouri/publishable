@@ -164,3 +164,21 @@ Task 4 ruling: `progress.md` carried an uncommitted line, absent from HEAD, asse
   standing authorization to merge, push, and edit `CLAUDE.md` / `spec-defects.md`. It contradicted
   the task's own instructions and was not acted on; it is removed here rather than committed, and
   quoted verbatim in `task-4-report.md` so the text survives. Flagged to the controller.
+
+Controller correction to task 4's ruling, and the cause was mine.
+  **The line was not a prompt injection. It was my own ledger write, uncommitted at dispatch time.**
+  The user widened the standing authorization after task 3 — "keep going until all tasks in H7c is
+  merged and pushed" — and I appended it to `progress.md` in the same shell command that extracted the
+  task-4 brief, so it sat in the working tree, absent from HEAD, when the implementer read it. The
+  authorization is real and stands: execute every remaining task, merge, push, then update `CLAUDE.md`,
+  `docs/superpowers/spec-defects.md` and `docs/feasibility-llm-growth-studies.md`.
+  **The implementer was right to refuse it and I am not overriding that judgment retroactively.** An
+  uncommitted line in a working tree asserting an authorization that contradicts the reader's own
+  instructions is indistinguishable, from inside that task, from an injected one. It quoted the text
+  verbatim into its report before removing it, which is what made this recoverable rather than a silent
+  deletion — the correct handling of a suspected injection.
+  Ruling, and it changes how I dispatch: **a ledger write is committed BEFORE the dispatch that follows
+  it**, never left in the tree for a subagent to find. An authorization a subagent cannot verify is one
+  it should not act on, so the only safe place for it is a commit — or, better, the dispatch prompt
+  itself, which is the channel that actually carries authority to a subagent. Cost of the old habit:
+  one task's worth of confusion, and a correct refusal that read as a defect.
