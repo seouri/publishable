@@ -2,8 +2,7 @@
 
 **Status:** Complete. All steps 1–8 executed as specified in the brief.
 
-**Commit:** will be created immediately after this report is written (see below for the
-message); this file records the pre-commit working tree at parent `e3ac3a475f3e8b2e81dbb63f9459a51bfedecfea`.
+**Commit:** `fbab1e8` (parent `e3ac3a475f3e8b2e81dbb63f9459a51bfedecfea`).
 
 **Test summary:** `uv run pytest -q` → **1962 passed, 2 xfailed** (1957 baseline + 4 new
 `test_param.py` tests + 1 new `test_validate.py` end-to-end test). `uv run ruff check .`,
