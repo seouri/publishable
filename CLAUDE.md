@@ -41,12 +41,9 @@ one refusal retired that 6 of 9 configs hit (`E-DATA-HOLDOUT-UNSUPPORTED`), one 
 beside the same structure are now a named refusal, `E-REPL-FOLD-CELLS` / `E-DATA-HOLDOUT-CELLS`), and
 **zero experiments newly executing** — all nine still declare a resolver and still earn
 `E-DATA-RESOLVER-UNSUPPORTED`, which is H7b's. A re-measurement dated 2026-08-16 is in
-[the feasibility analysis](docs/feasibility-llm-growth-studies.md) § Executability on this build, and it
-is the same lesson stated a third time: a retired-refusal count is not an executable-run count, which is
-exactly what step 10 of § Feasibility analyses exists to keep a reader from conflating. H4b (weighted
-contrasts) retires the one refusal C1–C3 carry beyond the resolver — a retired refusal is not an
-execution, and all nine, C1–C3 included, still declare a resolver, so *as written* none runs until H7b,
-and even under a table-roster substitution **only for configs sourcing their roster from a table**.
+[the feasibility analysis](docs/feasibility-llm-growth-studies.md) § Executability on this build. H4b
+(weighted contrasts) retires the one refusal C1–C3 carry beyond the resolver — a retired refusal is not an
+execution, and all nine, C1–C3 included, still declare a resolver, so *as written* none runs until H7b.
 
 A second amendment the same day scoped all five remaining slices against the code. **Every charter was
 stale in the same direction**: H4 is ~54 tasks split four ways, H7's remainder 38 split three ways, H3d
@@ -58,11 +55,10 @@ because `fold_basis` answers over the whole roster. That refusal ships with H3d;
 for a design that needs folds inside cells.
 
 The cost is that H3d now precedes the cells work it was scheduled to consume, so **H3c-3 owns
-retrofitting the holdout to cells, and — now that H3d has merged and named both refusals —
-retiring `E-DATA-HOLDOUT-CELLS` and `E-REPL-FOLD-CELLS` once drawing within a cell is built** —
-acceptable only because no experiment in that analysis declares a group axis. The reasoning lives in the
-spine design's *Order, amended against outside evidence*, which is now tracked — cite it rather than
-restating it.
+retrofitting the holdout to cells and retiring `E-DATA-HOLDOUT-CELLS` and `E-REPL-FOLD-CELLS`, both
+already named on H3d's branch, once drawing within a cell is built** — acceptable only because no
+experiment in that analysis declares a group axis. The reasoning lives in the spine design's *Order,
+amended against outside evidence*, which is now tracked — cite it rather than restating it.
 
 ## The documents
 
@@ -248,7 +244,7 @@ One analysis per file, at `docs/feasibility-<subject>.md`, kebab-case matching i
 3. **Express each experiment in the spec's vocabulary**, in this order: the problem in two sentences, the design decision (which axis, which repeat kind, which allocation, where the units come from), then the actual YAML.
 4. **Every YAML must be checkable against `reference.md` § The one config file**, whose fenced example is the config schema for template `generic` at full expansion — every parameter `publishable init` materializes, plus the optional blocks it leaves empty or undeclared. Any field you show must exist there or in the proposed template's `parameter_spec`; a template declares nothing outside `parameters`, so there is no top-level block of a plugin's own.
 5. **Do the arithmetic before writing the YAML, not after.** Every config states its condition count, its repeat structure, its execution count against `limits.max_executions`, its unit-executions (which is what a metered run is billed by, and what `dry-run` prints), and its cost and runtime from anchors the source itself observed. A feasibility section without execution counts is decorative — and a repeat structure chosen without them is how a translated design silently costs several times the original.
-6. **Name every refusal with its route.** Interactions, dose-response orderings, differences-in-differences, adaptive selection, model fitting, counterbalancing, roster-changing variants. `reference.md` § What core will not do for you and `experimental-designs.md` § What core will not do for you are the two lists to check against; the route is usually a `summary`-step `Estimate`, a separate run joined in a `study`, or a `report_by` stratum.
+6. **Name every refusal with its route.** Interactions, dose-response orderings, differences-in-differences, adaptive selection, model fitting, counterbalancing, roster-changing variants. `experimental-designs.md` § What core will not do for you is the list to check against; the route is usually a `summary`-step `Estimate`, a separate run joined in a `study`, or a `report_by` stratum.
 7. **Separate what is not an experiment at all.** Reference-standard adjudication, governance firewalls, and human decisions made between runs are not pipelines core executes. Say so explicitly — treating them as runs is the failure mode this step exists to catch.
 8. **Propose the plugin last, from what the designs actually needed.** Apply the core-vs-plugin test to every piece, keep the registered artifacts to the four registries, and say which of them the domain does *not* need. Watch the correction family: every metric a template's `aggregate` returns is comparisons × metrics, so a template returning twenty diagnostics corrects every interval in the run for numbers nobody reads.
 9. **Record the gaps the analysis found in the spec**, separately from the analysis itself. These are the deliverable's second output — a real project pressing on the schema is where an under-specified rule shows up.
