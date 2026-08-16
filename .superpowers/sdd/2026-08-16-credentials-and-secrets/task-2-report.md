@@ -2,6 +2,10 @@
 
 ## Status: complete
 
+## Commit
+
+`af8461137ed92aab458f688a65b20560db009cdc` on branch `h7c-credentials`
+
 ## Counts measured (Step 1)
 
 **`validate.py`'s `except ContractError` guard (line 518, inside `validate_config`):** exactly
