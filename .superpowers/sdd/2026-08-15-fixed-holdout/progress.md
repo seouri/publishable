@@ -513,3 +513,36 @@ Task 10: fix round 1. Commit f48cd68. All eight closed. Two of the three vacuous
   the side-naming line left the full suite green. A message assertion is not automatically a
   discriminating one, and that is a new entry for the catalogue.
 Task 10: complete. 1913 passed + 2 xfailed; ruff check and mypy clean. BASE for task 11 is f48cd68.
+Task 11: dispatched — construction 2: whole clusters, `stratify_by`, their composition, and the relation
+  between the constructions. Pre-checked all three mutations by reading the test bodies; all three
+  discriminate, and the stratified test correctly pins MEMBERSHIP as well as counts because the
+  per-stratum counts are forced by the apportionment and no count assertion can see a generator change.
+Task 11: implemented at 9d5e75c. 1917 passed + 2 xfailed. Four disagreements reported, two of which reach
+  back into task 10's tests: one task-10 assertion rewritten, and one task-10 test DELETED.
+Task 11: reviewed (opus). Both verdicts FAIL. The reviewer's attribution is the finding I am carrying
+  forward: "the implementer followed the brief faithfully and all three of its mutations discriminate;
+  the gap is that the brief's mutation set never touched the composition or any message path."
+  Ruling: my pre-dispatch check has been asking the wrong question. I verify that each prescribed
+  mutation DISCRIMINATES; I have not been asking what the mutation set FAILS TO COVER. A brief can
+  prescribe three sound mutations and still leave its own headline deliverable unpinned — here Step 3(a)'s
+  new declaration path was pinned by nothing, and corrupting it back to the exact bug that step exists to
+  fix left all 1917 tests green. **The check is now: for each of the task's stated deliverables, which
+  mutation kills it? A deliverable no mutation reaches is unpinned however good the mutations are.**
+  Both flagged cross-task items adjudicated. The deletion of task 10's
+  `test_a_clustered_or_stratified_holdout_raises_not_realized` was CORRECT — it asserted the
+  `NotImplementedError` this task retires — but its coverage was not replaced, and that is the half worth
+  remembering: a justified deletion still owes a replacement. The rewritten empty-side fragment was
+  checked for the vacuity task 10 had already hit once, and is clean: inverting the side-naming line
+  fails both parametrizations.
+  The sharpest finding: a BOLDED docstring guarantee that with one cluster per unit the two constructions
+  agree on sizes. The reviewer swept n x frac and found 90 disagreements, including `n=2, frac=0.1` where
+  the unclustered draw REFUSES and the clustered one returns 1/1 — a legality disagreement, not a rounding
+  one. The claim was contradicted by another sentence in its own docstring and by
+  `_assign_whole_clusters_by_ratio`'s "no bound is promised". A test was pinning that coincidence as
+  `len(...) == 4`.
+Task 11: fix round 1. Commit fb78340. All six closed. The false size-agreement claim was replaced with the
+  verified negative — no size agreement is promised at any cluster size — and the assertion pinning the
+  coincidence was dropped rather than weakened, keeping the membership INEQUALITY as the real check.
+  `_stratum_groups`' message now branches on the declaration so a holdout reader is no longer sent to two
+  `E-DATA-ASSIGN-*` codes and a `sweep.groups` path their declaration cannot take.
+Task 11: complete. 1919 passed + 2 xfailed; ruff check and mypy clean. BASE for task 12 is fb78340.
