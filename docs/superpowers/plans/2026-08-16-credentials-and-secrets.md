@@ -21,9 +21,14 @@ names have no value, `credential_values(names)` returns the values core read, an
 variable. `validate_config` calls `load_env` once, right after it resolves `repo_root`, and gains
 two collectors: `_check_required_env` (template-level, `E-CRED-MISSING`) and `_check_requires_env`
 (the union over the conditions `expand` resolves, `E-CRED-PARAM-MISSING`). `cli.command_run` calls
-`load_env` again — loading is a precondition of executing, not a side effect of checking — collects
-the values behind the same two declarations, and hands them to `runner.execute_plan` as
-`credentials=`, where the single site that builds a failed execution's `error` string redacts them.
+`load_env` again — loading is a precondition of executing, not a side effect of checking — and
+collects the values behind those same two declarations. Those values then reach the **two
+serialization boundaries** at which core turns an exception into text a reader sees:
+`runner.execute_plan`, which builds a failed execution's `error` string for `executions.jsonl` and
+`run.yaml`, and `Collector.render()`, the one method every diagnostic passes through on its way to
+stdout or stderr — which covers the four *other* places core interpolates a template's or a user
+package's exception. Two boundaries rather than five construction sites, so a sixth construction
+inherits the redaction instead of forgetting it.
 
 **Spec:** docs/superpowers/specs/2026-08-16-credentials-and-secrets-design.md
 
@@ -2129,8 +2134,8 @@ def _findings_of(path: Path) -> list:
 
 ## Task 12: The no-leak test, the redaction, and decision 4a's boundary
 
-**Files:** Modify `src/publishable/runner.py`, `src/publishable/cli.py`, `tests/test_cli.py`,
-`docs/reference.md`.
+**Files:** Modify `src/publishable/diagnostics.py`, `src/publishable/runner.py`,
+`src/publishable/cli.py`, `src/publishable/validate.py`, `tests/test_cli.py`, `docs/reference.md`.
 
 **Interfaces:**
 - Consumes: `redact(text: str | None, values: Mapping[str, str]) -> str | None` and
@@ -2427,16 +2432,18 @@ document it in `execute_plan`'s docstring in the same register as its neighbours
     `docs/reference.md` § Secrets & credentials.
 ```
 
-and redact at the single construction site inside `except Exception`:
+and redact inside `except Exception`, where the step-error text is built:
 
 ```python
         except Exception as exc:  # a failed execution never stops the run
             code = getattr(exc, "code", None)
             prefix = f"{code} " if code else ""
-            # Redacted where the string is BUILT, not where it is written: this is
-            # the one construction, and both records — `run.yaml` through
-            # `run_record` and `executions.jsonl` below — read from it, so one
-            # edit covers both and they cannot diverge.
+            # Redacted where this string is BUILT rather than at each writer:
+            # both records — `run.yaml` through `run_record` and
+            # `executions.jsonl` below — read from it, so one edit covers both
+            # and they cannot diverge. The *other* four places core interpolates
+            # an exception are diagnostics, and `Collector.render` covers all of
+            # them at once (`docs/reference.md` § Secrets & credentials).
             returned, status = {}, "failed"
             error = redact(f"{prefix}{type(exc).__name__}: {exc}", credentials or {})
 ```
@@ -2543,43 +2550,140 @@ Finally pass it at the call: add `credentials=credentials,` to the `execute_plan
 
 - [ ] **Step 4: Run and see them pass.** Both new tests, then the full suite.
 
+- [ ] **Step 4b: The `Collector.render()` boundary needs its own fixture — the step-error path does
+      not reach it.** Both tests in step 1 go through `runner.py`'s construction. If step 3a were
+      reverted wholesale they would stay green, and the second boundary would be pinned by
+      **nothing** — the shape that shipped a headline deliverable unpinned last slice.
+
+      **Reachability, verified rather than assumed.** `cli.py:1937` sits in the per-condition,
+      per-recording-step loop that calls `template.aggregate(...)`; the template comes from the
+      `get_template(..., repo_root)` call, so a **project-local** template's `aggregate` is the one
+      invoked. `tests/test_cli.py` already has three tests asserting `"W-STATS-AGGREGATE-FAILED" in
+      doc["stdout"]` (one of them patches `GenericTemplate.aggregate` to return a value whose
+      resample fails), so the construction, the collector, the `print(aggregate_c.render())`, and
+      `capsys` reaching `doc["stdout"]` are all live today. An `aggregate` that **raises** lands on
+      `cli.py:1937` directly. Confirm this by running the test and reading the captured stdout
+      before trusting the assertion.
+
+      This test reuses task 12 step 7's `_local_template` keyword and the same project shape, so
+      write it **after** step 7's helper lands or write step 7 first — the two are one fixture family
+      and the order between them is free.
+
+```python
+_AGGREGATE_LEAKING_TEMPLATE = """\
+import os
+
+from publishable import BaseTemplate, Param, register_template
+
+
+@register_template("cred_assay")
+class CredAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    required_env = ["PUBLISHABLE_TEST_AZURE"]
+    parameter_spec = {}
+
+    def aggregate(self, units, cfg):
+        # A template's own exception reaches stdout through
+        # `W-STATS-AGGREGATE-FAILED`, never through `run.yaml` — `run_record`
+        # has no diagnostics channel. So this is a leak the step-error path
+        # cannot see and the render boundary must catch.
+        raise RuntimeError("upstream rejected key " + os.environ["PUBLISHABLE_TEST_AZURE"])
+"""
+
+
+def test_a_template_exception_printed_as_a_warning_is_redacted_too(tmp_path, monkeypatch, capsys):
+    """The second serialization boundary, `Collector.render()`.
+
+    `aggregate` raising is one of five places core builds a
+    `f"...{type(exc).__name__}: {exc}"` string, and four of them are diagnostics
+    rather than records. This one reaches stdout and nothing else, so the step
+    tests above are blind to it — reverting `diagnostics.py` alone leaves all of
+    them green and this one red, which is the whole reason it exists.
+    """
+    monkeypatch.delenv("PUBLISHABLE_TEST_AZURE", raising=False)
+
+    doc = run_a_project(
+        tmp_path,
+        units=4,
+        experiment_type="cred_assay",
+        _local_template=_AGGREGATE_LEAKING_TEMPLATE,
+        _env_file=f"PUBLISHABLE_TEST_AZURE={_SENTINEL}\n",
+        capsys=capsys,
+    )
+    out = doc["stdout"] or ""
+    # SOMETHING THAT MUST REPORT: the warning fired, and it announced the
+    # redaction by naming the variable. Without the first assertion the two
+    # below pass identically on a build where `aggregate` was never called.
+    assert "W-STATS-AGGREGATE-FAILED" in out, out
+    assert "<redacted:PUBLISHABLE_TEST_AZURE>" in out, out
+    # The surrounding text survives — the warning is still diagnosable.
+    assert "upstream rejected key" in out, out
+    # And the value is nowhere: stdout, stderr, and every artifact.
+    assert _SENTINEL not in out
+    assert _SENTINEL not in (doc["stderr"] or "")
+    swept = _files_under(doc["results_dir"])
+    assert swept, "no artifacts were written — the sweep would be vacuous"
+    for path in swept:
+        assert _SENTINEL not in path.read_bytes().decode("utf-8", "replace"), path
+```
+
+      **Check before believing it:** the run must reach `EXIT_OK` (an `aggregate` that raises is
+      contained — `cli.py`'s own comment says the warning is emitted "alone", without setting
+      `status = "failed"`), and the scaffolded step must actually record a column, or `aggregate` is
+      never called for any step and the first assertion fails. `run_a_project`'s default
+      `STARTER_STEP` calls `io.record`, so it does — confirm by reading the captured stdout.
+
 - [ ] **Step 5: Document decision 3 and decision 4a.** In `reference.md` § Secrets & credentials,
       after the sentence about `report` and `diff` being safe to send as-is, add:
 
 ```
-**One surface can carry a value by accident, and it is refused rather than tolerated.** A step's exception text is written into both `run.yaml` and `executions.jsonl` when an execution fails, and a client library that interpolates a key into a URL in its error message is ordinary. Core replaces each credential value it read with `<redacted:VARIABLE_NAME>` and leaves the rest of the message intact, because the record exists to be debugged from — and it says a redaction happened rather than scrubbing silently, so a reader knows both what was removed and which variable to look at. The match is by **exact value, never by pattern**: core knows what it read out of the environment, so it answers the direct question instead of guessing from a name ending `_KEY` or from how random a string looks.
+**An exception's text can carry a value by accident, and it is refused rather than tolerated.** A client library that interpolates a key into a URL in its error message is ordinary, and core turns an exception into text a reader sees in two places: a failed execution's `error`, written into both `run.yaml` and `executions.jsonl`, and a [diagnostic](#exit-codes-and-diagnostics) printed to stdout or stderr — which is how a template's `aggregate` failure and an entrypoint that raises at import reach you. Core replaces each credential value it read with `<redacted:VARIABLE_NAME>` at both, and leaves the rest of the message intact, because the record exists to be debugged from — and it says a redaction happened rather than scrubbing silently, so a reader knows both what was removed and which variable to look at. The match is by **exact value, never by pattern**: core knows what it read out of the environment, so it answers the direct question instead of guessing from a name ending `_KEY` or from how random a string looks.
 
 **The limit of that, stated rather than discovered.** Core redacts only values it read for a **declared** variable — one named in a template's `required_env`, or in the `requires_env` of a value a condition resolves. `io` hands a step no credential, so a step that reaches `os.environ` for a name no declaration mentions holds a value core never saw and cannot match. Declare it, and it is covered; don't, and the redaction is not a guarantee the code can provide.
 ```
 
 Then run the mechanical pass over § Secrets & credentials.
 
-- [ ] **Step 6: Mutate — three.**
+- [ ] **Step 6: Mutate — one per boundary, plus one named as blind.** The pair is the point: each
+      mutation must redden **its own** boundary's tests and leave the other boundary's **green**.
+      Two boundaries that both went red under one mutation would mean one of them is doing nothing.
 
-  **(a) Delete the redaction.** In `runner.py`, change the `error = redact(...)` line back to
-  `error = f"{prefix}{type(exc).__name__}: {exc}"`.
+  **(a) Remove the step-error boundary.** In `runner.py`, change the `error = redact(...)` line back
+  to `error = f"{prefix}{type(exc).__name__}: {exc}"`.
   `test_a_credential_value_reaches_no_artifact_and_the_redaction_says_so` must FAIL — on the
-  `"<redacted:…>" in e` assertion first, and again on the file sweep. **Checked against the test
-  body:** the fixture's step raises with the sentinel in its message and `expect_exit=EXIT_PARTIAL`
-  guarantees the run reaches the ledger, so the two branches genuinely differ. **This is the
-  mutation the scoping asked for, stated as a mutation rather than as a fixture.**
+  `"<redacted:…>" in e` assertion first, and again on the file sweep — and so must step 7's
+  `test_a_project_local_template_s_credentials_are_redacted_too`. **Checked against the test bodies:**
+  each fixture's step raises with the sentinel in its message and passes
+  `expect_exit=EXIT_PARTIAL`, which guarantees the run reaches the ledger, so the two branches
+  genuinely differ. **Step 4b's `test_a_template_exception_printed_as_a_warning_is_redacted_too`
+  must stay GREEN** — its sentinel never touches `ExecutionResult.error` at all. Confirm both halves.
 
-  **(b) Redact only at `run_record.py`.** Move the redaction out of `runner.py`'s handler and into
-  `run_record._execution_block`'s `entry["error"] = r.error`. The test must still FAIL — on the
-  ledger assertion, since `executions.jsonl` is written by the runner and would still carry the raw
-  value. **This is what proves the single-construction siting is not merely tidier**: a
-  two-site redaction that misses one site is exactly the failure the deviation avoids, and this
-  mutation is the one that shows the test can see it.
+  **(b) Remove the `Collector.render()` boundary — the retargeted 12b.** In `diagnostics.py`, change
+  `render()`'s message line back to `lines.append(f"          {f.message}")`, leaving the
+  `credentials` field in place so the mutation is one line.
+  **`test_a_template_exception_printed_as_a_warning_is_redacted_too` must FAIL**, on
+  `"<redacted:PUBLISHABLE_TEST_AZURE>" in out` and again on `_SENTINEL not in out`.
+  **Checked against that test's body:** its sentinel reaches output *only* through
+  `W-STATS-AGGREGATE-FAILED` → `aggregate_c.render()` → `print(...)` → `capsys` → `doc["stdout"]`,
+  and the test asserts on `doc["stdout"]`, so the mutated and unmutated branches produce different
+  strings. **Both step-1 tests and step 7's must stay GREEN** — `runner.py` still redacts, and their
+  assertions are over `executions.jsonl`, `run.yaml` and the artifact sweep.
+
+  This replaces an earlier mutation ("move the redaction into `run_record._execution_block`") which
+  rested on the false premise that there was one construction site. Its *intent* — proving the test
+  can see a boundary that was skipped — is what (b) now does, against a boundary that genuinely
+  exists.
 
   **(c) Redact by pattern instead of by value.** Change `redact`'s loop to replace any
-  `sk-`-prefixed token. `test_a_credential_value_reaches_no_artifact_and_the_redaction_says_so`
-  would still pass — the sentinel starts with `sk-`. **This mutation is BLIND and is named here so
-  nobody proposes it as a check.** If the pattern reading is to be refused by a test, the fixture
-  must use a sentinel that no pattern matches; `tests/test_secrets.py`'s
-  `test_redaction_replaces_the_exact_value_and_names_the_variable` already does exactly that with
-  its `sk-zzzzzz`-untouched assertion, so **the property is covered there and needs nothing here**.
+  `sk-`-prefixed token. Every test above would still pass — both sentinels start with `sk-`.
+  **This mutation is BLIND and is named here so nobody proposes it as a check.** The pattern reading
+  is refused in `tests/test_secrets.py`'s
+  `test_redaction_replaces_the_exact_value_and_names_the_variable`, whose `sk-zzzzzz`-untouched
+  assertion is the fixture that can tell by-value from by-pattern. **The property is covered there
+  and needs nothing here.**
 
-  Revert each by editing back; delete `__pycache__`; re-run.
+  Revert each by editing the file back in place; delete `__pycache__`; re-run; confirm green.
+  **Never `git checkout --`.**
 
 - [ ] **Step 7: The third test — a credential that arrives through a project-local template.**
       **Not optional, and not an accepted gap.** Both tests above patch `GenericTemplate`, a *core*
@@ -2698,7 +2802,7 @@ proves this test was needed.
 describes what core *cannot* do, and there is no code to mutate. Named and accepted.
 
 - [ ] **Step 8: Verify and commit.** All four commands.
-      `feat: redact a credential value out of a failed execution's error, and state the limit`
+      `feat: redact credential values at the two serialization boundaries, and state the limit`
 
 ---
 
@@ -2948,7 +3052,7 @@ step that stops an entry reading as live work nobody holds.**
 |---|---|
 | 1 — two codes, not one | **1** (the two § Errors rows and the grounds), honoured by **9** and **10** emitting them separately |
 | 2 — the totality check is `E-TEMPLATE-LOAD` and owes no row | **3** (the `ValueError` and its end-to-end confirmation), **2** (the count phrases that must not move) |
-| 3 — redact by exact value at the record-writing sites, and say a redaction happened | **12**, with the deviation to the single construction site argued from `grep -rn "\.error\b"` |
+| 3 — redact by exact value, and say a redaction happened | **12**, at the **two serialization boundaries** per the spec's correction 1: `runner.execute_plan`'s step-error path and `Collector.render()`. `grep -rn 'type(exc).__name__' src/publishable/*.py` returns **five** constructions, four of which are diagnostics rather than records and reach the sweep through stdout |
 | 4 — detect by exact value, never by pattern | **7** (`redact`'s implementation and its by-value test), **12** (the blind pattern mutation named as blind) |
 | 4a — core redacts only what it read for a declared variable | **12** step 5, marked document-only |
 | 5 — two load sites, and the reconciled sentence | **8**, with `draft`/`resume` recorded as unbuilt rather than stubbed |
@@ -2995,8 +3099,10 @@ method. `tests/test_param.py`: no module-level helpers exist; every new name is 
 `base_config`, `write_config`, `write_config_nondet`, `write_config_broken`, `write_config_exits`,
 `_DELETE`, `codes`, `messages_by_code`, `_validate_with`, `_error_codes`.
 `tests/test_cli.py`: `_ENV_READING_STEP`, `_LEAKY_STEP`, `_LEAKY_AZURE_STEP`, `_SECRET_USING_STEP`,
-`_LOCAL_CRED_TEMPLATE`, `_SENTINEL`, `_files_under` — none collides with `Ran`, `run_a_project`,
-`_AGGREGATE_STEP`, `_TRAIN_TOUCHING_STEP`. `cli.py`: `declared_credential_names`,
+`_LOCAL_CRED_TEMPLATE`, `_AGGREGATE_LEAKING_TEMPLATE`, `_SENTINEL`, `_files_under` — none collides
+with `Ran`, `run_a_project`, `_AGGREGATE_STEP`, `_TRAIN_TOUCHING_STEP`. `diagnostics.py`:
+`Collector.credentials` is a new field on a dataclass whose only field today is `findings`, so no
+existing `Collector()` construction changes. `cli.py`: `declared_credential_names`,
 `_flatten_parameters` and the `run_template` local are all to be confirmed absent by grep in task 12
 step 3 — `template` is deliberately **not** reused, because `command_run` already binds that name
 after `execute_plan`. `tests/test_secrets.py` is a new file.
