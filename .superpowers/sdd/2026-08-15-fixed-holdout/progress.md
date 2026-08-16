@@ -263,3 +263,42 @@ Ruling (plan-wide, made before task 5 dispatched): all 19 verification steps in
   `uv run ruff format .`, and running it rewrites 67 files including prose documents, because ruff's
   formatter reaches fenced Python inside markdown here. The documented command damages the four
   documents. Out of scope for H3d; belongs to whoever next edits that table.
+Task 5: dispatched — `_check_holdout` declaration half A, wired into `validate_config`. Before dispatch I
+  checked all three of the brief's prescribed mutations against the fixtures they name, per the ruling
+  after task 4. All three discriminate: (a) the `frac: 0` and `frac: 1` rows exist in the parametrized
+  list; (b) passing `{}` for `units_decl` kills the third assertion of
+  `test_an_empty_or_null_holdout_validates_clean`, which is the positive companion; (c) dropping the
+  `not holdout` gate moves only that test's FIRST assertion, since `holdout: null` is not a dict either
+  way. This is the check I committed to after authoring three blind mutations, and it is now paying for
+  itself.
+Task 5: implemented at 5e3d965. 1846 passed + 2 xfailed.
+Task 5: reviewed (opus). Spec compliance PASS; task quality FAIL with six Important and four Minor.
+  The load-bearing one is F3, and it is this repo's dominant defect class again: ELEVEN `c.error` sites
+  and not one test reading a message. The reviewer mutated `if method is None:` to `if False:` and
+  `elif not isinstance(method, str):` to `elif False:` and each left 24 of 24 tests GREEN, because two
+  branches share a code and the tests only asserted the code. `messages_by_code` was already in the same
+  file.
+  F2 I verified myself before dispatching, because it edits a normative document: `frac` and `from` are
+  both typed in `envelope.py`'s `LEAF_TYPES`, so a wrong type earns `E-CONFIG-TYPE` from `check_envelope`
+  and never reaches `_check_holdout` — the § Errors rows claiming those codes cover wrong types were
+  overclaiming. A third row enumerated two NO-DRAW emit sites where the code has three. § Errors carries
+  one row per code covering every emit site, so the rows were what changed, not the code.
+Task 5: fix round 1. Commit 638639e. All ten findings closed.
+  Ruling: F5 was closed by changing BEHAVIOUR rather than the claim — `stratify_by: []` under
+  `by_attribute` is now exempt. I verified the convention it now mirrors: `validate.py:2803` reads
+  `is not None and != []`, byte-for-byte the test `assign` already makes at `validate.py:2435`, and
+  § Errors' `E-DATA-ASSIGN-NO-DRAW` row says "non-empty". Aligning with the documented sibling beats
+  narrowing a message to describe an inconsistency. Cost if wrong: an empty `stratify_by` under a
+  holdout is silently accepted where a reader might expect a refusal — which is exactly what assign
+  already does.
+  Ruling: F9's `doc` parameter is a genuine forward reference, not dead weight — task 6's
+  `E-DATA-HOLDOUT-FOLD` reads `doc.get("replication")`. Confirmed against the plan. This is the same
+  distinction task 1's fix round settled in the other direction, where two sites the reviewer called
+  fixture gaps were dead parameters. The two cases differ by whether a LATER TASK fills the parameter,
+  and that is the question to ask each time.
+  I re-ran F3's first mutation myself rather than take the fix on report: `if method is None:` ->
+  `if False:` now FAILS `test_a_malformed_holdout_declaration_is_refused[block0-...-is not declared]`,
+  where the same mutation left 24 of 24 green before the fix. Reverted by editing the file back,
+  confirmed byte-identical to HEAD and 25 passed.
+Task 5: complete. 1847 passed + 2 xfailed; ruff check and mypy clean; `ruff format --check` down to 68
+  (67 tracked baseline + one untracked record file). BASE for task 6 is 638639e.
