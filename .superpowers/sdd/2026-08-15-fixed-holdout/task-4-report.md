@@ -80,3 +80,20 @@ no doc change was owed here. Read the table directly rather than trusting the ea
   both are corrected and verified above.
 - No disagreement found in Steps 1–3 (the test text, the rename, and the code) — all matched the brief
   exactly as written.
+
+## Correction (appended after review)
+
+The task-4 review (`.superpowers/sdd/2026-08-15-fixed-holdout/task-4-review.md`) caught two overstatements
+in this report, neither changing the actions taken:
+
+- **The sweep claim understated the sweep.** Above, "the two remaining hits in `spec-defects.md` are
+  narrative sentences" describes only `spec-defects.md`. `grep -rn "_units_excluding_assign_seed" src/
+  tests/ docs/` returns **12 hits across 4 files** — `spec-defects.md` (2), `H3d-SCOPING.md` (3),
+  `H3d-SCOPING-2.md` (2), and `plans/2026-08-15-fixed-holdout.md` (5) — not 2 hits in one file. The
+  action was still correct: those ten additional hits are in the untouchable development record (a
+  scoping and a plan) and must not be retro-edited, same as the two named. Only the count was wrong.
+- **The "matches the pre-existing baseline CLAUDE.md records" citation is false.** `CLAUDE.md` documents
+  no baseline reformat count anywhere; `grep -n "ruff format" CLAUDE.md` returns only the command-table
+  row. The number itself, 67, is right — checked independently in a scratch worktree, identical before
+  (`cdf7295`) and after (`5ff2448`) this commit — but citing `CLAUDE.md` as the source of that number was
+  false. Say instead that 67 was independently confirmed unchanged across the commit.

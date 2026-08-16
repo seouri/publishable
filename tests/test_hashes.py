@@ -292,8 +292,10 @@ def test_the_seed_exclusion_covers_assign_and_holdout_together():
         }
 
     assert design_digest(cfg(7, 11)) == design_digest(cfg(8, 12))
-    # A non-seed edit inside the SAME two blocks still moves it, so the
-    # exclusion is per-field rather than per-block.
+    # A non-seed edit inside the assign block still moves it, so the
+    # exclusion is per-field rather than per-block. (The holdout half of that
+    # claim is pinned separately, in test_a_pinned_holdout_seed_does_not_move_
+    # the_design_digest's "widened" case.)
     moved = {
         "data": {
             "units": {
@@ -305,6 +307,30 @@ def test_the_seed_exclusion_covers_assign_and_holdout_together():
         }
     }
     assert design_digest(cfg(7, 11)) != design_digest(moved)
+
+
+def test_a_non_mapping_assign_does_not_block_the_holdout_seed_exclusion():
+    """The old implementation returned early whenever `assign` was not a
+    mapping, so a config with a non-mapping `assign` AND a pinned
+    `holdout.seed` would have kept the holdout seed in the digest. The
+    holdout exclusion must be reached regardless of what `assign` holds."""
+    pinned = {
+        "data": {
+            "units": {
+                "assign": "nonsense",
+                "holdout": {"method": "random", "frac": 0.2, "seed": 1},
+            }
+        }
+    }
+    unseeded = {
+        "data": {
+            "units": {
+                "assign": "nonsense",
+                "holdout": {"method": "random", "frac": 0.2},
+            }
+        }
+    }
+    assert design_digest(pinned) == design_digest(unseeded)
 
 
 def test_the_seed_exclusion_never_raises_on_a_shape_it_did_not_expect():

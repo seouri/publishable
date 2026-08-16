@@ -121,8 +121,8 @@ def _units_excluding_drawn_seeds(units: Any) -> Any:
 def design_digest(config: dict[str, Any]) -> str:
     """`data.units` (every field except a drawn partition's own `seed`) and `sweep.groups`.
 
-    A parameter edit redraws nothing, and neither does pinning or changing an
-    axis's `assign.seed` or `data.units.holdout.seed` — see
+    A parameter edit redraws nothing else, and neither does pinning or
+    changing an axis's `assign.seed` or `data.units.holdout.seed` — see
     `_units_excluding_drawn_seeds`.
     """
     units = _units_excluding_drawn_seeds((config.get("data") or {}).get("units"))

@@ -2733,7 +2733,7 @@ That output is the point of the whole mechanism: two runs with identical code, p
 
 ### What `auto` derives from
 
-`seed: auto` — for [repeat seeds](#repeat-kinds), [`sample`](#expansion-modes) draws, and [arm allocation](#allocation-within-subjects-or-between-subjects) — derives from a **design digest** over `data.units` (every field except `assign.seed` itself) and `sweep.groups`. Those are the declarations describing *what is being randomized over*. It covers nothing about the parameter values being swept.
+`seed: auto` — for [repeat seeds](#repeat-kinds), [`sample`](#expansion-modes) draws, and [arm allocation](#allocation-within-subjects-or-between-subjects) — derives from a **design digest** over `data.units` (every field except a drawn partition's own seed — `assign.<axis>.seed` and `holdout.seed`) and `sweep.groups`. Those are the declarations describing *what is being randomized over*. It covers nothing about the parameter values being swept.
 
 That separation is load-bearing, not tidiness. If randomization derived from `parameters_hash`, editing any parameter would redraw every fold boundary, reseed every repeat, and reassign every patient — so the comparison [`diff` advertises](design-principles.md#same-code-different-parameters) as "one named parameter changed" would actually be that parameter *plus* a fresh partition of the data under a fresh RNG, confounded and presented as clean. Two runs would differ in one visible place and two invisible ones. And a trial's arm membership would move because someone tuned `min_samples`, which is not a property any trial can have.
 
