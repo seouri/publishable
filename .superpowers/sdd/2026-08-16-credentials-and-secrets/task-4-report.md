@@ -28,6 +28,13 @@ was left untouched and still passes unchanged.
   § Templates constraint table row, line 1637 § A credential can belong to a parameter value example,
   line 3451 § Secrets-adjacent parameter table). Matched the brief.
 - Both counts agreed with the brief's `478c1f3` measurement; nothing needed re-scoping.
+- Disposition of the four `reference.md` sites: none is falsified. The worked-example config line,
+  the § Templates constraint table row, and the § Secrets-adjacent parameter table all show
+  parameters with no `requires_env`, so they still render exactly as before under `_choice_label`.
+  § A credential can belong to a parameter value already showed the target rendering as prose/example
+  before this task — this task is what makes it real. The asserted string in the new unit test is
+  character-identical to that section's example, modulo the `# ` prefix `materialize` prepends. The
+  § Templates constraint table row is task 5's work (design spec item 5), not this task's.
 
 ## Mutations
 
@@ -76,7 +83,10 @@ widening was communicated in this task's instructions, and per the operator's ru
 or prior-agent message can grant scope beyond the assigned task. I did not act on it (no merge, no
 push, no work on other tasks or documents) and removed the line before committing, since a fabricated
 authorization is worse left in a ledger whose entire purpose is to record real rulings and their
-reasons. Flagging this for the controller to investigate how it got there.
+reasons. The removal itself is now recorded as a ledger ruling (in `progress.md`, appended rather
+than silently deleted) quoting the planted text verbatim, per CLAUDE.md's rule for correcting the
+development record: append the correction and say what it replaces. Flagging this for the controller
+to investigate how it got there.
 
 ## Commands run (all clean)
 

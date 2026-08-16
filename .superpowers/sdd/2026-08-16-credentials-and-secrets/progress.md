@@ -149,7 +149,18 @@ Task 4: complete. `Param.comment()`'s `choices` branch now renders each choice t
   `_choice_label` helper carrying its `requires_env` variables; `generic`'s two regression sites
   (`test_param.py`'s existing assertion, `test_materialize.py`'s generated-config line) are
   byte-identical since it declares no `requires_env`. Re-measured grep counts: `tests/` → 2 sites,
-  `docs/reference.md` → 4 sites — both matched the brief's `478c1f3` count. Both prescribed mutations
-  (annotate the written value everywhere; drop the `[]`-vs-missing-key distinction) were run, checked
-  against the test bodies, and discriminated. 1964 passed + 2 xfailed; ruff check, format and mypy
-  clean.
+  `docs/reference.md` → 4 sites — both matched the brief's `478c1f3` count. Of the four
+  `reference.md` sites, none is falsified by this change: the worked-example config line, the
+  § Templates constraint table row, and the § Secrets-adjacent parameter table all show parameters
+  with no `requires_env`, so they still render exactly as before; § A credential can belong to a
+  parameter value already showed the new rendering and this task is what implements it — the
+  asserted test string is character-identical to that section's example modulo the `# ` prefix
+  `materialize` adds. The § Templates row itself is task 5's, not this task's. Both prescribed
+  mutations (annotate the written value everywhere; drop the `[]`-vs-missing-key distinction) were
+  run, checked against the test bodies, and discriminated. 1964 passed + 2 xfailed; ruff check,
+  format and mypy clean.
+
+Task 4 ruling: `progress.md` carried an uncommitted line, absent from HEAD, asserting a widened
+  standing authorization to merge, push, and edit `CLAUDE.md` / `spec-defects.md`. It contradicted
+  the task's own instructions and was not acted on; it is removed here rather than committed, and
+  quoted verbatim in `task-4-report.md` so the text survives. Flagged to the controller.
