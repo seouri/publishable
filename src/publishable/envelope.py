@@ -31,36 +31,36 @@ from typing import Any
 # `resample` is: `E-DATA-HOLDOUT-UNSUPPORTED` still refuses the block at this
 # commit, and the shape is checked ahead of that refusal lifting rather than
 # after it, so the slice that honours the block reads values whose shape a
-# check already approved. The optional blocks that
-# section documents but a materialized config omits — `sweep`'s modes,
-# `statistics.contrasts` / `.null_test` / `.report_by`, and `data.units.assign`
-# — are declared at their own key with the one outer type that section gives
-# them. `statistics.resample` is no longer among them: it is closed one level
-# in, the same way `measurements` is — its three keys (`method`, `n`,
-# `stratify_by`) are fixed, so leaving the block whole would make a typo among
-# them unreachable by any check. Unlike `measurements`, `resample` is closed
-# before its own wholesale refusal retired (H4a task 12), not after — see
-# the comment at its `LEAF_TYPES` entry for why validating the shape had to
-# precede honouring the values.
+# check already approved. The optional blocks that section documents but a
+# materialized config omits — `sweep`'s modes, `statistics.contrasts` /
+# `.null_test` / `.report_by`, and `data.units.assign` — are declared at their
+# own key with the one outer type that section gives them.
+# `statistics.resample` is no longer among them: it is closed one level in, the
+# same way `measurements` is — its three keys (`method`, `n`, `stratify_by`)
+# are fixed, so leaving the block whole would make a typo among them
+# unreachable by any check. Unlike `measurements`, `resample` is closed before
+# its own wholesale refusal retired (H4a task 12), not after — see the comment
+# at its `LEAF_TYPES` entry for why validating the shape had to precede
+# honouring the values.
 #
 # The table stopping at a key is the end of the line for everything under it:
-# the closure below never descends into a known leaf, and `_check_shape`
-# checks a container's *shape* and never the names inside one, so a
-# misspelled `resolverr` in a `data.units.from` mapping is reported by no
-# check in this build. That is the documented cost of a whole leaf
-# (`reference.md` § Validation names the blocks it applies to and the slice
-# that closes each), not a claim that such a key could never be named — a
-# `methodd` in `holdout` was in exactly that position and is now reported,
-# its children's names being fixed. The keys that
-# genuinely cannot be named are the dynamic ones inside `grid`, `baseline`,
-# and `assign` — a swept parameter path, an axis name — which no fixed dotted
-# path reaches; closing the nameable leaves here and not those would leave a
-# partial closure reading like a total one. `assign` differs one level further
-# in: the axis *name* is still unnameable, but each axis block's own keys are
-# fixed — `{method, from, ratio, block_size, stratify_by, seed}`, § The one
-# config file's full expansion of an `assign` entry — so `_check_assign_axis_keys`
-# below closes that inner level on its own, the same way `measurements` is
-# closed one level in rather than left whole.
+# the closure below never descends into a known leaf, and `_check_shape` checks
+# a container's *shape* and never the names inside one, so a misspelled
+# `resolverr` in a `data.units.from` mapping is reported by no check in this
+# build. That is the documented cost of a whole leaf (`reference.md`
+# § Validation names the blocks it applies to and the slice that closes each),
+# not a claim that such a key could never be named — a `methodd` in `holdout`
+# was in exactly that position and is now reported, its children's names being
+# fixed. The keys that genuinely cannot be named are the dynamic ones inside
+# `grid`, `baseline`, and `assign` — a swept parameter path, an axis name —
+# which no fixed dotted path reaches; closing the nameable leaves here and not
+# those would leave a partial closure reading like a total one. `assign`
+# differs one level further in: the axis *name* is still unnameable, but each
+# axis block's own keys are fixed — `{method, from, ratio, block_size,
+# stratify_by, seed}`, § The one config file's full expansion of an `assign`
+# entry — so `_check_assign_axis_keys` below closes that inner level on its
+# own, the same way `measurements` is closed one level in rather than left
+# whole.
 LEAF_TYPES: dict[str, type | tuple[type, ...]] = {
     "schema_version": str,
     "experiment_type": str,
@@ -96,14 +96,15 @@ LEAF_TYPES: dict[str, type | tuple[type, ...]] = {
     # `measurements`': the slice that honours a block needs the shape checked
     # before it can read the values.
     "data.units.holdout.method": str,
-    # `(int, float)`, matching `limits.max_failed_fraction`'s entry: a `frac: 1`
-    # is a well-typed number that happens to fall outside the open interval
-    # (0, 1), which is a different fault with a different code
-    # (`E-DATA-HOLDOUT-FRAC`) and a different fix, not a type error. `_is_type`
-    # already promotes a plain `int` to satisfy a bare `float` declaration, so
-    # this tuple documents what the entry permits rather than changing it —
-    # `bool` stays excluded either way, by `_is_type`'s separate special case,
-    # since `True` is not a fraction however well `bool` subclasses `int`.
+    # `(int, float)`, spelled out rather than left as bare `float` (the form
+    # `limits.max_failed_fraction` uses), so the entry states in the table
+    # itself what `_is_type` already does for any bare `float` declaration:
+    # promote a plain `int` to satisfy it. A `frac: 1` is therefore a
+    # well-typed number that happens to fall outside the open interval (0, 1)
+    # — a different fault with a different code (`E-DATA-HOLDOUT-FRAC`) and a
+    # different fix, not a type error. `bool` stays excluded either way, by
+    # `_is_type`'s separate special case, since `True` is not a fraction
+    # however well `bool` subclasses `int`.
     "data.units.holdout.frac": (int, float),
     "data.units.holdout.from": str,
     # `(str, int)`, matching what § What `auto` derives from permits: the
