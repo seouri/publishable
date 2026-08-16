@@ -231,3 +231,39 @@ Tasks 5 and 6: reviewed (opus). All four verdicts PASS, with one Important.
   renders, and there is no `spec-defects.md` entry. Pre-existing, out of scope here.
 Tasks 5 and 6: complete. 1964 passed + 2 xfailed; ruff check, format and mypy clean. **Part A is done.**
   BASE for task 7 is below.
+
+Task 7: implemented at b907ab6. 1971 passed + 2 xfailed. `secrets.py` ships `load_env`, `missing_env`,
+  `credential_values`, `redact`; `python-dotenv` added; § Package layout's `— not yet built` marker
+  retired IN THIS COMMIT, which is the deferral task 6 handed forward so the document never claimed a
+  module that was not there.
+  Real disagreement found by the implementer, and it is a good one: **`load_dotenv` writes straight
+  into `os.environ`, past `monkeypatch`'s tracking**, so a value one test's `.env` wrote survived into
+  the next and failed it — independent of the implementation. The plan's global prescription that
+  `monkeypatch.delenv(..., raising=False)` protects against a later direct write is empirically FALSE.
+Task 7: reviewed (opus). Spec compliance PASS; task quality FAIL on one Important.
+  **`missing_env`'s declared-order guarantee was pinned by nothing** — the fixture names were already
+  alphabetical, so declared order and sorted order are the same answer and `return sorted(out)` left
+  all seven tests green. `reversed(out)` was caught, so what was pinned was "not reversed", strictly
+  weaker than the normative § Validation claim. **And the test's NAME claimed the guarantee**, which is
+  the shape that makes a reader stop looking — task 9's implementer would have grepped, found it, and
+  skipped writing the real check. Fixed by changing one fixture name so the orders differ; I ran the
+  mutation both ways.
+  Ruling on the second Important, which the reviewer raised without attaching verdict weight: the
+  isolation fixture was FILE-LOCAL. The hazard is not — every module exercising a load path inherits
+  it, and tasks 8-12 would each have rediscovered the same leak. Moved to `tests/conftest.py`, with the
+  reason written where the next reader will be. Proven load-bearing after the move rather than assumed:
+  flipping `autouse` to `False` reproduces the failure. Cost if wrong: one autouse fixture over the
+  whole suite, which is the price of not having the leak rediscovered five more times.
+  Minor closed: `load_env`'s "Returns whether a file was read" was false in both directions. Measured
+  all three shapes myself — comment-only `False`, empty `False`, every-binding-skipped `True` — rather
+  than carrying the reviewer's account.
+  Routed to task 14's filings: `PYTHON_DOTENV_DISABLED` silently disables loading, so core's load path
+  honours an **undocumented behavior-changing environment variable** — which is against CLAUDE.md's
+  first invariant. It fails closed and predates the version bump, so it is a filing rather than a fix.
+  Also routed there: the constraint table's `min_items`/`max_items` rendering gap from tasks 5-6.
+  The reviewer also reported falsifying its OWN hypothesis mid-review — it set out to file the
+  idempotence assertion as vacuous and found an isolating memoization mutation does fail it. Recorded
+  because a reviewer that reports what it expected to find and didn't is worth more than one that only
+  reports hits.
+Task 7: complete. 1971 passed + 2 xfailed; ruff check, format (76 files) and mypy (43 source files)
+  clean. BASE for task 8 is below.

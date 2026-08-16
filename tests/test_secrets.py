@@ -9,17 +9,9 @@ _NAME = "PUBLISHABLE_TEST_TOKEN"
 _OTHER = "PUBLISHABLE_TEST_OTHER"
 
 
-@pytest.fixture(autouse=True)
-def _restore_environ():
-    """`load_env` calls `load_dotenv`, which writes straight into `os.environ` —
-    not through `monkeypatch`, so `monkeypatch` cannot undo it. Without this, a
-    value one test's `.env` writes (e.g. `from-the-file`) survives into the next
-    test, which is exactly the silent cross-test leak this file's tests exist to
-    avoid introducing into `os.environ` itself."""
-    saved = dict(os.environ)
-    yield
-    os.environ.clear()
-    os.environ.update(saved)
+# `os.environ` is restored around every test by an autouse fixture in `conftest.py`.
+# It lives there because `load_dotenv` writes past `monkeypatch`, and every module
+# exercising a load path inherits that hazard.
 
 
 def test_a_shell_value_wins_over_the_file(tmp_path: Path, monkeypatch):
@@ -58,10 +50,10 @@ def test_no_repo_and_no_file_are_both_quiet(tmp_path: Path, monkeypatch):
 def test_missing_env_answers_in_declared_order_and_dedupes(monkeypatch):
     monkeypatch.setenv(_NAME, "set")
     monkeypatch.delenv(_OTHER, raising=False)
-    monkeypatch.delenv("PUBLISHABLE_TEST_THIRD", raising=False)
-    assert missing_env([_OTHER, _NAME, "PUBLISHABLE_TEST_THIRD", _OTHER]) == [
+    monkeypatch.delenv("PUBLISHABLE_TEST_AAA", raising=False)
+    assert missing_env([_OTHER, _NAME, "PUBLISHABLE_TEST_AAA", _OTHER]) == [
         _OTHER,
-        "PUBLISHABLE_TEST_THIRD",
+        "PUBLISHABLE_TEST_AAA",
     ]
     # THE CONTROL: with everything set, the answer is empty — so a function that
     # returned its whole argument would fail here rather than only above.
@@ -74,7 +66,6 @@ def test_an_empty_string_counts_as_unset():
     """A variable exported as the empty string is a name someone wrote down and
     never filled in, which is the fault this family exists to catch — not a
     credential whose value happens to be empty."""
-    import os
 
     with pytest.MonkeyPatch.context() as mp:
         mp.setenv(_NAME, "")

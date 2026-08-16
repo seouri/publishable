@@ -21,7 +21,13 @@ ENV_FILENAME = ".env"
 
 
 def load_env(repo_root: Path | None) -> bool:
-    """Load `<repo_root>/.env` into `os.environ`. Returns whether a file was read.
+    """Load `<repo_root>/.env` into `os.environ`.
+
+    Returns `python-dotenv`'s own answer, which is **not** "a file was read": a
+    comment-only or empty `.env` returns `False`, and a load whose every binding is
+    skipped because the shell already set it returns `True`. No caller depends on the
+    distinction — it is returned rather than dropped so a caller that later needs it
+    has it, and described here so nobody reads it as a file-existence test.
 
     **Never overrides.** `override=False` means a variable already exported in the
     shell wins over the file, which is the direction that fails safe: a stale

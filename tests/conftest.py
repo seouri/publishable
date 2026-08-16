@@ -1,7 +1,29 @@
+import os
 import subprocess
 from pathlib import Path
 
 import pytest
+
+
+@pytest.fixture(autouse=True)
+def _restore_environ():
+    """Restore `os.environ` around every test in the suite.
+
+    `secrets.load_env` calls `python-dotenv`'s `load_dotenv`, which writes straight
+    into `os.environ` rather than through `monkeypatch` — so `monkeypatch` cannot undo
+    it and a value one test's `.env` writes survives into the next. That leak was
+    observed, not anticipated: it made a later test in `test_secrets.py` fail on a
+    value an earlier one had loaded.
+
+    It lives here rather than beside those tests because every module that exercises
+    a load path inherits the same hazard, and a per-file fixture leaves the next one
+    to rediscover it. Restoring by snapshot covers deletions as well as writes, which
+    a fixture that only unset what it saw would not.
+    """
+    saved = dict(os.environ)
+    yield
+    os.environ.clear()
+    os.environ.update(saved)
 
 
 def git(*args: str, cwd: Path) -> str:
