@@ -25,10 +25,11 @@ from publishable.diagnostics import EXIT_INVOCATION, EXIT_OK, EXIT_PARTIAL, EXIT
 from publishable.errors import ContractError
 from publishable.generators.experiment import generate_experiment
 from publishable.generators.step import generate_step
+from publishable.hashes import design_digest
 from publishable.replication import LABEL_JOIN
 from publishable.runner import attrition
 from publishable.scope import Execution
-from publishable.units import HoldoutPlan
+from publishable.units import HoldoutPlan, holdout_seed_for, resolve_units
 from publishable.validate import validate_config
 
 Ran = namedtuple("Ran", ["condition_index", "repeat_label"])
@@ -8186,8 +8187,20 @@ def test_a_declared_holdout_now_validates_and_runs(tmp_path, capsys):
     )
     assert not set(alloc["holdout"]["train"]) & set(alloc["holdout"]["test"])
 
-    # Task 14: the step saw the same two lists the record claims.
-    seen = json.loads(next(doc["run_dir"].rglob("split.json")).read_text())
+    # Task 14: the step saw the same two lists the record claims — and saw
+    # them identically every repeat. Five `split.json` files exist (one per
+    # seed repeat); reading only one, as an earlier version of this test did,
+    # cannot tell "realized once outside the loop" from "re-realized inside
+    # it off the same seed and roster" — the two are behaviourally identical
+    # from a single file's contents, so all five are collected and compared
+    # rather than one read at random. This still cannot see a re-realization
+    # keyed off the repeat's OWN RNG rather than the run's; only a mis-siting
+    # that draws differently per repeat is ruled out here.
+    split_files = sorted(doc["run_dir"].rglob("split.json"))
+    assert len(split_files) == 5
+    seen_all = [json.loads(p.read_text()) for p in split_files]
+    assert all(seen == seen_all[0] for seen in seen_all[1:]), seen_all
+    seen = seen_all[0]
     assert seen["test"] == sorted(alloc["holdout"]["test"])
     assert seen["train"] == sorted(alloc["holdout"]["train"])
 
@@ -8205,10 +8218,49 @@ def test_a_declared_holdout_now_validates_and_runs(tmp_path, capsys):
     # Task 15: the denominator is the TEST partition, and the roster's identity
     # is not. The two numbers asserted side by side, which is the ruling.
     assert run["provenance"]["units"]["n"] == 20
+    checked = 0
     for block in run["results"]["conditions"][0]["aggregated"].values():
         for metric in block.values():
             if isinstance(metric, dict) and isinstance(metric.get("n"), dict):
                 assert metric["n"]["resolved"] == 4, metric
+                checked += 1
+    # A guard with nothing to guard passes vacuously: if `aggregated` ever
+    # stops carrying a dict `n` (a renamed key, a shape change), this loop
+    # would execute zero times and the assertion above would never run. The
+    # counter makes that silent-pass state itself a failure.
+    assert checked > 0
+
+
+def test_a_holdouts_derived_seed_matches_its_own_digest(tmp_path, capsys):
+    """The brief's pin 1 seed clause, actually exercised: the sibling test above
+    declares `seed: 4321`, so its `alloc["holdout"]["seed"] == 4321` assertion
+    checks the **pinned** literal came back unchanged — `holdout_seed_for`'s
+    derivation branch (the `auto` path) never runs, and pinning a constant at
+    `_resolved_holdout`'s call site in `cli.py` (`digest` → `"sha256:constant"`
+    in `holdout_plan = _resolved_holdout(units_decl, roster, digest, clusters)`)
+    left the whole suite green, this test included, before this test existed.
+
+    This config declares no `seed` at all, so `allocation.json`'s recorded
+    seed is `holdout_seed_for`'s derived value — recomputed here from the
+    run's own recorded config, not re-read from anything the run wrote, the
+    same ground-truth discipline `run_roster_keys` above uses for the roster.
+    """
+    doc = run_a_project(
+        tmp_path, capsys=capsys, units=20,
+        units_overrides={"holdout": {"method": "random", "frac": 0.2}},
+        _starter_step=_HOLDOUT_SEEING_STEP,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    alloc = json.loads((doc["run_dir"] / "allocation.json").read_text())
+
+    units_decl = run["config"]["data"]["units"]
+    digest = design_digest(run["config"])
+    roster, _technical_n, _columns = resolve_units(
+        units_decl, doc["root"].parent / "data"
+    )
+    assert alloc["holdout"]["seed"] == holdout_seed_for(
+        units_decl["holdout"], digest, roster
+    )
 
 
 def test_max_failed_fraction_is_measured_against_the_test_partition(tmp_path, capsys):

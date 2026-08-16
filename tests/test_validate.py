@@ -906,8 +906,16 @@ def test_a_holdout_repeat_kind_still_routes_to_the_built_field(write_config):
     test belongs beside `_holdout`'s other consumers in this file rather than
     in `test_cli.py`, since it is a pure validate-time check with no run to
     drive — `write_config`, `_holdout` and `messages_by_code` are this
-    module's, not `test_cli.py`'s."""
-    overrides = _holdout(None)
+    module's, not `test_cli.py`'s.
+
+    The block is a real, well-formed declaration (`_holdout({"method": ...})`),
+    not `_holdout(None)`'s `holdout: null` — the retired refusal's
+    `if units.get(field):` gate never fired on a null block, so asserting its
+    absence there would prove nothing about the retirement. The destination
+    actually existing is pinned by `test_a_plain_holdout_declaration_is_now_accepted`,
+    whose config also declares a real block; this test's own job is only the
+    routing, which the first two assertions carry."""
+    overrides = _holdout({"method": "random", "frac": 0.2})
     overrides["replication"] = {
         "repeats": [{"kind": "holdout", "n": 1}], "order": "as_declared"
     }
@@ -11314,11 +11322,11 @@ def _holdout(block, **extra) -> dict:
 
 def test_an_empty_or_null_holdout_validates_clean(write_config):
     """`holdout: {}` and `holdout: null` declare nothing and partition nothing,
-    so neither is refused — `_check_resample`'s own `not isinstance(...) or not
-    ...: return` gate, one block over. Pinned because the shape looks like a
-    hole and is not: a misspelled child inside a NON-empty block is reported by
-    `check_envelope`, and `_check_unimplemented`'s truthiness test is false for
-    both of these.
+    so neither is refused — `_check_holdout`'s own `not isinstance(...) or not
+    ...: return` gate, the same shape `_check_resample` uses one block over.
+    Pinned because the shape looks like a hole and is not: a misspelled child
+    inside a NON-empty block is reported by `check_envelope`, and
+    `_check_holdout`'s gate returns without reporting for both of these.
 
     The positive companion is the third assertion: a real declaration in the
     same position DOES report, so this cannot pass by the check being dead.

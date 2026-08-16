@@ -29,8 +29,10 @@ from typing import Any
 # into by the closure, which is why the closure checks containers first.
 # `holdout` is closed one level in too, at its own five keys, the same way
 # `resample` was: the shape was checked ahead of the block's wholesale
-# refusal lifting rather than after it, so the slice that honours the block
-# (task 18) reads values whose shape a check already approved. The optional
+# refusal lifting rather than after it, so the tasks that honour the block —
+# `units.holdout_for`, `cli._resolved_holdout`, `io.units.train`, and the
+# denominator narrowing, task 18 itself retiring only the wholesale refusal —
+# read values whose shape a check already approved. The optional
 # blocks that section documents but a
 # materialized config omits — `sweep`'s modes, `statistics.contrasts` /
 # `.null_test` / `.report_by`, and `data.units.assign` — are declared at their
@@ -127,11 +129,12 @@ LEAF_TYPES: dict[str, type | tuple[type, ...]] = {
     "statistics.resample": dict,
     # Closed one level in, the arrangement `data.units.measurements` above has
     # and for its reason: these three names are fixed. The block's own
-    # wholesale refusal stood until H4a task 12 retired it — unlike `holdout`
-    # above, this was deliberately closed *before* that refusal retired, not
-    # after: the slice that honours `resample` needs the shape checked before
-    # it can read the values, so validate-before-honour meant these three
-    # names went in first, ahead of the wholesale refusal lifting. `assign`'s
+    # wholesale refusal stood until H4a task 12 retired it, and — the same
+    # ordering `holdout` above took relative to its own refusal's retirement —
+    # this was deliberately closed *before* that refusal retired, not after:
+    # the slice that honours `resample` needs the shape checked before it can
+    # read the values, so validate-before-honour meant these three names went
+    # in first, ahead of the wholesale refusal lifting. `assign`'s
     # separate `_check_assign_axis_keys` is not the precedent: it exists
     # because an axis NAME is user-chosen and no fixed dotted path reaches it.
     # `stratify_by` is

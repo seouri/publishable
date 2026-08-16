@@ -1410,8 +1410,7 @@ HOLDOUT_METHODS = ("random", "by_attribute")
 
 Two values and no more, and stated as a closed enum for `ASSIGN_METHODS`'s
 reason: a third named here and realized nowhere would validate clean and then
-reach `units.holdout_for`, which refuses what it cannot draw — not yet built
-at this commit; task 10 of this slice is where it lands. Which of the two
+reach `units.holdout_for`, which refuses what it cannot draw. Which of the two
 reads a partition and which draws one is what decides every other field's
 meaning, so a malformed `method` is reported before any of them is read.
 """
@@ -2722,10 +2721,11 @@ def _check_holdout(
 
     **An empty or non-mapping declaration returns reporting nothing**,
     `_check_resample`'s own gate one block over. `holdout: {}` and
-    `holdout: null` declare nothing and partition nothing;
-    `_check_unimplemented`'s truthiness test is false for both, and a
-    misspelled child inside a non-empty block is `check_envelope`'s
-    `E-CONFIG-KEY-UNKNOWN` rather than this function's.
+    `holdout: null` declare nothing and partition nothing; this function's own
+    `if not isinstance(holdout, dict) or not holdout: return` is what keeps
+    both from being read as a declaration, and a misspelled child inside a
+    non-empty block is `check_envelope`'s `E-CONFIG-KEY-UNKNOWN` rather than
+    this function's.
 
     Every value-shape fault reported here — the `frac` interval, the
     `method`/`from` type absorptions — is `isinstance`-guarded and quietly
@@ -3553,10 +3553,12 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
             "plugin registry is not implemented in this build; resolvers will be honored "
             "in a later slice. Use a table or a glob for now",
         )
-    # No `data.units` sub-field is refused wholesale any more. Each one this
-    # function used to hold — `allocation`/`assign`, `cluster_by`, `weight_by`,
-    # `measurements`, and now `holdout` — is checked for real by its own
-    # function instead, and each changes the run's record rather than
+    # No `data.units` *block* is refused wholesale any more — a `resolver`
+    # source (just above, under `E-DATA-RESOLVER-UNSUPPORTED`) is a leaf value
+    # inside `from`, not one of these blocks, and stays refused. Each block
+    # this function used to hold — `allocation`/`assign`, `cluster_by`,
+    # `weight_by`, `measurements`, and now `holdout` — is checked for real by
+    # its own function instead, and each changes the run's record rather than
     # validating clean and then doing nothing:
     #
     # `allocation: between` and `assign` are checked by `_check_assign` —
