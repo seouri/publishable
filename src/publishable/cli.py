@@ -56,7 +56,7 @@ from publishable.runner import (
 )
 from publishable.scaffold import scaffold_project
 from publishable.scope import Execution, build_plan
-from publishable.secrets import load_env
+from publishable.secrets import credential_values, load_env
 from publishable.stats import (
     UnitTable,
     cohens_dz,
@@ -307,6 +307,58 @@ def _wide_swept_paths(sweep_block: dict[str, Any]) -> set[str]:
         | set(ablated_paths(sweep_block))
         | set(sweep_block.get("baseline") or {})
     ) - selectors
+
+
+def _flatten_parameters(node: Any, prefix: str = "") -> dict[str, Any]:
+    """Mirrors `validate._flatten` for this one caller, rather than reaching
+    across a module boundary for a name private to that module."""
+    flat: dict[str, Any] = {}
+    for key, value in (node or {}).items():
+        path = f"{prefix}.{key}" if prefix else key
+        if isinstance(value, dict):
+            flat.update(_flatten_parameters(value, path))
+        else:
+            flat[path] = value
+    return flat
+
+
+def declared_credential_names(
+    doc: dict[str, Any], template: Any, conditions: "list[Condition]"
+) -> list[str]:
+    """Every environment variable this config's declarations name.
+
+    The same two collectors `validate` checks — the template's `required_env` and
+    the `requires_env` of every value a resolved condition selects — read here for
+    their *values* rather than for their presence. Deliberately the same set: core
+    redacts exactly what it was told to look for, which is what makes the answer a
+    fact rather than a guess.
+
+    Takes the already-expanded `conditions` rather than expanding again, so the
+    set core redacts is derived from the same condition list the run executes.
+
+    A `None` template yields the empty list, which is the honest answer for a name
+    that resolves to nothing — but it is also indistinguishable from a template
+    declaring no credentials, so the caller's job is to pass a template that was
+    resolved WITH `repo_root`.
+    """
+    names: list[str] = list(getattr(template, "required_env", None) or [])
+    spec = getattr(template, "parameter_spec", None) or {}
+    declared = _flatten_parameters(doc.get("parameters"))
+    for condition in conditions:
+        resolved = dict(declared)
+        for path, value in condition.values.items():
+            if path not in condition.selectors:
+                resolved[path] = value
+        for path, param in spec.items():
+            mapping = getattr(param, "requires_env", None)
+            if not mapping:
+                continue
+            value = resolved.get(path, param.default)
+            try:
+                names.extend(mapping.get(value) or [])
+            except TypeError:
+                continue
+    return names
 
 
 def _resolved_group_axes(
@@ -1475,6 +1527,19 @@ def command_run(config_path: Path) -> int:
     fold_members = fold_members_for(levels, partitions) if partitions is not None else None
 
     conditions = expand(doc)
+    # Resolved here rather than read off the later `get_template` call, which is
+    # bound after `execute_plan` and inside a roster guard. `repo_root` is passed
+    # because without it `registry._merged` never runs `discover_local`, and every
+    # project-local template resolves to `None` — which would empty `credentials`
+    # and silently turn the redaction below into a no-op for exactly the templates
+    # this check is for. Cannot raise: `validate_config` already made the same
+    # call and returned without error, or `command_run` returned above.
+    run_template = get_template(doc.get("experiment_type", ""), repo_root)
+    # Every credential core read for a DECLARED variable — the template's own
+    # `required_env`, plus the union its parameters' `requires_env` resolves to.
+    # Held for this command only and written nowhere; its single consumer is the
+    # redaction in `execute_plan`.
+    credentials = credential_values(declared_credential_names(doc, run_template, conditions))
     sweep_block = doc.get("sweep") or {}
     swept_paths = _wide_swept_paths(sweep_block)
     # One frozenset of unit keys per condition that selects a group axis — `None`
@@ -1654,6 +1719,7 @@ def command_run(config_path: Path) -> int:
                 else None
             ),
             measurements=(units_decl or {}).get("measurements"),
+            credentials=credentials,
         )
 
         status = run_status(results)
@@ -1696,6 +1762,7 @@ def command_run(config_path: Path) -> int:
         # runs, it just leaves `io.units`/`io.units.train` unreachable), so the
         # warning this collector carries must not be coupled to a roster existing.
         aggregate_c = Collector()
+        aggregate_c.credentials = credentials
         # An `Estimate` reaches here already valid (`coerce_scalars` refused a
         # `ci95` with no `method`, E-STEP-ESTIMATE-METHOD, and any non-`summary`
         # scope, E-STEP-ESTIMATE-SCOPE) — the one thing left unchecked is `n`.
@@ -2578,6 +2645,7 @@ def command_run(config_path: Path) -> int:
         if changed_inputs:
             status = "failed"
             drift_c = Collector()
+            drift_c.credentials = credentials
             noun = "path" if len(changed_inputs) == 1 else "paths"
             drift_c.error(
                 "E-INPUT-CHANGED",

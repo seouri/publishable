@@ -21,7 +21,7 @@ from publishable.param import MISSING
 from publishable.provenance import find_repo_root, resolves_inside_repo
 from publishable.replication import resolve_repeats
 from publishable.scope import step_name as _step_name
-from publishable.secrets import load_env, missing_env
+from publishable.secrets import credential_values, load_env, missing_env
 from publishable.stats import min_honest_draws
 from publishable.strata import levels_for
 from publishable.sweep import (
@@ -590,6 +590,13 @@ def validate_config(
     _check_entrypoint(doc, c)
     _check_required_env(doc, template, c)
     _check_requires_env(doc, template, c)
+    # Set once `template` is resolved, so `c.render()` — whenever it is finally
+    # called, by `command_validate` or `command_run` — redacts a credential value
+    # out of any finding's text, including `E-ENTRYPOINT-IMPORT` above, which is
+    # built before this line runs. Redaction happens at render, not at
+    # construction (`Diagnostic` is a frozen record with no methods), so setting
+    # this after the fact still covers every finding already appended.
+    c.credentials = credential_values(declared_credential_names_for(doc, template))
     _check_parameters(doc, template, c)
     _check_versions(doc, template, c)
     _check_data(doc, config_path, c)
@@ -822,6 +829,59 @@ def _check_requires_env(doc: dict[str, Any], template: Any, c: Collector) -> Non
             f"is `{value}` in {where}, which requires `{variable}` — no value in the "
             "environment or in `.env`",
         )
+
+
+def declared_credential_names_for(doc: dict[str, Any], template: Any) -> list[str]:
+    """Every environment variable this config's declarations name.
+
+    The same two collectors `_check_required_env` and `_check_requires_env`
+    check for *presence* above, read here for their *values* — deliberately the
+    same set, which is what makes the redaction this feeds a fact rather than a
+    guess. Not shared as one function with `cli.declared_credential_names`: that
+    one takes the `conditions` its caller already expanded, because a second
+    `expand(doc)` there would be a second derivation of the plan actually
+    executed; this module's every other check (`_check_requires_env`,
+    `_check_sweep`, `_check_contrasts`) already re-derives `expand(doc)` locally
+    under the same guard, since `validate` collects findings rather than
+    threading one resolved plan through them, so re-deriving here matches this
+    file's own convention rather than breaking it.
+
+    A `None` template — reached only when `resolve_template` already returned
+    early — yields the empty list, since `getattr(None, ...)` on a missing
+    template answers nothing rather than guessing.
+    """
+    names: list[str] = list(getattr(template, "required_env", None) or [])
+    spec = getattr(template, "parameter_spec", None) or {}
+    wanted = {path: p for path, p in spec.items() if getattr(p, "requires_env", None)}
+    if not wanted:
+        return names
+    try:
+        conditions = expand(doc)
+    except Exception:
+        # Guarded the same way `_check_requires_env` guards its own `expand(doc)`:
+        # an unexpandable sweep is `_check_sweep`'s finding to make, not this
+        # collector's crash to cause.
+        return names
+    declared = _flatten(doc.get("parameters"), "")
+    for condition in conditions:
+        resolved = dict(declared)
+        for path, value in condition.values.items():
+            if path in condition.selectors:
+                continue
+            resolved[path] = value
+        for path, param in wanted.items():
+            if path in resolved:
+                value = resolved[path]
+            elif param.default is not MISSING:
+                value = param.default
+            else:
+                continue
+            try:
+                needs = param.requires_env.get(value)
+            except TypeError:
+                continue
+            names.extend(needs or [])
+    return names
 
 
 def _check_parameters(doc: dict[str, Any], template: Any, c: Collector) -> None:

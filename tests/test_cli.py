@@ -8443,3 +8443,298 @@ def test_run_loads_dot_env_itself_rather_than_relying_on_validate(tmp_path, monk
     # Something that must REPORT, not an absence: the step got the real value and
     # returned its length. 8 is `len("abcdefgh")`, derived from the fixture above.
     assert json.dumps(per_repeat).count('"token_len": 8') >= 1
+
+
+_SENTINEL = "sk-h7c-sentinel-9f3a1c"
+
+_LEAKY_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+import os
+
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        token = os.environ["PUBLISHABLE_TEST_TOKEN"]
+        # A client library interpolating a key into a URL in its error message is
+        # ordinary, and this is the one surface on which that value can reach a
+        # record: `runner` writes a failed execution's exception text into both
+        # `executions.jsonl` and `run.yaml`.
+        raise RuntimeError("POST https://api.example/v1?key=" + token + " returned 401")
+"""
+
+_LEAKY_AZURE_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+import os
+
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        token = os.environ["PUBLISHABLE_TEST_AZURE"]
+        raise RuntimeError("POST https://api.example/v1?key=" + token + " returned 401")
+"""
+
+_SECRET_USING_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+import os
+
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        token = os.environ["PUBLISHABLE_TEST_TOKEN"]
+        for unit in io.units:
+            io.record(unit.key, {{"present": True}})
+        return {{"token_len": len(token)}}
+"""
+
+
+def _files_under(results_dir):
+    """Every file a run wrote, as a list of paths — the FILE LIST is what gets
+    filtered, never the sweep's output. Filtering the output of a search for a
+    string is how this repo lost a true hit once already.
+
+    Globbed rather than enumerated: `allocation.json` exists only under an
+    assignment or a holdout, and a fixture that declares neither would make a
+    named-file assertion vacuous or wrong.
+    """
+    return [p for p in sorted(results_dir.rglob("*")) if p.is_file()]
+
+
+def test_a_credential_value_reaches_no_artifact_and_the_redaction_says_so(
+    tmp_path, monkeypatch, capsys
+):
+    """The one accident this slice must survive: a step whose exception text
+    carries the value core read.
+
+    Three assertions, and the first is the one that makes the other two mean
+    something — a sweep for absence passes identically if nothing ran.
+
+    `extra_steps=["control"]` adds the generated no-op step (`return {{}}`,
+    always completes) beside the leaky one. Without it the scaffold's one step
+    fails on every one of its repeats, `run_status` sees no completed execution
+    anywhere, and the run is wholly `"failed"` (`EXIT_FAILED`) rather than
+    `"partial"` — the same fixture defect
+    `test_io_units_train_raises_without_a_fold_or_holdout` already found and
+    named: a step that fails on every repeat with no completing step anywhere
+    leaves the run `failed`, not `partial`, regardless of what the brief assumed.
+    """
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.delenv("PUBLISHABLE_TEST_TOKEN", raising=False)
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _LEAKY_STEP)
+    monkeypatch.setattr(
+        "publishable.templates.builtin.generic.GenericTemplate.required_env",
+        ["PUBLISHABLE_TEST_TOKEN"],
+    )
+
+    doc = run_a_project(
+        tmp_path,
+        units=4,
+        extra_steps=["control"],
+        _env_file=f"PUBLISHABLE_TEST_TOKEN={_SENTINEL}\n",
+        expect_exit=EXIT_PARTIAL,
+        capsys=capsys,
+    )
+    run_dir = doc["run_dir"]
+    run = yaml.safe_load((run_dir / "run.yaml").read_text())
+
+    # 1. SOMETHING THAT MUST REPORT. The execution failed, its error was recorded,
+    #    and the redaction announced itself by naming the variable.
+    ledger = [
+        json.loads(line)
+        for line in (run_dir / "executions.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    errors = [e["error"] for e in ledger if e["error"]]
+    assert errors, "no execution failed — the sweep below would be vacuous"
+    assert all("<redacted:PUBLISHABLE_TEST_TOKEN>" in e for e in errors), errors
+    # The surrounding text SURVIVES: scrubbing the whole message destroys the
+    # debugging the record exists for.
+    assert all("RuntimeError" in e and "returned 401" in e for e in errors), errors
+
+    # 2. The same, as `run.yaml` arranges it — a second surface, not a rephrasing
+    #    of the first.
+    recorded = json.dumps(run)
+    assert "<redacted:PUBLISHABLE_TEST_TOKEN>" in recorded
+
+    # 3. The sweep. The FILE LIST is filtered, never the output.
+    swept = _files_under(doc["results_dir"])
+    assert swept, "no artifacts were written — the sweep would be vacuous"
+    for path in swept:
+        assert _SENTINEL not in path.read_bytes().decode("utf-8", "replace"), path
+    # stdout/stderr, captured by the helper because `capsys` was passed.
+    assert _SENTINEL not in (doc["stdout"] or "")
+    assert _SENTINEL not in (doc["stderr"] or "")
+
+
+def test_a_step_reads_its_credential_and_the_value_still_reaches_no_artifact(
+    tmp_path, monkeypatch, capsys
+):
+    """The success path, with something that must report: the step got the real
+    value and returned its length. Without this, the sweep above proves only that
+    a *failed* run leaks nothing."""
+    import publishable.generators.experiment as experiment_gen
+
+    monkeypatch.delenv("PUBLISHABLE_TEST_TOKEN", raising=False)
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _SECRET_USING_STEP)
+    monkeypatch.setattr(
+        "publishable.templates.builtin.generic.GenericTemplate.required_env",
+        ["PUBLISHABLE_TEST_TOKEN"],
+    )
+
+    doc = run_a_project(
+        tmp_path, units=4, _env_file=f"PUBLISHABLE_TEST_TOKEN={_SENTINEL}\n", capsys=capsys
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    # Pin ONE spelling, derived from the document rather than guessed: print
+    # `run["results"]` once for this fixture, find where `token_len` lands, and
+    # write that access path here. An `or` between two candidate spellings passes
+    # if either happens to hold and proves nothing about which.
+    assert json.dumps(run).count(f'"token_len": {len(_SENTINEL)}') >= 1, run["results"]
+    swept = _files_under(doc["results_dir"])
+    assert swept, "no artifacts were written — the sweep would be vacuous"
+    for path in swept:
+        assert _SENTINEL not in path.read_bytes().decode("utf-8", "replace"), path
+    assert _SENTINEL not in (doc["stdout"] or "")
+    assert _SENTINEL not in (doc["stderr"] or "")
+
+
+_AGGREGATE_LEAKING_TEMPLATE = """\
+import os
+
+from publishable import BaseTemplate, Param, register_template
+
+
+@register_template("cred_assay")
+class CredAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    required_env = ["PUBLISHABLE_TEST_AZURE"]
+    parameter_spec = {}
+
+    def aggregate(self, units, cfg):
+        # A template's own exception reaches stdout through
+        # `W-STATS-AGGREGATE-FAILED`, never through `run.yaml` — `run_record`
+        # has no diagnostics channel. So this is a leak the step-error path
+        # cannot see and the render boundary must catch.
+        raise RuntimeError("upstream rejected key " + os.environ["PUBLISHABLE_TEST_AZURE"])
+"""
+
+
+def test_a_template_exception_printed_as_a_warning_is_redacted_too(tmp_path, monkeypatch, capsys):
+    """The second serialization boundary, `Collector.render()`.
+
+    `aggregate` raising is one of five places core builds a
+    `f"...{type(exc).__name__}: {exc}"` string, and four of them are diagnostics
+    rather than records. This one reaches stdout and nothing else, so the step
+    tests above are blind to it — reverting `diagnostics.py` alone leaves all of
+    them green and this one red, which is the whole reason it exists.
+
+    `parameters={}`: `CredAssay.parameter_spec` is empty, and the generic
+    scaffold's default `parameters.analysis.*` block is not a parameter of this
+    template — `E-PARAM-UNKNOWN` for each key, refused before `run` ever gets to
+    `execute_plan`.
+    """
+    monkeypatch.delenv("PUBLISHABLE_TEST_AZURE", raising=False)
+
+    doc = run_a_project(
+        tmp_path,
+        units=4,
+        experiment_type="cred_assay",
+        parameters={},
+        _local_template=_AGGREGATE_LEAKING_TEMPLATE,
+        _env_file=f"PUBLISHABLE_TEST_AZURE={_SENTINEL}\n",
+        capsys=capsys,
+    )
+    out = doc["stdout"] or ""
+    # SOMETHING THAT MUST REPORT: the warning fired, and it announced the
+    # redaction by naming the variable. Without the first assertion the two
+    # below pass identically on a build where `aggregate` was never called.
+    assert "W-STATS-AGGREGATE-FAILED" in out, out
+    assert "<redacted:PUBLISHABLE_TEST_AZURE>" in out, out
+    # The surrounding text survives — the warning is still diagnosable.
+    assert "upstream rejected key" in out, out
+    # And the value is nowhere: stdout, stderr, and every artifact.
+    assert _SENTINEL not in out
+    assert _SENTINEL not in (doc["stderr"] or "")
+    swept = _files_under(doc["results_dir"])
+    assert swept, "no artifacts were written — the sweep would be vacuous"
+    for path in swept:
+        assert _SENTINEL not in path.read_bytes().decode("utf-8", "replace"), path
+
+
+_LOCAL_CRED_TEMPLATE = """\
+from publishable import BaseTemplate, Param, register_template
+
+
+@register_template("cred_assay")
+class CredAssay(BaseTemplate):
+    naming_pattern = r"^[a-z0-9]+(-[a-z0-9]+)*$"
+    required_env = ["PUBLISHABLE_TEST_TOKEN"]
+    parameter_spec = {
+        "llm.provider": Param(
+            str,
+            default="azure_openai",
+            choices=["azure_openai", "openai"],
+            requires_env={
+                "azure_openai": ["PUBLISHABLE_TEST_AZURE"],
+                "openai": ["PUBLISHABLE_TEST_OPENAI"],
+            },
+        )
+    }
+"""
+
+
+def test_a_project_local_template_s_credentials_are_redacted_too(tmp_path, monkeypatch, capsys):
+    """The case `get_template` answers wrongly when `repo_root` is not passed.
+
+    Both tests above patch `GenericTemplate`, which resolves either way — so
+    neither can see a `declared_credential_names` that got `None` back and
+    returned `[]`. This one can: nothing here is a core template, and the value
+    that must be redacted is the one `requires_env` names.
+
+    `extra_steps=["control"]`, for the same reason the first test in this file
+    needs it: the scaffolded step fails on every one of its repeats, and with no
+    completing step anywhere `run_status` reports the run wholly `"failed"`
+    rather than `"partial"`.
+    """
+    import publishable.generators.experiment as experiment_gen
+
+    for name in ("PUBLISHABLE_TEST_TOKEN", "PUBLISHABLE_TEST_AZURE", "PUBLISHABLE_TEST_OPENAI"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _LEAKY_AZURE_STEP)
+
+    doc = run_a_project(
+        tmp_path,
+        units=4,
+        extra_steps=["control"],
+        experiment_type="cred_assay",
+        parameters={"llm": {"provider": "azure_openai"}},
+        _local_template=_LOCAL_CRED_TEMPLATE,
+        _env_file=(f"PUBLISHABLE_TEST_TOKEN=irrelevant\nPUBLISHABLE_TEST_AZURE={_SENTINEL}\n"),
+        expect_exit=EXIT_PARTIAL,
+        capsys=capsys,
+    )
+    ledger = [
+        json.loads(line)
+        for line in (doc["run_dir"] / "executions.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    errors = [e["error"] for e in ledger if e["error"]]
+    assert errors, "no execution failed — the sweep below would be vacuous"
+    assert all("<redacted:PUBLISHABLE_TEST_AZURE>" in e for e in errors), errors
+
+    swept = _files_under(doc["results_dir"])
+    assert swept, "no artifacts were written — the sweep would be vacuous"
+    for path in swept:
+        assert _SENTINEL not in path.read_bytes().decode("utf-8", "replace"), path

@@ -3484,6 +3484,10 @@ parameters:
 
 A template lists what it always needs in `required_env`, and a parameter value lists what *it* needs in [`requires_env`](#a-credential-can-belong-to-a-parameter-value); `validate` confirms each is set — the second only for the conditions a sweep actually resolves — without printing or logging it. Steps read `os.environ[cfg.parameters.instrument.credential_env_var]` normally. This is why `report` and `diff` output is safe to send as-is: there's nothing secret to redact, because there was never anything secret in it.
 
+**An exception's text can carry a value by accident, and it is refused rather than tolerated.** A client library that interpolates a key into a URL in its error message is ordinary, and core turns an exception into text a reader sees in two places: a failed execution's `error`, written into both `run.yaml` and `executions.jsonl`, and a [diagnostic](#exit-codes-and-diagnostics) printed to stdout or stderr — which is how a template's `aggregate` failure and an entrypoint that raises at import reach you. Core replaces each credential value it read with `<redacted:VARIABLE_NAME>` at both, and leaves the rest of the message intact, because the record exists to be debugged from — and it says a redaction happened rather than scrubbing silently, so a reader knows both what was removed and which variable to look at. The match is by **exact value, never by pattern**: core knows what it read out of the environment, so it answers the direct question instead of guessing from a name ending `_KEY` or from how random a string looks.
+
+**The limit of that, stated rather than discovered.** Core redacts only values it read for a **declared** variable — one named in a template's `required_env`, or in the `requires_env` of a value a condition resolves. `io` hands a step no credential, so a step that reaches `os.environ` for a name no declaration mentions holds a value core never saw and cannot match. Declare it, and it is covered; don't, and the redaction is not a guarantee the code can provide.
+
 ---
 
 ## Naming conventions & repeat defaults
