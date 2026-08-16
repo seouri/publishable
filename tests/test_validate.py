@@ -12601,3 +12601,153 @@ def test_two_missing_variables_are_reported_in_condition_order_not_sorted(
     found = [f for f in c.findings if f.code == "E-CRED-PARAM-MISSING"]
     variables_in_order = [next(name for name in _UNION_NAMES if name in f.message) for f in found]
     assert variables_in_order == ["OPENAI_TEST_KEY", "AZURE_TEST_KEY"]
+
+
+def _findings_of(path: Path) -> list:
+    """Every finding, not just its code or its message — the shape a test needs
+    when it must count findings of one code rather than test membership."""
+    c = Collector()
+    validate_config(path, c)
+    return list(c.findings)
+
+
+_ABLATABLE_TEMPLATE = """\
+from publishable import BaseTemplate, Param, register_template
+
+
+@register_template("cred_assay")
+class CredAssay(BaseTemplate):
+    parameter_spec = {
+        "llm.provider": Param(
+            str,
+            default="azure_openai",
+            nullable=True,
+            choices=["azure_openai", "openai", "ollama"],
+            requires_env={
+                "azure_openai": ["AZURE_TEST_KEY"],
+                "openai": ["OPENAI_TEST_KEY"],
+                "ollama": ["OLLAMA_TEST_KEY"],
+            },
+        ),
+        "llm.retries": Param(int, default=2, ge=0),
+    }
+"""
+
+
+def test_a_baseline_is_a_resolved_condition_whose_credential_joins_the_union(
+    git_repo: Path, write_config, monkeypatch
+):
+    """`sweep.NON_PRODUCT_MODES` is `("baseline", "ablate")` — a baseline is not a
+    description of a condition, it IS one, so the value it fixes is resolved and
+    its credential is required. No fixture for this existed anywhere in the
+    evidence base."""
+    _union_project(git_repo, monkeypatch, set_names=("AZURE_TEST_KEY",))
+    path = write_config(
+        {
+            "experiment_type": "cred_assay",
+            "parameters": {"llm": {"provider": "azure_openai", "retries": 2}},
+            "sweep": {
+                "baseline": {"llm.provider": "openai"},
+                "grid": {"llm.retries": [1, 2]},
+            },
+        }
+    )
+    message = messages_by_code(path)["E-CRED-PARAM-MISSING"]
+    assert "OPENAI_TEST_KEY" in message
+    assert "OLLAMA_TEST_KEY" not in message
+
+
+def test_a_paired_cell_resolves_both_of_its_paths(git_repo: Path, write_config, monkeypatch):
+    """A `paired` entry couples two paths into one cell — the shape the
+    feasibility analysis describes in prose for its Ollama case and shows in no
+    YAML (`sweep.paired` is `[]` in both configs that have the key)."""
+    _union_project(git_repo, monkeypatch, set_names=("AZURE_TEST_KEY",))
+    path = write_config(
+        {
+            "experiment_type": "cred_assay",
+            "parameters": {"llm": {"provider": "azure_openai", "retries": 2}},
+            "sweep": {
+                "paired": [
+                    {"llm.provider": "azure_openai", "llm.retries": 1},
+                    {"llm.provider": "ollama", "llm.retries": 4},
+                ]
+            },
+        }
+    )
+    message = messages_by_code(path)["E-CRED-PARAM-MISSING"]
+    assert "OLLAMA_TEST_KEY" in message
+    # Azure's key IS set, so the union reports one variable and not two — the
+    # positive companion that keeps this from being an absence-only control.
+    assert "AZURE_TEST_KEY" not in message
+
+
+def test_a_groups_axis_contributes_no_parameter_value(
+    git_repo: Path, tmp_path: Path, write_config, monkeypatch
+):
+    """A group level is a *set of units*, so it names no parameter and the union
+    over a groups-only sweep is the base value's requirement — which is the
+    correct answer rather than a gap.
+
+    The roster is rewritten first: the `write_config` fixture writes
+    `patient_id\\np1\\n` and nothing else, so `attributes: ["cohort"]` over that
+    file earns `E-UNITS-ATTR-MISSING` and this test would pass for the wrong
+    reason. `tmp_path / "input" / "index.csv"` is the file that fixture writes.
+    """
+    _union_project(git_repo, monkeypatch, set_names=())
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id,cohort\np1,derivation\np2,derivation\np3,validation\np4,validation\n"
+    )
+    path = write_config(
+        {
+            "experiment_type": "cred_assay",
+            "parameters": {"llm": {"provider": "azure_openai", "retries": 2}},
+            "sweep": {"groups": [{"by": "cohort", "levels": ["derivation", "validation"]}]},
+            "data.units": {
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["cohort"],
+            },
+        }
+    )
+    found = [f for f in _findings_of(path) if f.code == "E-CRED-PARAM-MISSING"]
+    assert len(found) == 1, [f.message for f in found]
+    assert "AZURE_TEST_KEY" in found[0].message  # the base value's, in both cells
+    assert "OPENAI_TEST_KEY" not in found[0].message
+    # Both group cells resolve the identical `llm.provider` value and so need the
+    # identical variable — the one attribution race this file's fixtures carry
+    # that the paired fixture above does not, since its two paths need two
+    # different variables. `expand` emits `cohort=derivation` before
+    # `cohort=validation`, so first-attribution names the former.
+    assert "condition `cohort=derivation`" in found[0].message
+
+
+def test_ablate_remove_resolves_a_value_with_no_key_and_requires_nothing(
+    git_repo: Path, write_config, monkeypatch
+):
+    """`sweep.removal_value` sets a nullable parameter to `null`. `requires_env` is
+    total over `choices`, and `null` is not a choice — so the ablated condition
+    requires nothing, silently. Reporting it would be a second report of a fault
+    `_check_sweep` owns.
+
+    The control is on the same document: the BASELINE condition still resolves
+    `openai` and still reports, so this test cannot pass by the check never
+    running.
+    """
+    for name in _UNION_NAMES:
+        monkeypatch.delenv(name, raising=False)
+    templates = git_repo / "templates"
+    templates.mkdir(exist_ok=True)
+    (templates / "cred_assay.py").write_text(_ABLATABLE_TEMPLATE)
+    path = write_config(
+        {
+            "experiment_type": "cred_assay",
+            "parameters": {"llm": {"provider": "azure_openai", "retries": 2}},
+            "sweep": {
+                "baseline": {"llm.provider": "openai"},
+                "ablate": {"remove": ["llm.provider"]},
+            },
+        }
+    )
+    found = [f for f in _findings_of(path) if f.code == "E-CRED-PARAM-MISSING"]
+    assert len(found) == 1, [f.message for f in found]
+    assert "OPENAI_TEST_KEY" in found[0].message  # the baseline's, and only it
