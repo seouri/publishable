@@ -302,3 +302,43 @@ Task 5: fix round 1. Commit 638639e. All ten findings closed.
   confirmed byte-identical to HEAD and 25 passed.
 Task 5: complete. 1847 passed + 2 xfailed; ruff check and mypy clean; `ruff format --check` down to 68
   (67 tracked baseline + one untracked record file). BASE for task 6 is 638639e.
+Task 6: dispatched — `stratify_by` existence and the `holdout` x `fold` mutual exclusion. Pre-checked both
+  brief mutations; the brief's own text rejects its first candidate as non-discriminating and prescribes a
+  replacement, and the fold fixture declares `[{kind: fold, k: 5}]` with no `batch` level, so retargeting
+  the exclusion to `"batch"` makes it never fire.
+Task 6: implemented at bbd4a29 / b5d1ae6. 1857 passed + 2 xfailed.
+  MY PRE-CHECK WAS ITSELF INSUFFICIENT AND THE IMPLEMENTER CAUGHT IT. I confirmed the mutation's target
+  test EXISTED and never read its ASSERTIONS. The test asserted only a finding COUNT of 1, and the
+  mutation produces count 1 too — via the wrong branch, with a different message. The implementer ran it,
+  saw PASS, strengthened the test to read the message, and re-proved it.
+  Ruling: the discipline adopted after task 4 was "check the mutation against the fixture it names". That
+  is now amended to "check the mutation against the ASSERTIONS the fixture makes" — a fixture's existence
+  says nothing about whether its assertions can see the difference the mutation makes. This is the same
+  defect as CLAUDE.md's "a dimension no assertion can see", arriving from the mutation's side rather than
+  the test's. Cost of the weaker form: a mutation recorded as proof that proves nothing, which is what
+  three of my four blind mutations were.
+Task 6: reviewed (opus). Spec compliance PASS; task quality FAIL with two Important and four Minor.
+  F1 is the class again: `if not isinstance(name, str) or not name:` -> `if False:` left the FULL SUITE at
+  1857 passed, because all four rows assert only the code and `7`/`[3]` fall through to the undeclared-name
+  branch under the same code at the same path. The `not name` clause had no fixture at all.
+  Ruling on F2, where the review's remedy was incomplete and I overrode it. The review found § Errors
+  self-contradicting — the `-NO-DRAW` row says an empty `stratify_by: []` is not refused, while `[]` in
+  fact earns `-STRATIFY-UNKNOWN` — and proposed fixing that one row. I probed the code instead. There is
+  NO behavioural contradiction: `[]` is refused exactly once, under the accurate code. The empty refusal
+  is CORRECT and stays, because `materialize.py` writes `holdout: null` and `init` never materializes a
+  holdout block, so refusing `[]` breaks no `init` output. That is also why holdout may differ from
+  `assign` here despite task 5 aligning the two on the `!= []` exemption — for `assign`, `init` DOES write
+  `stratify_by: []`, so the exemption there is forced. The asymmetry is principled.
+  The defect was purely the CLAIM, and it was false at TWO sites, not the one the review named: the
+  § Errors row, and the NO-DRAW branch's own message saying `[]` is "what `init` writes and changes no
+  behavior" — both halves false for holdout. Sweep for the claim, not the file it was noticed in.
+  Cost if wrong: a `stratify_by: []` under a holdout is refused where a user might have meant it as an
+  explicit "no strata"; `init` never writes that shape, so nobody arrives at it by accident.
+Task 6: fix round 1. Commit 062253f. All five actionable findings closed; F6 left alone as instructed —
+  `units.stratum_names`'s docstring names two call sites and has six, which is pre-existing and belongs to
+  the roster-half task. CARRIED TO TASK 7, along with the design's own note that
+  `stratum_varies_within_cluster`'s docstring claims two rows and has three callers, becoming four there.
+  Verified myself that `ruff format --check` rising 68 -> 70 is not a regression: measured 68 at 8f7270b
+  in a scratch worktree with `validate.py` ALREADY among them, and the two added files are this task's own
+  review and report records.
+Task 6: complete. 1859 passed + 2 xfailed; ruff check and mypy clean. BASE for task 7 is 062253f.
