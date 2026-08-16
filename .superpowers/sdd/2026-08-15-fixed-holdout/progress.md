@@ -783,3 +783,41 @@ Task 18: fix round 1. Commit b034923. All eight closed. The one worth naming: th
   because a realization inside a per-condition loop draws the same partition each time. Reading the call
   site had been the only instrument for six tasks.
 Task 18: complete. 1954 passed + 2 xfailed; ruff check and mypy clean. BASE for task 19 is b034923.
+Task 19: dispatched — the owned prose sweep, "thirteen sites in `src/`, by claim rather than by file". The
+  central instruction was to RE-DERIVE the list rather than trust it: that count came from a scoping taken
+  before eighteen tasks of edits, and CLAUDE.md's rule is that a scoping expires while a spec does not.
+  Also carried forward task 18's lesson one level in — sweep for the CLAIM, not the SYMBOL.
+Task 19: implemented at 538376d. 1954 passed + 2 xfailed. Of the brief's thirteen, NINE were already fixed
+  in passing by earlier tasks and four remained. Zero unnamed false sites — a claim I verified myself with
+  an independent sweep of `src/` for six stale-build phrasings, plus every `never`/`always` claim adjacent
+  to `holdout`, plus the four documents. `experimental-designs.md`'s within-cell paragraph is accurate and
+  stays: drawing a fold or holdout INSIDE each cell is genuinely unbuilt and belongs to H3c-3.
+Task 19: reviewed (opus). **BOTH VERDICTS FAIL, on two CRITICALS — and the failure is the deliverable's own
+  defect class arriving in the task that exists to remove it.** The sweep found every site. Two of the four
+  REPLACEMENT SENTENCES were themselves false.
+  One claimed "three checks answer to one row, and the row carries no code for that reason" — false twice:
+  § Validation's *Stratification attribute exists* row covers TWO checks and routes `assign` to a different
+  row, and NO row in that table carries a code, since its columns are `| Check | Example failure |`, which
+  makes "for that reason" a false cause. The other claimed "three declarations naming one attribute produce
+  three codes" — it is FOUR, and the file that says so is `units.py`, whose docstring task 7 of this same
+  slice corrected to four. The codes it named also answered cluster-constancy rather than the missing-value
+  clause they were attached to.
+  Ruling: the asymmetry is the whole finding, and it is general. The report said "disagreements with the
+  brief: none on substance" — the SITES were re-verified against the code and the REPLACEMENT TEXT was not.
+  A sweep task verifies what it is replacing and forgets to verify what it writes. **Every sentence written
+  must name the file and line it was checked against**, and that requirement is what the fix round carried.
+  Ruling on the plan: NOT corrected, unlike the `ruff format` case. Both false sentences were prescribed
+  verbatim by the plan's Steps 3(a) and 3(c), but task 19 is the last task that reads it, so the defect
+  cannot re-fire within this slice. The `ruff format` fix was made at source precisely because it had 16
+  more firings ahead of it. Recording here instead, which is what the development record is for. Cost if
+  wrong: a future re-derivation from this plan reintroduces two false sentences — and this ledger line is
+  where that reader is expected to look.
+Task 19: fix round 1. Commit a5e7ba4. Both Criticals closed, and the implementer reports catching ITSELF
+  drafting a third false claim mid-fix — a contrast between fold's inline indexing and `_stratum_groups`'s
+  handling that conflated a missing KEY with a missing VALUE, and would have contradicted a retained
+  paragraph a few lines below. It reverted to the minimal fix: drop the unsupported claim, add nothing.
+  That is the correct instinct and the one this slice has had to learn repeatedly — the third generation of
+  a defect is prevented by writing less, not by writing a better version of it. C2's count was replaced by
+  no count at all rather than by "four", following the pointer-not-enumeration form tasks 9, 10, 12 and 17
+  each adopted.
+Task 19: complete. 1954 passed + 2 xfailed; ruff check and mypy clean. BASE for task 20 is a5e7ba4.
