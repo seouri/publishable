@@ -595,8 +595,9 @@ def execute_plan(
         if fold_members is None or scoped_units is None:
             # A `data.units.holdout` is fixed for the WHOLE run, so it narrows
             # at every scope — `run`, `condition`, `repeat` and `summary`
-            # alike. That is the inverse of the fold rule three lines below,
-            # and deliberately: `reference.md` § Step scope says "a `holdout`
+            # alike. That is the inverse of the fold branch below, which hands
+            # `None` at `run`/`condition` because a fold hasn't happened yet
+            # there — and deliberately: `reference.md` § Step scope says "a `holdout`
             # does not raise, because its split is fixed for the whole run",
             # and `experimental-designs.md` § Cross-validation says
             # "condition-scoped fitting is right for a fixed holdout and wrong

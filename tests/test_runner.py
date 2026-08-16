@@ -1827,7 +1827,7 @@ def _load_step_from_source(source: str, *, scope: str) -> type:
     return namespace["Step"]
 
 
-def _one_step_plan(tmp_path: Path, *, scope: str, source: str = _UNITS_RECORDING_STEP_SOURCE):
+def _one_step_plan(*, scope: str, source: str = _UNITS_RECORDING_STEP_SOURCE):
     """A one-step, one-condition plan for driving `execute_plan` directly,
     without a `cli` run — what the holdout-beside-a-fold assertion test needs,
     since no config can reach that seam."""
@@ -1852,7 +1852,7 @@ def _run_one_step_raw(
     """Build a one-step plan for `scope` and run it through `execute_plan`
     directly (no `cli`), returning its single `ExecutionResult` — the raw form
     the "still raises" control needs `.status`/`.error` from."""
-    plan = _one_step_plan(tmp_path, scope=scope, source=source)
+    plan = _one_step_plan(scope=scope, source=source)
     run_dir = tmp_path / "run"
     run_dir.mkdir(parents=True, exist_ok=True)
     (tmp_path / "in").mkdir(parents=True, exist_ok=True)
@@ -1874,22 +1874,16 @@ def _run_one_step(tmp_path: Path, *, scope: str, units, holdout_train, source: s
     """Like `_run_one_step_raw`, but asserts the execution completed and returns
     the `seen.json` the recording step wrote — the test/train keys it saw as
     `io.units`/`io.units.train`."""
-    plan = _one_step_plan(tmp_path, scope=scope, source=source)
-    run_dir = tmp_path / "run"
-    run_dir.mkdir(parents=True, exist_ok=True)
-    (tmp_path / "in").mkdir(parents=True, exist_ok=True)
-    results = execute_plan(
-        plan=plan,
-        run_dir=run_dir,
-        input_dir=tmp_path / "in",
-        cfgs={0: Config({"parameters": {}}), -1: Config({"parameters": {}})},
-        repeats=[Repeat("seed", "seed17", 17)],
-        digest="sha256:abc",
+    result = _run_one_step_raw(
+        tmp_path,
+        scope=scope,
         units=units,
         holdout_train=holdout_train,
+        source=source,
     )
-    result = results[0]
     assert result.status == "completed", result.error
+    run_dir = tmp_path / "run"
+    plan = _one_step_plan(scope=scope, source=source)
     step_dir = step_dir_for(run_dir, plan[0], collapse_repeats=True)
     return json.loads((step_dir / "seen.json").read_text())
 
@@ -1920,14 +1914,19 @@ def test_a_holdout_narrows_io_units_at_every_scope(tmp_path, scope):
     assert seen["train"] == ["u0", "u1", "u2", "u3", "u4", "u5", "u6", "u7"]
 
 
-def test_without_a_holdout_train_still_raises_at_every_scope(tmp_path):
+@pytest.mark.parametrize("scope", ["run", "condition", "repeat", "summary"])
+def test_without_a_holdout_train_still_raises_at_every_scope(tmp_path, scope):
     """The control, and it must produce something: with `holdout_train=None`
     and no fold, `io.units` is the whole roster and `io.units.train` raises —
     the shape task 1 pinned end to end. A narrowing written one branch too wide
-    would hand a train list to a run that declared no partition."""
+    would hand a train list to a run that declared no partition.
+
+    Parametrized like the positive test `test_a_holdout_narrows_io_units_at_every_scope`,
+    for the same reason: the branch structure differs per scope, so a control
+    exercising only one of the four checks nothing about the other three."""
     roster = _runner_roster(10)
     result = _run_one_step_raw(
-        tmp_path, scope="repeat", units=roster, source=_UNITS_RECORDING_STEP_SOURCE
+        tmp_path, scope=scope, units=roster, source=_UNITS_RECORDING_STEP_SOURCE
     )
     assert result.status == "failed"
     assert "E-STEP-UNITS-UNAVAILABLE" in (result.error or "")
@@ -1944,9 +1943,9 @@ def test_a_holdout_beside_a_fold_is_a_core_defect_not_a_silent_choice(tmp_path):
     is this metric over?" is exactly what the refusal exists to prevent, and if
     it ever stops preventing it, this must be a crash and not a guess."""
     roster = _runner_roster(10)
-    with pytest.raises(AssertionError):
+    with pytest.raises(AssertionError, match="E-DATA-HOLDOUT-FOLD"):
         execute_plan(
-            plan=_one_step_plan(tmp_path, scope="repeat"),
+            plan=_one_step_plan(scope="repeat"),
             run_dir=tmp_path / "run",
             input_dir=tmp_path / "in",
             cfgs={},
@@ -1955,4 +1954,30 @@ def test_a_holdout_beside_a_fold_is_a_core_defect_not_a_silent_choice(tmp_path):
             units=roster,
             holdout_train=UnitList(list(roster)[:5]),
             fold_members={"fold0": frozenset({"u0"})},
+        )
+
+
+def test_a_holdout_beside_cells_is_a_core_defect_not_a_silent_choice(tmp_path):
+    """No CONFIG can reach this either: `E-DATA-HOLDOUT-CELLS` refuses a
+    holdout beside the group axis `arm_members` comes from, at validate time.
+    So this seam is exercised the same way its fold sibling above is — calling
+    `execute_plan` directly with both `holdout_train` and `arm_members`
+    non-`None`, rather than by a fixture that cannot exist.
+
+    Passes `fold_members=None` so only the cells assertion can fire, keeping
+    the attribution structural rather than incidental — the same shape the
+    fold test above uses to attribute to its own assertion."""
+    roster = _runner_roster(10)
+    with pytest.raises(AssertionError, match="E-DATA-HOLDOUT-CELLS"):
+        execute_plan(
+            plan=_one_step_plan(scope="repeat"),
+            run_dir=tmp_path / "run",
+            input_dir=tmp_path / "in",
+            cfgs={},
+            repeats=[],
+            digest="sha256:aaa",
+            units=roster,
+            holdout_train=UnitList(list(roster)[:5]),
+            fold_members=None,
+            arm_members={0: frozenset({"u0"})},
         )
