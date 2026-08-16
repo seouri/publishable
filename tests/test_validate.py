@@ -12502,9 +12502,10 @@ def test_an_undeclared_parameter_falls_back_to_the_template_s_default(
 
 
 def test_a_variable_two_conditions_need_is_reported_once(git_repo: Path, write_config, monkeypatch):
-    """One missing value is one thing to fix. Attributed to the first condition
-    that selected it, which is why the assertion below names `openai` and not the
-    later duplicate."""
+    """One missing value is one thing to fix: `openai` is selected by two of the
+    four expanded conditions (`retries` is 1 and 2 in turn), and the finding
+    names the first — `provider=openai__retries=1`, since `expand` orders the
+    grid by `llm.provider` before `llm.retries`."""
     _union_project(git_repo, monkeypatch, set_names=("AZURE_TEST_KEY",))
     path = write_config(
         {
@@ -12523,11 +12524,80 @@ def test_a_variable_two_conditions_need_is_reported_once(git_repo: Path, write_c
     found = [f for f in c.findings if f.code == "E-CRED-PARAM-MISSING"]
     assert len(found) == 1, [f.message for f in found]
     assert "OPENAI_TEST_KEY" in found[0].message
+    assert "condition `provider=openai__retries=1`" in found[0].message
 
 
 def test_a_template_declaring_no_requires_env_reports_nothing(write_config, monkeypatch):
-    """`generic`'s four parameters declare none, which is why the other 1957 tests
-    are unaffected. Asserted rather than assumed."""
+    """`generic`'s four parameters declare none, which is why every test in this
+    suite that validates a `generic` config is unaffected by this check. Asserted
+    rather than assumed."""
     for name in _UNION_NAMES:
         monkeypatch.delenv(name, raising=False)
     assert "E-CRED-PARAM-MISSING" not in codes(write_config())
+
+
+def test_a_list_valued_parameter_is_reported_by_e_param_value_not_a_traceback(
+    git_repo: Path, write_config, monkeypatch
+):
+    """`_check_requires_env` runs before `_check_parameters`, so a list resolved
+    for a `str`-typed parameter reaches `param.requires_env.get(value)` before
+    `_check_parameters` ever gets to reject it. The `except TypeError` guard is
+    what turns that into a collected `E-PARAM-VALUE` finding instead of an
+    unhandled `TypeError: unhashable type: 'list'` out of `validate_config`."""
+    _union_project(git_repo, monkeypatch, set_names=())
+    path = write_config(
+        {
+            "experiment_type": "cred_assay",
+            "parameters": {"llm": {"provider": ["azure_openai", "openai"], "retries": 2}},
+        }
+    )
+    assert codes(path) == {"E-PARAM-VALUE"}
+
+
+def test_a_group_axis_colliding_with_a_credentialed_parameter_still_runs_the_check(
+    git_repo: Path, write_config, monkeypatch
+):
+    """`condition.selectors` is skipped so a group axis's cell — which names a
+    path but plants no parameter — cannot masquerade as a resolved value. That
+    skip is not structurally unreachable: `sweep.groups` naming a path the
+    template also declares as a parameter is refused (`E-SWEEP-PATH-DUPLICATE`),
+    but `validate` collects findings rather than aborting on the first one, so
+    this check still runs over the same expanded conditions and would, without
+    the skip, misread the group axis's `ollama` cell as a resolved value for
+    `llm.provider` and additionally report `E-CRED-PARAM-MISSING` for a
+    credential the config never actually selects."""
+    _union_project(git_repo, monkeypatch, set_names=("AZURE_TEST_KEY",))
+    path = write_config(
+        {
+            "experiment_type": "cred_assay",
+            "parameters": {"llm": {"provider": "azure_openai", "retries": 2}},
+            "sweep": {"groups": [{"by": "llm.provider", "levels": ["ollama"]}]},
+        }
+    )
+    found = codes(path)
+    assert found == {"E-DATA-ALLOCATION-WITHIN-ARMS", "E-SWEEP-PATH-DUPLICATE"}
+    assert "E-CRED-PARAM-MISSING" not in found
+
+
+def test_two_missing_variables_are_reported_in_condition_order_not_sorted(
+    git_repo: Path, write_config, monkeypatch
+):
+    """Two variables missing at once are reported condition order then
+    declared-parameter order, not sorted: the grid selects `openai` before
+    `azure_openai`, so `OPENAI_TEST_KEY` is reported first even though
+    `AZURE_TEST_KEY` sorts first. A fixture ordered the other way
+    (`["azure_openai", "openai"]`) would not distinguish the two orderings,
+    since insertion order and sorted order would then agree."""
+    _union_project(git_repo, monkeypatch, set_names=())
+    path = write_config(
+        {
+            "experiment_type": "cred_assay",
+            "parameters": {"llm": {"provider": "azure_openai", "retries": 2}},
+            "sweep": {"grid": {"llm.provider": ["openai", "azure_openai"]}},
+        }
+    )
+    c = Collector()
+    validate_config(path, c)
+    found = [f for f in c.findings if f.code == "E-CRED-PARAM-MISSING"]
+    variables_in_order = [next(name for name in _UNION_NAMES if name in f.message) for f in found]
+    assert variables_in_order == ["OPENAI_TEST_KEY", "AZURE_TEST_KEY"]

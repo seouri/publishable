@@ -774,8 +774,7 @@ def _check_requires_env(doc: dict[str, Any], template: Any, c: Collector) -> Non
     A resolved value with no key in the mapping requires nothing. `requires_env`
     is total over `choices`, so that case is exactly the values `choices` does
     not hold: `sweep.ablate.remove` sets a nullable parameter to `null`, which is
-    a legal resolved value and not a choice. Reporting it here would be a second
-    report of a fault `_check_sweep` already owns.
+    a legal resolved value and not a choice.
 
     One finding per variable, attributed to the first condition that selected it:
     one missing value is one thing to fix, whatever selected it.
