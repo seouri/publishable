@@ -15,6 +15,7 @@ from publishable.units import (
     _apportion,
     _assign_constant_columns,
     _holdout_constant_column,
+    _seed_from,
     apply_rule,
     arm_members,
     arms_of,
@@ -25,6 +26,7 @@ from publishable.units import (
     collapse_measurements,
     fold_basis,
     holdout_for,
+    holdout_seed_for,
     holdout_sizes,
     holdout_values_fault,
     partition_units,
@@ -3606,3 +3608,57 @@ def test_collapse_stops_at_the_first_entry_of_the_constant_mapping_it_is_given()
     with pytest.raises(ContractError) as exc2:
         collapse_measurements(units, "read_id", "first", without_assign)
     assert exc2.value.code == "E-DATA-HOLDOUT-VARIES"
+
+
+def test_a_pinned_holdout_seed_is_returned_literally_and_ignores_the_digest():
+    """`sweep.sample_seed_for`'s load-bearing half, copied: on the pinned path
+    the digest is not consulted at all, so a pinned split survives a roster
+    that grows, shrinks or reorders.
+
+    Three varying inputs against one pin, because a function that read ANY of
+    them would move for at least one of these."""
+    block = {"method": "random", "frac": 0.2, "seed": 4321}
+    assert holdout_seed_for(block, "sha256:aaa", _roster(10)) == 4321
+    assert holdout_seed_for(block, "sha256:bbb", _roster(10)) == 4321
+    assert holdout_seed_for(block, "sha256:aaa", _roster(11)) == 4321
+
+
+def test_a_boolean_seed_is_not_a_pin():
+    """`isinstance(True, int)` is `True`, and `seed: true` is not a pin —
+    `validate` refuses it as `E-DATA-HOLDOUT-SEED`, and honouring it as `1`
+    here would record a derived seed under a key the config wrote
+    deliberately."""
+    derived = holdout_seed_for({"seed": True}, "sha256:aaa", _roster(10))
+    assert derived != 1
+    assert derived == holdout_seed_for({}, "sha256:aaa", _roster(10))
+
+
+def test_the_derived_holdout_seed_mixes_the_digest_and_the_resolved_roster():
+    """§ What `auto` derives from's new row. Each assertion changes exactly one
+    input, so a derivation that ignored either would fail one of them."""
+    base = holdout_seed_for({}, "sha256:aaa", _roster(10))
+    assert base == holdout_seed_for({"seed": "auto"}, "sha256:aaa", _roster(10))
+    assert base != holdout_seed_for({}, "sha256:bbb", _roster(10))
+    assert base != holdout_seed_for({}, "sha256:aaa", _roster(11))
+    # `units_hash` covers the roster IN RESOLVED ORDER, so a reordered roster
+    # is a different trial and must draw a different split.
+    reordered = UnitList(list(_roster(10))[::-1])
+    assert base != holdout_seed_for({}, "sha256:aaa", reordered)
+    assert 0 <= base < 2**32
+
+
+def test_the_holdout_seed_is_not_the_fold_seed_for_the_same_digest():
+    """`_seed_from` hardcodes `|folds`. The two declarations are mutually
+    exclusive today (`E-DATA-HOLDOUT-FOLD`), so nothing observes a collision —
+    which is the argument for the suffix rather than against it: the two stay
+    independent whatever a later slice permits."""
+    assert holdout_seed_for({}, "sha256:aaa", _roster(10)) != _seed_from("sha256:aaa")
+
+
+def test_the_holdout_seed_is_not_an_assign_axis_seed_for_the_same_digest():
+    """The other neighbour, and the one whose construction this copies: same
+    digest, same roster, different suffix."""
+    roster = _roster(10)
+    assert holdout_seed_for({}, "sha256:aaa", roster) != assign_seed_for(
+        {}, "holdout", "sha256:aaa", roster
+    )
