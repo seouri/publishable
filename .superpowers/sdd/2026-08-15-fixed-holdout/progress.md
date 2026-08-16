@@ -714,3 +714,35 @@ Task 16: fix round 1. Commit 579e524. All five closed. `_holdout_test_roster`'s 
   to a claim tied to its actual `except` tuple; § Errors' row now records the fallback to the whole roster
   when a declared draw cannot be performed, which the row had stated unconditionally.
 Task 16: complete. 1945 passed + 2 xfailed; ruff check and mypy clean. BASE for task 17 is 579e524.
+Task 17: dispatched — `allocation.json` gains its fourth key. Carried task 13's OBLIGATION explicitly:
+  its `_resolved_holdout` docstring claims present-tense that three consumers "are all handed this one
+  object", and that claim was false when written and becomes true only here. Pre-check added a fourth
+  mutation for the middle arm of a three-way distinction — drawn+stratified, drawn+unstratified, read —
+  which the brief's three did not reach.
+Task 17: implemented at 5eaaddb. 1950 passed + 2 xfailed.
+  Real disagreement, and the right resolution: the brief's literal code produces key order
+  `seed, arms, strata, holdout`, while `reference.md` § `allocation.json`'s printed example — settled by
+  task 2 — orders them `seed, arms, holdout, strata`. The implementer followed the DOCUMENT and verified
+  the output matches key-for-key. That is the repo's rule working as intended, from the direction that
+  matters: the plan argues from the spec, and where they disagree the document leads.
+Task 17: reviewed (opus). Spec compliance PASS; task quality FAIL with two Important, both one-paragraph
+  docstring fixes, plus two Minor.
+  Task 13's obligation is DISCHARGED and independently verified: all three consumers read the single
+  `holdout_plan`, with no second derivation anywhere. The runner's is a key-projection into a `UnitList`
+  rather than the plan object, which the reviewer checked is a projection and not a second draw.
+  On the key order: confirmed the document's example, and confirmed the order is PURELY COSMETIC because
+  `allocation_hash` canonicalizes with `sort_keys=True`. Recording that because it changes what the
+  disagreement cost — following the brief would have produced a reader-facing mismatch with a printed
+  example, not a hash divergence.
+  Both Importants closed by me directly rather than by a fix round. `build_allocation_document`'s
+  docstring still said it returns `None` when `group_axes` is empty — false as of this commit, and it
+  CITED the very sentence that falsifies it, three paragraphs above the guard this task widened.
+  `allocation_hash`'s docstring enumerated the written insertion order as `seed, arms, strata`; rather
+  than correct the count to four, I replaced the enumeration with a pointer to what builds it and what
+  § `allocation.json` prints — the form that does not go stale again, and the same move tasks 9 and 10
+  made for two other enumerations in this slice. Gates green after: artifacts tests pass, ruff and mypy
+  clean.
+  Minor carried, not fixed: dropping `holdout_plan` from the `build_allocation_document` call leaves all
+  1950 tests green. That is OWNED — task 18's fifth end-to-end pin names it verbatim, and no config can
+  reach `command_run` today.
+Task 17: complete. 1950 passed + 2 xfailed. BASE for task 18 is the commit below.

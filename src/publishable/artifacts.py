@@ -177,10 +177,11 @@ def build_allocation_document(
     keyed by axis name, `holdout` sharing the file because both are
     partitions of one roster drawn once.
 
-    Returns `None` when `group_axes` is empty — no arm assignment resolved,
-    matching § The other files a run writes' "present when either is
-    declared": the caller writes nothing in that case rather than an empty
-    file.
+    Returns `None` only when **neither** partition is declared — no arm
+    assignment resolved *and* no holdout realized — matching § The other files
+    a run writes' "present when either is declared": the caller writes nothing
+    in that case rather than an empty file. A holdout-only run therefore still
+    gets a document, with the axis-keyed blocks present and empty.
 
     **This function recomputes nothing — it is handed the plans and records
     them.** It used to take `(roster, (column, levels))` per axis and call
@@ -313,8 +314,9 @@ def allocation_hash(document: dict[str, Any]) -> str:
     bytes on disk, the same split `manifest.manifest_hash` makes for the input
     manifest: canonical JSON (`sort_keys=True`, compact separators) over the
     same dict `build_allocation_document` returned, which is **not** what
-    `allocation.json` is written as (that call uses `indent=2` and insertion
-    order — `seed`, `arms`, `strata` — for a human reader). The two encodings
+    `allocation.json` is written as (that call uses `indent=2` and the
+    insertion order `build_allocation_document` builds, which § `allocation.json`
+    prints, for a human reader). The two encodings
     hash to different digests for the same document. A reader reproducing
     this by hand must re-canonicalize `allocation.json`'s parsed content
     (`json.dumps(json.load(...), sort_keys=True, separators=(",", ":"))`)
