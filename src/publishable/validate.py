@@ -516,12 +516,17 @@ def validate_config(
         # import would escape `validate_config` and discard every other finding.
         template, known = resolve_template(name, repo_root)
     except ContractError as exc:
-        # The load-time refusals resolving a template can make — two today,
-        # `E-TEMPLATE-LOAD` and `E-TEMPLATE-COLLISION`. Reported under the code
-        # the raise carries rather than a code chosen here, so the two surfaces
-        # stay one fault, and reported at all because `validate` is contracted
-        # never to raise. Nothing later can run: which template a name means is
-        # exactly what either leaves unanswered.
+        # The load-time refusals resolving a template can make — two codes,
+        # `E-TEMPLATE-LOAD` and `E-TEMPLATE-COLLISION`. Two *codes*, not two
+        # faults: `E-TEMPLATE-LOAD` covers three shapes of its own (see its
+        # § Errors row), and a `Param` whose construction raises — `default=None`
+        # without `nullable=True`, or a `requires_env` mapping that is not total
+        # over `choices` — is the first of them, "raises while importing". Adding
+        # such a fault adds no code and does not move this count. Reported under
+        # the code the raise carries rather than a code chosen here, so the two
+        # surfaces stay one fault, and reported at all because `validate` is
+        # contracted never to raise. Nothing later can run: which template a name
+        # means is exactly what either leaves unanswered.
         c.error(exc.code, "experiment_type", str(exc))
         return None
     if template is None:
