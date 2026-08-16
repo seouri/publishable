@@ -21,7 +21,7 @@ from publishable.param import MISSING
 from publishable.provenance import find_repo_root, resolves_inside_repo
 from publishable.replication import resolve_repeats
 from publishable.scope import step_name as _step_name
-from publishable.secrets import load_env
+from publishable.secrets import load_env, missing_env
 from publishable.stats import min_honest_draws
 from publishable.strata import levels_for
 from publishable.sweep import (
@@ -508,7 +508,12 @@ def validate_config(
         # skipped rather than reported here — `generic` still resolves as a
         # core template regardless.
         repo_root = None
-    # `.env`, once, before any check that asks whether a variable is set.
+    # `.env`, once, before the first check that reads the environment —
+    # `_check_required_env` below, today, which is what
+    # `test_a_required_env_variable_may_be_supplied_by_dot_env` pins. That is
+    # weaker than "before `resolve_template`": nothing here depends on the
+    # stronger position, since `resolve_template` reads no environment
+    # variable, and no test distinguishes the two placements.
     # `reference.md` § CLI reference promises `validate` "creates nothing and
     # reaches nothing off the machine"; a file in the repository root is
     # on-machine, so this is inside that promise rather than an exception to it.
@@ -580,6 +585,7 @@ def validate_config(
 
     _check_metadata(doc, config_path, template, c)
     _check_entrypoint(doc, c)
+    _check_required_env(doc, template, c)
     _check_parameters(doc, template, c)
     _check_versions(doc, template, c)
     _check_data(doc, config_path, c)
@@ -716,6 +722,33 @@ def _check_entrypoint(doc: dict[str, Any], c: Collector) -> None:
             "E-ENTRYPOINT-REQUIRED",
             "entrypoint",
             "is empty, and is required — `run` cannot import a step without it",
+        )
+
+
+def _check_required_env(doc: dict[str, Any], template: Any, c: Collector) -> None:
+    """The template-level credential set — `reference.md` § Secrets & credentials.
+
+    Read from the class, so it needs no roster and no expansion: a `required_env`
+    list says what an experiment *type* always needs, which is the wrong shape
+    exactly when the credential follows a choice, and that case is
+    `_check_requires_env`'s.
+
+    Reported at `experiment_type`, the field that decided which template's list
+    applies. The value is never printed — the message names the variable and
+    where to put a value, which is the whole of what is safe to say and the whole
+    of what a reader needs.
+    """
+    names = getattr(template, "required_env", None)
+    if not isinstance(names, list):
+        return  # a template declaring something else is not this check's fault to report
+    name = doc.get("experiment_type", "")
+    for variable in missing_env(str(n) for n in names):
+        c.error(
+            "E-CRED-MISSING",
+            "experiment_type",
+            f"template `{name}` requires `{variable}`, which has no value in the "
+            "environment or in `.env` — the config records the NAME, so put the value "
+            "in `.env` at the repository root",
         )
 
 

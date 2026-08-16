@@ -12309,3 +12309,85 @@ def test_validate_loads_dot_env_from_the_repository_root(git_repo: Path, write_c
     monkeypatch.delenv("PUBLISHABLE_TEST_TOKEN", raising=False)
     assert codes(write_config()) == set()
     assert os.environ.get("PUBLISHABLE_TEST_TOKEN") is None
+
+
+_REQUIRED_ENV_TEMPLATE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("cred_assay")
+class CredAssay(BaseTemplate):
+    required_env = ["PUBLISHABLE_TEST_TOKEN", "PUBLISHABLE_TEST_OTHER"]
+    parameter_spec = {}
+"""
+
+
+def test_an_unset_required_env_variable_is_reported_with_its_name(
+    git_repo: Path, write_config, monkeypatch
+):
+    """The first reader of `BaseTemplate.required_env`.
+
+    `delenv` on both names is what makes this a test of the check rather than of
+    the machine: `os.environ` is inherited from the test runner, and without it
+    this passes on a laptop where nothing was ever set — including on a build
+    where the check does not exist.
+    """
+    monkeypatch.delenv("PUBLISHABLE_TEST_TOKEN", raising=False)
+    monkeypatch.delenv("PUBLISHABLE_TEST_OTHER", raising=False)
+    templates = git_repo / "templates"
+    templates.mkdir()
+    (templates / "cred_assay.py").write_text(_REQUIRED_ENV_TEMPLATE)
+
+    c = Collector()
+    validate_config(write_config({"experiment_type": "cred_assay", "parameters": {}}), c)
+    found = [f for f in c.findings if f.code == "E-CRED-MISSING"]
+
+    # One finding per unset variable, in declared order — a template needing two
+    # keys names both rather than one at a time. Asserted as a fragment per
+    # finding rather than by splitting the message on backticks: the message
+    # already carries a backticked template name, so an index-based split pins
+    # the message's backtick COUNT and breaks on any reworded clause.
+    assert len(found) == 2, [f.message for f in found]
+    assert "`PUBLISHABLE_TEST_TOKEN`" in found[0].message
+    assert "`PUBLISHABLE_TEST_OTHER`" in found[1].message
+    assert {f.path for f in found} == {"experiment_type"}
+    # The message names the template, which is the only thing this code CAN name
+    # — the fragment that distinguishes it from `E-CRED-PARAM-MISSING`, whose
+    # message names a parameter, a value and a condition and never a template.
+    assert "template `cred_assay`" in found[0].message
+    assert "condition" not in found[0].message
+
+
+def test_a_satisfied_required_env_validates_clean(git_repo: Path, write_config, monkeypatch):
+    """The honouring, and the control the negative test needs. Without it, a check
+    that reported unconditionally would pass every assertion above."""
+    monkeypatch.setenv("PUBLISHABLE_TEST_TOKEN", "x")
+    monkeypatch.setenv("PUBLISHABLE_TEST_OTHER", "y")
+    templates = git_repo / "templates"
+    templates.mkdir()
+    (templates / "cred_assay.py").write_text(_REQUIRED_ENV_TEMPLATE)
+
+    assert codes(write_config({"experiment_type": "cred_assay", "parameters": {}})) == set()
+
+
+def test_a_required_env_variable_may_be_supplied_by_dot_env(
+    git_repo: Path, write_config, monkeypatch
+):
+    """The two halves wired together: task 8's load makes `.env` a legal place to
+    put the value, which is the whole point of the mechanism."""
+    monkeypatch.delenv("PUBLISHABLE_TEST_TOKEN", raising=False)
+    monkeypatch.delenv("PUBLISHABLE_TEST_OTHER", raising=False)
+    templates = git_repo / "templates"
+    templates.mkdir()
+    (templates / "cred_assay.py").write_text(_REQUIRED_ENV_TEMPLATE)
+    (git_repo / ".env").write_text("PUBLISHABLE_TEST_TOKEN=a\nPUBLISHABLE_TEST_OTHER=b\n")
+
+    assert codes(write_config({"experiment_type": "cred_assay", "parameters": {}})) == set()
+
+
+def test_a_template_declaring_no_required_env_reports_nothing(write_config, monkeypatch):
+    """`generic` declares `required_env = []`. A check that reported for an empty
+    list would break every existing config in the suite — asserted here anyway,
+    so the reason a green suite is green is stated rather than assumed."""
+    monkeypatch.delenv("PUBLISHABLE_TEST_TOKEN", raising=False)
+    assert "E-CRED-MISSING" not in codes(write_config())
