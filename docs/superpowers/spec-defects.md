@@ -5637,3 +5637,25 @@ convention exists to prevent.
 
 **Owner: unassigned.** Any slice editing `reference.md` § Statistical reporting can settle which
 reading is right; H4b is next to touch that material.
+
+## OPEN — `technical_n` is a whole-roster figure beside a test-partition `n`
+
+`cli._cond_beside_n` withholds `technical_n` from a condition whose roster was narrowed to
+an arm, on the stated grounds that "copying a whole-roster figure onto a subset states a
+spread nobody computed over that subset". A `data.units.holdout` narrows the same way and
+the same withholding is not applied: `technical_n` is `{min, max, median}` over the whole
+roster's measurement counts, and under a holdout it would sit beside an `n` counting the
+test partition alone.
+
+**Deliberately not closed by H3d.** It needs `data.units.measurements` *and*
+`data.units.holdout` declared together, which no config in
+`docs/feasibility-llm-growth-studies.md` does, and closing it inside H3d's task 15 would
+add an unbudgeted behaviour change to the task the scoping already names as the one most
+likely to ship wrong. The mechanism is cheap when it is wanted: `_cond_beside_n` already
+takes the un-narrowed roster as its third argument and decides by identity.
+
+**Found by:** H3d, Task 2 (documents-only). **Owner:** whichever slice next changes
+`_cond_beside_n`, or H3c-3 if it retrofits the holdout to cells first — re-owner this entry
+when that slice finishes rather than leaving it pointing at a closed one.
+**Severity:** Minor. Both numbers are individually true and separately labelled; the fault
+is that a reader must know which roster each was computed over.
