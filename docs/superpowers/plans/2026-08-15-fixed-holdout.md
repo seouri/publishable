@@ -18,7 +18,13 @@
 
 Every task inherits all of these. They are copied verbatim rather than cross-referenced because an implementer sees only its own task brief.
 
-**Commands.** Tests `uv run pytest`. Lint `uv run ruff check .`. Format `uv run ruff format --check .`. Types `uv run mypy`. All four must pass before a commit.
+**Commands.** Tests `uv run pytest`. Lint `uv run ruff check .`. Format `uv run ruff format --check .`. Types `uv run mypy`. All four must pass before a commit. **Never `uv run ruff format .` without `--check`** — the unchecked form rewrites 67 files repo-wide including fenced Python inside `README.md`, which happened once in this slice. Roughly 70 would-be reformats is the repo's standing baseline, not a failure you caused; name a file if you must format one.
+
+**Every new `c.error` site is pinned by its MESSAGE, not only its code.** Added to Global Constraints on 2026-08-16, after this defect shipped in four consecutive tasks of this slice — tasks 4, 5, 6 and 7 — and survived being named in three separate briefs. Naming it in the next brief is the approach that failed; it lives here instead, and it binds every remaining task.
+
+The rule: a test asserting only that a code appears proves nothing about *which branch* produced it, and this slice's codes are emitted from two, three and four branches apiece. Use the `fragment` column pattern already in `tests/test_validate.py` — a parametrize column carrying a distinguishing substring, asserted via `messages_by_code(path)[code]`. Where two branches can emit the same code at the same path, their messages must be *distinguishable* and each pinned separately. Before believing a test, name the single-line mutation that makes it fail; if you cannot, the test is the defect.
+
+**`E-DATA-HOLDOUT-UNSUPPORTED` is not positive attribution.** It is emitted by `_check_unimplemented`, a different function, so a test asserting it alongside a finding would report identically if the check under test never ran. Assert it so the row survives task 18's retirement as a one-line deletion — never as evidence the new check fired. A control needs something only the check under test can produce.
 
 **Baseline.** `uv run pytest -q` at `78bb794` is **1801 passed, 2 xfailed**, ~96 s. A task that leaves the count below its own additions has broken something.
 
@@ -1850,30 +1856,53 @@ def test_allocation_between_alone_triggers_the_refusal_without_a_group_axis(
 ):
     """`allocation: between` and a non-empty `sweep.groups` are two spellings
     of the same cell structure, and EITHER is enough. Without this row a check
-    reading only `sweep.groups` passes every test above."""
+    reading only `sweep.groups` passes every test above.
+
+    The message is asserted, not just the code: `where` is a two-branch
+    ternary and BOTH branches emit the same code at the same path, so a
+    code-only assertion here and in its sibling below passes identically if
+    the ternary is collapsed to either branch."""
     (tmp_path / "input" / "index.csv").write_text(_CELL_ROSTER)
     overrides = _cells({"holdout": {"method": "random", "frac": 0.2}}, fold=False)
     overrides["sweep"] = {}
-    assert "E-DATA-HOLDOUT-CELLS" in codes(write_config(overrides))
+    path = write_config(overrides)
+    assert "E-DATA-HOLDOUT-CELLS" in codes(path)
+    assert "`data.units.allocation: between`" in (
+        messages_by_code(path)["E-DATA-HOLDOUT-CELLS"]
+    )
 
 
 def test_a_group_axis_alone_triggers_the_refusal_without_between(
     write_config, tmp_path
 ):
     """The other half of the same pair: without this row a check reading only
-    `allocation` passes every test above."""
+    `allocation` passes every test above. The message is asserted for the
+    reason its sibling above states."""
     (tmp_path / "input" / "index.csv").write_text(_CELL_ROSTER)
     overrides = _cells({"holdout": {"method": "random", "frac": 0.2}}, fold=False)
     overrides["data.units"]["allocation"] = "within"
-    assert "E-DATA-HOLDOUT-CELLS" in codes(write_config(overrides))
+    path = write_config(overrides)
+    assert "E-DATA-HOLDOUT-CELLS" in codes(path)
+    assert "a non-empty `sweep.groups`" in (
+        messages_by_code(path)["E-DATA-HOLDOUT-CELLS"]
+    )
 
 
 def test_an_evaluation_split_without_a_cell_structure_is_not_refused(
     write_config, tmp_path
 ):
-    """The control, and it must report something. `allocation: within`, no
-    `sweep.groups` — the shape all nine feasibility configs declare, and the
-    shape this refusal must leave alone."""
+    """The control. `allocation: within`, no `sweep.groups` — the shape all
+    nine feasibility configs declare, and the shape this refusal must leave
+    alone.
+
+    **`E-DATA-HOLDOUT-UNSUPPORTED` below is NOT positive attribution.** It is
+    emitted by `_check_unimplemented`, a different function, so it would appear
+    unchanged if this check never ran — task 7's review found three controls
+    resting on exactly that mistake. It is asserted here only so the row
+    survives task 18's retirement as a one-line deletion. A control over a
+    check that correctly reports nothing cannot prove itself; what proves this
+    one is the pair of trigger tests above, which differ from it only in the
+    cell structure."""
     (tmp_path / "input" / "index.csv").write_text(_CELL_ROSTER)
     found = codes(
         write_config(
@@ -2011,13 +2040,21 @@ capability.
 
 - [ ] **Step 4: Run, confirm it passes** — the Step 2 command, then `uv run pytest`, then `uv run ruff check . && uv run ruff format --check . && uv run mypy`. Then the **documents sweep, by claim not by file**: `grep -rn "within each cell" docs/reference.md docs/experimental-designs.md docs/design-principles.md README.md` — every remaining hit must be a statement this build actually honours, or must name the refusal. Prove the sweep can fail by running it against `each cell`, which returns more. Then the mechanical pass on both edited documents (trailing whitespace, tabs, anchors resolve, `×` not `x`, table rows match headers) and the cross-document pass: check § Mistakes core prevents in `experimental-designs.md` still lists nothing these edits make merely-discouraged rather than structurally impossible.
 
-- [ ] **Step 5: Mutate** — three.
+- [ ] **Step 5: Mutate** — four.
 
   (a) In `src/publishable/validate.py`, change `cells = allocation == "between" or bool(...)` to `cells = allocation == "between"`. `test_a_group_axis_alone_triggers_the_refusal_without_between` must **FAIL**. Revert in place; re-run.
 
   (b) Change it to `cells = bool(isinstance(groups, list) and groups)`. `test_allocation_between_alone_triggers_the_refusal_without_a_group_axis` must **FAIL**. Revert in place; re-run.
 
   (c) Add `return` immediately after the `E-DATA-HOLDOUT-CELLS` `c.error(...)` call. `test_both_split_kinds_beside_a_cell_structure_report_both_codes` must **FAIL** on `E-REPL-FOLD-CELLS`, and `test_a_fold_beside_a_cell_structure_is_refused` must still pass — which is the point: an early `return` is invisible to every single-declaration test, and only the both-declared fixture separates the two readings. Revert in place; re-run.
+
+  (d) Collapse `where`'s ternary to its second branch — delete the
+  `"`data.units.allocation: between`" if allocation == "between" else` half so
+  `where` is always ``"a non-empty `sweep.groups`"``.
+  `test_allocation_between_alone_triggers_the_refusal_without_a_group_axis`
+  must **FAIL** on its message assertion, and every code-only assertion in this
+  task must still pass — which is the point: both branches emit the same code
+  at the same path, so only the message separates them. Revert in place; re-run.
 
 - [ ] **Step 6: Commit** — `feat: refuse a roster-wide evaluation split beside a cell structure`.
 

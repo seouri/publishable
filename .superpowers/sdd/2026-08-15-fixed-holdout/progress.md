@@ -382,3 +382,34 @@ Task 7: fix round 1. Commit 00114d3. All nine findings closed; two Do-Not-Fix it
   accident this slice already had once. The claim was corrected in the report instead. Cost if wrong:
   five lines that a future repo-wide format will touch anyway.
 Task 7: complete. 1872 passed + 2 xfailed; ruff check and mypy clean. BASE for task 8 is 00114d3.
+Between tasks 7 and 8 — four corrections made at SOURCE rather than carried as reminders.
+  Ruling 1: the message-pinning defect is now a GLOBAL CONSTRAINT of the plan, not a line in the next
+  brief. Evidence that the per-brief remedy fails: task 7's brief DID name it, verbatim, and the
+  implementer still shipped three code-only assertion sites. Four consecutive tasks, three separate
+  briefs naming it. Same move as the `ruff format` fix — put it where every task inherits it. The
+  constraint also records that `E-DATA-HOLDOUT-UNSUPPORTED` is not positive attribution, so no later task
+  repeats the mistake I made.
+  Ruling 2: task 8's own test code is patched in the plan, not left to a reminder. Its `where` is a
+  two-branch ternary and BOTH branches emit `E-DATA-HOLDOUT-CELLS` at the same path, while the two tests
+  exercising them asserted only the code — collapsing the ternary would have passed both. Added the
+  message assertions, a fourth mutation that collapses the ternary, and corrected the control's docstring
+  claim that `-UNSUPPORTED` proves the check ran. Step 5's count phrase moved three -> four.
+  Ruling 3: `reference.md`'s `E-CONFIG-UNKNOWN` row was FALSE TODAY and had been for four tasks. It said
+  "a typo inside `data.units.holdout` ... is reached by no check at all" and justified it as latent
+  because the whole block is refused — but task 3 closed the envelope for all five holdout leaves, so
+  `check_envelope` reaches such a typo now. Task 5's own test docstring asserted the opposite. Fixed here
+  rather than deferred to the sweep task, because a normative document that is false is not a sweep item.
+  `envelope.py`'s own docstring was checked and is correct — task 3 rewrote it properly; only the
+  document lagged. This is also the record of that row's identity by CONTENT rather than by the line
+  number it was carried as, which is the repo's own convention and which an insertion would have broken.
+  Ruling 4: two deferrals were living only in review prose and are now FILED — the typo'd-`from` values
+  fault with no attribute-existence hint, and `units.stratum_names`'s docstring naming two call sites
+  against seven. CLAUDE.md's own lesson is that a ledger line saying "filed" is not a filing, and both
+  would have been exactly that. Each names its owner as a SLICE and says to re-owner it rather than let
+  it point at a closed one. A third item, § *How a metric becomes a number*, was checked and is genuinely
+  filed already.
+  Ruling 5: the per-task format reconciliation is retired. The invariant that matters is narrower than the
+  repo-wide count — no file a task touched became newly unformatted — and
+  `uv run ruff format --check $(git diff --name-only BASE..HEAD -- '*.py')` answers it in one call, with
+  no scratch worktree and no untracked-markdown noise. Four rounds were spent reconciling 67 -> 70 for a
+  number that was never the question.

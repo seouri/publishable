@@ -5661,3 +5661,51 @@ takes the un-narrowed roster as its third argument and decides by identity.
 when that slice finishes rather than leaving it pointing at a closed one.
 **Severity:** Minor. Both numbers are individually true and separately labelled; the fault
 is that a reader must know which roster each was computed over.
+
+## OPEN — a typo'd `data.units.holdout.from` reports as a values fault with no hint that the column is absent
+
+`_check_holdout`'s roster half reports `E-DATA-HOLDOUT-VALUES` when a `by_attribute` column
+does not hold exactly `train` and `test`. When the declared `from` names a column the roster
+has no attribute for at all, the same code fires with the same message shape — it says the
+column's values are wrong rather than that the column does not exist, and the values it lists
+are the ones a missing attribute yields rather than anything the user wrote. A misspelt
+`from` is the likeliest way to reach it, and the message sends the reader to look at their
+data instead of at their config.
+
+**Deliberately not closed by H3d.** The fix is a distinct finding — an attribute-existence
+check ahead of the values check, with its own code and its own § Errors row — and H3d's task
+7 was scoped to the values rule alone. Closing it there would have added a thirteenth code to
+a task already carrying three. `assign` has the same shape and the same gap, so a fix should
+close both rather than only the holdout half.
+
+**Found by:** H3d, Task 7 review. **Owner:** whichever slice next adds a diagnostic to
+`_check_holdout` or `_check_assign` — re-owner this entry when that slice finishes rather
+than leaving it pointing at a closed one.
+**Severity:** Minor. The config is refused either way, so nothing invalid runs; the cost is
+the reader's time between the message and the cause.
+
+## OPEN — `units.stratum_names`'s docstring names two call sites and has seven
+
+The docstring claims the helper is "shared by `assign.<axis>.stratify_by` and
+`statistics.resample.stratify_by`, and written against neither in particular". The
+enumeration was true when written and is not now: `stratum_names` is called from seven sites
+in `src/`, including `validate._check_holdout`'s stratum check, which H3d added. The
+"written against neither in particular" half remains true and is the load-bearing part; it is
+the enumeration that has gone stale.
+
+**Deliberately not closed by H3d.** Task 6's review found it and its brief did not own it;
+task 7 was offered it and correctly declined, because task 7 adds no call site and absorbing
+an unrelated docstring into a task carrying a Critical finding is how a slice's diff stops
+being reviewable. It is recorded here rather than deferred a third time in review prose,
+which is not a filing.
+
+**A sibling to check at the same time:** `stratum_varies_within_cluster` had the identical
+defect — two claimed call sites against three real ones — and H3d's task 7 corrected it to
+four. An enumeration of call sites inside a docstring is a maintenance obligation nobody
+owns, so the fix worth preferring is to state what the helper is *for* and drop the count.
+
+**Found by:** H3d, Task 6 review; deferred again at Task 7. **Owner:** whichever slice next
+edits `units.stratum_names` — re-owner this entry when that slice finishes rather than
+leaving it pointing at a closed one.
+**Severity:** Minor. A stale count in a docstring misleads a reader deciding whether a change
+is safe, which is exactly the decision this repo's § Development record exists to support.
