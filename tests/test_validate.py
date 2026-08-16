@@ -11419,3 +11419,150 @@ def test_a_well_formed_holdout_declaration_earns_none_of_the_five(write_config, 
     # The positive companion: this config is not silently escaping the check
     # entirely — the wholesale refusal still fires on the same declaration.
     assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
+
+
+_HOLDOUT_STRATA_ROSTER = "patient_id,label,site\n" + "".join(
+    f"p{i},{'x' if i % 2 else 'y'},s{i % 3}\n" for i in range(12)
+)
+
+
+def test_a_holdout_stratum_naming_no_declared_attribute_is_refused(write_config, tmp_path):
+    """§ Validation *Stratification attribute exists*, the `holdout` half —
+    `_check_fold_stratify_by`'s docstring names this as belonging to the slice
+    that builds the block, and this is that slice.
+
+    TWO undeclared names, because the rule is one finding per offending name
+    and a one-element fixture cannot tell that from one finding per
+    declaration."""
+    (tmp_path / "input" / "index.csv").write_text(_HOLDOUT_STRATA_ROSTER)
+    c = Collector()
+    validate_config(
+        write_config(
+            _holdout(
+                {"method": "random", "frac": 0.25, "stratify_by": ["sex", "cohort"]},
+                attributes=["label", "site"],
+            )
+        ),
+        c,
+    )
+    unknown = [f for f in c.findings if f.code == "E-DATA-HOLDOUT-STRATIFY-UNKNOWN"]
+    assert len(unknown) == 2, [f.message for f in unknown]
+    # Both names, not the same name twice: a loop reporting `strata[0]` each
+    # time would give a count of 2 and be wrong about which attributes failed.
+    joined = " ".join(f.message for f in unknown)
+    assert "'sex'" in joined and "'cohort'" in joined, joined
+    assert "E-DATA-HOLDOUT-UNSUPPORTED" in {f.code for f in c.findings}
+
+
+def test_a_bare_string_holdout_stratum_is_read_as_one_name(write_config, tmp_path):
+    """`units.stratum_names` reads `stratify_by: label` as one name exactly as
+    `[label]` is. Read as a sequence of characters instead, an undeclared bare
+    string would report one finding per LETTER — five for `sexes` — so the
+    count is what distinguishes the two readings, and the fixture's name is
+    five letters long for exactly that reason.
+
+    The message is pinned too, not just the count: a re-derivation reading
+    `stratify_by` as `tuple(x) if isinstance(x, list) else ()` also treats a
+    bare string as naming nothing and falls into the *empty* branch — count 1,
+    same as the correct reading, for the wrong reason. Only the message tells
+    the two apart."""
+    (tmp_path / "input" / "index.csv").write_text(_HOLDOUT_STRATA_ROSTER)
+    c = Collector()
+    validate_config(
+        write_config(
+            _holdout(
+                {"method": "random", "frac": 0.25, "stratify_by": "sexes"},
+                attributes=["label", "site"],
+            )
+        ),
+        c,
+    )
+    unknown = [f for f in c.findings if f.code == "E-DATA-HOLDOUT-STRATIFY-UNKNOWN"]
+    assert len(unknown) == 1
+    assert "'sexes'" in unknown[0].message and "is not a unit attribute" in unknown[0].message, (
+        unknown[0].message
+    )
+
+
+@pytest.mark.parametrize("declared", ["", [], 7, [3]])
+def test_a_holdout_stratum_that_names_no_attribute_at_all_is_refused(
+    write_config, tmp_path, declared
+):
+    """A non-string, an empty string, and an empty list each name no attribute.
+    `data.units.holdout.stratify_by` IS an `envelope.LEAF_TYPES` leaf as of task
+    3, so `7` also earns `E-CONFIG-TYPE` — absorbed here as well because a bare
+    type finding does not say what a stratum has to be."""
+    (tmp_path / "input" / "index.csv").write_text(_HOLDOUT_STRATA_ROSTER)
+    found = codes(
+        write_config(
+            _holdout(
+                {"method": "random", "frac": 0.25, "stratify_by": declared},
+                attributes=["label", "site"],
+            )
+        )
+    )
+    assert "E-DATA-HOLDOUT-STRATIFY-UNKNOWN" in found
+    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
+
+
+def test_a_holdout_stratum_naming_the_measurement_axis_is_refused(write_config, tmp_path):
+    """The measurement axis is consumed when a unit's rows collapse, so no
+    resolved unit carries it — the same fault and the same code as an
+    undeclared name, for `_check_fold_stratify_by`'s stated reason one
+    declaration over."""
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id,read_id,label\n" + "".join(f"p{i // 2},r{i},x\n" for i in range(12))
+    )
+    found = codes(
+        write_config(
+            _holdout(
+                {"method": "random", "frac": 0.25, "stratify_by": ["read_id"]},
+                attributes=["read_id", "label"],
+                measurements={"by": "read_id", "collapse": "mean"},
+            )
+        )
+    )
+    assert "E-DATA-HOLDOUT-STRATIFY-UNKNOWN" in found
+    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
+
+
+def test_a_declared_holdout_stratum_is_accepted(write_config, tmp_path):
+    """The positive companion, produced by the code under test: the same
+    declaration over a name `data.units.attributes` DOES declare reports
+    nothing, so the check reads the declaration rather than refusing every
+    `stratify_by`."""
+    (tmp_path / "input" / "index.csv").write_text(_HOLDOUT_STRATA_ROSTER)
+    found = codes(
+        write_config(
+            _holdout(
+                {"method": "random", "frac": 0.25, "stratify_by": ["label", "site"]},
+                attributes=["label", "site"],
+            )
+        )
+    )
+    assert "E-DATA-HOLDOUT-STRATIFY-UNKNOWN" not in found
+    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
+
+
+def test_a_holdout_beside_a_fold_repeat_is_refused(write_config):
+    """§ A fixed holdout split: two answers to one question — how the data is
+    divided for evaluation — leaving "which units is this metric over?" with
+    none. Probed at `78bb794`: this config reports ONLY
+    `E-DATA-HOLDOUT-UNSUPPORTED` today, with no exclusion check at all."""
+    overrides = _holdout({"method": "random", "frac": 0.2})
+    overrides["replication"] = {
+        "repeats": [{"kind": "fold", "k": 5}], "order": "as_declared"
+    }
+    found = codes(write_config(overrides))
+    assert "E-DATA-HOLDOUT-FOLD" in found
+    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
+
+
+def test_a_holdout_beside_a_seed_repeat_is_not_refused(write_config):
+    """The control, and it must report something: a `seed` repeat divides
+    nothing, so the exclusion is about `fold` specifically rather than about
+    `replication` being declared at all. Without the second assertion this
+    passes identically if the check is dead."""
+    found = codes(write_config(_holdout({"method": "random", "frac": 0.2})))
+    assert "E-DATA-HOLDOUT-FOLD" not in found
+    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found

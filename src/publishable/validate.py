@@ -2669,9 +2669,9 @@ def _check_holdout(
     cluster_by: str | None,
     c: Collector,
 ) -> None:
-    """Every check `data.units.holdout` gets — five findings at this commit, in
-    declaration order, and the enumeration is the list rather than a sample of
-    it:
+    """Every check `data.units.holdout` gets — seven findings at this commit,
+    in declaration order, and the enumeration is the list rather than a sample
+    of it:
 
     - `E-DATA-HOLDOUT-METHOD` — the `method` enum.
     - `E-DATA-HOLDOUT-FRAC` — `frac` in the open interval (0, 1), under `random`.
@@ -2679,16 +2679,18 @@ def _check_holdout(
     - `E-DATA-HOLDOUT-NO-DRAW` — a field meaning nothing under the declared
       method.
     - `E-DATA-HOLDOUT-SEED` — the seed pin.
+    - `E-DATA-HOLDOUT-STRATIFY-UNKNOWN` — a `stratify_by` name that is not a
+      declared unit attribute, names `data.units.measurements.by`, or is not
+      the name of an attribute at all.
+    - `E-DATA-HOLDOUT-FOLD` — a `{kind: fold}` repeat declared beside this
+      block. The only check here that reads a block other than `data.units`.
 
-    **None of the five reads `roster`, `cluster_by`, or `doc`**, and all three
-    are in the signature anyway, `units.assignment_for`'s reason: the caller
-    already holds them, and a caller told the signature changed under it is
-    what a stable one avoids. `doc` is genuinely unread at this commit, but
-    not for want of a use — task 6's `E-DATA-HOLDOUT-FOLD` reads
-    `doc.get("replication")` from inside this same function, so the parameter
-    is dead only until the next task, not dead in general. A check added here
-    must state which side of that line it is on — this list is what the next
-    reader counts against, so a sixth finding belongs in it, and a
+    **Only `E-DATA-HOLDOUT-FOLD` reads `doc`**, and none reads `roster` or
+    `cluster_by`; all three are in the signature anyway, `units.assignment_for`'s
+    reason: the caller already holds them, and a caller told the signature
+    changed under it is what a stable one avoids. A check added here must
+    state which side of that line it is on — this list is what the next
+    reader counts against, so an eighth finding belongs in it, and a
     roster-reading one carries its own `roster is not None` guard rather than
     leaning on a caller.
 
@@ -2823,6 +2825,90 @@ def _check_holdout(
                 "deriving one anyway would record a derived seed under a key the "
                 "config wrote deliberately",
             )
+
+    # `stratify_by`, through `units.stratum_names` — the single authority the
+    # draw balances on, which reads a bare `stratify_by: label` as one name
+    # exactly as `[label]` is. Re-deriving that reading here with an
+    # `isinstance` chain would pin two independent readings of one declaration
+    # in agreement by nothing, which is what `_check_resample` reads it this
+    # way to avoid.
+    #
+    # **`data.units.attributes` is the reference set**, not the source's
+    # columns, the side of the line `_check_cluster_by`, `_check_weight_by` and
+    # `_check_fold_stratify_by` all read: a stratum is read per unit when the
+    # split is drawn, so it has to survive resolution as an attribute rather
+    # than merely be a column of the source. Checked from the declaration
+    # alone, so it reports whether or not a roster resolved.
+    #
+    # One finding per offending name, `E-DATA-ASSIGN-STRATIFY-UNKNOWN`'s rule:
+    # a declaration naming two undeclared attributes earns two, rather than one
+    # naming only the first.
+    attrs = units.get("attributes") or []
+    declared_names = (
+        sorted({a for a in attrs if isinstance(a, str)}) if isinstance(attrs, list) else []
+    )
+    measurements = units.get("measurements")
+    measurement_axis = measurements.get("by") if isinstance(measurements, dict) else None
+    raw_strata = holdout.get("stratify_by")
+    strata = stratum_names(raw_strata)
+    if raw_strata is not None and not strata:
+        # An empty string or an empty list: present, and naming nothing. Left
+        # silent it would be a declaration that changes no behaviour, which is
+        # exactly what a truthy read of it hides.
+        c.error(
+            "E-DATA-HOLDOUT-STRATIFY-UNKNOWN",
+            "data.units.holdout.stratify_by",
+            "is empty, which names no attribute to balance the split on and changes "
+            "no behavior. Name the attribute, or remove the key",
+        )
+    for name in strata:
+        if not isinstance(name, str) or not name:
+            c.error(
+                "E-DATA-HOLDOUT-STRATIFY-UNKNOWN",
+                "data.units.holdout.stratify_by",
+                f"names {name!r}, which is not the name of a unit attribute — a split "
+                "is balanced on attributes named as strings",
+            )
+            continue
+        if name not in declared_names:
+            c.error(
+                "E-DATA-HOLDOUT-STRATIFY-UNKNOWN",
+                "data.units.holdout.stratify_by",
+                f"names {name!r}, which is not a unit attribute — a stratum is read "
+                "per unit when the split is drawn, so it has to be one. "
+                f"`data.units.attributes` declares "
+                f"{', '.join(declared_names) or 'none'}",
+            )
+            continue
+        if isinstance(measurement_axis, str) and measurement_axis == name:
+            c.error(
+                "E-DATA-HOLDOUT-STRATIFY-UNKNOWN",
+                "data.units.holdout.stratify_by",
+                f"names {name!r}, which `data.units.measurements.by` also names — the "
+                "measurement axis is consumed when a unit's rows collapse and is not "
+                "an attribute of the resolved unit, so there is nothing left to "
+                "balance the split on. Stratify on an attribute that survives the "
+                "collapse",
+            )
+
+    # The one check here that reads a block other than `data.units`. Sited in
+    # `validate` rather than in `resolve_repeats` because a `fold` level is a
+    # perfectly well-formed *repeat*: what is refused is the COMBINATION with a
+    # declaration in another block, which `resolve_repeats` never sees. That is
+    # also why `replication.REPL_DECLARATION_CODES` is unchanged by this.
+    repeats = (doc.get("replication") or {}).get("repeats")
+    if isinstance(repeats, list) and any(
+        isinstance(level, dict) and level.get("kind") == "fold" for level in repeats
+    ):
+        c.error(
+            "E-DATA-HOLDOUT-FOLD",
+            "data.units.holdout",
+            "is declared beside a `{kind: fold}` repeat level, and the two are "
+            "mutually exclusive — each divides the units for evaluation, so together "
+            "they leave `which units is this metric over?` with no single answer. To "
+            "hold out a final test set AND cross-validate for model selection, declare "
+            "the holdout and do the inner search inside the step over `io.units.train`",
+        )
 
 
 def _accounted_attribute_names(doc: dict[str, Any], units: dict[str, Any]) -> set[str]:
