@@ -2,7 +2,7 @@
 
 **Status:** DONE
 
-**Commit:** (to be filled after commit)
+**Commit:** `bbd4a29`
 
 **Test summary:** `uv run pytest` → 1857 passed, 2 xfailed (baseline 1847 + 10 new). `uv run ruff check .` clean. `uv run mypy` clean. `uv run ruff format --check .` shows only the pre-existing ~68-file standing baseline plus one line in my own appended test code that reproduces the brief's literal fixture text verbatim (`overrides["replication"] = {...}` on one line) — not reformatted, per the "never run ruff format bare" instruction and since the brief's code block is to be used verbatim.
 
