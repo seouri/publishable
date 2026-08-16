@@ -1246,6 +1246,182 @@ def holdout_values_fault(roster: UnitList, column: str) -> str | None:
     return None
 
 
+@dataclass(frozen=True)
+class HoldoutPlan:
+    """`data.units.holdout` **realized** — the two sides as unit keys, plus what
+    it took to produce them.
+
+    `ArmPlan`'s sibling and deliberately not the same type: an arm plan is
+    `level -> keys` over a declared `levels` tuple, where a holdout's two sides
+    are fixed and named, and squeezing one into the other would mean either a
+    fabricated axis name or a `levels` field with one legal value.
+
+    - `train` and `test` hold unit keys, never row numbers — a roster that
+      gains a unit renumbers rows and would silently repoint every membership
+      claim. Every key of the roster appears in exactly one of them.
+    - Order is **roster order** under `by_attribute`, which `arms_of` promises,
+      and the order the shuffle realized under `random` — recorded rather than
+      re-sorted, `ArmPlan`'s own rule, because the record of a draw is the
+      draw.
+    - `seed` is the seed the draw was realized with, and is `None` under
+      `by_attribute`: a method that reads a partition the data already holds
+      rather than drawing one, so recording a seed would be a false record of a
+      draw that never happened.
+    - `strata` is the realized `stratify_by`, in declared order, and is empty
+      under `by_attribute` for the reason above and empty under a draw that
+      declared none.
+
+    `frozen=True` blocks rebinding an attribute; the two tuples are immutable
+    outright, so unlike `ArmPlan.members` there is nothing here a determined
+    caller can mutate in place.
+    """
+
+    train: tuple[str, ...]
+    test: tuple[str, ...]
+    seed: int | None
+    strata: tuple[str, ...]
+
+
+HOLDOUT_METHODS_REALIZED = ("random", "by_attribute")
+"""The `data.units.holdout.method` values `holdout_for` draws or reads at this
+commit — named for its own fail-closed message, `assignment_for`'s allowlist
+posture one seam over: a third method added to `validate.HOLDOUT_METHODS` and
+to nothing else falls through to `holdout_for`'s final `NotImplementedError`
+rather than silently partitioning. Declared here rather than imported from
+`validate`, which imports `units` and not the reverse.
+"""
+
+
+def holdout_for(
+    roster: UnitList,
+    block: Mapping[str, Any] | None,
+    *,
+    seed: int,
+    clusters: Mapping[str, str] | None = None,
+) -> HoldoutPlan:
+    """`data.units.holdout`, realized — **the single producer** of a
+    `HoldoutPlan`.
+
+    A **pure function of its arguments**, `assignment_for`'s reason one
+    declaration over: `validate` has to ask "which units are in the test
+    partition" of the same declaration `cli.command_run` asks it of — the
+    `limits.min_clusters` warning is exactly that question — so the draw cannot
+    live in the runner. Two callers, one answer, computed the same way from the
+    same inputs.
+
+    **`seed` is required and this function never derives one.** The derivation
+    is `holdout_seed_for`'s, and composing them is `cli.command_run`'s: a
+    function that both draws and derives is two independent things to get wrong
+    inside one, and it would put the derivation out of reach of a test that
+    wants to pin a draw against a known seed. The value is recorded on the plan
+    under `random` and discarded under `by_attribute`, which draws nothing.
+
+    Dispatches on `block["method"]`, `reference.md` § A fixed holdout split's
+    own enum:
+
+    - `by_attribute` reads the two sides out of a column, through `arms_of`
+      **unchanged** — that function stays the authority for a column-read
+      partition and this one does not re-derive it. The levels it is handed are
+      `HOLDOUT_LEVELS`, the fixed `train`/`test` literals, so `arms_of`'s set
+      equality in both directions is what refuses a third value, a value naming
+      neither, and a literal naming no unit. The refusal goes through
+      `holdout_values_fault`, which owns both the verdict and the wording, so
+      this raise and `validate._check_holdout`'s collected finding are one
+      answer rather than two wrappings of the same raise — `arms_of`'s own
+      message names an arm and an axis's declared levels and would send a
+      holdout's reader to the wrong section.
+    - `random`, unclustered and unstratified, draws one: `holdout_sizes` — the
+      same apportionment `validate` approved the `frac` against — then one
+      `rng.shuffle` of the whole roster's keys, then two consecutive slices,
+      train first. That is `assignment_for`'s `random` branch exactly, and
+      deliberately so: one construction, described in one place.
+    - **Every other value raises `NotImplementedError`** — an allowlist. Fail
+      closed costs nothing, because `validate` already refuses an
+      out-of-enum method (`E-DATA-HOLDOUT-METHOD`) before a run reaches here,
+      and it is what keeps a *third* method added to `validate.HOLDOUT_METHODS`
+      and to nothing else from validating clean and then silently partitioning.
+
+    **A `clusters` mapping and a non-empty `stratify_by` are not realized at
+    this commit** and raise `NotImplementedError` rather than being silently
+    ignored — an ignored `stratify_by` is a split `validate` called stratified
+    and the draw balanced on nothing. `clusters` is a parameter anyway, for
+    `assignment_for`'s reason: a caller that already has to hold the cluster
+    map must not be told the signature changed under it.
+
+    **Both sides are refused empty**, under `E-DATA-HOLDOUT-EMPTY`.
+    `validate._check_holdout` refuses a zero *test* side from the declaration
+    and the roster size, and does not refuse a zero *train* side — 2 units at
+    `frac: 0.9` apportions `(0, 2)`, which would fit a model on nothing. The
+    draw holds the realized sizes and is the last place that can see them,
+    which is `assignment_for`'s own posture for a zero-size arm.
+    """
+    block_map: Mapping[str, Any] = block if isinstance(block, Mapping) else {}
+    method = block_map.get("method")
+    strata = stratum_names(block_map.get("stratify_by"))
+    if strata or clusters is not None:
+        raise NotImplementedError(
+            "a clustered or stratified `data.units.holdout` is not realized at this "
+            "commit — the draw that keeps whole clusters on one side, and the one that "
+            "balances the split within each stratum, are not built here. Ignoring "
+            "either would be a split `validate` called clustered or stratified and the "
+            "draw balanced on nothing"
+        )
+    if method == "by_attribute":
+        column = block_map.get("from")
+        if not isinstance(column, str) or not column:
+            raise NotImplementedError(
+                "`data.units.holdout.method: by_attribute` names no column to read the "
+                "split out of; `validate` refuses this as `E-DATA-HOLDOUT-FROM`"
+            )
+        # `holdout_values_fault` computes the verdict AND the wording, so this
+        # raise and `validate._check_holdout`'s collected finding are one
+        # answer rather than two wrappings of `arms_of` that drift apart.
+        fault = holdout_values_fault(roster, column)
+        if fault is not None:
+            raise ContractError(fault, code="E-DATA-HOLDOUT-VALUES")
+        sides = arms_of(roster, column, HOLDOUT_LEVELS)
+        return HoldoutPlan(
+            train=tuple(u.key for u in sides[HOLDOUT_LEVELS[0]]),
+            test=tuple(u.key for u in sides[HOLDOUT_LEVELS[1]]),
+            seed=None,
+            strata=(),
+        )
+    if method == "random":
+        frac = block_map.get("frac")
+        if not isinstance(frac, (int, float)) or isinstance(frac, bool):
+            raise NotImplementedError(
+                "`data.units.holdout.method: random` declares no usable `frac`; "
+                "`validate` refuses this as `E-DATA-HOLDOUT-FRAC`"
+            )
+        train_size, test_size = holdout_sizes(len(roster), float(frac))
+        if train_size == 0 or test_size == 0:
+            side = "train" if train_size == 0 else "test"
+            raise ContractError(
+                f"`data.units.holdout.frac: {frac}` over {len(roster)} resolved units "
+                f"apportions the {side} side zero of them. Every split needs both "
+                "sides — the training side has nothing to fit on, or the test side has "
+                "nothing to report over; widen or narrow `frac`, or resolve a larger "
+                "roster",
+                code="E-DATA-HOLDOUT-EMPTY",
+            )
+        shuffled = [unit.key for unit in roster]
+        random.Random(seed).shuffle(shuffled)
+        return HoldoutPlan(
+            train=tuple(shuffled[:train_size]),
+            test=tuple(shuffled[train_size:]),
+            seed=seed,
+            strata=(),
+        )
+    raise NotImplementedError(
+        f"`data.units.holdout.method: {method!r}` is not realized here — the methods "
+        f"this build draws are {', '.join(HOLDOUT_METHODS_REALIZED)}. `validate` "
+        "refuses an out-of-enum method as `E-DATA-HOLDOUT-METHOD` before a run reaches "
+        "this, and an allowlist is what keeps a method added to that enum and to "
+        "nothing else from validating clean and then partitioning on something core "
+        "never drew"
+    )
+
+
 def auto_block_size(weights: Sequence[float]) -> int:
     """`block_size: "auto"`'s resolved value for `assign.<axis>.method: blocked` —
     `reference.md` § Allocation: twice `ratio`'s sum, rounded to a whole number of
