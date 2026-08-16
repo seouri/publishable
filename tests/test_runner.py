@@ -1,4 +1,5 @@
 import copy
+import json
 from pathlib import Path
 
 import numpy as np
@@ -1787,3 +1788,171 @@ def test_clusters_and_effective_are_independent_parts_of_n(tmp_path: Path):
     assert both["effective"] == pytest.approx(_KISH_COMPLETED)
     assert "effective" not in attrition(results, roster, "record_four_skip_one", 0, clusters=_SITES)
     assert "clusters" not in attrition(results, roster, "record_four_skip_one", 0, weights=_WEIGHTS)
+
+
+# --- Task 14: a holdout narrows `io.units` to the test partition, and
+# `io.units.train` to the training one, at every scope. ---
+
+_UNITS_RECORDING_STEP_SOURCE = """\
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "{scope}"
+
+    def run(self, cfg, io):
+        io.write("seen.json", {{
+            "test": [u.key for u in io.units],
+            "train": [u.key for u in io.units.train],
+        }})
+        return {{"n": len(io.units)}}
+"""
+
+
+def _runner_roster(n: int) -> UnitList:
+    """`n` units keyed `u0`..`u{n-1}` — the roster the holdout tests split into
+    a train/test pair via `_runner_roster(10)`'s `{u0..u7}`/`{u8, u9}` split."""
+    return UnitList([Unit(key=f"u{i}") for i in range(n)])
+
+
+def _load_step_from_source(source: str, *, scope: str) -> type:
+    """Compile `source` (formatted with `scope`) and return its `Step` class.
+
+    `scope` is a class attribute `build_plan` reads before any instance exists,
+    so a test parametrized over scope needs one class per scope rather than one
+    shared class mutated in place — hence a source template instead of a plain
+    class body."""
+    namespace: dict = {"__name__": "test_runner_dynamic_step"}
+    exec(compile(source.format(scope=scope), "<dynamic-step>", "exec"), namespace)
+    return namespace["Step"]
+
+
+def _one_step_plan(tmp_path: Path, *, scope: str, source: str = _UNITS_RECORDING_STEP_SOURCE):
+    """A one-step, one-condition plan for driving `execute_plan` directly,
+    without a `cli` run — what the holdout-beside-a-fold assertion test needs,
+    since no config can reach that seam."""
+    step_cls = _load_step_from_source(source, scope=scope)
+
+    class P(BaseExperiment):
+        pass
+
+    P.steps = [step_cls]
+    return build_plan(P(), conditions=[(0, None)], repeat_labels=["seed17"])
+
+
+def _run_one_step_raw(
+    tmp_path: Path,
+    *,
+    scope: str,
+    units,
+    source: str,
+    holdout_train=None,
+    fold_members=None,
+):
+    """Build a one-step plan for `scope` and run it through `execute_plan`
+    directly (no `cli`), returning its single `ExecutionResult` — the raw form
+    the "still raises" control needs `.status`/`.error` from."""
+    plan = _one_step_plan(tmp_path, scope=scope, source=source)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "in").mkdir(parents=True, exist_ok=True)
+    results = execute_plan(
+        plan=plan,
+        run_dir=run_dir,
+        input_dir=tmp_path / "in",
+        cfgs={0: Config({"parameters": {}}), -1: Config({"parameters": {}})},
+        repeats=[Repeat("seed", "seed17", 17)],
+        digest="sha256:abc",
+        units=units,
+        holdout_train=holdout_train,
+        fold_members=fold_members,
+    )
+    return results[0]
+
+
+def _run_one_step(tmp_path: Path, *, scope: str, units, holdout_train, source: str):
+    """Like `_run_one_step_raw`, but asserts the execution completed and returns
+    the `seen.json` the recording step wrote — the test/train keys it saw as
+    `io.units`/`io.units.train`."""
+    plan = _one_step_plan(tmp_path, scope=scope, source=source)
+    run_dir = tmp_path / "run"
+    run_dir.mkdir(parents=True, exist_ok=True)
+    (tmp_path / "in").mkdir(parents=True, exist_ok=True)
+    results = execute_plan(
+        plan=plan,
+        run_dir=run_dir,
+        input_dir=tmp_path / "in",
+        cfgs={0: Config({"parameters": {}}), -1: Config({"parameters": {}})},
+        repeats=[Repeat("seed", "seed17", 17)],
+        digest="sha256:abc",
+        units=units,
+        holdout_train=holdout_train,
+    )
+    result = results[0]
+    assert result.status == "completed", result.error
+    step_dir = step_dir_for(run_dir, plan[0], collapse_repeats=True)
+    return json.loads((step_dir / "seen.json").read_text())
+
+
+@pytest.mark.parametrize("scope", ["run", "condition", "repeat", "summary"])
+def test_a_holdout_narrows_io_units_at_every_scope(tmp_path, scope):
+    """§ A fixed holdout split: the split is fixed for the whole run, so
+    `io.units` is the test partition and `io.units.train` the training one at
+    EVERY scope — the inverse of the fold rule in the same function, which
+    hands `None` at `run` and `condition`.
+
+    All four scopes are parametrized because the fold branch's `run`/
+    `condition` special case sits three lines away, and a narrowing written
+    inside it would pass a `repeat`-only test."""
+    roster = _runner_roster(10)
+    train = UnitList(
+        [u for u in roster if u.key in {"u0", "u1", "u2", "u3", "u4", "u5", "u6", "u7"}]
+    )
+    test = UnitList([u for u in roster if u.key in {"u8", "u9"}])
+    seen = _run_one_step(
+        tmp_path,
+        scope=scope,
+        units=test,
+        holdout_train=train,
+        source=_UNITS_RECORDING_STEP_SOURCE,
+    )
+    assert seen["test"] == ["u8", "u9"]
+    assert seen["train"] == ["u0", "u1", "u2", "u3", "u4", "u5", "u6", "u7"]
+
+
+def test_without_a_holdout_train_still_raises_at_every_scope(tmp_path):
+    """The control, and it must produce something: with `holdout_train=None`
+    and no fold, `io.units` is the whole roster and `io.units.train` raises —
+    the shape task 1 pinned end to end. A narrowing written one branch too wide
+    would hand a train list to a run that declared no partition."""
+    roster = _runner_roster(10)
+    result = _run_one_step_raw(
+        tmp_path, scope="repeat", units=roster, source=_UNITS_RECORDING_STEP_SOURCE
+    )
+    assert result.status == "failed"
+    assert "E-STEP-UNITS-UNAVAILABLE" in (result.error or "")
+
+
+def test_a_holdout_beside_a_fold_is_a_core_defect_not_a_silent_choice(tmp_path):
+    """No CONFIG can reach this: `E-DATA-HOLDOUT-FOLD` refuses the pair at
+    validate time, and `E-DATA-HOLDOUT-CELLS` closes the arm interaction. So
+    the seam is exercised by calling `execute_plan` directly with both
+    arguments non-`None`, rather than by a fixture that cannot exist — naming a
+    seam is not testing it.
+
+    An assertion rather than a silent precedence: two answers to "which units
+    is this metric over?" is exactly what the refusal exists to prevent, and if
+    it ever stops preventing it, this must be a crash and not a guess."""
+    roster = _runner_roster(10)
+    with pytest.raises(AssertionError):
+        execute_plan(
+            plan=_one_step_plan(tmp_path, scope="repeat"),
+            run_dir=tmp_path / "run",
+            input_dir=tmp_path / "in",
+            cfgs={},
+            repeats=[],
+            digest="sha256:aaa",
+            units=roster,
+            holdout_train=UnitList(list(roster)[:5]),
+            fold_members={"fold0": frozenset({"u0"})},
+        )

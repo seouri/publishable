@@ -1463,9 +1463,7 @@ def command_run(config_path: Path) -> int:
     # narrowing, the denominators and `allocation.json` are all handed this one
     # object. See `_resolved_holdout` for why not calling twice is the only
     # thing that can promise the run and the record agree.
-    holdout_plan = _resolved_holdout(  # noqa: F841 -- consumed starting task 14
-        units_decl, roster, digest, clusters
-    )
+    holdout_plan = _resolved_holdout(units_decl, roster, digest, clusters)
     arm_members_map = (
         arm_members(group_axes, conditions)
         if selector_paths(sweep_block) and roster is not None
@@ -1593,6 +1591,11 @@ def command_run(config_path: Path) -> int:
             max_failed_fraction=(doc.get("limits") or {}).get("max_failed_fraction"),
             fold_members=fold_members,
             arm_members=arm_members_map,
+            holdout_train=(
+                UnitList([u for u in roster if u.key in set(holdout_plan.train)])
+                if holdout_plan is not None and roster is not None
+                else None
+            ),
             measurements=(units_decl or {}).get("measurements"),
         )
 

@@ -467,6 +467,7 @@ def execute_plan(
     max_failed_fraction: float | None = None,
     fold_members: dict[str, frozenset[str]] | None = None,
     arm_members: "dict[int, frozenset[str]] | None" = None,
+    holdout_train: "UnitList | None" = None,
     measurements: dict[str, Any] | None = None,
 ) -> list[ExecutionResult]:
     """Run every execution in the plan, in order, one at a time.
@@ -494,7 +495,31 @@ def execute_plan(
     complement across the *whole* roster rather than within the arm would leak
     the other arm's units into `.train` — the same class of leak
     `units.partition_units` exists to prevent for a cluster, one level up.
+
+    `holdout_train` is `data.units.holdout`'s training roster, already resolved
+    by the caller (`cli.command_run`'s single-authority narrowing) — this
+    function derives nothing from it beyond wrapping it. Unlike a `fold`, a
+    holdout's split is fixed for the whole run, so when `holdout_train` is given,
+    `units` is the test partition and `io.units.train` is `holdout_train` at
+    every scope — `run`, `condition`, `repeat` and `summary` alike, not only
+    `repeat` the way a fold's `.train` is.
     """
+    # Two evaluation splits is two answers to "which units is this metric
+    # over?", which is exactly what `validate` refuses. No config can reach this
+    # at this commit: `E-DATA-HOLDOUT-FOLD` (task 6) refuses a `holdout` beside a
+    # declared `fold` level, and `E-DATA-HOLDOUT-CELLS` (task 8) refuses a
+    # holdout beside the group axis `arm_members` comes from. So this asserts
+    # something about core's own callers rather than about a config — and it is
+    # an assertion rather than silent precedence because if either refusal ever
+    # stops holding, a crash here is what makes that visible instead of a
+    # partition chosen by whichever branch happened to be written first.
+    assert holdout_train is None or fold_members is None, (
+        "a holdout and a fold repeat both narrow the roster; `validate` refuses the "
+        "pair as `E-DATA-HOLDOUT-FOLD`"
+    )
+    assert holdout_train is None or arm_members is None, (
+        "a holdout beside a group axis is refused as `E-DATA-HOLDOUT-CELLS`"
+    )
     collapse = len(repeats) <= 1
     seeds = {r.label: r.seed for r in repeats}
     ledger = run_dir / "executions.jsonl"
@@ -568,7 +593,26 @@ def execute_plan(
         # no-fold case — the arm-narrowed roster, when a group axis is declared,
         # since arm narrowing already ran above.
         if fold_members is None or scoped_units is None:
+            # A `data.units.holdout` is fixed for the WHOLE run, so it narrows
+            # at every scope — `run`, `condition`, `repeat` and `summary`
+            # alike. That is the inverse of the fold rule three lines below,
+            # and deliberately: `reference.md` § Step scope says "a `holdout`
+            # does not raise, because its split is fixed for the whole run",
+            # and `experimental-designs.md` § Cross-validation says
+            # "condition-scoped fitting is right for a fixed holdout and wrong
+            # for cross-validation". A holdout that took the fold branch's
+            # `run`/`condition` hole would hand `None` to exactly the step a
+            # holdout exists to let fit.
+            #
+            # `units` is already the TEST partition when a holdout is declared
+            # — `cli.command_run` narrowed it at the call site, `_cond_roster`'s
+            # single-authority rule, which `attrition`'s own docstring restates
+            # ("does not re-derive that narrowing itself, and must not"). This
+            # function turns two rosters into one `UnitList`; it derives
+            # neither.
             step_units = scoped_units
+            if holdout_train is not None and scoped_units is not None:
+                step_units = UnitList(list(scoped_units), train=holdout_train)
         elif execution.scope in ("run", "condition"):
             step_units = None  # no fold exists yet at these scopes
         elif execution.scope == "repeat":
