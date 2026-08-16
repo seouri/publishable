@@ -746,3 +746,40 @@ Task 17: reviewed (opus). Spec compliance PASS; task quality FAIL with two Impor
   1950 tests green. That is OWNED — task 18's fifth end-to-end pin names it verbatim, and no config can
   reach `command_run` today.
 Task 17: complete. 1950 passed + 2 xfailed. BASE for task 18 is the commit below.
+Task 18: dispatched — retire `E-DATA-HOLDOUT-UNSUPPORTED`, and the five end-to-end pins. The slice's pivot.
+  I counted the assertions to be removed before dispatching — 28 in `tests/test_validate.py` — and made the
+  central requirement not the deletion but the RE-VERIFICATION after it. Every task from 5 onward asserted
+  its finding alongside a code emitted by `_check_unimplemented`, a DIFFERENT function, so the companion
+  was never positive attribution for anything. Delete it and any test left asserting only absences becomes
+  a test that passes identically if nothing ran.
+Task 18: implemented at 30376a1 / 7b0cd14. 1953 passed + 2 xfailed. **FOUR TESTS HAD GONE VACUOUS AND WERE
+  REWRITTEN.** That is the whole return on the "assert alongside" discipline: the deletions were one-line
+  as designed, and the four that needed more were found by looking rather than by the suite, which stayed
+  green throughout.
+  Two strong disagreements. `executions.jsonl` carries no `n` key at all, so the brief's pin was written
+  against a field that does not exist. And the brief's `_ALWAYS_FAILING_STEP` — a bare `raise` — CANNOT
+  TRIP `max_failed_fraction` at any denominator, because `_units_failed_anywhere` counts only recording
+  steps and a step that never produces a row never records. The brief's own pin for task 15's second
+  property could not have fired. Replaced with a step that discriminates narrowed from un-narrowed.
+Task 18: reviewed (opus). Spec compliance PASS — retirement complete, only `E-DATA-RESOLVER-UNSUPPORTED`
+  and `E-STATS-NULLTEST-UNSUPPORTED` survive, all five repeat kinds still rejected by probe. Task quality
+  FAIL with five commentary/pin defects.
+  The reviewer re-verified the re-verification rather than trusting it, killing `_check_holdout` and
+  watching 37 tests fail, and confirmed every non-rewritten sample rests on `E-DATA-HOLDOUT-SEED` — a code
+  only that function emits. The four rewrites are genuine.
+  Two pins were pinning nothing. Pin 1's seed clause asserted the DECLARED `4321`, so replacing the digest
+  with a constant left all 1953 tests green; it now uses a config with no declared seed and recomputes
+  `holdout_seed_for` from the run's own recorded digest, and the mutation drives it. And the regression
+  assertion sat on `holdout: null` — a shape the retired refusal NEVER FIRED ON, so it could not have
+  failed even before the retirement.
+  Ruling on I1/M1, which is the lesson of this task: the implementer's sweep was scoped to the STRING
+  `E-DATA-HOLDOUT-UNSUPPORTED` rather than to the CLAIM, so a docstring citing the deleted
+  `_check_unimplemented` loop survived at two sites. CLAUDE.md's rule is sweep for the claim, not the file;
+  this is the same failure one level in — sweep for the claim, not the SYMBOL. Re-sweeping for the claim
+  found a third instance in `reference.md` that the string sweep could never have reached.
+Task 18: fix round 1. Commit b034923. All eight closed. The one worth naming: the task-14 pin read
+  `next(rglob("split.json"))` — 1 of 5 files — and now asserts all five are IDENTICAL. That is the first
+  behavioural instrument this slice has had for task 13's "realized once", which was otherwise invisible
+  because a realization inside a per-condition loop draws the same partition each time. Reading the call
+  site had been the only instrument for six tasks.
+Task 18: complete. 1954 passed + 2 xfailed; ruff check and mypy clean. BASE for task 19 is b034923.
