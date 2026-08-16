@@ -413,3 +413,32 @@ Between tasks 7 and 8 — four corrections made at SOURCE rather than carried as
   `uv run ruff format --check $(git diff --name-only BASE..HEAD -- '*.py')` answers it in one call, with
   no scratch worktree and no untracked-markdown noise. Four rounds were spent reconciling 67 -> 70 for a
   number that was never the question.
+Task 8: dispatched — the shared cells refusal, `_check_evaluation_split_cells`, two codes from one site,
+  H3c-3 named as owner of its retirement. First task dispatched under the new Global Constraints.
+Task 8: implemented at fa6accc / 44e232c, DONE_WITH_CONCERNS with three disclosed. Confirmed the LIVE
+  defect by hand before closing it, as the brief required: the fold-beside-cells fixture validated with
+  `found == set()` — no error at all — on the shipped build. That is the defect H3c-3 would otherwise have
+  carried, and seeing it is what stops a refusal being written against a fault that was never there.
+  Task 2's document work was already in place, so two of the brief's three document steps were phantom
+  edits. The implementer reported that rather than writing them twice, which is what the owed-context note
+  existed to buy.
+Task 8: reviewed (opus). Spec compliance PASS; **task quality PASS** — the first of this slice. The
+  reviewer's words: "the four-task pattern of unfailable tests does not recur." Moving the message-pinning
+  rule from the next brief into the plan's Global Constraints, and patching task 8's test code at source,
+  is what changed; three briefs naming it had not.
+  All three disclosed concerns adjudicated and none upheld. The one worth recording: `if units.get(
+  "holdout"):` is a bare truthiness gate where `_check_holdout` uses `isinstance(..., dict) and holdout`,
+  so a bare-string holdout beside cells earns `-CELLS` while `_check_holdout` stays silent. Ruled
+  acceptable — the divergence is confined to truthy non-mappings, which is exactly `E-CONFIG-TYPE`'s
+  territory; `_check_unimplemented` already uses the identical gate on the same key; and § Errors' row
+  says "is declared beside", which is true of a string.
+Task 8: fix round 1. Commit aff6ca5. One Important closed — the `and groups` emptiness half of the `cells`
+  predicate was unpinned, and dropping it left the whole suite green while a config with
+  `sweep.groups: []` and a holdout would have earned a spurious refusal that all three document sites
+  contradict. Also fixed a doubled verb in the `E-REPL-FOLD-CELLS` message, which the shared `reason`
+  string had forced, by factoring the tail into a `consequence` and giving each code its own verb.
+  Ruling: the review found the function's three `isinstance` guards unreachable from `validate_config` —
+  `E-CONFIG-SHAPE` returns first, proven with a `raise RuntimeError` probe. They stay, untested and
+  uncommented. Recording it here so it is not re-derived: an unreachable guard is not a testable one, and
+  a comment asserting it is reachable would be this repo's most recurring defect in its purest form.
+Task 8: complete. 1879 passed + 2 xfailed; ruff check and mypy clean. BASE for task 9 is aff6ca5.
