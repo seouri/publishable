@@ -14,6 +14,7 @@ from publishable.cli import (
     _apply_execution_order,
     _cond_roster,
     _condition_counts,
+    _evaluation_roster,
     _resolved_group_axes,
     _resolved_holdout,
     _wide_swept_paths,
@@ -26,6 +27,7 @@ from publishable.generators.step import generate_step
 from publishable.replication import LABEL_JOIN
 from publishable.runner import attrition
 from publishable.scope import Execution
+from publishable.units import HoldoutPlan
 from publishable.validate import validate_config
 
 Ran = namedtuple("Ran", ["condition_index", "repeat_label"])
@@ -7855,4 +7857,197 @@ def test_a_pinned_holdout_seed_reaches_the_realization():
         roster, "sha256:aaa", None,
     )
     assert plan.seed == 4321
+
+
+_HOLDOUT_PLAN_8_2 = HoldoutPlan(
+    train=tuple(f"u{i}" for i in range(8)),
+    test=("u8", "u9"),
+    seed=1234,
+    strata=(),
+)
+
+
+def test_the_evaluation_roster_is_the_test_partition_and_preserves_roster_order():
+    """The denominator every metric counts against. Order preserved because
+    the roster's order is part of its identity and `report_by`'s per-level
+    tables are built by walking it.
+
+    The `None` arm is the no-holdout case and must return the SAME OBJECT, not
+    a copy: `_cond_beside_n` decides whether `technical_n` survives by identity
+    (`cond_roster is roster`), so returning a copy here would silently withhold
+    it from every unswept run."""
+    from publishable.units import HoldoutPlan
+
+    roster = _cli_roster(10)
+    assert _evaluation_roster(roster, None) is roster
+    assert _evaluation_roster(None, None) is None
+
+    plan = HoldoutPlan(
+        train=("u3", "u1", "u0", "u2", "u4", "u6", "u5", "u7"),
+        test=("u9", "u8"),
+        seed=1234,
+        strata=(),
+    )
+    narrowed = _evaluation_roster(roster, plan)
+    assert [u.key for u in narrowed] == ["u8", "u9"]
+    assert len(narrowed) == 2
+
+
+def test_the_narrowed_roster_is_what_attrition_counts_against():
+    """The composition this task exists for: `attrition` hands out whatever
+    roster it is given, so a training unit that recorded nothing lands in
+    `failed` unless the roster it sees is already the test partition.
+
+    Asserted through `_condition_counts` — the one function `command_run`
+    calls for a condition's counts — rather than through `attrition` directly,
+    because `attrition` counting correctly over a roster nobody narrowed is
+    the defect, not the fix. `_repeat_result` (already used throughout this
+    file's `attrition`/`_condition_counts` fixtures) builds the
+    `list[ExecutionResult]` `attrition` reads; nothing new is needed for that
+    part."""
+    roster = _cli_roster(10)
+    eval_roster = _evaluation_roster(roster, _HOLDOUT_PLAN_8_2)
+    results = [_repeat_result("step01", "seed01", 0, {"u8": {}, "u9": {}})]
+
+    whole = _condition_counts(results, roster, "step01", 0, None)
+    narrowed = _condition_counts(results, eval_roster, "step01", 0, None)
+
+    # The defect, stated as a number: 8 training units counted as failures.
+    assert whole["resolved"] == 10 and whole["failed"] == 8
+    # The fix.
+    assert narrowed["resolved"] == 2
+    assert narrowed["completed"] == 2
+    assert narrowed["failed"] == 0
+
+
+def test_condition_report_by_levels_omits_a_level_confined_to_training_units():
+    """The third of the six sites the brief names with no test of its own:
+    `_condition_report_by_levels(roster, cond.index, arm_members_map,
+    attribute)`, called with `eval_roster` at `command_run`.
+
+    A `report_by` level built over the whole roster includes a level that
+    exists only among training units — units that never executed and have no
+    row in `collapsed`. Built over the test partition, that level is absent
+    entirely rather than reported with a training-only key set no result
+    backs. `cohort` is confined here so the two readings can't coincidentally
+    agree: `early` (`u0`..`u4`) is entirely training, `late` (`u5`..`u9`)
+    straddles the 8/2 holdout split at `u8`/`u9`."""
+    from publishable.cli import _condition_report_by_levels
+
+    roster = _cli_roster(10, cohort=lambda i: "early" if i < 5 else "late")
+    eval_roster = _evaluation_roster(roster, _HOLDOUT_PLAN_8_2)
+
+    whole = _condition_report_by_levels(roster, 0, None, "cohort")
+    assert set(whole) == {"early", "late"}
+    assert whole["late"][0] == {"u5", "u6", "u7", "u8", "u9"}
+
+    narrowed = _condition_report_by_levels(eval_roster, 0, None, "cohort")
+    # The level confined to training units is gone, not reported empty.
+    assert "early" not in narrowed
+    assert narrowed["late"][0] == {"u8", "u9"}
+
+
+def test_compute_declared_contrasts_within_is_narrowed_by_the_test_partition():
+    """The sixth site: `_compute_declared_contrasts(..., roster=roster, ...)`,
+    called with `eval_roster` at `command_run` — the route that reaches
+    `units_matching(roster, comp.within)` inside `_comparison_step_blocks`, so
+    a contrast's `within` subgroup is over test units too.
+
+    `within={"group": "x"}` matches `u0` and `u2` in the whole 4-unit roster
+    but only `u2` once the roster is narrowed to the 2-unit test partition
+    `{u2, u3}` — `u0`'s membership is real but inert once it can never be a
+    training unit's, and this is what makes that observable: `n_paired` counts
+    2 over the whole roster and 1 over the narrowed one, for the identical
+    `collapsed_by_key` input."""
+    from publishable.cli import _compute_declared_contrasts
+    from publishable.sweep import Condition
+    from publishable.units import UnitList
+
+    roster = _cli_roster(4, group=lambda i: "x" if i % 2 == 0 else "y")
+    eval_roster = UnitList([u for u in roster if u.key in {"u2", "u3"}])
+
+    of_collapsed = {f"u{i}": {"r": 1.0 + 0.1 * i} for i in range(4)}
+    against_collapsed = {f"u{i}": {"r": 0.5} for i in range(4)}
+    conditions = [
+        Condition(index=0, label="baseline", is_baseline=True),
+        Condition(index=1, label="m"),
+    ]
+    doc = {
+        "statistics": {
+            "contrasts": [
+                {"id": "c1", "of": "m", "against": "baseline", "within": {"group": "x"}}
+            ]
+        }
+    }
+    aggregated = {0: {"s": {"r": 0.5}}, 1: {"s": {"r": 1.15}}}
+    collapsed_by_key = {(0, "s"): against_collapsed, (1, "s"): of_collapsed}
+
+    def _run(eval_or_whole):
+        out, _members = _compute_declared_contrasts(
+            doc=doc,
+            conditions=conditions,
+            roster=eval_or_whole,
+            aggregated=aggregated,
+            collapsed_by_key=collapsed_by_key,
+            derived_by_key={},
+            resample_fns_by_key={},
+            seed=7,
+            draws=200,
+            findings=Collector(),
+            resample_columns=False,
+        )
+        return out[0]["s"]["r"]["n_paired"]
+
+    assert _run(roster) == 2
+    assert _run(eval_roster) == 1
+
+
+def test_compute_vs_baseline_roster_argument_never_affects_the_auto_generated_family():
+    """A finding, not a pin: `_compute_vs_baseline`'s only use of `roster` is
+    `units_matching(roster, comp.within)` inside `_comparison_step_blocks`
+    (via `_baseline_comparisons`/`resolve_contrasts`), and `resolve_contrasts`
+    never sets `within` on an auto-generated (non-`declared`) comparison —
+    every `Comparison(..., declared=False)` it builds omits the keyword, so it
+    takes the dataclass default of `None`.  `units_matching(_, None)` returns
+    `None` ("unrestricted") regardless of which roster object is passed, so
+    this site's `roster=eval_roster` at `command_run` cannot be shown to
+    differ from `roster=roster` through this function's return value — the
+    difference is inert here for the same reason `_condition_beside_n`'s is
+    (see the report), not because no fixture was clever enough. Recorded
+    rather than silently asserted so a future change that lets an
+    auto-generated comparison carry `within` is what would make this
+    observable, and this test's failure is what would say so."""
+    from publishable.cli import _compute_vs_baseline
+    from publishable.sweep import Condition
+    from publishable.units import UnitList
+
+    roster = _cli_roster(4, group=lambda i: "x" if i % 2 == 0 else "y")
+    eval_roster = UnitList([u for u in roster if u.key in {"u2", "u3"}])
+
+    of_collapsed = {f"u{i}": {"r": 1.0 + 0.1 * i} for i in range(4)}
+    against_collapsed = {f"u{i}": {"r": 0.5} for i in range(4)}
+    conditions = [
+        Condition(index=0, label="baseline", is_baseline=True),
+        Condition(index=1, label="m"),
+    ]
+    aggregated = {0: {"s": {"r": 0.5}}, 1: {"s": {"r": 1.15}}}
+    collapsed_by_key = {(0, "s"): against_collapsed, (1, "s"): of_collapsed}
+
+    def _run(eval_or_whole):
+        out, _members = _compute_vs_baseline(
+            doc={},
+            conditions=conditions,
+            roster=eval_or_whole,
+            aggregated=aggregated,
+            collapsed_by_key=collapsed_by_key,
+            derived_by_key={},
+            resample_fns_by_key={},
+            seed=7,
+            draws=200,
+            findings=Collector(),
+            resample_columns=False,
+        )
+        return out
+
+    assert _run(roster) == _run(eval_roster)
 

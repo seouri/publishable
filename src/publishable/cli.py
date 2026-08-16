@@ -499,6 +499,54 @@ def _resolved_holdout(
     )
 
 
+def _evaluation_roster(
+    roster: "UnitList | None", holdout: "HoldoutPlan | None"
+) -> "UnitList | None":
+    """The units every denominator counts against — the holdout's **test**
+    partition when one is declared, and the same roster object otherwise.
+
+    `reference.md` § A fixed holdout split: "`resolved` is the test partition
+    — a 20 % holdout over 240 units reports `resolved: 48`, and the interval is
+    over those 48. That's the honest denominator: the training units produced
+    no result to generalize from."
+
+    **Without this, every training unit lands in `failed`.** `runner.attrition`
+    computes `handed = keys` over whatever roster it is given, and a training
+    unit is handed out, records nothing, and is neither completed nor skipped —
+    so a 0.2 holdout over 240 would report 192 failures and trip
+    `max_failed_fraction` on a run in which nothing failed.
+
+    **The same object, not a copy, when no holdout is declared.**
+    `_cond_beside_n` decides whether `technical_n` survives by IDENTITY
+    (`cond_roster is roster`), so a copy here would silently withhold it from
+    every run in the build.
+
+    Roster order is preserved: it is part of the roster's identity, and
+    `_report_by_levels` walks it to build each level's table.
+
+    **What this deliberately does NOT narrow**, and the list is the point
+    rather than an omission:
+
+    - `provenance.units.n` and `provenance.units_hash` stay whole-roster. They
+      are the roster's identity, not a metric's denominator — which is what
+      makes `240` there and `48` in a metric's `n` two true numbers rather than
+      a contradiction.
+    - The key-indexed maps `command_run` builds over the roster — the
+      `weight_by` weights, `unit_attributes`, and `resample_strata` — are
+      consumed BY KEY over units that completed, so a surplus training key is
+      never looked up. Narrowing them would be a third answer to which roster
+      is which for no observable difference.
+    - `runner._counts`' Kish size and cluster count are computed over the
+      COMPLETED units already (its own docstring: "a df is over the units the
+      interval was computed from"), so they are holdout-safe by construction
+      and need nothing here.
+    """
+    if roster is None or holdout is None:
+        return roster
+    test = set(holdout.test)
+    return UnitList([u for u in roster if u.key in test])
+
+
 def _cond_roster(
     roster: "UnitList",
     cond_index: int,
@@ -1464,6 +1512,11 @@ def command_run(config_path: Path) -> int:
     # object. See `_resolved_holdout` for why not calling twice is the only
     # thing that can promise the run and the record agree.
     holdout_plan = _resolved_holdout(units_decl, roster, digest, clusters)
+    # One narrowing, six readers. `roster` itself stays whole below this line —
+    # `provenance.units.n` and `units_hash` are the roster's identity rather
+    # than a metric's denominator, and rebinding the name would narrow every
+    # future call site silently, including theirs.
+    eval_roster = _evaluation_roster(roster, holdout_plan)
     arm_members_map = (
         arm_members(group_axes, conditions)
         if selector_paths(sweep_block) and roster is not None
@@ -1587,7 +1640,7 @@ def command_run(config_path: Path) -> int:
             cfgs=cfgs,
             repeats=repeats,
             digest=digest,
-            units=roster,
+            units=eval_roster,
             max_failed_fraction=(doc.get("limits") or {}).get("max_failed_fraction"),
             fold_members=fold_members,
             arm_members=arm_members_map,
@@ -1661,6 +1714,12 @@ def command_run(config_path: Path) -> int:
                         "exists to catch, and `study add` cannot check what it cannot see",
                     )
         if roster is not None:
+            # `_evaluation_roster` returns `None` only when its own `roster`
+            # argument is `None` (`_resolved_holdout`'s docstring: a `None`
+            # roster has nothing to partition), so `eval_roster` is `None`
+            # exactly when `roster` is — narrowed here for the type checker,
+            # not a new runtime possibility.
+            assert eval_roster is not None
             # `condition_index` is guarded per condition: core aggregates within
             # each condition and never pools across conditions — an unguarded
             # filter would let a same-named step from another condition mark this
@@ -1815,7 +1874,7 @@ def command_run(config_path: Path) -> int:
                 # this task fixes happened — a narrowed roster computed and
                 # then not passed to `attrition`.
                 cond_beside_n = {
-                    **_condition_beside_n(beside_n, roster, cond.index, arm_members_map),
+                    **_condition_beside_n(beside_n, eval_roster, cond.index, arm_members_map),
                     **resample_beside,
                 }
                 for step_name in sorted(recording_steps):
@@ -1824,7 +1883,7 @@ def command_run(config_path: Path) -> int:
                     )
                     counts = _condition_counts(
                         results,
-                        roster,
+                        eval_roster,
                         step_name,
                         cond.index,
                         arm_members_map,
@@ -2205,7 +2264,7 @@ def command_run(config_path: Path) -> int:
                         # both arms hand `attrition` units the other arm's
                         # executions never touched.
                         for level, (keys, level_roster) in _condition_report_by_levels(
-                            roster, cond.index, arm_members_map, attribute
+                            eval_roster, cond.index, arm_members_map, attribute
                         ).items():
                             # One key set decides BOTH the table and the counts.
                             # Taking the level's rows beside the condition's `n`
@@ -2411,7 +2470,7 @@ def command_run(config_path: Path) -> int:
             vs_baseline, vs_baseline_members = _compute_vs_baseline(
                 doc=doc,
                 conditions=conditions,
-                roster=roster,
+                roster=eval_roster,
                 aggregated=aggregated,
                 collapsed_by_key=collapsed_by_key,
                 derived_by_key=derived_by_key,
@@ -2424,7 +2483,7 @@ def command_run(config_path: Path) -> int:
             contrasts_out, contrast_members = _compute_declared_contrasts(
                 doc=doc,
                 conditions=conditions,
-                roster=roster,
+                roster=eval_roster,
                 aggregated=aggregated,
                 collapsed_by_key=collapsed_by_key,
                 derived_by_key=derived_by_key,
@@ -2551,6 +2610,15 @@ def command_run(config_path: Path) -> int:
             # A run over a roster whose identity is not pinned is a run whose `n`
             # means nothing later: `units` and `units_hash` are `None` together
             # exactly when there is no `data.units` declaration to pin.
+            #
+            # **Whole-roster, deliberately, and not the same number a metric's
+            # `n` reports.** Under a `data.units.holdout` a metric's
+            # `n.resolved` counts the TEST partition — 48 where this says 240
+            # — and both are true: this is the identity of the roster the run
+            # resolved, which is what `units_hash` pins and what `reproduce`
+            # checks, where `n` is the denominator of an estimate. Narrowing
+            # this would make the hash cover a subset the config never
+            # described.
             "units": (
                 {"n": len(roster), "key": units_decl["key"]}
                 if roster is not None and units_decl is not None
