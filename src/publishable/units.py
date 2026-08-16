@@ -325,14 +325,14 @@ def resolve_units(
         # iteration order is the order `collapse_measurements` checks
         # declarations in, and it stops at the first that raises, so whichever
         # comes first in this dict wins a unit that violates more than one at
-        # once. `assign` is documented as the worst of the three (§ Allocation:
+        # once. `assign` is documented as the worst of the four (§ Allocation:
         # a mis-collapsed arm decides which condition a unit is measured in,
-        # where cluster/weight only decide which side of a split it lands on
-        # or what it stands for), so it has to be checked before the flat pair
-        # or that severity ordering would be undermined by an accident of
-        # dict-building order — the "precedence rule nothing in the documents
-        # states" `CONSTANT_COLUMN_RULES` warns against, now stated in both
-        # places rather than left implicit.
+        # where cluster/weight/holdout only decide which side of a split it
+        # lands on or what it stands for), so it has to be checked before the
+        # flat pair or that severity ordering would be undermined by an
+        # accident of dict-building order — the "precedence rule nothing in
+        # the documents states" `CONSTANT_COLUMN_RULES` warns against, now
+        # stated in both places rather than left implicit.
         constant = _assign_constant_columns(units_decl.get("assign"))
         # `holdout.from` next, between `assign` and the flat pair. `assign` is
         # documented as the worst of the family (§ Allocation: a mis-collapsed
@@ -344,11 +344,21 @@ def resolve_units(
         # is worse than the other. `weight_by` stays last, which is the
         # documented ordering.
         constant.update(_holdout_constant_column(units_decl.get("holdout")))
+        # `holdout` is excluded here even though it is a `CONSTANT_COLUMN_RULES`
+        # key: this comprehension's `isinstance(..., str)` filter would otherwise
+        # admit a bare-string `data.units.holdout`, a shape `_check_holdout`
+        # already refuses as `E-CONFIG-TYPE` and that `_holdout_constant_column`
+        # above is deliberately silent on. `holdout.from` reaches this registry
+        # only through that accessor, so a mis-typed scalar stays
+        # `E-CONFIG-TYPE`'s finding alone rather than also raising
+        # `E-DATA-HOLDOUT-VARIES` through a second, undocumented route.
         constant.update(
             {
                 declaration: units_decl[declaration]
                 for declaration in CONSTANT_COLUMN_RULES
-                if isinstance(units_decl.get(declaration), str) and units_decl[declaration]
+                if declaration != "holdout"
+                and isinstance(units_decl.get(declaration), str)
+                and units_decl[declaration]
             }
         )
         units, counts = collapse_measurements(
@@ -724,17 +734,21 @@ CONSTANT_COLUMN_RULES: dict[str, tuple[str, str]] = {
 """The declarations whose column may not vary within a unit's measurement rows.
 
 **Four codes, not one**, deliberately: `reference.md` § Clustered units,
-§ Weighted samples, § Allocation and § A fixed holdout split state the same
-rule about four different columns, and each of the first three says a
-different thing about what breaks — a mis-collapsed weight mis-sizes what one
-unit stands for, a mis-collapsed cluster decides which side of a split that
-unit lands on, and a mis-collapsed arm decides which *condition* the unit is
-measured in, the worst of the three because it changes what the run claims to
-have compared rather than how confidently it says so. **`holdout` is the one
-exception**: it says the *same* thing about the damage `cluster_by` does —
-which side of a split the unit lands on — and still gets its own code, because
-one identifier for either would send the reader naming the other to a section
-that does not describe their input field at all.
+§ Weighted samples and § Allocation each state the same constancy rule in
+prose, for a different one of the first three columns; `holdout.from`'s own
+instance of the rule is stated only in § Errors core raises
+(`E-DATA-HOLDOUT-VARIES`'s row) rather than in § A fixed holdout split, which
+carries no such paragraph.
+Each of the first three says a different thing about what breaks — a
+mis-collapsed weight mis-sizes what one unit stands for, a mis-collapsed
+cluster decides which side of a split that unit lands on, and a mis-collapsed
+arm decides which *condition* the unit is measured in, the worst of the three
+because it changes what the run claims to have compared rather than how
+confidently it says so. **`holdout` is the one exception**: it says the
+*same* thing about the damage `cluster_by` does — which side of a split the
+unit lands on — and still gets its own code, because one identifier for
+either would send the reader naming the other to a section that does not
+describe their input field at all.
 
 Keyed by the *declaration* rather than by the column, so a config naming one
 column under two declarations is checked once for each **declaration considered
@@ -806,11 +820,14 @@ def collapse_measurements(
 
     `constant` maps a declaration to the column it names, and those columns are
     refused where they vary within one unit's rows rather than being collapsed
-    like any other attribute. A key is either a bare entry of `CONSTANT_COLUMN_RULES`
-    (`cluster_by`, `weight_by`) or a dotted `assign.<axis>.from` — one per declared
-    axis, built by `_assign_constant_columns` — and the lookup below strips either
-    back to the segment before its first `.` to find the rule, so `assign`'s one
-    registry entry covers every axis alike. **`validate` cannot host that check**:
+    like any other attribute. A key is either a bare `CONSTANT_COLUMN_RULES` entry
+    or a dotted path built by that entry's own accessor (`_assign_constant_columns`,
+    `_holdout_constant_column`) for a declaration `CONSTANT_COLUMN_RULES` cannot
+    reach as a flat string — see `CONSTANT_COLUMN_RULES`'s own docstring for which
+    declaration takes which shape and why. The lookup below strips a dotted key
+    back to the segment before its first `.` to find the rule, so one registry
+    entry covers every dotted variant a declaration produces alike.
+    **`validate` cannot host that check**:
     `resolve_units` collapses internally, so a validate-time check sees the
     post-collapse roster and the disagreeing values are already gone. This
     function groups the rows by key and is the one place holding them.

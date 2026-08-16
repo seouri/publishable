@@ -134,3 +134,20 @@ Files touched: `src/publishable/units.py`, `src/publishable/validate.py`,
 `scripts/task-brief` had clobbered to a bare `*` before this task started
 (noticed via `git status`, restored via `git checkout .superpowers/sdd/.gitignore`
 — the tracked, correct content — not a mutation of my own work).
+
+## Correction (2026-08-16, closing review findings)
+
+The closing line above — "the reference.md § Errors row for `E-DATA-HOLDOUT-VARIES`
+… already described exactly what this task's emit site does, so no document change
+was needed there" — overstates what task 1's row covered. The task-9 review found
+two gaps that row left: (1) `"holdout"`, once added as a `CONSTANT_COLUMN_RULES`
+key, also admitted a bare-string `data.units.holdout` through `resolve_units`'s flat
+comprehension, an emit path (message spelling `data.units.holdout`, no `.from`) the
+row never described and no test pinned — closed by excluding `holdout` from that
+comprehension rather than documenting a second route, since the accessor was built
+to be the only one; (2) the row omitted that `validate` also reports this code
+through the resolution it performs, unlike its three dual-listed siblings — a gap
+this task's own emit site made real and so this task's to close. Both are fixed as
+part of closing that review. The row did describe the `holdout.from` accessor path
+correctly; it did not describe the flat-comprehension path this task's registry
+entry also opened, nor the `validate`-reporting fact.

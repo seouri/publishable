@@ -2888,7 +2888,7 @@ def test_one_column_named_by_both_cluster_and_arm_reports_exactly_one_code(input
 
 
 def test_resolve_units_checks_holdout_after_assign_and_before_cluster(input_dir: Path):
-    """`test_the_holdout_rule_is_checked_after_assign_and_before_the_flat_pair`
+    """`test_collapse_stops_at_the_first_entry_of_the_constant_mapping_it_is_given`
     (`test_units.py`, `_holdout_constant_column` fixture) pins the ordering
     against a `constant` mapping the test itself builds by hand — it proves
     `collapse_measurements` stops at whichever entry is first in the dict it
@@ -2922,6 +2922,35 @@ def test_resolve_units_checks_holdout_after_assign_and_before_cluster(input_dir:
     with pytest.raises(ContractError) as e2:
         resolve_units(without_assign, input_dir)
     assert e2.value.code == "E-DATA-HOLDOUT-VARIES"
+
+
+def test_a_bare_string_holdout_does_not_reach_the_registry_through_the_flat_comprehension(
+    input_dir: Path,
+):
+    """`holdout` is a key of `CONSTANT_COLUMN_RULES`, so `resolve_units`'s flat
+    comprehension — `if isinstance(units_decl.get(declaration), str) and
+    units_decl[declaration]` — would otherwise admit a bare-string
+    `data.units.holdout` naming a column that varies within a unit's
+    measurement rows, and raise `E-DATA-HOLDOUT-VARIES` at path
+    `data.units.holdout` (no `.from`) for a shape `_check_holdout` already
+    refuses as `E-CONFIG-TYPE`. `holdout.from` reaches this registry only
+    through `_holdout_constant_column`, so the flat comprehension excludes
+    `holdout` explicitly and this declaration produces no `constant` entry at
+    all — `resolve_units` completes without raising, over a roster whose
+    `split` column varies exactly the way the mapping form would refuse."""
+    _write_reads(
+        input_dir,
+        "patient_id,read_id,split\np1,r1,train\np1,r2,test\n",
+    )
+    decl = {
+        "from": "reads.csv",
+        "key": "patient_id",
+        "attributes": ["split", "read_id"],
+        "holdout": "split",
+        "measurements": {"by": "read_id", "collapse": "first"},
+    }
+    units, _, _ = resolve_units(decl, input_dir)
+    assert units[0].split == "train"
 
 
 def test_roster_order_not_severity_decides_when_different_units_violate_different_declarations(
@@ -3195,10 +3224,15 @@ def test_the_holdout_accessor_resolves_no_column_for_these(decl):
     assert _holdout_constant_column(decl) == {}
 
 
-def test_the_holdout_rule_is_checked_after_assign_and_before_the_flat_pair():
-    """`constant`'s iteration order decides which code a unit violating more
-    than one declaration gets, and `collapse_measurements` stops at the first.
-    Pinned as an order rather than left to dict-building accident.
+def test_collapse_stops_at_the_first_entry_of_the_constant_mapping_it_is_given():
+    """`collapse_measurements` stops at the first `constant` entry whose column
+    disagrees and raises that entry's code — this test builds the mapping by
+    hand, so it pins only that stopping behaviour, not that `resolve_units`
+    builds the mapping in any particular order. The order `resolve_units`
+    itself builds — `assign` before `holdout` before the flat pair — is pinned
+    by `test_resolve_units_checks_holdout_after_assign_and_before_cluster`,
+    which calls `resolve_units` on a real declaration; that is where the
+    ordering guarantee actually lives.
 
     The fixture makes ONE unit violate `assign`, `holdout` and `cluster_by`
     at once — three declarations, so the three candidate orderings each give a
