@@ -8109,10 +8109,13 @@ def test_validate_reports_rather_than_raising_on_a_varying_holdout(write_config,
     """`validate` collects findings and never raises. The same `except
     ContractError` in `_check_units` that catches the cluster/weight/arm raise
     catches this one too, and calling `validate_config` directly proves
-    nothing escaped it. The message is pinned, not only the code — `find` the
-    varying column, `who` the offending unit, and the `why` from
-    `CONSTANT_COLUMN_RULES["holdout"]`, none of which a bare code check
-    exercises."""
+    nothing escaped it. The message is pinned, not only the code — the varying
+    column and the offending unit, neither of which a bare code check
+    exercises. The trailing `why` from `CONSTANT_COLUMN_RULES` is **not**
+    pinned here: the asserted fragment is the prefix every entry in that
+    registry shares, so replacing the holdout entry's `why` outright leaves
+    this green. No sibling's `why` is pinned either, so that is parity rather
+    than an omission peculiar to the holdout."""
     _clustered_table(
         tmp_path,
         "patient_id,read_id,split",

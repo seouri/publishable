@@ -1,0 +1,246 @@
+# Review package: c5de085..d5f6b6b
+
+## Commits
+d5f6b6b test: verify a column draw is never degenerate, so resample_draws records the requested n
+
+## Files changed
+ .../2026-08-15-resample-honoured/task-11-report.md | 75 ++++++++++++++++++++++
+ docs/superpowers/spec-defects.md                   | 31 +++++++++
+ src/publishable/stats.py                           | 19 ++++++
+ tests/test_stats.py                                | 47 ++++++++++++++
+ 4 files changed, 172 insertions(+)
+
+## Diff
+diff --git a/.superpowers/sdd/2026-08-15-resample-honoured/task-11-report.md b/.superpowers/sdd/2026-08-15-resample-honoured/task-11-report.md
+new file mode 100644
+index 0000000..ba93e44
+--- /dev/null
++++ b/.superpowers/sdd/2026-08-15-resample-honoured/task-11-report.md
+@@ -0,0 +1,75 @@
++# Task 11 report — verify the invariant decision 2 rests on
++
++**Status:** COMPLETE.
++
++**Commit:** to be created — `test: verify a column draw is never degenerate, so resample_draws records the requested n`
++
++**Test summary:** `uv run pytest` → 1762 passed, 2 xfailed (baseline 1752 + 2 xfailed + 10 new tests).
++`uv run mypy` and `uv run ruff check .` both clean.
++
++## The verification
++
++Read `percentile_over_units` (`src/publishable/stats.py`) and `usable_weight`
++(`src/publishable/units.py`) directly rather than accepting the brief's argument on faith.
++
++- **Unweighted branch:** `sum(pool[rng.randrange(n)] for _ in range(n)) / n`, gated by
++  `if len(values) < 2: return None` above — so `n >= 2` always when this branch runs, no division
++  by zero reachable.
++- **Weighted branch:** `_weighted_mean` over a drawn subset, gated by `checked_weights`, which
++  reads `units.usable_weight`. Confirmed the guard is `if not math.isfinite(number) or number <= 0:
++  return None` (line 552) — a weight of `0`, negative, non-finite, or non-numeric (including `bool`,
++  explicitly excluded by `is_measurement_numeric`) is refused with `E-DATA-WEIGHT-INVALID`
++  **before any draw**. Σw over a non-empty drawn subset is therefore strictly positive.
++- **Stratified branch:** draws `len(group)` rows from each `group` in `ordered`, and every group is
++  non-empty by construction (it came from at least one `(value, weight)` pair). No degenerate draw
++  reachable there either.
++
++Wrote `tests/test_stats.py::test_a_column_resample_refuses_a_bad_weight_before_any_draw` (parametrized
++over `0, 0.0, -1.0, nan, inf, "heavy", None, True`),
++`test_a_column_resample_is_never_degenerate_across_adversarial_columns` (zero variance, near-zero
++spread, extreme weight ratios, a one-unit stratum, combined strata+weights), and
++`test_percentile_over_units_still_returns_a_bare_interval` (the negative pin: decision 2 is that the
++return type does NOT become `(Interval, int)`). All ten pass immediately, which is the expected shape
++for a verify-and-pin task — a pass on first run is the evidence the decision asked for, not a sign the
++test is inert (see the mutation below).
++
++**Mutation (Step 5):** changed `usable_weight`'s guard from `number <= 0` to `number < 0`, admitting a
++weight of exactly zero. Re-ran `test_a_column_resample_refuses_a_bad_weight_before_any_draw` — the `0`
++and `0.0` parameters FAILED with `ZeroDivisionError: float division by zero` at
++`stats.py:167` (inside `_weighted_mean`), confirming the invariant rests on that specific guard and not
++on incidental luck. Deleted `__pycache__`, edited the guard back to `number <= 0` in place (never
++`git checkout`), re-ran: all 8 weight-refusal parameters pass again.
++
++**Conclusion: no reachable degenerate column draw exists.** The decision holds under the conditions
++stated — `values` has length ≥ 2, and any declared weight vector is validated by `checked_weights`
++before a draw is taken. `percentile_over_units`'s return type is unchanged.
++
++## Disagreement between brief and code (found, per the standing question for this slice)
++
++The brief's Step 3 docstring text to append read, in present tense: "a column's `resample_draws` is
++the requested `n` and is recorded as such by `summarize_step`." Checked against the code
++(`c5de085`): `summarize_step`'s recorded-column branch (`out[column] = {...}`, distinct from the
++derived-metric branch several lines below it) carries **no `resample_draws` key at all** today —
++only `value`, `basis`, `n`, `ci95`, `method`, `correction`. Wiring `statistics.resample` into that
++branch, and adding `resample_draws` there, is task 12/14's work; `E-STATS-RESAMPLE-UNSUPPORTED`
++still refuses a declared `resample` end to end (confirmed via `grep` in `cli.py`).
++
++Writing the brief's sentence verbatim into `stats.py`'s docstring would have been exactly the failure
++mode CLAUDE.md names repeatedly ("a comment or docstring claiming a guarantee the code does not
++provide") — a present-tense claim about what `summarize_step` does, when it does not yet do it. I
++reworded the appended docstring text to state the invariant conditionally — safe for whenever a later
++slice wires column resample into `summarize_step` — rather than asserting current behavior, and
++recorded the same distinction in `docs/superpowers/spec-defects.md`'s new entry (its final paragraph)
++so the gap between the brief's wording and the code's current state is on the durable record, not just
++in this report.
++
++The spec decision itself (record the requested `n`, don't change `percentile_over_units`'s return
++type) is unaffected by this — it's a forward-looking ruling about how task 12/14 *should* wire things
++when it lands, and that ruling is sound. Only the tense of one sentence needed correcting.
++
++## Concerns
++
++None beyond the above. The invariant is conditional on `values` having length ≥ 2 (already gated by
++`percentile_over_units` itself, returning `None` below that) and on any weight vector being routed
++through `checked_weights` — both true for every call site in the current code. No new
++`E-STATS-RESAMPLE-*` behavior is implied to be honoured end to end by this task.
+diff --git a/docs/superpowers/spec-defects.md b/docs/superpowers/spec-defects.md
+index c469b0f..dc818d3 100644
+--- a/docs/superpowers/spec-defects.md
++++ b/docs/superpowers/spec-defects.md
+@@ -5026,10 +5026,41 @@ null_test" line names all three, but only two now have the check: `null_test` is
+ wholesale by `E-STATS-NULLTEST-UNSUPPORTED` with nothing underneath it, so the moment that
+ refusal retires, a bare `null_test: {shuffle: status}` with no `data.units` validates clean and
+ runs nothing — the identical hole task 7 closed for `resample`, reopened one field over.
+ 
+ Proposed resolution: whichever slice retires `E-STATS-NULLTEST-UNSUPPORTED` (H4d, per the current
+ plan) adds the same declaration-gated check `_check_resample` and `_check_replication` both use —
+ `not (doc.get("data") or {}).get("units")` — under its own code (`E-STATS-NULLTEST-UNITS`, to
+ match the naming this task settled on rather than the `E-REPL-FOLD-K` name once miscited for it),
+ reporting without returning, so a roster-independent `null_test` shape fault (its own `shuffle`
+ checks) still surfaces in the same pass.
++
++## A column metric's `resample_draws` records the requested `n`, not a survivor count
++
++Decided in H4a (2026-08-15). `stats.percentile_over_units` returns a bare `Interval` where
++`percentile_of_derived` returns `(Interval, int)`, so a recorded column under a declared
++`statistics.resample` has no survivor count to record beside its interval.
++
++**Ruling: record the requested `n`.** A column's draw statistic is a mean over a non-empty
++sample and is always defined — the unweighted branch divides by `n >= 2`, `checked_weights`
++refuses a non-positive or non-finite weight before any draw, and a stratified pool is non-empty
++by construction — so `draws_used == n` always and the return type need not change (~20 existing
++tests read it). Verified rather than assumed, by
++`tests/test_stats.py::test_a_column_resample_is_never_degenerate_across_adversarial_columns`
++and the parametrized weight refusal beside it.
++
++**Consequence to keep in view:** `W-STATS-RESAMPLE-THIN` fires on `used < requested`, so it can
++never fire for a column. That is correct — the warning exists for a template's `aggregate`
++producing nothing on some draws — but it means the two metric kinds carry the same field with
++subtly different provenance, which `reference.md` § Statistical reporting states.
++
++**Task 11's own docstring text was itself an instance of the trap this section warns about.**
++The brief's Step 3 text read "a column's `resample_draws` is the requested `n` and is recorded as
++such by `summarize_step`" in the present tense. Checked against the code (2026-08-15,
++`c5de085`): `summarize_step`'s recorded-column branch (`out[column] = {...}`, distinct from the
++derived-metric branch a few lines below it) carries no `resample_draws` key at all today — only
++`value`, `basis`, `n`, `ci95`, `method`, `correction`. Wiring `statistics.resample` into that
++branch is task 12/14's work; `E-STATS-RESAMPLE-UNSUPPORTED` still refuses a declared `resample`
++end to end. The docstring landed in `stats.py` was reworded to say the invariant holds for
++whenever that wiring lands, rather than asserting current behavior the code does not have — the
++same "comment claiming a guarantee the code does not provide" failure mode this repo has hit at
++least eight times before.
+diff --git a/src/publishable/stats.py b/src/publishable/stats.py
+index 3787557..71d5700 100644
+--- a/src/publishable/stats.py
++++ b/src/publishable/stats.py
+@@ -545,20 +545,39 @@ def percentile_over_units(
+     re-pair them — the mistake equal-sized strata cannot see.
+ 
+     Returns `None` rather than a zero-width interval when every stratum's own
+     (value, weight) pairs are all identical — a singleton stratum is the
+     special case of this, but a larger stratum whose rows all carry one
+     repeated pair guarantees the same zero freedom. That is a structural
+     guarantee, true whatever the repeated pair's value is, unlike a single
+     constant stratum among others that still vary — which keeps its interval,
+     the same way `percentile_over_units_clustered` reports a point rather than
+     a zero-width interval at `G < 2`.
++
++    **This returns a bare `Interval`, with no survivor count, and that is a
++    decision rather than an omission.** `percentile_of_derived` returns
++    `(Interval, int)` because a derived metric's `compute` can fail on a
++    degenerate draw — `nan`, `None`, or a raise — so how many draws survived is
++    a real fact about the interval. A column metric's draw statistic is a mean
++    over a non-empty sample, which is always defined: the unweighted branch
++    divides by `n >= 2`, the weighted branch's Σw is strictly positive because
++    `checked_weights` refuses a zero, negative, non-finite or non-numeric weight
++    before any draw is taken, and the stratified branch draws `len(pool) >= 1`
++    rows from each non-empty pool. So a column's `resample_draws` — once a later
++    slice wires `statistics.resample` for recorded columns into `summarize_step`
++    (today's build still refuses a declared `resample` with
++    `E-STATS-RESAMPLE-UNSUPPORTED`, and the recorded-column branch there carries
++    no `resample_draws` key at all) — can safely be the REQUESTED `n` rather than
++    a survivor count, and `percentile_over_units`'s return type need not change to
++    carry one. The invariant is pinned by
++    `test_a_column_resample_is_never_degenerate_across_adversarial_columns`
++    rather than asserted here.
+     """
+     if len(values) < 2:
+         return None
+     if draws < min_honest_draws(confidence):
+         return None
+     # One weight vector for every branch below, so a value and its weight are
+     # paired once. `checked_weights` gates before any draw rather than producing
+     # `draws` worth of `nan`, and it is the one authority `validate` and
+     # `kish_effective_n` also read.
+     carried = None if weights is None else checked_weights(weights)
+diff --git a/tests/test_stats.py b/tests/test_stats.py
+index a108d8e..2837c8c 100644
+--- a/tests/test_stats.py
++++ b/tests/test_stats.py
+@@ -3294,10 +3294,57 @@ def test_all_strata_internally_constant_gives_no_interval_at_all():
+ 
+ def test_every_unit_its_own_stratum_gives_no_interval_at_all():
+     """Every unit its own singleton stratum: each draw reproduces every value
+     exactly once, so the resample has no freedom left anywhere. This is the
+     singleton special case of the constant-stratum refusal above, not a
+     zero-width point to report."""
+     values = [1.0, 2.0, 3.0, 4.0]
+     strata = ["a", "b", "c", "d"]
+     got = percentile_over_units(values, seed=19, draws=2000, strata=strata)
+     assert got is None
++
++
++@pytest.mark.parametrize(
++    "bad", [0, 0.0, -1.0, float("nan"), float("inf"), "heavy", None, True]
++)
++def test_a_column_resample_refuses_a_bad_weight_before_any_draw(bad):
++    """The invariant decision 2 rests on: a column metric's draw statistic is a
++    mean over a non-empty sample, so it is ALWAYS defined and
++    `resample_draws == n` always. What could break that is a weight of zero
++    making Σw zero on some draw — so the check is that `checked_weights`
++    (reading `units.usable_weight`, which requires a finite positive number)
++    refuses every such weight before a single draw is taken."""
++    values = [1.0, 2.0, 3.0, 4.0]
++    weights = [1.0, 1.0, 1.0, bad]
++    with pytest.raises(ContractError) as exc:
++        percentile_over_units(values, seed=1, draws=100, weights=weights)
++    assert exc.value.code == "E-DATA-WEIGHT-INVALID"
++
++
++def test_a_column_resample_is_never_degenerate_across_adversarial_columns():
++    """The positive half, and the one that would catch a `(Interval, int)`
++    requirement appearing: over columns chosen to be as degenerate as a column
++    can be — zero variance, a single repeated value, extreme weight spread,
++    a one-unit stratum — the interval is always produced, so no survivor count
++    ever differs from the requested draws."""
++    cases: list[tuple[list[float], dict]] = [
++        ([5.0, 5.0, 5.0, 5.0], {}),                                  # zero variance
++        ([0.0, 0.0, 0.0, 1e-12], {}),                                # near-zero spread
++        ([1.0, 2.0, 3.0, 4.0], {"weights": [1e-9, 1e-9, 1e-9, 1e9]}),  # extreme spread
++        ([1.0, 2.0, 3.0], {"strata": ["a", "b", "b"]}),               # one-unit stratum
++        ([1.0, 2.0, 3.0, 4.0], {"strata": ["a", "a", "b", "b"],
++                                "weights": [1.0, 2.0, 3.0, 4.0]}),
++    ]
++    for values, kwargs in cases:
++        got = percentile_over_units(values, seed=2, draws=100, **kwargs)
++        assert got is not None, (values, kwargs)
++        assert got.method == "percentile_over_units"
++        assert got.low <= got.high
++
++
++def test_percentile_over_units_still_returns_a_bare_interval():
++    """Pinned deliberately: ~20 tests read this return, and decision 2 is that
++    it does NOT become `(Interval, int)`. A slice that changed it would have to
++    change this test, which is where the decision gets re-argued rather than
++    drifted past."""
++    got = percentile_over_units([1.0, 2.0, 3.0, 4.0], seed=1, draws=100)
++    assert isinstance(got, Interval)

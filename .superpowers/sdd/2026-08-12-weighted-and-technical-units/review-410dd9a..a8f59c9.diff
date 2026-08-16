@@ -1,0 +1,286 @@
+# Review package: 410dd9a..HEAD
+
+## Commits
+a8f59c9 fix: add median and sum to COLLAPSE_RULES, pin mode's tie-break
+193957b feat: collapse rows sharing a key into one unit
+
+## Files changed
+ docs/reference.md        |  1 +
+ src/publishable/units.py | 95 ++++++++++++++++++++++++++++++++++++++++++++++++
+ tests/test_units.py      | 74 ++++++++++++++++++++++++++++++++++++-
+ 3 files changed, 169 insertions(+), 1 deletion(-)
+
+## Diff
+diff --git a/docs/reference.md b/docs/reference.md
+index 2d12b6a..59115ff 100644
+--- a/docs/reference.md
++++ b/docs/reference.md
+@@ -868,20 +868,21 @@ Two levels, and only one leaf, because only one of these is ever a *state* rathe
+ | A `name` that escapes the step's directory, an `io.append` onto anything but `.jsonl`, or an extension [no writer claims](#steps-and-artifacts) handed an object that isn't `bytes` or `str` | `ArtifactError` · `E-ARTIFACT-NAME`, `E-ARTIFACT-APPEND`, `E-ARTIFACT-UNWRITABLE` |
+ | [Reading a step narrower than the caller](#step-scope) | `ContractError` · `E-STEP-READ-DIRECTION` |
+ | [`io.read_upstream` from `summary` scope naming a condition- or repeat-scoped step, once the sweep labels its conditions, or naming a repeat-scoped step once the run resolves more than one repeat](#step-scope) | `ContractError` · `E-STEP-READ-AMBIGUOUS` |
+ | [Reading a swept parameter](#step-scope) at `"run"` or `"summary"` scope | `ContractError` · `E-STEP-SWEPT-PARAM` |
+ | [`io.units` or `io.units.train`](#a-fold-repeat-puts-the-units-out-of-reach-of-the-wider-scopes) where the declarations put no such list | `ContractError` · `E-STEP-UNITS-UNAVAILABLE` |
+ | `self.condition` or `self.repeat` at a [scope that has none](#using-them-in-step-code) | `ContractError` · `E-STEP-CONTEXT-ABSENT` |
+ | An [`Estimate`](#estimate-carries-your-interval-without-core-claiming-it) outside `"summary"` scope, or one carrying `ci95` with no `method` | `ContractError` · `E-STEP-ESTIMATE-SCOPE`, `E-STEP-ESTIMATE-METHOD` |
+ | An [`Estimate`](#estimate-carries-your-interval-without-core-claiming-it) whose `ci95` is not two numbers in ascending order, or whose `value` is not a number | `ContractError` · `E-STEP-ESTIMATE-CI95`, `E-STEP-ESTIMATE-VALUE` |
+ | A [returned value core can't record](#steps-and-artifacts), or any [name collision the record can't hold](#validation) — a derived key against a recorded column, a recorded column against a unit attribute | `ContractError` · `E-STEP-RETURN-TYPE`, `E-STEP-KEY-COLLISION` |
+ | A [`cfg` path](#steps-and-artifacts) the config doesn't hold, or a write through a frozen [`Unit`](#the-unit-list-is-three-operations-and-the-units-in-it-are-frozen) | `ContractError` · `E-STEP-PARAM-UNKNOWN`, `E-UNIT-IMMUTABLE` |
++| Collapsing [technical replicates](#what-isnt-a-repeat) under a `collapse` rule name that is none of `mean`, `median`, `sum`, `first`, or `mode` | `ContractError` · `E-UNITS-COLLAPSE-RULE` |
+ | A [column](#templates-where-parameters-are-defined) no row of the unit table holds, read off `units` in a template's `aggregate` — reported as [`W-STATS-AGGREGATE-FAILED`](#warnings-core-reports), since `aggregate` runs after every execution has completed and a metric core can't compute never costs a run its record | `ContractError` · `E-STEP-COLUMN-UNKNOWN` |
+ | A [repeat level](#repeat-kinds) whose derived seeds or whose rendered labels are not distinct across its repeats | `ContractError` · `E-REPL-SEED-COLLISION` |
+ | Two [steps](#steps-and-artifacts) in one experiment deriving the same name — including the same step listed twice — or one whose `scope` is not one of the four | `ContractError` · `E-STEP-NAME-COLLISION`, `E-STEP-SCOPE-UNKNOWN` |
+ | [`io.record` or `io.skip`](#the-unit-table-is-the-inference-base) naming a unit the roster does not hold, or naming one this execution has already recorded or skipped | `ContractError` · `E-STEP-UNIT-UNKNOWN`, `E-STEP-UNIT-SETTLED` |
+ | An [`io` accessor](#step-scope) reached from a scope that does not have it | `ContractError` · `E-STEP-SCOPE-ONLY` |
+ | Indexing [`io.units`](#the-unit-list-is-three-operations-and-the-units-in-it-are-frozen) with anything but a plain integer — a slice, a string, a bool | `ContractError` · `E-STEP-UNITS-CONTRACT` |
+ | [`io.read_condition`](#steps-that-need-every-condition) naming a condition index this run did not resolve, or naming a repeat-scoped step with no `repeat=` to say which copy | `ContractError` · `E-STEP-READ-CONDITION-UNKNOWN`, `E-STEP-READ-REPEAT-REQUIRED` |
+ | Core's execution plan disagreeing with the state core resolved beside it — a repeat execution whose seed or whose resolved config isn't there, a [realized order](#a-batch-says-when-not-what) naming a pair the plan doesn't hold, or a declared fold core can't pair with the units it partitions — a repeat label carrying no fold component, a fold with no resolved roster, drawn partitions with no fold level to label them | `ContractError` · `E-RUN-SEED-MISSING`, `E-RUN-CFG-MISSING`, `E-RUN-ORDER-MISMATCH`, `E-REPL-ORDER-UNRESOLVED`, `E-RUN-FOLD-UNRESOLVED` |
+ 
+ **That last row is the one you can't cause, and it's in the table anyway.** Every other entry is something your declarations or your step code asked for; those five are core checking its own work, because the plan and the resolved conditions, repeats, seeds, folds, and order are all derived from one config and must agree. If they ever don't, the run would execute something other than what it recorded, and no result from it is worth reading. They carry a type and a code for the same reason everything above does rather than being an `assert`: `assert` disappears under `python -O`, which is precisely the wrong property for the only guard on a condition nothing else detects. One of them reaching you is a bug to report, not a config to fix — and unlike every row above, none of the five is raised inside an execution, so it stops the run instead of failing one step and continuing. A plan core can't trust is not a plan to keep walking.
+diff --git a/src/publishable/units.py b/src/publishable/units.py
+index 3c5d881..60f9f5c 100644
+--- a/src/publishable/units.py
++++ b/src/publishable/units.py
+@@ -3,20 +3,22 @@
+ 
+ Resolution runs at `validate` as well as at `run`, so this module reads
+ `input_dir` directly rather than through `io` — at validate time there is no run
+ directory and no step for an `io` to belong to.
+ """
+ 
+ import csv
+ import hashlib
+ import json
+ import random
++import statistics
++from collections import Counter
+ from collections.abc import Iterator, Mapping
+ from dataclasses import dataclass, field
+ from pathlib import Path
+ from typing import Any
+ 
+ from publishable.errors import ContractError
+ 
+ RESERVED_FIELDS = ("key", "paths", "attributes")
+ 
+ 
+@@ -259,20 +261,113 @@ def resolve_units(units_decl: dict[str, Any], input_dir: Path) -> UnitList:
+     for u in units:
+         if u.key in seen:
+             raise ContractError(
+                 f"`data.units.key` is not unique: {u.key!r} appears more than once",
+                 code="E-UNITS-KEY-DUPLICATE",
+             )
+         seen[u.key] = 1
+     return UnitList(units)
+ 
+ 
++COLLAPSE_RULES = ("mean", "median", "sum", "first", "mode")
++
++# `reference.md` § What isn't a repeat: "`collapse` is `mean`, `median`, or `sum`
++# for numeric columns and `first` or `mode` for the rest." Exported so task 2's
++# validate-time check — which numeric-only rule was named over a non-numeric
++# column — reads the same set rather than re-deriving it, which is how the two
++# would come to disagree.
++NUMERIC_COLLAPSE_RULES = ("mean", "median", "sum")
++
++
++def _rule_for(column: str, collapse: Any) -> str:
++    """One rule for every column, or a per-column map falling back to `first`.
++
++    A column the config did not name is one the design did not ask to average,
++    so the fallback carries the first value rather than guessing at a statistic.
++    """
++    if isinstance(collapse, Mapping):
++        return str(collapse.get(column, "first"))
++    return str(collapse)
++
++
++def _apply(rule: str, values: list[Any]) -> Any:
++    if rule not in COLLAPSE_RULES:
++        raise ContractError(
++            f"`data.units.measurements.collapse` names {rule!r}; expected one of "
++            f"{', '.join(COLLAPSE_RULES)}",
++            code="E-UNITS-COLLAPSE-RULE",
++        )
++    # `reference.md` § What isn't a repeat: "Attributes constant within a key
++    # collapse to that value with no rule needed." Checked after the rule-name
++    # validation above (a bogus rule still raises even over a single-member
++    # group) and before dispatch, so a non-numeric column that happens to agree
++    # across a unit's replicates never reaches `sum()`.
++    if all(v == values[0] for v in values):
++        return values[0]
++    if rule == "first":
++        return values[0]
++    if rule == "mode":
++        # `Counter.most_common` breaks a count-tie by insertion order on
++        # Python 3.7+, which is what pins the documented "by whichever tied
++        # value appeared first" — a property of `dict` iteration order the
++        # standard library commits to, not an accident of this call.
++        return Counter(values).most_common(1)[0][0]
++    if rule == "median":
++        return statistics.median(values)
++    if rule == "sum":
++        return sum(values)
++    return sum(values) / len(values)  # rule == "mean"
++
++
++def collapse_measurements(
++    units: list[Unit], by: str, collapse: Any
++) -> tuple[list[Unit], list[int]]:
++    """Collapse rows sharing a `key` into one unit, in first-seen order.
++
++    `reference.md` § What isn't a repeat: rows sharing a key are technical
++    replicates, collapsed at resolution, before any step sees them — which is
++    what keeps them out of `n`. The measurement axis `by` is consumed: it
++    distinguished the rows and has no value once they are one unit.
++
++    Returns the collapsed units and their measurement counts in the same order,
++    because `technical_n` is `{min, max, median}` over exactly these counts and
++    recomputing them from a second walk is how the two come to disagree.
++
++    Each group's member list is built by appending in `units`' own iteration
++    order, so it *is* resolution order — which is what makes `_apply`'s `first`
++    branch (`values[0]`) match the documented "earliest row in resolution
++    order" rather than an incidental artifact of `dict` grouping.
++    """
++    groups: dict[str, list[Unit]] = {}
++    for unit in units:
++        groups.setdefault(unit.key, []).append(unit)
++    collapsed: list[Unit] = []
++    counts: list[int] = []
++    for key, members in groups.items():
++        names: list[str] = []
++        for member in members:
++            for name in member.attributes:
++                if name != by and name not in names:
++                    names.append(name)
++        merged = {
++            name: _apply(
++                _rule_for(name, collapse),
++                [m.attributes[name] for m in members if name in m.attributes],
++            )
++            for name in names
++        }
++        paths = tuple(p for m in members for p in m.paths)
++        collapsed.append(Unit(key=key, paths=paths, attributes=merged))
++        counts.append(len(members))
++    return collapsed, counts
++
++
+ def partition_units(roster: UnitList, k: int, digest: str) -> list[list[Unit]]:
+     """Split the roster into `k` test partitions, each unit in exactly one.
+ 
+     Drawn from the design digest rather than `parameters_hash`: editing an
+     unrelated parameter must not redraw every fold boundary (reference.md
+     § What auto-derives from). Sizes differ by at most one, so no fold is
+     systematically smaller than its neighbours.
+     """
+     units = list(roster)
+     rng = random.Random(_seed_from(digest))
+diff --git a/tests/test_units.py b/tests/test_units.py
+index 78b605c..52059f4 100644
+--- a/tests/test_units.py
++++ b/tests/test_units.py
+@@ -1,17 +1,24 @@
+ # tests/test_units.py
+ from pathlib import Path
+ 
+ import pytest
+ 
+ from publishable import ContractError
+-from publishable.units import Unit, UnitList, partition_units, resolve_units, units_hash
++from publishable.units import (
++    Unit,
++    UnitList,
++    collapse_measurements,
++    partition_units,
++    resolve_units,
++    units_hash,
++)
+ 
+ 
+ @pytest.fixture
+ def input_dir(tmp_path: Path) -> Path:
+     d = tmp_path / "in"
+     (d / "scans").mkdir(parents=True)
+     (d / "index.csv").write_text("patient_id,label,site\np3,1,a\np1,0,b\np2,1,a\n")
+     for name in ("b.dcm", "a.dcm"):
+         (d / "scans" / name).write_bytes(b"\x00")
+     (d / "top.dcm").write_bytes(b"\x00")
+@@ -312,10 +319,75 @@ def test_a_glob_source_reports_a_reserved_attribute_name_as_reserved(input_dir:
+     with pytest.raises(ContractError) as e:
+         resolve_units(
+             {"from": {"glob": "*.dcm"}, "key": "path", "attributes": ["paths"]}, input_dir
+         )
+     assert e.value.code == "E-UNITS-ATTR-RESERVED"
+ 
+ 
+ def test_a_glob_source_with_no_declared_attributes_still_resolves(input_dir: Path):
+     units = resolve_units({"from": {"glob": "*.dcm"}, "key": "path", "attributes": []}, input_dir)
+     assert [u.key for u in units] == ["top.dcm"]
++
++
++def test_rows_sharing_a_key_collapse_to_one_unit():
++    """`collapse="mean"` here applies to every column, including the non-numeric
++    `site` — a config shape task 2's row-243 check refuses at `validate` time
++    (`collapse: mean` over a non-numeric column). It is legal input to this
++    *function*, which must stay total over the constant case regardless of what
++    `validate` will later reject, so `site` collapsing cleanly via the
++    "constant needs no rule" path is not evidence the config itself is legal."""
++    units = [
++        Unit(key="p1", paths=(), attributes={"read_id": "r1", "depth": 10, "site": "A"}),
++        Unit(key="p1", paths=(), attributes={"read_id": "r2", "depth": 20, "site": "A"}),
++        Unit(key="p2", paths=(), attributes={"read_id": "r3", "depth": 30, "site": "B"}),
++    ]
++    collapsed, counts = collapse_measurements(units, by="read_id", collapse="mean")
++    assert [u.key for u in collapsed] == ["p1", "p2"]
++    assert counts == [2, 1]
++    assert collapsed[0].depth == 15.0        # mean of 10 and 20
++    assert collapsed[0].site == "A"          # non-numeric, constant: carried
++    assert "read_id" not in collapsed[0].attributes   # the measurement axis is consumed
++
++
++def test_median_and_sum_are_collapse_rules():
++    units = [
++        Unit(key="p1", paths=(), attributes={"read_id": "r1", "depth": 10}),
++        Unit(key="p1", paths=(), attributes={"read_id": "r2", "depth": 20}),
++        Unit(key="p1", paths=(), attributes={"read_id": "r3", "depth": 60}),
++    ]
++    median_collapsed, _ = collapse_measurements(units, by="read_id", collapse="median")
++    assert median_collapsed[0].depth == 20
++    sum_collapsed, _ = collapse_measurements(units, by="read_id", collapse="sum")
++    assert sum_collapsed[0].depth == 90
++
++
++def test_mode_breaks_a_genuine_tie_by_whichever_value_appeared_first():
++    """`reference.md` § What isn't a repeat pins the tie-break: `mode` breaks a
++    tie "by whichever tied value appeared first" — resolution order, not an
++    incidental property of `Counter.most_common`. `"b"` and `"a"` each appear
++    twice; `"b"` is first in resolution order, so it must win."""
++    units = [
++        Unit(key="p1", paths=(), attributes={"read_id": "r1", "label": "b"}),
++        Unit(key="p1", paths=(), attributes={"read_id": "r2", "label": "a"}),
++        Unit(key="p1", paths=(), attributes={"read_id": "r3", "label": "a"}),
++        Unit(key="p1", paths=(), attributes={"read_id": "r4", "label": "b"}),
++    ]
++    collapsed, _ = collapse_measurements(units, by="read_id", collapse="mode")
++    assert collapsed[0].label == "b"
++
++
++def test_a_column_absent_from_the_collapse_map_falls_back_to_first():
++    """`collapse` may be a per-column map; a column it does not name falls back
++    to `first` rather than being averaged. `batch` differs across the two rows,
++    so this is the case `collapse_measurements`'s blanket `"mean"` test above
++    cannot reach: it exercises `_apply`'s `first` branch on values that are not
++    already constant."""
++    units = [
++        Unit(key="p1", paths=(), attributes={"read_id": "r1", "depth": 10, "batch": "b1"}),
++        Unit(key="p1", paths=(), attributes={"read_id": "r2", "depth": 20, "batch": "b2"}),
++    ]
++    collapsed, counts = collapse_measurements(
++        units, by="read_id", collapse={"depth": "mean"}
++    )
++    assert counts == [2]
++    assert collapsed[0].depth == 15.0
++    assert collapsed[0].batch == "b1"

@@ -858,3 +858,42 @@ Task 20: complete. 1954 passed + 2 xfailed; ruff check and mypy clean.
 
 ALL TWENTY TASKS COMPLETE. Whole-branch review next; then STOP AND ASK before merge or push — the user
 chose the subagent-driven variant without standing merge authorization for this slice.
+
+WHOLE-BRANCH REVIEW (opus, over the 400KB code-and-documents diff; the 2.2MB full diff is mostly the
+  development record). Verdict: **ready to merge**, four Important, none Critical, none blocking.
+  The strongest finding was one no per-task reviewer could have seen: mutating `units_hash(roster)` to
+  `units_hash(eval_roster)` PASSED THE ENTIRE SUITE. The spec's own Trap 1 requires `provenance.units.n`
+  AND `units_hash` to stay whole-roster while the denominators narrow; only the first half was pinned,
+  because task 1's pin sits on a NO-HOLDOUT fixture where the two rosters are the same object. A whole-
+  branch view is what makes a half-pinned invariant visible.
+  It also verified, rather than proposed, the fix for the `ruff format` hazard I had deferred to it.
+Whole-branch fix round. Commit db2c482 + my own follow-ups. All six findings and three residues closed.
+  The repo-level outcome worth naming: `pyproject.toml` now carries `[tool.ruff.format] exclude = ["*.md"]`,
+  and I verified the walk myself — `uv run ruff format --check .` now sees exactly the 74 tracked Python
+  files and zero markdown, so the command CLAUDE.md documents no longer rewrites fenced Python inside the
+  normative documents. That hazard cost this slice one repo-wide accidental rewrite at task 4 and a
+  per-task reconciliation ritual for six tasks after it.
+SCOPED RE-REVIEW (opus). All six findings confirmed closed and the I3 mutation independently re-run — but
+  **closing them introduced four new one-clause defects, three of them false claims in normative or dated
+  text.** That is the recursion this slice has hit at every level: a fix round for false claims produces
+  false claims. Closed by me directly, and deliberately by writing LESS rather than better:
+  - the `-EMPTY` row said it covers "the two draws `validate` cannot check itself" — there is a THIRD, the
+    train side of any draw, since `validate` tests the test side alone. Probed: `holdout_sizes(2, 0.9)` is
+    `(0, 2)` and the plain draw raises after validating clean. Now enumerated as three, with the reason.
+  - the `-VALUES` row said "a run that validates first meets it at the draw" — false, since `command_run`
+    exits on `c.has_errors` and no run reaches that raise. Rewritten to describe the caller it actually
+    protects: one reaching `holdout_for` WITHOUT validating.
+  - a new test's docstring claimed it pins the `why` from `CONSTANT_COLUMN_RULES`; the asserted fragment is
+    the prefix every entry shares, and replacing the holdout `why` outright leaves the suite green. The
+    docstring now says so, and says no sibling pins its `why` either — parity, not an omission. Fixed the
+    CLAIM rather than adding the assertion, because the assertion would have been the only one of its kind.
+  - the appended correction's own closing sentence — "`git diff d72724b..HEAD -- src/ tests/` is empty" —
+    was falsified by the very commit that wrote it, and pinned a DATED claim to `HEAD`, a moving ref, where
+    step 10 requires a sha. I checked what actually changed: one docstring in `artifacts.py`, no executable
+    code. The sentence now says that, which is both true and verifiable.
+  Also took the reviewer's nit on CLAUDE.md's Format row: "the 39 currently-unformatted Python files" is a
+  count nothing maintains, so it now describes the hazard without the expiry — the same pointer-not-
+  enumeration form this slice adopted six times.
+FINAL: 1957 passed + 2 xfailed; ruff check and mypy clean; mechanical pass clean on every edited document.
+  72+ commits. STOPPING HERE to ask about merge — the user chose the subagent-driven variant for this
+  slice without standing merge authorization, and a merge is an outward-facing action that is theirs.

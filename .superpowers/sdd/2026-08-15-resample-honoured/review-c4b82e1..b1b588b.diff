@@ -1,0 +1,334 @@
+# Review package: c4b82e1..b1b588b
+
+## Commits
+b1b588b docs: task 18+19 report — strata/summary pins and the init residual, closed
+aee11b3 docs: close the init-materializes-optional-blocks residual — no, and here is the behaviour argument
+645a009 test: pin that strata mint no Members and a summary Estimate is never recomputed
+
+## Files changed
+ .../task-18-19-report.md                           | 116 ++++++++++++++++++
+ docs/superpowers/spec-defects.md                   |  23 +++-
+ tests/test_cli.py                                  | 135 +++++++++++++++++++++
+ 3 files changed, 270 insertions(+), 4 deletions(-)
+
+## Diff
+diff --git a/.superpowers/sdd/2026-08-15-resample-honoured/task-18-19-report.md b/.superpowers/sdd/2026-08-15-resample-honoured/task-18-19-report.md
+new file mode 100644
+index 0000000..96b7794
+--- /dev/null
++++ b/.superpowers/sdd/2026-08-15-resample-honoured/task-18-19-report.md
+@@ -0,0 +1,116 @@
++# Task 18+19 report — the last two tasks of H4a, batched
++
++**Status: both COMPLETE.** Two commits, one per task, on `h4a-resample-honoured`:
++
++- Task 18: `645a009` — `test: pin that strata mint no Members and a summary Estimate is never recomputed`
++- Task 19: `aee11b3` — `docs: close the init-materializes-optional-blocks residual — no, and here is the behaviour argument`
++
++**Test summary:** `uv run pytest` — **1800 passed + 2 xfailed** (baseline 1798 + 2 new tests in task
++18, task 19 added none). `ruff check .` clean. `mypy` clean. `ruff format --check .` reports 62
++pre-existing reformattable files unrelated to either task (confirmed via `git stash` against the
++pre-task tree — identical count).
++
++## Task 18
++
++Both properties verified live before writing anything, per the brief's "check what exists before
++building."
++
++**Property 1 (`report_by` levels mint no `Member`s): already true, confirmed by reading the code**
++(`_comparison_step_blocks`'s per-metric loop at `src/publishable/cli.py:772` excludes `- {"by"}`)
++and by task 15's review, which already ran this live with a positive companion. Wrote the pin anyway
++per the brief ("this slice touches this code whether or not it claims anything here"), with a fresh
++positive companion produced inside the same test.
++
++**Property 2 (a `summary`-step `Estimate` is never recomputed): structural, and owed a test.**
++`run_record.summary_values` (the only place an `Estimate` is expanded into `results.summary`) shares
++no code with `stats.summarize_step` (the resample pass), so there is nothing for the pass to walk
++into. Pinned with an exact-equality assertion plus a positive companion (a real column in the same
++run resampled).
++
++### A real disagreement with the brief, found and fixed
++
++The brief's property-1 test asserted that a `report_by` level's **recorded column** (`pred`) would
++carry `method: percentile_over_units` under a declared `resample`. Empirically it does not:
++`cli.command_run`'s `report_by` level call to `summarize_step` (`src/publishable/cli.py`, around
++line 2243) never passes `resample_columns`, so a level's own column interval stays `t_over_units`
++regardless of what the run declares — confirmed by running the scenario before writing the test.
++This is not a live bug introduced by this slice: it is `docs/superpowers/spec-defects.md`'s
++`percentile_of_derived` entry, **Finding 2**, already found by task 15's review and deferred with a
++named owner (H4 Statistics) on 2026-08-15. A level's own *derived* metric, by contrast, resamples
++unconditionally whenever a seed and callable exist (`resample_columns` or not) — confirmed live and
++matching the filed entry's own wording.
++
++Fixed by rewriting the test's positive companion to use the level's derived metric (`mean_pred`,
++via `aggregate_returns` composed with `_starter_step=_METHOD_VARYING_STEP`) rather than the
++recorded column, and adjusting the family-shape assertion from `{comparisons: 1, metrics: 1}` to
++`{comparisons: 1, metrics: 2}` since both a recorded column and a derived metric are present. Also
++fixed the brief's `_SUMMARY_ESTIMATE_STEP` fixture, whose header comment referenced an unsupplied
++`{pkg}` format key — `generate_step`'s `STEP_PY.format(step_name=step_name)` call only supplies
++`step_name`, so the literal raised `KeyError: 'pkg'`; removed the `{pkg}` segment, matching every
++other `extra_step_source` fixture in the file. Also corrected `extra_steps=["step02_report"]` to
++`extra_steps=["report"]` — `generate_step` numbers and prefixes the file itself
++(`step{number:02d}_{step_name}.py`), so the brief's literal would have written
++`step02_step02_report.py`.
++
++### Mutations (both applied, confirmed FAIL, reverted in place)
++
++1. Removed `- {"by"}` from `_comparison_step_blocks`'s metric loop
++   (`sorted(set(of_summary) & set(against_summary))`). `test_a_report_by_level_resamples_without_
++   joining_the_correction_family` failed on the "no `by` entry in `vs_baseline`" assertion — a `by`
++   block appeared as an ordinary (nonsensical) metric.
++2. Added `"basis": "units"` to the `Estimate` dict `run_record.summary_values` builds.
++   `test_a_summary_estimate_is_not_recomputed_by_the_resample_pass` failed on its exact-equality
++   assertion.
++
++Both reverted by editing in place (never `git checkout`); `__pycache__` cleared between mutate and
++revert each time; confirmed PASS after revert. `git status --short src/publishable/cli.py
++src/publishable/run_record.py` shows no diff after task 18.
++
++## Task 19
++
++Read the open entry first, as instructed. `docs/superpowers/spec-defects.md`'s "The generated config
++calls itself 'the complete parameter set' before it is one" entry's **Open residual, routed**
++paragraph named H4 Statistics as owner and left the materialize-or-not question open. Confirmed the
++three grounds against the actual code before writing the ruling:
++
++1. `grep -n 'resample\|null_test' src/publishable/materialize.py` — no hits; the `statistics:` block
++   `materialize.py` writes contains only `correction: holm` and, at top level, `hypotheses: []`.
++2. `reference.md` § The one config file already carries the "schema is wider than `init`'s literal
++   output" sentence for `contrasts`/`report_by` (confirmed by reading it, unchanged by this task).
++3. Empirically demonstrated (see Step 5 below) that materializing `resample` would be a **behaviour**
++   change, not a text one, now that H4a has wired `resample_columns` into the honoring path.
++
++**Ruling: no.** `init` should not materialize `statistics.resample`/`null_test`/`contrasts`/
++`report_by`. Replaced the **Open residual, routed** paragraph with the closing ruling verbatim as
++given in the brief (three grounds, in the order they bind). No `materialize.py` change, no
++`reference.md` change.
++
++### Step 5 mutation, and where the brief overstated it
++
++Added `"  resample: {method: bootstrap, n: 2000}",` to `materialize.py`'s `statistics:` block and ran
++`uv run pytest tests/test_cli.py -k undeclared_resample_shape`. The brief's Step 5 says "**Both** of
++Task 1's pins must FAIL." Empirically only one did:
++
++- `test_the_undeclared_resample_shape_is_pinned_absent_key` — **FAILED**, exactly as predicted: a
++  generated project's `config.statistics` now carries the declared `resample` key, which the test
++  asserts absent.
++- `test_the_undeclared_resample_shape_is_pinned_explicit_null` — **still passed.** Its own
++  `statistics={"correction": "holm", "resample": None}` override replaces the whole materialized
++  `statistics` block via `run_a_project`'s top-level `doc.update(overrides)` (a plain dict replace,
++  not a merge), so the mutation to `materialize.py` never reaches this test's config at all.
++
++This is a minor overstatement in the brief, not a defect that changes the ruling: one pin failing is
++sufficient to demonstrate ground 3 empirically (a materialized `resample` reaches an ordinary
++generated project and changes its `run.yaml`). Reverted in place, `__pycache__` cleared, both pins
++confirmed PASS again; `git status --short src/publishable/materialize.py` shows no diff.
++
++## Concerns / carried forward
++
++- Nothing new filed. Task 18's finding (the `report_by` level column asymmetry) was already on
++  record as spec-defects.md's Finding 2 before this task started; this task's contribution is
++  confirming it live and routing around it correctly in the test rather than asserting the brief's
++  mistaken expectation.
++- Task 19 leaves `materialize.py` and `reference.md` untouched, per the ruling's own conclusion — no
++  follow-up owed.
++- The pre-existing `ruff format --check .` non-idempotence (62 files) predates both tasks (verified
++  via `git stash`) and is out of scope for this batch.
+diff --git a/docs/superpowers/spec-defects.md b/docs/superpowers/spec-defects.md
+index 933b49c..f4a8e90 100644
+--- a/docs/superpowers/spec-defects.md
++++ b/docs/superpowers/spec-defects.md
+@@ -58,24 +58,39 @@ a boundary. Two document changes were in fact needed and were made by task 16:
+ 
+ - `reference.md` § The one config file: task 6's clause explained the four blocks' absence by "a
+   feature core does not yet execute", which is false for `contrasts` and `report_by`. Rewritten to
+   rest the point on the schema being wider than `init`'s output, with no claim about which features
+   are built.
+ - `experimental-designs.md` § Mistakes core prevents: "**A typo'd parameter silently using a
+   default** | `init` materializes every valid key…" was a direct contradiction of that clause — the
+   prevention actually rests on `validate` checking every key against a closed schema, which is what
+   it now says. The prevented mistake is not weakened: an unknown key still fails validation.
+ 
+-**Open residual, routed:** whether `init` should materialize the optional `statistics` sub-blocks
+-at all is a design decision, not a reconciliation, and is left open. **Owner: H4 Statistics** (it
+-owns `resample` and `null_test`, the last two that are refused; whatever it decides for those
+-decides the shape for all four).
++**Residual — CLOSED by H4a (2026-08-15).** Whether `init` should materialize the optional
++`statistics` sub-blocks: **no.** Three grounds, in the order they bind.
++
++1. `parameter_spec` is the single source of truth for what `init` writes, and none of these is a
++   parameter. `materialize.py` writes `statistics.correction` and a top-level `hypotheses: []`
++   and nothing else under `statistics`.
++2. `reference.md` § The one config file already resolves it for `contrasts` and `report_by` —
++   its fenced example is "the complete config *schema*, which is a wider thing than the literal
++   output of `init`; a materialized file that does not carry them is not an incomplete config" —
++   and `resample` and `null_test` inherit that sentence rather than needing their own.
++3. **The argument only this slice could make:** now that `resample` is honored, a materialized
++   `resample: {method: bootstrap, n: 2000}` would be a *declared* resample, so every generated
++   project would give every recorded column a percentile interval by default — reversing
++   § Statistical reporting's asymmetry, which is that a column has a t-interval available so
++   resampling it is a **choice** and `resample` is what makes it. A materialized `resample: null`
++   would be inert but would need its own inline comment and would invite the
++   `.get("resample", DEFAULT)` reading that separates the absent key from the explicit null.
++
++No `materialize.py` change and no `reference.md` change. Recorded so the absence is a decision.
+ 
+ ## The specification's error registry does not cover step-name collisions
+ 
+ `reference.md` § Errors core raises enumerates identifiers like `E-STEP-SCOPE-UNKNOWN` and
+ `E-STEP-CONTEXT-ABSENT` but has no code for two step classes deriving the same `step_name` (two
+ `class Analyze` in different modules both yield `"analyze"`). The loss this causes is silent
+ rather than loud: a later slice uses `step_name` as both the step's artifact directory and the
+ key in the run record's `per_repeat[step_name][repeat_label]`, so a collision either overwrites
+ one step's recorded values with no error, or — if the two happen to write the same filename —
+ fails only incidentally, deep in an unrelated write path. S1 introduces `E-STEP-NAME-COLLISION`,
+diff --git a/tests/test_cli.py b/tests/test_cli.py
+index a81009d..4937a61 100644
+--- a/tests/test_cli.py
++++ b/tests/test_cli.py
+@@ -7392,10 +7392,145 @@ def test_no_resample_block_is_recorded_when_none_was_declared(tmp_path, capsys):
+         tmp_path, capsys=capsys, aggregate_returns="mean_pred", units=40
+     )
+     run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+     aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+     assert "resample" not in aggregated["pred"]
+     assert "resample" not in aggregated["mean_pred"]
+     # The positive companion: the derived metric IS still resampled at the
+     # documented default, so the block really did run.
+     assert aggregated["mean_pred"]["resample_draws"] == 2000
+     assert aggregated["mean_pred"]["method"] == "percentile_over_units"
++
++
++
++
++def test_a_report_by_level_resamples_without_joining_the_correction_family(
++    tmp_path, capsys
++):
++    """`Member`s are built in one place, `_comparison_step_blocks`'s per-metric
++    loop, which excludes the `by` key the whole strata block lives under. That
++    property already holds — Task 15's review confirmed it live (level blocks
++    carry no `family`, `family_size`, or `correction` key, beside a level's
++    derived metric genuinely carrying `resample_draws: 2000` and a real
++    `ci95`). This test keeps it holding now that H4a has landed a declared
++    `resample`.
++
++    A real disagreement with this test's original brief, found and fixed here:
++    the brief expected a `report_by` level's *recorded column* (`pred`) to
++    carry `method: percentile_over_units` under a declared `resample`. It does
++    not — `cli.command_run`'s level call to `summarize_step`
++    (`src/publishable/cli.py`, the `report_by` block) never passes
++    `resample_columns`, so a level's own recorded-column interval stays
++    `t_over_units` regardless of what the run declares. This is not a live bug:
++    it is `docs/superpowers/spec-defects.md`'s "`percentile_of_derived` reported
++    a zero-width interval..." entry, Finding 2, deferred with a named owner
++    (H4 Statistics) as of 2026-08-15. So the positive companion here is the
++    level's own DERIVED metric (`mean_pred`), which — unlike the column —
++    resamples inside `report_by` unconditionally whenever a seed and a
++    callable exist, `resample_columns` or not; that is what actually executed
++    inside the code path this test is pinning.
++
++    The absence assertion has a positive companion IN THE SAME TEST: the level
++    genuinely produced a percentile interval, so the test cannot pass by
++    nothing having been stratified. And `family` is asserted to the exact shape
++    a strata-free run would have, so a level joining the family shows up as an
++    inflated metric count rather than as a silence."""
++    doc = run_a_project(
++        tmp_path, capsys=capsys, units=40, unit_attributes=["cohort"],
++        aggregate_returns="mean_pred",
++        _starter_step=_METHOD_VARYING_STEP,
++        sweep={"baseline": {"analysis.method": "pearson"},
++               "grid": {"analysis.method": ["spearman"]}},
++        statistics={"correction": "holm", "report_by": ["cohort"],
++                    "resample": {"method": "bootstrap", "n": 2000}},
++    )
++    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
++    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
++    # Positive companion: the level exists and carries a real percentile
++    # interval over its own units, resampled by the same code path this test
++    # is pinning.
++    level = aggregated["by"]["cohort"]["a"]["mean_pred"]
++    assert level["method"] == "percentile_over_units"
++    assert level["ci95"] is not None
++    assert level["resample_draws"] == 2000
++    assert level["n"]["completed"] < aggregated["mean_pred"]["n"]["completed"]
++    # The absence: no `family`, `family_size`, or `correction` key at all on a
++    # level block — a `report_by` level never joins the correction family.
++    for level_name in ("a", "b"):
++        level_block = aggregated["by"]["cohort"][level_name]
++        assert "family" not in level_block
++        assert "family_size" not in level_block
++        assert "correction" not in level_block
++    # And the family a REAL contrast holds is exactly the strata-free shape:
++    # one comparison, two metrics (the recorded `pred` and the derived
++    # `mean_pred`) — `by` is not a metric and neither are its levels, so the
++    # family stays 1 x 2 rather than growing with the number of `cohort`
++    # levels the `by` block holds.
++    entry = _named_contrast(run, "method=spearman", "mean_pred")
++    assert entry is not None
++    assert entry["family"] == {"comparisons": 1, "metrics": 2}
++    assert entry["family_size"] == 2
++    # And there is no contrast entry for `by` at all.
++    for condition in run["results"]["conditions"]:
++        for step_block in condition.get("vs_baseline", {}).values():
++            assert "by" not in step_block
++
++
++_SUMMARY_ESTIMATE_STEP = '''\
++# generated, and runnable as-is
++from publishable import BaseStep, Estimate
++
++
++class Step(BaseStep):
++    scope = "summary"
++
++    def run(self, cfg, io):
++        return {{
++            "site_adjusted_delta": Estimate(
++                value=0.041, ci95=[0.012, 0.070], n=228, method="mixed_model"
++            ),
++            "converged": True,
++        }}
++'''
++
++
++def test_a_summary_estimate_is_not_recomputed_by_the_resample_pass(tmp_path, capsys):
++    """A `summary`-step `Estimate` is `reported: true`, outside the correction
++    family, and never recomputed — and H4a's column pass walks every metric
++    block, so this is a boundary the slice OWES a test for rather than one it
++    merely respects. Structural: an `Estimate` reaches `results.summary` through
++    `run_record.summary_values`, never through `summarize_step`
++    (`src/publishable/run_record.py`, `summary_values`) — `summarize_step`
++    (`src/publishable/stats.py`) is never called on a `summary`-scope step's
++    return at all, so there is no shared code for a resample pass to walk into.
++
++    The positive companion is in the same test: a recorded column in the same
++    run DID take a percentile interval, so this cannot pass by the resample
++    having done nothing at all."""
++    doc = run_a_project(
++        tmp_path, capsys=capsys, units=40,
++        extra_steps=["report"],
++        extra_step_source=_SUMMARY_ESTIMATE_STEP,
++        aggregate_returns="mean_pred",
++        statistics={"correction": "holm",
++                    "resample": {"method": "bootstrap", "n": 2000}},
++    )
++    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
++    estimate = run["results"]["summary"]["step02_report"]["site_adjusted_delta"]
++    assert estimate == {
++        "value": 0.041,
++        "reported": True,
++        "ci95": [0.012, 0.070],
++        "n": 228,
++        "method": "mixed_model",
++    }
++    # Nothing the resample pass writes has been added to it.
++    assert "resample_draws" not in estimate
++    assert "resample" not in estimate
++    assert "basis" not in estimate
++    assert "correction" not in estimate
++    # The non-Estimate return is untouched too.
++    assert run["results"]["summary"]["step02_report"]["converged"] is True
++    # Positive companion: a column in the same run IS resampled.
++    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
++    assert aggregated["mean_pred"]["method"] == "percentile_over_units"
++    assert aggregated["mean_pred"]["resample"]["n"] == 2000

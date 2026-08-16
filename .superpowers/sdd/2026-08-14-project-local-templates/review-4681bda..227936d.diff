@@ -1,0 +1,120 @@
+# Review package: 4681bda..HEAD
+
+## Commits
+227936d feat: add register_template decorator and pending-registration buffer
+
+## Files changed
+ src/publishable/__init__.py            |  2 ++
+ src/publishable/templates/discovery.py | 37 ++++++++++++++++++++++++++++++++++
+ tests/test_templates.py                | 18 +++++++++++++++++
+ 3 files changed, 57 insertions(+)
+
+## Diff
+diff --git a/src/publishable/__init__.py b/src/publishable/__init__.py
+index 74000fc..d4f6456 100644
+--- a/src/publishable/__init__.py
++++ b/src/publishable/__init__.py
+@@ -4,25 +4,27 @@ from publishable.base_experiment import BaseExperiment
+ from publishable.base_step import BaseStep
+ from publishable.errors import (
+     ArtifactError,
+     ArtifactExistsError,
+     ContractError,
+     PublishableError,
+ )
+ from publishable.estimate import Estimate
+ from publishable.param import Param
+ from publishable.templates.base import BaseTemplate
++from publishable.templates.discovery import register_template
+ from publishable.units import Unit
+ 
+ __all__ = [
+     "ArtifactError",
+     "ArtifactExistsError",
+     "BaseExperiment",
+     "BaseStep",
+     "BaseTemplate",
+     "ContractError",
+     "Estimate",
+     "Param",
+     "PublishableError",
+     "Unit",
++    "register_template",
+ ]
+ __version__ = "0.1.0"
+diff --git a/src/publishable/templates/discovery.py b/src/publishable/templates/discovery.py
+new file mode 100644
+index 0000000..2804c68
+--- /dev/null
++++ b/src/publishable/templates/discovery.py
+@@ -0,0 +1,37 @@
++"""`register_template` and the pending-registration buffer it fills.
++
++A local template's `@register_template` argument is the whole of its
++registration — the decorator records `(name, cls)` and returns the class
++unchanged, so `class X(BaseTemplate)` still resolves for every later
++reference to `X`.
++
++The pending list is module-level, but it is only a staging buffer: task 6's
++requirement is that two projects in one process never see each other's
++templates, so nothing here keeps a persistent name→class mapping. Discovery
++drains this list into whatever scoped registry it builds per run.
++"""
++
++from collections.abc import Callable
++
++from publishable.templates.base import BaseTemplate
++
++_pending: list[tuple[str, type[BaseTemplate]]] = []
++
++
++def register_template(
++    name: str,
++) -> Callable[[type[BaseTemplate]], type[BaseTemplate]]:
++    """Record `(name, cls)` for the next `drain_pending()` and return `cls` unchanged."""
++
++    def decorator(cls: type[BaseTemplate]) -> type[BaseTemplate]:
++        _pending.append((name, cls))
++        return cls
++
++    return decorator
++
++
++def drain_pending() -> list[tuple[str, type[BaseTemplate]]]:
++    """Hand over the accumulated registrations and empty the buffer."""
++    pending = list(_pending)
++    _pending.clear()
++    return pending
+diff --git a/tests/test_templates.py b/tests/test_templates.py
+index 5b38020..289e2a3 100644
+--- a/tests/test_templates.py
++++ b/tests/test_templates.py
+@@ -42,10 +42,28 @@ def test_the_base_aggregate_returns_nothing():
+ 
+ 
+ def test_a_subclass_can_derive_from_the_table():
+     class T(BaseTemplate):
+         def aggregate(self, units, cfg):
+             return {"total": sum(units.pred)}
+ 
+     assert T().aggregate(UnitTable({"u1": {"pred": 1.0}, "u2": {"pred": 2.0}}), None) == {
+         "total": 3.0
+     }
++
++
++def test_register_template_returns_the_class_and_records_the_name():
++    """§ Creating a plugin: a local template's `@register_template` argument
++    "is therefore the whole of its registration". The decorator must return the
++    class unchanged — a decorator that returned the registration record would
++    break `class X(BaseTemplate)` for every later reference to X."""
++    from publishable import register_template
++    from publishable.templates.discovery import drain_pending
++
++    @register_template("my_assay")
++    class MyAssay(BaseTemplate):
++        pass
++
++    assert MyAssay.__name__ == "MyAssay"          # returned unchanged
++    assert issubclass(MyAssay, BaseTemplate)
++    assert drain_pending() == [("my_assay", MyAssay)]
++    assert drain_pending() == []                  # draining empties it

@@ -1,0 +1,43 @@
+e91cf0d docs: pin the merge order, name the record the derived refusal leaves, and stop three phrases counting a table that grew
+c0ccd8d docs: state the partition order as a promise, and name the three method strings the table omitted
+5cd65e4 docs: register the two new codes, settle the run-time E-DATA-CLUSTER-UNKNOWN debt, nine to seven
+65cd97a test: pin E-DATA-CLUSTER-DERIVED's guard shape, including the narrowings cli cannot reach
+23ac64e fix: refuse a fold stratum naming the measurement axis, which retiring the fold refusal made reachable
+870301f feat: refuse the two clustered combinations that have no construction, and retire both codes
+cefaba3 test: an uneven clustered partition still reconciles in the record
+42df52d test: name which task pins the fold count and which pins its membership
+c43e02b feat: a declared cluster decides the fold's membership and the column's interval
+ee8b1fd test: the mean-of-means rival is asserted by its own endpoints, not by set size
+17ef816 feat: a declared cluster makes the cluster the percentile draw
+c9e03a5 test: the clustered df assertion builds its standard error independently
+50c796a feat: a cluster-robust interval takes its df from the cluster count
+ad55d40 feat: `n` gains `clusters`, over the units each metric was computed from
+58adf6a docs: a stratified split's size spread has two regimes, and its k bound is per-stratum
+21acabb feat: a declared fold stratification balances the split it was checked against
+8b98056 test: one argument decides both the probe roster and its config
+7f13c3e feat: a fold's stratify_by must name an attribute and survive clustering
+96f6f45 test: pin the floor warning to the same fold basis the refusal reads
+0261be0 feat: bound a fold's k by the clusters it cannot divide
+6c58f55 feat: partition folds by whole clusters, largest first after a seeded shuffle
+6ef2368 docs: name the flat-key constraint CONSTANT_COLUMN_RULES cannot express
+8ed0135 test: pin the empty-group totality case and fire the weight raise through the wiring
+e63dc01 feat: refuse a cluster or a weight that varies within a unit's measurement rows
+46c994f fix: scope the cluster-exclusion walk to the design blocks, and pin the envelope deferral
+df3a4f2 feat: one authority for cluster membership, and the undeclared-cluster warning
+6a3c3a9 docs: point both cluster-warning summaries at the row that states its trigger
+2c80d49 docs: name the cluster checks the code is about to implement
+ docs/reference.md              |   52 +-
+ src/publishable/cli.py         |  128 ++++-
+ src/publishable/replication.py |   88 ++-
+ src/publishable/runner.py      |   41 +-
+ src/publishable/stats.py       |  383 ++++++++++++-
+ src/publishable/units.py       |  399 +++++++++++++-
+ src/publishable/validate.py    |  504 +++++++++++++++++-
+ tests/test_cli.py              |  539 ++++++++++++++++++-
+ tests/test_replication.py      |  120 ++++-
+ tests/test_runner.py           |   98 ++++
+ tests/test_stats.py            |  961 ++++++++++++++++++++++++++++++++-
+ tests/test_sweep.py            |    2 +-
+ tests/test_units.py            |  716 +++++++++++++++++++++++++
+ tests/test_validate.py         | 1152 +++++++++++++++++++++++++++++++++++++++-
+ 14 files changed, 5069 insertions(+), 114 deletions(-)

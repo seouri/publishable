@@ -1,0 +1,475 @@
+20347d9 docs: correct the ledger line that recorded a registration never made
+d5bfca2 docs: the fix report's crash-risk paragraph now matches the argument the code makes
+85be4e7 docs: sharpen the retry's non-raise argument, and file the phantom section honestly
+3acb38e fix: the contained-aggregate retry keeps the declared column resample
+
+diff --git a/docs/reference.md b/docs/reference.md
+index e153da4..40bf97e 100644
+--- a/docs/reference.md
++++ b/docs/reference.md
+@@ -178,21 +178,21 @@ hypotheses:
+   - id: h1
+     kind: confirmatory                   # confirmatory | exploratory
+     statement: "Spearman correlation exceeds Pearson on this cohort."
+     metric: step03_analyze.r
+     compare: {condition: "method=spearman", to: baseline}
+     direction: greater
+     threshold: 0.02
+     evaluate_on: observed                # observed | ci95_lower | ci95_upper
+ ```
+ 
+-`init` materializes **every parameter the template declares**, each with its default and its inline comment. The four optional `statistics` sub-blocks are shown above at their full expansion because this section is the complete config *schema*, which is a wider thing than the literal output of `init`; a materialized file that does not carry them is not an incomplete config. For `contrasts` and `report_by`, declaring one by hand is how a run asks for it, and `validate` accepts the key whether or not `init` wrote it. **Three declarations above are not yet built, and each is marked `NOT BUILT` where it appears**: `data.units.holdout`, the `{resolver: <name>}` form of `data.units.from`, and `statistics.null_test`. A config declaring any of them is refused today, naming the `-UNSUPPORTED` code its slice will retire — the same treatment [an unbuilt module](#package-layout) and [an unbuilt import](#the-importable-surface) get, because a contract that appears only once its implementation lands is a contract nobody could have designed to. That whole family is [deliberately absent from the validate-time registry](#errors-validate-reports) for the same reason, which is why this list, and not that table, is where a refused block is named. `statistics.resample` left this list with H4a: `_check_resample` now checks its declaration for real instead of refusing the block wholesale, and its `NOT BUILT` marker is gone from the line above. `sweep.groups`, `data.units.assign`, and any `data.units.allocation` other than `within` left this list once their own slice landed: `expand` crosses a group axis into the condition product, `_check_assign` checks `allocation` and `assign` against each other and against `sweep.groups` for real, and `cli.py` writes `allocation.json` and `provenance.allocation_hash` — each is refused only in the shapes [§ Validation](#validation) and [§ Errors `validate` reports](#errors-validate-reports) name on their own merits now, not wholesale. What `init` writes is complete with respect to [`parameter_spec`](#templates-where-parameters-are-defined), which is the only source of truth there is one of. `data.units.measurements` is the one *built* block shown as a `null` with its shape in a comment rather than expanded, because `init` materializes it as `null` and a run declares it only when it has technical replicates to collapse — carried in its input, or produced by a step through [`io.record(..., measurement=)`](#steps-and-artifacts), which core refuses without the declaration. Its two sub-fields, `by` and `collapse`, are named in that comment and nowhere else in this section, and both are keys [the closed schema checks](#validation); `.holdout` inherits the same treatment when its slice lands. `.assign`'s slice has landed with this closed one level in: `envelope.py` still types the block itself a bare `dict` — the axis name beneath it (`arm` in the expansion above) is user-chosen and no fixed dotted path can name it — but each axis block's own keys are checked against the closed set `{method, from, ratio, block_size, stratify_by, seed}`, so a misspelled field inside an axis block (`stratifyy_by` for `stratify_by`) is reported as `E-CONFIG-KEY-UNKNOWN` rather than silently ignored. `.weight_by` and `.cluster_by`, whose slices have both landed, needed none of it: each is a string naming an attribute rather than a block, so neither has sub-keys for a schema to close, and each is shown as a `null` above for the ordinary reason that most runs declare neither a weight nor a cluster. A `fold` repeat level's `stratify_by` left this list alongside `.cluster_by`, and the `replication` block above names it nowhere — not because anything is unbuilt, but because that block shows what `init` writes, a single `{kind: seed, n: 5}`, and the fields of a level are the *kind's* rather than this block's: a `fold`'s `k` isn't shown there either. [Repeat kinds](#repeat-kinds) is where each kind's own fields are enumerated.
++`init` materializes **every parameter the template declares**, each with its default and its inline comment. The four optional `statistics` sub-blocks are shown above at their full expansion because this section is the complete config *schema*, which is a wider thing than the literal output of `init`; a materialized file that does not carry them is not an incomplete config. For `contrasts` and `report_by`, declaring one by hand is how a run asks for it, and `validate` accepts the key whether or not `init` wrote it. **Three declarations above are not yet built, and each is marked `NOT BUILT` where it appears**: `data.units.holdout`, the `{resolver: <name>}` form of `data.units.from`, and `statistics.null_test`. A config declaring any of them is refused today, naming the `-UNSUPPORTED` code its slice will retire — the same treatment [an unbuilt module](#package-layout) and [an unbuilt import](#the-importable-surface) get, because a contract that appears only once its implementation lands is a contract nobody could have designed to. That whole family is [deliberately absent from the validate-time registry](#errors-validate-reports) for the same reason, which is why this list, and not that table, is where a refused block is named. `statistics.resample` left this list with H4a: `_check_resample` now checks its declaration for real instead of refusing the block wholesale, and its `NOT BUILT` marker is gone from the line above. `sweep.groups`, `data.units.assign`, and any `data.units.allocation` other than `within` left this list once their own slice landed: `expand` crosses a group axis into the condition product, `_check_assign` checks `allocation` and `assign` against each other and against `sweep.groups` for real, and `cli.py` writes `allocation.json` and `provenance.allocation_hash` — each is refused only in the shapes [§ Validation](#validation) and [§ Errors `validate` reports](#errors-validate-reports) name on their own merits now, not wholesale. What `init` writes is complete with respect to [`parameter_spec`](#templates-where-parameters-are-defined), which is the only source of truth there is one of. `data.units.measurements` is the one *built* block `init` **materializes** as a `null` with its shape in a comment rather than expanded — `statistics.resample` is shown that way too since H4a made it built, but `init` writes no `resample` key at all, which is the difference the [column-resample asymmetry](#statistical-reporting) rests on: a declared `resample` is what turns a column's interval into a percentile, so a materialized one would silently make that the default for every generated project. `measurements` is materialized because a run declares it only when it has technical replicates to collapse — carried in its input, or produced by a step through [`io.record(..., measurement=)`](#steps-and-artifacts), which core refuses without the declaration. Its two sub-fields, `by` and `collapse`, are named in that comment and nowhere else in this section, and both are keys [the closed schema checks](#validation); `.holdout` inherits the same treatment when its slice lands. `.assign`'s slice has landed with this closed one level in: `envelope.py` still types the block itself a bare `dict` — the axis name beneath it (`arm` in the expansion above) is user-chosen and no fixed dotted path can name it — but each axis block's own keys are checked against the closed set `{method, from, ratio, block_size, stratify_by, seed}`, so a misspelled field inside an axis block (`stratifyy_by` for `stratify_by`) is reported as `E-CONFIG-KEY-UNKNOWN` rather than silently ignored. `.weight_by` and `.cluster_by`, whose slices have both landed, needed none of it: each is a string naming an attribute rather than a block, so neither has sub-keys for a schema to close, and each is shown as a `null` above for the ordinary reason that most runs declare neither a weight nor a cluster. A `fold` repeat level's `stratify_by` left this list alongside `.cluster_by`, and the `replication` block above names it nowhere — not because anything is unbuilt, but because that block shows what `init` writes, a single `{kind: seed, n: 5}`, and the fields of a level are the *kind's* rather than this block's: a `fold`'s `k` isn't shown there either. [Repeat kinds](#repeat-kinds) is where each kind's own fields are enumerated.
+ 
+ **The four identifying fields above `metadata` say what this config is written against, and `validate` checks each — three for a config generated against a [project-local template](#templates-where-parameters-are-defined), which `init` writes with no `template_version` at all.** `experiment_type` names the template and must resolve to one core, an installed plugin, or this project's own `templates/` registers — the plugin case is not yet checked, since no entry point is resolved in this build, the same disclosure [`E-TEMPLATE-UNKNOWN`](#errors-validate-reports) carries; `template_version` records the spec this file was materialized from, and a mismatch with the installed template gets a [warning](#warnings-core-reports) — `W-TEMPLATE-VERSION` — not an error, because upgrading a plugin is ordinary and [nothing ever writes back into your config](#the-one-config-file). What makes an incompatibility *fail* is already covered without a version check: a retired parameter is an unknown key, and a new required one is a missing key. So the version tells you where to look and the existing checks decide whether it matters; `plugin` names where the template came from, and is a readable note beside the authoritative pin in `uv.lock` rather than a second one — core never installs from it. `schema_version` is the config format's own version: core reads any minor at or below its own and refuses a higher one, or a major it doesn't implement, rather than guessing at a field it doesn't recognize. Through v0.x a change that would break an existing config bumps the major, and there is no migration command — a config is small, `init` writes a fresh one, and the [defaults-file argument](#there-is-no-separate-defaults-file) applies to a migration file too. What protects an old *result* is that `run.yaml` embeds its config verbatim alongside the `schema_version` it was written under, so a record stays readable whether or not the format moved. All four are inside [`parameters_hash`](#three-hashes), because a config read against a different spec is a different declaration.
+ 
+ This file is three things at once: the scaffold (you didn't type it), the documentation (every available parameter is present, with its constraints in a comment), and the config (it's what `run` consumes). Keeping them as one artifact is what prevents the usual drift where documentation lists options the code no longer accepts.
+ 
+ **The file is freely editable, and nothing `publishable` does ever writes back into it.** Edit it as much as you like; each run embeds the config it used verbatim into its own `run.yaml`, which is where parameter provenance actually lives.
+ 
+ **Whether you commit it is your call, and core takes no position.** Reproducibility doesn't depend on it either way: `run.yaml` embeds the config verbatim and fingerprints it with `parameters_hash`, so a run is fully reportable whether or not its config was ever tracked. Because of that, the scaffold's `.gitignore` says nothing about `configs/` — imposing a policy there would be the tool overriding a judgment that belongs to you.
+ 
+ Two things worth weighing when you decide:
+diff --git a/docs/superpowers/spec-defects.md b/docs/superpowers/spec-defects.md
+index 89b0bb0..21d3aa0 100644
+--- a/docs/superpowers/spec-defects.md
++++ b/docs/superpowers/spec-defects.md
+@@ -5154,22 +5154,33 @@ Both are pinned as *known, unfixed* defects (not correct behavior) by
+ — a future change that fixes either must update those tests and this entry together, rather than
+ silently making the gap disappear from the record.
+ 
+ **Why `(Interval, int)` is not the remedy either**, confirmed rather than assumed: nothing on this
+ path treats a `nan`/`inf` draw statistic as a failed draw to filter out — there is no per-draw
+ survivor check anywhere in `percentile_over_units`, unlike `percentile_of_derived`, which can
+ observe an individual draw's `compute` fail. Adding a survivor count here would report
+ `(Interval(nan, nan), n)`: the identical false claim, with an extra field implying it was
+ checked.
+ 
+-**Proposed resolution, not attempted here:** whichever slice wires column resample into
+-`summarize_step` (task 12/14) should validate `values` and any weight vector for finiteness
++**Owner re-assigned to H4b — weights and clusters through the contrast family**
++(`docs/superpowers/H4-SCOPING.md` § Decomposition), amended by the H4a whole-branch review
++(2026-08-15, `d59316d`). The original owner named below — "whichever slice wires column resample
++into `summarize_step` (task 12/14)" — **was H4a**, and both tasks landed without it. That was a
++deliberate decline, not an oversight: H4a task 14's ledger entry records the choice, and the
++disclosure it took instead is live in two places — `stats.summarize_step`'s docstring, which says
++in terms that "nothing on this path checks that condition", and `reference.md`
++§ Statistical reporting. The two `*_is_a_known_unfixed_gap` tests below still pin it.
++H4b is the successor because it builds the weighted and clustered paired constructions, which is
++where the same unchecked finiteness assumption lands next.
++
++**Proposed resolution, not attempted here:** whichever slice takes it should validate `values` and
++any weight vector for finiteness
+ before drawing — plausibly reusing `is_measurement_numeric`/`usable_weight`'s existing finite
+ checks, extended to also catch a weight sum that overflows once accumulated — and route a
+ failure to a real refusal (`ci95: null`, `resample_draws: null` per the ruling above) rather than
+ publishing `nan` under a false `resample_draws: n`. This is bigger than task 11's scope: it likely
+ also affects the unweighted and clustered percentile constructions and the `t_over_units` family,
+ none of which check finiteness either, and none of which this entry claims to have surveyed.
+ 
+ ## `statistics.resample.stratify_by` is checked by `validate` and honoured by nothing — CLOSED
+ 
+ Found during task 14's review (2026-08-15, H4a, `ce2f2db`). `validate._check_resample` refuses a
+@@ -5372,23 +5383,27 @@ contradiction: it is the identical shape `test_no_resample_block_is_recorded_whe
+ already established for an undeclared run's OWN unresampled columns (absent `resample_draws`, no
+ claim of a resolution attempted here), transplanted to a column that sits beside a sibling
+ declaration it did not use. Nothing about task 17's own change makes the level path lie; it makes
+ the level path echo a declaration whose relevance to that one block a reader must still work out from
+ `method`, which is exactly the "discloses, does not explain" gap this entry already named as the
+ open half of the fix. The deferral, its owner, and the fix list above are unchanged by this
+ amendment.
+ 
+ ## The contrast path discloses nothing about its resample, and `paired_percentile_of_derived` never got the zero-width sweep
+ 
+-Found by the **task 16 review** (H4a, `2026-08-15-resample-honoured`), at commit `b06079c`. Two
+-findings, both **deferred with a named owner — H4's contrast-side hardening** — because both are
+-disclosure/refusal gaps on a path task 16 widened rather than created, and neither is a regression.
++Found by the **task 16 review** (H4a, `2026-08-15-resample-honoured`), at commit `b06079c`; a third
++finding added below by the whole-branch review at `d59316d`. Three
++findings, all **deferred with a named owner — H4b, "weights and clusters through the contrast
++family"** (`docs/superpowers/H4-SCOPING.md` § Decomposition; a third finding was appended by the
++H4a whole-branch review, and the owner named here was "H4's contrast-side hardening", a description
++rather than a slice, until the same review) — because all are
++disclosure/refusal gaps on a path task 16 widened rather than created, and none is a regression.
+ 
+ **Finding 1 — a declared `resample` can silently remove a column contrast's interval.** Task 16
+ routes a recorded column's contrast through `stats.paired_percentile_of_derived` under a declared
+ `statistics.resample`. When the surviving draws fall below `min_honest_draws(confidence)` — a ragged
+ column, a degenerate closure — the construction returns `interval=None` and the entry publishes
+ `ci95: null` where it previously published a `paired_t_over_units` interval over the same
+ `col_keys`. **Nothing warns.** `W-STATS-RESAMPLE-THIN` is emitted from exactly one site,
+ `cli.py`'s per-condition `summarize_step` loop; `_comparison_step_blocks` emits no resample finding
+ at all, so neither `vs_baseline` nor `results.contrasts` can say a contrast's interval was lost to a
+ thin pool rather than to a thin intersection. Pre-existing for **derived** contrasts, which have had
+@@ -5396,26 +5411,99 @@ this shape since they were built; task 16 widens it to every recorded column und
+ `resample`. The fix is a task, not a line — a contrast-scope thin finding needs a `where` that names
+ the comparison (`cond:<index>` / `contrast:<id>`, which `_comparison_step_blocks` already carries as
+ `where_id`) and a registry row, and it should be built alongside Finding 2 rather than separately.
+ 
+ **Finding 2 — `paired_percentile_of_derived` carries none of the content-based degenerate
+ refusals its three siblings now have.** `percentile_over_units` (strata branch),
+ `percentile_over_units_clustered` (cluster-content branch) and — as of task 15, recorded one entry
+ above this one — `percentile_of_derived` each refuse a draw whose structure cannot vary, on the
+ stated authority of `reference.md` § Statistical reporting: "a zero-width 95 % interval is not
+ [honest]; reporting a point with no interval is honest." The paired construction has no such check.
++
++**Scoped by the whole-branch review (`d59316d`): each of those three refusals is on its stratified
++or clustered branch, and none of them is a general "core never publishes a zero-width percentile
++interval" guarantee.** Probed directly: an **unstratified** constant pool still returns
++`Interval(5, 5)` from `percentile_over_units` and `(Interval(5, 5), 200)` from
++`percentile_of_derived`; the same pool with `strata` (or with `cluster_by`) returns `None`. That is
++not a regression — `t_over_units` over the identical column returns `Interval(5, 5)` too — and it
++is defensible on its own terms, since an unstratified bootstrap of a constant column genuinely has
++no sampling variance. It is recorded because within one run a constant column is refused with
++`stratify_by` declared and published without it, and a reader inferring the general guarantee from
++the sentence above would be wrong.
+ Verified end to end at `b06079c`: a column recorded identically under both conditions
+ (`tests/test_cli.py`'s `_AGGREGATE_STEP`, whose `pred = float(i)` ignores `cfg`) under
+ `resample: {method: bootstrap, n: 2000}` publishes
+ `method: paired_percentile_over_units, delta: 0.0, ci95: [0.0, 0.0], ci95_corrected: [0.0, 0.0]`.
+ 
+ **Why this is deferred and not a task-16 defect.** It is **not a regression**:
+ `paired_t_over_units([0.0] * 40)` already returns `Interval(0.0, 0.0)`, so the same design published
+ the same zero-width interval before task 16 under a different `method` string. It is also **not** the
+ "plausible but wrong" case `paired_percentile_of_derived`'s own docstring warns about — that one is a
+ *nonzero* point-estimate delta beside a zero-width interval at zero, produced when a shared closure
+ cancels across two identical tables; here the delta is `0.0` beside it, so the record is internally
+ consistent and a reader can see what happened. Task 16's own decision to pass `_column_mean` twice is
+ sound for the same reason: the two tables are the two conditions' own collapsed data, not one table
+ seen twice, so nothing cancels. What is owed is consistency — the paired construction is now the
+ fourth reachable from a recorded column and the only one the zero-width sweep never touched, and the
+ sweep should finish rather than stop at three.
++
++**Finding 3 — a contrast entry carries no resolved-`resample` echo, while every `aggregated` block
++beside it does.** Filed by the **H4a whole-branch review** (2026-08-15, at `d59316d`), which found
++the gap real and found that it had never been filed: H4a task 17's ledger entry recorded it as
++"registered against H4's contrast-side hardening, same owner as task 16's filed items", and no such
++amendment was ever made to this entry. The ledger is tracked, so the ruling was not lost, but
++`CLAUDE.md` names this file as the place to look before filing a "new" gap, and it was not here.
++
++The gap, confirmed by the review by running a config, and re-confirmed here at the construction
++site: under a declared `statistics.resample`, a `vs_baseline` entry reports
++`method: paired_percentile_over_units` with no `resample` block beside it, while every `aggregated`
++metric block in the same `run.yaml` carries the resolved `{method, n, stratify_by}` echo task 17
++added. `_comparison_step_blocks` builds each entry as a literal
++`{delta, n_paired, method, ci95, cohens_d, correction}` mapping and takes no `beside_n` parameter
++at all, so there is no route by which the echo could reach it. `cli.py` merges `resample_beside` into
++`weighted_beside`, which reaches `summarize_step`'s `beside_n` and so the per-condition blocks;
++`_comparison_step_blocks` builds its entries by another route and receives no such mapping. So a
++reader can see what a condition's own interval rests on and cannot see it for the contrast between
++two conditions — which is the half `reference.md` § Statistical reporting's "so the number is never
++the result of an undocumented default" reason applies to equally.
++
++**Same owner as Findings 1 and 2, and it should be built with them:** all three are contrast-path
++disclosure gaps, and a `where` that names the comparison is the thing Finding 1 needs and this one
++would reuse. Not a regression — no contrast entry ever carried the echo, the echo itself being H4a
++task 17's own addition.
++
++## `reference.md` § *How a metric becomes a number* is cited across the repo and does not exist
++
++Found by the **H4a whole-branch fix pass** (2026-08-15, at `d59316d`), while adding a citation to
++that section and checking that its anchor resolved. It does not: **no heading of that name exists**
++in `reference.md` or in any of the four documents, and no commit in this repo's history ever
++removed one (`git log -S` over `docs/reference.md`). The name is nonetheless in wide, consistent
++use — **eighteen files name it**: five sites in `src/` (four in `stats.py`, one in `validate.py`),
++both scoping documents, four plans, four specs, five files of the development record (this pass's
++own report among them), and this file, whose `W-STATS-AGGREGATE-FAILED` entry proposes to "add
++`resample_draws` to the § How a metric becomes a number derived-metric shape once that section next
++changes". Nothing anywhere records it
++as a section that is *owed*; every use reads as a citation of something already written. Two further
++instances were written by this pass and corrected before they landed.
++
++**Where the cited material actually lives, checked by locating the quotations rather than assumed:**
++`stats.py`'s "can do only for a metric it knows how to compute" is under `#### What isn't a repeat`;
++the `resample_draws` `null`/`0`/*n* scheme and the recorded-column paragraph are under
++`### Statistical reporting` → `#### The unit table is the inference base`. So the phantom name spans
++at least two real sections, which is why this is not a `sed`: each site has to be read to see which
++one it leans on.
++
++**Two readings, and the fix differs.** Either the citations are misaddressed and should each be
++repointed at the real section — or the repo has been describing a section `reference.md` genuinely
++lacks, in which case the fix is to write it: a single place saying how a metric gets from a step
++return or an `aggregate` to a value, a basis, and an interval, which is what those eighteen files
++have been pointing at. The second is the more likely reading given how uniform the usage is, and it
++is a documentation change of real size, which is why nothing is repointed here.
++
++Not a behaviour defect, and no reader is misled about a *rule* — every quoted sentence is true and
++resolves somewhere in `reference.md`; only the address is wrong. Filed because `CLAUDE.md`
++§ Documentation conventions makes section citation the one durable way to point between files
++("never by line number"), and a cited section that does not exist is precisely the failure that
++convention exists to prevent.
++
++**Owner: unassigned.** Any slice editing `reference.md` § Statistical reporting can settle which
++reading is right; H4b is next to touch that material.
+diff --git a/src/publishable/cli.py b/src/publishable/cli.py
+index 2d73f09..4a487d6 100644
+--- a/src/publishable/cli.py
++++ b/src/publishable/cli.py
+@@ -1908,48 +1908,69 @@ def command_run(config_path: Path) -> int:
+                         )
+                         # `weights` on the retry too: the collision costs the
+                         # `derived` mapping and nothing else, so the recorded
+                         # columns must come back with the same arithmetic they
+                         # had on the first call. Silently downgrading them to
+                         # unweighted numbers over a badly named derived key is
+                         # this slice's own failure class, reached through the
+                         # containment path. (A weight core cannot use cannot
+                         # arrive here: `attrition` above gates the same mapping
+                         # through `kish_effective_n`, outside any `try`.)
+-                        # `resample_columns` deliberately NOT passed here (H4a
+-                        # task 14). Today this retry already passes no `seed`,
+-                        # so `resample_columns`'s own gate
+-                        # (`resample_columns and seed is not None`) would stay
+-                        # closed regardless — passing it here is inert right
+-                        # now, not a live behavior change, and the suite
+-                        # cannot tell the two apart. It is still left off on
+-                        # purpose: this call's job is to reproduce the
+-                        # recorded columns exactly as the first call built
+-                        # them, after a derived-key fault, not to change their
+-                        # construction — so if a future change ever threads a
+-                        # `seed` through here too, `resample_columns` must not
+-                        # come along with it, or the same run would record two
+-                        # different constructions for the same column
+-                        # depending on whether its derived metrics happened to
+-                        # collide. `strata` (H4a task 15) is left off for the
+-                        # identical reason: it only ever moves a column's
+-                        # interval through the SAME `resample_columns and seed
+-                        # is not None` gate `resample_columns` itself reads, so
+-                        # with neither passed here `strata` is inert now and
+-                        # must stay off if a future change ever threads a
+-                        # `seed` through this retry.
++                        # `seed`, `draws`, `resample_columns` and `strata` on
++                        # the retry for the same reason `weights` is on it, and
++                        # the four travel together because the column branch
++                        # reads all four (H4a whole-branch review, I1). Left
++                        # off — as they were until that review — a declared
++                        # `statistics.resample` was silently dropped from every
++                        # recorded column here while `beside_n` went on
++                        # carrying the `resample` echo, so one block claimed a
++                        # declaration and omitted the `resample_draws` key that
++                        # `reference.md` § Statistical reporting makes the mark
++                        # of an UNDECLARED resample ("absent entirely — not
++                        # `null` — when no `resample` is declared"). `draws` matters
++                        # as much as the gate does: at its 2000 default a
++                        # config declaring `n: 500` would resample the column
++                        # at 2000 draws beside an echo saying 500.
++                        #
++                        # **This retry cannot raise**, which is the property
++                        # `stats.py`'s `E-STEP-KEY-COLLISION` comment states as
++                        # an invariant ("the caller's retry passes the same
++                        # `collapsed` and would re-raise uncontained") and which
++                        # widening the arguments must not cost — a second raise
++                        # here is a crash after every execution is already
++                        # spent. The argument is local to `summarize_step`:
++                        # every `ContractError` this `except` can catch is
++                        # raised from its `if derived:` block, which runs AFTER
++                        # its column loop has completed. The two faults raised
++                        # inside the column loop —
++                        # `E-STATS-RESAMPLE-STRATIFY-VARIES` from
++                        # `percentile_over_units_clustered`, and
++                        # `E-DATA-WEIGHT-INVALID` from `checked_weights` —
++                        # surface on the FIRST call and so never enter this
++                        # handler at all. Reaching here therefore means that
++                        # loop already succeeded, and the retry replays it over
++                        # the identical `collapsed`/`counts`/`weights`/
++                        # `clusters`/`seed`/`draws`/`resample_columns`/`strata`.
++                        # (`validate` also refuses the strata composition from
++                        # the roster before `run` starts, and `attrition` gates
++                        # the weights outside any `try` — second lines of
++                        # defence, not what this rests on.)
+                         step_summary = summarize_step(
+                             collapsed,
+                             counts,
++                            seed=resample_seed_value,
++                            draws=derived_metric_draws,
+                             beside_n=cond_beside_n,
+                             weights=weights,
+                             clusters=clusters,
++                            resample_columns=resample_spec["declared"],
++                            strata=resample_strata,
+                         )
+                         # What the parent block dropped, every stratum of it
+                         # drops too. A level's table carries the same columns as
+                         # the whole one, so the collision that raised above
+                         # raises identically per level — uncontained, after the
+                         # run has already spent every execution. Retrying each
+                         # level with its own `try` would be worse than either:
+                         # a level block carrying a derived metric its own parent
+                         # does not have.
+                         strata_derived: dict[str, Any] | None = None
+diff --git a/src/publishable/validate.py b/src/publishable/validate.py
+index cfc4177..ef17854 100644
+--- a/src/publishable/validate.py
++++ b/src/publishable/validate.py
+@@ -4986,35 +4986,50 @@ tuple enforces.
+ **A closed, one-value enum on purpose.** `bootstrap` is the only value the
+ schema shows and the only construction `stats.py` has, and § Statistical
+ reporting's construction tables enumerate the method strings core *emits*
+ (`percentile_over_units`, `paired_percentile_over_units`) — outputs, not inputs
+ a config may name. Stating the enum is what makes `method: bootstap` a
+ diagnostic rather than a shrug, and what makes adding a second value a
+ documented change rather than a silent one."""
+ 
+ 
+ def _check_resample(doc: dict[str, Any], roster: UnitList | None, c: Collector) -> None:
+-    """`statistics.resample`'s `method` enum, its `n` floor, the comparison-family
+-    lower bound on that same `n`, its `stratify_by` names, whether a roster was
+-    declared at all, and — the one check here that reads the roster —
+-    `limits.min_clusters` against the resolved cluster count.
++    """Every check `statistics.resample` gets, seven findings in declaration
++    order — the enumeration is the list, not a sample of it:
++
++    - `E-STATS-RESAMPLE-UNITS` — a `resample` with no `data.units` at all.
++    - `E-STATS-RESAMPLE-METHOD` — the `method` enum.
++    - `E-STATS-RESAMPLE-N` — the `n` floor.
++    - `E-STATS-RESAMPLE-STRATIFY-UNKNOWN` — a `stratify_by` name that is not a
++      declared unit attribute.
++    - `W-STATS-RESAMPLE-CLUSTERS` — **reads the roster:** `limits.min_clusters`
++      against the resolved cluster count.
++    - `E-STATS-RESAMPLE-STRATIFY-VARIES` — **reads the roster too:** a stratum
++      that varies within a `cluster_by` cluster.
++    - `W-STATS-RESAMPLE-FAMILY` — the comparison-family lower bound on that
++      same `n`.
++
++    **Two of the seven read `roster`, not one**, and each carries its own
++    `roster is not None` guard rather than leaning on a caller or on the
++    no-`return` gate below. A check added here must state which side of that
++    line it is on; this list is what the next reader counts against, so an
++    eighth finding belongs in it.
+ 
+     `_check_unimplemented`'s wholesale refusal of a declared `resample`
+     retired with H4a task 12 (commit `2fdc957`) — a shape fault inside the
+     block is worth reporting on its own terms rather than only as
+     "unsupported", the same way a malformed `report_by` entry is worth
+-    naming even though `report_by` runs for real.
+-    Resampling itself had not been honored by `cli.command_run` as of that
+-    commit; the two tasks after it resolve the block and thread it into the
+-    interval constructions, so a declared `resample` validated clean here
+-    before it changed any interval. Check `cli.command_run`'s
+-    `derived_metric_draws` directly for whether that gap is still open.
++    naming even though `report_by` runs for real. Resampling itself was not
++    honored by `cli.command_run` at that commit, so for two tasks a declared
++    `resample` validated clean here before it changed any interval; H4a tasks
++    13–15 closed that window, and `cli.command_run` now resolves the block
++    once and threads it into the column and derived constructions alike.
+ 
+     Every check here presupposes the declaration is a mapping; a scalar or a
+     list is `check_envelope`'s `E-CONFIG-TYPE` (`statistics.resample` is typed
+     `dict`), and a wrong-typed child (`method`, `n`, `stratify_by`) is the same, because Task 3
+     closed the block one level in. A leaf type fault is deliberately non-fatal
+     in this module — reported, and validation continues — so each value read
+     here is `isinstance`-guarded and quietly skipped when it is not a leaf the
+     envelope types — the same division `_check_report_by` keeps with its own
+     entries.
+ 
+@@ -5037,30 +5052,31 @@ def _check_resample(doc: dict[str, Any], roster: UnitList | None, c: Collector)
+     # expression, refusing a `fold` level for the identical reason. (Not
+     # `E-REPL-FOLD-K`: that is the unrelated `k: all`-basis-unknowable fault.)
+     #
+     # Read from the DECLARATION, not from `roster is None`: the roster is also
+     # `None` when `data.units` is declared and failed to resolve, and that fault
+     # already has `_check_units`' own finding. A second, derived fault on top of
+     # the one the reader has to fix anyway is what `validate_config`'s
+     # `usable_cluster` guard avoids by the same argument.
+     #
+     # No `return` here, matching the `E-REPL-FOLD-NO-UNITS` twin. Of the checks
+-    # below, `method`, `n`, the family bound, and `stratify_by` read
+-    # `resample`/`doc` alone and are safe with no roster at all. The
+-    # `limits.min_clusters` check further down is the one exception — it DOES
+-    # read `roster`, and is written to require `roster is not None` itself
+-    # rather than leaning on this early-exit having not fired. So this
+-    # comment's job is only to explain why there is no `return` here — not to
+-    # promise every check below is roster-independent, which the next reader
+-    # extending this function must re-verify rather than assume from this
+-    # sentence alone. Stopping here would silently swallow a `method`/`n`
+-    # fault the reader would only meet on their next pass.
++    # below, `method`, `n`, the family bound, and `stratify_by`'s names read
++    # `resample`/`doc` alone and are safe with no roster at all. The two that
++    # DO read `roster` — `limits.min_clusters` and the stratum-varies-within-
++    # cluster composition, both enumerated in the docstring above — each
++    # require `roster is not None` themselves rather than leaning on this
++    # early-exit having not fired. So this comment's job is only to explain why
++    # there is no `return` here — not to promise every check below is
++    # roster-independent, which the next reader extending this function must
++    # re-verify against the docstring's list rather than assume from this
++    # sentence. Stopping here would silently swallow a `method`/`n` fault the
++    # reader would only meet on their next pass.
+     units_declared = ((doc.get("data") or {}).get("units")) or {}
+     if not units_declared:
+         c.error(
+             "E-STATS-RESAMPLE-UNITS",
+             "statistics.resample",
+             "is declared and `data.units` is not, so there is no unit table to draw "
+             "from and no metric core could recompute on a draw — a declaration that "
+             "changes no behavior. Declare `data.units`, or drop `resample` and report "
+             "over repeats, which is honest for a design whose executions are the "
+             "observations",
+diff --git a/tests/test_cli.py b/tests/test_cli.py
+index 8559507..e925bd1 100644
+--- a/tests/test_cli.py
++++ b/tests/test_cli.py
+@@ -6197,20 +6197,64 @@ def test_the_same_derived_metric_unclustered_is_drawn_as_it_always_was(tmp_path,
+         units_overrides={"attributes": ["site"]},
+     )
+     run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+     aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+     assert aggregated["total"]["value"] == 7.0
+     assert aggregated["total"]["method"] == "percentile_over_units"
+     assert aggregated["total"]["resample_draws"] == 2000
+     assert "E-DATA-CLUSTER-DERIVED" not in doc["stdout"]
+ 
+ 
++def test_a_contained_aggregate_fault_does_not_downgrade_a_declared_column_resample(
++    tmp_path, capsys
++):
++    """The contained fault costs the DERIVED mapping and nothing else — including
++    the construction a declared `statistics.resample` puts around every recorded
++    column (H4a whole-branch review, I1).
++
++    `cli.py`'s retry after `E-DATA-CLUSTER-DERIVED` re-summarizes without the
++    derived metrics. Until this fix it also dropped `resample_columns`/`strata`/
++    `seed`/`draws`, so `pred` came back `weighted_t_over_units_clustered` with no
++    `resample_draws` key — which `reference.md` § Statistical reporting makes
++    the shape of a run that declared NO resample — while `beside_n` went on
++    carrying the `resample` echo beside it. One block cannot say both.
++
++    `n: 500` rather than the 2000 default on purpose: `draws` is a separate
++    parameter from the gate, and at its default a declared 500 would be resampled
++    2000 times beside an echo saying 500."""
++    doc = run_a_project(
++        tmp_path,
++        capsys=capsys,
++        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
++        aggregate_returns="total",
++        roster_csv=_UNEVEN_CLUSTERS,
++        units_overrides={"attributes": ["site"], "cluster_by": "site"},
++        statistics={"correction": "holm", "resample": {"method": "bootstrap", "n": 500}},
++    )
++    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
++    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
++    # The fault fired and cost exactly the derived mapping, as before.
++    assert "E-DATA-CLUSTER-DERIVED" in doc["stdout"]
++    assert set(aggregated) == {"pred"}
++    # And the recorded column came back with the construction the declaration
++    # asked for, at the number of draws it asked for.
++    assert aggregated["pred"]["method"] == "percentile_over_units_clustered"
++    assert aggregated["pred"]["resample_draws"] == 500
++    # The echo and the column now agree about what happened.
++    assert aggregated["pred"]["resample"] == {
++        "method": "bootstrap",
++        "n": 500,
++        "stratify_by": [],
++    }
++    assert run["status"] == "completed"
++
++
+ def test_the_shipped_template_derives_nothing_so_no_generated_project_is_reached():
+     """The blast radius of the refusal above, measured rather than asserted: core
+     ships exactly one template, and `generic` does not override `aggregate` at all
+     — `publishable init` therefore generates no project that can reach
+     `E-DATA-CLUSTER-DERIVED`. Only a user-written template that derives a metric
+     does, which is why the refusal is narrow enough to carry until H4 builds the
+     construction."""
+     from publishable.templates.base import BaseTemplate
+     from publishable.templates.builtin.generic import GenericTemplate
+ 

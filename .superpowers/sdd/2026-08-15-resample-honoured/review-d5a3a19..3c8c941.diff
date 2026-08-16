@@ -1,0 +1,136 @@
+# Review package: d5a3a19..3c8c941
+
+## Commits
+3c8c941 feat: close statistics.resample one level in, the way measurements already is
+
+## Files changed
+ src/publishable/envelope.py | 23 ++++++++++++++++++++---
+ tests/test_envelope.py      | 41 +++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 61 insertions(+), 3 deletions(-)
+
+## Diff
+diff --git a/src/publishable/envelope.py b/src/publishable/envelope.py
+index cf39139..a826f3d 100644
+--- a/src/publishable/envelope.py
++++ b/src/publishable/envelope.py
+@@ -23,23 +23,26 @@ from typing import Any
+ # never a bare scalar, so both are typed `dict`. `measurements` is typed a
+ # second time one level down, at `.by` and `.collapse`: its children have fixed
+ # names and the block is no longer refused wholesale, so leaving it whole would
+ # have made a `colapse` typo unreachable by any check the moment the block's
+ # wholesale refusal retired — a latent gap turning live. A path
+ # that is both a leaf and a container is typed by the loop below AND descended
+ # into by the closure, which is why the closure checks containers first.
+ # `holdout` stays whole for now: `E-DATA-HOLDOUT-UNSUPPORTED` still refuses the
+ # block, so its gap is latent, and H3d closes it. The optional blocks that
+ # section documents but a materialized config omits — `sweep`'s modes,
+-# `statistics.contrasts` / `.resample` / `.null_test` / `.report_by`, and
+-# `data.units.assign` — are declared at their own key with the one outer type
+-# that section gives them.
++# `statistics.contrasts` / `.null_test` / `.report_by`, and `data.units.assign`
++# — are declared at their own key with the one outer type that section gives
++# them. `statistics.resample` is no longer among them: it is closed one level
++# in, the same way `measurements` is — its three keys (`method`, `n`,
++# `stratify_by`) are fixed, so leaving the block whole would make a typo among
++# them unreachable by any check.
+ #
+ # The table stopping at a key is the end of the line for everything under it:
+ # the closure below never descends into a known leaf, and `_check_shape`
+ # checks a container's *shape* and never the names inside one, so a
+ # misspelled `resolverr` in a `data.units.from` mapping or `methodd` in
+ # `holdout` is reported by no check in this build. That is the documented
+ # cost of a whole leaf (`reference.md` § Validation names the blocks it
+ # applies to and the slice that closes each), not a claim that such a key
+ # could never be named: `holdout`'s children have fixed names. The keys that
+ # genuinely cannot be named are the dynamic ones inside `grid`, `baseline`,
+@@ -78,20 +81,34 @@ LEAF_TYPES: dict[str, type | tuple[type, ...]] = {
+     # like a `grid` axis's swept path.
+     "data.units.measurements.collapse": (str, dict),
+     "data.units.holdout": dict,
+     "data.units.assign": dict,
+     "replication.repeats": list,
+     "replication.order": str,
+     "replication.rationale": str,
+     "statistics.correction": str,
+     "statistics.contrasts": list,
+     "statistics.resample": dict,
++    # Closed one level in, the arrangement `data.units.measurements` above has
++    # and for its reason: these three names are fixed, the block is no longer
++    # refused wholesale, and leaving it whole would make a `stratifyy_by` typo
++    # unreachable by any check the moment the wholesale refusal retired — a
++    # latent gap turning live. `assign`'s separate `_check_assign_axis_keys` is
++    # not the precedent: it exists because an axis NAME is user-chosen and no
++    # fixed dotted path reaches it. `stratify_by` is `(str, list)` because
++    # `units.stratum_names` — the single authority the draw balances on — reads
++    # a bare `stratify_by: site` as one name exactly as `[site]` is; typing it
++    # `list` alone would make the envelope and the draw disagree about the same
++    # declaration.
++    "statistics.resample.method": str,
++    "statistics.resample.n": int,
++    "statistics.resample.stratify_by": (str, list),
+     "statistics.null_test": dict,
+     "statistics.report_by": list,
+     "sweep.baseline": dict,
+     "sweep.groups": list,
+     "sweep.paired": list,
+     "sweep.ablate": dict,
+     "sweep.sample": dict,
+     "sweep.grid": dict,
+     "limits.max_executions": int,
+     "limits.max_failed_fraction": float,
+diff --git a/tests/test_envelope.py b/tests/test_envelope.py
+index 594d9fb..5f3f90b 100644
+--- a/tests/test_envelope.py
++++ b/tests/test_envelope.py
+@@ -85,10 +85,51 @@ def test_a_non_string_top_level_key_is_reported_not_raised() -> None:
+     schema declares — reported, not silently skipped."""
+     findings = check_envelope({1: "oops"})
+ 
+     assert [(f[0], f[1]) for f in findings] == [("E-CONFIG-KEY-UNKNOWN", "1")]
+ 
+ 
+ def test_a_non_string_nested_key_is_reported_not_raised() -> None:
+     findings = check_envelope({"metadata": {1: "oops"}})
+ 
+     assert [(f[0], f[1]) for f in findings] == [("E-CONFIG-KEY-UNKNOWN", "metadata.1")]
++
++
++def test_a_misspelled_resample_key_is_reported_rather_than_ignored():
++    """`statistics.resample` is now both a leaf and a container, the same
++    arrangement `data.units.measurements` has: typed a mapping by the loop in
++    `check_envelope`, and descended into by `_check_unknown_keys`, which checks
++    containers before leaves. Without the three child paths the closure stops at
++    the leaf and `stratifyy_by` is reached by no check in this build."""
++    findings = check_envelope(
++        {"statistics": {"resample": {"method": "bootstrap", "n": 2000, "stratifyy_by": ["a"]}}}
++    )
++    by_code = [(code, path) for code, path, _ in findings]
++    assert ("E-CONFIG-KEY-UNKNOWN", "statistics.resample.stratifyy_by") in by_code
++    # The positive companion: the three real keys are NOT reported, so the test
++    # cannot pass by the closure rejecting everything under the block.
++    assert not any(
++        path.startswith("statistics.resample.") and path.endswith(("method", "n", "stratify_by"))
++        for _, path in by_code
++    )
++
++
++def test_the_three_resample_leaves_are_typed():
++    """A wrong-typed child now has an `E-CONFIG-TYPE` backstop, which is what
++    lets `_check_resample` read each value without its own isinstance ladder."""
++    findings = check_envelope(
++        {"statistics": {"resample": {"method": 3, "n": "many", "stratify_by": 7}}}
++    )
++    paths = {path for code, path, _ in findings if code == "E-CONFIG-TYPE"}
++    assert paths == {
++        "statistics.resample.method",
++        "statistics.resample.n",
++        "statistics.resample.stratify_by",
++    }
++
++
++def test_a_bare_string_stratify_by_is_accepted_by_the_envelope():
++    """`units.stratum_names` reads a bare `stratify_by: site` as one name, the
++    same as `[site]`. Typing this `list` alone would make the two readings
++    disagree — `E-CONFIG-TYPE` here while the draw balances on it there."""
++    findings = check_envelope({"statistics": {"resample": {"stratify_by": "site"}}})
++    assert not [f for f in findings if f[1].startswith("statistics.resample")]

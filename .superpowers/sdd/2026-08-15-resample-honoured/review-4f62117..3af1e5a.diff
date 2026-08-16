@@ -1,0 +1,625 @@
+# Review package: 4f62117..3af1e5a
+
+## Commits
+3af1e5a docs: task-10 report — the stratified x clustered composition, and a mutation the brief's own test missed
+97c911c feat: a stratum is constant within a cluster, and the draw is a cluster within its stratum
+
+## Files changed
+ .../2026-08-15-resample-honoured/task-10-report.md | 105 +++++++++++++++++
+ docs/reference.md                                  |   3 +
+ src/publishable/stats.py                           |  76 +++++++++++-
+ src/publishable/validate.py                        |  26 ++++
+ tests/test_stats.py                                | 131 +++++++++++++++++++++
+ tests/test_validate.py                             |  52 ++++++++
+ 6 files changed, 392 insertions(+), 1 deletion(-)
+
+## Diff
+diff --git a/.superpowers/sdd/2026-08-15-resample-honoured/task-10-report.md b/.superpowers/sdd/2026-08-15-resample-honoured/task-10-report.md
+new file mode 100644
+index 0000000..29634de
+--- /dev/null
++++ b/.superpowers/sdd/2026-08-15-resample-honoured/task-10-report.md
+@@ -0,0 +1,105 @@
++# Task 10 report — the stratified × clustered composition rule
++
++Status: COMPLETE
++Commit: 97c911c
++
++## Test summary
++
++`uv run pytest` 1748 passed + 2 xfailed (baseline 1742 + 6 new: the brief's 2 stats tests and 2
++validate tests, plus 2 I added — a call-count test and a degenerate-case pair — see below). `uv run
++ruff check .` and `uv run mypy` both clean.
++
++## What was built
++
++`percentile_over_units_clustered` in `src/publishable/stats.py` gained `strata: Sequence[Any] | None =
++None`, implemented per the brief's given code almost verbatim (fixed one typo in my own added docstring
++prose — "a public function hand" → "handed"). `validate._check_resample` gained the roster-side check,
++reusing `units.stratum_varies_within_cluster` exactly as *Fold strata survive clustering* does.
++`docs/reference.md` gained one § Validation row and one row each in § Errors `validate` reports and §
++Errors core raises, all citing `#clustered-units` (verified as an existing anchor) and dual-listing
++`E-STATS-RESAMPLE-STRATIFY-VARIES` the way `E-DATA-WEIGHT-INVALID` is dual-listed.
++
++## One brief/code disagreement (as flagged — this was one of the seven)
++
++The brief's `test_validate.py` fixtures used `"limits.min_clusters": 2` as a *dotted* override key.
++`write_config`'s override mechanism (`tests/test_validate.py:53-63`) walks dotted keys through existing
++dict nodes (`node = node[h]`), and `base_config` has no top-level `"limits"` key at all — so the dotted
++form raised `KeyError: 'limits'` before validation ever ran. Every existing test that sets
++`limits.min_clusters` in this file (e.g. `test_a_clustered_resample_below_min_clusters_warns`) uses the
++nested form, `"limits": {"min_clusters": N}`, instead. Fixed both new tests to match that existing
++convention; the rule under test (the composition check) is unaffected — this is pure test-scaffolding
++syntax.
++
++## A gap the brief's own reasoning didn't survive contact with: the width-ratio mutation test
++
++Step 5 of the brief expects `test_a_clustered_stratified_draw_takes_clusters_within_strata` to FAIL
++under the mutation `for _ in range(len(group))` → `for _ in range(1)`, reasoning that "one cluster per
++stratum makes every replicate three clusters instead of six." I ran this exact mutation and the test
++PASSED. Traced why: the fixture's interval **extremes** are reached whenever a stratum's draw happens to
++repeat its own single most-extreme cluster — and pooling several copies of the *same* cluster's units
++gives that cluster's own mean regardless of how many copies are pooled. So the endpoint values are
++identical whether a stratum draws 1 cluster or its own count of 2; only interior draws differ, and the
++"plain" (unstratified) comparator used by the ratio assertion is built from the *same* mutated loop
++(`strata=None` also goes through `stratum_pools = [ordered]`), so it degrades in the same direction and
++the `< half` inequality survives. I verified this by hand (`plain` width goes from ~100 to unaffected-ish
++while `stratified` also changes, but the ratio still holds) rather than trusting the brief's prose.
++
++To actually catch this mutation I added
++`test_a_clustered_stratified_draw_spends_one_pick_per_cluster_the_stratum_holds`, which monkeypatches
++`random.Random` with a `_CountingRandom` spy and asserts the total `randrange` call count over 2000
++draws equals `2000 * 6` (the true total cluster count across all three strata). This is a structural
++pin immune to the value-coincidence that defeats the width comparison. I kept the brief's original test
++too (it is still a legitimate demonstration of the intended behavior, just not a sufficient mutation
++guard on its own).
++
++## The degenerate case — decided and tested (not handed over as literal test code)
++
++The brief's prose said "the clustered-and-stratified path needs its own answer to the degenerate case,
++and it should be the same answer" as `percentile_over_units`'s all-identical-strata refusal, but did not
++supply test code for it — only the implementation snippet, which I extended with:
++`if all(len(group) < 2 for group in stratum_pools): return None` (added inside the `strata is not None`
++branch, right after building `stratum_pools`). The reasoning: if every stratum holds fewer than two
++clusters, each stratum always redraws its lone cluster on every replicate, so the resampled mean is
++identical on every draw — the same "zero-width 95% interval is not honest" shape `groups < 2` already
++refuses one level up, and the same answer `percentile_over_units`'s all-strata-constant check gives.
++I added `test_a_clustered_stratified_draw_refuses_a_zero_width_interval_too` (positive: all-strata
++singleton → `None`; negative: one stratum given 2 clusters → an interval), and mutated the guard to a
++no-op to confirm the positive case FAILED with a real zero-width `Interval(10.5, 10.5)` before reverting.
++
++## Mutation testing
++
++- `stats.py`: `range(len(group))` → `range(1)` in the drawn-cluster loop. The brief's own width-ratio
++  test PASSED (see gap above — an empirical finding, not carelessness); my new call-count test FAILED
++  (6000 vs expected 12000 `randrange` calls). Reverted in place, `__pycache__` cleared, both PASS.
++- `stats.py`: the degenerate-case guard forced to `if False`. My new degenerate test FAILED, producing
++  the exact zero-width `Interval(10.5, 10.5)` the guard exists to prevent. Reverted in place, PASS.
++- `validate.py`: `stratum_varies_within_cluster(roster, cluster_by, name)` → `None`. The brief's negative
++  test (`test_a_resample_stratum_varying_within_a_cluster_is_refused`) FAILED as required; the positive
++  companion continued to pass (it asserts absence, so a broken check reporting nothing is
++  indistinguishable from a correct one on that test alone — which is exactly why the negative test is
++  the one that must fail here, and did). Reverted in place, PASS.
++
++All three reverts were in-place edits, never `git checkout`; `__pycache__` cleared between mutation and
++revert each time; full suite (`uv run pytest`, `ruff`, `mypy`) reconfirmed clean after every revert.
++
++## Context carried forward (not this task's to fix)
++
++`percentile_of_derived` still takes no `strata` (task 9's routed gap, unaffected by this task — I did
++not touch it and have nothing to add or subtract from that routing). `E-STATS-RESAMPLE-UNSUPPORTED`
++still refuses every declared `resample` end to end; nothing in this task's validate.py change or
++message wording implies otherwise — the new `E-STATS-RESAMPLE-STRATIFY-VARIES` check runs *inside*
++`_check_resample`, which fires alongside `E-STATS-RESAMPLE-UNSUPPORTED` on any config that reaches it,
++exactly like the five checks tasks 4-8 already added there.
++
++## Concerns for the reviewer
++
++1. The width-ratio-vs-call-count gap above is worth double-checking independently — I traced it by hand
++   and with direct interpreter runs, but a reviewer building their own reference implementation (as
++   task 9's review did) would be the strongest confirmation that the fix (the spy test) is both
++   necessary and sufficient, and that no other mutation escapes both tests at once.
++2. I did not attempt an exhaustive-enumeration ("achievable set") style test like the existing
++   `_pooled`/`_achievable` pattern for the unstratified clustered percentile, because I found by
++   computation that the achievable set's *extremes* coincide across correct and mutated (1-per-stratum)
++   draws on this exact fixture — so that style of test would have looked rigorous while still missing
++   the bug the call-count test catches. Left as a note in case a future reviewer reaches for that
++   pattern here and is surprised it doesn't discriminate.
+diff --git a/docs/reference.md b/docs/reference.md
+index c91d832..5e3546a 100644
+--- a/docs/reference.md
++++ b/docs/reference.md
+@@ -314,20 +314,21 @@ The table below states each check by the mistake it catches. What `validate` *pr
+ | Contrast stratum is an attribute | `statistics.contrasts[1].within` names `site`, which is not in `data.units.attributes` |
+ | Contrast stratum is populated | `contrasts[1].within: {dx_family: rare}` leaves 6 paired units; below `limits.min_reported_n` (warning) |
+ | Reporting stratum is an attribute | `statistics.report_by` names `site`, which is not in `data.units.attributes` |
+ | Reporting stratum is populated | `report_by: [dx_family]` has a level with 4 units; below `limits.min_reported_n` (warning) |
+ | Weight attribute exists | `data.units.weight_by` names `sampling_weight`, which is not a unit attribute |
+ | Weights are usable | `sampling_weight` holds a zero or negative value for 3 units; a weight is what a unit stands for |
+ | Weight is constant within a unit | `weight_by: sampling_weight`, and `p1`'s [measurement rows](#what-isnt-a-repeat) carry 1 and 99 — a weight is what one unit stands for, not what one measurement does |
+ | Weighted deltas aren't computed | `data.units.weight_by` is declared and the design resolves to a comparison — a `vs_baseline`, or a `statistics.contrasts` entry; each condition's own value and interval are weighted and no contrast construction is — specified, not built in this build |
+ | Weighting looks undeclared | `sampling_weight` varies across units and looks like an inverse sampling probability, but `weight_by` is unset (warning) |
+ | Resample strata exist | `statistics.resample.stratify_by` names `count_stratum`, which is not a unit attribute |
++| Resample strata survive clustering | `statistics.resample: {stratify_by: [label]}` with `cluster_by: animal_id`, but `label` varies within animal `A3` — a resample draws whole clusters, so a cluster carrying two stratum values can be drawn within neither |
+ | Correction declared for a family | 6 enumerated conditions × 3 metrics produce a family of 15 baseline comparisons with `statistics.correction: none` (warning). Not raised for a `sample`-only sweep, whose draws aren't a family |
+ | Correction can be applied | `statistics.correction: fdr_bh`, but no comparison in the family will carry a p-value — `statistics.null_test` is undeclared, or its `shuffle` reaches none of them; Benjamini-Hochberg has nothing to adjust (warning) |
+ | Hypothesis needs baseline | `hypotheses[0].compare.to: baseline` but `sweep.baseline` is not declared |
+ | Hypothesis bound exists | `hypotheses[0].evaluate_on` is `ci95_lower`, but `data.units` is undeclared and template `generic` defines no `aggregate`, so no metric this run computes can carry an interval |
+ | Hypothesis names a real contrast | `hypotheses[1].compare.contrast` is `invariance`, which `statistics.contrasts` does not declare |
+ | Hypothesis names a metric | `hypotheses[1]` declares `compare.contrast` and no `metric`; a contrast reports a value per step metric, so the quantity under test is unnamed |
+ | Hypothesis form matches its metric | `hypotheses[1].metric` names a metric of a `scope: "summary"` step but declares `compare`; a summary metric is one value per run, not a contrast between conditions — and a condition-step metric without `compare` is the same mistake inverted |
+ | Hypothesis has an inference base | `hypotheses[0]` names a metric under the same declarations, without a bound: every metric will be `basis: repeats`, so it can be reported but not tested (warning) |
+ 
+ The unknown-key check matters more than it looks: a mistyped key in a hand-edited YAML file is otherwise silently ignored, and the run proceeds with a default while you believe you changed something. Since [the schema is closed and `validate` checks every key against it](#the-one-config-file), any key not in the spec is a typo by construction — except inside a block the schema declares as a whole leaf, where the walk stops and the keys within it are not reached: a `hypotheses` or a `statistics.contrasts` entry, a `replication.repeats` entry of kind `seed` or `fold` (a `batch` level is closed), and the mapping form of `data.units.from`. A key not in the spec there is ignored rather than reported — which in the first three means a misspelled `evaluate_on`, `within`, or `n` silently keeps its default — and each is closed by the slice that owns its block.
+@@ -520,20 +521,21 @@ likewise apart from those same two envelope rows, none of the others.
+ | A `statistics.contrasts` entry's `of` or `against` names another entry's `id` rather than a condition's label — contrasts compare conditions and do not nest | `E-STATS-CONTRAST-NESTED` |
+ | A `statistics.contrasts` entry sets `of` and `against` to the same condition | `E-STATS-CONTRAST-SAME-SIDES` |
+ | `statistics.contrasts` is not a list, an entry in it is not a mapping, or an entry's `id` is missing, is not a string, or repeats an earlier entry's | `E-STATS-CONTRAST-SHAPE` |
+ | A `statistics.contrasts` entry's `of` or `against` names a value that matches no declared condition's label and no other entry's `id` | `E-STATS-CONTRAST-UNKNOWN` |
+ | A `statistics.contrasts` entry's `within` names an attribute `data.units.attributes` does not declare | `E-STATS-CONTRAST-WITHIN` |
+ | `statistics.correction` is set and is a value other than `none`, `bonferroni`, `holm`, or `fdr_bh` — unset (`null`) is accepted | `E-STATS-CORRECTION-UNKNOWN` |
+ | A `statistics.report_by` entry is not a string, or names an attribute `data.units.attributes` does not declare | `E-STATS-REPORTBY-UNKNOWN` |
+ | `statistics.resample.method` names a value other than `bootstrap` — the whole enum, [§ Statistical reporting](#statistical-reporting)'s *Resample methods*. Unset (`null`) is accepted and takes the documented default | `E-STATS-RESAMPLE-METHOD` |
+ | `statistics.resample.n` is below 80, the fewest draws both percentile ranks are interior at. Refused rather than warned because under it core reports no interval at all, so a declared `n: 50` would null `ci95` on every metric in the run rather than narrowing one | `E-STATS-RESAMPLE-N` |
+ | `statistics.resample.stratify_by` names a value `data.units.attributes` does not declare, or an entry that is not a name at all (`stratify_by: [3]`). `data.units.attributes`, not the source's columns, for the same reason `E-DATA-CLUSTER-UNKNOWN` reads that set: a stratum is read per unit when the draw is taken, so it has to survive resolution as an attribute. Read through the same normalization the draw balances on, so a bare `stratify_by: site` is one name to both. One finding per offending name. Unlike `assign.<axis>.stratify_by`, a [`sweep.groups`](#expansion-modes) axis name is **not** a legal target here — a resample draws from the roster, not from an allocation. Unlike that field, `stratify_by` here **is** an `envelope.py` `LEAF_TYPES` leaf (`(str, list)`), so a wrong-typed *declaration* (`stratify_by: 5`) is `E-CONFIG-TYPE` and stays silent under this code rather than being reported twice — only a wrong-typed *entry* inside an otherwise-list declaration reaches this row. A bare `stratify_by: ""` is accepted rather than refused, unlike a `fold` level's own `stratify_by` above: `units.stratum_names` treats an empty string the same as an absent one (both falsy), naming no stratum at all rather than one empty name, so there is nothing here to refuse | `E-STATS-RESAMPLE-STRATIFY-UNKNOWN` |
++| `statistics.resample.stratify_by` names a value that varies within a cluster under a declared `data.units.cluster_by` — the same constancy [§ Clustered units](#clustered-units) already requires for `fold`, `holdout` and `assign`, checked here through `units.stratum_varies_within_cluster`, the single authority *Fold strata survive clustering* and *Holdout strata survive clustering* also read. A resample draws whole clusters, so a cluster carrying two stratum values can be dealt to neither. **Dual-listed, the shape `E-DATA-WEIGHT-INVALID` has**: `stats.percentile_over_units_clustered` raises the same code at run time, under the same message, because it is handed the stratum vector and the membership map directly and cannot silently choose one over the other | `E-STATS-RESAMPLE-STRATIFY-VARIES` |
+ | `statistics.resample` is declared and `data.units` is not — there is no unit table to draw from, so the declaration would change no behavior. Read from the declaration, not from whether a roster resolved: a declared-but-unresolvable `data.units` already has its own finding | `E-STATS-RESAMPLE-UNITS` |
+ | `sweep.ablate` is declared (truthy) and `sweep.baseline` fixes a level of a [`sweep.groups`](#expansion-modes) axis, which § Expansion modes refuses because "an ablation is one change from *its own cell's* full model, and there is no single reference condition when the reference cohort differs". The consequence is stronger than a mis-numbering, which is why this is an error: in the composition § Expansion modes permits — `ablate` over group axes and nothing else — a baseline fixing an axis expands over nothing, so the crossed ablation has one cell and **every other level of that axis is executed by no condition at all** while the run reports success. `ablate` beside a *parameter* axis duplicates the fixed level instead, the way `E-SWEEP-BASELINE-GROUP` describes, and is refused for its own reason by `E-SWEEP-ABLATE-CROSSED` beside this code. The two group-level refusals are exclusive: a config carries this one or that one, never both | `E-SWEEP-ABLATE-BASELINE-GROUP` |
+ | `sweep.ablate` is declared and `sweep.baseline` is not, so no condition is one change away from anything and the ablated conditions carry only their own change. Both sides are read for a *truthy* value, so `ablate: null` is not a declaration and an empty `baseline: {}` is not one either | `E-SWEEP-ABLATE-BASELINE-MISSING` |
+ | `sweep.ablate` is declared (truthy) alongside a non-empty `sweep.grid`, `sweep.paired` or `sweep.sample` — the axis-shaped modes, read as one set rather than named here, so a later axis mode joins this refusal by being classified as one (the mode vocabulary is a closed partition of axis and non-axis modes, and a mode outside it is refused by `E-SWEEP-KEY-UNKNOWN` before it can be used at all). `sweep.groups` is a non-axis mode and composes freely, varying units rather than parameters | `E-SWEEP-ABLATE-CROSSED` |
+ | A `sweep.ablate.remove` entry names a path `remove` cannot act on, in either of two ways: the parameter is neither a boolean nor `nullable`, so neither `false` nor `null` is a value it may hold (reported whatever the baseline says); or — for a boolean, and only when a `sweep.baseline` is declared at all — the baseline fixes no *boolean* value for that path, so `remove` finds nothing to turn off and sets `null` rather than `false`, planting it at a parameter that is not nullable. Reported only for a path the template declares, since an unknown one is `E-SWEEP-PATH-UNKNOWN`; the baseline reading is `remove`'s alone, an `override` stating its own value | `E-SWEEP-ABLATE-TARGET` |
+ | A `sweep.grid` axis declares an empty (falsy) list of values, so the sweep would expand to zero conditions | `E-SWEEP-AXIS-EMPTY` |
+ | `sweep.baseline` fixes a level of a [`sweep.groups`](#expansion-modes) axis and `sweep.ablate` is not declared — § Expansion modes' *the arms of a group axis are peers*. `_baseline_cells` reads a fixed axis as fixed, so it expands over nothing while `_axes` still emits that level as a product row: the level is rendered **twice**, once as the baseline row and once as its own axis's, and the two conditions hold the same units and the same parameters, with directories identical at every artifact — [*two identical measurements reported as two arms*](experimental-designs.md#mistakes-core-prevents). Where the axis declares two or more levels, the other levels' rows cross the single baseline and `E-DATA-ALLOCATION-CONTRAST` reports beside this code — but that refusal is temporary, and at one level there is no cross-arm comparison for it to read at all. The route a control arm actually wants, once there are two of them, is a [`statistics.contrasts`](#contrasts-claims-that-arent-condition-vs-baseline) entry naming both arms — whose delta this build refuses for the same disjoint-units reason, leaving a `summary`-step `Estimate` or two runs joined in a `study`. Where `ablate` is declared the sibling code `E-SWEEP-ABLATE-BASELINE-GROUP` reports instead, never both | `E-SWEEP-BASELINE-GROUP` |
+ | `sweep` is declared and resolves to zero conditions, whatever shape produced that — a backstop beneath the per-axis checks above | `E-SWEEP-EXPANDS-EMPTY` |
+ | `sweep` declares a key that is not one of the six recognized sweep modes (`baseline`, `grid`, `paired`, `ablate`, `sample`, `groups`) | `E-SWEEP-KEY-UNKNOWN` |
+ | A [`sweep.groups`](#expansion-modes) axis declares the same level twice (`levels: [control, treatment, control]`). The route § Mistakes core prevents' *two identical measurements reported as two arms* is not otherwise closed by: `E-DATA-ALLOCATION-NO-ARMS` and `E-DATA-ALLOCATION-WITHIN-ARMS` both read the `within`-versus-arms question and are satisfied here, `E-SWEEP-PATH-DUPLICATE` compares axis *names* across entries rather than values within one entry's `levels`, and `arms_of`'s set equality has nothing to disagree with because `{control} == {control}`. Unrefused, `expand` renders two conditions carrying the same label and the same `values`, each handed the same units, and the two condition directories are identical at every artifact on a green run. A **parameter** axis repeating a value (`grid: {analysis.method: [pearson, pearson]}`) has the same shape and is deliberately not refused — but **not because its consequence is milder**: crossed with a group axis it reproduces this outcome exactly. `groups: [{by: arm, levels: [control, treatment]}] × grid: {analysis.method: [pearson, pearson]}` runs to exit 0 with `00_arm=control__method=pearson` and `01_arm=control__method=pearson` identical at every artifact, and the duplicated label bodies carry the *arm* — so they are [selectors](#contrasts-claims-that-arent-condition-vs-baseline), and a contrast naming one resolves silently to the later of the pair with no ambiguity reported. Only the group axis is checked because a group level is a claim about *which units* and a parameter value is not; the parameter-axis duplicate is a known gap, recorded here rather than closed. The axis's *other* route to two identical arms — a `sweep.baseline` fixing one of its levels, which renders that level as the baseline row and as its own product row — is `E-SWEEP-BASELINE-GROUP`; neither code reaches the other's shape | `E-SWEEP-LEVEL-DUPLICATE` |
+@@ -964,20 +966,21 @@ Two levels, and only one leaf, because only one of these is ever a *state* rathe
+ | An [`Estimate`](#estimate-carries-your-interval-without-core-claiming-it) whose `ci95` is not two numbers in ascending order, or whose `value` is not a number | `ContractError` · `E-STEP-ESTIMATE-CI95`, `E-STEP-ESTIMATE-VALUE` |
+ | A [returned value core can't record](#steps-and-artifacts), or any [name collision the record can't hold](#validation) — a derived key against a recorded column, a recorded column against a unit attribute | `ContractError` · `E-STEP-RETURN-TYPE`, `E-STEP-KEY-COLLISION` |
+ | A [`cfg` path](#steps-and-artifacts) the config doesn't hold, or a write through a frozen [`Unit`](#the-unit-list-is-three-operations-and-the-units-in-it-are-frozen) | `ContractError` · `E-STEP-PARAM-UNKNOWN`, `E-UNIT-IMMUTABLE` |
+ | Collapsing [technical replicates](#what-isnt-a-repeat) under a `collapse` rule name that is none of `mean`, `median`, `sum`, `first`, or `mode` | `ContractError` · `E-UNITS-COLLAPSE-RULE` |
+ | Collapsing [technical replicates](#what-isnt-a-repeat) whose `data.units.measurements` block is not a mapping or names no `by`, or under a numeric `collapse` rule over a value that is neither numeric nor a string that parses as one — the second raised as an input table's rows collapse and as a step's `measurement=` rows collapse at the end of its execution, which is the surface `validate` cannot reach, the value being one the step recorded rather than one a declaration named; both are also [reported by `validate`](#errors-validate-reports) under the same codes | `ContractError` · `E-DATA-MEASUREMENTS-INVALID`, `E-DATA-MEASUREMENTS-COLLAPSE-TYPE` |
+ | Collapsing [technical replicates](#what-isnt-a-repeat) of a unit whose rows disagree about the column [`data.units.cluster_by`](#clustered-units), [`data.units.weight_by`](#weighted-samples), or an axis's [`assign.<axis>.from`](#allocation-within-subjects-or-between-subjects) names — the one place the pre-collapse values are in hand, which is why none of the three is a check `validate` makes for itself; all three are also [reported by `validate`](#errors-validate-reports) under the same codes, reaching it through the resolution it performs | `ContractError` · `E-DATA-CLUSTER-VARIES`, `E-DATA-WEIGHT-VARIES`, `E-DATA-ASSIGN-VARIES` |
+ | Resolving [cluster membership](#clustered-units) for a unit that carries no value for the column `data.units.cluster_by` names — when the partition is drawn, when an interval is computed, and wherever `units.clusters_of` is read, that being the single authority both surfaces share, so a roster core cannot group raises rather than inventing a cluster for it; also [reported by `validate`](#errors-validate-reports) under the same code, which is where a run that validates first meets it | `ContractError` · `E-DATA-CLUSTER-UNKNOWN` |
+ | A [drawn arm assignment](#allocation-within-subjects-or-between-subjects) whose realized partition leaves a declared level with no units at all — the same fault, and the same code, [`validate` reports](#errors-validate-reports) for a `ratio` that starves an arm over the resolved roster, raised here for the three draws that pass validate-time: a clustered one, whose empty arm depends on the seed, and a stratified one of either kind — on a declared attribute or on an earlier group axis — which `validate` declines to draw for a reason of its own rather than because the answer would differ. `units.assignment_for` is the single authority, so the run meets it where it draws | `ContractError` · `E-DATA-ASSIGN-LEVELS` |
+ | Resampling a metric a template's [`aggregate`](#templates-where-parameters-are-defined) derived, under a declared [`data.units.cluster_by`](#clustered-units). `percentile_of_derived` draws units; the clustered draw for a *recomputed* metric is a different construction — each replicate drawing whole clusters and rebuilding a unit table from their pooled units, so its row count varies per draw — and it does not exist, so the interval would be narrower than the design supports beside recorded columns that are cluster-robust. **Not a fault `validate` can report**, and the one row here whose absence from that table is the point: `aggregate` is user code core never inspects, and a template overriding it may still return `{}` for a given config, so "derives a metric" has no validate-time meaning and this is the first place core holds the answer as a fact. Contained the way a derived key collision is — the whole `derived` mapping is dropped, the code disclosed through [`W-STATS-AGGREGATE-FAILED`](#warnings-core-reports), and the run keeps its record and its recorded columns — and dropped rather than published with `ci95: null`, that state already meaning "no resample callable, or no seed". Temporary, alongside `E-DATA-CLUSTER-CONTRAST`, which is the same missing construction one level over | `ContractError` · `E-DATA-CLUSTER-DERIVED` |
+ | Computing a [weighted](#weighted-samples) figure — Kish's effective size, or a weighted interval — over a `data.units.weight_by` value that is not a positive finite number, the same `units.usable_weight` predicate `validate` approves the column against, so a weight it cannot use raises here rather than answering a plausible-looking number; also [reported by `validate`](#errors-validate-reports) under the same code, which is where a run that validates first meets it | `ContractError` · `E-DATA-WEIGHT-INVALID` |
++| `stats.percentile_over_units_clustered` given both `strata` and `membership`, where a cluster's units disagree about the stratum they carry — the composition [§ Clustered units](#clustered-units) states, "a stratum must be constant within a cluster", taken again for `resample` rather than invented a second time. Dual-listed the same way `E-DATA-WEIGHT-INVALID` above is: `validate` reports the declaration form of this from the roster, through `units.stratum_varies_within_cluster`, and this is the run-time half, raised because a public function handed both vectors directly cannot silently pick one | `ContractError` · `E-STATS-RESAMPLE-STRATIFY-VARIES` |
+ | A [column](#templates-where-parameters-are-defined) no row of the unit table holds, read off `units` in a template's `aggregate` — reported as [`W-STATS-AGGREGATE-FAILED`](#warnings-core-reports), since `aggregate` runs after every execution has completed and a metric core can't compute never costs a run its record | `ContractError` · `E-STEP-COLUMN-UNKNOWN` |
+ | A [repeat level](#repeat-kinds) whose derived seeds or whose rendered labels are not distinct across its repeats | `ContractError` · `E-REPL-SEED-COLLISION` |
+ | Two [steps](#steps-and-artifacts) in one experiment deriving the same name — including the same step listed twice — or one whose `scope` is not one of the four | `ContractError` · `E-STEP-NAME-COLLISION`, `E-STEP-SCOPE-UNKNOWN` |
+ | A template name claimed twice as a repo's [`templates/`](#templates-where-parameters-are-defined) is discovered and merged — two local registrations of one name, or a local registration of a name core itself registers. One of three load-time raises, beside `E-STEP-NAME-COLLISION`/`E-STEP-SCOPE-UNKNOWN` and `E-TEMPLATE-LOAD`, and dual-surface: every command that resolves a template meets it at load and prints this code, and `validate` [reports it as a finding](#errors-validate-reports) under the same code rather than raising, that table being where its conditions are stated in full. Never raised inside an execution — which template a name means is settled before the first step runs — so it stops the command rather than failing one step | `ContractError` · `E-TEMPLATE-COLLISION` |
+ | A project-local `templates/*.py` fails to load, in any of three shapes: it raises while importing, it imports cleanly but registers nothing, or it registers a class that is not a `BaseTemplate` subclass — [reported for the first such file](#errors-validate-reports) in `discover_local`'s sorted walk, once every file in the directory has been imported. The third of the load-time raises and dual-surface for the same reason `E-TEMPLATE-COLLISION` is: every command resolving a template meets `discover_local` at load. Checked *ahead* of a collision — a collision computed while a file failed to load would be computed over a partial set of claims. Never raised inside an execution, for the same reason `E-TEMPLATE-COLLISION` is not | `ContractError` · `E-TEMPLATE-LOAD` |
+ | [`io.record` or `io.skip`](#the-unit-table-is-the-inference-base) naming a unit the roster does not hold, or naming one this execution has already recorded or skipped — a unit measured with `measurement=` counts as settled for both, in either order, since it arrives by one path or the other and never both, while a second measurement of it is what the argument is for | `ContractError` · `E-STEP-UNIT-UNKNOWN`, `E-STEP-UNIT-SETTLED` |
+ | [`io.record`](#the-importable-surface) given `measurement=` while `data.units.measurements` is undeclared, so there is no rule to collapse the rows under | `ContractError` · `E-STEP-MEASUREMENT-UNDECLARED` |
+ | An [`io` accessor](#step-scope) reached from a scope that does not have it | `ContractError` · `E-STEP-SCOPE-ONLY` |
+ | Indexing [`io.units`](#the-unit-list-is-three-operations-and-the-units-in-it-are-frozen) with anything but a plain integer — a slice, a string, a bool | `ContractError` · `E-STEP-UNITS-CONTRACT` |
+ | [`io.read_condition`](#steps-that-need-every-condition) naming a condition index this run did not resolve, or naming a repeat-scoped step with no `repeat=` to say which copy | `ContractError` · `E-STEP-READ-CONDITION-UNKNOWN`, `E-STEP-READ-REPEAT-REQUIRED` |
+diff --git a/src/publishable/stats.py b/src/publishable/stats.py
+index e7d42b8..c9defba 100644
+--- a/src/publishable/stats.py
++++ b/src/publishable/stats.py
+@@ -632,20 +632,21 @@ def percentile_over_units(
+ 
+ 
+ def percentile_over_units_clustered(
+     values: Sequence[float],
+     keys: Sequence[str],
+     membership: Mapping[str, str],
+     seed: int,
+     draws: int = 2000,
+     confidence: float = 0.95,
+     weights: Sequence[Any] | None = None,
++    strata: Sequence[Any] | None = None,
+ ) -> Interval | None:
+     """A percentile interval that resamples whole CLUSTERS, not rows.
+ 
+     `reference.md` § Clustered units: "`resample` resamples clusters, not rows. A
+     bootstrap that draws 300 cells with replacement from 10 animals produces
+     resamples far more alike than a fresh sample of animals would be, so the
+     percentile interval comes out too narrow… Core draws whole clusters with
+     replacement, so a resampled table has a varying row count, and the interval's
+     effective `n` is the cluster count." § Statistical reporting says the same
+     thing for the contrast forms — "the percentile forms resample whole clusters"
+@@ -710,43 +711,116 @@ def percentile_over_units_clustered(
+     represents" — which moves the draw and says in its reason clause that the two
+     live in different places. A cluster drawn twice contributes its units' weights
+     twice, which is the only reading of "pools their units". `checked_weights`
+     gates once before any grouping, for the reason the unclustered weighted branch
+     states: a bad weight is refused before the draw rather than producing 2000
+     draws' worth of `nan`.
+ 
+     `strict=True` on the zip, for the reason `_weighted_mean` uses it: a
+     keys/values length mismatch is a misaligned cluster vector, and it would
+     produce a plausible number rather than an error.
++
++    **With `strata`, a stratum must be constant within a cluster, and the draw
++    is a cluster drawn within its stratum.** `stratify_by` says what an
++    independent draw is; `cluster_by` says the draw IS a cluster — composed,
++    `reference.md` § Clustered units already requires exactly this constancy
++    for `fold`, `holdout` and `assign`, so this is the same rule taken again
++    rather than a second one invented for `resample`. A cluster carrying two
++    stratum values cannot be dealt to either, being indivisible, and is refused
++    as `E-STATS-RESAMPLE-STRATIFY-VARIES` — `validate` reports the declaration
++    form of the same fault from the roster, through
++    `units.stratum_varies_within_cluster`, and this is the run-time half of
++    that dual listing, the shape `E-DATA-WEIGHT-INVALID` already has: a public
++    function handed a stratum vector and a membership map directly cannot
++    silently pick one over the other. Each stratum then draws exactly as many
++    clusters, with replacement, as it holds — preserving each stratum's own
++    cluster count the way the unstratified draw preserves `G` — and, when every
++    stratum holds fewer than two clusters, no draw can differ from any other:
++    the same "a zero-width 95% interval is not honest" refusal `G < 2` and
++    every-stratum-identical both already give, so this returns `None` too.
+     """
+     if len(values) < 2:
+         return None
+     if draws < min_honest_draws(confidence):
+         return None
+     groups = cluster_count_of(membership, keys)
+     if groups < 2:
+         return None
+     # Unit weights of 1.0 when none were declared, so the pairs have one shape;
+     # the unweighted branch below still computes a plain mean, so this cannot move
+     # an unweighted interval by a digit.
+     carried = [1.0] * len(values) if weights is None else checked_weights(weights)
+     # Grouped BEFORE any sort, indexed rather than `.get`-ed for the reason
+     # `cluster_count_of` states: a key the roster doesn't hold is a core defect,
+     # and a cluster of its own for it would raise `G`.
+     pools: dict[str, list[tuple[float, float]]] = {}
+     for value, key, weight in zip(values, keys, carried, strict=True):
+         pools.setdefault(membership[key], []).append((float(value), weight))
++    # A stratum must be CONSTANT within a cluster, and this is a composition of
++    # two declarations rather than a third rule: `stratify_by` says what an
++    # independent draw is, `cluster_by` says the draw IS a cluster, and a cluster
++    # carrying two stratum values cannot be dealt to either, being indivisible.
++    # § Clustered units already imposes exactly this on `fold`, `holdout` and
++    # `assign`; `validate` reports it from the declaration through
++    # `units.stratum_varies_within_cluster`, and this is the run-time half of the
++    # same dual listing `E-DATA-WEIGHT-INVALID` has — a public function handed
++    # both vectors directly cannot silently pick one of them.
++    cluster_stratum: dict[str, Any] = {}
++    if strata is not None:
++        for key, stratum in zip(keys, strata, strict=True):
++            cluster = membership[key]
++            if cluster in cluster_stratum and cluster_stratum[cluster] != stratum:
++                raise ContractError(
++                    f"cluster {cluster!r} carries stratum values "
++                    f"{cluster_stratum[cluster]!r} and {stratum!r}. A resample draws "
++                    "whole clusters, so a cluster cannot be drawn within one stratum "
++                    "while carrying two; stratify on an attribute that is constant "
++                    "within a cluster, or drop `cluster_by` if the units really are "
++                    "independent",
++                    code="E-STATS-RESAMPLE-STRATIFY-VARIES",
++                )
++            cluster_stratum[cluster] = stratum
+     ordered = sorted(sorted(pool) for pool in pools.values())
+     rng = random.Random(seed)
++    if strata is None:
++        stratum_pools = [ordered]
++    else:
++        # Cluster pools grouped by the stratum their cluster carries, then each
++        # group ordered by its own sorted contents — the same label-independence
++        # the unstratified `ordered` gets, one level up.
++        by_stratum: dict[Any, list[list[tuple[float, float]]]] = {}
++        for cluster, pool in pools.items():
++            by_stratum.setdefault(cluster_stratum[cluster], []).append(sorted(pool))
++        stratum_pools = [sorted(group) for group in by_stratum.values()]
++        stratum_pools.sort()
++        # If every stratum holds fewer than two clusters, no draw can come out
++        # different from any other: each stratum always redraws its one
++        # cluster, so the resampled mean is the same value on every replicate.
++        # That is the same degenerate shape `groups < 2` refuses above, one
++        # level down — a stratum boundary can only ever narrow the pool a
++        # cluster is drawn from, never widen it, so a singleton-everywhere
++        # stratification is strictly more degenerate than the unstratified
++        # draw over the same clusters, which already passed `groups >= 2`.
++        if all(len(group) < 2 for group in stratum_pools):
++            return None
+     means: list[float] = []
+     for _ in range(draws):
+-        drawn = [pair for _ in range(groups) for pair in ordered[rng.randrange(groups)]]
++        # Each stratum contributes exactly as many CLUSTERS as it holds — the
++        # composition of "the draw is a cluster" with "each stratum keeps its
++        # size". With no strata this is one group holding every cluster, which
++        # is the unstratified draw digit for digit.
++        drawn = [
++            pair
++            for group in stratum_pools
++            for _ in range(len(group))
++            for pair in group[rng.randrange(len(group))]
++        ]
+         if weights is None:
+             means.append(sum(v for v, _ in drawn) / len(drawn))
+         else:
+             means.append(_weighted_mean([w for _, w in drawn], [v for v, _ in drawn]))
+     means.sort()
+     lo, hi = _percentile_ranks(draws, confidence)
+     return Interval(
+         low=means[lo], high=means[hi], method="percentile_over_units_clustered"
+     )
+ 
+diff --git a/src/publishable/validate.py b/src/publishable/validate.py
+index 756c904..6f3383a 100644
+--- a/src/publishable/validate.py
++++ b/src/publishable/validate.py
+@@ -5180,20 +5180,46 @@ def _check_resample(doc: dict[str, Any], roster: UnitList | None, c: Collector)
+         if groups is not None and groups < min_clusters:
+             c.warn(
+                 "W-STATS-RESAMPLE-CLUSTERS",
+                 "limits.min_clusters",
+                 f"is {min_clusters}, and `data.units.cluster_by: {cluster_by}` puts this "
+                 f"roster in {groups} clusters — `resample` draws whole clusters, so the "
+                 f"percentile interval rests on {groups} independent draws however many "
+                 "units they hold",
+             )
+ 
++    # The composition rule, from the declarations plus the roster — the same
++    # shape *Fold strata survive clustering* and *Holdout strata survive
++    # clustering* already have, and reusing `units.stratum_varies_within_cluster`
++    # rather than minting a second notion of constancy is the point: a resample
++    # draws whole clusters, so it inherits the rule rather than inventing one.
++    if roster is not None and isinstance(cluster_by, str) and cluster_by:
++        for name in stratum_names(resample.get("stratify_by")):
++            if not isinstance(name, str) or name not in declared:
++                continue  # already refused above
++            try:
++                offender = stratum_varies_within_cluster(roster, cluster_by, name)
++            except ContractError:
++                # A unit with no cluster value (`E-DATA-CLUSTER-UNKNOWN`),
++                # already reported beside this. This module collects.
++                break
++            if offender is not None:
++                cluster, seen = offender
++                c.error(
++                    "E-STATS-RESAMPLE-STRATIFY-VARIES",
++                    "statistics.resample.stratify_by",
++                    f"names `{name}`, which varies within `{cluster_by}` {cluster} — it "
++                    f"carries {', '.join(seen)}. A resample draws whole clusters, so a "
++                    "cluster cannot be drawn within one stratum while carrying two; "
++                    "stratify on an attribute constant within a cluster",
++                )
++
+     # The comparisons-only lower bound. Holm's tightest level is `ALPHA / m` at
+     # rank 1, and a corrected interval is read off the same pool the raw one
+     # was — true of every pool-backed member today; a future construction that
+     # reads a different pool for the corrected number is not this check's to
+     # anticipate — (`stats.interval_at`, which `correction` calls), so a pool
+     # below `min_honest_draws(1 - level)` yields `ci95_corrected: null` with
+     # only `W-STATS-CORRECTED-THIN` at run time to say why. `m` is
+     # `comparisons × metrics` and the metric count is unknowable here BY
+     # DESIGN — `correction.family_shape` derives it from `Member`s built after
+     # the run, out of `io.record` keys and `aggregate`'s return, and core never
+diff --git a/tests/test_stats.py b/tests/test_stats.py
+index 8d893c8..035318c 100644
+--- a/tests/test_stats.py
++++ b/tests/test_stats.py
+@@ -2341,20 +2341,151 @@ def test_the_same_seed_reproduces_the_clustered_percentile():
+         _POOL_VALUES, _POOL_KEYS, _POOL_MEMBERSHIP, seed=7
+     ) == percentile_over_units_clustered(_POOL_VALUES, _POOL_KEYS, _POOL_MEMBERSHIP, seed=7)
+     values = [float(i) for i in range(50)]
+     keys = [f"u{i}" for i in range(50)]
+     membership = {key: f"c{i // 2}" for i, key in enumerate(keys)}
+     assert percentile_over_units_clustered(
+         values, keys, membership, seed=7
+     ) != percentile_over_units_clustered(values, keys, membership, seed=99)
+ 
+ 
++def _clustered_banded() -> tuple[list[float], list[str], dict[str, str], list[str]]:
++    """Six clusters of unequal size across three strata, with disjoint value
++    bands per stratum — so a cluster draw ignoring the strata, a correct
++    stratified cluster draw, and a row-level draw all give different intervals.
++
++    Stratum `low`  : clusters c0 (4 units), c1 (3) — values in [0, 1)
++    Stratum `mid`  : clusters c2 (3), c3 (2)       — values in [10, 11)
++    Stratum `high` : clusters c4 (2), c5 (1)       — values in [100, 101)
++    """
++    values: list[float] = []
++    keys: list[str] = []
++    membership: dict[str, str] = {}
++    strata: list[str] = []
++    plan = [
++        ("c0", "low", 4, 0.0), ("c1", "low", 3, 0.5),
++        ("c2", "mid", 3, 10.0), ("c3", "mid", 2, 10.5),
++        ("c4", "high", 2, 100.0), ("c5", "high", 1, 100.5),
++    ]
++    for cluster, stratum, size, base in plan:
++        for i in range(size):
++            key = f"{cluster}_u{i}"
++            values.append(base + i / 100.0)
++            keys.append(key)
++            membership[key] = cluster
++            strata.append(stratum)
++    return values, keys, membership, strata
++
++
++def test_a_clustered_stratified_draw_takes_clusters_within_strata():
++    """`stratify_by` says what an independent draw is; `cluster_by` says the
++    draw IS a cluster. Composed: two clusters are drawn from each stratum
++    (each stratum holds two), so every replicate carries all three bands and the
++    interval is far narrower than the unstratified cluster draw, where a single
++    replicate can hold six `high` clusters."""
++    values, keys, membership, strata = _clustered_banded()
++    stratified = percentile_over_units_clustered(
++        values, keys, membership, seed=13, draws=2000, strata=strata
++    )
++    plain = percentile_over_units_clustered(values, keys, membership, seed=13, draws=2000)
++    assert stratified is not None and plain is not None
++    assert (stratified.high - stratified.low) < (plain.high - plain.low) / 2.0
++    assert stratified.method == "percentile_over_units_clustered"
++
++
++class _CountingRandom(random.Random):
++    """Wraps `random.Random` to count `randrange` calls, catching a mutation the
++    width-ratio test above cannot. Substituting a constant 1 for `len(group)` in
++    the draw loop still narrows the interval on this fixture — each stratum
++    still contributes one cluster from its own band, and `_clustered_banded`'s
++    extremes are single-cluster values that a one-cluster-per-stratum draw
++    reaches exactly as surely as a two-cluster one, since pooling several
++    picks of the SAME extreme cluster reproduces that cluster's own mean. No
++    interval-shaped assertion on this fixture tells the two apart; the number
++    of clusters actually drawn does."""
++
++    calls = 0
++
++    def randrange(self, *args: object, **kwargs: object) -> int:
++        type(self).calls += 1
++        return super().randrange(*args, **kwargs)  # type: ignore[arg-type]
++
++
++def test_a_clustered_stratified_draw_spends_one_pick_per_cluster_the_stratum_holds(
++    monkeypatch: pytest.MonkeyPatch,
++) -> None:
++    """Structural pin for the composition rule: each of the 2000 replicates must
++    draw exactly as many clusters as the strata hold IN TOTAL — 2 (`low`) + 2
++    (`mid`) + 2 (`high`) = 6 here, the same total `G` the unstratified draw over
++    this same roster uses — not a smaller constant such as one per stratum.
++    `_CountingRandom`'s docstring says why an interval-shaped assertion cannot
++    tell that mutation apart from the correct draw on this fixture."""
++    monkeypatch.setattr("publishable.stats.random.Random", _CountingRandom)
++    values, keys, membership, strata = _clustered_banded()
++    _CountingRandom.calls = 0
++    percentile_over_units_clustered(
++        values, keys, membership, seed=13, draws=2000, strata=strata
++    )
++    assert _CountingRandom.calls == 2000 * 6
++
++
++def test_a_clustered_stratified_draw_refuses_a_stratum_that_varies_within_a_cluster():
++    """A cluster is indivisible, so it cannot be dealt to two strata. The same
++    rule § Clustered units already imposes on `fold`, `holdout` and `assign`,
++    reported under this construction's own code because `stats.py` is handed the
++    two vectors directly and cannot pick one."""
++    values, keys, membership, strata = _clustered_banded()
++    strata[0] = "mid"  # c0_u0 now disagrees with the rest of c0
++    with pytest.raises(ContractError) as exc:
++        percentile_over_units_clustered(
++            values, keys, membership, seed=13, draws=2000, strata=strata
++        )
++    assert exc.value.code == "E-STATS-RESAMPLE-STRATIFY-VARIES"
++    assert "c0" in str(exc.value)
++    # Positive companion: the UNMUTATED vector does not raise, so this cannot
++    # pass by the construction refusing every stratified clustered draw.
++    _, _, _, clean = _clustered_banded()
++    assert percentile_over_units_clustered(
++        values, keys, membership, seed=13, draws=2000, strata=clean
++    ) is not None
++
++
++def test_a_clustered_stratified_draw_refuses_a_zero_width_interval_too():
++    """Each stratum holding fewer than two clusters is the stratified path's own
++    degenerate case, not the unstratified `groups < 2` guard's — three clusters
++    overall passes that guard, but if every stratum owns exactly one of them,
++    each stratum always redraws its single cluster and every replicate is the
++    same multiset. `percentile_over_units`'s own strata branch returns `None`
++    for the analogous all-strata-constant shape (`reference.md` § Statistical
++    reporting: "a zero-width 95% interval is not honest"), and this is the same
++    answer, not a second rule."""
++    values = [0.0, 1.0, 10.0, 11.0, 20.0, 21.0]
++    keys = ["c0_u0", "c0_u1", "c1_u0", "c1_u1", "c2_u0", "c2_u1"]
++    membership = {
++        "c0_u0": "c0", "c0_u1": "c0",
++        "c1_u0": "c1", "c1_u1": "c1",
++        "c2_u0": "c2", "c2_u1": "c2",
++    }
++    one_cluster_each = ["a", "a", "b", "b", "c", "c"]
++    assert percentile_over_units_clustered(
++        values, keys, membership, seed=1, draws=2000, strata=one_cluster_each
++    ) is None
++    # Positive companion: the same roster, but `a` now holds two of the three
++    # clusters — one stratum can vary, so the interval is reportable again,
++    # which is what tells this apart from a construction that refuses every
++    # stratified clustered draw regardless of shape.
++    two_in_one_stratum = ["a", "a", "a", "a", "b", "b"]
++    assert percentile_over_units_clustered(
++        values, keys, membership, seed=1, draws=2000, strata=two_in_one_stratum
++    ) is not None
++
++
+ def test_resample_seed_depends_on_the_digest():
+     assert resample_seed("a") != resample_seed("b")
+     assert resample_seed("a") == resample_seed("a")
+ 
+ 
+ class _FakeRandom:
+     """Replaces `random.Random` so the exact index picked at each draw is known,
+     which pins the rank the low/high formulas select rather than trusting a real
+     RNG's output. With pool `[0.0, 1.0]`, `randrange` returning `(0, 0)` for a draw
+     yields mean 0.0, `(0, 1)` yields 0.5, `(1, 1)` yields 1.0 — so a fixed sequence
+diff --git a/tests/test_validate.py b/tests/test_validate.py
+index ffd7faf..4956d44 100644
+--- a/tests/test_validate.py
++++ b/tests/test_validate.py
+@@ -3518,20 +3518,72 @@ def test_a_resample_stratum_naming_a_real_but_undeclared_column_is_refused(
+                 "statistics": {
+                     "resample": {"method": "bootstrap", "n": 2000,
+                                  "stratify_by": ["extra_col"]}
+                 },
+             }
+         )
+     )
+     assert "E-STATS-RESAMPLE-STRATIFY-UNKNOWN" in found
+ 
+ 
++_VARYING_STRATUM = (
++    "patient_id,animal_id,label\n"
++    "p0,a0,x\np1,a0,y\n"          # animal a0 carries two labels
++    + "".join(f"p{i},a{i},x\n" for i in range(2, 14))
++)
++
++
++def test_a_resample_stratum_varying_within_a_cluster_is_refused(write_config, tmp_path):
++    """The composition rule, checked from the declaration plus the roster the
++    way *Fold strata survive clustering* already is — `validate` reuses
++    `units.stratum_varies_within_cluster` rather than minting a second notion of
++    constancy."""
++    (tmp_path / "input" / "index.csv").write_text(_VARYING_STRATUM)
++    found = codes(
++        write_config(
++            {
++                "data.units": {
++                    "from": "index.csv", "key": "patient_id",
++                    "attributes": ["animal_id", "label"], "cluster_by": "animal_id",
++                },
++                "limits": {"min_clusters": 2},
++                "statistics": {"resample": {"method": "bootstrap", "n": 2000,
++                                            "stratify_by": ["label"]}},
++            }
++        )
++    )
++    assert "E-STATS-RESAMPLE-STRATIFY-VARIES" in found
++
++
++def test_a_constant_stratum_within_clusters_is_accepted(write_config, tmp_path):
++    """Positive companion: the same declaration over a roster where `label` IS
++    constant within each animal is clean, so the check reads the roster rather
++    than refusing the combination."""
++    (tmp_path / "input" / "index.csv").write_text(
++        "patient_id,animal_id,label\n" + "".join(f"p{i},a{i // 2},x\n" for i in range(28))
++    )
++    found = codes(
++        write_config(
++            {
++                "data.units": {
++                    "from": "index.csv", "key": "patient_id",
++                    "attributes": ["animal_id", "label"], "cluster_by": "animal_id",
++                },
++                "limits": {"min_clusters": 2},
++                "statistics": {"resample": {"method": "bootstrap", "n": 2000,
++                                            "stratify_by": ["label"]}},
++            }
++        )
++    )
++    assert "E-STATS-RESAMPLE-STRATIFY-VARIES" not in found
++
++
+ def test_a_bare_string_resample_stratum_is_read_as_one_name(write_config, tmp_path: Path):
+     """`units.stratum_names` reads `stratify_by: site` as one name exactly as
+     `[site]` is — the same normalization the draw balances on. Read as a
+     sequence of characters instead, this would report four findings (`s`, `i`,
+     `t`, `e`) rather than one, which is what the count catches."""
+     _resample_stratum_table(tmp_path)
+     c = Collector()
+     validate_config(
+         write_config(
+             {

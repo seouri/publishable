@@ -1,0 +1,1311 @@
+# Review package: 6718f4c..HEAD
+
+## Commits
+2542b7f test: crosscut the two-axis fixture, and require roster and digest where the draw will arrive
+60c65d4 feat: realize one ArmPlan per axis, once, and pass it to both consumers
+
+## Files changed
+ src/publishable/artifacts.py |  87 +++++++++++--------
+ src/publishable/cli.py       |  94 ++++++++++++++------
+ src/publishable/units.py     | 142 +++++++++++++++++++++++++-----
+ tests/test_artifacts.py      |  30 ++++---
+ tests/test_cli.py            | 200 +++++++++++++++++++++++++++++++++++++------
+ tests/test_units.py          | 147 +++++++++++++++++++++++++++----
+ 6 files changed, 561 insertions(+), 139 deletions(-)
+
+## Diff
+diff --git a/src/publishable/artifacts.py b/src/publishable/artifacts.py
+index dbf7bd5..5e29a80 100644
+--- a/src/publishable/artifacts.py
++++ b/src/publishable/artifacts.py
+@@ -1,32 +1,31 @@
+ # src/publishable/artifacts.py
+ """Scope-aware, atomic, append-only artifacts. docs/reference.md § Steps and artifacts."""
+ 
+ import csv
+ import hashlib
+ import io as _io
+ import json
+ import os
+ import tempfile
+-from collections.abc import Mapping, Sequence
++from collections.abc import Mapping
+ from pathlib import Path
+ from typing import TYPE_CHECKING, Any
+ 
+ import yaml
+ 
+ from publishable.coercion import coerce_scalars
+ from publishable.errors import ArtifactError, ArtifactExistsError, ContractError
+ from publishable.sweep import condition_dir_name
+-from publishable.units import arms_of
+ 
+ if TYPE_CHECKING:
+-    from publishable.units import UnitList
++    from publishable.units import ArmPlan, UnitList
+ 
+ SCOPE_ORDER = {"run": 0, "condition": 1, "repeat": 2, "summary": 3}
+ 
+ 
+ def write_atomic(path: Path, data: bytes) -> None:
+     """Temp file plus rename, so a crash leaves nothing rather than a half-file."""
+     path.parent.mkdir(parents=True, exist_ok=True)
+     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".partial-")
+     try:
+         with os.fdopen(fd, "wb") as fh:
+@@ -163,58 +162,72 @@ READERS = {
+ def _suffix_for(name: str) -> str | None:
+     """The longest registered suffix of the name's last component, lower-cased."""
+     last = name.rsplit("/", 1)[-1].lower()
+     best: str | None = None
+     for suffix in WRITERS:
+         if last.endswith(suffix) and (best is None or len(suffix) > len(best)):
+             best = suffix
+     return best
+ 
+ 
+-def build_allocation_document(
+-    roster: "UnitList", group_axes: Mapping[str, tuple[str, Sequence[str]]]
+-) -> dict[str, Any] | None:
++def build_allocation_document(group_axes: Mapping[str, "ArmPlan"]) -> dict[str, Any] | None:
+     """`allocation.json`'s payload — `reference.md` § `allocation.json` — who
+     went where prints it in full: four top-level keys, `arms`/`seed`/`strata`
+     keyed by axis name, `holdout` sharing the file because both are
+     partitions of one roster drawn once.
+ 
+     Returns `None` when `group_axes` is empty — no arm assignment resolved,
+     matching § The other files a run writes' "present when either is
+     declared": the caller writes nothing in that case rather than an empty
+     file.
+ 
+-    **`arms`** maps each axis to `units.arms_of`'s own partition, restated as
+-    unit keys in roster order — `arms_of` is the single authority task 10
+-    built for arm membership, read here directly rather than reduced through
+-    `units.arm_members` (built for a *condition's* intersection across axes,
+-    the wrong shape for "every level of every axis"), and rather than a
+-    third derivation of membership from the roster. Unit keys, never row
+-    numbers, because a roster that gains a unit renumbers rows and would
+-    silently repoint every membership claim; roster order because `arms_of`
+-    already promises it and re-sorting here would silently contradict a
+-    `blocked` design that reads that order as data (once `blocked` itself is
+-    built).
+-
+-    **`seed` and `strata` are always empty in this build.** This build's
+-    only reachable `assign.method` is `by_attribute` (`E-DATA-ASSIGN-DRAWN`
+-    refuses `random` and `blocked`, the two methods that draw), and
+-    `by_attribute` reads an arm a trial system already assigned rather than
+-    drawing one — recording a `seed` would be a false record of a draw that
+-    never happened, the same fault § Allocation names for a non-empty
+-    `ratio` under `by_attribute`. `assign.stratify_by` names how a draw was
+-    *balanced*; with no draw there is nothing it describes, so the axis is
+-    left out of `strata` for the same reason. Both keys stay present as
+-    empty mappings — `seed`/`strata` are `{}`, not omitted — because the
+-    shape is "keyed by axis name" whether or not any axis qualifies, and an
+-    omitted key would read as "this build never has a seed or strata block
+-    at all" rather than "no axis drew or stratified this run."
++    **This function recomputes nothing — it is handed the plans and records
++    them.** It used to take `(roster, (column, levels))` per axis and call
++    `units.arms_of` a *second* time, after `cli.command_run` had already
++    called it to narrow each condition's roster. Under `by_attribute` that
++    second call is harmless, since reading the same column of the same
++    roster twice gives the same partition. **Under a draw it is not**: a
++    second draw is a second allocation, and "provably identical" is not
++    something two calls can be made to promise — only not calling twice
++    can. So the decision is *compute once and pass*:
++    `cli._resolved_group_axes` realizes one `units.ArmPlan` per axis,
++    `units.arm_members` narrows with those plans, and this function records
++    those same plan objects. The partition the runner ran and the partition
++    `allocation.json` claims are therefore the same object, not two answers
++    that happen to agree. This function takes **no roster** for that reason:
++    with nothing to read membership from, it cannot become a second producer
++    of it.
++
++    **`arms`** maps each axis to its plan's `members`, level → unit keys.
++    Unit keys, never row numbers, because a roster that gains a unit
++    renumbers rows and would silently repoint every membership claim. The
++    order is the plan's own — roster order under `by_attribute`, which
++    `units.arms_of` promises — and is recorded rather than re-sorted here,
++    because a `blocked` design reads that order as data (once `blocked`
++    itself is built).
++
++    **`seed` and `strata` carry whatever the plans realized, which in this
++    build is nothing.** An axis appears under `seed` only when its plan has
++    one, and under `strata` only when its plan's `strata` is non-empty.
++    This build's only reachable `assign.method` is `by_attribute`
++    (`E-DATA-ASSIGN-DRAWN` refuses `random` and `blocked`, the two methods
++    that draw), and `units.assignment_for` realizes `seed=None`,
++    `strata=()` there: `by_attribute` reads an arm a trial system already
++    assigned rather than drawing one, so recording a `seed` would be a false
++    record of a draw that never happened, the same fault § Allocation names
++    for a non-empty `ratio` under `by_attribute`, and `assign.stratify_by`
++    names how a draw was *balanced*, which with no draw describes nothing.
++    Both keys stay present as empty mappings — `seed`/`strata` are `{}`, not
++    omitted — because the shape is "keyed by axis name" whether or not any
++    axis qualifies, and an omitted key would read as "this build never has a
++    seed or strata block at all" rather than "no axis drew or stratified
++    this run."
+ 
+     **`holdout` is never written here.** `E-DATA-HOLDOUT-UNSUPPORTED`
+     refuses every `data.units.holdout` declaration in this build, so there
+     is never a holdout partition to record; the key is omitted entirely
+     rather than written `null`, matching `manifest/input.json`'s own
+     "absent rather than null, so 'not hashed' can't be misread as 'hashed
+     to nothing'" — here, "no holdout key" rather than "a holdout of
+     nothing." H3d adds the key once that refusal lifts.
+ 
+     **This is the file `resume` must read rather than re-draw.**
+@@ -239,25 +252,27 @@ def build_allocation_document(
+     # `group_axes` earlier, before any run directory exists, and
+     # `arm_members` raises `KeyError` the moment a condition selects an axis
+     # or level missing from it (`units.arm_members`'s own docstring: "a
+     # caller passing a condition whose selected axis or level is not in
+     # `axes` ... raises a bare `KeyError`"). So a malformed axis never
+     # reaches this call at all; this gate would need reconsidering only if a
+     # future caller ever invoked `build_allocation_document` without that
+     # upstream call already having succeeded.
+     if not group_axes:
+         return None
+-    arms: dict[str, dict[str, list[str]]] = {}
+-    for axis, (column, levels) in group_axes.items():
+-        partition = arms_of(roster, column, levels)
+-        arms[axis] = {level: [u.key for u in units] for level, units in partition.items()}
+-    return {"seed": {}, "arms": arms, "strata": {}}
++    arms = {
++        axis: {level: list(keys) for level, keys in plan.members.items()}
++        for axis, plan in group_axes.items()
++    }
++    seed = {axis: plan.seed for axis, plan in group_axes.items() if plan.seed is not None}
++    strata = {axis: list(plan.strata) for axis, plan in group_axes.items() if plan.strata}
++    return {"seed": seed, "arms": arms, "strata": strata}
+ 
+ 
+ def allocation_hash(document: dict[str, Any]) -> str:
+     """`provenance.allocation_hash` — a hash of the *document*, not of the file's
+     bytes on disk, the same split `manifest.manifest_hash` makes for the input
+     manifest: canonical JSON (`sort_keys=True`, compact separators) over the
+     same dict `build_allocation_document` returned, which is **not** what
+     `allocation.json` is written as (that call uses `indent=2` and insertion
+     order — `seed`, `arms`, `strata` — for a human reader). The two encodings
+     hash to different digests for the same document. A reader reproducing
+diff --git a/src/publishable/cli.py b/src/publishable/cli.py
+index 705231b..5421e02 100644
+--- a/src/publishable/cli.py
++++ b/src/publishable/cli.py
+@@ -76,23 +76,25 @@ from publishable.sweep import (
+     ablated_paths,
+     condition_dir_name,
+     expand,
+     sample_seed_for,
+     selector_paths,
+     sweep_document,
+ )
+ from publishable.templates.base import BaseTemplate
+ from publishable.templates.registry import get_template
+ from publishable.units import (
++    ArmPlan,
+     Unit,
+     UnitList,
+     arm_members,
++    assignment_for,
+     clusters_of,
+     fold_basis,
+     partition_units,
+     resolve_units,
+     units_hash,
+ )
+ from publishable.uv_support import uv_lock_info
+ from publishable.validate import load_document, validate_config
+ 
+ if TYPE_CHECKING:
+@@ -250,35 +252,68 @@ def _wide_swept_paths(sweep_block: dict[str, Any]) -> set[str]:
+     """
+     selectors = set(selector_paths(sweep_block))
+     return (
+         set(_swept_paths(sweep_block))
+         | set(ablated_paths(sweep_block))
+         | set(sweep_block.get("baseline") or {})
+     ) - selectors
+ 
+ 
+ def _resolved_group_axes(
+-    units_decl: dict[str, Any] | None, sweep_block: dict[str, Any]
+-) -> dict[str, tuple[str, list[str]]]:
+-    """Every `sweep.groups` axis resolved to `(assign.<axis>.from, declared levels)`
+-    — `units.arm_members`'s own input shape — read the same way
+-    `validate._check_assign`'s `by_attribute` branch resolves the pair: the
+-    declared `from` if it is a non-empty string, else the axis name itself.
++    units_decl: dict[str, Any] | None,
++    sweep_block: dict[str, Any],
++    roster: "UnitList | None",
++    digest: str,
++    clusters: dict[str, str] | None = None,
++) -> dict[str, ArmPlan]:
++    """Every `sweep.groups` axis **realized** — one `units.ArmPlan` per axis,
++    `units.arm_members`'s own input shape and `artifacts.build_allocation_document`'s.
++
++    This function resolves the *declaration* (which axes exist, and which
++    levels each declares) and hands each axis to `units.assignment_for`,
++    which is the single producer of a plan and which owns the resolution of
++    `assign.<axis>.from` against its default — the declared `from` if it is a
++    non-empty string, else the axis name itself. That resolution used to live
++    here as well as there; two resolutions of one declaration is a smaller
++    instance of the defect this slice closes, so there is now exactly one.
++
++    Realized **once per run**, and the result is what both `units.arm_members`
++    and `artifacts.build_allocation_document` are handed — neither recomputes
++    it. Under `by_attribute` a recomputation would agree; under a draw a second
++    call is a second allocation, so the plan is computed once and passed.
++
++    `roster` and `digest` are required rather than defaulted, `clusters` is
++    not: `digest` is unread on the `by_attribute` path today and task 8
++    threads it into `units.assign_seed_for`, so a defaulted one would become
++    a draw silently seeded from the empty string with every test still green
++    — exactly the class of silent-wrong-under-a-draw this seam exists to
++    close, sitting in the signature the draw will arrive through.
++
++    Returns `{}` when `roster is None`: an allocation is a partition of a
++    resolved roster, and there is nothing to partition without one. That is
++    the same gate `command_run` already applied before calling
++    `units.arm_members`, kept here rather than moved, so a design with no
++    `data.units` block still reaches `execute_plan` with no arm narrowing at
++    all rather than raising.
+ 
+     Skips an axis whose `levels` does not resolve to a non-empty list of
+     strings, matching `_check_assign`'s own skip for that shape — `sweep.groups`'s
+     own shape check is `validate`'s to report, or not report at all in this
+     build, and inventing a second notion of "resolved" here would not change
+-    that. A malformed `assign` block (absent, non-mapping, or naming a method
+-    other than `by_attribute`) resolves the axis to its own name, the same
+-    default `_check_assign` falls back to before its own checks on the block
+-    would have already reported the malformation as a finding.
++    that. A malformed `assign` block (absent, non-mapping, or naming no
++    method) reaches `assignment_for` as-is and takes its `by_attribute` path,
++    the same default `_check_assign` falls back to before its own checks on
++    the block would have already reported the malformation as a finding; a
++    block naming `random` or `blocked` raises `NotImplementedError` from
++    there, the explicit hole tasks 8 and 10 fill, unreachable through
++    `command_run` because `validate` refuses both as `E-DATA-ASSIGN-DRAWN`
++    and returns first.
+ 
+     **That skip is narrower than `sweep.selector_paths`'s own idea of "a group
+     axis exists"**, and the caller must not gate on this function's own
+     truthiness for that reason: `selector_paths` — the same function `expand`
+     uses to decide which paths are group cells — accepts a `levels` list of any
+     element type, so a config with e.g. `levels: [1, 2]` still expands into
+     conditions carrying `Condition.selectors == {"that axis"}`, while this
+     function silently omits the axis from its result. `command_run` gates
+     calling `units.arm_members` on `selector_paths(sweep_block)`, not on this
+     function's result, exactly so that disagreement surfaces as `arm_members`'s
+@@ -287,47 +322,46 @@ def _resolved_group_axes(
+     axis.
+ 
+     Reachable from `command_run` now that task 17 retired
+     `E-SWEEP-GROUPS-UNSUPPORTED`: `tests/test_cli.py`'s
+     `test_a_group_axis_actually_narrows_end_to_end` and
+     `test_allocation_json_is_written_with_exact_arm_keys_when_declared` reach
+     this line for real, through a passing `command_run`, the same way
+     `_wide_swept_paths` above is now reachable for the selector-path
+     subtraction it depends on.
+     """
++    if roster is None:
++        return {}
+     assign = (units_decl or {}).get("assign")
+     blocks = assign if isinstance(assign, dict) else {}
+-    axes: dict[str, tuple[str, list[str]]] = {}
++    axes: dict[str, ArmPlan] = {}
+     for entry in sweep_block.get("groups") or []:
+         if not isinstance(entry, dict):
+             continue
+         axis = entry.get("by")
+         if not isinstance(axis, str) or not axis:
+             continue
+         levels = entry.get("levels")
+         if not (
+             isinstance(levels, list) and levels and all(isinstance(v, str) for v in levels)
+         ):
+             continue
+         block = blocks.get(axis)
+-        # Gated on `method == "by_attribute"`, matching `_check_assign`'s own
+-        # elif chain and `units._assign_constant_columns`'s own gate for the
+-        # same reason: `from` "means nothing" under `random`/`blocked` or an
+-        # absent/out-of-enum method, each already refused at `validate` before
+-        # this line is ever reached (`E-DATA-ASSIGN-DRAWN`/`E-DATA-ASSIGN-METHOD`).
+-        declared_from = (
+-            block.get("from")
+-            if isinstance(block, dict) and block.get("method") == "by_attribute"
+-            else None
++        # The whole block, not a `from` this function resolved: `assignment_for`
++        # dispatches on `method` and resolves `from` on the branch where `from`
++        # means anything at all, which is where the gate this call site used to
++        # apply now lives. `from` "means nothing" under `random`/`blocked` for
++        # the reason `units._assign_constant_columns` states, and neither method
++        # reads a column there — it raises.
++        axes[axis] = assignment_for(
++            roster, axis, block if isinstance(block, dict) else None, levels, digest, clusters
+         )
+-        column = declared_from if isinstance(declared_from, str) and declared_from else axis
+-        axes[axis] = (column, levels)
+     return axes
+ 
+ 
+ def _cond_roster(
+     roster: "UnitList",
+     cond_index: int,
+     arm_members_map: "dict[int, frozenset[str]] | None",
+ ) -> "UnitList":
+     """The units condition `cond_index` counts against — its own arm's subset
+     of the shared roster when a group axis selects one, and the whole roster
+@@ -1160,23 +1194,23 @@ def command_run(config_path: Path) -> int:
+     # `isinstance(by, str)` accepts it, so `selector_paths` names `""` an axis
+     # and `expand` renders conditions under it (`Condition.selectors == {""}`,
+     # labels `=a`/`=b`), but this function's own `not axis` check (an empty
+     # string is falsy) skips it — every condition on that axis would then get
+     # the whole roster, exactly the outcome two declared arms exist to make
+     # impossible. Gating on `selector_paths` instead means `arm_members` is
+     # still called whenever `expand` treated the config as having a group axis,
+     # so a resolution gap surfaces as `arm_members`'s own `KeyError` — a
+     # caller-disagreement bug to see, not a config to silently accept — rather
+     # than as a silently unnarrowed run.
+-    group_axes = _resolved_group_axes(units_decl, sweep_block)
++    group_axes = _resolved_group_axes(units_decl, sweep_block, roster, digest, clusters)
+     arm_members_map = (
+-        arm_members(roster, group_axes, conditions)
++        arm_members(group_axes, conditions)
+         if selector_paths(sweep_block) and roster is not None
+         else None
+     )
+     plan = build_plan(  # phase 4
+         experiment,
+         conditions=[(c.index, c.label) for c in conditions],
+         repeat_labels=labels,
+     )
+     cfgs: dict[int, Config] = {
+         # The whole `Condition`, not `dict(c.values)`: a group cell's path names
+@@ -1261,21 +1295,31 @@ def command_run(config_path: Path) -> int:
+             )
+         )
+ 
+         # `allocation.json` — settled beside `sweep.yaml`, before the first
+         # execution and never touched again, per § The other files a run
+         # writes: both are partitions of one roster drawn once. `None` when
+         # `group_axes` is empty — no arm assignment resolved for this run —
+         # matching "present when either [an arm assignment or a holdout] is
+         # declared"; `holdout` is never in this build's document at all
+         # (`E-DATA-HOLDOUT-UNSUPPORTED` refuses every declaration of it).
+-        alloc_doc = build_allocation_document(roster, group_axes) if roster is not None else None
++        #
++        # `group_axes` — the same object `arm_members` narrowed every
++        # condition's roster with above, not a second resolution of the same
++        # declaration. `build_allocation_document` used to be handed the roster
++        # and re-derive the partition through `arms_of`; under a drawn method
++        # that second derivation is a second draw, so the plans are realized
++        # once (`_resolved_group_axes`) and recorded as realized. No roster
++        # guard is needed here either: `_resolved_group_axes` already returns
++        # `{}` when none resolved, and the empty mapping is what makes this
++        # `None`.
++        alloc_doc = build_allocation_document(group_axes)
+         alloc_hash: str | None = None
+         if alloc_doc is not None:
+             (run_dir / "allocation.json").write_text(json.dumps(alloc_doc, indent=2))
+             alloc_hash = allocation_hash(alloc_doc)
+ 
+         results = execute_plan(  # phase 7
+             plan=plan,
+             run_dir=run_dir,
+             input_dir=input_dir,
+             cfgs=cfgs,
+diff --git a/src/publishable/units.py b/src/publishable/units.py
+index 121ce35..2938192 100644
+--- a/src/publishable/units.py
++++ b/src/publishable/units.py
+@@ -953,75 +953,173 @@ def arms_of(roster: UnitList, column: str, levels: Sequence[str]) -> dict[str, l
+         raise ContractError(
+             f"the arm attribute {column!r} does not resolve to the declared levels "
+             f"— no unit's value names {', '.join(empty)}. Every declared level "
+             "needs at least one unit, or that arm's condition resolves zero of "
+             "them",
+             code="E-DATA-ASSIGN-LEVELS",
+         )
+     return partition
+ 
+ 
+-def arm_members(
++@dataclass(frozen=True)
++class ArmPlan:
++    """One axis's **realized** membership: level → unit keys, in roster order.
++
++    The shape a drawn allocation and a read one both fit, and the reason this
++    type exists at all: `arms_of` reads an arm out of a *column*, and a drawn
++    axis (`method: random`, `method: blocked`) has no column to read. A caller
++    holding `(column, levels)` — `arm_members`' old input shape — cannot
++    express a draw, so the draw would have had to happen somewhere else, and
++    "somewhere else" is a second producer of arm membership: the
++    validate-clean-then-disagree gap `arms_of`'s own docstring is written to
++    prevent a third instance of. `assignment_for` below is the one producer,
++    and this is what it produces.
++
++    - `levels` is the axis's declared `sweep.groups` levels, in declared
++      order, and every one of them is a key of `members`.
++    - `members` maps each level to that arm's unit keys. **In roster order
++      under `by_attribute`**; under a draw, in whatever order the draw
++      realized — `artifacts.build_allocation_document` records the order it
++      is given rather than re-sorting, because a `blocked` design reads that
++      order as data.
++    - `seed` is the seed the draw was realized with (`units.assign_seed_for`),
++      and is `None` under `by_attribute` — a method that reads an arm a trial
++      system already assigned rather than drawing one, so recording a seed
++      would be a false record of a draw that never happened.
++    - `strata` is the realized `assign.<axis>.stratify_by`, empty under
++      `by_attribute` for the same reason: `stratify_by` names how a draw was
++      *balanced*, and with no draw there is nothing it describes.
++
++    `frozen=True` blocks rebinding an attribute; it does **not** deep-freeze
++    `members`, whose values are tuples but whose mapping a determined caller
++    can still mutate in place if it is handed a `dict`. Treat it as read-only
++    — nothing in core writes through it — rather than as a guarantee this type
++    enforces.
++    """
++
++    levels: tuple[str, ...]
++    members: Mapping[str, tuple[str, ...]]
++    seed: int | None
++    strata: tuple[str, ...]
++
++
++def assignment_for(
+     roster: UnitList,
+-    axes: Mapping[str, tuple[str, Sequence[str]]],
++    axis: str,
++    block: Mapping[str, Any] | None,
++    levels: Sequence[str],
++    digest: str,
++    clusters: Mapping[str, str] | None = None,
++) -> ArmPlan:
++    """One axis's allocation, realized — **the single producer** of an `ArmPlan`,
++    and the seam this whole slice turns on.
++
++    A **pure function of its arguments**, deliberately: `validate` has to ask
++    "which units are in this arm" of the same declaration `cli.command_run`
++    asks it of (the cell and stratum checks), so the draw cannot live in the
++    runner. Two callers, one answer, computed the same way from the same
++    inputs — the property that makes a `between` design `validate` approved
++    one core can actually build.
++
++    Dispatches on `block["method"]`, `reference.md` § Allocation's own enum:
++
++    - `by_attribute` (and an absent, non-mapping, or method-less block, which
++      `validate._check_assign` falls back to the same way) reads the arm out
++      of a column, through `arms_of` **unchanged** — that function stays the
++      authority for a column-read partition and this one does not re-derive
++      it. `from` is resolved here, once: the declared `from` when it is a
++      non-empty string, else the axis name.
++    - `random` and `blocked` raise `NotImplementedError` until tasks 8 and 10
++      build them. An explicit hole, not a silent fallback to reading a column
++      that need not exist: a drawn axis's units carry no arm attribute, so a
++      fallback would either raise `E-DATA-ASSIGN-LEVELS` about a column
++      nobody declared or, worse, partition on an unrelated one.
++    - Any other `method` string takes the `by_attribute` path rather than a
++      fourth behaviour: `validate` refuses an out-of-enum method outright
++      (`E-DATA-ASSIGN-METHOD`) before `run` reaches this, and the two methods
++      that *draw* are named explicitly above, so no drawing method can reach
++      a column read by falling through.
++
++    `digest` and `clusters` are unread on the `by_attribute` path and are
++    parameters anyway: they are what tasks 8 and 10 draw with —
++    `assign_seed_for(block, axis, digest, roster)` for the seed, `clusters`
++    because a cluster is indivisible and a draw must allocate whole clusters
++    — and a caller that already has to hold them cannot then be told the
++    signature changed under it.
++    """
++    method = block.get("method") if isinstance(block, Mapping) else None
++    if method in ("random", "blocked"):
++        raise NotImplementedError(
++            f"`data.units.assign.{axis}.method: {method}` draws its allocation, and this "
++            "build does not draw one yet (`validate` refuses it as `E-DATA-ASSIGN-DRAWN`)"
++        )
++    declared_from = block.get("from") if isinstance(block, Mapping) else None
++    column = declared_from if isinstance(declared_from, str) and declared_from else axis
++    partition = arms_of(roster, column, levels)
++    return ArmPlan(
++        levels=tuple(levels),
++        members={level: tuple(u.key for u in units) for level, units in partition.items()},
++        seed=None,
++        strata=(),
++    )
++
++
++def arm_members(
++    axes: Mapping[str, ArmPlan],
+     conditions: "Sequence[Any]",
+ ) -> dict[int, frozenset[str]]:
+-    """Which units each resolved condition's own arm holds, one call into
+-    `arms_of` per declared group axis rather than one per condition — the
+-    reduction the runner's subset view is built from, so a condition on a group
+-    axis is handed a real subset of the shared roster and not a second
+-    resolution of it.
+-
+-    `axes` maps a group axis name to `(the resolved `assign.<axis>.from`
+-    attribute, that axis's declared `sweep.groups` levels)` — the caller's own
+-    resolution of the declaration, mirroring `validate._check_assign`'s. This
+-    function's job is narrower than that resolution: it calls `arms_of` — **the
+-    single authority** for a single axis's partition — exactly once per axis in
+-    `axes`, and then reduces that partition across every axis a condition
+-    selects, never deriving membership from the roster a second time by any
+-    other route.
++    """Which units each resolved condition's own arm holds — the reduction the
++    runner's subset view is built from, so a condition on a group axis is
++    handed a real subset of the shared roster and not a second resolution of
++    it.
++
++    `axes` maps a group axis name to that axis's realized `ArmPlan`, one plan
++    per declared axis, produced by `assignment_for` — **not** a roster and a
++    column. This function takes no roster at all, and that absence is the
++    point: with nothing to read membership *from*, no future edit here can
++    quietly become the second producer of it. Its whole job is to intersect
++    plans across the axes a condition selects.
+ 
+     `conditions` is an iterable of objects carrying `.index`, `.values` and
+     `.selectors` — `sweep.Condition`'s own shape, read structurally rather than
+     imported, since `sweep.py` and `units.py` share no dependency edge today and
+     a caller building a lightweight stand-in for a test loses nothing by it.
+     `.selectors` names which of `.values`' paths are group cells; a condition
+     selecting more than one axis gets the *intersection* of each axis's arm —
+     § Validation's `sex × arm` cell — and a condition selecting none is absent
+     from the returned mapping entirely, rather than mapped to the whole roster,
+-    since "no arm" and "every unit" are different claims and only `arms_of`
+-    itself is the authority for which units a real arm holds.
++    since "no arm" and "every unit" are different claims and only the plan
++    itself says which units a real arm holds.
+ 
+     A caller passing a condition whose selected axis or level is not in `axes`
+     — an inconsistency between the two arguments — raises a bare `KeyError`
+     rather than falling back to the whole roster: `axes` is meant to cover
+     every axis every condition selects, built from the same declarations that
+     built the conditions, so a gap here is the caller's own bug to see rather
+     than one this function should absorb by handing back units nothing
+     verified.
+     """
+-    partitions = {axis: arms_of(roster, column, levels) for axis, (column, levels) in axes.items()}
+     result: dict[int, frozenset[str]] = {}
+     for condition in conditions:
+         if not condition.selectors:
+             continue
+         members: set[str] | None = None
+-        # `partitions[axis]`, not `.get`, and `[level]`, not `.get`: `axes` is
++        # `axes[axis]`, not `.get`, and `.members[level]`, not `.get`: `axes` is
+         # meant to cover every axis every condition selects, so a selected axis
+-        # missing from it — or a level `arms_of` didn't partition — is the two
++        # missing from it — or a level the plan didn't realize — is the two
+         # arguments disagreeing, a caller bug this function must not paper over
+         # by silently dropping the axis from the intersection (which would hand
+         # back a *larger*, wrong arm) or the condition from the result (which
+         # would hand its execution the whole roster, one level up).
+         for axis in condition.selectors:
+             level = condition.values[axis]
+-            keys = {u.key for u in partitions[axis][level]}
++            keys = set(axes[axis].members[level])
+             members = keys if members is None else members & keys
+         result[condition.index] = frozenset(members or set())
+     return result
+ 
+ 
+ def cluster_count_of(membership: Mapping[str, str], keys: Iterable[str]) -> int:
+     """How many distinct clusters a given set of unit keys falls in.
+ 
+     The counting expression, in one place. `cluster_count` below is the whole
+     roster's answer and this is the same question asked of a SUBSET — the units a
+diff --git a/tests/test_artifacts.py b/tests/test_artifacts.py
+index 084d3e3..03ac193 100644
+--- a/tests/test_artifacts.py
++++ b/tests/test_artifacts.py
+@@ -1,21 +1,21 @@
+ # tests/test_artifacts.py
+ import json
+ from pathlib import Path
+ from typing import Any
+ 
+ import numpy as np
+ import pytest
+ 
+ from publishable import ArtifactError, ArtifactExistsError, ContractError
+ from publishable.artifacts import StepIO, allocation_hash, build_allocation_document, write_atomic
+-from publishable.units import Unit, UnitList
++from publishable.units import Unit, UnitList, assignment_for
+ 
+ 
+ def _u(key: str) -> Unit:
+     return Unit(key=key)
+ 
+ 
+ @pytest.fixture
+ def io(tmp_path: Path) -> StepIO:
+     step_dir = tmp_path / "run" / "shared" / "step01"
+     step_dir.mkdir(parents=True)
+@@ -1249,63 +1249,72 @@ def _mixed_arm_roster():
+     treatment list — so a test reading `arms_of`'s output back can tell
+     "the order `arms_of` resolved units in" from "sorted," which a
+     same-length, same-membership check could not."""
+     control_keys = ["c3", "c0", "c2", "c1"]
+     treatment_keys = ["t5", "t1", "t8", "t0", "t3", "t7", "t2", "t6", "t4"]
+     units = [Unit(key=k, attributes={"arm": "control"}) for k in control_keys]
+     units += [Unit(key=k, attributes={"arm": "treatment"}) for k in treatment_keys]
+     return UnitList(units), control_keys, treatment_keys
+ 
+ 
++def _plans_for(roster):
++    """The one `arm` axis of `_mixed_arm_roster`, realized through
++    `units.assignment_for` — the single producer of an `ArmPlan`, and the only
++    route by which membership reaches `build_allocation_document` now that it
++    takes no roster and derives nothing. `block=None` takes `assignment_for`'s
++    `by_attribute` path and resolves the column to the axis name, which is
++    what this fixture's units carry."""
++    return {"arm": assignment_for(roster, "arm", None, ["control", "treatment"], "digest")}
++
++
+ def test_build_allocation_document_returns_none_with_no_group_axes():
+     """`group_axes` empty — no arm assignment resolved for this run — is the
+     absent half of 'present when either is declared', and `command_run` reads
+     `None` here as "write nothing.\""""
+-    roster, _, _ = _mixed_arm_roster()
+-    assert build_allocation_document(roster, {}) is None
++    assert build_allocation_document({}) is None
+ 
+ 
+ def test_build_allocation_document_maps_axis_to_level_to_unit_keys_in_roster_order():
+     """The mutation the brief names: writing row indices rather than keys must
+     fail THIS assertion, not merely a length check — `["c3", "c0", "c2",
+     "c1"]` and `[0, 1, 2, 3]` are both length 4, so only the exact key
+     strings, in `arms_of`'s own resolved order, discriminate. `seed` and
+     `strata` are asserted `{}` — the addendum's finding that a writer
+     emitting a seed under `by_attribute` (nothing was drawn) looks correct
+     against a fixture nobody checked the seed of — and `holdout` is asserted
+     absent, since this build never declares one."""
+     roster, control_keys, treatment_keys = _mixed_arm_roster()
+-    group_axes = {"arm": ("arm", ["control", "treatment"])}
++    group_axes = _plans_for(roster)
+ 
+-    doc = build_allocation_document(roster, group_axes)
++    doc = build_allocation_document(group_axes)
+ 
+     assert doc is not None
+     assert set(doc.keys()) == {"seed", "arms", "strata"}
+     assert doc["arms"] == {"arm": {"control": control_keys, "treatment": treatment_keys}}
+     assert doc["seed"] == {}
+     assert "arm" not in doc["seed"]
+     assert doc["strata"] == {}
+     assert "arm" not in doc["strata"]
+     assert "holdout" not in doc
+ 
+ 
+ def test_allocation_hash_is_deterministic_and_content_sensitive():
+     """Mirrors `manifest.manifest_hash`'s own contract: same document, same
+     hash; a document that differs by one unit key hashes differently — the
+     property `provenance.allocation_hash` rests on to say a copy edited
+     after the run no longer matches what that run reported."""
+     roster, _, _ = _mixed_arm_roster()
+-    group_axes = {"arm": ("arm", ["control", "treatment"])}
+-    doc = build_allocation_document(roster, group_axes)
++    group_axes = _plans_for(roster)
++    doc = build_allocation_document(group_axes)
+ 
+     h1 = allocation_hash(doc)
+-    h2 = allocation_hash(build_allocation_document(roster, group_axes))
++    h2 = allocation_hash(build_allocation_document(group_axes))
+     assert h1 == h2
+     assert h1.startswith("sha256:")
+ 
+     mutated = json.loads(json.dumps(doc))
+     mutated["arms"]["arm"]["control"][0] = "c9"
+     assert allocation_hash(mutated) != h1
+ 
+ 
+ def test_allocation_hash_changes_when_two_units_swap_arms_and_nothing_else_moves():
+     """The discriminating form task 15's addendum asked for, in place of the
+@@ -1329,22 +1338,21 @@ def test_allocation_hash_changes_when_two_units_swap_arms_and_nothing_else_moves
+     fixture the unswapped document hashes to
+     `sha256:bf077b6dceea21f680dc12c7b050f04af5ee405be7326afe81c920c3e605d7d6`
+     and the swapped one to
+     `sha256:74e5df039ba6eaaca52d561a0e4bd04a4d1fa7334c4f4bdc2f42ec6ea069981d`
+     (both recomputed directly against this build, not carried over from
+     memory) — two different digests for a roster whose 13 keys, per-arm
+     counts, and multiset of `arm` values are all unchanged; only which key
+     sits in which arm moved.
+     """
+     roster, control_keys, treatment_keys = _mixed_arm_roster()
+-    group_axes = {"arm": ("arm", ["control", "treatment"])}
+-    doc = build_allocation_document(roster, group_axes)
++    doc = build_allocation_document(_plans_for(roster))
+     h1 = allocation_hash(doc)
+     assert h1 == "sha256:bf077b6dceea21f680dc12c7b050f04af5ee405be7326afe81c920c3e605d7d6"
+ 
+     swapped_units = []
+     for unit in roster:
+         if unit.key == "c0":
+             swapped_units.append(Unit(key=unit.key, attributes={"arm": "treatment"}))
+         elif unit.key == "t0":
+             swapped_units.append(Unit(key=unit.key, attributes={"arm": "control"}))
+         else:
+@@ -1352,17 +1360,17 @@ def test_allocation_hash_changes_when_two_units_swap_arms_and_nothing_else_moves
+     swapped_roster = UnitList(swapped_units)
+ 
+     swapped_control = {*control_keys, "t0"} - {"c0"}
+     swapped_treatment = {*treatment_keys, "c0"} - {"t0"}
+     # Same per-arm sizes, same combined key set, same multiset of `arm`
+     # values — only membership moved.
+     assert len(swapped_control) == len(control_keys) == 4
+     assert len(swapped_treatment) == len(treatment_keys) == 9
+     assert swapped_control | swapped_treatment == set(control_keys) | set(treatment_keys)
+ 
+-    swapped_doc = build_allocation_document(swapped_roster, group_axes)
++    swapped_doc = build_allocation_document(_plans_for(swapped_roster))
+     h2 = allocation_hash(swapped_doc)
+ 
+     assert set(swapped_doc["arms"]["arm"]["control"]) == swapped_control
+     assert set(swapped_doc["arms"]["arm"]["treatment"]) == swapped_treatment
+     assert h2 == "sha256:74e5df039ba6eaaca52d561a0e4bd04a4d1fa7334c4f4bdc2f42ec6ea069981d"
+     assert h2 != h1
+diff --git a/tests/test_cli.py b/tests/test_cli.py
+index d29a94e..7254805 100644
+--- a/tests/test_cli.py
++++ b/tests/test_cli.py
+@@ -402,63 +402,121 @@ def test_a_group_path_gets_no_swept_away_marker():
+     }
+     # `analysis.min_samples` is the control that must report: a baseline-only
+     # parameter path, on the same term of the union the group path arrives by,
+     # so a subtraction that took the whole `baseline` would fail here.
+     assert _wide_swept_paths(block) == {"analysis.method", "analysis.min_samples"}
+     # And with no `groups` declared, a baseline path named `arm` is an ordinary
+     # parameter the wide config must still mark.
+     assert _wide_swept_paths({"baseline": {"arm": "control"}}) == {"arm"}
+ 
+ 
+-def test_resolved_group_axes_defaults_from_and_skips_unresolvable_levels():
+-    """`_resolved_group_axes` is `command_run`'s own resolution of `assign.<axis>.from`
+-    against its default — the axis name — mirroring `validate._check_assign`'s
+-    `by_attribute` branch, and `units.arm_members`'s own input shape.
++def _levels_roster():
++    """8 `control`, 3 `treatment`, 11 total — `tests/test_cli.py`'s own arm
++    sizes, distinct from `_arm_roster12`'s 7/5 and `test_artifacts.py`'s 4/9.
++
++    `cohort` **crosscuts** `arm_column` rather than tracking it: 5 of the 8
++    controls are `derivation` and 3 are `validation`, and the 3 treatments run
++    the other way (1 `derivation`, 2 `validation`). Two axes that partitioned
++    the roster identically could not tell "read the `cohort` column" from
++    "read whatever column the other axis resolved," and crosstalk between the
++    two resolutions would pass unseen — the coinciding-properties fixture
++    fault this project has already been bitten by. `arm_column` rather than
++    `arm`, so a `from` that resolved to the axis name instead of the
++    declaration would fail to partition at all."""
++    from publishable.units import Unit, UnitList
++
++    control_cohorts = ["derivation"] * 5 + ["validation"] * 3
++    treatment_cohorts = ["derivation", "validation", "validation"]
++    control = [
++        Unit(key=f"c{i}", attributes={"arm_column": "control", "cohort": cohort})
++        for i, cohort in enumerate(control_cohorts)
++    ]
++    treatment = [
++        Unit(key=f"t{i}", attributes={"arm_column": "treatment", "cohort": cohort})
++        for i, cohort in enumerate(treatment_cohorts)
++    ]
++    return UnitList(control + treatment)
++
++
++def test_resolved_group_axes_realizes_a_plan_per_axis_and_skips_unresolvable_levels():
++    """`_resolved_group_axes` is `command_run`'s own realization of every
++    declared group axis — one `units.ArmPlan` each, the shape both
++    `units.arm_members` and `artifacts.build_allocation_document` are handed.
++
++    The `from` default is resolved by `units.assignment_for`, not here, and
++    this test discriminates the two: `arm` declares `from: arm_column` while
++    `cohort` declares no block at all and must fall back to its own axis
++    name. Membership keys are written out literally rather than re-derived
++    from the fixture, so a wrongly recomputed partition cannot satisfy them.
+ 
+     A focused unit test on the function itself, for the reason
+     `test_a_group_path_gets_no_swept_away_marker` above states: it pins the
+-    exact resolved `(column, levels)` pair per axis, including the
+-    skipped-rather-than-defaulted `unresolvable` axis, more directly than an
+-    end-to-end run's aggregated output would."""
++    exact realized plan per axis, including the skipped-rather-than-realized
++    `unresolvable` axis, more directly than an end-to-end run's aggregated
++    output would."""
+     sweep_block = {
+         "groups": [
+             {"by": "arm", "levels": ["control", "treatment"]},
+             {"by": "cohort", "levels": ["derivation", "validation"]},
+-            {"by": "unresolvable"},  # no `levels` at all — skipped, not defaulted
++            {"by": "unresolvable"},  # no `levels` at all — skipped, not realized
+         ],
+     }
+     units_decl = {
+         "assign": {
+             "arm": {"method": "by_attribute", "from": "arm_column"},
+             # `cohort` has no block at all: defaults to the axis name.
+         },
+     }
+-    assert _resolved_group_axes(units_decl, sweep_block) == {
+-        "arm": ("arm_column", ["control", "treatment"]),
+-        "cohort": ("cohort", ["derivation", "validation"]),
+-    }
++    roster = _levels_roster()
++    plans = _resolved_group_axes(units_decl, sweep_block, roster, "digest", None)
++
++    assert set(plans) == {"arm", "cohort"}
++    assert plans["arm"].levels == ("control", "treatment")
++    assert plans["arm"].members["control"] == ("c0", "c1", "c2", "c3", "c4", "c5", "c6", "c7")
++    assert plans["arm"].members["treatment"] == ("t0", "t1", "t2")
++    assert plans["cohort"].levels == ("derivation", "validation")
++    # Crosscutting, so all four member tuples differ: neither axis's answer
++    # could have come from the other's column.
++    assert plans["cohort"].members["derivation"] == ("c0", "c1", "c2", "c3", "c4", "t0")
++    assert plans["cohort"].members["validation"] == ("c5", "c6", "c7", "t1", "t2")
++    assert all(p.seed is None and p.strata == () for p in plans.values())
+ 
+ 
+ def test_resolved_group_axes_is_empty_with_no_groups_declared():
+-    assert _resolved_group_axes({"assign": {"arm": {"from": "x"}}}, {}) == {}
++    assert _resolved_group_axes({"assign": {"arm": {"from": "x"}}}, {}, _levels_roster(), "d") == {}
+ 
+ 
+-def test_resolved_group_axes_ignores_from_under_a_non_by_attribute_method():
+-    """`from` "means nothing" under `random`/`blocked` — the same gate
+-    `units._assign_constant_columns` applies and for the same reason: neither
+-    method is executable (`E-DATA-ASSIGN-DRAWN`), so reading `from` under one
+-    would resolve a column no method here actually consults."""
++def test_resolved_group_axes_is_empty_with_no_roster_to_partition():
++    """An allocation is a partition of a resolved roster, and a design
++    declaring no `data.units` has none — so every axis is dropped rather than
++    realized against nothing. The control that must report: the same
++    declaration WITH a roster realizes the axis, so this is the roster's
++    absence doing the work and not the declaration's shape."""
++    sweep_block = {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}
++    units_decl = {"assign": {"arm": {"method": "by_attribute", "from": "arm_column"}}}
++    assert _resolved_group_axes(units_decl, sweep_block, None, "digest") == {}
++    assert set(_resolved_group_axes(units_decl, sweep_block, _levels_roster(), "digest")) == {"arm"}
++
++
++def test_resolved_group_axes_raises_rather_than_reading_a_column_under_a_drawn_method():
++    """`from` "means nothing" under `random`/`blocked` — but this build does not
++    quietly read the axis name instead, which is what this function used to
++    resolve to. `units.assignment_for` raises `NotImplementedError` until tasks
++    8 and 10, an explicit hole; the fixture's units carry an arm attribute, so
++    a fallback to a column read would have succeeded silently here.
++
++    Unreachable through `command_run`: `validate` refuses both methods as
++    `E-DATA-ASSIGN-DRAWN` and returns before any of this runs."""
+     sweep_block = {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}
+     units_decl = {"assign": {"arm": {"method": "random", "from": "arm_column"}}}
+-    assert _resolved_group_axes(units_decl, sweep_block) == {
+-        "arm": ("arm", ["control", "treatment"])
+-    }
++    with pytest.raises(NotImplementedError):
++        _resolved_group_axes(units_decl, sweep_block, _levels_roster(), "digest")
+ 
+ 
+ def test_non_string_levels_make_arm_members_raise_rather_than_skip_narrowing():
+     """`sweep.selector_paths` — the same function `expand` uses to decide which
+     paths are group cells — accepts a `levels` list of any element type, but
+     `_resolved_group_axes` requires every level to be a `str`, matching
+     `validate._check_assign`'s own stricter skip. `groups: [{by: arm, levels:
+     [1, 2]}]` is exactly this disagreement: `expand` treats `arm` as a real
+     selector axis (every condition's `.selectors == {"arm"}`), while
+     `_resolved_group_axes` drops it entirely (`{}`).
+@@ -476,31 +534,31 @@ def test_non_string_levels_make_arm_members_raise_rather_than_skip_narrowing():
+     doc = {
+         "sweep": {
+             "groups": [{"by": "arm", "levels": [1, 2]}],
+             "baseline": {},
+         }
+     }
+     sweep_block = doc["sweep"]
+     conditions = expand(doc)
+     assert all(c.selectors == frozenset({"arm"}) for c in conditions)
+ 
+-    group_axes = _resolved_group_axes({}, sweep_block)
++    roster = UnitList(
++        [Unit(key="u0", attributes={"arm": "1"}), Unit(key="u1", attributes={"arm": "2"})]
++    )
++    group_axes = _resolved_group_axes({}, sweep_block, roster, "digest")
+     assert group_axes == {}  # the shape fault `_resolved_group_axes` skips
+ 
+     # The gate `command_run` uses: `selector_paths`, not `group_axes`.
+     assert selector_paths(sweep_block)  # still true — `expand` agrees
+ 
+-    roster = UnitList(
+-        [Unit(key="u0", attributes={"arm": "1"}), Unit(key="u1", attributes={"arm": "2"})]
+-    )
+     with pytest.raises(KeyError):
+-        arm_members(roster, group_axes, conditions)
++        arm_members(group_axes, conditions)
+ 
+ 
+ _ARM_STEP = '''\
+ # src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+ from publishable import BaseStep
+ 
+ 
+ class Step(BaseStep):
+     scope = "repeat"
+ 
+@@ -935,20 +993,110 @@ def test_allocation_json_is_written_with_exact_arm_keys_when_declared(tmp_path:
+     assert alloc["strata"] == {}
+     assert "arm" not in alloc["strata"]
+     assert "holdout" not in alloc
+ 
+     from publishable.artifacts import allocation_hash
+ 
+     assert run_yaml["provenance"]["allocation"] == "allocation.json"
+     assert run_yaml["provenance"]["allocation_hash"] == allocation_hash(alloc)
+ 
+ 
++def test_one_plan_per_axis_is_realized_once_and_both_consumers_get_that_same_plan(
++    tmp_path: Path, monkeypatch
++):
++    """**The seam this slice turns on, asserted end to end.**
++
++    `artifacts.build_allocation_document` used to call `units.arms_of` a
++    *second* time on the same axes, after `units.arm_members` had already
++    narrowed every condition with the first call. Under `by_attribute` the two
++    calls agree, so nothing observable distinguished them. Under a drawn method
++    they do not: a second draw is a second allocation, and two calls cannot be
++    made to promise they agree — only not calling twice can. The decision is
++    *compute once and pass*, and this is what pins it.
++
++    Three assertions, each with a mutation that breaks it and nothing else:
++
++    - `units.assignment_for` runs **exactly once** — one axis, one plan, for a
++      whole run. Calling `_resolved_group_axes` a second time before
++      `build_allocation_document` (the shape of the recomputation this task
++      removed) takes the count to 2. Mutation-verified.
++    - `allocation.json`'s `arms` is the **same plan object's** membership the
++      runner narrowed with, compared against the plan this spy captured on the
++      way through, not against a re-derivation.
++    - the arms actually narrowed: 4 and 9 resolved units, the fixture's own
++      uneven split, so a plan that reached the file but not the runner (or the
++      reverse) fails here.
++
++    The literal key lists are the control against a plan that is realized once
++    but realized *wrongly*: making `assignment_for` return a fresh partition —
++    each level's keys reversed — leaves the identity assertion satisfied (both
++    consumers still get the one plan) and fails these. Mutation-verified.
++    """
++    control_keys = ["c3", "c0", "c2", "c1"]
++    treatment_keys = ["t5", "t1", "t8", "t0", "t3", "t7", "t2", "t6", "t4"]
++    control_rows = "\n".join(f"{k},control" for k in control_keys)
++    treatment_rows = "\n".join(f"{k},treatment" for k in treatment_keys)
++    roster_csv = f"patient_id,arm\n{control_rows}\n{treatment_rows}\n"
++
++    from publishable import cli as cli_module
++
++    realized: list[Any] = []
++    real_assignment_for = cli_module.assignment_for
++
++    def spy(*args: Any, **kwargs: Any) -> Any:
++        plan = real_assignment_for(*args, **kwargs)
++        realized.append(plan)
++        return plan
++
++    monkeypatch.setattr(cli_module, "assignment_for", spy)
++
++    doc = run_a_project(
++        tmp_path,
++        aggregate_returns="total",
++        roster_csv=roster_csv,
++        units_overrides={
++            "allocation": "between",
++            "assign": {"arm": {"method": "by_attribute"}},
++            "attributes": ["arm"],
++        },
++        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
++    )
++
++    # One axis, one plan, one realization — for the run's whole lifetime.
++    assert len(realized) == 1
++    plan = realized[0]
++    assert plan.levels == ("control", "treatment")
++    assert plan.members["control"] == tuple(control_keys)
++    assert plan.members["treatment"] == tuple(treatment_keys)
++
++    alloc = json.loads((doc["run_dir"] / "allocation.json").read_text())
++    # What the file records IS what the one plan says, key for key and in
++    # order — not a second answer that happens to agree.
++    assert alloc["arms"]["arm"] == {
++        level: list(keys) for level, keys in plan.members.items()
++    }
++    assert alloc["arms"]["arm"]["control"] == control_keys
++    assert alloc["arms"]["arm"]["treatment"] == treatment_keys
++
++    # And the same plan is what the runner narrowed with: 4 and 9, the
++    # fixture's uneven split, so neither arm can be confused with the other
++    # or with the 13-unit roster by size.
++    run_yaml = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
++    conditions = run_yaml["results"]["conditions"]
++    assert [c["label"] for c in conditions] == ["arm=control", "arm=treatment"]
++    ns = [c["aggregated"]["step01_summarize_units"]["pred"]["n"] for c in conditions]
++    assert ns[0]["resolved"] == 4
++    assert ns[0]["completed"] == 4
++    assert ns[1]["resolved"] == 9
++    assert ns[1]["completed"] == 9
++
++
+ def test_allocation_json_is_absent_without_a_declared_arm(tmp_path: Path):
+     """The absent half of 'present when either is declared' — and the addendum's
+     warning that this half is the one that passes vacuously. Paired with a
+     positive assertion on the very same run (`run.yaml` exists and completed),
+     so this cannot pass for a run that failed before writing anything, a wrong
+     `run_dir`, or a typo in the filename — the four verification probes this
+     project has already caught reporting nothing for every input."""
+     doc = run_a_project(tmp_path)
+ 
+     run_yaml = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+diff --git a/tests/test_units.py b/tests/test_units.py
+index c98bb3e..ff1defe 100644
+--- a/tests/test_units.py
++++ b/tests/test_units.py
+@@ -1,24 +1,26 @@
+ # tests/test_units.py
+ from collections import Counter
+ from pathlib import Path
+ 
+ import pytest
+ 
+ from publishable import ContractError
+ from publishable.units import (
++    ArmPlan,
+     Unit,
+     UnitList,
+     apply_rule,
+     arm_members,
+     arms_of,
+     assign_seed_for,
++    assignment_for,
+     cluster_count,
+     clusters_of,
+     collapse_measurements,
+     fold_basis,
+     partition_units,
+     resolve_units,
+     stratum_varies_within_cluster,
+     units_hash,
+ )
+ 
+@@ -1125,69 +1127,174 @@ def test_arms_refuse_a_declared_level_with_no_unit():
+             Unit(key="u0", paths=(), attributes={"arm": "control"}),
+             Unit(key="u1", paths=(), attributes={"arm": "control"}),
+         ]
+     )
+     with pytest.raises(ContractError) as e:
+         arms_of(roster, "arm", ["control", "treatment"])
+     assert e.value.code == "E-DATA-ASSIGN-LEVELS"
+     assert "treatment" in str(e.value)
+ 
+ 
++def _arm_roster12():
++    """12 units, 7 `control` and 5 `treatment` — `tests/test_runner.py`'s
++    `_arm_roster12`, restated here so this module's arm tests run against the
++    same uneven split: neither half is 6, so an arm cannot be confused with
++    the other arm, with half the roster, or with the whole roster by size
++    alone."""
++    return UnitList(
++        [Unit(key=f"c{i}", attributes={"arm": "control"}) for i in range(7)]
++        + [Unit(key=f"t{i}", attributes={"arm": "treatment"}) for i in range(5)]
++    )
++
++
++def _arm_plans(roster):
++    return {"arm": assignment_for(roster, "arm", None, ["control", "treatment"], "digest")}
++
++
++def test_assignment_for_by_attribute_realizes_arms_of_with_no_seed_and_no_strata():
++    """Step 1 of the seam: `by_attribute` through `ArmPlan` gives exactly what
++    `arms_of` gives, and says so about the two fields a draw would fill.
++
++    Both arms' keys are written out literally rather than re-derived from the
++    fixture's own `arm` attribute: a test that rebuilds the expectation by
++    re-running the membership rule cannot tell a correct partition from a
++    wrongly recomputed one, since the same rule produces both.
++
++    `seed is None` and `strata == ()` are the load-bearing halves, not
++    decoration — `by_attribute` reads an arm a trial system already assigned,
++    so a realized seed here would be a false record of a draw that never
++    happened, and `artifacts.build_allocation_document` writes exactly what
++    these two fields say."""
++    roster = _arm_roster12()
++    plan = assignment_for(roster, "arm", {"method": "by_attribute"}, ["control", "treatment"], "d")
++
++    assert plan.levels == ("control", "treatment")
++    assert plan.members["control"] == ("c0", "c1", "c2", "c3", "c4", "c5", "c6")
++    assert plan.members["treatment"] == ("t0", "t1", "t2", "t3", "t4")
++    assert set(plan.members) == {"control", "treatment"}
++    assert plan.seed is None
++    assert plan.strata == ()
++
++    # The same partition `arms_of` returns, restated as keys — the plan is
++    # `arms_of`'s answer carried in a shape a draw can also fill, not a
++    # second reading of the column.
++    partition = arms_of(roster, "arm", ["control", "treatment"])
++    assert plan.members == {
++        level: tuple(u.key for u in units) for level, units in partition.items()
++    }
++
++
++def test_assignment_for_resolves_from_against_the_axis_name_and_reads_no_other_column():
++    """The `from`-or-axis-name default now lives in `assignment_for` alone —
++    `cli._resolved_group_axes` used to resolve it too, and two resolutions of
++    one declaration is the defect class this slice closes. A declared `from`
++    naming a column that is NOT the axis name is what discriminates: the
++    fixture's units carry `arm_column`, and nothing at all under `arm`, so a
++    resolution that fell back to the axis name would raise
++    `E-DATA-ASSIGN-LEVELS` instead of partitioning."""
++    roster = UnitList(
++        [
++            Unit(key="u0", attributes={"arm_column": "control"}),
++            Unit(key="u1", attributes={"arm_column": "treatment"}),
++        ]
++    )
++    block = {"method": "by_attribute", "from": "arm_column"}
++    plan = assignment_for(roster, "arm", block, ["control", "treatment"], "digest")
++    assert plan.members == {"control": ("u0",), "treatment": ("u1",)}
++
++    # The control that must report: with no `from`, the axis name is the
++    # column, and this fixture has no `arm` attribute to read.
++    with pytest.raises(ContractError) as e:
++        assignment_for(roster, "arm", None, ["control", "treatment"], "digest")
++    assert e.value.code == "E-DATA-ASSIGN-LEVELS"
++
++
++@pytest.mark.parametrize("method", ["random", "blocked"])
++def test_assignment_for_refuses_a_drawn_method_rather_than_reading_a_column(method: str):
++    """An explicit hole until tasks 8 and 10, not a silent fallback: a drawn
++    axis's units carry no arm attribute, so falling back to `arms_of` would
++    either raise about a column nobody declared or partition on an unrelated
++    one. The fixture's units DO carry `arm`, so a fallback would succeed
++    silently here — which is exactly why the assertion is `NotImplementedError`
++    and not a `ContractError` about a missing column."""
++    roster = _arm_roster12()
++    with pytest.raises(NotImplementedError) as e:
++        assignment_for(roster, "arm", {"method": method}, ["control", "treatment"], "digest")
++    assert method in str(e.value)
++
++
++def test_assignment_for_takes_the_by_attribute_path_for_an_unnamed_method():
++    """An absent block, a non-mapping one, and a block with no `method` all
++    take the `by_attribute` path — the same default `validate._check_assign`
++    falls back to. Only `random` and `blocked` divert, so no method that
++    *draws* can reach a column read by falling through."""
++    roster = _arm_roster12()
++    expected = ("c0", "c1", "c2", "c3", "c4", "c5", "c6")
++    for block in (None, {}, {"from": "arm"}):
++        plan = assignment_for(roster, "arm", block, ["control", "treatment"], "digest")
++        assert plan.members["control"] == expected
++        assert plan.seed is None
++
++
+ def test_arm_members_reduces_arms_of_across_the_resolved_conditions():
+     """`units.arm_members` is the reduction the runner's subset view is built
+     from: one call into `arms_of` per declared axis, then a per-condition lookup
+     against `.selectors`/`.values` — never a second derivation of membership.
+     7 control, 5 treatment, deliberately uneven per the H3c fixture rule, plus a
+     third condition selecting no axis at all, which must be absent from the
+     result entirely rather than mapped to the whole roster."""
+     from publishable.sweep import Condition
+ 
+     roster = UnitList(
+         [Unit(key=f"c{i}", attributes={"arm": "control"}) for i in range(7)]
+         + [Unit(key=f"t{i}", attributes={"arm": "treatment"}) for i in range(5)]
+     )
+     selectors = frozenset({"arm"})
+     conditions = [
+         Condition(index=0, label="control", values={"arm": "control"}, selectors=selectors),
+         Condition(index=1, label="treatment", values={"arm": "treatment"}, selectors=selectors),
+         Condition(index=2, label="plain", values={}, selectors=frozenset()),
+     ]
+-    result = arm_members(roster, {"arm": ("arm", ["control", "treatment"])}, conditions)
++    result = arm_members(_arm_plans(roster), conditions)
+     assert result[0] == frozenset(f"c{i}" for i in range(7))
+     assert result[1] == frozenset(f"t{i}" for i in range(5))
+     assert 2 not in result
+     assert len(result[0]) + len(result[1]) == len(roster)
+ 
+ 
+-def test_arm_members_calls_arms_of_once_per_axis_not_per_condition():
+-    """The reduction, not a second partition: with three conditions selecting the
+-    same single axis, `arms_of` must run exactly once for it, verified by
+-    counting calls rather than by inspecting the result — the discriminator a
+-    per-condition re-derivation would still pass on output alone."""
+-    from unittest.mock import patch
+-
++def test_arm_members_derives_no_membership_of_its_own_from_a_planted_plan():
++    """The property `test_arm_members_calls_arms_of_once_per_axis_not_per_condition`
++    used to pin, retargeted rather than dropped: `arm_members` no longer calls
++    `arms_of` at all — it is handed plans — so "once per axis, not once per
++    condition" is now `assignment_for`'s own property (pinned end-to-end in
++    `test_cli.py`), and what is left to pin here is stronger. The plan handed
++    in **contradicts** the roster attribute: `c0` carries `arm: control` but
++    the plan puts it in `treatment`, and `t0` the reverse. `arm_members`
++    must return the plan's answer, not the column's. A version that re-derived
++    membership from a roster — the second producer this slice exists to make
++    impossible — would return the swapped-back sets and fail both assertions."""
+     from publishable.sweep import Condition
+ 
+-    roster = UnitList(
+-        [
+-            Unit(key="c0", attributes={"arm": "control"}),
+-            Unit(key="t0", attributes={"arm": "treatment"}),
+-        ]
+-    )
+     selectors = frozenset({"arm"})
+     conditions = [
+         Condition(index=0, label="control", values={"arm": "control"}, selectors=selectors),
+         Condition(index=1, label="treatment", values={"arm": "treatment"}, selectors=selectors),
+     ]
+-    with patch("publishable.units.arms_of", wraps=arms_of) as spy:
+-        arm_members(roster, {"arm": ("arm", ["control", "treatment"])}, conditions)
+-        assert spy.call_count == 1
++    planted = ArmPlan(
++        levels=("control", "treatment"),
++        members={"control": ("t0",), "treatment": ("c0",)},
++        seed=None,
++        strata=(),
++    )
++    result = arm_members({"arm": planted}, conditions)
++    assert result[0] == frozenset({"t0"})
++    assert result[1] == frozenset({"c0"})
+ 
+ 
+ def test_arm_members_intersects_when_a_condition_selects_two_axes():
+     """§ Validation's `sex × arm` cell: a condition selecting more than one axis
+     gets the intersection of each axis's arm, not either one alone."""
+     from publishable.sweep import Condition
+ 
+     roster = UnitList(
+         [
+             Unit(key="u0", attributes={"arm": "control", "sex": "f"}),
+@@ -1197,22 +1304,24 @@ def test_arm_members_intersects_when_a_condition_selects_two_axes():
+     )
+     conditions = [
+         Condition(
+             index=0,
+             label="cell",
+             values={"arm": "control", "sex": "f"},
+             selectors=frozenset({"arm", "sex"}),
+         ),
+     ]
+     result = arm_members(
+-        roster,
+-        {"arm": ("arm", ["control", "treatment"]), "sex": ("sex", ["f", "m"])},
++        {
++            "arm": assignment_for(roster, "arm", None, ["control", "treatment"], "digest"),
++            "sex": assignment_for(roster, "sex", None, ["f", "m"], "digest"),
++        },
+         conditions,
+     )
+     assert result[0] == frozenset({"u0"})
+ 
+ 
+ def test_the_fold_basis_is_the_cluster_count_when_the_units_are_clustered():
+     """`reference.md` § Validation, *Folds fit inside the clusters*: a cluster is
+     indivisible, so what a fold may be drawn from is the cluster count.
+ 
+     Sizes 7/3/3/1/1 — 5 clusters over 15 units — deliberately: with one unit per

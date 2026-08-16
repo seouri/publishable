@@ -1,0 +1,197 @@
+# Review package: 56cc440..HEAD
+
+## Commits
+dec6242 docs: name rows instead of counting them, close the caveat's own gap
+
+## Files changed
+ docs/experimental-designs.md |  2 +-
+ docs/reference.md            | 14 +++++++++-----
+ tests/test_validate.py       |  2 +-
+ 3 files changed, 11 insertions(+), 7 deletions(-)
+
+## Diff
+diff --git a/docs/experimental-designs.md b/docs/experimental-designs.md
+index 6200b63..6badd9e 100644
+--- a/docs/experimental-designs.md
++++ b/docs/experimental-designs.md
+@@ -67,21 +67,21 @@ data:
+     attributes: [site, severity]
+     allocation: between
+     assign:
+       arm:                            # one block per axis, keyed by axis name
+         method: random
+         stratify_by: [site, severity]
+         ratio: {control: 1, treatment: 1}
+         seed: auto
+ ```
+ 
+-**`method: random` is refused in this build**, as `E-DATA-ASSIGN-DRAWN` — drawing an arm is specified but not implemented yet; `method: by_attribute` is what runs today, and it's what a real trial does regardless, since the arm was already decided somewhere. This design is shown with `random` because that's the shape a prospective allocation takes; the refusal lifts once drawing is built. See [reference.md § Allocation](reference.md#allocation-within-subjects-or-between-subjects).
++**`method: random` is refused in this build**, as `E-DATA-ASSIGN-DRAWN` — drawing an arm is specified but not implemented yet; `method: by_attribute` is what runs today, and it's what a real trial does regardless, since the arm was already decided somewhere. This design is shown with `random` because a trial drawing its own arms, rather than reading someone else's, is the case being illustrated; the refusal lifts once drawing is built. See [reference.md § Allocation](reference.md#allocation-within-subjects-or-between-subjects).
+ 
+ The realized allocation lands in `allocation.json`, hashed. The arm-to-arm comparison is unpaired, derived from the fact that the two conditions differ on the `groups` axis rather than declared separately — and if you compose a parameter axis on top, contrasts *within* an arm stay paired, because they're the same patients analyzed two ways. The two conditions share a `parameters_hash`, which is the point: same code, same parameters, different units. `statistics.null_test` with `shuffle: arm` tests that contrast directly: permuting the attribute that *defines* the arms is a test of the difference between them, not of either arm's own estimate, and core attaches the p-value to the contrast for that reason — see [reference.md § What isn't a repeat](reference.md#what-isnt-a-repeat).
+ 
+ `seed: auto` derives from a design digest over `data.units` and `sweep.groups`, not from `parameters_hash`, so arm membership doesn't move when you edit an analysis parameter. It does move if the roster does — core draws over the units resolved at run start and carries nothing forward from a previous run — so for a design you intend to cite, pin the seed to an integer and keep the `allocation.json` it produced. Prospective enrollment isn't something any `assign.method` supports; see [reference.md § What `auto` derives from](reference.md#what-auto-derives-from).
+ 
+ When the arm was decided elsewhere — a trial system, a registry, an exposure that simply happened — name the column instead of a seed, and core assigns nothing:
+ 
+ ```yaml
+ data:
+   units:
+diff --git a/docs/reference.md b/docs/reference.md
+index 095a756..32a7a80 100644
+--- a/docs/reference.md
++++ b/docs/reference.md
+@@ -413,22 +413,22 @@ are. An unresolvable `experiment_type` reports
+ `E-TEMPLATE-UNKNOWN` exactly once, since that check returns immediately after, and,
+ likewise apart from those same two envelope rows, none of the others.
+ 
+ | Reported when | Code |
+ |---|---|
+ | A key under a container `check_envelope`'s `LEAF_TYPES` table declares, or a top-level key, that the table does not name — checked with a `difflib` hint, skipping the `parameters` and `sweep` subtrees entirely since each has its own closure (`E-PARAM-UNKNOWN`, `E-SWEEP-KEY-UNKNOWN`), and never descending into a known leaf's own value (a typo inside `data.units.holdout` or a `from` mapping is reached by no check at all — not by `_check_shape` either, which checks a container's shape and never the names inside one; [§ Validation](#validation) names the whole-leaf blocks that costs and the slice that closes each, and `holdout` is not among them only because the whole block is refused today as `E-DATA-HOLDOUT-UNSUPPORTED`, which makes its gap latent rather than live); a non-string YAML mapping key is coerced with `str()` first so it is still reported | `E-CONFIG-KEY-UNKNOWN` |
+ | The config file does not parse as YAML, or parses to something other than a mapping | `E-CONFIG-PARSE` |
+ | A top-level block, or a nested container `_check_shape` walks before its items — `data.units` and its `attributes`, `sweep.baseline`, `sweep.grid` and each axis's values, `replication.repeats` and each level, `statistics.contrasts`, `statistics.report_by` — is present and not the mapping, list, or string its position requires; unset (`null`) is treated as absent, matching `E-CONFIG-TYPE` | `E-CONFIG-SHAPE` |
+ | A leaf `check_envelope`'s `LEAF_TYPES` table declares is present and not its declared type — a `bool` never satisfies any leaf's type, since the table declares none as `bool`, and an `int` satisfies a `float` one; unset (`null`) is treated as absent | `E-CONFIG-TYPE` |
+ | [`data.units.allocation`](#allocation-within-subjects-or-between-subjects) is `between` and `sweep.groups` declares no axis to say what the arms are — no axis at all, or none whose `by` this build can read, which is what a malformed `groups` entry leaves it with. The pair is the check rather than either half: `between` says how a unit reaches an arm, not what the arms are, so a design declaring it alone has one cohort and nothing to divide it into. Read from the declarations, so it reports whether or not a roster resolved | `E-DATA-ALLOCATION-NO-ARMS` |
+-| A `data.units.assign` block's `method` is `random` or `blocked` — both are in the enum, and both draw an arm rather than read one a trial system or the data already assigned. Drawing is specified but not implemented in this build; only `method: by_attribute` executes. Deliberately not gated on `allocation`, the same as `E-DATA-ASSIGN-METHOD` below: this is a check on the block's value rather than on a pair of declarations. Mutually exclusive with `E-DATA-ASSIGN-METHOD` by construction: a value this row names is by definition inside the enum, so it can never also be absent or out of it. Temporary: the refusal lifts with the slice that implements drawing | `E-DATA-ASSIGN-DRAWN` |
+-| A `data.units.assign` block's `method` is absent or `null`, or is a value other than `random`, `by_attribute`, or `blocked`. **A block that is not a mapping at all is reported here too**, as the block naming no method that it is: `envelope.py` types `data.units.assign` itself and none of its children, whose keys are axis names no fixed dotted path could ever name, so nothing else speaks for one. Which of a block's other fields are read follows from the discriminator — `from` is `by_attribute`'s, `block_size` is `blocked`'s — so a block without one describes no assignment. Deliberately not gated on `allocation`, unlike the two rows above: this is a check on the block rather than on a pair of declarations, and a block naming no method describes no assignment wherever it was declared | `E-DATA-ASSIGN-METHOD` |
++| A `data.units.assign` block's `method` is `random` or `blocked` — both are in the enum, and both draw an arm rather than read one a trial system or the data already assigned. Drawing is specified but not implemented in this build; only `method: by_attribute` executes. Deliberately not gated on `allocation`, the same as `E-DATA-ASSIGN-METHOD` immediately below: both are a check on the block's value rather than on a pair of declarations, unlike `E-DATA-ALLOCATION-NO-ARMS` and `E-DATA-ASSIGN-MISSING` above. Mutually exclusive with `E-DATA-ASSIGN-METHOD` by construction: a value this row names is by definition inside the enum, so it can never also be absent or out of it. Temporary: the refusal lifts with the slice that implements drawing | `E-DATA-ASSIGN-DRAWN` |
++| A `data.units.assign` block's `method` is absent or `null`, or is a value other than `random`, `by_attribute`, or `blocked`. **A block that is not a mapping at all is reported here too**, as the block naming no method that it is: `envelope.py` types `data.units.assign` itself and none of its children, whose keys are axis names no fixed dotted path could ever name, so nothing else speaks for one. Which of a block's other fields are read follows from the discriminator — `from` is `by_attribute`'s, `block_size` is `blocked`'s — so a block without one describes no assignment. Deliberately not gated on `allocation`, the same as `E-DATA-ASSIGN-DRAWN` immediately above and unlike `E-DATA-ALLOCATION-NO-ARMS` and `E-DATA-ASSIGN-MISSING` further up: this is a check on the block rather than on a pair of declarations, and a block naming no method describes no assignment wherever it was declared | `E-DATA-ASSIGN-METHOD` |
+ | `data.units.allocation` is `between` and a [`sweep.groups`](#expansion-modes) axis has no block under [`data.units.assign`](#allocation-within-subjects-or-between-subjects) — an absent or `null` `assign`, the empty `assign: {}` `init` writes, or the axis's own key left `null`. One finding per unassigned axis, in declaration order, since the remedy is one block each. This and `E-DATA-ALLOCATION-NO-ARMS` are between them the whole of [§ The one config file](#the-one-config-file)'s "REQUIRED when `allocation` is `between`", which is why that rule has no third code of its own. Not reported under `allocation: within`, where a declared group axis is [§ Validation](#validation)'s *Arms need allocation* — a different fault, and one this build reports by nothing. Skipped when `assign` is present and is not a mapping, which `E-CONFIG-TYPE` already reports | `E-DATA-ASSIGN-MISSING` |
+ | [`data.units.cluster_by`](#clustered-units) is a non-empty string and the design resolves to at least one comparison — a generated `vs_baseline` for every non-baseline condition, plus every declared [`statistics.contrasts`](#contrasts-claims-that-arent-condition-vs-baseline) entry, the same family `W-STATS-FAMILY` counts and the same test `E-DATA-WEIGHT-CONTRAST` below applies. [§ Statistical reporting](#statistical-reporting) gives each contrast construction a `_clustered` suffix under a declared cluster — the *t* forms cluster-robust over the differenced values when paired and the arm-level ones when not, the percentile forms resampling whole clusters, jointly across both sides when paired — and **none of those five exists in this build**: `paired_t_over_units` takes a list of per-unit differences and nothing else, the derived forms take rows and a seed and know nothing about membership, and there is no unpaired form at all. So the delta and its interval would be computed as though the units were independent, which is the one thing the declaration says they are not, beside per-condition values that *are* cluster-robust and with nothing in the record saying which is which — the interval [§ Clustered units](#clustered-units) calls too narrow, on the number a reader acts on. The *resolved* family is the test rather than the declaration, exactly as below: a `sweep.baseline` with no axis beside it expands to a single baseline row, never a comparison's subject, so a clustered run of it publishes no delta and is accepted, and a declared contrast over a sweep with no baseline is refused though it declares no baseline at all. [`statistics.report_by`](#reporting-strata) is outside it, a stratum repeating the per-condition aggregation — whose interval is clustered — and publishing no delta. Temporary: the refusal lifts with the slice that builds the `_clustered` contrast family | `E-DATA-CLUSTER-CONTRAST` |
+ | [`data.units.cluster_by`](#clustered-units) is present and is an empty string — an empty declaration changes no behavior — or names a value `data.units.attributes` does not declare, which includes every name under a `{glob: ...}` source, that source declaring none. `data.units.attributes`, not the source's columns, and for the same reason `E-DATA-WEIGHT-UNKNOWN` below reads that set: a cluster is read per unit when the partition is drawn and again when an interval is computed, so it has to survive resolution as an attribute, where a `measurements.by` is consumed at collapse time and dropped from the merged unit. Checked from the declaration alone, so it reports whether or not a roster resolved; a non-string is left to `E-CONFIG-TYPE`. Raised at run time too, under the same code, wherever cluster membership is resolved for a unit that carries no value for it — `units.clusters_of` is the single authority both surfaces read, so a roster core cannot group raises here rather than inventing a cluster for it | `E-DATA-CLUSTER-UNKNOWN` |
+ | [`data.units.cluster_by`](#clustered-units) names a column whose value is not the same across one unit's [measurement rows](#what-isnt-a-repeat) — the rows `data.units.measurements` collapses into that unit. Reported for the first such unit, naming the values it declares. Not a check `validate` can make for itself: `resolve_units` collapses the rows internally, so by the time there is a roster to read the disagreement is gone and the cluster is whichever value `first` or `mode` returned. So it is raised where the rows collapse — at run time under the same code, this being one fault with one identifier on both surfaces — and reaches `validate` through the resolution it already performs, the same route `E-UNITS-COLLAPSE-RULE` below takes. A column only some of a unit's rows carry is not a disagreement: the rows that carry it agree, and whether every unit has a value at all is `E-DATA-CLUSTER-UNKNOWN` above | `E-DATA-CLUSTER-VARIES` |
+ | `data.input_dir` or `data.output_dir` resolves inside the git repository, checked once a repo root is found | `E-DATA-IN-REPO` |
+ | A `data.units.measurements.collapse` rule of `mean`, `median`, or `sum` — the top-level string, or a per-column map's own entry, or its `first` fallback over a column the map does not name — is checked against the resolved roster's own attribute values for that column, and `units.is_measurement_numeric` — the single authority this check and the run-time coercion both read — says at least one is neither numeric nor a string that parses as one (a `bool` counts as neither); skipped, along with the rest of this row's checks, when the roster does not resolve, since there is then no column to check a rule against. Raised at run time too, under the same code, wherever that coercion runs: over an input table's rows as the roster resolves, and over the rows a step [measured](#what-isnt-a-repeat) as its execution finalizes — the same reuse `E-UNITS-COLLAPSE-RULE` below illustrates. The step-path half is not a fault `validate` can predict: the value is one the *step* recorded, not one any declaration named | `E-DATA-MEASUREMENTS-COLLAPSE-TYPE` |
+ | `data.units.measurements` is declared (non-null) and is not a mapping, or is an empty mapping — reported alone, since there is then no `by` or `collapse` to check either; or the mapping is neither of those and its `by` is missing or is not a non-empty string, or its `collapse` is missing — an omitted `collapse` names no rule, so it is this row rather than `E-UNITS-COLLAPSE-RULE` below. Also raised where the roster resolves, under the same code, since resolution reads `by` before this check runs and a malformed block reaches it first | `E-DATA-MEASUREMENTS-INVALID` |
+ | `data.input_dir` or `data.output_dir`, after `expanduser()`, is not an absolute path | `E-DATA-NOT-ABSOLUTE` |
+ | `data.input_manifest_policy` is empty, or is a value outside the declared policies | `E-DATA-POLICY` |
+ | `data.input_dir` or `data.output_dir` is empty | `E-DATA-REQUIRED` |
+@@ -1090,21 +1090,21 @@ data:
+ `from` answers a different question from the rest of the block. Everything else — `key`, `attributes`, `allocation`, `cluster_by`, `holdout` — says what the design needs of a unit; `from` says how core finds one. Three forms, in descending order of how much the input already looks like a table:
+ 
+ ```yaml
+ from: index.csv                      # a delimited table in input_dir
+ from: {glob: "*.dcm"}                # one unit per matching path
+ from: {resolver: plate_wells}        # a plugin walks the input and yields units
+ ```
+ 
+ A table is the ordinary case, and the one everything else in this document uses: `key` and `attributes` name columns, and core reads them. `glob` covers input whose only structure is the filesystem — core builds the table itself, one row per matching path, with the path relative to `input_dir` as the `key`. The pattern is matched against those relative paths, with `**` recursing, so `{glob: "**/*.dcm"}` walks the tree and `{glob: "*.dcm"}` does not. There are no attributes to declare, so a design that needs them wants one of the other two forms.
+ 
+-**The resolved list keeps the order it was resolved in** — table row order, resolver yield order, or lexicographic path order for a `glob`, which is what makes a glob reproducible across filesystems that walk directories differently. That order is not cosmetic: [`assign.method: blocked`](#allocation-within-subjects-or-between-subjects) balances arms *across the roster's order*, so it's the one declaration that reads the order as data. `provenance.units_hash` covers the list in that same order for the same reason — two runs that resolved the same units in a different sequence did not allocate the same trial, and a hash that called them identical would say they had.
++**The resolved list keeps the order it was resolved in** — table row order, resolver yield order, or lexicographic path order for a `glob`, which is what makes a glob reproducible across filesystems that walk directories differently. That order is not cosmetic: [`assign.method: blocked`](#allocation-within-subjects-or-between-subjects) — refused in this build as `E-DATA-ASSIGN-DRAWN` — balances arms *across the roster's order*, so it's the one declaration that reads the order as data. `provenance.units_hash` covers the list in that same order for the same reason — two runs that resolved the same units in a different sequence did not allocate the same trial, and a hash that called them identical would say they had.
+ 
+ **A resolver is for input that is neither.** A DICOM archive whose units are series rather than files, a plate layout where identity is a barcode and a well position, a benchmark shipped as sharded JSONL: finding the units there is domain work, and it is the *only* domain work in the block. So it's a plugin artifact, registered the way a template is:
+ 
+ ```python
+ # src/publishable_my_assay/resolvers/plate.py
+ from publishable import Unit, register_resolver
+ 
+ @register_resolver("plate_wells")
+ def resolve(io, cfg):
+     for row in io.read_input("layout.csv"):          # rows are mappings
+@@ -1281,21 +1281,21 @@ Core then computes cluster-robust intervals — over the same per-unit table eve
+ 
+ **`cluster_by` also constrains how `fold` partitions.** Whole clusters go to one side of a split; a cluster is never divided between train and test. This is not a refinement of the interval, it's the difference between a valid evaluation and a leaky one: with 300 cells from 10 animals split without regard to `animal_id`, every fold trains on other cells of the animal it tests on, and the metric is inflated before any interval is computed — so cluster-robust standard errors don't repair it. Core computes the partitions, so this has to be core's rule rather than something each experiment remembers.
+ 
+ Two consequences of clustering the split:
+ 
+ - **`k` is bounded by the cluster count, not the unit count.** Ten animals admit at most 10 folds, and `validate` rejects a larger `k` rather than emitting empty partitions. Fold sizes also stop being equal — clusters differ in size, so core balances units-per-fold as evenly as whole clusters allow and records the realized sizes in `sweep.yaml`. **The order it assigns in is part of the contract, not an implementation detail**: core shuffles the clusters using the [design digest](#what-auto-derives-from), then walks them largest-first, sending each whole cluster to the fold holding the fewest units so far. Both halves earn their place — without the shuffle, equally sized clusters would be partitioned in whatever order the input file listed them, and without the largest-first pass a big cluster arriving last has no balanced fold left to go to. What is *not* promised is a bound on how uneven the result may be: one cluster larger than the units a fold would otherwise hold makes an uneven split unavoidable, and core reports the realized sizes rather than pretending otherwise.
+ - **`stratify_by` must be constant within a cluster.** Stratifying folds on an attribute that varies inside a cluster is unsatisfiable once the cluster is indivisible, so `validate` rejects it instead of silently prioritizing one constraint. Stratifying on `animal_strain` works; stratifying on a per-cell `label` that differs within an animal does not. That constancy is also what makes the stratified split well-defined rather than a second balancing problem: a cluster carrying one stratum value belongs to exactly one stratum, so core runs the rule above inside each stratum separately and then merges the per-stratum partitions **index-wise** — fold *i* of every stratum's partition becomes fold *i* of the result, which is what makes each fold carry its share of each stratum. Reordering that merge is invisible to any assertion about fold *sizes*, since permuting a stratum's pieces leaves their sizes alone, which is why the order is stated rather than left to be re-derived. All of it rests on the rejection above: without it a cluster could belong to two strata and there would be nothing to merge.
+ 
+ **A cluster must not vary within a unit's [measurement rows](#what-isnt-a-repeat)**, and core refuses one that does, as `E-DATA-CLUSTER-VARIES`. `measurements` would otherwise collapse the cluster column like any other attribute, under `first` or `mode` — the only rules a string column admits, `mean` over one being [rejected](#validation) rather than coerced — so a unit whose replicate rows declare `S1` and `S2` would collapse to `S1`, chosen by the `first` fallback, which would make the answer depend on the order the file happens to be in. The refusal is raised where the rows collapse, which is inside resolution, so `validate` reports it too: a check reading the roster would see the collapsed value and never the disagreement that produced it. **The consequence is worse than the same mistake in a [weight](#weighted-samples)**: a mis-collapsed weight mis-sizes what one unit stands for, while a mis-collapsed cluster decides which side of a train/test split that unit lands on — and a unit filed under the wrong site is a unit whose real site is on both sides, which is the leak this section calls the difference between a valid evaluation and a leaky one, arriving through the input file rather than through the partition. A cluster is a fact about the unit, not about the measurement.
+ 
+-The same logic governs `assign.stratify_by` under `allocation: between` — **when core is the one assigning.** With `method: random` or `blocked` a cluster is drawn as a whole, so arms are balanced over clusters and no cluster straddles two arms. A cluster-randomized trial is exactly that design, and the rule is the same one that keeps a cluster out of two folds: core computed the partition, so core keeps it indivisible.
++The same logic governs `assign.stratify_by` under `allocation: between` — **when core is the one assigning.** With `method: random` or `blocked` — refused as [`E-DATA-ASSIGN-DRAWN`](#allocation-within-subjects-or-between-subjects) in this build — a cluster is drawn as a whole, so arms are balanced over clusters and no cluster straddles two arms. A cluster-randomized trial is exactly that design, and the rule is the same one that keeps a cluster out of two folds: core computed the partition, so core keeps it indivisible.
+ 
+ **With `method: by_attribute` the arm is read rather than drawn, and a cluster may span both arms — in a [matched case-control](experimental-designs.md#matched-case-control) design it always does.** A matched set holding one case and one control is what matching *is*, and core neither prevents it nor treats it as an error: nothing was assigned, so there is no draw to keep whole. What `cluster_by` does there is set the inferential draw instead. The contrast stays unpaired, since no unit appears in both arms, but its interval is cluster-robust on the matched set — so the effective `n` is the number of sets rather than the number of subjects, which is the accounting a matched design needs. A conditional *estimator* is still yours, in a `scope: "summary"` step.
+ 
+ **And it decides what [`statistics.resample` and `statistics.null_test`](#what-isnt-a-repeat) operate on.** Both work by rebuilding the unit table, so both need to know what an independent draw is. Undeclared, they treat 300 cells as 300 of them; declared, the cluster is the draw:
+ 
+ - **`resample` resamples clusters, not rows.** A bootstrap that draws 300 cells with replacement from 10 animals produces resamples far more alike than a fresh sample of animals would be, so the percentile interval comes out too narrow — the same failure `cluster_by` exists to prevent, arriving by a different route. Core draws whole clusters with replacement, so a resampled table has a varying row count, and the interval's effective `n` is the cluster count. That count joins the [three-part `n`](#what-isnt-a-repeat) rather than replacing it — `n: {resolved: 300, completed: 300, failed: 0, clusters: 10}` — because a percentile interval over 10 draws is a different claim than one over 300, and which one a reader is holding shouldn't have to be inferred from `cluster_by` being set somewhere else in the config.
+ - **`null_test` shuffles at the level the shuffled attribute lives at.** Core derives which from the data rather than asking: if `shuffle` names an attribute that varies *within* clusters, labels are permuted within each cluster independently — for [matched case-control](experimental-designs.md#matched-case-control) that's a case/control swap inside each matched set, which is the conditional test that design calls for. If the attribute is constant within a cluster, whole clusters are relabelled, which is the null for a cluster-randomized trial. Shuffling rows freely would destroy the structure the null is supposed to hold fixed, and the two designs need opposite treatments, so guessing is not an option.
+ 
+ `validate` rejects the ambiguous middle: an attribute constant within some clusters and varying within others has no correct level, and neither null is defensible over a mixture.
+ 
+@@ -1628,21 +1628,21 @@ Sampling is deterministic given its seed, so `sweep.yaml` records both the seed
+ ```yaml
+ sweep:
+   groups:
+     - by: arm                            # names the axis; levels become the condition labels
+       levels: [control, treatment]
+   # 2 conditions: 00_arm=control, 01_arm=treatment
+ ```
+ 
+ `groups` is a **list**, always — one axis is a list of one. Two spellings for one concept is the drift this project exists to prevent, so there is no mapping shorthand.
+ 
+-A group level is a *set of units*, resolved from [`data.units`](#allocation-within-subjects-or-between-subjects): core assigns them when `allocation: between` with `assign.method: random` or `blocked`, and reads an existing column when `by_attribute`. `io.units` then yields that level's units, and nothing else about the condition changes.
++A group level is a *set of units*, resolved from [`data.units`](#allocation-within-subjects-or-between-subjects): core assigns them when `allocation: between` with `assign.method: random` or `blocked`, and reads an existing column when `by_attribute`. `io.units` then yields that level's units, and nothing else about the condition changes. (`random` and `blocked` are refused in this build as `E-DATA-ASSIGN-DRAWN` — see [§ Allocation](#allocation-within-subjects-or-between-subjects); `by_attribute` is what runs today.)
+ 
+ So two conditions on a group axis can share a `parameters_hash` — and that's correct, not a degenerate case. Identical code and identical parameters over two arms of units is exactly the claim a trial makes, and the three hashes say so precisely: same code, same parameters, different units. The design cell is recorded in `results.conditions[i].values` (`{arm: treatment}`) and the realized membership in `allocation.json`.
+ 
+ Group axes compose with parameter axes like any other mode, which is how "each arm analyzed three ways" is expressed:
+ 
+ ```yaml
+ sweep:
+   groups:
+     - {by: arm, levels: [control, treatment]}
+   grid:
+@@ -1664,28 +1664,32 @@ data:
+     allocation: between
+     assign:
+       sex: {method: by_attribute}          # `from` defaults to the axis name
+       arm:
+         method: random
+         stratify_by: [site, sex]           # balance arm within sex
+         ratio: {control: 1, treatment: 1}
+         seed: auto
+ ```
+ 
++`arm`'s `method: random` carries the same refusal as the single-axis example above — `sex`'s `by_attribute` is unaffected.
++
+ **Axes resolve in declaration order, and `stratify_by` may name a group axis declared before it.** That one rule is what makes every crossed case fall out of machinery core already has, rather than needing a joint-allocation mode of its own:
+ 
+ | The design | How it's written |
+ |---|---|
+ | Both factors already in the data | Two `by_attribute` axes; core assigns nothing |
+ | One randomized, one observed | Declare the observed axis first, and stratify the randomized one on it — which is how the design is actually run |
+ | Both randomized (a 2×2 factorial randomization) | Two `random` axes, the second stratifying on the first |
+ 
++The first row's two `by_attribute` axes are the only one of the three that executes in this build; the other two describe `random`, refused as [`E-DATA-ASSIGN-DRAWN`](#allocation-within-subjects-or-between-subjects).
++
+ `ratio` is always keyed by its own axis's levels, so no cell tuple appears anywhere in the config, and forward-only stratification makes a cycle unrepresentable rather than something `validate` has to detect. What core still won't do is decompose the result: a crossed design reports each cell and its contrasts, and [main effects and interactions](experimental-designs.md#what-core-will-not-do-for-you) remain a `scope: "summary"` step — exactly as they are for a parameter `grid`.
+ 
+ Comparisons *across* a group axis are unpaired, since no unit appears in two levels — unless the levels are matched, in which case `cluster_by` on the matched-set identifier is what carries the dependence. See [experimental-designs.md § Matched case-control](experimental-designs.md#matched-case-control). Comparisons *within* a level, between two parameter settings applied to the same arm, remain paired: composing a group axis with a parameter axis doesn't make every contrast in the run unpaired. See [Allocation](#allocation-within-subjects-or-between-subjects).
+ 
+ **`baseline` — a designated reference.** Without one, every condition is a peer and `report` can only list them. With one, core computes deltas and effect sizes against it automatically. It accepts group levels as well as parameter paths, so `{arm: control}` designates the control arm:
+ 
+ ```yaml
+ sweep:
+   baseline: {analysis.method: pearson, analysis.min_samples: 30}
+   grid:
+diff --git a/tests/test_validate.py b/tests/test_validate.py
+index 5026a8b..789f5ea 100644
+--- a/tests/test_validate.py
++++ b/tests/test_validate.py
+@@ -7224,21 +7224,21 @@ def test_allocation_within_leaves_both_cross_field_rows_silent():
+     reporting a missing `assign` there would name the wrong fault."""
+     c = Collector()
+     _check_assign({"sweep": {"groups": _ARM_AXIS}}, {"from": "index.csv"}, c)
+     assert [f.code for f in c.findings] == []
+ 
+ 
+ def test_by_attribute_assignment_is_accepted(write_config):
+     """`by_attribute` is the one method that executes in this build, so it earns
+     neither `E-DATA-ASSIGN-METHOD` (absent or out-of-enum) nor
+     `E-DATA-ASSIGN-DRAWN` (in-enum but drawn) — the control for both, and it must
+-    still report: the two live `-UNSUPPORTED` refusals below discriminate "the
++    still report: the three live `-UNSUPPORTED` refusals below discriminate "the
+     config loaded and only the method-value checks are silent" from "nothing
+     ran". The exact set is the number that matters — three codes, none of them
+     `E-DATA-ASSIGN-METHOD` or `E-DATA-ASSIGN-DRAWN`."""
+     found = _error_codes(write_config(_between({"arm": {"method": "by_attribute"}})))
+     assert found == {
+         "E-DATA-ALLOCATION-UNSUPPORTED",
+         "E-DATA-ASSIGN-UNSUPPORTED",
+         "E-SWEEP-GROUPS-UNSUPPORTED",
+     }
+     assert "E-DATA-ASSIGN-DRAWN" not in found

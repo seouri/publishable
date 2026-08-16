@@ -18,7 +18,7 @@ This repository holds both the normative specification and the tool it specifies
 |---|---|
 | Tests | `uv run pytest` |
 | Lint | `uv run ruff check .` |
-| Format | `uv run ruff format --check .` (the unchecked form is safe to run only on a branch where reformatting the 39 currently-unformatted Python files is the intended change) |
+| Format | `uv run ruff format --check .` (the unchecked form rewrites every file the check currently reports, which is more than a change of your own — run it only on a branch where reformatting them is the intended change) |
 | Types | `uv run mypy` |
 
 `docs/reference.md` § Package layout describes a tree that now **partially** exists.

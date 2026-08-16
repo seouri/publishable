@@ -1,0 +1,20 @@
+## Task 15: The promise this slice widens, and the gap it declines to fix
+
+**Files:** Modify `docs/reference.md`
+
+- [ ] **Step 1: Write the sentence § Creating a plugin owes.** It justifies entry points by saying `validate` resolves a name *"without importing a line of that package"*, "which matters because importing a module runs its top level and `validate` is documented as creating nothing and reaching nothing." For a local template that cannot hold: the decorator argument **is** the registration, and the collision rule makes discovery **eager**, so `validate` imports every file in `templates/` — including ones no config references. Say it beside the argument it qualifies. Say also that this is not a greenfield breach — importing is not inspecting, and it is the same line `validate` already crosses for `entrypoint` — but that it widens that exception from one module to a directory.
+- [ ] **Step 2: Record the README gap** where a reader meets it, **not** in `spec-defects.md` (gitignored, does not survive a merge). **Re-anchored — do not grep for the old wording.** Task 9 already changed § Generators' `template` row: the promise that the parameter table "is added to the README" now reads *"Adding its parameter table to the README is NOT BUILT"*, so **the `template` half is marked and must not be re-marked**. What remains is the gap itself: § The generated README specifies **no region** for a parameter table, and `generate_experiment` does not touch the README at all — a pre-existing defect plus a genuinely under-specified spot, deferred to whoever owns `docs`. Record it once, where a reader of § The generated README meets it.
+- [ ] **Step 2b: Two items routed here from task 9's review.** (i) The `experiment` row's *"adds a row to the README's managed experiments table"* is the same false build fact as the row above it; task 9 marked it, so **verify only** that both rows now read consistently and that no third row in that table still claims an unbuilt README effect. (ii) `BaseTemplate.required_env` is **dead** (spec measurement: declarable, read nowhere), yet § The generated README specifies that `generate experiment` *"merges any new `required_env` into the credentials table"* — a specified reader of an unbuilt member. Same defect shape as the parameter table, same paragraph; record it in the same place rather than minting a second note.
+- [ ] **Step 2c: Generalize § Exit codes' `E-STEP-EXISTS` clause.** `E-TEMPLATE-EXISTS` (minted in task 9) joins a family — `E-STEP-EXISTS` and its siblings — whose behaviour § Exit codes states for one member only, by name. This is now the fourth undocumented member. Widen that clause to name the family and its shared exit behaviour rather than adding a fourth row; the greenfield refusal is one rule, not four.
+- [ ] **Step 3: One sentence on `__pycache__`.** Discovery writes `templates/__pycache__/`; a scaffolded project ignores it, so neither the dirty gate nor `code_hash` is disturbed — **probed**. A hand-made repo whose `.gitignore` lacks it would go dirty on `validate` and fail `run`.
+- [ ] **Step 4:** Mechanical pass over everything edited. Commit.
+
+---
+
+## Sequencing
+
+1 → 15 in order. Tasks 1–3 build the mechanism bottom-up and **task 3 is where the suite briefly cannot collect** unless all six bindings move together. Task 4 is the ordering constraint; 5 makes it reachable from the two other call sites. **Task 6 is the one whose absence passes every other test in this plan** — a naive implementation is correct until a second repo appears in the same process. Tasks 7–8 are the refusals, 9–10 the generator and the version question, 11–15 the documents, with 11 atomic against its binding tests.
+
+## Where this slice will be attacked
+
+**The acceptance property:** a `templates/<name>.py` in a project's own repo resolves by name through `validate`, `run` and `generate`, with core's builtins still resolving beside it; two files claiming one name are refused naming both; a broken file is a finding rather than a traceback; and two repos in one process never see each other's templates.

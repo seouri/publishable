@@ -1,0 +1,345 @@
+# Review package: 33e4ce1..HEAD
+
+## Commits
+3beabee fix: a helper directory with no __init__.py has no __file__, and survived the restore
+565d9af feat: per-repo template module names, and a sys.modules restore that survives a second repo
+
+## Files changed
+ src/publishable/templates/discovery.py | 107 ++++++++++++++++++++++++----
+ tests/test_templates.py                | 124 +++++++++++++++++++++++++++++++++
+ 2 files changed, 217 insertions(+), 14 deletions(-)
+
+## Diff
+diff --git a/src/publishable/templates/discovery.py b/src/publishable/templates/discovery.py
+index 0d527fa..09d9b75 100644
+--- a/src/publishable/templates/discovery.py
++++ b/src/publishable/templates/discovery.py
+@@ -4,21 +4,22 @@ A local template's `@register_template` argument is the whole of its
+ registration — the decorator records `(name, cls)` and returns the class
+ unchanged, so `class X(BaseTemplate)` still resolves for every later
+ reference to `X`.
+ 
+ The pending list is module-level, but it is only a staging buffer: task 6's
+ requirement is that two projects in one process never see each other's
+ templates, so nothing here keeps a persistent name→class mapping. Discovery
+ drains this list into whatever scoped registry it builds per run.
+ """
+ 
+-import importlib
++import hashlib
++import importlib.util
+ import sys
+ from collections.abc import Callable
+ from pathlib import Path
+ 
+ from publishable.templates.base import BaseTemplate
+ 
+ _pending: list[tuple[str, type[BaseTemplate]]] = []
+ 
+ 
+ def register_template(
+@@ -33,53 +34,131 @@ def register_template(
+     return decorator
+ 
+ 
+ def drain_pending() -> list[tuple[str, type[BaseTemplate]]]:
+     """Hand over the accumulated registrations and empty the buffer."""
+     pending = list(_pending)
+     _pending.clear()
+     return pending
+ 
+ 
++def _module_name(repo_root: Path, stem: str) -> str:
++    """A synthetic module name that cannot alias across repos, or onto a real module.
++
++    Keyed on the resolved repo root as well as the file stem: two projects in
++    one process can both hold `templates/my_assay.py`, and a name derived from
++    the stem alone makes them one `sys.modules` entry. The `_publishable_local_`
++    prefix keeps the name out of every real module's namespace, which is what
++    stops a `templates/json.py` from being bound as `json` and importing
++    *itself* when its own top level says `import json` — the same hazard a
++    `templates/io.py` would carry, since `publishable` imports `io`.
++    """
++    token = hashlib.sha256(str(repo_root).encode()).hexdigest()[:12]
++    return f"_publishable_local_{token}_{stem}"
++
++
++def _import_file(path: Path, module_name: str, templates_dir: Path) -> None:
++    """Execute one `templates/*.py` under `module_name`, leaving `sys.modules` as found.
++
++    `templates_dir` goes on the *end* of `sys.path` so a file may import a
++    sibling helper, without that directory shadowing a stdlib or site-packages
++    name for the duration.
++
++    Only the entries this import touched are undone, and only those `_is_local`
++    places under `templates_dir` — plus any entry it *replaced*, wherever it
++    lives, since that is the clobber path. Blanket-restoring every new entry
++    would un-import whatever the template legitimately pulled in (numpy, say),
++    trading a discovery bug for a re-initialisation bug in the rest of the
++    process.
++    """
++    before = dict(sys.modules)
++    spec = importlib.util.spec_from_file_location(module_name, path)
++    if spec is None or spec.loader is None:  # pragma: no cover - unreachable for a .py file
++        raise ImportError(f"no import machinery for {path}")
++    module = importlib.util.module_from_spec(spec)
++    sys.path.append(str(templates_dir))
++    entry = len(sys.path) - 1
++    sys.modules[module_name] = module
++    try:
++        spec.loader.exec_module(module)
++    finally:
++        # By index, not `remove`, which takes the *first* occurrence and would
++        # strip a pre-existing entry for this directory while leaving ours.
++        del sys.path[entry]
++        for key, was in list(sys.modules.items()):
++            if key not in before:
++                if key == module_name or _is_local(sys.modules[key], templates_dir):
++                    del sys.modules[key]
++            elif was is not before[key]:
++                sys.modules[key] = before[key]
++        for key, was in before.items():
++            if key not in sys.modules:
++                sys.modules[key] = was
++
++
++def _is_local(module: object, templates_dir: Path) -> bool:
++    """Whether `module` was loaded out of the repo's own `templates/`.
++
++    `__file__` alone is not enough. A helper directory with no `__init__.py` —
++    the default shape, since nobody adds one on purpose — becomes a namespace
++    package, and a namespace package has no `__file__` at all. Left in
++    `sys.modules` it hands the next repo the previous repo's submodules, which
++    is the exact leak this restore exists to close. `__path__` covers regular
++    packages, namespace packages, and plain modules with one predicate.
++    """
++    origin = getattr(module, "__file__", None)
++    if origin and _under(Path(origin), templates_dir):
++        return True
++    return any(_under(Path(entry), templates_dir) for entry in getattr(module, "__path__", ()))
++
++
++def _under(path: Path, directory: Path) -> bool:
++    """Whether `path` is `directory` or sits inside it, both resolved first.
++
++    Resolved because the two strings reach here by different routes — one from
++    a module's `__file__`, one from the repo root a command was given — and on
++    macOS a symlinked temporary directory makes them differ textually while
++    naming one place.
++    """
++    here, root = path.resolve(), directory.resolve()
++    return root == here or root in here.parents
++
++
+ def discover_local(repo_root: Path) -> dict[str, type[BaseTemplate]]:
+     """Import every `templates/*.py` under `repo_root` and return what it registered.
+ 
+     Eager rather than lazy — every file is imported, not only the one a config
+     names — because a collision between two local templates (task 7) can only
+     be detected between files a config never mentions. Import order therefore
+     never decides which template wins; both are found and the collision is
+     named. See `reference.md` § Creating a plugin.
+ 
+-    Imports by path, following `base_experiment.load_experiment`'s shape: the
+-    module name is purged from `sys.modules` first and `templates/` is put on
+-    `sys.path` only for the duration of the import, inside a `try`/`finally`,
+-    for the same reason `load_experiment` gives — a cached module from another
+-    project would silently hand back the wrong file's registrations. `.gitkeep`,
++    Imports by path, for the reason `base_experiment.load_experiment` gives —
++    a cached module from another project would silently hand back the wrong
++    file's registrations. Two things make that safe here: each file executes
++    under a module name keyed on the repo root as well as its stem (see
++    `_module_name`), so no two projects share an entry; and `sys.modules` is
++    put back as it was found after each file (see `_import_file`), so a helper
++    a template imports from its own `templates/` cannot be served to the next
++    project from cache. `.gitkeep`,
+     `__init__.py`, and any non-`.py` file are skipped; a file that raises on
+     import is not caught here (task 8 owns that diagnostic), and any
+     registrations it made before raising are left in the pending buffer for
+     task 8 to reason about rather than silently discarded.
+ 
+     Discards whatever the pending buffer already held before this call — the
+     return value is what *these files* registered, not a leftover from an
+     earlier `@register_template` in the same process.
+     """
+     templates_dir = repo_root / "templates"
+     if not templates_dir.is_dir():
+         return {}
+ 
+     drain_pending()  # discard anything queued before this call — not ours to return
+     found: dict[str, type[BaseTemplate]] = {}
+     for path in sorted(templates_dir.glob("*.py")):
+         if path.stem.startswith("__"):
+             continue
+-        module_name = path.stem
+-        sys.modules.pop(module_name, None)
+-        sys.path.insert(0, str(templates_dir))
+-        try:
+-            importlib.import_module(module_name)
+-        finally:
+-            sys.path.remove(str(templates_dir))
+-            sys.modules.pop(module_name, None)
++        _import_file(path, _module_name(repo_root.resolve(), path.stem), templates_dir)
+         for name, cls in drain_pending():
+             found[name] = cls
+     return found
+diff --git a/tests/test_templates.py b/tests/test_templates.py
+index 9cf1246..b94c91c 100644
+--- a/tests/test_templates.py
++++ b/tests/test_templates.py
+@@ -1,10 +1,11 @@
++import sys
+ from pathlib import Path
+ 
+ from publishable import BaseTemplate, Param
+ from publishable.stats import UnitTable
+ from publishable.templates.discovery import discover_local
+ from publishable.templates.registry import get_template, template_names
+ 
+ 
+ def test_generic_is_registered_and_declares_its_conventions():
+     t = get_template("generic")
+@@ -115,20 +116,143 @@ def test_per_call_merge_does_not_leak_between_two_roots(tmp_path: Path):
+         "from publishable import BaseTemplate, register_template\n\n\n"
+         '@register_template("alpha")\n'
+         "class Alpha(BaseTemplate):\n"
+         "    pass\n"
+     )
+ 
+     assert get_template("alpha", root_a) is not None
+     assert get_template("alpha", root_b) is None
+ 
+ 
++def _two_repos_each_holding_my_assay(tmp_path: Path) -> tuple[Path, Path]:
++    """Repo A and repo B, both with `templates/my_assay.py` registering `my_assay`.
++
++    Each file imports helpers from its own `templates/`, in both shapes a
++    helper directory comes in — `support/` with an `__init__.py`, and `plain/`
++    without one, which Python makes a *namespace* package with no `__file__` at
++    all. Both, because a restore that tested only `__file__` would leave the
++    namespace package cached and leak it to the next repo; and directories
++    rather than sibling `.py` files, because every `templates/*.py` is itself
++    imported by discovery, so a sibling would be re-imported per repo by
++    accident and no leak would show.
++
++    `plain.data` carries a `__file__` and is evicted either way, so the value
++    it holds is not what the namespace package costs. What it costs is the
++    *parent* surviving in `sys.modules` with the previous repo's submodules
++    still attached to it — which a file saying `import plain` and reading
++    `plain.data` is then handed, silently and with the wrong repo's data. That
++    file cannot be written as a fixture here, because once the residue is gone
++    it is an `AttributeError` rather than a value; the residue's absence is
++    asserted directly instead.
++    """
++    roots = []
++    for tag in ("a", "b"):
++        root = tmp_path / tag
++        (root / "templates" / "support").mkdir(parents=True)
++        (root / "templates" / "plain").mkdir(parents=True)
++        (root / "templates" / "support" / "__init__.py").write_text(f'ORIGIN = "{tag.upper()}"\n')
++        (root / "templates" / "plain" / "data.py").write_text(f'ORIGIN = "{tag.upper()}"\n')
++        (root / "templates" / "my_assay.py").write_text(
++            "import support\n"
++            "import plain.data\n"
++            "from publishable import BaseTemplate, register_template\n\n\n"
++            '@register_template("my_assay")\n'
++            "class MyAssay(BaseTemplate):\n"
++            f'    """{tag.upper()}\'s"""\n\n'
++            "    origin = support.ORIGIN\n"
++            "    namespaced_origin = plain.data.ORIGIN\n"
++        )
++        roots.append(root)
++    return roots[0], roots[1]
++
++
++def test_two_repos_in_one_process_do_not_cross_contaminate(tmp_path: Path):
++    """Both repos hold `templates/my_assay.py`, registering the same name but
++    different classes. Resolving from repo A then repo B must give B's class —
++    asserted by class identity (`__doc__`, and `origin` carried from the repo's
++    own helper), never by the name, which is identical either way and so proves
++    nothing.
++
++    Three claims, each dying to a different defect:
++
++    - `origin` — repo B's `import support` served repo A's package from
++      `sys.modules`, so B's class silently carries A's data. This is the one
++      that fails today, and it dies to dropping the `sys.modules` restore.
++    - no `plain` or `support` left in `sys.modules` — the restore must catch a
++      helper directory with no `__init__.py` too, which has no `__file__` to
++      test. Dies to a restore that looks at `__file__` alone.
++    - `__module__` inequality — the two files are not one `sys.modules` entry.
++      Dies to keying the synthetic module name on the file stem alone.
++
++    `namespaced_origin` is a control rather than a claim: it holds under every
++    one of those defects, and it is here so a fix that made the namespace
++    helper unimportable fails rather than passing the residue assertion."""
++    repo_a, repo_b = _two_repos_each_holding_my_assay(tmp_path)
++
++    a = get_template("my_assay", repo_a)
++    b = get_template("my_assay", repo_b)
++
++    assert a is not None and b is not None
++    assert type(a).__doc__ == "A's"
++    assert type(b).__doc__ == "B's"
++    assert type(a).origin == "A"
++    assert type(b).origin == "B"
++    assert type(a).namespaced_origin == "A"
++    assert type(b).namespaced_origin == "B"
++    assert type(a) is not type(b)
++    assert type(a).__module__ != type(b).__module__
++    assert "plain" not in sys.modules and "support" not in sys.modules
++
++
++def test_a_repos_own_templates_are_reachable_from_a_second_call(tmp_path: Path):
++    """THE CONTROL for the test above: naming a module per repo must not make a
++    repo resolvable only once. Nothing is cached, so the same root asked twice
++    re-imports and answers identically — with the same class *identity*, since
++    two separate imports of one file give two unequal classes."""
++    repo_a, _ = _two_repos_each_holding_my_assay(tmp_path)
++
++    first = get_template("my_assay", repo_a)
++    second = get_template("my_assay", repo_a)
++
++    assert first is not None and second is not None
++    assert type(first).__doc__ == type(second).__doc__ == "A's"
++    assert type(first).origin == type(second).origin == "A"
++
++
++def test_a_template_named_for_a_stdlib_module_does_not_import_itself(tmp_path: Path):
++    """`templates/json.py` whose own top level says `import json`. Bound as
++    `json` in `sys.modules` it gets *itself* back — deterministically, on every
++    call, single-threaded — and the stdlib `json` is evicted from the process
++    for good afterwards. `publishable` itself imports `io`, so `templates/io.py`
++    carries the same hazard; it is named here rather than tested, because
++    clobbering `sys.modules["io"]` mid-suite is worse than the bug.
++
++    THE CONTROL is `saw_stdlib_json`: a fix that merely skipped files named
++    after a stdlib module would leave the template unresolved and fail it."""
++    templates = tmp_path / "templates"
++    templates.mkdir()
++    (templates / "json.py").write_text(
++        "import json\n"
++        "from publishable import BaseTemplate, register_template\n\n\n"
++        '@register_template("jsonish")\n'
++        "class Jsonish(BaseTemplate):\n"
++        "    saw_stdlib_json = hasattr(json, 'loads')\n"
++    )
++
++    resolved = get_template("jsonish", tmp_path)
++
++    assert resolved is not None
++    assert type(resolved).__name__ == "Jsonish"
++    assert type(resolved).saw_stdlib_json is True
++    assert hasattr(sys.modules["json"], "loads")
++
++
+ def test_validate_defaults_to_no_cross_field_rules():
+     class Bare(BaseTemplate):
+         parameter_spec: dict[str, Param] = {}
+ 
+     assert Bare().validate(None) == []
+ 
+ 
+ def test_the_base_aggregate_returns_nothing():
+     """`{}` is the right answer for a table a template doesn't recognize — core
+     calls `aggregate` once per recording step, and a pipeline can have several."""

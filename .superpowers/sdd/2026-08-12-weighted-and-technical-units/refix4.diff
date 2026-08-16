@@ -1,0 +1,207 @@
+diff --git a/src/publishable/artifacts.py b/src/publishable/artifacts.py
+index 0b2df3d..1ea1da5 100644
+--- a/src/publishable/artifacts.py
++++ b/src/publishable/artifacts.py
+@@ -224,26 +224,35 @@ class StepIO:
+         return self._units
+ 
+     @property
+     def recorded_keys(self) -> set[str]:
+         return set(self._recorded_keys)
+ 
+     @property
+     def skipped(self) -> dict[str, str]:
+         return dict(self._skipped)
+ 
+-    def _settle(self, unit_key: str) -> None:
++    def _check_roster(self, unit_key: str) -> None:
++        """The roster half of settling — the one check every arrival path needs,
++        including the measurement path: a measurement of a unit this execution was
++        never given is as wrong as a plain record of one, and `reference.md` §
++        Errors core raises documents `E-STEP-UNIT-UNKNOWN` for `io.record` with no
++        measurement exception.
++        """
+         if self._units is not None and unit_key not in {u.key for u in self._units}:
+             raise ContractError(
+                 f"{unit_key!r} is not in this execution's roster",
+                 code="E-STEP-UNIT-UNKNOWN",
+             )
++
++    def _settle(self, unit_key: str) -> None:
++        self._check_roster(unit_key)
+         if unit_key in self._rows or unit_key in self._skipped:
+             raise ContractError(
+                 f"{unit_key!r} was already recorded or skipped in this execution",
+                 code="E-STEP-UNIT-SETTLED",
+             )
+ 
+     def _declared_attributes(self) -> set[str]:
+         if self._units is None or len(self._units) == 0:
+             return set()
+         return set(self._units[0].attributes)
+@@ -264,32 +273,53 @@ class StepIO:
+                 "`io.record` was given `measurement=` while `data.units.measurements` "
+                 "is undeclared, so there is no rule to collapse the rows under. Declare "
+                 "it with a `by` and a `collapse`, or drop the argument — without a rule "
+                 "a second row for one unit is a resumed retry, not a measurement",
+                 code="E-STEP-MEASUREMENT-UNDECLARED",
+             )
+         if measurement is not None:
+             key = (unit_key, measurement)
+             if key in self._measurement_rows:
+                 return  # first write wins, so a resumed measurement is idempotent too
++            self._check_roster(unit_key)
++            # Only the skipped half of `_settle`'s settled-check applies here: a
++            # second measurement of one unit is the whole point of this path, so
++            # `_rows`-membership must not block it, but `io.skip` declares the unit
++            # ineligible — admitting no result by design — and a later measurement
++            # re-entering it as a completed result is exactly the accounting
++            # failure `ineligible` exists to prevent (`reference.md` § The unit
++            # table is the inference base).
++            if unit_key in self._skipped:
++                raise ContractError(
++                    f"{unit_key!r} was already skipped in this execution",
++                    code="E-STEP-UNIT-SETTLED",
++                )
+             if "unit" in values:
+                 raise ContractError(
+                     "`unit` collides with the unit key column: a recorded column may "
+                     "not be named `unit`",
+                     code="E-STEP-KEY-COLLISION",
+                 )
+             if "measurement" in values:
+                 raise ContractError(
+                     "`measurement` collides with the measurement column: a recorded "
+                     "column may not be named `measurement`",
+                     code="E-STEP-KEY-COLLISION",
+                 )
++            collision = self._declared_attributes() & values.keys()
++            if collision:
++                name = sorted(collision)[0]
++                raise ContractError(
++                    f"{name!r} collides with a declared unit attribute of the same "
++                    "name: a recorded column may not shadow it",
++                    code="E-STEP-KEY-COLLISION",
++                )
+             self._measurement_rows[key] = {
+                 "unit": unit_key,
+                 "measurement": measurement,
+                 **coerce_scalars(values, "io.record"),
+             }
+             return
+         if unit_key in self._rows:
+             return  # first write wins, matching io.append's idempotency
+         self._settle(unit_key)
+         if "unit" in values:
+diff --git a/tests/test_artifacts.py b/tests/test_artifacts.py
+index 310bf8d..3156b8d 100644
+--- a/tests/test_artifacts.py
++++ b/tests/test_artifacts.py
+@@ -440,20 +440,107 @@ def test_a_measurement_row_may_not_name_a_column_unit_or_measurement(tmp_path: P
+         measurements={"by": "read_id", "collapse": "mean"},
+     )
+     with pytest.raises(ContractError) as e:
+         io.record("p1", {"unit": "IMPOSTER"}, measurement="r1")
+     assert e.value.code == "E-STEP-KEY-COLLISION"
+     with pytest.raises(ContractError) as e:
+         io.record("p1", {"measurement": "IMPOSTER"}, measurement="r1")
+     assert e.value.code == "E-STEP-KEY-COLLISION"
+ 
+ 
++def test_measuring_a_key_not_in_the_roster_is_refused(tmp_path: Path):
++    """Control: the plain path already refuses this (`E-STEP-UNIT-UNKNOWN`); the
++    measurement path must not bypass the roster just because it skips the rest
++    of `_settle`."""
++    from publishable.units import Unit, UnitList
++
++    sd = tmp_path / "run" / "s"
++    sd.mkdir(parents=True)
++    (tmp_path / "in").mkdir()
++    io = StepIO(
++        step_dir=sd,
++        input_dir=tmp_path / "in",
++        run_dir=tmp_path / "run",
++        units=UnitList([Unit(key="p0")]),
++        measurements={"by": "read_id", "collapse": "mean"},
++    )
++    with pytest.raises(ContractError) as e:
++        io.record("ghost", {"score": 1}, measurement="r1")
++    assert e.value.code == "E-STEP-UNIT-UNKNOWN"
++
++
++def test_measuring_a_skipped_unit_is_settled(tmp_path: Path):
++    """A `skip`ped unit is ineligible by design; a later measurement re-entering
++    it as a completed result is exactly the accounting failure `ineligible`
++    exists to prevent, so this must raise even though a second measurement of
++    an *unskipped* unit (the next test) must not."""
++    sd = tmp_path / "run" / "s"
++    sd.mkdir(parents=True)
++    (tmp_path / "in").mkdir()
++    io = StepIO(
++        step_dir=sd,
++        input_dir=tmp_path / "in",
++        run_dir=tmp_path / "run",
++        measurements={"by": "read_id", "collapse": "mean"},
++    )
++    io.skip("p1", "no baseline visit")
++    with pytest.raises(ContractError) as e:
++        io.record("p1", {"score": 10}, measurement="r1")
++    assert e.value.code == "E-STEP-UNIT-SETTLED"
++    assert io.measurement_rows() == []
++
++
++def test_a_second_measurement_of_an_unskipped_unit_is_not_settled(tmp_path: Path):
++    """Control for the previous test: a unit that was neither skipped nor
++    plain-recorded must still accept a second, *different* measurement — the
++    whole point of `measurement=`."""
++    sd = tmp_path / "run" / "s"
++    sd.mkdir(parents=True)
++    (tmp_path / "in").mkdir()
++    io = StepIO(
++        step_dir=sd,
++        input_dir=tmp_path / "in",
++        run_dir=tmp_path / "run",
++        measurements={"by": "read_id", "collapse": "mean"},
++    )
++    io.record("p1", {"score": 10}, measurement="r1")
++    io.record("p1", {"score": 20}, measurement="r2")
++    assert len(io.measurement_rows()) == 2
++
++
++def test_a_measurement_column_matching_a_declared_attribute_is_a_key_collision(
++    tmp_path: Path,
++):
++    """Control: the plain path already refuses this for `site`; the measurement
++    path must refuse it identically rather than folding a shadowed attribute
++    into a row task 5 will later merge against the same unit's `site`."""
++    from publishable.units import Unit, UnitList
++
++    sd = tmp_path / "run" / "s"
++    sd.mkdir(parents=True)
++    (tmp_path / "in").mkdir()
++    roster = UnitList([Unit(key="p0", attributes={"site": "A"})])
++    io = StepIO(
++        step_dir=sd,
++        input_dir=tmp_path / "in",
++        run_dir=tmp_path / "run",
++        units=roster,
++        measurements={"by": "read_id", "collapse": "mean"},
++    )
++    with pytest.raises(ContractError) as e:
++        io.record("p0", {"site": "x"}, measurement="r1")
++    assert e.value.code == "E-STEP-KEY-COLLISION"
++    assert "site" in str(e.value)
++    io.record("p0", {"score": 1}, measurement="r1")
++    assert io.measurement_rows() == [{"unit": "p0", "measurement": "r1", "score": 1}]
++
++
+ def test_recorded_keys_skipped_and_rows_are_not_live_handles(tmp_path: Path):
+     from publishable.units import Unit, UnitList
+ 
+     sd = tmp_path / "run" / "s"
+     sd.mkdir(parents=True)
+     (tmp_path / "in").mkdir()
+     io = StepIO(
+         step_dir=sd,
+         input_dir=tmp_path / "in",
+         run_dir=tmp_path / "run",

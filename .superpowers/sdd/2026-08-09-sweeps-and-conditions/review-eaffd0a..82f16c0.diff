@@ -1,0 +1,447 @@
+# Review package: eaffd0a..HEAD
+
+## Commits
+82f16c0 Widen read_condition to accept what io.conditions yields, not only a bare index
+09882a7 Let a summary step read across conditions, and only a summary step
+7374581 Extract condition_dir_name as the one source of the conditions/<nn>_<label> format
+
+## Files changed
+ src/publishable/artifacts.py |  69 +++++++++++++++++++
+ src/publishable/runner.py    |   7 +-
+ src/publishable/sweep.py     |  10 +++
+ tests/test_artifacts.py      | 159 +++++++++++++++++++++++++++++++++++++++++++
+ 4 files changed, 242 insertions(+), 3 deletions(-)
+
+## Diff
+diff --git a/src/publishable/artifacts.py b/src/publishable/artifacts.py
+index dd86839..481b4b1 100644
+--- a/src/publishable/artifacts.py
++++ b/src/publishable/artifacts.py
+@@ -5,24 +5,27 @@ import csv
+ import io as _io
+ import json
+ import os
+ import tempfile
+ from pathlib import Path
+ from typing import TYPE_CHECKING, Any
+ 
+ import yaml
+ 
+ from publishable.errors import ArtifactError, ArtifactExistsError, ContractError
++from publishable.sweep import condition_dir_name
+ 
+ if TYPE_CHECKING:
+     from publishable.units import UnitList
+ 
++SCOPE_ORDER = {"run": 0, "condition": 1, "repeat": 2, "summary": 3}
++
+ 
+ def write_atomic(path: Path, data: bytes) -> None:
+     """Temp file plus rename, so a crash leaves nothing rather than a half-file."""
+     path.parent.mkdir(parents=True, exist_ok=True)
+     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".partial-")
+     try:
+         with os.fdopen(fd, "wb") as fh:
+             fh.write(data)
+             fh.flush()
+             os.fsync(fh.fileno())
+@@ -164,29 +167,37 @@ def _suffix_for(name: str) -> str | None:
+ 
+ 
+ class StepIO:
+     def __init__(
+         self,
+         *,
+         step_dir: Path,
+         input_dir: Path,
+         run_dir: Path,
+         units: "UnitList | None" = None,
++        scope: str = "repeat",
++        conditions: list[tuple[int, str]] | None = None,
++        repeats: list[str] | None = None,
++        step_scopes: dict[str, str] | None = None,
+     ) -> None:
+         self.step_dir = step_dir
+         self.input_dir = input_dir
+         self.run_dir = run_dir
+         self.resumed = False
+         self._recorded_keys: set[str] = set()
+         self._units = units
+         self._rows: dict[str, dict[str, Any]] = {}
+         self._skipped: dict[str, str] = {}
++        self._scope = scope
++        self._conditions = conditions
++        self._repeats = repeats
++        self._step_scopes = step_scopes
+ 
+     @property
+     def units(self) -> "UnitList":
+         if self._units is None:
+             raise ContractError(
+                 "`io.units` needs a `data.units` declaration; none is present, and an "
+                 "empty list would let a step report results about nothing",
+                 code="E-STEP-UNITS-UNAVAILABLE",
+             )
+         return self._units
+@@ -326,20 +337,78 @@ class StepIO:
+                 code="E-ARTIFACT-APPEND",
+             )
+         target = self._resolve(name)
+         target.parent.mkdir(parents=True, exist_ok=True)
+         with target.open("a", encoding="utf-8") as fh:
+             fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+ 
+     def read_input(self, relpath: str) -> Any:
+         return self._read(self.input_dir / relpath)
+ 
++    def _summary_only(self, what: str) -> None:
++        if self._scope != "summary":
++            raise ContractError(
++                f"`io.{what}` is available at `summary` scope only; this step is "
++                f"`{self._scope}`-scoped, and a narrower step has no business reading "
++                "across conditions",
++                code="E-STEP-SCOPE-ONLY",
++            )
++
++    @property
++    def conditions(self) -> list[tuple[int, str]]:
++        self._summary_only("conditions")
++        return list(self._conditions or [])
++
++    @property
++    def repeats(self) -> list[str]:
++        self._summary_only("repeats")
++        return list(self._repeats or [])
++
++    def read_condition(
++        self,
++        condition: "int | tuple[int, str]",
++        step: str,
++        name: str,
++        repeat: str | None = None,
++    ) -> Any:
++        """`condition` accepts either a bare index or the `(index, label)` element
++        `io.conditions` yields, so the documented `for condition in io.conditions:
++        io.read_condition(condition, ...)` pattern and a literal index both work."""
++        self._summary_only("read_condition")
++        index = condition[0] if isinstance(condition, tuple) else condition
++        target = (self._step_scopes or {}).get(step)
++        if target == "repeat" and repeat is None:
++            raise ContractError(
++                f"`{step}` is repeat-scoped, so `read_condition` needs a `repeat=` naming "
++                "which repeat's copy to read",
++                code="E-STEP-READ-REPEAT-REQUIRED",
++            )
++        label = dict(self._conditions or []).get(index)
++        if label is None:
++            raise ContractError(
++                f"condition {index} is not among this run's resolved conditions",
++                code="E-STEP-READ-CONDITION-UNKNOWN",
++            )
++        base = self.run_dir / "conditions" / condition_dir_name(index, label)
++        collapsed = len(self._repeats or []) <= 1
++        if target == "repeat" and repeat is not None and not collapsed:
++            base = base / repeat
++        return self._read(base / step / name)
++
+     def read_upstream(self, step: str, name: str) -> Any:
++        target = (self._step_scopes or {}).get(step)
++        if target is not None and SCOPE_ORDER[target] > SCOPE_ORDER[self._scope]:
++            raise ContractError(
++                f"`{step}` is `{target}`-scoped and this step is `{self._scope}`-scoped; "
++                "a wider step cannot read a narrower one, because at the time it runs "
++                "those executions have not happened",
++                code="E-STEP-READ-DIRECTION",
++            )
+         return self._read(self.run_dir / "shared" / step / name)
+ 
+     @staticmethod
+     def _read(path: Path) -> Any:
+         """Inverts the same table `write` dispatches through — see `WRITERS`/`READERS`."""
+         suffix = _suffix_for(path.name)
+         if suffix is not None:
+             return READERS[suffix](path.read_bytes())
+         return path.read_bytes()
+diff --git a/src/publishable/runner.py b/src/publishable/runner.py
+index ec10591..9a9e671 100644
+--- a/src/publishable/runner.py
++++ b/src/publishable/runner.py
+@@ -6,20 +6,21 @@ import time
+ from dataclasses import dataclass
+ from datetime import UTC, datetime
+ from pathlib import Path
+ from typing import Any
+ 
+ from publishable.artifacts import StepIO
+ from publishable.config import Config, SweptAway
+ from publishable.errors import ContractError
+ from publishable.replication import Repeat
+ from publishable.scope import Execution
++from publishable.sweep import condition_dir_name
+ from publishable.units import UnitList
+ 
+ 
+ @dataclass(frozen=True)
+ class ExecutionResult:
+     execution: Execution
+     status: str
+     started_at: str
+     wall_seconds: float
+     returned: dict[str, Any]
+@@ -137,23 +138,23 @@ def _units_failed_anywhere(results: list[ExecutionResult], roster: "UnitList") -
+     return failed
+ 
+ 
+ def step_dir_for(run_dir: Path, execution: Execution, collapse_repeats: bool) -> Path:
+     """Depth follows scope; degenerate levels collapse."""
+     if execution.scope == "run":
+         return run_dir / "shared" / execution.step_name
+     if execution.scope == "summary":
+         return run_dir / "summary" / execution.step_name
+     base = run_dir
+-    if execution.condition_label is not None:
+-        base = base / "conditions" / (
+-            f"{execution.condition_index:02d}_{execution.condition_label}"
++    if execution.condition_label is not None and execution.condition_index is not None:
++        base = base / "conditions" / condition_dir_name(
++            execution.condition_index, execution.condition_label
+         )
+     if execution.scope == "repeat" and not collapse_repeats and execution.repeat_label:
+         base = base / execution.repeat_label
+     return base / execution.step_name
+ 
+ 
+ def resolve_condition_cfg(base: dict[str, Any], values: dict[str, Any]) -> Config:
+     """Overlay this condition's swept values onto the base config.
+ 
+     Each dotted path in `values` names a leaf under `parameters`; the overlay
+diff --git a/src/publishable/sweep.py b/src/publishable/sweep.py
+index 29c6349..a567358 100644
+--- a/src/publishable/sweep.py
++++ b/src/publishable/sweep.py
+@@ -112,20 +112,30 @@ def _keys_for(paths: list[str]) -> dict[str, str]:
+ def label_for(values: dict[str, Any], grid: dict[str, Any], is_baseline: bool) -> str:
+     if is_baseline:
+         return "baseline"
+     keys = _keys_for(list(grid))
+     return AXIS_SEPARATOR.join(
+         f"{keys.get(path, path.rsplit('.', 1)[-1])}={render_value(value)}"
+         for path, value in values.items()
+     )
+ 
+ 
++def condition_dir_name(index: int, label: str) -> str:
++    """The `<nn>_<label>` name a condition nests under, in `run_dir/conditions/`.
++
++    Single source of truth for the format: `runner.step_dir_for` and
++    `artifacts.StepIO.read_condition` both nest here, and a second implementation
++    of this string is how they drift apart.
++    """
++    return f"{index:02d}_{label}"
++
++
+ def expand(config: dict[str, Any]) -> list[Condition]:
+     """Ordered conditions: a declared baseline as 00, then the grid product.
+ 
+     With no `sweep` block, one condition whose label is None — which is what
+     keeps the `conditions/` level out of the artifact tree.
+     """
+     sweep = config.get("sweep") or {}
+     if not sweep:
+         return [Condition(index=0, label=None, values={}, is_baseline=False)]
+ 
+diff --git a/tests/test_artifacts.py b/tests/test_artifacts.py
+index 0fb54c8..8a61bb5 100644
+--- a/tests/test_artifacts.py
++++ b/tests/test_artifacts.py
+@@ -9,20 +9,42 @@ from publishable.artifacts import StepIO, write_atomic
+ 
+ 
+ @pytest.fixture
+ def io(tmp_path: Path) -> StepIO:
+     step_dir = tmp_path / "run" / "shared" / "step01"
+     step_dir.mkdir(parents=True)
+     (tmp_path / "input").mkdir()
+     return StepIO(step_dir=step_dir, input_dir=tmp_path / "input", run_dir=tmp_path / "run")
+ 
+ 
++def make_io(
++    tmp_path: Path,
++    *,
++    scope: str = "repeat",
++    conditions: list[tuple[int, str]] | None = None,
++    repeats: list[str] | None = None,
++    step_scopes: dict[str, str] | None = None,
++) -> StepIO:
++    step_dir = tmp_path / "run" / "step"
++    step_dir.mkdir(parents=True, exist_ok=True)
++    (tmp_path / "input").mkdir(exist_ok=True)
++    return StepIO(
++        step_dir=step_dir,
++        input_dir=tmp_path / "input",
++        run_dir=tmp_path / "run",
++        scope=scope,
++        conditions=conditions,
++        repeats=repeats,
++        step_scopes=step_scopes,
++    )
++
++
+ def test_write_dispatches_on_the_longest_registered_suffix(io: StepIO):
+     io.write("a.json", {"x": 1})
+     io.write("b.yaml", {"y": 2})
+     io.write("c.jsonl", [{"i": 1}, {"i": 2}])
+     io.write("d.csv", [{"k": "p1", "v": 1}])
+     assert (io.step_dir / "a.json").read_text().strip() == '{"x": 1}'
+     assert "y: 2" in (io.step_dir / "b.yaml").read_text()
+     assert (io.step_dir / "c.jsonl").read_text().count("\n") == 2
+     assert "k,v" in (io.step_dir / "d.csv").read_text()
+ 
+@@ -415,10 +437,147 @@ def test_rows_returns_deep_enough_copies_that_mutating_a_row_does_not_corrupt_st
+     io = StepIO(
+         step_dir=sd,
+         input_dir=tmp_path / "in",
+         run_dir=tmp_path / "run",
+         units=UnitList([Unit(key="p0")]),
+     )
+     io.record("p0", {"v": 1})
+     rows = io.rows()
+     rows[0]["v"] = 999
+     assert io.rows() == [{"unit": "p0", "v": 1}]
++
++
++def test_conditions_and_read_condition_are_summary_only(tmp_path: Path):
++    io = make_io(tmp_path, scope="repeat", conditions=[(0, "baseline")])
++    for call in (lambda: io.conditions, lambda: io.read_condition(0, "s", "a.json")):
++        with pytest.raises(ContractError) as e:
++            call()
++        assert e.value.code == "E-STEP-SCOPE-ONLY"
++
++
++def test_repeats_is_summary_only(tmp_path: Path):
++    io = make_io(tmp_path, scope="condition", repeats=["seed17"])
++    with pytest.raises(ContractError) as e:
++        _ = io.repeats
++    assert e.value.code == "E-STEP-SCOPE-ONLY"
++
++
++def test_conditions_and_read_condition_raise_at_run_scope(tmp_path: Path):
++    io = make_io(tmp_path, scope="run", conditions=[(0, "baseline")])
++    with pytest.raises(ContractError) as e:
++        _ = io.conditions
++    assert e.value.code == "E-STEP-SCOPE-ONLY"
++
++
++def test_a_summary_step_can_list_conditions_and_repeats(tmp_path: Path):
++    io = make_io(
++        tmp_path,
++        scope="summary",
++        conditions=[(0, "baseline"), (1, "method=spearman")],
++        repeats=["seed17"],
++    )
++    assert io.conditions == [(0, "baseline"), (1, "method=spearman")]
++    assert io.repeats == ["seed17"]
++
++
++def test_a_wider_step_cannot_read_a_narrower_one(tmp_path: Path):
++    io = make_io(tmp_path, scope="condition", step_scopes={"analyze": "repeat"})
++    with pytest.raises(ContractError) as e:
++        io.read_upstream("analyze", "units.parquet")
++    assert e.value.code == "E-STEP-READ-DIRECTION"
++    assert "condition" in str(e.value) and "repeat" in str(e.value)
++
++
++def test_a_narrower_step_reads_a_wider_one_normally(tmp_path: Path):
++    io = make_io(tmp_path, scope="repeat", step_scopes={"load": "run"})
++    (io.run_dir / "shared" / "load").mkdir(parents=True)
++    (io.run_dir / "shared" / "load" / "a.json").write_text('{"x": 1}\n')
++    assert io.read_upstream("load", "a.json") == {"x": 1}
++
++
++def test_a_step_reads_another_step_at_its_own_scope(tmp_path: Path):
++    io = make_io(tmp_path, scope="condition", step_scopes={"fit": "condition"})
++    (io.run_dir / "shared" / "fit").mkdir(parents=True)
++    (io.run_dir / "shared" / "fit" / "model.json").write_text('{"k": 1}\n')
++    assert io.read_upstream("fit", "model.json") == {"k": 1}
++
++
++def test_read_condition_requires_a_repeat_for_a_repeat_scoped_step(tmp_path: Path):
++    io = make_io(
++        tmp_path,
++        scope="summary",
++        conditions=[(0, "baseline")],
++        step_scopes={"analyze": "repeat"},
++    )
++    with pytest.raises(ContractError) as e:
++        io.read_condition(0, "analyze", "units.parquet")
++    assert e.value.code == "E-STEP-READ-REPEAT-REQUIRED"
++
++
++def test_read_condition_rejects_an_unresolved_condition_index(tmp_path: Path):
++    io = make_io(tmp_path, scope="summary", conditions=[(0, "baseline")])
++    with pytest.raises(ContractError) as e:
++        io.read_condition(7, "s", "a.json")
++    assert e.value.code == "E-STEP-READ-CONDITION-UNKNOWN"
++
++
++def test_read_condition_resolves_a_non_repeat_scoped_step_without_a_repeat(tmp_path: Path):
++    io = make_io(
++        tmp_path,
++        scope="summary",
++        conditions=[(0, "baseline"), (1, "method=spearman")],
++        step_scopes={"fit": "condition"},
++    )
++    target = io.run_dir / "conditions" / "01_method=spearman" / "fit"
++    target.mkdir(parents=True)
++    (target / "model.json").write_text('{"m": 1}\n')
++    assert io.read_condition(1, "fit", "model.json") == {"m": 1}
++
++
++def test_read_condition_accepts_the_element_io_conditions_yields(tmp_path: Path):
++    """The documented pattern (reference.md around lines 1784, 1806, 2318):
++    `for condition in io.conditions: io.read_condition(condition, ...)` — passing
++    the (index, label) tuple straight through must work, not only a bare index."""
++    io = make_io(
++        tmp_path,
++        scope="summary",
++        conditions=[(0, "baseline"), (1, "method=spearman")],
++        step_scopes={"fit": "condition"},
++    )
++    target = io.run_dir / "conditions" / "01_method=spearman" / "fit"
++    target.mkdir(parents=True)
++    (target / "model.json").write_text('{"m": 1}\n')
++    results = {}
++    for condition in io.conditions:
++        if condition[0] == 1:
++            results[condition] = io.read_condition(condition, "fit", "model.json")
++    assert results[(1, "method=spearman")] == {"m": 1}
++
++
++def test_read_condition_resolves_a_named_repeat_when_the_run_has_several(tmp_path: Path):
++    io = make_io(
++        tmp_path,
++        scope="summary",
++        conditions=[(0, "baseline")],
++        repeats=["seed1", "seed2"],
++        step_scopes={"analyze": "repeat"},
++    )
++    target = io.run_dir / "conditions" / "00_baseline" / "seed2" / "analyze"
++    target.mkdir(parents=True)
++    (target / "scores.json").write_text('{"s": 2}\n')
++    assert io.read_condition(0, "analyze", "scores.json", repeat="seed2") == {"s": 2}
++
++
++def test_read_condition_collapses_the_repeat_directory_when_the_run_has_only_one(
++    tmp_path: Path,
++):
++    io = make_io(
++        tmp_path,
++        scope="summary",
++        conditions=[(0, "baseline")],
++        repeats=["seed1"],
++        step_scopes={"analyze": "repeat"},
++    )
++    target = io.run_dir / "conditions" / "00_baseline" / "analyze"
++    target.mkdir(parents=True)
++    (target / "scores.json").write_text('{"s": 1}\n')
++    assert io.read_condition(0, "analyze", "scores.json", repeat="seed1") == {"s": 1}

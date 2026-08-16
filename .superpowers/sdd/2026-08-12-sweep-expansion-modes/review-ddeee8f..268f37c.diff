@@ -1,0 +1,487 @@
+# Review package: ddeee8f..HEAD
+
+## Commits
+268f37c feat: expand paired as a single coupled axis
+
+## Files changed
+ docs/reference.md           |  4 +--
+ src/publishable/sweep.py    | 20 +++++++++++-
+ src/publishable/validate.py | 30 +++++++++--------
+ tests/test_sweep.py         | 50 ++++++++++++++++++++++++++++
+ tests/test_validate.py      | 79 ++++++++++++++++++++++++++++++++++++++++++---
+ 5 files changed, 162 insertions(+), 21 deletions(-)
+
+## Diff
+diff --git a/docs/reference.md b/docs/reference.md
+index 9a59336..b91609c 100644
+--- a/docs/reference.md
++++ b/docs/reference.md
+@@ -105,21 +105,21 @@ parameters:
+     min_samples: 30                # integer >= 2
+     confidence: 0.95               # float in (0, 1)
+     drop_missing: true
+ 
+ sweep:
+   # ---- What varies. Omit entirely for a single-condition experiment. ----
+   # Keys are dotted paths into `parameters`; modes compose. See "Sweeps and repeats".
+   baseline: {analysis.method: pearson}   # optional reference condition; enables deltas
+   groups: []                             # NOT BUILT; optional list of unit-group axes,
+                                          #   e.g. [{by: arm, levels: [...]}]
+-  paired: []                             # NOT BUILT; optional coupled settings,
++  paired: []                             # optional coupled settings,
+                                          #   e.g. [{analysis.min_samples: 30,
+                                          #   analysis.confidence: 0.95}] — one axis, not a product
+   ablate: null                           # NOT BUILT; optional; 1 + n one-change conditions, e.g.
+                                          #   {from: baseline, remove: [...]} or {override: [...]}
+                                          #   — requires baseline
+   sample: null                           # NOT BUILT; optional; continuous ranges instead of
+                                          #   enumeration, e.g. {n: 40, method: sobol, seed: auto,
+                                          #   ranges: {...}}
+   grid:
+     analysis.method: [spearman, kendall]
+@@ -171,21 +171,21 @@ hypotheses:
+   - id: h1
+     kind: confirmatory                   # confirmatory | exploratory
+     statement: "Spearman correlation exceeds Pearson on this cohort."
+     metric: step03_analyze.r
+     compare: {condition: "method=spearman", to: baseline}
+     direction: greater
+     threshold: 0.02
+     evaluate_on: observed                # observed | ci95_lower | ci95_upper
+ ```
+ 
+-`init` materializes **every parameter the template declares**, each with its default and its inline comment. The four optional `statistics` sub-blocks are shown above at their full expansion because this section is the complete config *schema*, which is a wider thing than the literal output of `init`; a materialized file that does not carry them is not an incomplete config. For `contrasts` and `report_by`, declaring one by hand is how a run asks for it, and `validate` accepts the key whether or not `init` wrote it. **Fourteen declarations above are not yet built, and each is marked `NOT BUILT` where it appears**: `sweep.groups`, `sweep.paired`, `sweep.ablate` and `sweep.sample`; `data.units.assign`, `.cluster_by`, `.weight_by`, `.measurements` and `.holdout`, the `{resolver: <name>}` form of `data.units.from`, and any `data.units.allocation` other than `within`; a `fold` repeat level's `stratify_by`; and `statistics.resample` and `statistics.null_test`. A config declaring any of them is refused today, naming the `-UNSUPPORTED` code its slice will retire — the same treatment [an unbuilt module](#package-layout) and [an unbuilt import](#the-importable-surface) get, because a contract that appears only once its implementation lands is a contract nobody could have designed to. That whole family is [deliberately absent from the validate-time registry](#errors-validate-reports) for the same reason, which is why this list, and not that table, is where a refused block is named. What `init` writes is complete with respect to [`parameter_spec`](#templates-where-parameters-are-defined), which is the only source of truth there is one of.
++`init` materializes **every parameter the template declares**, each with its default and its inline comment. The four optional `statistics` sub-blocks are shown above at their full expansion because this section is the complete config *schema*, which is a wider thing than the literal output of `init`; a materialized file that does not carry them is not an incomplete config. For `contrasts` and `report_by`, declaring one by hand is how a run asks for it, and `validate` accepts the key whether or not `init` wrote it. **Thirteen declarations above are not yet built, and each is marked `NOT BUILT` where it appears**: `sweep.groups`, `sweep.ablate` and `sweep.sample`; `data.units.assign`, `.cluster_by`, `.weight_by`, `.measurements` and `.holdout`, the `{resolver: <name>}` form of `data.units.from`, and any `data.units.allocation` other than `within`; a `fold` repeat level's `stratify_by`; and `statistics.resample` and `statistics.null_test`. A config declaring any of them is refused today, naming the `-UNSUPPORTED` code its slice will retire — the same treatment [an unbuilt module](#package-layout) and [an unbuilt import](#the-importable-surface) get, because a contract that appears only once its implementation lands is a contract nobody could have designed to. That whole family is [deliberately absent from the validate-time registry](#errors-validate-reports) for the same reason, which is why this list, and not that table, is where a refused block is named. What `init` writes is complete with respect to [`parameter_spec`](#templates-where-parameters-are-defined), which is the only source of truth there is one of.
+ 
+ **The four identifying fields above `metadata` say what this config is written against, and `validate` checks each.** `experiment_type` names the template and must resolve to one an installed package registers; `template_version` records the spec this file was materialized from, and a mismatch with the installed template gets a [warning](#warnings-core-reports) — `W-TEMPLATE-VERSION` — not an error, because upgrading a plugin is ordinary and [nothing ever writes back into your config](#the-one-config-file). What makes an incompatibility *fail* is already covered without a version check: a retired parameter is an unknown key, and a new required one is a missing key. So the version tells you where to look and the existing checks decide whether it matters; `plugin` names where the template came from, and is a readable note beside the authoritative pin in `uv.lock` rather than a second one — core never installs from it. `schema_version` is the config format's own version: core reads any minor at or below its own and refuses a higher one, or a major it doesn't implement, rather than guessing at a field it doesn't recognize. Through v0.x a change that would break an existing config bumps the major, and there is no migration command — a config is small, `init` writes a fresh one, and the [defaults-file argument](#there-is-no-separate-defaults-file) applies to a migration file too. What protects an old *result* is that `run.yaml` embeds its config verbatim alongside the `schema_version` it was written under, so a record stays readable whether or not the format moved. All four are inside [`parameters_hash`](#three-hashes), because a config read against a different spec is a different declaration.
+ 
+ This file is three things at once: the scaffold (you didn't type it), the documentation (every available parameter is present, with its constraints in a comment), and the config (it's what `run` consumes). Keeping them as one artifact is what prevents the usual drift where documentation lists options the code no longer accepts.
+ 
+ **The file is freely editable, and nothing `publishable` does ever writes back into it.** Edit it as much as you like; each run embeds the config it used verbatim into its own `run.yaml`, which is where parameter provenance actually lives.
+ 
+ **Whether you commit it is your call, and core takes no position.** Reproducibility doesn't depend on it either way: `run.yaml` embeds the config verbatim and fingerprints it with `parameters_hash`, so a run is fully reportable whether or not its config was ever tracked. Because of that, the scaffold's `.gitignore` says nothing about `configs/` — imposing a policy there would be the tool overriding a judgment that belongs to you.
+ 
+ Two things worth weighing when you decide:
+diff --git a/src/publishable/sweep.py b/src/publishable/sweep.py
+index 74713ae..b01663d 100644
+--- a/src/publishable/sweep.py
++++ b/src/publishable/sweep.py
+@@ -113,22 +113,34 @@ def _keys_for(paths: list[str]) -> dict[str, str]:
+             keys[path] = path
+     return keys
+ 
+ 
+ def _swept_paths(sweep: dict[str, Any]) -> list[str]:
+     """Every path any axis-shaped mode sweeps, in declared order.
+ 
+     `label_for` shortens these to unique suffixes, so it needs the whole set:
+     a key is only unambiguous against every other swept path, not against one
+     mode's. Later modes extend this and nothing else about labelling changes.
++
++    A path may recur across `paired` entries (each entry sets the same keys to
++    different values) or even reappear from `grid` in a hand-written config;
++    it is added at most once, in the order it was first seen — a duplicate
++    would make `_keys_for` compare a path against itself, which is trivially
++    "unique" (`p != path` excludes it) and would silently under-disambiguate
++    every other path sharing that suffix.
+     """
+-    return list(sweep.get("grid") or {})
++    paths = list(sweep.get("grid") or {})
++    for entry in sweep.get("paired") or []:
++        for path in entry:
++            if path not in paths:
++                paths.append(path)
++    return paths
+ 
+ 
+ def label_for(values: dict[str, Any], swept: list[str], is_baseline: bool) -> str:
+     if is_baseline:
+         return "baseline"
+     keys = _keys_for(swept)
+     return AXIS_SEPARATOR.join(
+         f"{keys.get(path, path.rsplit('.', 1)[-1])}={render_value(value)}"
+         for path, value in values.items()
+     )
+@@ -149,20 +161,26 @@ def _axes(sweep: dict[str, Any]) -> list[list[dict[str, Any]]]:
+ 
+     The product of these is the condition set. `grid` contributes one axis per
+     key; later modes contribute one axis each, whose cells may set several paths
+     at once. Keeping every mode in this one list is what makes the composition
+     rule — "the product of every axis-shaped mode present" — a property of the
+     structure rather than a sentence someone has to remember.
+     """
+     axes: list[list[dict[str, Any]]] = []
+     for path, values in (sweep.get("grid") or {}).items():
+         axes.append([{path: value} for value in values])
++    paired = sweep.get("paired") or []
++    if paired:
++        # One axis, not one per key: a paired entry is a single setting that
++        # happens to set several paths. Treating its keys as separate axes is
++        # exactly the combinatorial reading § Expansion modes rejects.
++        axes.append([dict(entry) for entry in paired])
+     return axes
+ 
+ 
+ def expand(config: dict[str, Any]) -> list[Condition]:
+     """Ordered conditions: a declared baseline as 00, then the product of every axis.
+ 
+     With no `sweep` block, one condition whose label is None — which is what
+     keeps the `conditions/` level out of the artifact tree.
+     """
+     sweep = config.get("sweep") or {}
+diff --git a/src/publishable/validate.py b/src/publishable/validate.py
+index 905cf2e..a1979de 100644
+--- a/src/publishable/validate.py
++++ b/src/publishable/validate.py
+@@ -11,21 +11,21 @@ from publishable.contrasts import resolve_contrasts, units_matching
+ from publishable.diagnostics import Collector
+ from publishable.envelope import check_envelope
+ from publishable.errors import ContractError
+ from publishable.manifest import POLICIES
+ from publishable.materialize import TEMPLATE_VERSION
+ from publishable.param import MISSING
+ from publishable.provenance import find_repo_root, resolves_inside_repo
+ from publishable.replication import resolve_repeats
+ from publishable.scope import step_name as _step_name
+ from publishable.strata import levels_for
+-from publishable.sweep import check_swept_value, expand
++from publishable.sweep import _swept_paths, check_swept_value, expand
+ from publishable.templates.base import BaseTemplate
+ from publishable.templates.registry import get_template, template_names
+ from publishable.units import UnitList, resolve_units
+ 
+ REQUIRED_METADATA = ("description", "authors")
+ 
+ # The shape of every top-level block, checked once before any `_check_*` reads one —
+ # a property of the config format, not of whichever check happens to read a block
+ # first. `statistics`, `limits`, and `hypotheses` are included even though nothing
+ # reads them yet in this build, so the next reader inherits the guard rather than
+@@ -736,24 +736,27 @@ def _check_replication(
+         c.error(
+             "E-REPL-ORDER",
+             "replication.order",
+             f"is `{order}`; the only orders are `as_declared` and `randomized`",
+         )
+ 
+ 
+ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
+     """Declared-but-unimplemented blocks, refused rather than silently ignored.
+ 
+-    This build expands `sweep.baseline` and `sweep.grid` only. Both declared
+-    orders are honored — `randomized` shuffles within each batch and
+-    `as_declared` leaves the plan's step-major layout alone. `sweep.paired`,
+-    `.ablate`, `.sample`, and `.groups` are read by nothing yet. It resolves a
++    This build expands `sweep.baseline`, `sweep.grid`, and `sweep.paired`
++    only. Both declared orders are honored — `randomized` shuffles within
++    each batch and `as_declared` leaves the plan's step-major layout alone.
++    `sweep.paired` is no longer refused here — `_axes` composes it as a
++    single axis whose cells set several paths at once, per § Expansion
++    modes. `.ablate`, `.sample`, and `.groups` are read by nothing yet. It
++    resolves a
+     unit roster, but several `data.units` sub-fields — allocation other than
+     `within`, `assign`, `cluster_by`, `weight_by`, `measurements`, `holdout`,
+     and a `resolver` source — are read by nothing yet either. Each of these
+     would otherwise validate clean and then run something other than what the
+     config describes — the same class of failure `resolve_repeats` already
+     refuses for repeat levels: `E-REPL-FOLD-STRATIFY-UNSUPPORTED` for
+     `fold.stratify_by`, `E-REPL-LEVEL-DUPLICATE` for two levels of the same
+     kind, and `E-REPL-LEVEL-DEPTH` past two levels, and
+     `E-REPL-LEVEL-BATCH-INNER` for a `batch` that is not the outermost level.
+     `batch` and `fold` themselves are no longer refused — both are supported
+@@ -769,21 +772,20 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
+     `correction_level`, `family_size`, and `family`, so what this module owes it
+     is the value checks below (`E-STATS-CORRECTION-UNKNOWN`,
+     `W-STATS-CORRECTION-INAPPLICABLE`) plus `W-STATS-FAMILY` on the one value that
+     opts out — `none`, which corrects nothing and records `correction: null` to
+     say so. Each remaining message says
+     plainly that the block is honored in a later slice, so a user does not read this as
+     their config being malformed.
+     """
+     sweep = doc.get("sweep") or {}
+     for mode, code, why in (
+-        ("paired", "E-SWEEP-PAIRED-UNSUPPORTED", "couples parameters into one axis"),
+         (
+             "ablate",
+             "E-SWEEP-ABLATE-UNSUPPORTED",
+             "emits 1 + n one-change conditions and reads the baseline rather than re-emitting it",
+         ),
+         (
+             "sample",
+             "E-SWEEP-SAMPLE-UNSUPPORTED",
+             "draws continuous ranges and labels its conditions `NN_sample`",
+         ),
+@@ -792,36 +794,38 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
+             "E-SWEEP-GROUPS-UNSUPPORTED",
+             "is an axis over units rather than parameters, so it needs "
+             "`data.units.allocation` and `data.units.assign`",
+         ),
+     ):
+         if sweep.get(mode):
+             c.error(
+                 code,
+                 f"sweep.{mode}",
+                 f"{why}, and is specified but not implemented in this build — this build "
+-                "expands `baseline` and `grid` only; the other modes will be honored in a "
+-                "later slice",
++                "expands `baseline`, `grid`, and `paired` only; the other modes will be "
++                "honored in a later slice",
+             )
+ 
+-    # A baseline that fixes only *some* of the grid's axes. `reference.md`:1415-1422
++    # A baseline that fixes only *some* of the swept axes. `reference.md`:1415-1422
+     # states one rule with two cases: the baseline expands over whichever axes it
+     # does not fix, giving one baseline condition per cell of the unfixed axes.
+     # `expand` emits exactly one `00_baseline` row carrying only what the baseline
+     # literally names, so the declared design is not the executed design — the
+     # failure every other refusal in this function exists to prevent. Per-cell
+     # expansion is a real feature; until it lands, refuse rather than diverge.
+-    # A baseline fixing every declared axis (including the no-grid case) is the
+-    # supported row and is unaffected.
++    # A baseline fixing every declared axis (including the no-sweep-axis case) is
++    # the supported row and is unaffected. `_swept_paths` is every axis-shaped
++    # mode's paths, not `grid`'s alone — `paired` composes into this same product
++    # now, and a baseline that fixes `grid` but leaves a `paired` axis free is the
++    # identical declared-vs-executed mismatch this check exists to catch.
+     baseline = sweep.get("baseline") or {}
+-    grid = sweep.get("grid") or {}
+-    unfixed = [path for path in grid if path not in baseline]
++    unfixed = [path for path in _swept_paths(sweep) if path not in baseline]
+     if baseline and unfixed:
+         c.error(
+             "E-SWEEP-BASELINE-PARTIAL",
+             "sweep.baseline",
+             f"fixes no value for {', '.join(f'`{p}`' for p in unfixed)}, and a baseline "
+             "that leaves an axis free expands to one baseline condition per cell of the "
+             "unfixed axes — which is specified but not implemented in this build; this "
+             "build emits a single `00_baseline` condition, so the design executed would "
+             "not be the design declared. Per-cell baselines will be honored in a later "
+             "slice; fix a value on every swept axis for now",
+diff --git a/tests/test_sweep.py b/tests/test_sweep.py
+index 08fd6b1..f4f43a7 100644
+--- a/tests/test_sweep.py
++++ b/tests/test_sweep.py
+@@ -131,20 +131,70 @@ def test_a_value_rendering_the_axis_separator_is_refused():
+     assert "__" in message
+ 
+ 
+ def test_a_single_underscore_is_still_accepted():
+     """Narrowing the pattern to exclude `_` entirely would be over-correction —
+     only the two-character separator sequence is the conflict."""
+     from publishable.sweep import check_swept_value
+     assert check_swept_value("a_b") is None
+ 
+ 
++def test_paired_is_one_axis_not_a_product_of_its_keys() -> None:
++    """§ Expansion modes' own example: grid × paired = 2 × 2 = 4, not 2 × 2 × 2.
++    A paired entry sets several paths at once and counts once."""
++    conditions = expand(
++        {
++            "sweep": {
++                "grid": {"analysis.method": ["pearson", "spearman"]},
++                "paired": [
++                    {"analysis.min_samples": 30, "analysis.confidence": 0.95},
++                    {"analysis.min_samples": 50, "analysis.confidence": 0.99},
++                ],
++            }
++        }
++    )
++
++    assert len(conditions) == 4
++    assert dict(conditions[0].values) == {
++        "analysis.method": "pearson",
++        "analysis.min_samples": 30,
++        "analysis.confidence": 0.95,
++    }
++    # `_swept_paths` now carries `paired`'s paths alongside `grid`'s, so
++    # `label_for` disambiguates all three — none is a shared leaf, so each
++    # keeps its shortest suffix.
++    assert [c.label for c in conditions] == [
++        "method=pearson__min_samples=30__confidence=0.95",
++        "method=pearson__min_samples=50__confidence=0.99",
++        "method=spearman__min_samples=30__confidence=0.95",
++        "method=spearman__min_samples=50__confidence=0.99",
++    ]
++
++
++def test_swept_paths_lists_a_paired_path_once_even_when_every_entry_names_it():
++    """Every `paired` entry here names both `min_samples` and `confidence`; a
++    naive walk would append each twice, and a duplicate path would make
++    `_keys_for` compare a path against itself (trivially "unique") instead of
++    against every other swept path."""
++    from publishable.sweep import _swept_paths
++    paths = _swept_paths(
++        {
++            "grid": {"analysis.method": ["pearson", "spearman"]},
++            "paired": [
++                {"analysis.min_samples": 30, "analysis.confidence": 0.95},
++                {"analysis.min_samples": 50, "analysis.confidence": 0.99},
++            ],
++        }
++    )
++    assert paths == ["analysis.method", "analysis.min_samples", "analysis.confidence"]
++
++
+ def test_values_already_refused_by_the_pattern_are_still_refused():
+     """The separator check is on top of the pattern check, not instead of it."""
+     from publishable.sweep import check_swept_value
+     assert check_swept_value("a b") is not None
+     assert check_swept_value("a/b") is not None
+ 
+ 
+ def test_every_generated_label_body_matches_the_selector_pattern():
+     import re
+ 
+diff --git a/tests/test_validate.py b/tests/test_validate.py
+index 2e8f47e..5af6efd 100644
+--- a/tests/test_validate.py
++++ b/tests/test_validate.py
+@@ -1057,54 +1057,75 @@ def test_baseline_and_grid_are_now_accepted(write_config):
+                 }
+             }
+         )
+     )
+     assert not [c for c in found if c.startswith("E-SWEEP")]
+ 
+ 
+ @pytest.mark.parametrize(
+     "mode,value,code",
+     [
+-        ("paired", [{"analysis.method": "pearson"}], "E-SWEEP-PAIRED-UNSUPPORTED"),
+         ("ablate", {"from": "baseline", "remove": ["a.b"]}, "E-SWEEP-ABLATE-UNSUPPORTED"),
+         ("sample", {"n": 40, "ranges": {}}, "E-SWEEP-SAMPLE-UNSUPPORTED"),
+         ("groups", [{"by": "arm", "levels": ["a", "b"]}], "E-SWEEP-GROUPS-UNSUPPORTED"),
+     ],
+ )
+ def test_each_unimplemented_mode_is_refused_on_its_own(write_config, mode, value, code):
+-    """`paired`, `ablate`, `sample`, and `groups` each get their own refusal now that
+-    the old blanket sweep refusal is retired — otherwise each would fall through
+-    into silence the moment `baseline`/`grid` stopped covering the whole block."""
++    """`ablate`, `sample`, and `groups` each get their own refusal now that the old
++    blanket sweep refusal is retired — otherwise each would fall through into
++    silence the moment `baseline`/`grid`/`paired` stopped covering the whole
++    block. `paired` is no longer in this family: it expands for real now, see
++    `test_paired_is_accepted_and_expands_for_real` below."""
+     assert code in codes(write_config({"sweep": {mode: value}}))
+ 
+ 
++def test_paired_is_accepted_and_expands_for_real(write_config):
++    """§ Expansion modes retires `E-SWEEP-PAIRED-UNSUPPORTED`: `paired` is now one
++    of the axis-shaped modes `_axes` composes, and a config declaring it validates
++    clean rather than tripping the refusal `ablate`/`sample`/`groups` still get."""
++    found = codes(
++        write_config(
++            {
++                "sweep": {
++                    "grid": {"analysis.method": ["pearson", "spearman"]},
++                    "paired": [
++                        {"analysis.min_samples": 30, "analysis.confidence": 0.95},
++                        {"analysis.min_samples": 50, "analysis.confidence": 0.99},
++                    ],
++                }
++            }
++        )
++    )
++    assert "E-SWEEP-PAIRED-UNSUPPORTED" not in found
++    assert not [c for c in found if c.startswith("E-SWEEP")]
++
++
+ def test_an_empty_or_null_mode_is_not_a_declaration(write_config):
+     """`init` may write these absent or null; only a truthy value is refused."""
+     found = codes(
+         write_config(
+             {
+                 "sweep": {
+                     "grid": {"analysis.method": ["spearman"]},
+                     "paired": [],
+                     "ablate": None,
+                     "sample": None,
+                     "groups": [],
+                 }
+             }
+         )
+     )
+     assert not [c for c in found if c.endswith("-UNSUPPORTED")]
+ 
+ 
+ def test_every_sweep_refusal_message_defers_rather_than_scolds(write_config):
+     for mode, value, code in [
+-        ("paired", [{"a.b": 1}], "E-SWEEP-PAIRED-UNSUPPORTED"),
+         ("ablate", {"from": "baseline"}, "E-SWEEP-ABLATE-UNSUPPORTED"),
+         ("sample", {"n": 1}, "E-SWEEP-SAMPLE-UNSUPPORTED"),
+         ("groups", [{"by": "arm"}], "E-SWEEP-GROUPS-UNSUPPORTED"),
+     ]:
+         c = Collector()
+         validate_config(write_config({"sweep": {mode: value}}), c)
+         message = next(f.message for f in c.findings if f.code == code)
+         assert "later slice" in message, f"{code} must defer, not scold"
+ 
+ 
+@@ -1749,20 +1770,68 @@ def test_a_baseline_that_leaves_a_grid_axis_free_is_refused(write_config):
+                     },
+                 }
+             }
+         )
+     )
+     assert "E-SWEEP-BASELINE-PARTIAL" in found
+     assert "analysis.min_samples" in found["E-SWEEP-BASELINE-PARTIAL"]
+     assert "not implemented in this build" in found["E-SWEEP-BASELINE-PARTIAL"]
+ 
+ 
++def test_a_baseline_that_leaves_a_paired_axis_free_is_refused(write_config):
++    """`paired` now composes into the same product `grid` does (Task 2), so a
++    baseline that fixes `grid` but leaves a `paired` axis unfixed is the identical
++    declared-vs-executed mismatch `test_a_baseline_that_leaves_a_grid_axis_free_is_refused`
++    covers for `grid` — the check must read `_swept_paths`, not `grid` alone."""
++    found = messages_by_code(
++        write_config(
++            {
++                "sweep": {
++                    "baseline": {"analysis.method": "pearson"},
++                    "grid": {"analysis.method": ["spearman", "kendall"]},
++                    "paired": [
++                        {"analysis.min_samples": 30, "analysis.confidence": 0.95},
++                        {"analysis.min_samples": 50, "analysis.confidence": 0.99},
++                    ],
++                }
++            }
++        )
++    )
++    assert "E-SWEEP-BASELINE-PARTIAL" in found
++    assert "analysis.min_samples" in found["E-SWEEP-BASELINE-PARTIAL"]
++    assert "analysis.confidence" in found["E-SWEEP-BASELINE-PARTIAL"]
++
++
++def test_a_baseline_fixing_every_axis_including_paired_is_supported(write_config):
++    """The mirror of the refusal above: a baseline naming every path any axis-shaped
++    mode sweeps — `grid`'s and `paired`'s alike — stays the supported row."""
++    found = codes(
++        write_config(
++            {
++                "sweep": {
++                    "baseline": {
++                        "analysis.method": "pearson",
++                        "analysis.min_samples": 30,
++                        "analysis.confidence": 0.95,
++                    },
++                    "grid": {"analysis.method": ["spearman", "kendall"]},
++                    "paired": [
++                        {"analysis.min_samples": 30, "analysis.confidence": 0.95},
++                        {"analysis.min_samples": 50, "analysis.confidence": 0.99},
++                    ],
++                }
++            }
++        )
++    )
++    assert "E-SWEEP-BASELINE-PARTIAL" not in found
++
++
+ def test_a_baseline_fixing_every_axis_is_supported(write_config):
+     """The row the slice's worked example uses, and it must keep working."""
+     found = codes(
+         write_config(
+             {
+                 "sweep": {
+                     "baseline": {"analysis.method": "pearson", "analysis.min_samples": 10},
+                     "grid": {"analysis.min_samples": [10, 20]},
+                 }
+             }

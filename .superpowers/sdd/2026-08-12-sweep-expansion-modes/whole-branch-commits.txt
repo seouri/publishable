@@ -1,0 +1,37 @@
+82dff37 docs: state E-SWEEP-SAMPLE-BASELINE's truthiness branch and a reachable remedy
+012472d fix: refuse a baseline beside a sample axis until the family excludes draws
+24cb017 test: pin the two sample claims task 6 left unprotected
+632018b feat: each vs_baseline targets its own cell's baseline
+d53b702 fix: the confounded message states the fact and stops
+c208c58 docs: record the shape a half-fixed paired axis still produces
+b61c054 fix: the confounded row states silence, not a verdict
+eba1804 feat: a partial baseline is a design core accepts
+0857a37 feat: a baseline expands over the axes it does not fix
+94e50a3 fix: name the sweep vocabulary from the set the check gates on
+00c53de docs: name the choke point the axis-mode set is pinned to
+1cabc11 fix: pin the axis-mode set to the vocabulary's choke point
+e0ee322 feat: refuse the three ablate compositions reference.md names
+b93a559 fix: check a remove path against the template, and pin the ablate window
+9e07dd4 test: pin an ablate override path as unreadable at run scope
+e2f85e7 feat: expand ablate as one change at a time, not an axis
+c48464a docs: widen the sample refusal row; report the seed shape as both its legal types
+c7faf37 fix: check the values sample draws, not only the bounds it declares
+2907ebb fix: make every axis-shaped mode's paths unreadable at run scope
+cabdc5a test: distinguish sobol's scramble and the sample axis's cell shape; record the seed-derivation ambiguity
+2e0e270 feat: expand sample as deterministic draws over declared ranges
+2d30836 fix: refuse a non-string key inside sweep.grid too
+1c5ed66 fix: refuse a non-string key inside a paired entry
+54cdac7 fix: close the paired shape gap and grid/paired path collision
+268f37c feat: expand paired as a single coupled axis
+ddeee8f refactor: expand conditions as a product over axes
+ docs/experimental-designs.md |    2 +-
+ docs/reference.md            |   32 +-
+ src/publishable/cli.py       |   28 +-
+ src/publishable/contrasts.py |  116 ++++-
+ src/publishable/sweep.py     |  643 ++++++++++++++++++++++-
+ src/publishable/validate.py  |  622 ++++++++++++++++++++--
+ tests/test_cli.py            |  171 +++++++
+ tests/test_contrasts.py      |  215 +++++++-
+ tests/test_sweep.py          |  763 ++++++++++++++++++++++++++-
+ tests/test_validate.py       | 1165 ++++++++++++++++++++++++++++++++++++++++--
+ 10 files changed, 3602 insertions(+), 155 deletions(-)

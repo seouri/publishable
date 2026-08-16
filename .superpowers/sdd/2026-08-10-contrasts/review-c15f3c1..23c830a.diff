@@ -1,0 +1,148 @@
+# Review package: c15f3c1..HEAD
+
+## Commits
+23c830a Interval and effect size for a paired column metric
+
+## Files changed
+ src/publishable/stats.py | 28 ++++++++++++++++++++++++++++
+ tests/test_stats.py      | 33 +++++++++++++++++++++++++++++++++
+ 2 files changed, 61 insertions(+)
+
+## Diff
+diff --git a/src/publishable/stats.py b/src/publishable/stats.py
+index 5dc9b83..f82030c 100644
+--- a/src/publishable/stats.py
++++ b/src/publishable/stats.py
+@@ -45,20 +45,48 @@ def t_over_units(values: Sequence[float], confidence: float = 0.95) -> Interval
+     if n < 2:
+         return None
+     mean = sum(values) / n
+     variance = sum((v - mean) ** 2 for v in values) / (n - 1)
+     sem = math.sqrt(variance) / math.sqrt(n)
+     critical = float(_scipy_stats.t.ppf(1 - (1 - confidence) / 2, df=n - 1))
+     half = critical * sem
+     return Interval(low=mean - half, high=mean + half, method="t_over_units")
+ 
+ 
++def paired_t_over_units(diffs: Sequence[float], confidence: float = 0.95) -> Interval | None:
++    """Student's t on the per-unit differences, df = n_paired − 1.
++
++    The contrast's interval is its own construction, never a difference of the
++    two sides' intervals — differencing discards the covariance that pairing
++    exists to exploit, which is why a paired interval is narrower than the two
++    conditions' own (reference.md § How a metric becomes a number).
++    """
++    plain = t_over_units(diffs, confidence)
++    if plain is None:
++        return None
++    return Interval(low=plain.low, high=plain.high, method="paired_t_over_units")
++
++
++def cohens_dz(diffs: Sequence[float]) -> float | None:
++    """The mean of the per-unit differences over their standard deviation.
++
++    Reported only for a per-unit mean: a derived metric has no per-unit value to
++    difference, which is why the worked example carries `cohens_d: null` for `r`.
++    """
++    if len(diffs) < 2:
++        return None
++    mean = sum(diffs) / len(diffs)
++    variance = sum((d - mean) ** 2 for d in diffs) / (len(diffs) - 1)
++    sd = math.sqrt(variance)
++    return mean / sd if sd > 0 else None
++
++
+ def resample_seed(digest: str) -> int:
+     """From the design digest, never `parameters_hash`.
+ 
+     Editing an unrelated parameter must not redraw a resample — the same rule
+     fold partitions and `order_seed` follow (reference.md § What auto-derives from).
+     """
+     return int.from_bytes(hashlib.sha256(f"{digest}|resample".encode()).digest()[:4], "big")
+ 
+ 
+ def _percentile_ranks(draws: int, confidence: float) -> tuple[int, int]:
+diff --git a/tests/test_stats.py b/tests/test_stats.py
+index c776353..0e08aab 100644
+--- a/tests/test_stats.py
++++ b/tests/test_stats.py
+@@ -1,25 +1,27 @@
+ import math
+ 
+ import pytest
+ 
+ from publishable.errors import ContractError
+ from publishable.replication import resolve_repeats
+ from publishable.stats import (
+     Interval,
+     UnitTable,
+     _percentile_ranks,
++    cohens_dz,
+     collapse_repeats,
+     handed_to,
+     mean_of,
+     min_honest_draws,
+     paired_keys,
++    paired_t_over_units,
+     percentile_of_derived,
+     percentile_over_units,
+     repeat_spread,
+     resample_seed,
+     summarize_step,
+     t_over_units,
+ )
+ 
+ 
+ def cfg(repeats):
+@@ -900,20 +902,51 @@ def test_mean_of_is_none_for_an_empty_sequence():
+     assert mean_of([1.0, 2.0]) == 1.5
+ 
+ 
+ def test_confidence_widens_the_interval():
+     narrow = t_over_units([1.0, 2.0, 3.0, 4.0], confidence=0.80)
+     wide = t_over_units([1.0, 2.0, 3.0, 4.0], confidence=0.99)
+     assert narrow is not None and wide is not None
+     assert (wide.high - wide.low) > (narrow.high - narrow.low)
+ 
+ 
++def test_the_interval_is_students_t_on_the_differences():
++    diffs = [1.0, 2.0, 3.0, 4.0]
++    got = paired_t_over_units(diffs)
++    plain = t_over_units(diffs)
++    assert got is not None and plain is not None
++    assert got.low == plain.low and got.high == plain.high
++
++
++def test_it_names_its_own_method():
++    iv = paired_t_over_units([1.0, 2.0, 3.0])
++    assert iv is not None and iv.method == "paired_t_over_units"
++
++
++def test_one_difference_has_no_interval():
++    assert paired_t_over_units([1.0]) is None
++
++
++def test_cohens_dz_is_the_mean_over_the_standard_deviation():
++    """Hand-computed: mean 2.5, sample sd of [1,2,3,4] is 1.2909944, so dz = 1.9365."""
++    assert cohens_dz([1.0, 2.0, 3.0, 4.0]) == pytest.approx(1.93649167, rel=1e-6)
++
++
++def test_cohens_dz_is_none_below_two_differences():
++    assert cohens_dz([1.0]) is None
++
++
++def test_cohens_dz_is_none_when_every_difference_is_identical():
++    """Zero dispersion would divide by zero; no `d` is honest, infinity is not."""
++    assert cohens_dz([2.0, 2.0, 2.0]) is None
++
++
+ def test_iteration_yields_one_row_per_unit():
+     t = UnitTable({"u1": {"pred": 1.0}, "u2": {"pred": 2.0}})
+     assert [r["unit"] for r in t] == ["u1", "u2"]
+     assert [r["pred"] for r in t] == [1.0, 2.0]
+ 
+ 
+ def test_column_access_returns_values_in_iteration_order():
+     t = UnitTable({"u1": {"pred": 1.0}, "u2": {"pred": 2.0}})
+     assert list(t.pred) == [1.0, 2.0]
+ 

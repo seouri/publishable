@@ -1,0 +1,174 @@
+# Review package: 23c830a..HEAD
+
+## Commits
+ddf2769 Resample a paired difference with one draw for both sides
+
+## Files changed
+ src/publishable/stats.py | 44 ++++++++++++++++++++++++++++++++++++
+ tests/test_stats.py      | 58 ++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 102 insertions(+)
+
+## Diff
+diff --git a/src/publishable/stats.py b/src/publishable/stats.py
+index f82030c..520e353 100644
+--- a/src/publishable/stats.py
++++ b/src/publishable/stats.py
+@@ -238,20 +238,64 @@ def percentile_of_derived(
+     if len(values) < min_honest_draws(confidence):
+         return None, len(values)
+     values.sort()
+     lo, hi = _percentile_ranks(len(values), confidence)
+     return (
+         Interval(low=values[lo], high=values[hi], method="percentile_over_units"),
+         len(values),
+     )
+ 
+ 
++def paired_percentile_of_derived(
++    of: dict[str, dict[str, float]],
++    against: dict[str, dict[str, float]],
++    keys: list[str],
++    compute: "Callable[[UnitTable], float | None]",
++    seed: int,
++    draws: int = 2000,
++    confidence: float = 0.95,
++) -> tuple[Interval | None, int]:
++    """Percentiles of the resampled difference, one draw applied to both sides.
++
++    Drawing each side independently would resample the two conditions apart and
++    destroy the pairing — the same error as differencing the two sides' own
++    intervals. Both spellings produce a plausible interval; only this one is
++    narrower, which is what `allocation: within` buys.
++    """
++    if len(keys) < 2:
++        return None, 0
++    rng = random.Random(seed)
++    n = len(keys)
++    values: list[float] = []
++    for _ in range(draws):
++        drawn = [keys[rng.randrange(n)] for _ in range(n)]
++        try:
++            a = compute(_unit_table_from_rows([{"unit": k, **of[k]} for k in drawn]))
++            b = compute(_unit_table_from_rows([{"unit": k, **against[k]} for k in drawn]))
++        except Exception:  # a degenerate draw, not a fault; see percentile_of_derived
++            continue
++        if a is None or b is None:
++            continue
++        diff = float(a) - float(b)
++        if math.isnan(diff):
++            continue
++        values.append(diff)
++    if len(values) < min_honest_draws(confidence):
++        return None, len(values)
++    values.sort()
++    lo, hi = _percentile_ranks(len(values), confidence)
++    return (
++        Interval(low=values[lo], high=values[hi], method="paired_percentile_over_units"),
++        len(values),
++    )
++
++
+ def _is_numeric(value: object) -> bool:
+     """`bool` is a `int` subclass in Python but is never a quantity to average."""
+     return isinstance(value, (int, float)) and not isinstance(value, bool)
+ 
+ 
+ def handed_to(
+     unit_key: str, labels: list[str], fold_members: dict[str, frozenset[str]] | None
+ ) -> list[str]:
+     """The repeat labels this unit was actually given.
+ 
+diff --git a/tests/test_stats.py b/tests/test_stats.py
+index 0e08aab..824ba21 100644
+--- a/tests/test_stats.py
++++ b/tests/test_stats.py
+@@ -7,20 +7,21 @@ from publishable.replication import resolve_repeats
+ from publishable.stats import (
+     Interval,
+     UnitTable,
+     _percentile_ranks,
+     cohens_dz,
+     collapse_repeats,
+     handed_to,
+     mean_of,
+     min_honest_draws,
+     paired_keys,
++    paired_percentile_of_derived,
+     paired_t_over_units,
+     percentile_of_derived,
+     percentile_over_units,
+     repeat_spread,
+     resample_seed,
+     summarize_step,
+     t_over_units,
+ )
+ 
+ 
+@@ -1109,10 +1110,67 @@ class _FakeRandom:
+ def test_the_rank_indices_are_symmetric_not_off_by_one(monkeypatch):
+     """At draws=2000, confidence=0.95, tail=0.025: the intended ranks are 49 (the
+     50th-smallest, 2.5%) and 1949 (the 1950th-smallest, 97.5% — symmetric with 49
+     about the two ends). Rank 1949 sits in the middle (0.5) block; the bare
+     asymmetric form `int((1 - tail) * draws)` would instead pick rank 1950, one
+     past the boundary into the top (1.0) block — a real, detectable difference,
+     not a rounding wash."""
+     monkeypatch.setattr("publishable.stats.random.Random", _FakeRandom)
+     result = percentile_over_units([0.0, 1.0], seed=7, draws=2000, confidence=0.95)
+     assert result == Interval(low=0.0, high=0.5, method="percentile_over_units")
++
++
++def _mean_m(t):
++    vals = [v for v in t.m if v is not None]
++    return sum(vals) / len(vals) if vals else None
++
++
++def test_the_paired_interval_is_narrower_than_two_independent_draws():
++    """The property that makes pairing worth doing. Two conditions that move
++    together have a stable difference even when each side is highly variable —
++    an implementation drawing independently loses exactly that.
++
++    The per-unit difference alternates 1.0/0.0 (mean 0.5) rather than being a
++    constant 0.5 offset: a constant offset makes the paired difference exactly
++    0.5 on *every* resample regardless of which units are drawn, which would
++    demonstrate the narrowing with a degenerate zero-width interval instead of
++    a real one."""
++    of = {f"u{i}": {"m": float(i) + (1.0 if i % 2 == 0 else 0.0)} for i in range(60)}
++    against = {f"u{i}": {"m": float(i)} for i in range(60)}
++    keys = sorted(of)
++    paired, _ = paired_percentile_of_derived(of, against, keys, _mean_m, seed=7)
++    a, _ = percentile_of_derived(of, _mean_m, seed=7)
++    b, _ = percentile_of_derived(against, _mean_m, seed=7)
++    independent_width = (a.high - a.low) + (b.high - b.low)
++    assert (paired.high - paired.low) < independent_width / 4
++
++
++def test_the_interval_brackets_the_observed_difference():
++    of = {f"u{i}": {"m": float(i) + (1.0 if i % 2 == 0 else 0.0)} for i in range(60)}
++    against = {f"u{i}": {"m": float(i)} for i in range(60)}
++    got, _ = paired_percentile_of_derived(of, against, sorted(of), _mean_m, seed=7)
++    assert got.low < 0.5 < got.high
++
++
++def test_it_names_its_own_method_paired_percentile():
++    of = {f"u{i}": {"m": float(i) + 1.0} for i in range(60)}
++    against = {f"u{i}": {"m": float(i)} for i in range(60)}
++    got, _ = paired_percentile_of_derived(of, against, sorted(of), _mean_m, seed=7)
++    assert got.method == "paired_percentile_over_units"
++
++
++def test_the_same_seed_reproduces_and_a_different_one_does_not_paired():
++    of = {f"u{i}": {"m": float(i) + (1.0 if i % 2 == 0 else 0.0)} for i in range(60)}
++    against = {f"u{i}": {"m": float(i)} for i in range(60)}
++    k = sorted(of)
++    assert paired_percentile_of_derived(of, against, k, _mean_m, seed=7) == \
++        paired_percentile_of_derived(of, against, k, _mean_m, seed=7)
++    assert paired_percentile_of_derived(of, against, k, _mean_m, seed=7) != \
++        paired_percentile_of_derived(of, against, k, _mean_m, seed=99)
++
++
++def test_below_the_survivor_floor_there_is_no_interval_paired():
++    of = {f"u{i}": {"m": float(i)} for i in range(60)}
++    against = {f"u{i}": {"m": float(i)} for i in range(60)}
++    got, used = paired_percentile_of_derived(
++        of, against, sorted(of), lambda t: None, seed=7, draws=200)
++    assert got is None and used == 0

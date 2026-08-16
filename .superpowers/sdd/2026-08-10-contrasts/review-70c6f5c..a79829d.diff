@@ -1,0 +1,147 @@
+# Review package: 70c6f5c..HEAD
+
+## Commits
+a79829d Narrow the try to compute only, pin one-sided and constant-fixture cases
+
+## Files changed
+ src/publishable/stats.py |  6 ++--
+ tests/test_stats.py      | 89 ++++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 93 insertions(+), 2 deletions(-)
+
+## Diff
+diff --git a/src/publishable/stats.py b/src/publishable/stats.py
+index 520e353..5d0307c 100644
+--- a/src/publishable/stats.py
++++ b/src/publishable/stats.py
+@@ -261,23 +261,25 @@ def paired_percentile_of_derived(
+     intervals. Both spellings produce a plausible interval; only this one is
+     narrower, which is what `allocation: within` buys.
+     """
+     if len(keys) < 2:
+         return None, 0
+     rng = random.Random(seed)
+     n = len(keys)
+     values: list[float] = []
+     for _ in range(draws):
+         drawn = [keys[rng.randrange(n)] for _ in range(n)]
++        table_a = _unit_table_from_rows([{"unit": k, **of[k]} for k in drawn])
++        table_b = _unit_table_from_rows([{"unit": k, **against[k]} for k in drawn])
+         try:
+-            a = compute(_unit_table_from_rows([{"unit": k, **of[k]} for k in drawn]))
+-            b = compute(_unit_table_from_rows([{"unit": k, **against[k]} for k in drawn]))
++            a = compute(table_a)
++            b = compute(table_b)
+         except Exception:  # a degenerate draw, not a fault; see percentile_of_derived
+             continue
+         if a is None or b is None:
+             continue
+         diff = float(a) - float(b)
+         if math.isnan(diff):
+             continue
+         values.append(diff)
+     if len(values) < min_honest_draws(confidence):
+         return None, len(values)
+diff --git a/tests/test_stats.py b/tests/test_stats.py
+index 824ba21..f6efa59 100644
+--- a/tests/test_stats.py
++++ b/tests/test_stats.py
+@@ -1167,10 +1167,99 @@ def test_the_same_seed_reproduces_and_a_different_one_does_not_paired():
+     assert paired_percentile_of_derived(of, against, k, _mean_m, seed=7) != \
+         paired_percentile_of_derived(of, against, k, _mean_m, seed=99)
+ 
+ 
+ def test_below_the_survivor_floor_there_is_no_interval_paired():
+     of = {f"u{i}": {"m": float(i)} for i in range(60)}
+     against = {f"u{i}": {"m": float(i)} for i in range(60)}
+     got, used = paired_percentile_of_derived(
+         of, against, sorted(of), lambda t: None, seed=7, draws=200)
+     assert got is None and used == 0
++
++
++def test_a_constant_offset_gives_a_genuinely_zero_width_interval():
++    """A point-mass bootstrap: every unit's difference is the same constant 0.5,
++    so the resampled difference is 0.5 on *every* draw regardless of which units
++    are drawn. That is not a bug — a difference with no sampling variability
++    should report no width — and it is a sharper discriminator against an
++    independently-drawn variant than the alternating fixture above: paired width
++    is exactly 0.0 against a nonzero independent width, an unbounded ratio
++    rather than a merely large one."""
++    of = {f"u{i}": {"m": float(i) + 0.5} for i in range(60)}
++    against = {f"u{i}": {"m": float(i)} for i in range(60)}
++    got, _ = paired_percentile_of_derived(of, against, sorted(of), _mean_m, seed=7)
++    assert got is not None
++    assert got.high - got.low < 1e-9
++
++
++def test_a_raising_compute_is_treated_as_degenerate_not_propagated_paired():
++    of = {f"u{i}": {"m": float(i)} for i in range(60)}
++    against = {f"u{i}": {"m": float(i)} for i in range(60)}
++
++    def always_raises(units):
++        raise ZeroDivisionError("degenerate draw")
++
++    got, used = paired_percentile_of_derived(
++        of, against, sorted(of), always_raises, seed=7, draws=20)
++    assert got is None
++    assert used == 0
++
++
++def test_a_nan_compute_is_treated_as_degenerate_paired():
++    of = {f"u{i}": {"m": float(i)} for i in range(60)}
++    against = {f"u{i}": {"m": float(i)} for i in range(60)}
++
++    def always_nan(units):
++        return float("nan")
++
++    got, used = paired_percentile_of_derived(
++        of, against, sorted(of), always_nan, seed=7, draws=20)
++    assert got is None
++    assert used == 0
++
++
++def test_a_one_sided_raise_drops_the_whole_draw_not_half():
++    """A defect that narrows the `try` to only one side's `compute` call — the
++    exact regression Finding 1 named — would leave the other side's exception
++    unguarded, crashing the whole function rather than dropping just that
++    draw. `compute` is called twice per draw, `of` then `against` (see the
++    call order in `paired_percentile_of_derived`), so failing every fourth
++    call fails only the `against` side, on exactly every other draw, while
++    `of` always succeeds — pinning that a one-sided failure drops the whole
++    draw rather than surviving on the strength of the healthy side."""
++    of = {f"u{i}": {"m": float(i)} for i in range(60)}
++    against = {f"u{i}": {"m": float(i)} for i in range(60)}
++    calls = {"n": 0}
++
++    def flaky_against_only(units):
++        calls["n"] += 1
++        if calls["n"] % 4 == 0:
++            raise ZeroDivisionError("degenerate on this call only")
++        return float(sum(v for v in units.m if v is not None)) / len(units.m)
++
++    draws = 200
++    got, used = paired_percentile_of_derived(
++        of, against, sorted(of), flaky_against_only, seed=7, draws=draws)
++    assert used == draws // 2
++    assert got is not None
++
++
++def test_a_one_sided_none_drops_the_whole_draw_not_half():
++    """The `None`-flavoured sibling of the test above: checking only `a is
++    None` (omitting the `against`-side check) would let a `None` on `against`
++    reach `float(a) - float(b)` and crash on `TypeError` instead of being
++    dropped as a degenerate draw."""
++    of = {f"u{i}": {"m": float(i)} for i in range(60)}
++    against = {f"u{i}": {"m": float(i)} for i in range(60)}
++    calls = {"n": 0}
++
++    def flaky_against_only(units):
++        calls["n"] += 1
++        if calls["n"] % 4 == 0:
++            return None
++        return float(sum(v for v in units.m if v is not None)) / len(units.m)
++
++    draws = 200
++    got, used = paired_percentile_of_derived(
++        of, against, sorted(of), flaky_against_only, seed=7, draws=draws)
++    assert used == draws // 2
++    assert got is not None

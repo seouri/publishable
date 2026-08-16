@@ -1,0 +1,166 @@
+# Review package: f7a02db..HEAD
+
+## Commits
+b4858e7 test: add the discriminating swap-two-units allocation_hash assertion
+
+## Files changed
+ src/publishable/artifacts.py | 33 +++++++++++++++++++++++-
+ tests/test_artifacts.py      | 61 ++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 93 insertions(+), 1 deletion(-)
+
+## Diff
+diff --git a/src/publishable/artifacts.py b/src/publishable/artifacts.py
+index bcd6e8d..dbf7bd5 100644
+--- a/src/publishable/artifacts.py
++++ b/src/publishable/artifacts.py
+@@ -209,20 +209,32 @@ def build_allocation_document(
+     omitted key would read as "this build never has a seed or strata block
+     at all" rather than "no axis drew or stratified this run."
+ 
+     **`holdout` is never written here.** `E-DATA-HOLDOUT-UNSUPPORTED`
+     refuses every `data.units.holdout` declaration in this build, so there
+     is never a holdout partition to record; the key is omitted entirely
+     rather than written `null`, matching `manifest/input.json`'s own
+     "absent rather than null, so 'not hashed' can't be misread as 'hashed
+     to nothing'" — here, "no holdout key" rather than "a holdout of
+     nothing." H3d adds the key once that refusal lifts.
++
++    **This is the file `resume` must read rather than re-draw.**
++    `reference.md` § Allocation and § Resuming both say `allocation.json` is
++    "read rather than re-drawn" on resume — a fact about which units landed
++    in which arm should not be re-computable to a different answer just
++    because the run is being continued. **That rule has no reader in this
++    build**: `OPERATION_COMMANDS = {"validate", "run"}` in `cli.py`, there is
++    no `resume` command yet, so nothing here calls this function a second
++    time against an existing `allocation.json`. This paragraph is the
++    contract a future `resume` must honour — read the existing file rather
++    than calling `build_allocation_document` again — not a description of
++    behavior this build has or tests.
+     """
+     # Gated on `group_axes` truthiness, which `cli._resolved_group_axes`'s own
+     # docstring warns a caller against in general: an axis whose declared
+     # `levels` aren't all `str` is silently dropped from `group_axes`, so
+     # `bool(group_axes)` alone cannot tell "no axis was declared" from "an
+     # axis was declared but shaped wrong." That silent-skip case cannot reach
+     # here, though — not because of anything local to this function, but
+     # because `cli.command_run` calls `units.arm_members` on the very same
+     # `group_axes` earlier, before any run directory exists, and
+     # `arm_members` raises `KeyError` the moment a condition selects an axis
+@@ -244,21 +256,40 @@ def build_allocation_document(
+ def allocation_hash(document: dict[str, Any]) -> str:
+     """`provenance.allocation_hash` — a hash of the *document*, not of the file's
+     bytes on disk, the same split `manifest.manifest_hash` makes for the input
+     manifest: canonical JSON (`sort_keys=True`, compact separators) over the
+     same dict `build_allocation_document` returned, which is **not** what
+     `allocation.json` is written as (that call uses `indent=2` and insertion
+     order — `seed`, `arms`, `strata` — for a human reader). The two encodings
+     hash to different digests for the same document. A reader reproducing
+     this by hand must re-canonicalize `allocation.json`'s parsed content
+     (`json.dumps(json.load(...), sort_keys=True, separators=(",", ":"))`)
+-    rather than hash the file's bytes directly."""
++    rather than hash the file's bytes directly.
++
++    **Why this lives here rather than as a fourth entry in `hashes.py`.**
++    `hashes.py` holds `code_hash`, `parameters_hash`, and `design_digest` —
++    all three hash something the caller already has lying around (the repo
++    tree, the config), not something this module built for them.
++    `manifest_hash` sits in `manifest.py`, next to `build_manifest`, for the
++    matching reason: it hashes the exact document its own module just
++    constructed, so the construction and the hash of what it constructs stay
++    one property of one artifact rather than two modules that have to agree
++    on a shape from a distance. `allocation_hash` follows `manifest_hash`'s
++    placement, not `hashes.py`'s: it hashes `build_allocation_document`'s
++    own return value, and that function lives in `artifacts.py` because
++    `allocation.json` is an artifact `cli.command_run` writes alongside the
++    others this module already handles. A future reader adding H3d's
++    `holdout` half should draw the same conclusion: `holdout_hash` (if one
++    is ever needed) belongs beside whatever builds the holdout partition's
++    document, not in `hashes.py` either — the module boundary here is "hashes
++    a document this file assembles," not "is a hash."
++    """
+     payload = json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
+     return "sha256:" + hashlib.sha256(payload).hexdigest()
+ 
+ 
+ class StepIO:
+     def __init__(
+         self,
+         *,
+         step_dir: Path,
+         input_dir: Path,
+diff --git a/tests/test_artifacts.py b/tests/test_artifacts.py
+index c1c7b07..084d3e3 100644
+--- a/tests/test_artifacts.py
++++ b/tests/test_artifacts.py
+@@ -1298,10 +1298,71 @@ def test_allocation_hash_is_deterministic_and_content_sensitive():
+     doc = build_allocation_document(roster, group_axes)
+ 
+     h1 = allocation_hash(doc)
+     h2 = allocation_hash(build_allocation_document(roster, group_axes))
+     assert h1 == h2
+     assert h1.startswith("sha256:")
+ 
+     mutated = json.loads(json.dumps(doc))
+     mutated["arms"]["arm"]["control"][0] = "c9"
+     assert allocation_hash(mutated) != h1
++
++
++def test_allocation_hash_changes_when_two_units_swap_arms_and_nothing_else_moves():
++    """The discriminating form task 15's addendum asked for, in place of the
++    weaker mutation above: that test edits a unit key inside the document
++    (`"c3"` -> `"c9"`), which would also catch a hash that hashed something
++    else entirely, but it says nothing about whether `allocation_hash`
++    actually tracks *membership* rather than, say, the roster's contents.
++    Reassigning a single unit changes the roster's own multiset of `arm`
++    values (one fewer `control`, one more `treatment`), so a hash that
++    happened to cover the roster instead of the assignment would *also* move
++    and the test would pass while proving nothing about which one moved it.
++
++    Swapping two units — one `control`, one `treatment` — between arms keeps
++    the roster byte-identical in every column that isn't membership: same 13
++    keys, same per-arm counts (4 `control`, 9 `treatment`), same multiset of
++    `arm` values. Only which key sits in which arm changes. A hash sensitive
++    to the roster's contents but not to `arms_of`'s partition would be blind
++    to this and wrongly report no change.
++
++    `c0` (`control`) and `t0` (`treatment`) are the two swapped. On this
++    fixture the unswapped document hashes to
++    `sha256:bf077b6dceea21f680dc12c7b050f04af5ee405be7326afe81c920c3e605d7d6`
++    and the swapped one to
++    `sha256:74e5df039ba6eaaca52d561a0e4bd04a4d1fa7334c4f4bdc2f42ec6ea069981d`
++    (both recomputed directly against this build, not carried over from
++    memory) — two different digests for a roster whose 13 keys, per-arm
++    counts, and multiset of `arm` values are all unchanged; only which key
++    sits in which arm moved.
++    """
++    roster, control_keys, treatment_keys = _mixed_arm_roster()
++    group_axes = {"arm": ("arm", ["control", "treatment"])}
++    doc = build_allocation_document(roster, group_axes)
++    h1 = allocation_hash(doc)
++    assert h1 == "sha256:bf077b6dceea21f680dc12c7b050f04af5ee405be7326afe81c920c3e605d7d6"
++
++    swapped_units = []
++    for unit in roster:
++        if unit.key == "c0":
++            swapped_units.append(Unit(key=unit.key, attributes={"arm": "treatment"}))
++        elif unit.key == "t0":
++            swapped_units.append(Unit(key=unit.key, attributes={"arm": "control"}))
++        else:
++            swapped_units.append(unit)
++    swapped_roster = UnitList(swapped_units)
++
++    swapped_control = {*control_keys, "t0"} - {"c0"}
++    swapped_treatment = {*treatment_keys, "c0"} - {"t0"}
++    # Same per-arm sizes, same combined key set, same multiset of `arm`
++    # values — only membership moved.
++    assert len(swapped_control) == len(control_keys) == 4
++    assert len(swapped_treatment) == len(treatment_keys) == 9
++    assert swapped_control | swapped_treatment == set(control_keys) | set(treatment_keys)
++
++    swapped_doc = build_allocation_document(swapped_roster, group_axes)
++    h2 = allocation_hash(swapped_doc)
++
++    assert set(swapped_doc["arms"]["arm"]["control"]) == swapped_control
++    assert set(swapped_doc["arms"]["arm"]["treatment"]) == swapped_treatment
++    assert h2 == "sha256:74e5df039ba6eaaca52d561a0e4bd04a4d1fa7334c4f4bdc2f42ec6ea069981d"
++    assert h2 != h1

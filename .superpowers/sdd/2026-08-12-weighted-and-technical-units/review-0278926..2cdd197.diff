@@ -1,0 +1,686 @@
+# Review package: 0278926..HEAD
+
+## Commits
+2cdd197 test: pin the derived metric's weighted_by and the four int parts of n
+2836af1 feat: report the effective n a weighted interval was computed at
+
+## Files changed
+ docs/reference.md         |  3 +-
+ src/publishable/cli.py    | 53 ++++++++++++++++++++++++++---
+ src/publishable/runner.py | 80 ++++++++++++++++++++++++++++++++++++++------
+ src/publishable/stats.py  | 10 +++---
+ tests/test_cli.py         | 65 ++++++++++++++++++++++++++++++++++++
+ tests/test_runner.py      | 85 +++++++++++++++++++++++++++++++++++++++++++++++
+ tests/test_stats.py       | 25 ++++++++++++++
+ 7 files changed, 302 insertions(+), 19 deletions(-)
+
+## Diff
+diff --git a/docs/reference.md b/docs/reference.md
+index f6b1091..a11a743 100644
+--- a/docs/reference.md
++++ b/docs/reference.md
+@@ -409,21 +409,21 @@ likewise apart from those same two envelope rows, none of the others.
+ | The config file does not parse as YAML, or parses to something other than a mapping | `E-CONFIG-PARSE` |
+ | A top-level block, or a nested container `_check_shape` walks before its items — `data.units` and its `attributes`, `sweep.baseline`, `sweep.grid` and each axis's values, `replication.repeats` and each level, `statistics.contrasts`, `statistics.report_by` — is present and not the mapping, list, or string its position requires; unset (`null`) is treated as absent, matching `E-CONFIG-TYPE` | `E-CONFIG-SHAPE` |
+ | A leaf `check_envelope`'s `LEAF_TYPES` table declares is present and not its declared type — a `bool` never satisfies any leaf's type, since the table declares none as `bool`, and an `int` satisfies a `float` one; unset (`null`) is treated as absent | `E-CONFIG-TYPE` |
+ | `data.input_dir` or `data.output_dir` resolves inside the git repository, checked once a repo root is found | `E-DATA-IN-REPO` |
+ | A `data.units.measurements.collapse` rule of `mean`, `median`, or `sum` — the top-level string, or a per-column map's own entry, or its `first` fallback over a column the map does not name — is checked against the resolved roster's own attribute values for that column, and `units.is_measurement_numeric` — the single authority this check and the run-time coercion both read — says at least one is neither numeric nor a string that parses as one (a `bool` counts as neither); skipped, along with the rest of this row's checks, when the roster does not resolve, since there is then no column to check a rule against. Raised at run time too, under the same code, wherever that coercion runs: over an input table's rows as the roster resolves, and over the rows a step [measured](#what-isnt-a-repeat) as its execution finalizes — the same reuse `E-UNITS-COLLAPSE-RULE` below illustrates. The step-path half is not a fault `validate` can predict: the value is one the *step* recorded, not one any declaration named | `E-DATA-MEASUREMENTS-COLLAPSE-TYPE` |
+ | `data.units.measurements` is declared (non-null) and is not a mapping, or is an empty mapping — reported alone, since there is then no `by` or `collapse` to check either; or the mapping is neither of those and its `by` is missing or is not a non-empty string, or its `collapse` is missing — an omitted `collapse` names no rule, so it is this row rather than `E-UNITS-COLLAPSE-RULE` below. Also raised where the roster resolves, under the same code, since resolution reads `by` before this check runs and a malformed block reaches it first | `E-DATA-MEASUREMENTS-INVALID` |
+ | `data.input_dir` or `data.output_dir`, after `expanduser()`, is not an absolute path | `E-DATA-NOT-ABSOLUTE` |
+ | `data.input_manifest_policy` is empty, or is a value outside the declared policies | `E-DATA-POLICY` |
+ | `data.input_dir` or `data.output_dir` is empty | `E-DATA-REQUIRED` |
+ | `data.input_dir` is not a directory, or is a directory with nothing in it | `E-DATA-UNREADABLE` |
+-| `data.units.weight_by` names a declared attribute, the roster resolves, and at least one unit's value for it is not a positive finite number — zero, negative, non-numeric, or a NaN. "Numeric" is `units.is_measurement_numeric`, the same single authority the collapse-type check reads, so a table-sourced `"2.0"` counts as the number it holds; finiteness is checked on top of positivity because `float("nan")` parses and compares `False` against every bound. Skipped when the roster does not resolve, there being no values to check, and reported for the whole roster at once naming the first offending unit | `E-DATA-WEIGHT-INVALID` |
++| `data.units.weight_by` names a declared attribute, the roster resolves, and at least one unit's value for it is not a positive finite number — zero, negative, non-numeric, or a NaN. "Numeric" is `units.is_measurement_numeric`, the same single authority the collapse-type check reads, so a table-sourced `"2.0"` counts as the number it holds; finiteness is checked on top of positivity because `float("nan")` parses and compares `False` against every bound. Skipped when the roster does not resolve, there being no values to check, and reported for the whole roster at once naming the first offending unit. Raised at run time too, under the same code, wherever a weight is actually used — the same reuse `E-DATA-MEASUREMENTS-COLLAPSE-TYPE` above illustrates, and for the same single-authority reason | `E-DATA-WEIGHT-INVALID` |
+ | `data.units.weight_by` is present and is an empty string — an empty declaration changes no behavior — or names a value `data.units.attributes` does not declare, which includes every name under a `{glob: ...}` source, that source declaring none. `data.units.attributes`, not the source's columns, and deliberately unlike the `measurements.by` half of `E-UNITS-ATTR-MISSING` below: a weight is read per unit at analysis time, so it has to survive resolution as an attribute, where a `by` is consumed at collapse time and dropped from the merged unit. Checked from the declaration alone, so it reports whether or not a roster resolved; a non-string is left to `E-CONFIG-TYPE` | `E-DATA-WEIGHT-UNKNOWN` |
+ | Once no experiment was preloaded, `entrypoint` is a non-empty string, and a repository root was found for it, importing it raises anything — a `SystemExit` at module scope, `entrypoint` not shaped `<module>:<attribute>`, or any other exception; skipped without a report when no repository root exists at all, since there is then no `src/` to import from | `E-ENTRYPOINT-IMPORT` |
+ | `entrypoint` is empty, or is not a string | `E-ENTRYPOINT-REQUIRED` |
+ | A hypothesis's `compare.to` is `baseline` — explicit, or implicit when `compare.condition` is present and neither `to` nor `compare.contrast` is — and `sweep.baseline` is not declared. Presence is the test, so `condition: null` counts and is *not* treated as absent the way an unset `E-CONFIG-TYPE` or `E-CONFIG-SHAPE` leaf is: `hypotheses` is a whole-leaf block whose entries `hypotheses.resolve` reads by key, stringifying whatever `condition` holds into a label lookup, so a present-but-`null` `condition` names a label that resolves to nothing rather than leaving a field unset. With a baseline declared it draws `E-HYPOTHESIS-CONDITION` instead, for that same reason | `E-HYPOTHESIS-BASELINE` |
+ | Once the entrypoint has imported and the metric's step is one it declares, a hypothesis names a metric whose scope is not `summary`, sets `evaluate_on` to `ci95_lower` or `ci95_upper`, and no metric this run computes could ever carry an interval — `data.units` is undeclared and the template defines no `aggregate` | `E-HYPOTHESIS-BOUND` |
+ | A hypothesis's `compare` declares `to`, and its value is not `baseline` | `E-HYPOTHESIS-COMPARE-TO` |
+ | A hypothesis's `compare.condition` names a label the run's `sweep` does not declare, or names the baseline's own label — checked only once a baseline is declared, since `E-HYPOTHESIS-BASELINE` already covers the case where none is, and only once `sweep` expands cleanly enough to resolve condition labels at all | `E-HYPOTHESIS-CONDITION` |
+ | A hypothesis's `compare.contrast` names an `id` `statistics.contrasts` does not declare | `E-HYPOTHESIS-CONTRAST` |
+ | A hypothesis's `direction` is missing or is a value other than `greater` or `less` | `E-HYPOTHESIS-DIRECTION` |
+ | A hypothesis's `evaluate_on` is set and is a value other than `observed`, `ci95_lower`, or `ci95_upper` — unset (`null`) is accepted, since `observed` is the documented default | `E-HYPOTHESIS-EVALUATE-ON` |
+@@ -878,20 +878,21 @@ Two levels, and only one leaf, because only one of these is ever a *state* rathe
+ | [`io.read_upstream` from `summary` scope naming a condition- or repeat-scoped step, once the sweep labels its conditions, or naming a repeat-scoped step once the run resolves more than one repeat](#step-scope) | `ContractError` · `E-STEP-READ-AMBIGUOUS` |
+ | [Reading a swept parameter](#step-scope) at `"run"` or `"summary"` scope | `ContractError` · `E-STEP-SWEPT-PARAM` |
+ | [`io.units` or `io.units.train`](#a-fold-repeat-puts-the-units-out-of-reach-of-the-wider-scopes) where the declarations put no such list | `ContractError` · `E-STEP-UNITS-UNAVAILABLE` |
+ | `self.condition` or `self.repeat` at a [scope that has none](#using-them-in-step-code) | `ContractError` · `E-STEP-CONTEXT-ABSENT` |
+ | An [`Estimate`](#estimate-carries-your-interval-without-core-claiming-it) outside `"summary"` scope, or one carrying `ci95` with no `method` | `ContractError` · `E-STEP-ESTIMATE-SCOPE`, `E-STEP-ESTIMATE-METHOD` |
+ | An [`Estimate`](#estimate-carries-your-interval-without-core-claiming-it) whose `ci95` is not two numbers in ascending order, or whose `value` is not a number | `ContractError` · `E-STEP-ESTIMATE-CI95`, `E-STEP-ESTIMATE-VALUE` |
+ | A [returned value core can't record](#steps-and-artifacts), or any [name collision the record can't hold](#validation) — a derived key against a recorded column, a recorded column against a unit attribute | `ContractError` · `E-STEP-RETURN-TYPE`, `E-STEP-KEY-COLLISION` |
+ | A [`cfg` path](#steps-and-artifacts) the config doesn't hold, or a write through a frozen [`Unit`](#the-unit-list-is-three-operations-and-the-units-in-it-are-frozen) | `ContractError` · `E-STEP-PARAM-UNKNOWN`, `E-UNIT-IMMUTABLE` |
+ | Collapsing [technical replicates](#what-isnt-a-repeat) under a `collapse` rule name that is none of `mean`, `median`, `sum`, `first`, or `mode` | `ContractError` · `E-UNITS-COLLAPSE-RULE` |
+ | Collapsing [technical replicates](#what-isnt-a-repeat) whose `data.units.measurements` block is not a mapping or names no `by`, or under a numeric `collapse` rule over a value that is neither numeric nor a string that parses as one — the second raised as an input table's rows collapse and as a step's `measurement=` rows collapse at the end of its execution, which is the surface `validate` cannot reach, the value being one the step recorded rather than one a declaration named; both are also [reported by `validate`](#errors-validate-reports) under the same codes | `ContractError` · `E-DATA-MEASUREMENTS-INVALID`, `E-DATA-MEASUREMENTS-COLLAPSE-TYPE` |
++| Computing a [weighted](#weighted-samples) figure — Kish's effective size, or a weighted interval — over a `data.units.weight_by` value that is not a positive finite number, the same `units.usable_weight` predicate `validate` approves the column against, so a weight it cannot use raises here rather than answering a plausible-looking number; also [reported by `validate`](#errors-validate-reports) under the same code, which is where a run that validates first meets it | `ContractError` · `E-DATA-WEIGHT-INVALID` |
+ | A [column](#templates-where-parameters-are-defined) no row of the unit table holds, read off `units` in a template's `aggregate` — reported as [`W-STATS-AGGREGATE-FAILED`](#warnings-core-reports), since `aggregate` runs after every execution has completed and a metric core can't compute never costs a run its record | `ContractError` · `E-STEP-COLUMN-UNKNOWN` |
+ | A [repeat level](#repeat-kinds) whose derived seeds or whose rendered labels are not distinct across its repeats | `ContractError` · `E-REPL-SEED-COLLISION` |
+ | Two [steps](#steps-and-artifacts) in one experiment deriving the same name — including the same step listed twice — or one whose `scope` is not one of the four | `ContractError` · `E-STEP-NAME-COLLISION`, `E-STEP-SCOPE-UNKNOWN` |
+ | [`io.record` or `io.skip`](#the-unit-table-is-the-inference-base) naming a unit the roster does not hold, or naming one this execution has already recorded or skipped — a unit measured with `measurement=` counts as settled for both, in either order, since it arrives by one path or the other and never both, while a second measurement of it is what the argument is for | `ContractError` · `E-STEP-UNIT-UNKNOWN`, `E-STEP-UNIT-SETTLED` |
+ | [`io.record`](#the-importable-surface) given `measurement=` while `data.units.measurements` is undeclared, so there is no rule to collapse the rows under | `ContractError` · `E-STEP-MEASUREMENT-UNDECLARED` |
+ | An [`io` accessor](#step-scope) reached from a scope that does not have it | `ContractError` · `E-STEP-SCOPE-ONLY` |
+ | Indexing [`io.units`](#the-unit-list-is-three-operations-and-the-units-in-it-are-frozen) with anything but a plain integer — a slice, a string, a bool | `ContractError` · `E-STEP-UNITS-CONTRACT` |
+ | [`io.read_condition`](#steps-that-need-every-condition) naming a condition index this run did not resolve, or naming a repeat-scoped step with no `repeat=` to say which copy | `ContractError` · `E-STEP-READ-CONDITION-UNKNOWN`, `E-STEP-READ-REPEAT-REQUIRED` |
+ | Core's execution plan disagreeing with the state core resolved beside it — a repeat execution whose seed or whose resolved config isn't there, a [realized order](#a-batch-says-when-not-what) naming a pair the plan doesn't hold, or a declared fold core can't pair with the units it partitions — a repeat label carrying no fold component, a fold with no resolved roster, drawn partitions with no fold level to label them | `ContractError` · `E-RUN-SEED-MISSING`, `E-RUN-CFG-MISSING`, `E-RUN-ORDER-MISMATCH`, `E-REPL-ORDER-UNRESOLVED`, `E-RUN-FOLD-UNRESOLVED` |
+ 
+diff --git a/src/publishable/cli.py b/src/publishable/cli.py
+index 5ef8271..69d4fd2 100644
+--- a/src/publishable/cli.py
++++ b/src/publishable/cli.py
+@@ -708,20 +708,47 @@ def command_run(config_path: Path) -> int:
+     )
+     # Carried only when the input path actually merged rows. A run whose STEP does
+     # the measuring (`io.record(..., measurement=)`) has one input row per unit, so
+     # an ungated `technical_n` would report `{min: 1, max: 1, median: 1}` beside a
+     # `measurements.parquet` holding three rows per unit — a false claim of no
+     # replication, which is worse than the missing one. The step path's own counts
+     # are not carried in this build; see `docs/superpowers/spec-defects.md`.
+     beside_n: dict[str, Any] = {}
+     if technical_n is not None and technical_n["max"] > 1:
+         beside_n["technical_n"] = technical_n
++    # `data.units.weight_by` names a unit attribute holding the inverse sampling
++    # probability (`reference.md` § Weighted samples). Two facts reach the record
++    # from it, by the two different routes `stats.summarize_step` describes:
++    # `weighted_by` sits BESIDE `n`, exactly where the document's own example
++    # prints it, and `effective` — Kish's size — JOINS `n`, so it travels in
++    # `attrition`'s counts rather than here.
++    #
++    # ⚠️ The VALUE is not weighted yet: a weighted mean and a
++    # `weighted_t_over_units` interval exist in `stats.py` but nothing calls them
++    # from this path, so `weighted_by` here marks a declaration rather than an
++    # arithmetic that happened. Harmless today — `E-DATA-WEIGHT-UNSUPPORTED`
++    # refuses every config that declares `weight_by`, so no run reaches this
++    # branch — and a wrong number the moment that refusal is retired. Retiring it
++    # without wiring the estimator is the forbidden move; see the task 9 report.
++    weight_by = (units_decl or {}).get("weight_by")
++    weights: dict[str, Any] | None = None
++    weighted_beside: dict[str, Any] = {}
++    if isinstance(weight_by, str) and weight_by and roster is not None:
++        # `.get`, not `[...]`: `validate` guarantees `weight_by` names a declared
++        # attribute and `_from_table` gives every unit every declared attribute,
++        # so a missing one is a core defect — and `None` reaches
++        # `kish_effective_n`, which refuses it as `E-DATA-WEIGHT-INVALID` under
++        # the same single authority `validate` used. A comprehension that skipped
++        # the unit instead would quietly shrink the denominator.
++        weights = {u.key: u.attributes.get(weight_by) for u in roster}
++        weighted_beside["weighted_by"] = weight_by
++        beside_n["weighted_by"] = weight_by
+     # `unit_count` is what turns `{kind: fold, k: all}` into a real count and
+     # what `_fold_k` checks a declared `k` against — the same roster
+     # `_check_units`/`_check_replication` resolved at `validate` time, threaded
+     # through here rather than trusted blind, since `run` re-resolves it fresh.
+     levels = resolve_repeats(doc, digest, unit_count=len(roster) if roster is not None else None)
+     repeats = cross_levels(levels)
+     labels = [r.label for r in repeats if r.label] or [""]
+     fold_level = next((lv for lv in levels if lv.kind == "fold"), None)
+     partitions: list[list[Unit]] | None = None
+     if fold_level is not None:
+@@ -976,21 +1003,26 @@ def command_run(config_path: Path) -> int:
+                     if r.execution.scope == "repeat"
+                     and r.execution.condition_index == cond.index
+                     and r.rows
+                 }
+                 aggregated[cond.index] = {}
+                 for step_name in sorted(recording_steps):
+                     collapsed = collapse_repeats(
+                         results, step_name, cond.index, fold_members=fold_members
+                     )
+                     counts = attrition(
+-                        results, roster, step_name, cond.index, fold_members=fold_members
++                        results,
++                        roster,
++                        step_name,
++                        cond.index,
++                        fold_members=fold_members,
++                        weights=weights,
+                     )
+                     max_ineligible = (doc.get("limits") or {}).get("max_ineligible_fraction")
+                     if (
+                         isinstance(max_ineligible, (int, float))
+                         and not isinstance(max_ineligible, bool)
+                         and counts["resolved"]
+                         and counts["ineligible"] / counts["resolved"] > max_ineligible
+                     ):
+                         aggregate_c.warn(
+                             "W-DATA-INELIGIBLE",
+@@ -1253,20 +1285,27 @@ def command_run(config_path: Path) -> int:
+                             level_collapsed = {
+                                 k: v for k, v in collapsed.items() if k in keys
+                             }
+                             level_roster = UnitList([u for u in roster if u.key in keys])
+                             level_counts = attrition(
+                                 results,
+                                 level_roster,
+                                 step_name,
+                                 cond.index,
+                                 fold_members=fold_members,
++                                # Recomputed over the level's own units, which is
++                                # what makes it carryable at all: `technical_n`
++                                # below is withheld because it is a whole-roster
++                                # figure that would have to be COPIED down, and
++                                # Kish's size over this stratum is a different
++                                # number this call computes from scratch.
++                                weights=weights,
+                             )
+                             # Attrition happens during the run, so a level the
+                             # roster-time `W-STATS-REPORTBY-THIN` counted as
+                             # comfortable can complete on a handful — or on
+                             # nothing at all. This check sits ahead of both
+                             # gates below (the empty-level `continue` and the
+                             # no-metric-produced check) on purpose: a level
+                             # thinned to zero is the most disclosive case, and
+                             # is exactly the one that gets no block. Warning
+                             # only where a block is also emitted would mean the
+@@ -1349,37 +1388,43 @@ def command_run(config_path: Path) -> int:
+                                         continue
+                                     # Omitted rather than carried over from the
+                                     # parent: no value for this level is honest,
+                                     # the parent's value here would not be.
+                                     if level_value is not None:
+                                         level_derived[key] = level_value
+                             # The run's own resample seed, not one derived per
+                             # level: a level resamples from its own key set,
+                             # which is already what makes the draw its own.
+                             #
+-                            # No `beside_n`, for the same reason a level block
+-                            # carries no `repeat_spread`: `technical_n` is
++                            # `weighted_beside`, not the parent's `beside_n`, and
++                            # the difference is the whole rule: `technical_n` is
+                             # `{min, max, median}` over the WHOLE roster, and a
+                             # stratum's own units may have collapsed a different
+                             # number of measurements each. Copying the parent's
+                             # figure onto a subset would state a spread nobody
+                             # computed over that subset, and `reference.md`
+                             # § Reporting strata documents a level block as the
+                             # aggregation repeated over the subset, not the
+-                            # parent's numbers re-shown.
++                            # parent's numbers re-shown — the same reason a level
++                            # block carries no `repeat_spread`. `weighted_by`
++                            # names the declaration rather than reporting a
++                            # figure, and is as true of a stratum as of the whole
++                            # roster, so withholding it would leave a block whose
++                            # `n` carries `effective` with nothing saying why.
+                             level_summary = summarize_step(
+                                 level_collapsed,
+                                 level_counts,
+                                 derived=level_derived or None,
+                                 seed=resample_seed_value,
+                                 resample=strata_resample,
+                                 draws=derived_metric_draws,
++                                beside_n=weighted_beside,
+                             )
+                             # At least one entry has to come from the level's own
+                             # table. A block holding nothing but derived metrics
+                             # over a table whose every column was non-numeric is
+                             # the empty case again, wearing a value.
+                             if set(level_summary) - set(level_derived or {}):
+                                 levels_block[level] = level_summary
+                         if levels_block:
+                             by_block[attribute] = levels_block
+                     # `by` is reserved (`stats.RESERVED_METRIC_NAMES`). A derived
+diff --git a/src/publishable/runner.py b/src/publishable/runner.py
+index c841a1c..c71dcdd 100644
+--- a/src/publishable/runner.py
++++ b/src/publishable/runner.py
+@@ -7,45 +7,85 @@ from dataclasses import dataclass
+ from datetime import UTC, datetime
+ from pathlib import Path
+ from typing import Any
+ 
+ from publishable.artifacts import StepIO
+ from publishable.coercion import coerce_scalars
+ from publishable.config import Config, SweptAway
+ from publishable.errors import ContractError
+ from publishable.replication import LABEL_JOIN, Repeat
+ from publishable.scope import Execution
+-from publishable.stats import handed_to
++from publishable.stats import handed_to, kish_effective_n
+ from publishable.sweep import condition_dir_name
+ from publishable.units import UnitList
+ 
+ 
+ @dataclass(frozen=True)
+ class ExecutionResult:
+     execution: Execution
+     status: str
+     started_at: str
+     wall_seconds: float
+     returned: dict[str, Any]
+     error: str | None
+     recorded: frozenset[str] = frozenset()
+     skipped: frozenset[str] = frozenset()
+     rows: tuple[dict[str, Any], ...] = ()
+ 
+ 
++def _counts(
++    resolved: int,
++    completed: "set[str]",
++    ineligible: int,
++    failed: int,
++    weights: "dict[str, Any] | None",
++) -> dict[str, float]:
++    """The one builder all three of `attrition`'s return sites go through.
++
++    Three parallel dict literals is how `effective` reaches two of them and not
++    the third — a design that weights reading as one that doesn't, at whichever
++    site a given run happens to take. The shape is decided here instead.
++
++    `effective` is Kish's size over the COMPLETED units' weights: those are the
++    units a `basis: units` interval is computed from, so they are the ones whose
++    concentration its degrees of freedom come from (`reference.md` § Weighted
++    samples). It is `float` rather than `int` — an uneven weighting's effective
++    size is not a whole number, and rounding it would report a size no interval
++    was computed at. Present only when `weight_by` is declared, on the rule the
++    three-part `n` states for every one of its parts: "each present only when it
++    applies so a design that never skips reads as it always did".
++
++    Sorted for reproducibility — Kish's ratio is order-independent in exact
++    arithmetic but its two sums are not in floating point, and `completed` is a
++    `set`. Indexed rather than `.get`-ed because every completed key comes from
++    the roster the caller built `weights` from; a `.get(k, 0)` default would
++    quietly change the denominator instead of failing.
++    """
++    out: dict[str, float] = {
++        "resolved": resolved,
++        "completed": len(completed),
++        "ineligible": ineligible,
++        "failed": failed,
++    }
++    if weights is not None:
++        out["effective"] = kish_effective_n([weights[k] for k in sorted(completed)])
++    return out
++
++
+ def attrition(
+     results: list[ExecutionResult],
+     roster: "UnitList | None",
+     step_name: str,
+     condition_index: int,
+     fold_members: dict[str, frozenset[str]] | None = None,
+-) -> dict[str, int]:
++    weights: dict[str, Any] | None = None,
++) -> dict[str, float]:
+     """The four counts, scoped to one step within one condition. A failed unit has
+     no row anywhere, so failure is derived.
+ 
+     `step_name` is required, mirroring `stats.collapse_repeats`: without it this
+     intersects `recorded`/`skipped` across every repeat-scoped execution of the
+     condition, including an ordinary scalar-only step (a timing step, a logging
+     step) that records no units at all. That step's empty `recorded` set would
+     then intersect every OTHER step's into emptiness too, reclassifying every unit
+     as `failed` and reporting a right-looking mean beside a wrong `n` — exactly the
+     mismatch this parameter exists to make impossible.
+@@ -81,41 +121,60 @@ def attrition(
+     right answer at this scope: the counts a condition reports are against the
+     cohort the condition was run over, and a fold whose execution is missing
+     leaves its units genuinely unsettled, so they land in `failed` rather than
+     vanishing from the denominator. The smaller-than-roster figure is a fact
+     about one *execution* — `reference.md` § Repeat kinds states it at that
+     level, "`n: {resolved: 1, completed: 1}` per execution" under `k: all` — and
+     this function is per-condition, so it is not the number to expect here. No
+     per-execution `n` is written in this build: `run.yaml`'s `per_repeat` stays
+     verbatim what each step returned (see `run_record.assemble_run_yaml`).
+ 
++    `weights` is unit key → that unit's `data.units.weight_by` value, supplied
++    only when the config declares one, and it is what adds `effective` to the
++    returned mapping (`_counts` says what the figure is and why it is
++    conditional). The values are passed through as the roster holds them —
++    `str`, under a table source — because `stats.kish_effective_n` gates and
++    parses its own input against `units.usable_weight`, the single authority
++    `validate` approves a config's weights against. Coercing here would be a
++    second notion of a usable weight, which is the thing this slice most
++    carefully has only one of.
++
++    That gating RAISES `ContractError` · `E-DATA-WEIGHT-INVALID` on a weight
++    that is zero, negative, non-finite or non-numeric, and this call sits
++    outside `cli.py`'s containment around `summarize_step`. For `run` the window
++    is closed: `command_run` validates before it executes, against the same
++    roster it then resolves, and `E-DATA-WEIGHT-INVALID` is one of the checks it
++    runs — the same reasoning that closes `measurements`' validate/run window.
++    It re-opens for any command that executes without validating first, which is
++    `draft` and `resume` when they land (H9).
++
+     This is the per-step, per-condition breakdown `stats.summarize_step` attaches
+     as a metric's `n`. It is deliberately not what guards `max_failed_fraction`:
+     that threshold is run-level and a union across every recording step (see
+     `_units_failed_anywhere` in `execute_plan`), not an intersection scoped to one.
+     """
+     if roster is None:
+-        return {"resolved": 0, "completed": 0, "ineligible": 0, "failed": 0}
++        return _counts(0, set(), 0, 0, weights)
+     keys = {u.key for u in roster}
+     recording = [
+         r
+         for r in results
+         if r.execution.step_name == step_name
+         and r.execution.scope == "repeat"
+         # Strict: `or 0` would map an unexpected `None` onto condition 0, which is
+         # the pooling this function's required `condition_index` exists to prevent.
+         # `build_plan` always gives a `repeat`-scoped execution a real index, so a
+         # `None` here is a core defect and must drop out rather than be absorbed.
+         and r.execution.condition_index == condition_index
+     ]
+     if not recording:
+-        return {"resolved": len(keys), "completed": 0, "ineligible": 0, "failed": len(keys)}
++        return _counts(len(keys), set(), 0, len(keys), weights)
+     # Accumulated per label, exactly as `stats.collapse_repeats` accumulates its
+     # rows: two executions sharing one repeat label (a resumed leaf re-reported,
+     # say) must merge, not overwrite. A dict comprehension kept only the last
+     # while `labels` still held the duplicate, so the two readers of the same
+     # executions disagreed about a unit — the collapsed table carrying a row for
+     # a unit these counts called `failed`, which breaks the reconciliation
+     # `resolved == completed + ineligible + failed`. `labels` comes off the
+     # accumulator so it is unique and in execution order, the same list
+     # `collapse_repeats` hands `handed_to`.
+     recorded_by_label: dict[str, set[str]] = {}
+@@ -131,26 +190,27 @@ def attrition(
+         handed = {k for s in fold_members.values() for k in s} & keys
+     completed, ineligible = set(), set()
+     for key in handed:
+         mine = handed_to(key, labels, fold_members)
+         if not mine:
+             continue
+         if all(key in recorded_by_label[lb] for lb in mine):
+             completed.add(key)
+         elif all(key in skipped_by_label[lb] for lb in mine):
+             ineligible.add(key)
+-    return {
+-        "resolved": len(handed),
+-        "completed": len(completed),
+-        "ineligible": len(ineligible),
+-        "failed": len(handed) - len(completed) - len(ineligible),
+-    }
++    return _counts(
++        len(handed),
++        completed,
++        len(ineligible),
++        len(handed) - len(completed) - len(ineligible),
++        weights,
++    )
+ 
+ 
+ def _handed_keys(
+     repeat_label: str, keys: set[str], fold_members: dict[str, frozenset[str]] | None
+ ) -> set[str]:
+     """The units an execution with this repeat label was actually given.
+ 
+     Subtracting from the whole roster instead is what made every fold run abort:
+     the k−1 partitions this execution never saw are neither recorded nor skipped,
+     and would each count as a failure.
+diff --git a/src/publishable/stats.py b/src/publishable/stats.py
+index a68f60f..cfe1d66 100644
+--- a/src/publishable/stats.py
++++ b/src/publishable/stats.py
+@@ -808,21 +808,21 @@ def repeat_spread(
+         if not member_means:
+             continue
+         grand_mean = sum(member_means) / len(member_means)
+         variance = sum((m - grand_mean) ** 2 for m in member_means) / len(member_means)
+         entries.append({"std": math.sqrt(variance), "n": len(member_means), "kind": level.kind})
+     return entries
+ 
+ 
+ def summarize_step(
+     collapsed: dict[str, dict[str, float]],
+-    counts: dict[str, int],
++    counts: dict[str, float],
+     derived: dict[str, Any] | None = None,
+     seed: int | None = None,
+     resample: "dict[str, Callable[[UnitTable], float | None]] | None" = None,
+     draws: int = 2000,
+     beside_n: dict[str, Any] | None = None,
+ ) -> dict[str, dict[str, Any]]:
+     """Per-column value, basis, `n`, and interval over the collapsed unit table.
+ 
+     Every column here is `basis: units`: it was a recorded column, `n` counts
+     units, and the interval is `t_over_units` over the per-unit values — or
+@@ -875,23 +875,25 @@ def summarize_step(
+     `artifacts.py` raises for the sibling case: one name cannot hold both a
+     column's mean and a derived value.
+ 
+     `beside_n` is core-supplied context copied verbatim into every metric block —
+     `technical_n` today. It is the second of two routes a count-shaped fact
+     travels, and which one a new fact takes is decided by where `reference.md`
+     shows it:
+ 
+     - **A key that JOINS `n` travels in `counts`.** § What isn't a repeat says the
+       three-part `n` is "joined by `clusters` … by `effective` … by `ineligible`",
+-      so those are parts of `n` and need no new carrier. (`counts` is annotated
+-      `dict[str, int]`; `effective` is Kish's size and is not an integer, so the
+-      task that adds it widens that annotation rather than inventing a route.)
++      so those are parts of `n` and need no new carrier. `effective` arrives that
++      way — `runner.attrition` puts it there under a declared `weight_by` — which
++      is why `counts` is annotated `dict[str, float]` rather than `dict[str,
++      int]`: Kish's effective size is fractional for any uneven weighting, and
++      rounding it would name a size no interval was computed at.
+     - **A key that sits BESIDE `n` travels here.** § What isn't a repeat shows
+       `technical_n` as a sibling of `n` in the metric block, and § Weighted
+       samples shows `weighted_by` in the same position.
+ 
+     Copied into the derived branch as well as the recorded-column one, because
+     the document's own example of a metric carrying `technical_n` is `r`, which
+     `aggregate` derives. The computed keys are merged last and so always win: a
+     caller cannot shadow `n`, `value`, or an interval with a key of this name.
+     """
+     columns: list[str] = []
+diff --git a/tests/test_cli.py b/tests/test_cli.py
+index f405fb3..b598d97 100644
+--- a/tests/test_cli.py
++++ b/tests/test_cli.py
+@@ -4179,10 +4179,75 @@ def test_a_report_by_level_block_carries_no_technical_n(tmp_path: Path):
+     )
+     run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+     aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+     assert "technical_n" in aggregated["pred"]
+     levels = aggregated["by"]["cohort"]
+     assert levels, aggregated
+     for block in levels.values():
+         for metric in block.values():
+             assert "technical_n" not in metric
+ 
++
++# --- H3a task 9: `n` gains `effective`, and the record carries `weighted_by` ---
++
++
++def test_an_unweighted_run_grows_no_effective_and_no_weighted_by(tmp_path: Path):
++    """The regression, read back from a real `run.yaml`. `reference.md` § The
++    three-part `n`: `effective` joins `n` "whenever `weight_by` makes Kish's size
++    the one the interval was computed at", "each present only when it applies so a
++    design that never skips reads as it always did". A run that declares no
++    `weight_by` must read exactly as it always did — four parts in `n`, and no
++    `weighted_by` beside it, on both metric shapes (a recorded column and a
++    derived one)."""
++    doc = run_a_project(
++        tmp_path,
++        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
++        aggregate_returns="total",
++    )
++    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
++    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
++    for name in ("pred", "total"):
++        assert set(aggregated[name]["n"]) == {"resolved", "completed", "ineligible", "failed"}
++        assert "effective" not in aggregated[name]["n"]
++        assert "weighted_by" not in aggregated[name]
++    # The control that must report: the run really did produce metrics of both
++    # shapes with a populated `n`, so the assertions above are not passing off an
++    # empty block.
++    assert aggregated["pred"]["n"]["completed"] == 10
++    assert aggregated["total"]["value"] is not None
++
++
++@pytest.mark.xfail(
++    strict=True,
++    reason="`E-DATA-WEIGHT-UNSUPPORTED` refuses every config declaring `weight_by` and "
++    "`command_run` returns before executing, so no end-to-end run can reach the wiring "
++    "this pins — task 11 retires that refusal. Strict, so it XPASSes and fails the suite "
++    "the moment it does, which is the handoff: the wiring is unit-tested in "
++    "tests/test_runner.py (`attrition`) and tests/test_stats.py (`summarize_step`), and "
++    "this is the only assertion that can see the two meeting in `run.yaml`",
++)
++def test_n_gains_effective_under_a_weighted_design(tmp_path: Path):
++    """§ Weighted samples prints exactly this shape: `weighted_by` beside the
++    value, `effective` inside `n` beside `completed`.
++
++    Four units weighted 1/1/1/3, all completing, so Kish's size is
++    (1+1+1+3)² / (1+1+1+9) = 36/12 = exactly 3.0 against a `completed` of 4 —
++    the two figures differ, which is the point of reporting both."""
++    doc = run_a_project(
++        tmp_path,
++        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
++        aggregate_returns="total",
++        roster_csv="patient_id,sampling_weight\np1,1\np2,1\np3,1\np4,3\n",
++        units_overrides={
++            "attributes": ["sampling_weight"],
++            "weight_by": "sampling_weight",
++        },
++    )
++    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
++    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
++    # Both metric shapes: `pred` is a recorded column and `total` is derived by
++    # `aggregate`, which is the shape § Weighted samples' own example (`r`) has —
++    # and the derived branch builds its `n` from a separate literal.
++    for name in ("pred", "total"):
++        assert aggregated[name]["weighted_by"] == "sampling_weight"
++        assert aggregated[name]["n"]["effective"] == pytest.approx(3.0)
++        assert aggregated[name]["n"]["completed"] == 4
+diff --git a/tests/test_runner.py b/tests/test_runner.py
+index 55bb20b..022a697 100644
+--- a/tests/test_runner.py
++++ b/tests/test_runner.py
+@@ -1268,10 +1268,95 @@ def test_io_conditions_is_ascending_by_index_whatever_the_plan_order(tmp_path: P
+     (tmp_path / "input").mkdir(parents=True, exist_ok=True)
+     execute_plan(
+         plan=plan,
+         run_dir=run_dir,
+         input_dir=tmp_path / "input",
+         cfgs={i: Config({"parameters": {}}) for i in (-1, 0, 1, 2)},
+         repeats=repeats,
+         digest="sha256:abc",
+     )
+     assert seen == [[(0, "a"), (1, "b"), (2, "c")]]
++
++
++# --- H3a task 9: `n` gains `effective` under `data.units.weight_by` ------------
++
++# Five units, weighted unevenly, four of them completed. The weights are `str`
++# because `units._from_table` builds every attribute through `csv.DictReader`,
++# which is the shape a real roster's weight column has — `stats.kish_effective_n`
++# gates and parses them itself.
++#
++# Kish over the COMPLETED four is (1+1+1+3)² / (1+1+1+9) = 36/12 = exactly 3.0,
++# with no float slack; over all five RESOLVED it is 16²/112 = 2.2857…, and over
++# the ineligible-included-but-heaviest-dropped set nothing else lands on 3.0. So
++# the number, not merely the key's presence, is what these tests assert.
++_WEIGHTS = {"p0": "1", "p1": "1", "p2": "1", "p3": "3", "p4": "10"}
++_KISH_COMPLETED = 3.0
++_KISH_RESOLVED = 256 / 112
++
++
++class RecordFourSkipOne(BaseStep):
++    scope = "repeat"
++
++    def run(self, cfg, io):
++        for u in list(io.units)[:4]:
++            io.record(u.key, {"v": 1.0})
++        io.skip("p4", "by design")
++        return {}
++
++
++def _weighted_harness(tmp_path: Path):
++    roster = UnitList([Unit(key=f"p{i}") for i in range(5)])
++    _, results, _ = harness(tmp_path, [RecordFourSkipOne], units=roster)
++    return roster, results
++
++
++def test_n_has_no_effective_key_without_weight_by(tmp_path: Path):
++    """The regression. `reference.md` § The three-part `n`: each part is "present
++    only when it applies so a design that never skips reads as it always did" —
++    so a run that never weights must produce an `n` of exactly the four parts it
++    always had, not one with a fifth key holding a stand-in value."""
++    roster, results = _weighted_harness(tmp_path)
++    counts = attrition(results, roster, "record_four_skip_one", condition_index=0)
++    assert counts == {"resolved": 5, "completed": 4, "ineligible": 1, "failed": 0}
++    assert "effective" not in counts
++
++
++def test_n_gains_effective_under_a_weighted_design(tmp_path: Path):
++    """Kish's effective size over the units the interval is computed from — the
++    COMPLETED ones, which is why the fixture's heaviest unit is ineligible: over
++    all five resolved units the answer would be 2.2857, and over four equal ones
++    4.0."""
++    roster, results = _weighted_harness(tmp_path)
++    counts = attrition(
++        results, roster, "record_four_skip_one", condition_index=0, weights=_WEIGHTS
++    )
++    assert counts["effective"] == pytest.approx(_KISH_COMPLETED)
++    assert counts["effective"] != pytest.approx(_KISH_RESOLVED)
++    # `effective` sits beside `completed` rather than replacing it: weights change
++    # what each unit contributes, not how many there were (§ Weighted samples).
++    assert counts["completed"] == 4
++    assert counts["resolved"] == counts["completed"] + counts["ineligible"] + counts["failed"]
++    # The other four parts stay `int`. `reference.md` § Weighted samples prints
++    # `{resolved: 240, completed: 228, failed: 12, effective: 191.4}` — three whole
++    # numbers and one fractional — and widening the mapping's annotation to
++    # `float` for `effective`'s sake must not turn `resolved` into `240.0` in
++    # `run.yaml`. `5 == 5.0`, so nothing else here can see the difference.
++    whole = ("resolved", "completed", "ineligible", "failed")
++    assert all(isinstance(counts[k], int) for k in whole)
++    assert isinstance(counts["effective"], float)
++
++
++def test_every_attrition_return_site_agrees_about_effective(tmp_path: Path):
++    """Three sites build `n` — no roster, no recording execution, and the
++    accumulating return — and a weighted design must read the same way at all
++    three. Two of the three report over an empty completed set, where Kish's size
++    is 0.0: a run that weights and completed nothing has an effective size, and it
++    is zero, not a missing key."""
++    roster, results = _weighted_harness(tmp_path)
++    no_roster = attrition(results, None, "record_four_skip_one", 0, weights=_WEIGHTS)
++    no_recording = attrition(results, roster, "never_ran", 0, weights=_WEIGHTS)
++    assert no_roster["effective"] == 0.0
++    assert no_recording["effective"] == 0.0
++    assert no_recording["failed"] == 5  # the site really is the no-recording one
++    # And the mirrored control: without weights, neither site grows the key.
++    assert "effective" not in attrition(results, None, "record_four_skip_one", 0)
++    assert "effective" not in attrition(results, roster, "never_ran", 0)
+diff --git a/tests/test_stats.py b/tests/test_stats.py
+index 4c92c3a..e5353d6 100644
+--- a/tests/test_stats.py
++++ b/tests/test_stats.py
+@@ -1662,10 +1662,35 @@ def test_beside_n_cannot_shadow_a_computed_metric_key():
+     whatever it happened to name."""
+     collapsed = {"u1": {"score": 1.0}, "u2": {"score": 3.0}}
+     counts = {"resolved": 2, "completed": 2, "ineligible": 0, "failed": 0}
+     out = summarize_step(
+         collapsed,
+         counts,
+         beside_n={"technical_n": {"min": 2, "max": 3, "median": 3}, "n": "clobbered"},
+     )
+     assert out["score"]["n"] == counts
+     assert out["score"]["technical_n"] == {"min": 2, "max": 3, "median": 3}
++
++
++def test_a_fractional_effective_rides_counts_into_every_metrics_n():
++    """`effective` JOINS `n`, so it travels in `counts` and needs no carrier of
++    its own — and it must survive as the fractional number `runner.attrition`
++    computed. `reference.md` § Weighted samples prints `effective: 191.4` beside
++    a `completed` of 228: rounding it to an `int` would name a size no interval
++    was computed at, which is why `counts` is `dict[str, float]`.
++
++    Asserted on both metric shapes. The document's own example is `r`, which
++    `aggregate` derives, and the derived branch builds its `n` from a separate
++    literal — so a change made in only the recorded-column loop reads correctly
++    for `pred` and drops `effective` for `r`."""
++    collapsed = {"u1": {"score": 1.0}, "u2": {"score": 3.0}}
++    counts = {"resolved": 3, "completed": 2, "ineligible": 1, "failed": 0, "effective": 1.6}
++    out = summarize_step(collapsed, counts, derived={"total": 4.0})
++    for name in ("score", "total"):
++        assert out[name]["n"]["effective"] == pytest.approx(1.6)
++        # Beside `completed`, not replacing it: weights change what each unit
++        # contributes, not how many there were.
++        assert out[name]["n"]["completed"] == 2
++    # The control: `completed` is still recomputed per column rather than taken
++    # from `counts`, so this is not passing off a verbatim copy of the mapping.
++    ragged = summarize_step({"u1": {"score": 1.0}}, counts)
++    assert ragged["score"]["n"] == {**counts, "completed": 1}

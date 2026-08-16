@@ -1,0 +1,369 @@
+# Review package: 268f37c..HEAD
+
+## Commits
+54cdac7 fix: close the paired shape gap and grid/paired path collision
+
+## Files changed
+ docs/reference.md           |   3 +-
+ src/publishable/validate.py |  69 ++++++++++++++++++++++++---
+ tests/test_validate.py      | 113 ++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 178 insertions(+), 7 deletions(-)
+
+## Diff
+diff --git a/docs/reference.md b/docs/reference.md
+index b91609c..20a63dc 100644
+--- a/docs/reference.md
++++ b/docs/reference.md
+@@ -440,23 +440,24 @@ likewise apart from those same two envelope rows, none of the others.
+ | `replication.order` is set and is a value other than `as_declared` or `randomized` — unset (`null`) is accepted | `E-REPL-ORDER` |
+ | Two members of one repeat level derive the same seed, or resolve to the same label, from the digest the check ran against | `E-REPL-SEED-COLLISION` |
+ | A `statistics.contrasts` entry's `of` or `against` names another entry's `id` rather than a condition's label — contrasts compare conditions and do not nest | `E-STATS-CONTRAST-NESTED` |
+ | A `statistics.contrasts` entry sets `of` and `against` to the same condition | `E-STATS-CONTRAST-SAME-SIDES` |
+ | `statistics.contrasts` is not a list, an entry in it is not a mapping, or an entry's `id` is missing, is not a string, or repeats an earlier entry's | `E-STATS-CONTRAST-SHAPE` |
+ | A `statistics.contrasts` entry's `of` or `against` names a value that matches no declared condition's label and no other entry's `id` | `E-STATS-CONTRAST-UNKNOWN` |
+ | A `statistics.contrasts` entry's `within` names an attribute `data.units.attributes` does not declare | `E-STATS-CONTRAST-WITHIN` |
+ | `statistics.correction` is set and is a value other than `none`, `bonferroni`, `holm`, or `fdr_bh` — unset (`null`) is accepted | `E-STATS-CORRECTION-UNKNOWN` |
+ | A `statistics.report_by` entry is not a string, or names an attribute `data.units.attributes` does not declare | `E-STATS-REPORTBY-UNKNOWN` |
+ | A `sweep.grid` axis declares an empty (falsy) list of values, so the sweep would expand to zero conditions | `E-SWEEP-AXIS-EMPTY` |
+-| `sweep.baseline` is declared and leaves at least one of `sweep.grid`'s axes unfixed — per-cell baseline expansion is specified but not implemented in this build | `E-SWEEP-BASELINE-PARTIAL` |
++| `sweep.baseline` is declared and leaves at least one of the swept axes unfixed — per-cell baseline expansion is specified but not implemented in this build | `E-SWEEP-BASELINE-PARTIAL` |
+ | `sweep` is declared and resolves to zero conditions, whatever shape produced that — a backstop beneath the per-axis checks above | `E-SWEEP-EXPANDS-EMPTY` |
+ | `sweep` declares a key that is not one of the six recognized sweep modes (`baseline`, `grid`, `paired`, `ablate`, `sample`, `groups`) | `E-SWEEP-KEY-UNKNOWN` |
++| `sweep.grid` and `sweep.paired` write the same dotted path — `expand`'s product would let whichever mode is later silently overwrite the other's value on every combination | `E-SWEEP-PATH-DUPLICATE` |
+ | `sweep.grid` or `sweep.baseline` names a dotted path the template's `parameter_spec` does not declare | `E-SWEEP-PATH-UNKNOWN` |
+ | A `sweep.grid` value cannot be rendered into a condition label — a `sweep.baseline` value is exempt, since it is never rendered into one | `E-SWEEP-VALUE-UNNAMEABLE` |
+ | `template.validate(doc)` yields a message — run last, after every other check in this table, and ungated by their findings, so a cross-block rule can report on `parameters` another row already refused | `E-TEMPLATE-RULE` |
+ | `experiment_type` names a template no installed package registers | `E-TEMPLATE-UNKNOWN` |
+ | `data.units.attributes` names a value the source table has no column for, or names any value at all under a `{glob: ...}` source, which yields a key and a path and nothing else — reported for the first such name, and after `E-UNITS-ATTR-RESERVED` under either source; or — for a table source only — names a non-string item | `E-UNITS-ATTR-MISSING` |
+ | `data.units.attributes` names a field of `Unit` itself (`key`, `paths`, or `attributes`), which cannot also be a declared attribute | `E-UNITS-ATTR-RESERVED` |
+ | The table `data.units.from` names has no data rows, or the `glob` it names matches no files under `input_dir` | `E-UNITS-EMPTY` |
+ | Two resolved units share the same `data.units.key` value | `E-UNITS-KEY-DUPLICATE` |
+ | `data.units.key` names a column the source table does not have | `E-UNITS-KEY-MISSING` |
+ | `data.units.from` names a table that is not a file under `input_dir`, or is neither a table name nor a `{glob: ...}` mapping | `E-UNITS-SOURCE-MISSING` |
+diff --git a/src/publishable/validate.py b/src/publishable/validate.py
+index a1979de..35e7c27 100644
+--- a/src/publishable/validate.py
++++ b/src/publishable/validate.py
+@@ -119,20 +119,38 @@ def _check_shape(doc: dict[str, Any], c: Collector) -> bool:
+         if baseline is not None and not isinstance(baseline, dict):
+             _bad("sweep.baseline", baseline, "mapping")
+         grid = sweep.get("grid")
+         if grid is not None and not isinstance(grid, dict):
+             _bad("sweep.grid", grid, "mapping")
+         elif isinstance(grid, dict):
+             for path, values in grid.items():
+                 if values is not None and not isinstance(values, list):
+                     _bad(f"sweep.grid.{path}", values, "list")
+ 
++        # `paired` closes the same gap `grid` does, one level down: `_axes` now
++        # reads it unconditionally (`dict(entry) for entry in paired`), so a
++        # non-list `paired` or a non-mapping entry escaped as a bare `TypeError`/
++        # `ValueError` from `expand`, past `_check_sweep`'s premise that it is the
++        # check that reports an expansion crash. Two guards, same shape as
++        # `grid`'s: the container, then each entry. Unlike a `grid` axis value —
++        # which is used as-is and stays legal as `null` (a param-value question,
++        # not a shape one) — every `paired` entry is fed straight into `dict()`,
++        # so a `null` entry is itself the crash (`dict(None)` raises `TypeError`)
++        # and is refused here rather than treated as absent.
++        paired = sweep.get("paired")
++        if paired is not None and not isinstance(paired, list):
++            _bad("sweep.paired", paired, "list")
++        elif isinstance(paired, list):
++            for i, entry in enumerate(paired):
++                if not isinstance(entry, dict):
++                    _bad(f"sweep.paired[{i}]", entry, "mapping")
++
+     replication = doc.get("replication")
+     if isinstance(replication, dict):
+         repeats = replication.get("repeats")
+         if repeats is not None and not isinstance(repeats, list):
+             _bad("replication.repeats", repeats, "list")
+         elif isinstance(repeats, list):
+             for i, level in enumerate(repeats):
+                 if not isinstance(level, dict):
+                     _bad(f"replication.repeats[{i}]", level, "mapping")
+ 
+@@ -739,25 +757,28 @@ def _check_replication(
+             f"is `{order}`; the only orders are `as_declared` and `randomized`",
+         )
+ 
+ 
+ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
+     """Declared-but-unimplemented blocks, refused rather than silently ignored.
+ 
+     This build expands `sweep.baseline`, `sweep.grid`, and `sweep.paired`
+     only. Both declared orders are honored — `randomized` shuffles within
+     each batch and `as_declared` leaves the plan's step-major layout alone.
+-    `sweep.paired` is no longer refused here — `_axes` composes it as a
++    `sweep.paired` is no longer refused here: `_axes` composes it as a
+     single axis whose cells set several paths at once, per § Expansion
+-    modes. `.ablate`, `.sample`, and `.groups` are read by nothing yet. It
+-    resolves a
+-    unit roster, but several `data.units` sub-fields — allocation other than
++    modes — `_check_shape` guards its container and entry shapes, and
++    `_check_sweep` refuses a path it shares with `sweep.grid`
++    (`E-SWEEP-PATH-DUPLICATE`), the same way a bad `grid` shape or an
++    unresolvable `grid` path already were. `.ablate`, `.sample`, and
++    `.groups` are read by nothing yet. It resolves a unit roster, but
++    several `data.units` sub-fields — allocation other than
+     `within`, `assign`, `cluster_by`, `weight_by`, `measurements`, `holdout`,
+     and a `resolver` source — are read by nothing yet either. Each of these
+     would otherwise validate clean and then run something other than what the
+     config describes — the same class of failure `resolve_repeats` already
+     refuses for repeat levels: `E-REPL-FOLD-STRATIFY-UNSUPPORTED` for
+     `fold.stratify_by`, `E-REPL-LEVEL-DUPLICATE` for two levels of the same
+     kind, and `E-REPL-LEVEL-DEPTH` past two levels, and
+     `E-REPL-LEVEL-BATCH-INNER` for a `batch` that is not the outermost level.
+     `batch` and `fold` themselves are no longer refused — both are supported
+     kinds. `statistics.resample` and `.null_test`, and a top-level `hypotheses`
+@@ -798,32 +819,41 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
+     ):
+         if sweep.get(mode):
+             c.error(
+                 code,
+                 f"sweep.{mode}",
+                 f"{why}, and is specified but not implemented in this build — this build "
+                 "expands `baseline`, `grid`, and `paired` only; the other modes will be "
+                 "honored in a later slice",
+             )
+ 
+-    # A baseline that fixes only *some* of the swept axes. `reference.md`:1415-1422
++    # A baseline that leaves some swept PATH unfixed. `reference.md`:1415-1422
+     # states one rule with two cases: the baseline expands over whichever axes it
+     # does not fix, giving one baseline condition per cell of the unfixed axes.
+     # `expand` emits exactly one `00_baseline` row carrying only what the baseline
+     # literally names, so the declared design is not the executed design — the
+     # failure every other refusal in this function exists to prevent. Per-cell
+     # expansion is a real feature; until it lands, refuse rather than diverge.
+-    # A baseline fixing every declared axis (including the no-sweep-axis case) is
++    # A baseline fixing every swept path (including the no-sweep-axis case) is
+     # the supported row and is unaffected. `_swept_paths` is every axis-shaped
+     # mode's paths, not `grid`'s alone — `paired` composes into this same product
+     # now, and a baseline that fixes `grid` but leaves a `paired` axis free is the
+     # identical declared-vs-executed mismatch this check exists to catch.
++    #
++    # This check is path-granular, not axis-granular: it asks "does every swept
++    # path have some baseline value", not "does the baseline supply a whole cell
++    # of a `paired` axis". A baseline naming only half of one `paired` entry's
++    # paths passes this check pointing at the still-unfixed path, exactly as it
++    # would for two independent `grid` axes — and a value that isn't any declared
++    # `paired` cell (a mix-and-match the axis never produces) is not itself
++    # caught here, since per-cell baseline expansion (which would need to resolve
++    # a baseline against actual cells) is Task 6's feature, not this refusal's.
+     baseline = sweep.get("baseline") or {}
+     unfixed = [path for path in _swept_paths(sweep) if path not in baseline]
+     if baseline and unfixed:
+         c.error(
+             "E-SWEEP-BASELINE-PARTIAL",
+             "sweep.baseline",
+             f"fixes no value for {', '.join(f'`{p}`' for p in unfixed)}, and a baseline "
+             "that leaves an axis free expands to one baseline condition per cell of the "
+             "unfixed axes — which is specified but not implemented in this build; this "
+             "build emits a single `00_baseline` condition, so the design executed would "
+@@ -1023,20 +1053,47 @@ def _check_sweep(
+                 f"sweep.grid.{path}",
+                 "declares no values, so the sweep expands to zero conditions and the run "
+                 "would execute nothing while reporting success",
+             )
+             continue
+         if not _path_resolves(path, f"sweep.grid.{path}"):
+             continue
+         for i, value in enumerate(values):
+             _value_checks(path, value, f"sweep.grid.{path}[{i}]", nameable=True)
+ 
++    # `grid` and `paired` writing the same path is not a shape fault — both are
++    # well-formed on their own — but `expand`'s product applies each axis's cell
++    # to `values` in declared order, so whichever mode is later in `_axes`
++    # silently overwrites the other's value for that path on every combination.
++    # Some combinations then collapse to byte-identical `values`: two different
++    # `grid` settings paired with the same `paired` entry both resolve to that
++    # entry's value, producing duplicate conditions `_condition_labels` cannot
++    # see (it collects into a `set`). Filed as a spec gap in
++    # `docs/superpowers/spec-defects.md` — § Expansion modes never states that a
++    # path belongs to at most one axis-shaped mode — and refused here rather
++    # than left to execute a design other than the one declared.
++    paired_paths: dict[str, list[int]] = {}
++    for i, entry in enumerate(sweep.get("paired") or []):
++        if isinstance(entry, dict):
++            for path in entry:
++                paired_paths.setdefault(path, []).append(i)
++    for path in sorted(set(grid) & set(paired_paths)):
++        indices = ", ".join(f"paired[{i}]" for i in paired_paths[path])
++        c.error(
++            "E-SWEEP-PATH-DUPLICATE",
++            f"sweep.paired.{path}",
++            f"is also a `sweep.grid` axis (named in {indices}) — two axis-shaped modes "
++            "writing the same path make `expand`'s product overwrite one mode's value "
++            "with the other's on every combination, collapsing some conditions to "
++            "duplicates the run would silently execute twice",
++        )
++
+     # `sweep.baseline` gets the same per-entry checks — one value, not a list.
+     # `reference.md`:218 names this by example ("Baseline is a valid condition |
+     # `sweep.baseline` sets `analysis.method: pearsonn`"). Unchecked, a misspelled
+     # path was planted verbatim into condition `00`'s config by
+     # `resolve_condition_cfg`'s `setdefault` walk, so `00_baseline` ran the base
+     # config under a label claiming otherwise and the run reported success.
+     baseline = sweep.get("baseline") or {}
+     for path, value in baseline.items():
+         if _path_resolves(path, f"sweep.baseline.{path}"):
+             _value_checks(path, value, f"sweep.baseline.{path}", nameable=False)
+diff --git a/tests/test_validate.py b/tests/test_validate.py
+index 5af6efd..974d856 100644
+--- a/tests/test_validate.py
++++ b/tests/test_validate.py
+@@ -1092,20 +1092,64 @@ def test_paired_is_accepted_and_expands_for_real(write_config):
+                         {"analysis.min_samples": 50, "analysis.confidence": 0.99},
+                     ],
+                 }
+             }
+         )
+     )
+     assert "E-SWEEP-PAIRED-UNSUPPORTED" not in found
+     assert not [c for c in found if c.startswith("E-SWEEP")]
+ 
+ 
++def test_grid_and_paired_naming_the_same_path_is_refused(write_config):
++    """`expand`'s product applies each axis's cell to `values` in order, so a
++    path named by both `grid` and `paired` lets whichever mode is later silently
++    overwrite the other's value on every combination — collapsing two of the
++    four combinations to byte-identical `values` (grid=30/paired-30 and
++    grid=50/paired-30 both resolve to `min_samples=30`). Filed as a spec gap
++    (`docs/superpowers/spec-defects.md`) and refused rather than executed."""
++    path = write_config(
++        {
++            "sweep": {
++                "grid": {"analysis.min_samples": [30, 50]},
++                "paired": [
++                    {"analysis.min_samples": 30, "analysis.confidence": 0.95},
++                    {"analysis.min_samples": 50, "analysis.confidence": 0.99},
++                ],
++            }
++        }
++    )
++    c = Collector()
++    validate_config(path, c)
++    found = [f for f in c.findings if f.code == "E-SWEEP-PATH-DUPLICATE"]
++    assert found
++    assert found[0].path == "sweep.paired.analysis.min_samples"
++
++
++def test_grid_and_paired_on_disjoint_paths_is_not_a_duplicate(write_config):
++    """The mirror case: `grid` and `paired` naming different paths is exactly
++    the brief's own worked example and must stay clean."""
++    found = codes(
++        write_config(
++            {
++                "sweep": {
++                    "grid": {"analysis.method": ["pearson", "spearman"]},
++                    "paired": [
++                        {"analysis.min_samples": 30, "analysis.confidence": 0.95},
++                        {"analysis.min_samples": 50, "analysis.confidence": 0.99},
++                    ],
++                }
++            }
++        )
++    )
++    assert "E-SWEEP-PATH-DUPLICATE" not in found
++
++
+ def test_an_empty_or_null_mode_is_not_a_declaration(write_config):
+     """`init` may write these absent or null; only a truthy value is refused."""
+     found = codes(
+         write_config(
+             {
+                 "sweep": {
+                     "grid": {"analysis.method": ["spearman"]},
+                     "paired": [],
+                     "ablate": None,
+                     "sample": None,
+@@ -1892,20 +1936,89 @@ def test_a_bare_string_axis_is_refused_rather_than_expanded_per_character(write_
+     assert "expected a list" in shape[0].message
+ 
+ 
+ def test_a_null_grid_or_baseline_is_absent_not_malformed(write_config):
+     """A key present but `null` is treated as absent everywhere else in this
+     module (`doc.get("x") or {}`), and the shape guard must not diverge."""
+     found = codes(write_config({"sweep": {"baseline": None, "grid": None}}))
+     assert "E-CONFIG-SHAPE" not in found
+ 
+ 
++def test_a_non_list_paired_is_a_diagnostic_not_a_traceback(write_config):
++    """`_axes` now reads `paired` unconditionally (`dict(entry) for entry in
++    paired`), same as `grid`'s unguarded `.items()` before ad6cf3d — so a
++    non-list `paired` needs the identical container guard `grid` already has,
++    or it crashes `expand` inside `cli.run` rather than `validate`."""
++    found = codes(
++        write_config(
++            {
++                "sweep": {
++                    "grid": {"analysis.method": ["spearman"]},
++                    "paired": "analysis.min_samples",
++                }
++            }
++        )
++    )
++    assert "E-CONFIG-SHAPE" in found
++
++
++def test_a_paired_entry_that_is_not_a_mapping_is_a_diagnostic_not_a_traceback(write_config):
++    """`dict(entry)` inside `_axes`'s paired branch raises `ValueError` on a
++    non-mapping entry — `["notadict"]` reproduces exactly the crash the
++    reviewer found: zero `validate` findings, then a bare `ValueError:
++    dictionary update sequence element #0 has length 1; 2 is required` out of
++    `cli.py`'s `expand(doc)`, past `main`'s `PublishableError` handler."""
++    found = codes(
++        write_config(
++            {
++                "sweep": {
++                    "grid": {"analysis.method": ["spearman", "kendall"]},
++                    "paired": ["notadict"],
++                }
++            }
++        )
++    )
++    assert "E-CONFIG-SHAPE" in found
++
++
++def test_a_null_paired_entry_is_a_diagnostic_not_a_traceback(write_config):
++    """`sweep`-level `null` (`sweep.paired: null`) is absent, matching the rest
++    of this module — but a `null` *entry inside* an otherwise-list `paired` is
++    not the same case: `_axes` feeds every entry straight to `dict()`, and
++    `dict(None)` raises `TypeError` exactly like `dict(["notadict"][0])` raises
++    `ValueError` above. A `grid` axis value stays legal as `null` because it is
++    used as-is (a param-value question); a `paired` entry has no such out."""
++    found = codes(
++        write_config(
++            {
++                "sweep": {
++                    "grid": {"analysis.method": ["spearman", "kendall"]},
++                    "paired": [None],
++                }
++            }
++        )
++    )
++    assert "E-CONFIG-SHAPE" in found
++
++
++def test_a_null_whole_paired_block_is_absent_not_malformed(write_config):
++    """`sweep.paired: null` is the block-level case the rest of this module
++    treats as absent (`doc.get("x") or {}`), distinct from a `null` entry
++    inside a present list, which the test above refuses."""
++    found = codes(
++        write_config(
++            {"sweep": {"grid": {"analysis.method": ["spearman", "kendall"]}, "paired": None}}
++        )
++    )
++    assert "E-CONFIG-SHAPE" not in found
++
++
+ def test_check_contrasts_still_refuses_a_non_list_when_called_directly():
+     """`_check_contrasts`'s own `isinstance(entries, list)` guard is kept even
+     though `_check_shape` now refuses that shape first in the normal pipeline
+     (`validate_config` early-returns before `_check_contrasts` ever runs for a
+     non-list block). The guard is still live for a caller that reaches
+     `_check_contrasts` directly, which is exactly why it was kept rather than
+     deleted as newly redundant."""
+     c = Collector()
+     _check_contrasts({"statistics": {"contrasts": {"id": "x"}}}, c)
+     assert "E-STATS-CONTRAST-SHAPE" in {f.code for f in c.findings}

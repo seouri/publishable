@@ -1,0 +1,1602 @@
+# Review package: cbd4420..HEAD
+
+## Commits
+923c1a5 feat: make a group axis's arm a subset view, never a re-resolution
+
+## Files changed
+ docs/reference.md           |   7 +-
+ src/publishable/cli.py      |  69 +++++++++++++++
+ src/publishable/runner.py   |  87 ++++++++++++++++---
+ src/publishable/units.py    |  54 ++++++++++++
+ src/publishable/validate.py |  31 ++++++-
+ tests/test_cli.py           |  51 ++++++++++-
+ tests/test_runner.py        | 203 +++++++++++++++++++++++++++++++++++++++++++-
+ tests/test_units.py         |  80 +++++++++++++++++
+ tests/test_validate.py      | 124 +++++++++++++++++++++------
+ 9 files changed, 659 insertions(+), 47 deletions(-)
+
+## Diff
+diff --git a/docs/reference.md b/docs/reference.md
+index 0ed329b..2226ad1 100644
+--- a/docs/reference.md
++++ b/docs/reference.md
+@@ -414,24 +414,25 @@ are. An unresolvable `experiment_type` reports
+ `E-TEMPLATE-UNKNOWN` exactly once, since that check returns immediately after, and,
+ likewise apart from those same two envelope rows, none of the others.
+ 
+ | Reported when | Code |
+ |---|---|
+ | A key under a container `check_envelope`'s `LEAF_TYPES` table declares, or a top-level key, that the table does not name — checked with a `difflib` hint, skipping the `parameters` and `sweep` subtrees entirely since each has its own closure (`E-PARAM-UNKNOWN`, `E-SWEEP-KEY-UNKNOWN`), and never descending into a known leaf's own value (a typo inside `data.units.holdout` or a `from` mapping is reached by no check at all — not by `_check_shape` either, which checks a container's shape and never the names inside one; [§ Validation](#validation) names the whole-leaf blocks that costs and the slice that closes each, and `holdout` is not among them only because the whole block is refused today as `E-DATA-HOLDOUT-UNSUPPORTED`, which makes its gap latent rather than live); a non-string YAML mapping key is coerced with `str()` first so it is still reported | `E-CONFIG-KEY-UNKNOWN` |
+ | The config file does not parse as YAML, or parses to something other than a mapping | `E-CONFIG-PARSE` |
+ | A top-level block, or a nested container `_check_shape` walks before its items — `data.units` and its `attributes`, `sweep.baseline`, `sweep.grid` and each axis's values, `replication.repeats` and each level, `statistics.contrasts`, `statistics.report_by` — is present and not the mapping, list, or string its position requires; unset (`null`) is treated as absent, matching `E-CONFIG-TYPE` | `E-CONFIG-SHAPE` |
+ | A leaf `check_envelope`'s `LEAF_TYPES` table declares is present and not its declared type — a `bool` never satisfies any leaf's type, since the table declares none as `bool`, and an `int` satisfies a `float` one; unset (`null`) is treated as absent | `E-CONFIG-TYPE` |
+ | [`data.units.allocation`](#allocation-within-subjects-or-between-subjects) is `between` and `sweep.groups` declares no axis to say what the arms are — no axis at all, or none whose `by` this build can read, which is what a malformed `groups` entry leaves it with. The pair is the check rather than either half: `between` says how a unit reaches an arm, not what the arms are, so a design declaring it alone has one cohort and nothing to divide it into. Read from the declarations, so it reports whether or not a roster resolved | `E-DATA-ALLOCATION-NO-ARMS` |
++| The mirror of `E-DATA-ALLOCATION-NO-ARMS`: [`sweep.groups`](#expansion-modes) declares an axis, but [`data.units.allocation`](#allocation-within-subjects-or-between-subjects) is `within`, or absent (which defaults to it). `within` says every unit appears in every condition, so a unit can't be in one arm and in all of them — the fault [§ Validation](#validation)'s *Arms need allocation* names, and the pair this row and its mirror form is what makes handing every condition on a group axis the same, whole roster structurally impossible rather than merely avoided. Read from the declarations, so it reports whether or not a roster resolved. Gated on `allocation` being exactly `null`/absent/`within`, not on a bare declared axis, so an out-of-enum `allocation` value is left to `E-DATA-ALLOCATION-UNSUPPORTED`'s blanket refusal rather than being misreported here as `within` | `E-DATA-ALLOCATION-WITHIN-ARMS` |
+ | A `data.units.assign` block's `method` is `random` or `blocked` — both are in the enum, and both draw an arm rather than read one a trial system or the data already assigned. Drawing is specified but not implemented in this build; only `method: by_attribute` executes. Deliberately not gated on `allocation`, the same as `E-DATA-ASSIGN-METHOD`'s own refusal of an absent or out-of-enum method: both are a check on the block's value rather than on a pair of declarations, unlike `E-DATA-ALLOCATION-NO-ARMS` and `E-DATA-ASSIGN-MISSING`, each of which reports a pair of declarations that disagree. Mutually exclusive with `E-DATA-ASSIGN-METHOD` by construction: a value this row names is by definition inside the enum, so it can never also be absent or out of it. Temporary: the refusal lifts with the slice that implements drawing | `E-DATA-ASSIGN-DRAWN` |
+ | Under `method: by_attribute`, the resolved attribute's values, over the resolved roster, are not exactly the declared [`sweep.groups`](#expansion-modes) levels for that axis — **set equality, in either direction, under one code**: a unit's value (including a unit carrying no value for the attribute at all) names none of the declared levels, so that unit would belong to no arm and there is no fourth part of `n` for it; or a declared level no unit's value names, so that arm's condition would resolve zero units. `units.arms_of` is the single authority, the construction `units.clusters_of` is for `cluster_by`, and its raise is caught and reported here under its own code, the same reuse `E-DATA-CLUSTER-UNKNOWN` illustrates for its sibling. Skipped when the roster does not resolve, when the axis's `levels` do not resolve to a non-empty list of strings, or when `from` does not resolve to a unit attribute at all — `E-DATA-ASSIGN-UNKNOWN`'s own fault to report — there being nothing to partition against in any of those cases | `E-DATA-ASSIGN-LEVELS` |
+ | A `data.units.assign` block's `method` is absent or `null`, or is a value other than `random`, `by_attribute`, or `blocked`. **A block that is not a mapping at all is reported here too**, as the block naming no method that it is: `envelope.py` types `data.units.assign` itself and none of its children, whose keys are axis names no fixed dotted path could ever name, so nothing else speaks for one. Which of a block's other fields are read follows from the discriminator — `from` is `by_attribute`'s, `block_size` is `blocked`'s — so a block without one describes no assignment. Deliberately not gated on `allocation`, the same as `E-DATA-ASSIGN-DRAWN`'s own refusal of a well-formed method value this build does not yet execute, and unlike `E-DATA-ALLOCATION-NO-ARMS` and `E-DATA-ASSIGN-MISSING`, each of which reports a pair of declarations that disagree: this is a check on the block rather than on a pair of declarations, and a block naming no method describes no assignment wherever it was declared | `E-DATA-ASSIGN-METHOD` |
+-| `data.units.allocation` is `between` and a [`sweep.groups`](#expansion-modes) axis has no block under [`data.units.assign`](#allocation-within-subjects-or-between-subjects) — an absent or `null` `assign`, the empty `assign: {}` `init` writes, or the axis's own key left `null`. One finding per unassigned axis, in declaration order, since the remedy is one block each. This and `E-DATA-ALLOCATION-NO-ARMS` are between them the whole of [§ The one config file](#the-one-config-file)'s "REQUIRED when `allocation` is `between`", which is why that rule has no third code of its own. Not reported under `allocation: within`, where a declared group axis is [§ Validation](#validation)'s *Arms need allocation* — a different fault, and one this build reports by nothing. Skipped when `assign` is present and is not a mapping, which `E-CONFIG-TYPE` already reports | `E-DATA-ASSIGN-MISSING` |
++| `data.units.allocation` is `between` and a [`sweep.groups`](#expansion-modes) axis has no block under [`data.units.assign`](#allocation-within-subjects-or-between-subjects) — an absent or `null` `assign`, the empty `assign: {}` `init` writes, or the axis's own key left `null`. One finding per unassigned axis, in declaration order, since the remedy is one block each. This and `E-DATA-ALLOCATION-NO-ARMS` are between them the whole of [§ The one config file](#the-one-config-file)'s "REQUIRED when `allocation` is `between`", which is why that rule has no third code of its own. Not reported under `allocation: within`, where a declared group axis is [§ Validation](#validation)'s *Arms need allocation* — a different fault, reported under its own code, `E-DATA-ALLOCATION-WITHIN-ARMS`. Skipped when `assign` is present and is not a mapping, which `E-CONFIG-TYPE` already reports | `E-DATA-ASSIGN-MISSING` |
+ | Under `method: by_attribute`, `assign.<axis>.from` — declared, or **defaulted to the axis name** when absent (§ The one config file: "`from` is `by_attribute` only, and defaults to the axis name") — is present and is an empty string (present, so the default does not apply — an empty declaration changes no behavior), or names a value `data.units.attributes` does not declare. `data.units.attributes`, not the roster's realized names, for the same reason `E-DATA-WEIGHT-UNKNOWN`'s name half reads that set: an arm is read per unit, so it has to survive resolution as an attribute. Read from the declaration, so it reports whether or not a roster resolved. **A non-`str`, non-absent `from` is reported here too**, naming its type rather than a resolved attribute: unlike `weight_by`/`cluster_by`, `assign`'s children are axis names no fixed dotted path can type, so there is no `E-CONFIG-TYPE` backstop to defer to — the same reason `E-DATA-ASSIGN-METHOD`'s own row absorbs a non-mapping block as the block naming no method that it is | `E-DATA-ASSIGN-UNKNOWN` |
+ | Under `method: by_attribute`, `assign.<axis>.from` — declared, or defaulted to the axis name the same way its own name check resolves it (see `E-DATA-ASSIGN-UNKNOWN`) — names a column whose value is not the same across one unit's [measurement rows](#what-isnt-a-repeat), the same shape `E-DATA-CLUSTER-VARIES` and `E-DATA-WEIGHT-VARIES` refuse and reported the same way, through the same collapse. **The worst of the three**: a mis-collapsed cluster decides which side of a split a unit lands on and a mis-collapsed weight mis-sizes what one unit stands for, but a mis-collapsed arm decides which *condition* the unit is measured in — so the order the file happens to be in would be silently deciding it. One entry per declared axis feeds the same collapse, and each declaration is checked on its own and still raises its own code when it is the only one declared; a single unit violating more than one gets exactly one code, from whichever declaration's entry is checked first — `assign`, ahead of `cluster_by`/`weight_by`, matching the severity this row states | `E-DATA-ASSIGN-VARIES` |
+ | [`data.units.cluster_by`](#clustered-units) is a non-empty string and the design resolves to at least one comparison — a generated `vs_baseline` for every non-baseline condition, plus every declared [`statistics.contrasts`](#contrasts-claims-that-arent-condition-vs-baseline) entry, the same family `W-STATS-FAMILY` counts and the same test `E-DATA-WEIGHT-CONTRAST` below applies. [§ Statistical reporting](#statistical-reporting) gives each contrast construction a `_clustered` suffix under a declared cluster — the *t* forms cluster-robust over the differenced values when paired and the arm-level ones when not, the percentile forms resampling whole clusters, jointly across both sides when paired — and **none of those five exists in this build**: `paired_t_over_units` takes a list of per-unit differences and nothing else, the derived forms take rows and a seed and know nothing about membership, and there is no unpaired form at all. So the delta and its interval would be computed as though the units were independent, which is the one thing the declaration says they are not, beside per-condition values that *are* cluster-robust and with nothing in the record saying which is which — the interval [§ Clustered units](#clustered-units) calls too narrow, on the number a reader acts on. The *resolved* family is the test rather than the declaration, exactly as below: a `sweep.baseline` with no axis beside it expands to a single baseline row, never a comparison's subject, so a clustered run of it publishes no delta and is accepted, and a declared contrast over a sweep with no baseline is refused though it declares no baseline at all. [`statistics.report_by`](#reporting-strata) is outside it, a stratum repeating the per-condition aggregation — whose interval is clustered — and publishing no delta. Temporary: the refusal lifts with the slice that builds the `_clustered` contrast family | `E-DATA-CLUSTER-CONTRAST` |
+ | [`data.units.cluster_by`](#clustered-units) is present and is an empty string — an empty declaration changes no behavior — or names a value `data.units.attributes` does not declare, which includes every name under a `{glob: ...}` source, that source declaring none. `data.units.attributes`, not the source's columns, and for the same reason `E-DATA-WEIGHT-UNKNOWN` below reads that set: a cluster is read per unit when the partition is drawn and again when an interval is computed, so it has to survive resolution as an attribute, where a `measurements.by` is consumed at collapse time and dropped from the merged unit. Checked from the declaration alone, so it reports whether or not a roster resolved; a non-string is left to `E-CONFIG-TYPE`. Raised at run time too, under the same code, wherever cluster membership is resolved for a unit that carries no value for it — `units.clusters_of` is the single authority both surfaces read, so a roster core cannot group raises here rather than inventing a cluster for it | `E-DATA-CLUSTER-UNKNOWN` |
+ | [`data.units.cluster_by`](#clustered-units) names a column whose value is not the same across one unit's [measurement rows](#what-isnt-a-repeat) — the rows `data.units.measurements` collapses into that unit. Reported for the first such unit, naming the values it declares. Not a check `validate` can make for itself: `resolve_units` collapses the rows internally, so by the time there is a roster to read the disagreement is gone and the cluster is whichever value `first` or `mode` returned. So it is raised where the rows collapse — at run time under the same code, this being one fault with one identifier on both surfaces — and reaches `validate` through the resolution it already performs, the same route `E-UNITS-COLLAPSE-RULE` below takes. A column only some of a unit's rows carry is not a disagreement: the rows that carry it agree, and whether every unit has a value at all is `E-DATA-CLUSTER-UNKNOWN` above | `E-DATA-CLUSTER-VARIES` |
+ | `data.input_dir` or `data.output_dir` resolves inside the git repository, checked once a repo root is found | `E-DATA-IN-REPO` |
+ | A `data.units.measurements.collapse` rule of `mean`, `median`, or `sum` — the top-level string, or a per-column map's own entry, or its `first` fallback over a column the map does not name — is checked against the resolved roster's own attribute values for that column, and `units.is_measurement_numeric` — the single authority this check and the run-time coercion both read — says at least one is neither numeric nor a string that parses as one (a `bool` counts as neither); skipped, along with the rest of this row's checks, when the roster does not resolve, since there is then no column to check a rule against. Raised at run time too, under the same code, wherever that coercion runs: over an input table's rows as the roster resolves, and over the rows a step [measured](#what-isnt-a-repeat) as its execution finalizes — the same reuse `E-UNITS-COLLAPSE-RULE` below illustrates. The step-path half is not a fault `validate` can predict: the value is one the *step* recorded, not one any declaration named | `E-DATA-MEASUREMENTS-COLLAPSE-TYPE` |
+ | `data.units.measurements` is declared (non-null) and is not a mapping, or is an empty mapping — reported alone, since there is then no `by` or `collapse` to check either; or the mapping is neither of those and its `by` is missing or is not a non-empty string, or its `collapse` is missing — an omitted `collapse` names no rule, so it is this row rather than `E-UNITS-COLLAPSE-RULE` below. Also raised where the roster resolves, under the same code, since resolution reads `by` before this check runs and a malformed block reaches it first | `E-DATA-MEASUREMENTS-INVALID` |
+ | `data.input_dir` or `data.output_dir`, after `expanduser()`, is not an absolute path | `E-DATA-NOT-ABSOLUTE` |
+ | `data.input_manifest_policy` is empty, or is a value outside the declared policies | `E-DATA-POLICY` |
+@@ -916,23 +917,23 @@ Two levels, and only one leaf, because only one of these is ever a *state* rathe
+ | Resampling a metric a template's [`aggregate`](#templates-where-parameters-are-defined) derived, under a declared [`data.units.cluster_by`](#clustered-units). `percentile_of_derived` draws units; the clustered draw for a *recomputed* metric is a different construction — each replicate drawing whole clusters and rebuilding a unit table from their pooled units, so its row count varies per draw — and it does not exist, so the interval would be narrower than the design supports beside recorded columns that are cluster-robust. **Not a fault `validate` can report**, and the one row here whose absence from that table is the point: `aggregate` is user code core never inspects, and a template overriding it may still return `{}` for a given config, so "derives a metric" has no validate-time meaning and this is the first place core holds the answer as a fact. Contained the way a derived key collision is — the whole `derived` mapping is dropped, the code disclosed through [`W-STATS-AGGREGATE-FAILED`](#warnings-core-reports), and the run keeps its record and its recorded columns — and dropped rather than published with `ci95: null`, that state already meaning "no resample callable, or no seed". Temporary, alongside `E-DATA-CLUSTER-CONTRAST`, which is the same missing construction one level over | `ContractError` · `E-DATA-CLUSTER-DERIVED` |
+ | Computing a [weighted](#weighted-samples) figure — Kish's effective size, or a weighted interval — over a `data.units.weight_by` value that is not a positive finite number, the same `units.usable_weight` predicate `validate` approves the column against, so a weight it cannot use raises here rather than answering a plausible-looking number; also [reported by `validate`](#errors-validate-reports) under the same code, which is where a run that validates first meets it | `ContractError` · `E-DATA-WEIGHT-INVALID` |
+ | A [column](#templates-where-parameters-are-defined) no row of the unit table holds, read off `units` in a template's `aggregate` — reported as [`W-STATS-AGGREGATE-FAILED`](#warnings-core-reports), since `aggregate` runs after every execution has completed and a metric core can't compute never costs a run its record | `ContractError` · `E-STEP-COLUMN-UNKNOWN` |
+ | A [repeat level](#repeat-kinds) whose derived seeds or whose rendered labels are not distinct across its repeats | `ContractError` · `E-REPL-SEED-COLLISION` |
+ | Two [steps](#steps-and-artifacts) in one experiment deriving the same name — including the same step listed twice — or one whose `scope` is not one of the four | `ContractError` · `E-STEP-NAME-COLLISION`, `E-STEP-SCOPE-UNKNOWN` |
+ | [`io.record` or `io.skip`](#the-unit-table-is-the-inference-base) naming a unit the roster does not hold, or naming one this execution has already recorded or skipped — a unit measured with `measurement=` counts as settled for both, in either order, since it arrives by one path or the other and never both, while a second measurement of it is what the argument is for | `ContractError` · `E-STEP-UNIT-UNKNOWN`, `E-STEP-UNIT-SETTLED` |
+ | [`io.record`](#the-importable-surface) given `measurement=` while `data.units.measurements` is undeclared, so there is no rule to collapse the rows under | `ContractError` · `E-STEP-MEASUREMENT-UNDECLARED` |
+ | An [`io` accessor](#step-scope) reached from a scope that does not have it | `ContractError` · `E-STEP-SCOPE-ONLY` |
+ | Indexing [`io.units`](#the-unit-list-is-three-operations-and-the-units-in-it-are-frozen) with anything but a plain integer — a slice, a string, a bool | `ContractError` · `E-STEP-UNITS-CONTRACT` |
+ | [`io.read_condition`](#steps-that-need-every-condition) naming a condition index this run did not resolve, or naming a repeat-scoped step with no `repeat=` to say which copy | `ContractError` · `E-STEP-READ-CONDITION-UNKNOWN`, `E-STEP-READ-REPEAT-REQUIRED` |
+-| Core's execution plan disagreeing with the state core resolved beside it — a repeat execution whose seed or whose resolved config isn't there, a [realized order](#a-batch-says-when-not-what) naming a pair the plan doesn't hold, or a declared fold core can't pair with the units it partitions — a repeat label carrying no fold component, a fold with no resolved roster, drawn partitions with no fold level to label them | `ContractError` · `E-RUN-SEED-MISSING`, `E-RUN-CFG-MISSING`, `E-RUN-ORDER-MISMATCH`, `E-REPL-ORDER-UNRESOLVED`, `E-RUN-FOLD-UNRESOLVED` |
++| Core's execution plan disagreeing with the state core resolved beside it — a repeat execution whose seed or whose resolved config isn't there, a [realized order](#a-batch-says-when-not-what) naming a pair the plan doesn't hold, a declared fold core can't pair with the units it partitions — a repeat label carrying no fold component, a fold with no resolved roster, drawn partitions with no fold level to label them — or a condition on a [group axis](#expansion-modes) core can't pair with its arm, the same disagreement one level over: a condition index missing from the resolved arms | `ContractError` · `E-RUN-SEED-MISSING`, `E-RUN-CFG-MISSING`, `E-RUN-ORDER-MISMATCH`, `E-REPL-ORDER-UNRESOLVED`, `E-RUN-FOLD-UNRESOLVED`, `E-RUN-ARM-UNRESOLVED` |
+ 
+-**That last row is the one you can't cause, and it's in the table anyway.** Every other entry is something your declarations or your step code asked for; those five are core checking its own work, because the plan and the resolved conditions, repeats, seeds, folds, and order are all derived from one config and must agree. If they ever don't, the run would execute something other than what it recorded, and no result from it is worth reading. They carry a type and a code for the same reason everything above does rather than being an `assert`: `assert` disappears under `python -O`, which is precisely the wrong property for the only guard on a condition nothing else detects. One of them reaching you is a bug to report, not a config to fix — and unlike every row above, none of the five is raised inside an execution, so it stops the run instead of failing one step and continuing. A plan core can't trust is not a plan to keep walking.
++**That last row is the one you can't cause, and it's in the table anyway.** Every other entry is something your declarations or your step code asked for; those six are core checking its own work, because the plan and the resolved conditions, repeats, seeds, folds, arms, and order are all derived from one config and must agree. If they ever don't, the run would execute something other than what it recorded, and no result from it is worth reading. They carry a type and a code for the same reason everything above does rather than being an `assert`: `assert` disappears under `python -O`, which is precisely the wrong property for the only guard on a condition nothing else detects. One of them reaching you is a bug to report, not a config to fix — and unlike every row above, none of the six is raised inside an execution, so it stops the run instead of failing one step and continuing. A plan core can't trust is not a plan to keep walking.
+ 
+ **An exception exists where your code could act on the distinction; everything a *command* reports is a [diagnostic](#exit-codes-and-diagnostics), not an exception you catch.** `validate` collecting eleven errors over a config is not eleven raises — it's a report, and modelling it as an exception per finding would force it to stop at the first. So the hierarchy above covers exactly the run-time surface, where there is a step to raise into.
+ 
+ **A `ContractError` inside an execution fails that execution like any other error**, and the run [continues to the next one](#what-status-means-and-when-a-run-keeps-going). It is not a special stop: core has no way to know whether the mistake is in one step or in all fifteen, and a plan abandoned on the first is the outcome [that section already rejects](#what-status-means-and-when-a-run-keeps-going).
+ 
+ ---
+ 
+ ## Steps and artifacts
+ 
+ An experiment is a list of ordered steps. Each step is a file under `src/<experiment>/steps/`, and its artifacts land in a directory of the same name — at a depth set by the step's [scope](#step-scope). The code layout *is* the output layout:
+diff --git a/src/publishable/cli.py b/src/publishable/cli.py
+index afe1476..d9e0fc0 100644
+--- a/src/publishable/cli.py
++++ b/src/publishable/cli.py
+@@ -71,20 +71,21 @@ from publishable.sweep import (
+     expand,
+     sample_seed_for,
+     selector_paths,
+     sweep_document,
+ )
+ from publishable.templates.base import BaseTemplate
+ from publishable.templates.registry import get_template
+ from publishable.units import (
+     Unit,
+     UnitList,
++    arm_members,
+     clusters_of,
+     fold_basis,
+     partition_units,
+     resolve_units,
+     units_hash,
+ )
+ from publishable.uv_support import uv_lock_info
+ from publishable.validate import load_document, validate_config
+ 
+ if TYPE_CHECKING:
+@@ -266,20 +267,74 @@ def _wide_swept_paths(sweep_block: dict[str, Any]) -> set[str]:
+     axis declared, and an end-to-end test of it cannot exist yet.
+     """
+     selectors = set(selector_paths(sweep_block))
+     return (
+         set(_swept_paths(sweep_block))
+         | set(ablated_paths(sweep_block))
+         | set(sweep_block.get("baseline") or {})
+     ) - selectors
+ 
+ 
++def _resolved_group_axes(
++    units_decl: dict[str, Any] | None, sweep_block: dict[str, Any]
++) -> dict[str, tuple[str, list[str]]]:
++    """Every `sweep.groups` axis resolved to `(assign.<axis>.from, declared levels)`
++    — `units.arm_members`'s own input shape — read the same way
++    `validate._check_assign`'s `by_attribute` branch resolves the pair: the
++    declared `from` if it is a non-empty string, else the axis name itself.
++
++    Skips an axis whose `levels` does not resolve to a non-empty list of
++    strings, matching `_check_assign`'s own skip for that shape — `sweep.groups`'s
++    own shape check is `validate`'s to report, or not report at all in this
++    build, and inventing a second notion of "resolved" here would not change
++    that. A malformed `assign` block (absent, non-mapping, or naming a method
++    other than `by_attribute`) resolves the axis to its own name, the same
++    default `_check_assign` falls back to before its own checks on the block
++    would have already reported the malformation as a finding.
++
++    Unreachable from `command_run` today: a declared `sweep.groups` axis draws
++    `E-SWEEP-GROUPS-UNSUPPORTED` from `validate`, an error that stops `run`
++    (`command_run`'s `if doc is None or c.has_errors: return EXIT_WRONG`) before
++    this line is ever reached, until the slice that retires it (task 17) lands
++    — the same "unreachable in this build" `_wide_swept_paths` above notes for
++    the selector-path subtraction it depends on.
++    """
++    assign = (units_decl or {}).get("assign")
++    blocks = assign if isinstance(assign, dict) else {}
++    axes: dict[str, tuple[str, list[str]]] = {}
++    for entry in sweep_block.get("groups") or []:
++        if not isinstance(entry, dict):
++            continue
++        axis = entry.get("by")
++        if not isinstance(axis, str) or not axis:
++            continue
++        levels = entry.get("levels")
++        if not (
++            isinstance(levels, list) and levels and all(isinstance(v, str) for v in levels)
++        ):
++            continue
++        block = blocks.get(axis)
++        # Gated on `method == "by_attribute"`, matching `_check_assign`'s own
++        # elif chain and `units._assign_constant_columns`'s own gate for the
++        # same reason: `from` "means nothing" under `random`/`blocked` or an
++        # absent/out-of-enum method, each already refused at `validate` before
++        # this line is ever reached (`E-DATA-ASSIGN-DRAWN`/`E-DATA-ASSIGN-METHOD`).
++        declared_from = (
++            block.get("from")
++            if isinstance(block, dict) and block.get("method") == "by_attribute"
++            else None
++        )
++        column = declared_from if isinstance(declared_from, str) and declared_from else axis
++        axes[axis] = (column, levels)
++    return axes
++
++
+ def _attributed(table: UnitTable, attributes: dict[str, dict[str, Any]]) -> UnitTable:
+     """The same table, with each unit's declared attributes merged into its row.
+ 
+     `data.units.attributes` declares what the roster carries; `reference.md` §
+     Templates has `aggregate` reading the unit table, and a template that wants
+     to stratify on a declared attribute has nowhere else to read it from — the
+     collapsed table holds only *recorded* columns, because that is all a step's
+     `io.record` puts there. So the roster is merged in here, at the one boundary
+     where `aggregate` is called.
+ 
+@@ -928,20 +983,33 @@ def command_run(config_path: Path) -> int:
+         if fold_level.stratify_by:
+             strata = {u.key: str(u.attributes[fold_level.stratify_by]) for u in roster}
+         partitions = partition_units(
+             roster, fold_level.n, digest, clusters=clusters, strata=strata
+         )
+     fold_members = fold_members_for(levels, partitions) if partitions is not None else None
+ 
+     conditions = expand(doc)
+     sweep_block = doc.get("sweep") or {}
+     swept_paths = _wide_swept_paths(sweep_block)
++    # One frozenset of unit keys per condition that selects a group axis — `None`
++    # for a design declaring none. Unreachable today (see `_resolved_group_axes`):
++    # a declared `sweep.groups` axis returns `E-SWEEP-GROUPS-UNSUPPORTED`, which
++    # stops `run` above before this line. Built anyway, rather than left for the
++    # slice that retires that refusal, because `execute_plan`'s subset view is the
++    # rest of this feature and a config that never reaches it is not evidence the
++    # wiring is wrong — only that nothing yet asks for it end to end.
++    group_axes = _resolved_group_axes(units_decl, sweep_block)
++    arm_members_map = (
++        arm_members(roster, group_axes, conditions)
++        if group_axes and roster is not None
++        else None
++    )
+     plan = build_plan(  # phase 4
+         experiment,
+         conditions=[(c.index, c.label) for c in conditions],
+         repeat_labels=labels,
+     )
+     cfgs: dict[int, Config] = {
+         # The whole `Condition`, not `dict(c.values)`: a group cell's path names
+         # units rather than a parameter, and `c.selectors` is which — the answer
+         # `expand` computed once, travelling with the values it qualifies.
+         c.index: resolve_condition_cfg(doc, c)
+@@ -1026,20 +1094,21 @@ def command_run(config_path: Path) -> int:
+         results = execute_plan(  # phase 7
+             plan=plan,
+             run_dir=run_dir,
+             input_dir=input_dir,
+             cfgs=cfgs,
+             repeats=repeats,
+             digest=digest,
+             units=roster,
+             max_failed_fraction=(doc.get("limits") or {}).get("max_failed_fraction"),
+             fold_members=fold_members,
++            arm_members=arm_members_map,
+             measurements=(units_decl or {}).get("measurements"),
+         )
+ 
+         status = run_status(results)
+         # No roster means nothing to aggregate over, so `aggregated` stays `None`
+         # rather than an empty dict — `assemble_run_yaml` omits the key entirely in
+         # that case, instead of every condition reporting a misleading empty
+         # `aggregated: {}`.
+         aggregated: dict[int, dict[str, dict[str, Any]]] | None = None
+         # Same absent-not-empty rule as `aggregated`, for the same reason: a run
+diff --git a/src/publishable/runner.py b/src/publishable/runner.py
+index 38dc91f..427b1af 100644
+--- a/src/publishable/runner.py
++++ b/src/publishable/runner.py
+@@ -234,20 +234,48 @@ def attrition(
+     return _counts(
+         len(handed),
+         completed,
+         len(ineligible),
+         len(handed) - len(completed) - len(ineligible),
+         weights,
+         clusters,
+     )
+ 
+ 
++def _arm_keys(
++    condition_index: int,
++    keys: set[str],
++    arm_members: "dict[int, frozenset[str]] | None",
++) -> set[str]:
++    """The units a condition's execution was actually given, when the design
++    declares group axes — the arm counterpart to `_handed_keys`'s fold narrowing,
++    and the piece that makes the subset view real rather than merely avoided.
++
++    Indexed, not `.get`-ed: `arm_members` is built once, from the same resolved
++    conditions the plan itself was built from (`cli.command_run`), so a
++    condition index missing from it is the plan and the resolved arms
++    disagreeing — a core defect, not a condition with no arm. A `.get` default
++    would silently hand that condition the whole roster, which is exactly the
++    outcome two arms are declared to prevent, and is why this raises rather than
++    falling back the way `_handed_keys` does for the fold case it mirrors.
++    """
++    if arm_members is None:
++        return keys
++    if condition_index not in arm_members:
++        raise ContractError(
++            f"condition {condition_index} has no arm among arm_members "
++            f"({sorted(arm_members)!r}); the plan and the resolved arms disagree",
++            code="E-RUN-ARM-UNRESOLVED",
++        )
++    return set(arm_members[condition_index]) & keys
++
++
+ def _handed_keys(
+     repeat_label: str, keys: set[str], fold_members: dict[str, frozenset[str]] | None
+ ) -> set[str]:
+     """The units an execution with this repeat label was actually given.
+ 
+     Subtracting from the whole roster instead is what made every fold run abort:
+     the k−1 partitions this execution never saw are neither recorded nor skipped,
+     and would each count as a failure.
+ 
+     A label carrying no fold component while `fold_members` is not `None` is not
+@@ -271,20 +299,21 @@ def _handed_keys(
+             "composed under a declared fold must include one of its members",
+             code="E-RUN-FOLD-UNRESOLVED",
+         )
+     return set().union(*mine) & keys
+ 
+ 
+ def _units_failed_anywhere(
+     results: list[ExecutionResult],
+     roster: "UnitList",
+     fold_members: dict[str, frozenset[str]] | None = None,
++    arm_members: "dict[int, frozenset[str]] | None" = None,
+ ) -> set[str]:
+     """Units with no settled answer — neither recorded nor skipped — in at least
+     one execution of a step that records units, across the whole run.
+ 
+     A step "records units" if any of its repeat-scoped executions has produced at
+     least one row so far — the same notion `cli.py`'s `recording_steps` uses to
+     decide which steps enter `aggregated`, reused here rather than invented twice.
+     That guard is what keeps an ordinary scalar-only repeat step (a timing step, a
+     logging step) from ever failing the whole roster just because it records no
+     units at all — only a step in the business of recording units can flunk one. A
+@@ -298,30 +327,39 @@ def _units_failed_anywhere(
+     run level" is explicit that the fraction is "units that failed in at least one
+     execution, over `provenance.units.n`" — a union across every recording
+     execution of every step, in every condition, over the whole resolved roster.
+     `attrition`'s intersection is the right shape for one step's `n`; it is the
+     wrong shape for this run-level union.
+ 
+     What changes under a fold is the membership set each execution's recorded and
+     skipped units are checked against: `_handed_keys` scopes it to the partition
+     that execution was actually given, not the entire resolved roster — the other
+     k−1 partitions were never handed to it and so cannot count as failures of it.
++    `arm_members`, when a group axis is declared, narrows the same way for the
++    same reason — a unit of the other arm was never handed to this condition's
++    execution either, and counting it as failed would trip `max_failed_fraction`
++    on an arm this run never touched. `_arm_keys` applies before `_handed_keys`,
++    the same order `execute_plan`'s own narrowing uses, so a fold's complement is
++    computed within the arm rather than across it.
+     """
+     keys = {u.key for u in roster}
+     recording_steps = {
+         r.execution.step_name for r in results if r.execution.scope == "repeat" and r.rows
+     }
+     failed: set[str] = set()
+     for r in results:
+         if r.execution.scope != "repeat" or r.execution.step_name not in recording_steps:
+             continue
+-        handed = _handed_keys(r.execution.repeat_label or "", keys, fold_members)
++        scoped = keys
++        if r.execution.condition_index is not None:
++            scoped = _arm_keys(r.execution.condition_index, keys, arm_members)
++        handed = _handed_keys(r.execution.repeat_label or "", scoped, fold_members)
+         failed |= handed - (r.recorded | r.skipped)
+     return failed
+ 
+ 
+ def step_dir_for(run_dir: Path, execution: Execution, collapse_repeats: bool) -> Path:
+     """Depth follows scope; degenerate levels collapse."""
+     if execution.scope == "run":
+         return run_dir / "shared" / execution.step_name
+     if execution.scope == "summary":
+         return run_dir / "summary" / execution.step_name
+@@ -402,31 +440,48 @@ def execute_plan(
+     *,
+     plan: list[Execution],
+     run_dir: Path,
+     input_dir: Path,
+     cfgs: dict[int, Any],
+     repeats: list[Repeat],
+     digest: str,
+     units: UnitList | None = None,
+     max_failed_fraction: float | None = None,
+     fold_members: dict[str, frozenset[str]] | None = None,
++    arm_members: "dict[int, frozenset[str]] | None" = None,
+     measurements: dict[str, Any] | None = None,
+ ) -> list[ExecutionResult]:
+     """Run every execution in the plan, in order, one at a time.
+ 
+     A failed execution never stops the run — the plan runs to its end, because
+     abandoning it throws away every execution still pending and `resume` cannot
+     un-abort a plan that was never attempted. `max_failed_fraction` is the one
+     documented exception: unit failures only accumulate, so once the fraction of
+     the roster that has failed in at least one execution crosses the threshold, no
+     later execution can bring it back, and spending the remaining compute to
+     confirm that is waste.
++
++    `arm_members` is `units.arm_members`'s answer, one frozenset of keys per
++    resolved condition that selects a group axis — `None` for a design that
++    declares none. An arm is a **subset view of the one roster resolved for the
++    whole run, never a re-resolution**: `Unit` is frozen and hashable by key
++    exactly because one roster is shared across every condition, and narrowing to
++    an arm here filters that same roster rather than reading the units a second
++    time. Narrowed exactly when `execution.condition_index is not None` — a `run`-
++    or `summary`-scoped execution belongs to no condition and so to no arm, and
++    keeps the whole roster unconditionally, the same way a `fold` repeat already
++    leaves those two scopes alone. The narrowing happens **before** the fold
++    branch below reads `units`, not after: a `fold` repeat's `train` is built as
++    "the roster minus what this execution was handed", and computing that
++    complement across the *whole* roster rather than within the arm would leak
++    the other arm's units into `.train` — the same class of leak
++    `units.partition_units` exists to prevent for a cluster, one level up.
+     """
+     collapse = len(repeats) <= 1
+     seeds = {r.label: r.seed for r in repeats}
+     ledger = run_dir / "executions.jsonl"
+     results: list[ExecutionResult] = []
+ 
+     # Derived once from the plan itself, not threaded in as extra parameters:
+     # `io.conditions`/`io.repeats`/`io.read_condition` are a `summary`-scoped
+     # step's read surface, and the plan already carries every condition and
+     # repeat label the run resolved. A no-`sweep` run still has one resolved
+@@ -468,42 +523,52 @@ def execute_plan(
+         else:
+             seed = 0
+ 
+         step = execution.step_cls()
+         step._bind(
+             condition=execution.condition_index,
+             repeat=execution.repeat_label or None,
+             digest=digest,
+             seed=seed,
+         )
++        # Arm narrowing first, before the fold branch below reads the roster: a
++        # `run`- or `summary`-scoped execution has no condition and so no arm
++        # (`execution.condition_index is None`) and keeps the whole roster,
++        # exactly the units the outer `units` variable still names — narrowing
++        # is a plain reassignment of the *local* `scoped_units`, so `units`
++        # itself stays untouched for `attrition`/`_units_failed_anywhere` below,
++        # the same reason the fold narrowing already left it alone.
++        scoped_units = units
++        if arm_members is not None and units is not None and execution.condition_index is not None:
++            arm_keys = _arm_keys(execution.condition_index, {u.key for u in units}, arm_members)
++            scoped_units = UnitList([u for u in units if u.key in arm_keys])
+         # A fold repeat puts the units out of reach of the wider scopes: there is
+         # no fold at "run" or "condition" scope, since folds are repeats and
+         # repeats haven't happened yet, so a step fitting there would fit on units
+         # later folds test on. By "summary" scope every fold has already run, so
+         # there is nothing left to leak, and it keeps the whole roster like the
+-        # no-fold case. `units` (the full roster, from the outer scope) stays
+-        # untouched for `attrition`/`_units_failed_anywhere` below — only this
+-        # execution's own `step_units` narrows.
+-        if fold_members is None or units is None:
+-            step_units = units
++        # no-fold case — the arm-narrowed roster, when a group axis is declared,
++        # since arm narrowing already ran above.
++        if fold_members is None or scoped_units is None:
++            step_units = scoped_units
+         elif execution.scope in ("run", "condition"):
+             step_units = None  # no fold exists yet at these scopes
+         elif execution.scope == "repeat":
+             handed = _handed_keys(
+-                execution.repeat_label or "", {u.key for u in units}, fold_members
++                execution.repeat_label or "", {u.key for u in scoped_units}, fold_members
+             )
+             step_units = UnitList(
+-                [u for u in units if u.key in handed],
+-                train=UnitList([u for u in units if u.key not in handed]),
++                [u for u in scoped_units if u.key in handed],
++                train=UnitList([u for u in scoped_units if u.key not in handed]),
+             )
+         else:
+-            step_units = units  # "summary": every fold has already run
++            step_units = scoped_units  # "summary": every fold has already run
+         io = StepIO(
+             step_dir=step_dir_for(run_dir, execution, collapse),
+             input_dir=input_dir,
+             run_dir=run_dir,
+             units=step_units,
+             scope=execution.scope,
+             conditions=conditions_list,
+             repeats=repeats_list,
+             step_scopes=step_scopes,
+             condition_index=execution.condition_index,
+@@ -580,14 +645,14 @@ def execute_plan(
+                         "started_at": result.started_at,
+                         "wall_seconds": result.wall_seconds,
+                         "error": error,
+                     }
+                 )
+                 + "\n"
+             )
+ 
+         if max_failed_fraction is not None and units is not None:
+             resolved = len(units)
+-            failed = _units_failed_anywhere(results, units, fold_members)
++            failed = _units_failed_anywhere(results, units, fold_members, arm_members)
+             if resolved and len(failed) / resolved > max_failed_fraction:
+                 break
+     return results
+diff --git a/src/publishable/units.py b/src/publishable/units.py
+index e7cecc0..c86a2e5 100644
+--- a/src/publishable/units.py
++++ b/src/publishable/units.py
+@@ -953,20 +953,74 @@ def arms_of(roster: UnitList, column: str, levels: Sequence[str]) -> dict[str, l
+         raise ContractError(
+             f"the arm attribute {column!r} does not resolve to the declared levels "
+             f"— no unit's value names {', '.join(empty)}. Every declared level "
+             "needs at least one unit, or that arm's condition resolves zero of "
+             "them",
+             code="E-DATA-ASSIGN-LEVELS",
+         )
+     return partition
+ 
+ 
++def arm_members(
++    roster: UnitList,
++    axes: Mapping[str, tuple[str, Sequence[str]]],
++    conditions: "Sequence[Any]",
++) -> dict[int, frozenset[str]]:
++    """Which units each resolved condition's own arm holds, one call into
++    `arms_of` per declared group axis rather than one per condition — the
++    reduction the runner's subset view is built from, so a condition on a group
++    axis is handed a real subset of the shared roster and not a second
++    resolution of it.
++
++    `axes` maps a group axis name to `(the resolved `assign.<axis>.from`
++    attribute, that axis's declared `sweep.groups` levels)` — the caller's own
++    resolution of the declaration, mirroring `validate._check_assign`'s. This
++    function's job is narrower than that resolution: it calls `arms_of` — **the
++    single authority** for a single axis's partition — exactly once per axis in
++    `axes`, and then reduces that partition across every axis a condition
++    selects, never deriving membership from the roster a second time by any
++    other route.
++
++    `conditions` is an iterable of objects carrying `.index`, `.values` and
++    `.selectors` — `sweep.Condition`'s own shape, read structurally rather than
++    imported, since `sweep.py` and `units.py` share no dependency edge today and
++    a caller building a lightweight stand-in for a test loses nothing by it.
++    `.selectors` names which of `.values`' paths are group cells; a condition
++    selecting more than one axis gets the *intersection* of each axis's arm —
++    § Validation's `sex × arm` cell — and a condition selecting none is absent
++    from the returned mapping entirely, rather than mapped to the whole roster,
++    since "no arm" and "every unit" are different claims and only `arms_of`
++    itself is the authority for which units a real arm holds.
++
++    A caller passing a condition whose selected axis or level is not in `axes`
++    — an inconsistency between the two arguments — raises a bare `KeyError`
++    rather than falling back to the whole roster: `axes` is meant to cover
++    every axis every condition selects, built from the same declarations that
++    built the conditions, so a gap here is the caller's own bug to see rather
++    than one this function should absorb by handing back units nothing
++    verified.
++    """
++    partitions = {axis: arms_of(roster, column, levels) for axis, (column, levels) in axes.items()}
++    result: dict[int, frozenset[str]] = {}
++    for condition in conditions:
++        selected = [axis for axis in condition.selectors if axis in partitions]
++        if not selected:
++            continue
++        members: set[str] | None = None
++        for axis in selected:
++            level = condition.values[axis]
++            keys = {u.key for u in partitions[axis][level]}
++            members = keys if members is None else members & keys
++        result[condition.index] = frozenset(members or set())
++    return result
++
++
+ def cluster_count_of(membership: Mapping[str, str], keys: Iterable[str]) -> int:
+     """How many distinct clusters a given set of unit keys falls in.
+ 
+     The counting expression, in one place. `cluster_count` below is the whole
+     roster's answer and this is the same question asked of a SUBSET — the units a
+     metric was actually computed over, which is what `n.clusters` reports
+     (`runner._counts`, `stats.summarize_step`). Those callers have no roster to
+     hand `cluster_count`: they hold a set of completed keys and the roster-wide
+     membership mapping. Writing `len({m[k] for k in keys})` at each of them would
+     be the second and third notion of "how many clusters is that", which is the
+diff --git a/src/publishable/validate.py b/src/publishable/validate.py
+index 1be3d37..0bf836d 100644
+--- a/src/publishable/validate.py
++++ b/src/publishable/validate.py
+@@ -1215,38 +1215,46 @@ from `E-DATA-ASSIGN-METHOD`'s refusal of an absent or out-of-enum one. The two
+ checks read the same `method` value in an `elif` chain in `_check_assign`, so
+ that mutual exclusion is a property of the code: a value this tuple names is by
+ construction inside `ASSIGN_METHODS`, so it can never also be out-of-enum.
+ """
+ 
+ 
+ def _check_assign(
+     doc: dict[str, Any], units: dict[str, Any], roster: UnitList | None, c: Collector
+ ) -> None:
+     """`data.units.allocation` and `data.units.assign` against each other and against
+-    `sweep.groups` — six § Validation rows, most read from declarations alone, so
++    `sweep.groups` — seven § Validation rows, most read from declarations alone, so
+     each reports whether or not a roster resolved; the last two need the roster.
+ 
+     *Allocation needs arms* — `allocation: between` with no group axis. § Allocation
+     puts the reason in one sentence: `between` "answers *how units reach an arm*, not
+     *what the arms are*", so the declaration on its own describes one cohort and
+     nothing to divide it into.
+ 
+     *Every axis is assigned* — a declared group axis with no block under `assign`.
+     One finding per unassigned axis, in declaration order, because the remedy is one
+     block per axis and a reader fixing the first would otherwise come back for the
+     second. Together with *Allocation needs arms* this is the whole of § The one
+     config file's "`assign` is REQUIRED when `allocation` is `between`": an absent
+     `assign` and an empty `assign: {}` both leave every declared axis unassigned, and
+     `between` with no axes at all is what *Allocation needs arms* reports. Neither
+-    fires under `allocation: within`, whose
+-    own row (*Arms need allocation*) states the fault differently — a unit cannot be
+-    in one arm and in all of them — and is reported by nothing in this build.
++    fires under `allocation: within` — that value takes the sibling branch below.
++
++    *Arms need allocation* — the mirror of *Allocation needs arms*: a declared
++    group axis with `allocation` absent or `within`, rather than `between` with no
++    group axis. `within` says every unit appears in every condition, so a unit
++    cannot be in one arm and in all of them — the design the pair below exists to
++    make structurally impossible: handing every condition on a group axis the
++    same, whole roster is exactly two identical measurements reported as two arms.
++    `E-DATA-ALLOCATION-WITHIN-ARMS`, read from the declarations alone like its
++    mirror, and mutually exclusive with it by construction — one `if`/`elif` over
++    the same `allocation` value.
+ 
+     *Assignment names a method*, which is **not** gated on `allocation`: it is a
+     check on the block, not on the pair, and an `assign` block naming no method
+     describes no assignment wherever it was declared.
+ 
+     *Assignment method isn't drawn* — a `method` in the enum but not yet
+     executable (`random`, `blocked`), refused as `E-DATA-ASSIGN-DRAWN` rather than
+     `E-DATA-ASSIGN-METHOD`. Read from the same `elif` chain *Assignment names a
+     method* is, so the two are mutually exclusive by construction rather than by
+     convention.
+@@ -1337,20 +1345,35 @@ def _check_assign(
+             for axis in axes:
+                 if blocks.get(axis) is None:
+                     c.error(
+                         "E-DATA-ASSIGN-MISSING",
+                         "data.units.assign",
+                         f"declares no `{axis}` block, but `sweep.groups` declares that axis "
+                         f"and `data.units.allocation` is `between` — one block per axis is "
+                         f"what says how each unit reaches its arm, and an axis without one "
+                         f"names arms nothing puts a unit in",
+                     )
++    elif units.get("allocation") in (None, "within") and axes:
++        # *Arms need allocation* — the mirror of *Allocation needs arms* above:
++        # `sweep.groups` names an axis but `allocation` is `within`, or absent
++        # (which defaults to it). Gated on `(None, "within")` explicitly, rather
++        # than a bare `elif axes:`, so a stray out-of-enum `allocation` value —
++        # left to `E-DATA-ALLOCATION-UNSUPPORTED`'s blanket refusal to catch —
++        # is not misreported here as `within`.
++        c.error(
++            "E-DATA-ALLOCATION-WITHIN-ARMS",
++            "data.units.allocation",
++            f"is `within` (the default when the key is absent), but `sweep.groups` "
++            f"declares {', '.join(axes)} — `within` says every unit appears in every "
++            f"condition, so a unit can't be in one arm and in all of them. Declare "
++            f"`allocation: between`, or drop the group axis",
++        )
+ 
+     for axis, block in blocks.items():
+         if block is None:
+             continue  # an absent block; *Every axis is assigned* is the one that speaks
+         if not isinstance(block, dict):
+             c.error(
+                 "E-DATA-ASSIGN-METHOD",
+                 f"data.units.assign.{axis}",
+                 f"is a {type(block).__name__} (`{block!r}`) rather than a block declaring a "
+                 f"`method`; the methods are {', '.join(ASSIGN_METHODS)}, and which of the "
+diff --git a/tests/test_cli.py b/tests/test_cli.py
+index 17eb18c..eb6644e 100644
+--- a/tests/test_cli.py
++++ b/tests/test_cli.py
+@@ -2,21 +2,26 @@ import json
+ import re
+ import subprocess
+ from collections import namedtuple
+ from pathlib import Path
+ from typing import Any
+ 
+ import pytest
+ import yaml
+ 
+ from publishable import BaseStep
+-from publishable.cli import _apply_execution_order, _wide_swept_paths, main
++from publishable.cli import (
++    _apply_execution_order,
++    _resolved_group_axes,
++    _wide_swept_paths,
++    main,
++)
+ from publishable.diagnostics import EXIT_INVOCATION, EXIT_OK, EXIT_PARTIAL, EXIT_WRONG
+ from publishable.errors import ContractError
+ from publishable.generators.experiment import generate_experiment
+ from publishable.generators.step import generate_step
+ from publishable.replication import LABEL_JOIN
+ from publishable.scope import Execution
+ 
+ Ran = namedtuple("Ran", ["condition_index", "repeat_label"])
+ 
+ 
+@@ -384,20 +389,64 @@ def test_a_group_path_gets_no_swept_away_marker():
+     }
+     # `analysis.min_samples` is the control that must report: a baseline-only
+     # parameter path, on the same term of the union the group path arrives by,
+     # so a subtraction that took the whole `baseline` would fail here.
+     assert _wide_swept_paths(block) == {"analysis.method", "analysis.min_samples"}
+     # And with no `groups` declared, a baseline path named `arm` is an ordinary
+     # parameter the wide config must still mark.
+     assert _wide_swept_paths({"baseline": {"arm": "control"}}) == {"arm"}
+ 
+ 
++def test_resolved_group_axes_defaults_from_and_skips_unresolvable_levels():
++    """`_resolved_group_axes` is `command_run`'s own resolution of `assign.<axis>.from`
++    against its default — the axis name — mirroring `validate._check_assign`'s
++    `by_attribute` branch, and `units.arm_members`'s own input shape.
++
++    Tested here rather than end to end for the reason `test_a_group_path_gets_no_swept_away_marker`
++    above states: `validate` refuses `groups` outright in this build
++    (`E-SWEEP-GROUPS-UNSUPPORTED`), so no `run` reaches this code with a group
++    axis declared."""
++    sweep_block = {
++        "groups": [
++            {"by": "arm", "levels": ["control", "treatment"]},
++            {"by": "cohort", "levels": ["derivation", "validation"]},
++            {"by": "unresolvable"},  # no `levels` at all — skipped, not defaulted
++        ],
++    }
++    units_decl = {
++        "assign": {
++            "arm": {"method": "by_attribute", "from": "arm_column"},
++            # `cohort` has no block at all: defaults to the axis name.
++        },
++    }
++    assert _resolved_group_axes(units_decl, sweep_block) == {
++        "arm": ("arm_column", ["control", "treatment"]),
++        "cohort": ("cohort", ["derivation", "validation"]),
++    }
++
++
++def test_resolved_group_axes_is_empty_with_no_groups_declared():
++    assert _resolved_group_axes({"assign": {"arm": {"from": "x"}}}, {}) == {}
++
++
++def test_resolved_group_axes_ignores_from_under_a_non_by_attribute_method():
++    """`from` "means nothing" under `random`/`blocked` — the same gate
++    `units._assign_constant_columns` applies and for the same reason: neither
++    method is executable (`E-DATA-ASSIGN-DRAWN`), so reading `from` under one
++    would resolve a column no method here actually consults."""
++    sweep_block = {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}
++    units_decl = {"assign": {"arm": {"method": "random", "from": "arm_column"}}}
++    assert _resolved_group_axes(units_decl, sweep_block) == {
++        "arm": ("arm", ["control", "treatment"])
++    }
++
++
+ def test_the_recorded_order_is_the_order_that_ran(tmp_path: Path):
+     """The realized order is a fact about the run, not a rule to re-derive.
+ 
+     Uses `RANDOMIZED_ACROSS_CONDITIONS` (2 conditions) rather than a single-condition
+     fixture: with one condition there is no condition boundary for a batch to cross,
+     so the plan-reordering this test exists to catch could be missing entirely and
+     a single-condition run would still pass.
+     """
+     doc = run_a_project(
+         tmp_path,
+diff --git a/tests/test_runner.py b/tests/test_runner.py
+index a268215..b8f77b7 100644
+--- a/tests/test_runner.py
++++ b/tests/test_runner.py
+@@ -15,21 +15,21 @@ from publishable.runner import (
+     _handed_keys,
+     _units_failed_anywhere,
+     attrition,
+     execute_plan,
+     resolve_condition_cfg,
+     resolve_wide_cfg,
+     step_dir_for,
+ )
+ from publishable.scope import Execution, build_plan
+ from publishable.sweep import Condition, expand
+-from publishable.units import Unit, UnitList
++from publishable.units import Unit, UnitList, units_hash
+ 
+ 
+ class Load(BaseStep):
+     scope = "run"
+ 
+     def run(self, cfg, io):
+         io.write("cohort.json", {"loaded": True})
+         return {"n": 2}
+ 
+ 
+@@ -99,44 +99,51 @@ def test_a_collapsed_repeat_still_collapses_with_a_composed_label(tmp_path):
+ 
+ def harness(
+     tmp_path: Path,
+     steps,
+     *,
+     units=None,
+     repeats=None,
+     max_failed_fraction=None,
+     conditions=None,
+     fold_members=None,
++    arm_members=None,
+     measurements=None,
+ ):
+     class P(BaseExperiment):
+         pass
+ 
+     P.steps = steps
+     if repeats is None:
+         repeats = [Repeat("seed", "seed17", 17), Repeat("seed", "seed42", 42)]
+     if conditions is None:
+         conditions = [(0, None)]
+     plan = build_plan(P(), conditions=conditions, repeat_labels=[r.label for r in repeats])
+     run_dir = tmp_path / "run"
+     run_dir.mkdir(parents=True, exist_ok=True)
+     (tmp_path / "input").mkdir(parents=True, exist_ok=True)
++    # One `Config` per condition index the caller declared, plus the `-1` wide
++    # slot every run resolves regardless — a fixed `{0: ..., -1: ...}` left every
++    # multi-condition (arm) test with no `cfg` for condition 1 and `E-RUN-CFG-MISSING`.
++    cfgs = {index: Config({"parameters": {}}) for index, _label in conditions}
++    cfgs[-1] = Config({"parameters": {}})
+     results = execute_plan(
+         plan=plan,
+         run_dir=run_dir,
+         input_dir=tmp_path / "input",
+-        cfgs={0: Config({"parameters": {}}), -1: Config({"parameters": {}})},
++        cfgs=cfgs,
+         repeats=repeats,
+         digest="sha256:abc",
+         units=units,
+         max_failed_fraction=max_failed_fraction,
+         fold_members=fold_members,
++        arm_members=arm_members,
+         measurements=measurements,
+     )
+     return run_dir, results, repeats
+ 
+ 
+ def test_no_sweep_means_no_conditions_level(tmp_path: Path):
+     run_dir, _, _ = harness(tmp_path, [Load, Analyze])
+     assert (run_dir / "shared" / "load" / "cohort.json").is_file()
+     assert not (run_dir / "conditions").exists()
+     assert (run_dir / "seed17").is_dir()
+@@ -785,20 +792,212 @@ def test_a_summary_step_under_a_fold_still_gets_the_full_roster(tmp_path: Path):
+         tmp_path,
+         [TouchesUnitsAtSummary],
+         units=roster,
+         repeats=[Repeat("fold", "fold01", 0), Repeat("fold", "fold02", 0)],
+         fold_members=members,
+     )
+     assert results[0].status == "completed"
+     assert results[0].returned == {"keys": "u1,u2,u3,u4"}
+ 
+ 
++def _arm_roster12():
++    """12 units, 7 `control` and 5 `treatment` — deliberately uneven, and neither
++    half is 6, so an arm can't be confused with the other arm, with half the
++    roster, or with the whole roster by size alone. No `cluster_by` is declared
++    and the fixture carries no attribute a cluster test would key on, so this
++    can't double as a cluster fixture — arm-aware and cluster-aware behaviour
++    would be indistinguishable if it did."""
++    control = [Unit(key=f"c{i}", attributes={"arm": "control"}) for i in range(7)]
++    treatment = [Unit(key=f"t{i}", attributes={"arm": "treatment"}) for i in range(5)]
++    return UnitList(control + treatment)
++
++
++def _arm_members12():
++    roster = _arm_roster12()
++    return {
++        0: frozenset(u.key for u in roster if u.attributes["arm"] == "control"),
++        1: frozenset(u.key for u in roster if u.attributes["arm"] == "treatment"),
++    }
++
++
++def test_two_arms_get_different_rosters_and_neither_is_the_whole_roster(tmp_path: Path):
++    """The bar H2 set: 'a groups axis that expanded conditions while handing each
++    the same roster would report two identical measurements as two arms'. 12
++    units, 7 control and 5 treatment — deliberately uneven, so the two arms
++    cannot be confused with each other or with the roster by size alone.
++
++    `units_hash` over the FULL roster is unaffected by narrowing (asserted
++    below), because narrowing filters a view rather than re-resolving — but that
++    assertion alone does not discriminate re-resolution from the real thing,
++    since a re-resolution producing the same keys and attributes hashes
++    identically. `same_objects` is what actually discriminates: an arm is a
++    subset view, so every unit a condition-scoped step sees must be the exact
++    same `Unit` object the roster holds, not a freshly built one with an equal
++    key."""
++    roster = _arm_roster12()
++    before = units_hash(roster)
++    arm_members = _arm_members12()
++
++    class SeeYourArm(BaseStep):
++        scope = "condition"
++
++        def run(self, cfg, io):
++            return {
++                "n": len(io.units),
++                "same_objects": all(any(u is r for r in roster) for u in io.units),
++            }
++
++    _, results, _ = harness(
++        tmp_path,
++        [SeeYourArm],
++        units=roster,
++        conditions=[(0, "control"), (1, "treatment")],
++        arm_members=arm_members,
++    )
++    by_index = {r.execution.condition_index: r for r in results}
++    sizes = {by_index[0].returned["n"], by_index[1].returned["n"]}
++    assert sizes == {7, 5}
++    assert 12 not in sizes
++    assert by_index[0].returned["same_objects"] is True
++    assert by_index[1].returned["same_objects"] is True
++    assert units_hash(roster) == before
++
++
++def test_run_and_summary_scope_keep_the_whole_roster_under_arms(tmp_path: Path):
++    """A `run`-scope step runs once for the whole run and a `summary`-scope step
++    runs once after every condition — neither belongs to an arm, so both must
++    see all 12 units. This is the pair that discriminates a correct
++    `execution.condition_index is not None` predicate from an implementation
++    that narrows at all four scopes, which would still pass the size assertion
++    above."""
++    roster = _arm_roster12()
++    arm_members = _arm_members12()
++
++    class TouchesAtRun(BaseStep):
++        scope = "run"
++
++        def run(self, cfg, io):
++            return {"n": len(io.units)}
++
++    class TouchesAtSummary(BaseStep):
++        scope = "summary"
++
++        def run(self, cfg, io):
++            return {"n": len(io.units)}
++
++    _, results, _ = harness(
++        tmp_path,
++        [TouchesAtRun, TouchesAtSummary],
++        units=roster,
++        conditions=[(0, "control"), (1, "treatment")],
++        arm_members=arm_members,
++    )
++    by_step = {r.execution.step_name: r for r in results}
++    assert by_step["touches_at_run"].returned == {"n": 12}
++    assert by_step["touches_at_summary"].returned == {"n": 12}
++
++
++def test_a_fold_repeat_composes_with_arms_without_leaking_the_other_arm(tmp_path: Path):
++    """`groups` + `fold` is not refused: each unit is still in exactly one fold,
++    and cross-validation happens within the arm. `fold01`/`fold02` are drawn
++    across the WHOLE 12-unit roster, spanning both arms — the realistic shape,
++    since `partition_units` in `cli.py` partitions the roster before arms narrow
++    anything. Narrowing to the arm before the fold branch reads `units` is what
++    keeps `.train` from holding units of the OTHER arm: if the arm narrowing ran
++    after the fold branch instead, `train` would be computed as the complement
++    over the whole roster and leak the other arm in, the same class of fault
++    `partition_units` exists to prevent for a cluster."""
++    roster = _arm_roster12()
++    arm_members = _arm_members12()
++    fold_members = {
++        "fold01": frozenset({"c0", "c1", "c2", "c3", "t0", "t1"}),
++        "fold02": frozenset({"c4", "c5", "c6", "t2", "t3", "t4"}),
++    }
++    control_keys = arm_members[0]
++    treatment_keys = arm_members[1]
++
++    class SeeFoldWithinArm(BaseStep):
++        scope = "repeat"
++
++        def run(self, cfg, io):
++            return {
++                "test_keys": ",".join(sorted(u.key for u in io.units)),
++                "train_keys": ",".join(sorted(u.key for u in io.units.train)),
++            }
++
++    _, results, _ = harness(
++        tmp_path,
++        [SeeFoldWithinArm],
++        units=roster,
++        conditions=[(0, "control"), (1, "treatment")],
++        repeats=[Repeat("fold", "fold01", 0), Repeat("fold", "fold02", 0)],
++        fold_members=fold_members,
++        arm_members=arm_members,
++    )
++    for r in results:
++        arm_keys = control_keys if r.execution.condition_index == 0 else treatment_keys
++        test_str, train_str = r.returned["test_keys"], r.returned["train_keys"]
++        test_keys = frozenset(test_str.split(",")) if test_str else frozenset()
++        train_keys = frozenset(train_str.split(",")) if train_str else frozenset()
++        # Every unit this execution sees, and every unit in its complement,
++        # belongs to this condition's own arm — never the other one.
++        assert test_keys <= arm_keys
++        assert train_keys <= arm_keys
++        assert test_keys | train_keys == arm_keys
++    by_pair = {(r.execution.condition_index, r.execution.repeat_label): r for r in results}
++    assert by_pair[(0, "fold01")].returned["test_keys"] == "c0,c1,c2,c3"
++    assert by_pair[(1, "fold01")].returned["test_keys"] == "t0,t1"
++
++
++def test_a_missing_arm_entry_is_a_core_defect_not_a_whole_roster_fallback(tmp_path: Path):
++    """Indexed, not `.get`-ed: a condition index absent from `arm_members` means
++    the plan and the resolved arms disagree, which is a core bug — handing that
++    condition the whole roster instead (a `.get` default) is exactly the outcome
++    two declared arms exist to make impossible, so this raises loud, outside the
++    per-execution `try`, the same treatment `E-RUN-CFG-MISSING` gets for the
++    analogous plan/cfgs disagreement — rather than being absorbed as one
++    execution's own failure."""
++    roster = _arm_roster12()
++
++    class SeeYourArm(BaseStep):
++        scope = "condition"
++
++        def run(self, cfg, io):
++            return {"n": len(io.units)}
++
++    with pytest.raises(ContractError) as excinfo:
++        harness(
++            tmp_path,
++            [SeeYourArm],
++            units=roster,
++            conditions=[(0, "control"), (1, "treatment")],
++            arm_members={0: frozenset({"c0"})},  # condition 1 missing on purpose
++        )
++    assert excinfo.value.code == "E-RUN-ARM-UNRESOLVED"
++
++
++def test_units_failed_anywhere_does_not_blame_the_other_arm(tmp_path: Path):
++    """A unit that never belonged to this condition's arm was never handed to
++    its executions, so its absence from `recorded`/`skipped` must not count as
++    a failure — the arm counterpart of `test_without_folds_the_union_is_unchanged`
++    for the analogous fold guarantee. 4 units split 2/2 into two arms, so any
++    cross-arm leak into `_units_failed_anywhere` shows up as a spurious member
++    of the returned set."""
++    roster = _roster4()
++    arm_members = {0: frozenset({"u1", "u2"}), 1: frozenset({"u3", "u4"})}
++    results = [
++        _repeat_result("analyze", "seed01", 0, {"u1": {}, "u2": {}}),
++        _repeat_result("analyze", "seed01", 1, {"u3": {}}),  # u4 never settled
++    ]
++    assert _units_failed_anywhere(results, roster, None, arm_members) == {"u4"}
++
++
+ def test_a_single_repeat_skip_is_still_ineligible(tmp_path: Path):
+     """With one repeat, intersection over a single set is that set — unchanged behavior."""
+     roster = UnitList([Unit(key="p0"), Unit(key="p1")])
+ 
+     class SkipOne(BaseStep):
+         scope = "repeat"
+ 
+         def run(self, cfg, io):
+             io.skip("p0", "excluded by design")
+             io.record("p1", {"v": 1.0})
+diff --git a/tests/test_units.py b/tests/test_units.py
+index d757db2..a14e347 100644
+--- a/tests/test_units.py
++++ b/tests/test_units.py
+@@ -2,20 +2,21 @@
+ from collections import Counter
+ from pathlib import Path
+ 
+ import pytest
+ 
+ from publishable import ContractError
+ from publishable.units import (
+     Unit,
+     UnitList,
+     apply_rule,
++    arm_members,
+     arms_of,
+     cluster_count,
+     clusters_of,
+     collapse_measurements,
+     fold_basis,
+     partition_units,
+     resolve_units,
+     stratum_varies_within_cluster,
+     units_hash,
+ )
+@@ -1080,20 +1081,99 @@ def test_arms_refuse_a_declared_level_with_no_unit():
+             Unit(key="u0", paths=(), attributes={"arm": "control"}),
+             Unit(key="u1", paths=(), attributes={"arm": "control"}),
+         ]
+     )
+     with pytest.raises(ContractError) as e:
+         arms_of(roster, "arm", ["control", "treatment"])
+     assert e.value.code == "E-DATA-ASSIGN-LEVELS"
+     assert "treatment" in str(e.value)
+ 
+ 
++def test_arm_members_reduces_arms_of_across_the_resolved_conditions():
++    """`units.arm_members` is the reduction the runner's subset view is built
++    from: one call into `arms_of` per declared axis, then a per-condition lookup
++    against `.selectors`/`.values` — never a second derivation of membership.
++    7 control, 5 treatment, deliberately uneven per the H3c fixture rule, plus a
++    third condition selecting no axis at all, which must be absent from the
++    result entirely rather than mapped to the whole roster."""
++    from publishable.sweep import Condition
++
++    roster = UnitList(
++        [Unit(key=f"c{i}", attributes={"arm": "control"}) for i in range(7)]
++        + [Unit(key=f"t{i}", attributes={"arm": "treatment"}) for i in range(5)]
++    )
++    selectors = frozenset({"arm"})
++    conditions = [
++        Condition(index=0, label="control", values={"arm": "control"}, selectors=selectors),
++        Condition(index=1, label="treatment", values={"arm": "treatment"}, selectors=selectors),
++        Condition(index=2, label="plain", values={}, selectors=frozenset()),
++    ]
++    result = arm_members(roster, {"arm": ("arm", ["control", "treatment"])}, conditions)
++    assert result[0] == frozenset(f"c{i}" for i in range(7))
++    assert result[1] == frozenset(f"t{i}" for i in range(5))
++    assert 2 not in result
++    assert len(result[0]) + len(result[1]) == len(roster)
++
++
++def test_arm_members_calls_arms_of_once_per_axis_not_per_condition():
++    """The reduction, not a second partition: with three conditions selecting the
++    same single axis, `arms_of` must run exactly once for it, verified by
++    counting calls rather than by inspecting the result — the discriminator a
++    per-condition re-derivation would still pass on output alone."""
++    from unittest.mock import patch
++
++    from publishable.sweep import Condition
++
++    roster = UnitList(
++        [
++            Unit(key="c0", attributes={"arm": "control"}),
++            Unit(key="t0", attributes={"arm": "treatment"}),
++        ]
++    )
++    selectors = frozenset({"arm"})
++    conditions = [
++        Condition(index=0, label="control", values={"arm": "control"}, selectors=selectors),
++        Condition(index=1, label="treatment", values={"arm": "treatment"}, selectors=selectors),
++    ]
++    with patch("publishable.units.arms_of", wraps=arms_of) as spy:
++        arm_members(roster, {"arm": ("arm", ["control", "treatment"])}, conditions)
++        assert spy.call_count == 1
++
++
++def test_arm_members_intersects_when_a_condition_selects_two_axes():
++    """§ Validation's `sex × arm` cell: a condition selecting more than one axis
++    gets the intersection of each axis's arm, not either one alone."""
++    from publishable.sweep import Condition
++
++    roster = UnitList(
++        [
++            Unit(key="u0", attributes={"arm": "control", "sex": "f"}),
++            Unit(key="u1", attributes={"arm": "control", "sex": "m"}),
++            Unit(key="u2", attributes={"arm": "treatment", "sex": "f"}),
++        ]
++    )
++    conditions = [
++        Condition(
++            index=0,
++            label="cell",
++            values={"arm": "control", "sex": "f"},
++            selectors=frozenset({"arm", "sex"}),
++        ),
++    ]
++    result = arm_members(
++        roster,
++        {"arm": ("arm", ["control", "treatment"]), "sex": ("sex", ["f", "m"])},
++        conditions,
++    )
++    assert result[0] == frozenset({"u0"})
++
++
+ def test_the_fold_basis_is_the_cluster_count_when_the_units_are_clustered():
+     """`reference.md` § Validation, *Folds fit inside the clusters*: a cluster is
+     indivisible, so what a fold may be drawn from is the cluster count.
+ 
+     Sizes 7/3/3/1/1 — 5 clusters over 15 units — deliberately: with one unit per
+     cluster the two numbers coincide and this assertion could not tell the cluster
+     count from the roster size.
+     """
+     roster, _ = _clustered({"S1": 7, "S2": 3, "S3": 3, "S4": 1, "S5": 1})
+     assert len(roster) == 15
+diff --git a/tests/test_validate.py b/tests/test_validate.py
+index f6add1d..25fd4de 100644
+--- a/tests/test_validate.py
++++ b/tests/test_validate.py
+@@ -936,39 +936,41 @@ def test_the_budget_check_fires_for_leave_one_out_against_the_real_roster(write_
+ def test_the_budget_counts_the_conditions_a_group_axis_expands(write_config):
+     """`reference.md` § Validation, *Grid size sane*: conditions are counted over
+     every axis the sweep expands, "a group axis included, since a group level is a
+     condition that executes like any other". The budget is
+     `len(expand(doc)) × repeat_total`, so it inherits that from `expand` — which
+     now crosses a group axis into the product — and the number the warning names
+     must be the real one, not the parameter-only product it was before.
+ 
+     Reached the same way every other group check is: `groups` is still refused
+     wholesale in this build, and `validate` collects rather than stops, so the
+-    warning is raised beside `E-SWEEP-GROUPS-UNSUPPORTED`. The exact error set is
+-    asserted so no unrelated refusal can be the one carrying the config.
++    warning is raised beside `E-SWEEP-GROUPS-UNSUPPORTED` — and, since this
++    config declares no `allocation` at all (defaulting to `within`) beside a
++    declared group axis, `E-DATA-ALLOCATION-WITHIN-ARMS` too. The exact error
++    set is asserted so no unrelated refusal can be the one carrying the config.
+ 
+     Two controls, and the second must report rather than be silent: the same
+     design without the group axis fits under the same budget (so the two levels
+     are what pushed it over), and at a budget of 10 it warns with *its* count
+     (so a silent control cannot be silence from a dead check)."""
+     grid = {"analysis.method": ["pearson", "spearman", "kendall"]}
+     repeats = {"repeats": [{"kind": "seed", "n": 5}]}
+     axis = [{"by": "arm", "levels": ["control", "treatment"]}]
+ 
+     over = write_config(
+         {
+             "sweep": {"groups": axis, "grid": grid},
+             "replication": repeats,
+             "limits": {"max_executions": 20},  # 2 arms × 3 methods × 5 seeds = 30 > 20
+         }
+     )
+-    assert _error_codes(over) == {"E-SWEEP-GROUPS-UNSUPPORTED"}
++    assert _error_codes(over) == {"E-SWEEP-GROUPS-UNSUPPORTED", "E-DATA-ALLOCATION-WITHIN-ARMS"}
+     assert (
+         messages_by_code(over)["W-EXEC-BUDGET"]
+         == "6 conditions × 5 repeats = 30 executions exceeds 20"
+     )
+ 
+     without = messages_by_code(
+         write_config(
+             {"sweep": {"grid": grid}, "replication": repeats, "limits": {"max_executions": 20}}
+         )
+     )
+@@ -1463,34 +1465,35 @@ def test_ablate_is_refused_against_every_axis_shaped_mode(write_config, mode):
+     )
+     assert "E-SWEEP-ABLATE-CROSSED" in found
+ 
+ 
+ def test_ablate_composes_with_a_group_axis(write_config):
+     """§ Validation, "Ablation doesn't compose with a parameter axis": "`groups`
+     is permitted — it varies no parameter". Without this, a mutation putting
+     `groups` into `PARAMETER_AXIS_MODES` — the set `E-SWEEP-ABLATE-CROSSED`
+     reads — passes every other test: this is the one assertion that tells the
+     product predicate and the parameter-axis predicate apart. `groups` is
+-    refused on its own identifier in this build, and that is the *only* error
+-    this config may carry."""
++    refused on its own identifier in this build, and — since no `allocation` is
++    declared beside it, defaulting to `within` — *Arms need allocation* fires
++    too; between them those are the only errors this config may carry."""
+     found = _error_codes(
+         write_config(
+             {
+                 "sweep": {
+                     "baseline": {"analysis.drop_missing": True},
+                     "groups": [{"by": "cohort", "levels": ["derivation", "validation"]}],
+                     "ablate": {"remove": ["analysis.drop_missing"]},
+                 }
+             }
+         )
+     )
+-    assert found == {"E-SWEEP-GROUPS-UNSUPPORTED"}
++    assert found == {"E-SWEEP-GROUPS-UNSUPPORTED", "E-DATA-ALLOCATION-WITHIN-ARMS"}
+ 
+ 
+ def test_a_plain_ablation_validates_clean(write_config):
+     """The legal composition, so that a check firing where it should not fails
+     here: a baseline fixing the removed boolean, one `remove`, no axis."""
+     assert (
+         _error_codes(
+             write_config(
+                 {
+                     "sweep": {
+@@ -7042,101 +7045,119 @@ def test_a_baseline_may_fix_a_group_level(write_config):
+     Two controls, both of which must report, and each closes one direction:
+     with no `groups` axis declaring `arm`, the same baseline key *is* an unknown
+     parameter path and stays `E-SWEEP-PATH-UNKNOWN` (which is also the answer to
+     task 3's open question — nothing else refuses a baseline fixing a group path
+     no axis declares); and a misspelled parameter path alongside a real group
+     axis is still reported, so the exemption is the declared axis name and not
+     the `groups` block's presence.
+ 
+     `groups` itself is still refused in this build, so that code is expected
+     beside the ones under test rather than filtered away: `validate` collects
+-    rather than stops, which is what makes the exemption testable today."""
++    rather than stops, which is what makes the exemption testable today. So is
++    `E-DATA-ALLOCATION-WITHIN-ARMS`: none of these three configs declares
++    `allocation`, which defaults to `within`, beside the declared `arm` axis."""
+     axis = [{"by": "arm", "levels": ["control", "treatment"]}]
+     assert _error_codes(
+         write_config({"sweep": {"groups": axis, "baseline": {"arm": "control"}}})
+-    ) == {"E-SWEEP-GROUPS-UNSUPPORTED"}
++    ) == {"E-SWEEP-GROUPS-UNSUPPORTED", "E-DATA-ALLOCATION-WITHIN-ARMS"}
+ 
+     assert _error_codes(write_config({"sweep": {"baseline": {"arm": "control"}}})) == {
+         "E-SWEEP-PATH-UNKNOWN"
+     }
+ 
+     assert _error_codes(
+         write_config(
+             {
+                 "sweep": {
+                     "groups": axis,
+                     "baseline": {"arm": "control", "analysis.methdo": "pearson"},
+                 }
+             }
+         )
+-    ) == {"E-SWEEP-GROUPS-UNSUPPORTED", "E-SWEEP-PATH-UNKNOWN"}
++    ) == {"E-SWEEP-GROUPS-UNSUPPORTED", "E-SWEEP-PATH-UNKNOWN", "E-DATA-ALLOCATION-WITHIN-ARMS"}
+ 
+ 
+ def test_a_group_axis_may_not_name_a_path_a_parameter_axis_writes(write_config):
+     """`groups: [{by: arm}]` beside `grid: {arm: [...]}` is worse than the
+     overwrite `E-SWEEP-PATH-DUPLICATE` already refuses between two parameter
+     axes: `expand` marks the path a *selector* on every row, so
+     `resolve_condition_cfg` plants nothing and `cli`'s wide config subtracts it —
+     the grid axis claims to sweep `parameters.arm` while every condition runs the
+     base value at every scope. That is § Mistakes core prevents' "a typo'd
+     parameter silently using a default", reached by a route no other check
+     covers: the duplicate check reads `grid`/`paired`/`sample` only.
+ 
+     The control must report: a group axis whose name no parameter axis writes is
+-    the ordinary composed design, and carries the unsupported code alone."""
++    the ordinary composed design, and carries the unsupported code and *Arms
++    need allocation* alone — neither config below declares `allocation`, which
++    defaults to `within`, beside the declared `arm` axis."""
+     assert _error_codes(
+         write_config(
+             {
+                 "sweep": {
+                     "groups": [{"by": "arm", "levels": ["control", "treatment"]}],
+                     "grid": {"arm": ["control", "treatment"]},
+                 }
+             }
+         )
+-    ) == {"E-SWEEP-GROUPS-UNSUPPORTED", "E-SWEEP-PATH-DUPLICATE", "E-SWEEP-PATH-UNKNOWN"}
++    ) == {
++        "E-SWEEP-GROUPS-UNSUPPORTED",
++        "E-SWEEP-PATH-DUPLICATE",
++        "E-SWEEP-PATH-UNKNOWN",
++        "E-DATA-ALLOCATION-WITHIN-ARMS",
++    }
+ 
+     assert _error_codes(
+         write_config(
+             {
+                 "sweep": {
+                     "groups": [{"by": "arm", "levels": ["control", "treatment"]}],
+                     "grid": {"analysis.method": ["pearson", "spearman"]},
+                 }
+             }
+         )
+-    ) == {"E-SWEEP-GROUPS-UNSUPPORTED"}
++    ) == {"E-SWEEP-GROUPS-UNSUPPORTED", "E-DATA-ALLOCATION-WITHIN-ARMS"}
+ 
+ 
+ def test_a_group_level_must_render_into_a_condition_label(write_config):
+     """A group cell renders into a label now that the axis expands
+     (`00_arm=control`), and a label is also a directory segment and a selector.
+     `control__b` passes `SWEEP_VALUE_PATTERN` and destroys the axis separator, so
+     it is refused exactly as a `grid` value is — the exemption `sweep.baseline`
+     values get never applied to a value `label_for` renders.
+ 
+-    The control must report: well-formed levels carry the unsupported code
+-    alone."""
++    The control must report: well-formed levels carry the unsupported code and
++    *Arms need allocation* alone — none of these three configs declares
++    `allocation`, which defaults to `within`, beside the declared `arm` axis."""
+     assert _error_codes(
+         write_config(
+             {"sweep": {"groups": [{"by": "arm", "levels": ["control", "treat__ment"]}]}}
+         )
+-    ) == {"E-SWEEP-GROUPS-UNSUPPORTED", "E-SWEEP-VALUE-UNNAMEABLE"}
++    ) == {
++        "E-SWEEP-GROUPS-UNSUPPORTED",
++        "E-SWEEP-VALUE-UNNAMEABLE",
++        "E-DATA-ALLOCATION-WITHIN-ARMS",
++    }
+ 
+     assert _error_codes(
+         write_config({"sweep": {"groups": [{"by": "arm", "levels": ["control", "a/b"]}]}})
+-    ) == {"E-SWEEP-GROUPS-UNSUPPORTED", "E-SWEEP-VALUE-UNNAMEABLE"}
++    ) == {
++        "E-SWEEP-GROUPS-UNSUPPORTED",
++        "E-SWEEP-VALUE-UNNAMEABLE",
++        "E-DATA-ALLOCATION-WITHIN-ARMS",
++    }
+ 
+     assert _error_codes(
+         write_config(
+             {"sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}}
+         )
+-    ) == {"E-SWEEP-GROUPS-UNSUPPORTED"}
++    ) == {"E-SWEEP-GROUPS-UNSUPPORTED", "E-DATA-ALLOCATION-WITHIN-ARMS"}
+ 
+ 
+ def test_a_baseline_may_not_fix_a_group_level_while_ablate_is_declared(write_config):
+     """§ Expansion modes states this twice: "`sweep.baseline` may not name the
+     group axis for this reason — the arms are peers, and `validate` rejects a
+     baseline that fixes a level while `ablate` is declared", and "`ablate ×
+     groups` always lands in the second row, since `validate` rejects a baseline
+     that fixes a group level while `ablate` is declared: an ablation is one
+     change from *its own cell's* full model, and there is no single reference
+     condition when the reference cohort differs".
+@@ -7145,57 +7166,63 @@ def test_a_baseline_may_not_fix_a_group_level_while_ablate_is_declared(write_con
+     disappears from the run**. The baseline fixes the group axis, so it expands
+     over nothing, the crossed ablation has one empty cell to repeat over, and
+     `expand` returns `00_baseline` and `01_labs=false` on the derivation cohort
+     alone: `validation` is executed nowhere while the run reports success.
+ 
+     Two controls, both of which must report: an ablation whose baseline fixes a
+     *parameter* beside the same group axis is the legal composition and carries
+     the unsupported code alone (it is also
+     `test_ablate_composes_with_a_group_axis`, untouched), and the same baseline
+     without `ablate` is the ordinary per-cell design § Expansion modes' second
+-    table row describes."""
++    table row describes. None of the three declares `allocation`, which
++    defaults to `within`, beside the declared `cohort` axis, so
++    `E-DATA-ALLOCATION-WITHIN-ARMS` fires alongside every one of them."""
+     axis = [{"by": "cohort", "levels": ["derivation", "validation"]}]
+     assert _error_codes(
+         write_config(
+             {
+                 "sweep": {
+                     "groups": axis,
+                     "baseline": {"cohort": "derivation", "analysis.drop_missing": True},
+                     "ablate": {"remove": ["analysis.drop_missing"]},
+                 }
+             }
+         )
+-    ) == {"E-SWEEP-GROUPS-UNSUPPORTED", "E-SWEEP-ABLATE-BASELINE-GROUP"}
++    ) == {
++        "E-SWEEP-GROUPS-UNSUPPORTED",
++        "E-SWEEP-ABLATE-BASELINE-GROUP",
++        "E-DATA-ALLOCATION-WITHIN-ARMS",
++    }
+ 
+     assert _error_codes(
+         write_config(
+             {
+                 "sweep": {
+                     "groups": axis,
+                     "baseline": {"analysis.drop_missing": True},
+                     "ablate": {"remove": ["analysis.drop_missing"]},
+                 }
+             }
+         )
+-    ) == {"E-SWEEP-GROUPS-UNSUPPORTED"}
++    ) == {"E-SWEEP-GROUPS-UNSUPPORTED", "E-DATA-ALLOCATION-WITHIN-ARMS"}
+ 
+     assert _error_codes(
+         write_config(
+             {
+                 "sweep": {
+                     "groups": axis,
+                     "grid": {"analysis.method": ["pearson", "spearman"]},
+                     "baseline": {"cohort": "derivation"},
+                 }
+             }
+         )
+-    ) == {"E-SWEEP-GROUPS-UNSUPPORTED"}
++    ) == {"E-SWEEP-GROUPS-UNSUPPORTED", "E-DATA-ALLOCATION-WITHIN-ARMS"}
+ 
+ 
+ # `data.units.allocation`, `data.units.assign`, and `sweep.groups` against each
+ # other — § Validation's *Allocation needs arms*, *Every axis is assigned*, and
+ # *Assignment names a method*.
+ #
+ # **Every config below still carries a live refusal**, and that is why each
+ # assertion is an exact set rather than a membership test:
+ # `E-DATA-ALLOCATION-UNSUPPORTED`, `E-SWEEP-GROUPS-UNSUPPORTED` and
+ # `E-DATA-ASSIGN-UNSUPPORTED` all stay until the slice that retires them, so a
+@@ -7276,27 +7303,68 @@ def test_each_unassigned_axis_is_reported_on_its_own():
+                               {"by": "arm", "levels": ["control", "treatment"]}]}},
+         {"allocation": "between", "assign": {"sex": {"method": "by_attribute"}}},
+         None,
+         c,
+     )
+     missing = [f for f in c.findings if f.code == "E-DATA-ASSIGN-MISSING"]
+     assert len(missing) == 1
+     assert "`arm`" in missing[0].message and "`sex`" not in missing[0].message
+ 
+ 
+-def test_allocation_within_leaves_both_cross_field_rows_silent():
+-    """Neither row is gated on `groups` alone. A group axis under the default
+-    `within` is *Arms need allocation*, a row this build reports by nothing —
+-    reporting a missing `assign` there would name the wrong fault."""
++def test_within_allocation_with_a_group_axis_is_arms_need_allocation():
++    """The mirror of `test_between_allocation_with_no_group_axis_has_no_arms`
++    below: a group axis under the default `within` is *Arms need allocation*,
++    `E-DATA-ALLOCATION-WITHIN-ARMS` — reporting a missing `assign` here instead
++    would name the wrong fault, since `assign` means nothing under `within` at
++    all. Read from the declarations alone, so it reports with no roster."""
+     c = Collector()
+     _check_assign({"sweep": {"groups": _ARM_AXIS}}, {"from": "index.csv"}, None, c)
+-    assert [f.code for f in c.findings] == []
++    assert [f.code for f in c.findings] == ["E-DATA-ALLOCATION-WITHIN-ARMS"]
++
++    # An explicit `allocation: within` is the same fault as the absent key that
++    # defaults to it — the row is stated in terms of the *value*, not the key's
++    # presence.
++    c = Collector()
++    _check_assign(
++        {"sweep": {"groups": _ARM_AXIS}},
++        {"from": "index.csv", "allocation": "within"},
++        None,
++        c,
++    )
++    assert [f.code for f in c.findings] == ["E-DATA-ALLOCATION-WITHIN-ARMS"]
++
++
++def test_between_allocation_with_a_group_axis_draws_neither_arms_row(write_config):
++    """The control the pair demands: `allocation: between` beside a well-formed
++    group axis is the legal composition, so it must draw NEITHER
++    `E-DATA-ALLOCATION-NO-ARMS` nor its mirror `E-DATA-ALLOCATION-WITHIN-ARMS` —
++    only the still-live blanket refusals this build has not yet retired."""
++    c = Collector()
++    _check_assign(
++        {"sweep": {"groups": _ARM_AXIS}},
++        {
++            "from": "index.csv",
++            "allocation": "between",
++            "assign": {"arm": {"method": "by_attribute"}},
++        },
++        None,
++        c,
++    )
++    codes = [f.code for f in c.findings]
++    assert "E-DATA-ALLOCATION-NO-ARMS" not in codes
++    assert "E-DATA-ALLOCATION-WITHIN-ARMS" not in codes
++
++    found = _error_codes(
++        write_config(_between({"arm": {"method": "by_attribute"}}))
++    )
++    assert "E-DATA-ALLOCATION-NO-ARMS" not in found
++    assert "E-DATA-ALLOCATION-WITHIN-ARMS" not in found
+ 
+ 
+ def test_by_attribute_assignment_is_accepted(write_config, tmp_path):
+     """`by_attribute` is the one method that executes in this build, so it earns
+     neither `E-DATA-ASSIGN-METHOD` (absent or out-of-enum) nor
+     `E-DATA-ASSIGN-DRAWN` (in-enum but drawn) — the control for both, and it must
+     still report: the three live `-UNSUPPORTED` refusals below discriminate "the
+     config loaded and only the method-value checks are silent" from "nothing
+     ran". The exact set is the number that matters — three codes, none of them
+     `E-DATA-ASSIGN-METHOD` or `E-DATA-ASSIGN-DRAWN`.
+@@ -7448,75 +7516,79 @@ def test_assign_levels_resolve_when_every_unit_names_a_declared_level():
+     """The accept path for `E-DATA-ASSIGN-LEVELS`: three units, one level
+     repeated. Deliberately not two units, one per level — that partition would
+     coincide with a two-cluster fixture, and an arm-aware reader (grouping
+     `control` twice) would be indistinguishable from a cluster-aware one, which
+     has no notion of `levels` at all and would not even run this check."""
+     c = Collector()
+     _check_assign(
+         {"sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}},
+         {
+             "attributes": ["arm"],
++            "allocation": "between",
+             "assign": {"arm": {"method": "by_attribute"}},
+         },
+         _arm_roster(["control", "control", "treatment"]),
+         c,
+     )
+     assert [f.code for f in c.findings] == []
+ 
+ 
+ def test_assign_levels_refused_when_a_value_names_no_declared_level():
+     """§ Allocation, twice: `from` "a unit attribute whose values are exactly
+     the declared levels", and `between` opens "each unit belongs to exactly
+     one arm". A unit holding `unknown_arm` — not `control` or `treatment` —
+     would belong to no arm, and there is no fourth part of `n` for it."""
+     c = Collector()
+     _check_assign(
+         {"sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}},
+         {
+             "attributes": ["arm"],
++            "allocation": "between",
+             "assign": {"arm": {"method": "by_attribute"}},
+         },
+         _arm_roster(["control", "treatment", "unknown_arm"]),
+         c,
+     )
+     assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-LEVELS"]
+     assert "unknown_arm" in c.findings[0].message
+ 
+ 
+ def test_assign_levels_refused_when_a_unit_carries_no_value_at_all():
+     """The other route to the same violation `clusters_of` recognizes for
+     `cluster_by`: a unit with no value for the attribute at all belongs to no
+     arm exactly as one holding an unrecognized value does, so it is folded into
+     the same code and message rather than a distinct one."""
+     c = Collector()
+     _check_assign(
+         {"sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}},
+         {
+             "attributes": ["arm"],
++            "allocation": "between",
+             "assign": {"arm": {"method": "by_attribute"}},
+         },
+         _arm_roster(["control", "treatment", None]),
+         c,
+     )
+     assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-LEVELS"]
+     assert "carries no value" in c.findings[0].message
+ 
+ 
+ def test_assign_levels_refused_when_a_declared_level_holds_no_unit():
+     """The other direction of set equality: every unit resolves to a declared
+     level, but one declared level — `treatment` — holds none of them, so that
+     arm's condition would resolve zero units."""
+     c = Collector()
+     _check_assign(
+         {"sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}},
+         {
+             "attributes": ["arm"],
++            "allocation": "between",
+             "assign": {"arm": {"method": "by_attribute"}},
+         },
+         _arm_roster(["control", "control", "control"]),
+         c,
+     )
+     assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-LEVELS"]
+     assert "treatment" in c.findings[0].message
+ 
+ 
+ @pytest.mark.parametrize("method", ["random", "blocked"])
