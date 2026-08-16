@@ -207,3 +207,48 @@ Task 4: implemented, commit TBD. 1823 passed + 2 xfailed (baseline 1820 + 3 new)
   mutations run, confirmed FAIL, reverted in place, diffed byte-identical against a pre-round backup,
   confirmed PASS.
   See task-4-report.md for the commit sha.
+Task 4: controller verification of the collateral revert. `git diff --stat cdf7295..HEAD` is exactly five
+  files — progress.md, task-4-report.md, spec-defects.md, hashes.py, test_hashes.py. README.md is
+  untouched (the only `docs/` entry is spec-defects.md), and `ruff format --check` reports 67 would-be
+  reformats against 267 already formatted, which is the pre-task baseline. The hashes.py diff was read in
+  full: 46 added lines, all of them the rename, the `holdout` branch, and rewritten docstrings — no
+  reformatting hunk survived.
+  Ruling: my brief's Step 4 said `uv run ruff format .` where every prior task said `--check`. That is a
+  MUTATING command issued as a verification step, and it rewrote 67 files repo-wide including fenced
+  Python inside a normative document. Cost if the implementer had not caught it: a formatting commit
+  spanning the whole repo buried inside a one-function task, and README prose silently altered. Every
+  remaining brief in this plan is to be read for `ruff format` without `--check` before dispatch.
+  Ruling: this is the THIRD blind mutation I have authored across H4a and H3d — H4a task 10's
+  `range(len(group)) -> range(1)`, H3d task 3's "delete the `method` line", and now H3d task 4's Step 5
+  second mutation. All three share one shape: I proposed a mutation without checking that the fixture
+  actually reaches the mutated branch. Cost if uncaught: a test recorded as mutation-proven that never
+  ran the mutation. Remaining briefs get their mutations checked against the fixture they name, not
+  against the code alone.
+Task 4: reviewed (opus). Spec compliance PASS; task quality FAIL with one Critical, one Important, five
+  Minor. Critical verified by me before dispatching the fix: `reference.md` § What `auto` derives from
+  still opened "every field except `assign.seed` itself" while a later paragraph in the SAME section
+  already said `holdout.seed` is excluded too — the code was fixed and the normative sentence it mirrors
+  was not. In this repo the documents lead, so a false document state is the blocking defect, not the
+  code.
+Task 4: fix round 1 (fresh agent — the implementer's id did not survive compaction; a precise brief
+  substitutes, and the diff is small enough that it did). Commit fe7fd01. `reference.md`'s parenthetical
+  now states the RULE — "every field except a drawn partition's own seed" — with the two names as
+  illustration, so a later slice adding a third drawn partition does not silently falsify it. Sweep for
+  the old phrasing over the four documents, CLAUDE.md, `src/` and `tests/` returns zero; the quotations
+  in `spec-defects.md` and `H3c-SCOPING.md` were correctly left standing as dated evidence.
+  Three docstring/comment claims narrowed: "redraws nothing" -> "redraws nothing else" (pinning
+  `holdout.seed` does redraw the holdout), and the `moved` fixture's comment now describes the one block
+  it actually edits. Report correction appended, not retro-edited.
+  Ruling: the reviewer's Important finding is FALSIFIED in its premise, and I ran the mutation myself to
+  settle it. Inserting `if not isinstance(assign, dict): return units` before the holdout branch fails
+  TWO tests, not zero — `test_a_pinned_holdout_seed_does_not_move_the_design_digest` was already
+  discriminating, because its fixture omits `assign` entirely and so takes the same early return. The
+  reviewer reported "all 17 green"; that did not reproduce. The added test stands anyway: it pins a
+  non-mapping `assign` where the pre-existing one pins an ABSENT `assign`, which are different shapes
+  through `.get`, and it is the more explicit of the two. Cost if wrong: one redundant test.
+  Ruling: the `ruff format --check` count moving 67 -> 68 is NOT a regression. Measured at `5ff2448` in a
+  scratch worktree: 67, with `tests/test_hashes.py` and `docs/reference.md` ALREADY among them. The 68th
+  is the reviewer's own untracked `task-4-review.md` — ruff's check counts markdown in this repo, which
+  is also why the brief's `ruff format .` accident rewrote fenced Python inside README. Both the fix
+  agent's and the reviewer's numbers were right; they measured trees differing by one untracked file.
+Task 4: complete. 1824 passed + 2 xfailed; ruff check and mypy clean. BASE for task 5 is fe7fd01.
