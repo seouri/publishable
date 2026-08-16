@@ -4878,24 +4878,26 @@ canonicalising, leaving every other `assign` field (`method`, `from`, `stratify_
 `block_size`) inside, since those describe what is randomized over. **H3c-1 task 16 owns it.**
 No document change is owed.
 
-**Closed by task 16.** `hashes._units_excluding_assign_seed` drops `seed` from each
-`assign.<axis>` block, per-axis, before `design_digest` canonicalises `data.units` — every other
-`assign` field, and a second or later axis's own `seed`, still moves the digest. It also never
-raises on a shape it does not expect (`assign` or an axis block that is not a mapping), since
-`validate` can reach `design_digest` before a config is known-good.
+**Closed by task 16.** `hashes._units_excluding_drawn_seeds` (named `_units_excluding_assign_seed`
+until renamed by H3d task 4) drops `seed` from each `assign.<axis>` block, per-axis, before
+`design_digest` canonicalises `data.units` — every other `assign` field, and a second or later
+axis's own `seed`, still moves the digest. It also never raises on a shape it does not expect
+(`assign` or an axis block that is not a mapping), since `validate` can reach `design_digest`
+before a config is known-good.
 
-**One field over, the same defect is latent.** The document excludes only `assign.seed`, so as
-written it endorses `data.units.holdout.seed` perturbing every other derived draw — the same
-confounding, from the same wholesale canonicalisation. `holdout` is `NOT BUILT`, so nothing
-exhibits it yet; the slice that builds `data.units.holdout` owes either the same exclusion in
-`design_digest` or a stated reason the two seeds differ.
+**~~One field over, the same defect is latent.~~ Closed by H3d, task 4.**
+`hashes._units_excluding_assign_seed` was renamed `_units_excluding_drawn_seeds` and now
+drops `data.units.holdout.seed` as well as each `assign.<axis>.seed`, so a pinned holdout
+seed no longer perturbs any other derived draw. `reference.md` § What `auto` derives from
+gained the matching row and named `E-DATA-HOLDOUT-SEED` in the same slice.
 
-**Found by:** H3c-1, Task 1 (documents-only). **Closed by:** H3c-1, Task 16.
+**Found by:** H3c-1, Task 1 (documents-only). **Closed by:** H3c-1, Task 16 (`assign.seed`
+half); H3d, Task 4 (`holdout.seed` half).
 **Severity:** Was Minor while open, since `assign` is refused outright as `NOT BUILT` and no
 config could reach a pinned `assign.seed` — but it would have become live the moment H3c-1
 retired that refusal, so closing it now rather than later avoids a fix landing after the
-confounding it prevents becomes reachable. The `holdout.seed` half above remains open and is
-unaffected by this closure.
+confounding it prevents becomes reachable. The `holdout.seed` half above is closed by H3d
+task 4.
 
 ## RESOLVED (H3c, task 10) — `assign.<axis>.from`'s "unchanged" divergence from `weight_by`/`cluster_by`
 

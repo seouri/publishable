@@ -66,48 +66,65 @@ def parameters_hash(config: dict[str, Any]) -> str:
     return _prefixed(hashlib.sha256(_canonical(covered)).hexdigest())
 
 
-def _units_excluding_assign_seed(units: Any) -> Any:
-    """`data.units` with `assign.<axis>.seed` dropped from every axis block.
+def _units_excluding_drawn_seeds(units: Any) -> Any:
+    """`data.units` with every drawn partition's own `seed` dropped —
+    `assign.<axis>.seed` from each axis block, and `holdout.seed`.
 
-    `assign` is a mapping of axis name -> block, so the exclusion is per-axis:
+    `assign` is a mapping of axis name -> block, so its exclusion is per-axis:
     an axis's own `seed` is dropped from its own block only, never the whole
-    `assign` subtree and never a sibling axis's `seed`. See docs/reference.md
-    § What `auto` derives from: an axis's `assign.seed` "mixes digest + the
-    axis name + the resolved roster" — a seed that is itself inside the
-    digest it is mixed with would make the derivation self-referential.
+    `assign` subtree and never a sibling axis's `seed`. `holdout` is a single
+    block, so its exclusion is one key. See docs/reference.md § What `auto`
+    derives from: each of these seeds mixes the digest with the roster, and a
+    seed that is itself inside the digest it is mixed with would make the
+    derivation self-referential.
+
+    **The wider harm is the reason this is not merely tidy.** `design_digest`
+    canonicalizes `data.units` wholesale, and every other derived draw in the
+    run reads the digest — the `seed` repeat stream, `sweep.sample`, each
+    axis's assignment. Leaving a pinned seed in would mean that pinning one
+    partition to cite it silently redrew all the others, which is the exact
+    confounding § What `auto` derives from exists to prevent.
+
+    Every other field of both blocks still moves the digest, which is the
+    point: widening `frac`, restratifying, or changing an axis's `method` is a
+    different design and must not be reproducible under the same digest.
 
     `design_digest` runs at run time on a validated config, but `validate`
     reaches it too (indirectly, via `expand` -> the `sample` seed derivation),
-    so a malformed config can arrive here first. This function never raises:
-    a non-mapping `units`, a non-mapping `assign`, or a non-mapping axis block
-    is left exactly as given rather than unpacked, so the caller's canonical
-    JSON encoding still runs over *something* instead of crashing on a shape
-    it did not expect.
+    so a malformed config can arrive here first. This function never raises: a
+    non-mapping `units`, a non-mapping `assign`, a non-mapping axis block, or a
+    non-mapping `holdout` is left exactly as given rather than unpacked, so the
+    caller's canonical JSON encoding still runs over *something* instead of
+    crashing on a shape it did not expect.
     """
     if not isinstance(units, dict):
         return units
-    assign = units.get("assign")
-    if not isinstance(assign, dict):
-        return units
-    new_assign = {}
-    changed = False
-    for axis, block in assign.items():
-        if isinstance(block, dict) and "seed" in block:
-            new_assign[axis] = {k: v for k, v in block.items() if k != "seed"}
-            changed = True
-        else:
-            new_assign[axis] = block
-    if not changed:
-        return units
-    return {**units, "assign": new_assign}
+    out = units
+    assign = out.get("assign")
+    if isinstance(assign, dict):
+        new_assign = {}
+        changed = False
+        for axis, block in assign.items():
+            if isinstance(block, dict) and "seed" in block:
+                new_assign[axis] = {k: v for k, v in block.items() if k != "seed"}
+                changed = True
+            else:
+                new_assign[axis] = block
+        if changed:
+            out = {**out, "assign": new_assign}
+    holdout = out.get("holdout")
+    if isinstance(holdout, dict) and "seed" in holdout:
+        out = {**out, "holdout": {k: v for k, v in holdout.items() if k != "seed"}}
+    return out
 
 
 def design_digest(config: dict[str, Any]) -> str:
-    """`data.units` (every field except `assign.seed` itself) and `sweep.groups`.
+    """`data.units` (every field except a drawn partition's own `seed`) and `sweep.groups`.
 
     A parameter edit redraws nothing, and neither does pinning or changing an
-    axis's `assign.seed` — see `_units_excluding_assign_seed`.
+    axis's `assign.seed` or `data.units.holdout.seed` — see
+    `_units_excluding_drawn_seeds`.
     """
-    units = _units_excluding_assign_seed((config.get("data") or {}).get("units"))
+    units = _units_excluding_drawn_seeds((config.get("data") or {}).get("units"))
     groups = (config.get("sweep") or {}).get("groups")
     return _prefixed(hashlib.sha256(_canonical({"units": units, "groups": groups})).hexdigest())

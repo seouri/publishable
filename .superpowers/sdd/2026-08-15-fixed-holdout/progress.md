@@ -72,3 +72,138 @@ Task 1 review: spec ✅, quality 1 CRITICAL + 2 Important + 1 Minor. All three b
 CARRY FORWARD (task 1 Minor, shapes tasks 14-17): executions.jsonl carries NO `n` field, so ALL OF TASK
   15'S DENOMINATORS ARE run.yaml-SIDE. Any test of a narrowing that looks for it in the ledger is
   looking in the wrong artifact.
+Task 1: COMPLETE (commits 889de01, 33eafac). 1803 passed + 2 xfailed; ruff and mypy clean; src/ diff
+  empty throughout, diffed byte-identical against a pre-round backup. Note the fix round was re-dispatched
+  after the first agent died to a session limit having made no change — tree verified clean before resuming.
+  THE FIX ROUND OVERTURNED BOTH THE REVIEWER'S DIAGNOSIS AND MY RULING, AND IT IS RIGHT —
+  CONTROLLER-VERIFIED. The reviewer called _condition_beside_n and _compute_vs_baseline(roster=)
+  FIXTURE GAPS and I ruled "close them in task 1". They are STRUCTURALLY DEAD PARAMETERS:
+    - _condition_beside_n's narrowing is invariant under BOTH branches of _cond_roster — the identity
+      check holds or fails independent of roster size;
+    - _compute_vs_baseline's `roster` only feeds units_matching(roster, comp.within), and comp.within is
+      PROVABLY None for every comparison reachable there. Verified myself: Comparison.within defaults to
+      None (contrasts.py:33) and _baseline_comparisons constructs
+      Comparison(id=…, of=…, against=…, declared=False) at :195 WITHOUT EVER SETTING within, so
+      units_matching returns None unconditionally. The reviewer's proposed remedy — "a vs_baseline
+      comparison with `within`" — DESCRIBES A CONFIG THIS CODE CANNOT PRODUCE.
+  GENERALIZES, AND IT IS NEW: A SITE NO TEST CAN SEE IS NOT ALWAYS A FIXTURE GAP. It can be a DEAD
+  PARAMETER, and no fixture can make a dead parameter observable — chasing one produces either a test
+  that cannot fail or a config that cannot exist. Before ruling "extend the fixture", ask whether the
+  argument reaches anything. The right remedy is to record the pinning obligation AGAINST THE TASK THAT
+  MAKES THE PARAMETER LIVE.
+CARRY FORWARD — TASK 14 AND TASK 15 EACH OWE A PIN: task 14 for _condition_beside_n and task 15 for
+  _compute_vs_baseline(roster=), each becoming live under its own narrowing. Recorded as an obligation
+  on those tasks, NOT as closed and NOT as an unowned deferral.
+  Also closed in this round: the pin now asserts the FULL `n` dict plus value/ci95 rather than
+  n["resolved"] alone (mutating execute_plan's units=roster now fails on completed 10->3, failed 0->7);
+  and units_hash is RECOMPUTED AND COMPARED rather than asserted as startswith("sha256:").
+  The fix round also independently re-verified the reviewer's two "caught by the whole suite" claims
+  rather than trusting them — _condition_report_by_levels (11 named tests fail) and
+  _compute_declared_contrasts (3 fail, including n_paired 20->1).
+Task 2: implemented, commits 3b5e942 + d3ee12c. 1803 passed + 2 xfailed; ruff and mypy clean. Thirteen
+  codes registered (twelve in § Errors validate reports, E-DATA-HOLDOUT-VARIES in § Errors core raises
+  beside its VARIES siblings), both § Validation rows, the resample x holdout sentence, and THE
+  INFERENCE-BASE RULING: the test partition counts as `n`, training units count NOWHERE, and
+  provenance.units.n / units_hash stay whole-roster. technical_n filed not fixed. NOT BUILT marker
+  correctly left to task 19.
+CONTROLLER-VERIFIED CONTRADICTION, RAISED BY THE IMPLEMENTER AND RULED BACK TO IT: task 2's own
+  reference.md text says a roster-wide split beside a cell structure is "REFUSED, NOT DRAWN" and that
+  drawing within each cell "IS NOT BUILT", while experimental-designs.md:123 still says, present tense
+  and unqualified, that "folds and holdouts are drawn WITHIN each cell". TWO NORMATIVE DOCUMENTS GIVING
+  OPPOSITE ANSWERS TO ONE QUESTION. Ruled: task 2 closes it minimally NOW rather than leaving it to task
+  8, six tasks away — CLAUDE.md says both consistency passes run BEFORE AN EDIT IS FINISHED, so the
+  cross-document pass is the editing task's obligation, not a later task's. Task 8 keeps the fuller
+  treatment.
+  GENERALIZES: the rule that made task 2 right to LEAVE the NOT BUILT marker is the same rule that makes
+  it wrong to leave this — NEVER SHIP A DOCUMENT STATE THAT IS FALSE, IN EITHER DIRECTION. It applied the
+  principle in one direction and not the other.
+PLAN DEFECT RECORDED: the plan attributes the reference.md cell-paragraph rewrite to TASK 8, but it
+  actually fell to task 2. Task 8's implementer would otherwise assume the reconciliation already
+  happened and check nothing. Task 8's dispatch must carry the current wording.
+Task 2: COMPLETE (commits 3b5e942, d3ee12c, efba1e7, 641b63c, ecaa7dc). 1803 passed + 2 xfailed; ruff,
+  mypy and the mechanical pass clean after each fix commit. CONTROLLER-VERIFIED: the "drawn within each
+  cell" claim is now DEAD across all four documents.
+  THE SWEEP LESSON DEMONSTRATED ITSELF. I pointed at ONE contradiction, in experimental-designs.md. The
+  implementer's second pass found THREE MORE INSTANCES OF THE IDENTICAL CLAIM INSIDE reference.md — the
+  file it had just finished editing: § Validation's "Folds fit inside the cells" row, § Cross-validation's
+  opening ("Under allocation: between, folds are drawn within each cell"), and § Repeat kinds' fold row.
+  Its own rewrite of § A fixed holdout split changed the underlying rule and left three siblings
+  asserting the old one. THIS IS "SWEEP FOR THE CLAIM, NOT THE FILE" PROVING ITSELF INSIDE A SINGLE
+  FILE — the boundary that traps people is not only the file, it is the SECTION they were editing.
+  The superseded § Validation row was left in place rather than deleted, because H3c-3-SCOPING.md cites
+  it BY NAME — correct call: a scoping is dated evidence and its citations must keep resolving.
+PLAN DEFECT CORRECTED, AND MY LEDGER LINE WAS WRONG: the misattribution is in TASK 20's brief ("task 8
+  already rewrote the one paragraph that did"), NOT task 8's. Task 8's brief correctly names task 2 and
+  correctly flags two of the four spots as its own to finish. My previous entry said task 8; that is
+  struck. TASK 20's dispatch is the one that must carry the current wording.
+Task 3: implemented, commits 93372ce + 0c1f9b1. 1820 passed + 2 xfailed (baseline 1803 + 17 new); ruff
+  and mypy clean. The measurements/resample precedent held — five LEAF_TYPES entries, NO closed key set.
+  THIRD IMPLEMENTER, THIRD SET OF BRIEF DEFECTS, AND ONE IS "A MUTATION IS A CLAIM TOO" IN MY OWN BRIEF:
+  (1) my `frac` comment claimed a false guarantee about (int, float) vs float — _is_type ALREADY promotes
+  int->float, so the tuple is behaviourally redundant; it kept the tuple per the interface and reworded
+  the comment.
+  (2) MY SECOND MUTATION INSTRUCTION DOES NOT FALSIFY THE TEST. Deleting only the `method` line leaves
+  four other holdout.* entries, which keep `holdout` A KNOWN CONTAINER — so the closure test still
+  passes. It used a corrected mutation (delete all five) that does fail. This is the third
+  non-discriminating mutation in two slices, and the second one I wrote.
+  (3) A THIRD instance of the "holdout stays whole" claim beyond the two my brief named — inside
+  _check_unknown_keys's OWN DOCSTRING in the same file. Task 2 hit the identical pattern one task ago:
+  the false claim is never only where you noticed it.
+  It also added a test BEYOND the brief's file scope, pinning end-to-end through validate_config that the
+  new envelope finding and E-DATA-HOLDOUT-UNSUPPORTED fire TOGETHER — the brief's own tests exercised
+  check_envelope directly, which would not have caught a wiring break.
+Task 3 review dispatched. BASE ecaa7dc, HEAD 0c1f9b1.
+Task 3 review: spec ✅, quality approved with findings — 1 Important, 3 Minor. Nothing blocks 4-7.
+  Mechanism verified BY BEHAVIOUR: non-mapping holdout gives exactly one E-CONFIG-TYPE with no
+  traceback; {} and null both silent, matching the documented null-is-absent rule and both sibling
+  blocks; typos report at the exact path with the difflib hint; stratify_by takes bare string AND list;
+  EVERY new assertion has a killing mutation. The five closed keys are exactly the set § Errors gives a
+  code each, so no legal config is refused.
+  ALL THREE BRIEF DEFECTS CONFIRMED, and the implementer's generalization on the blind mutation is the
+  keeper: "DELETE ONE CHILD OF N>1" CAN NEVER FALSIFY A _known_containers DERIVATION, because the
+  siblings keep the container known. That is the SHAPE of my error, not just the instance.
+  Its out-of-scope end-to-end test is confirmed genuinely discriminating — dropping E-CONFIG-KEY-UNKNOWN
+  at the validate.py wiring left ALL 32 envelope tests green and failed that one test alone.
+  IMPORTANT — A FALSE CLAIM INTRODUCED INSIDE THE COMMIT THAT FIXED A FALSE CLAIM. The rewritten `frac`
+  comment cites limits.max_failed_fraction's entry as precedent for (int, float); THAT ENTRY IS A BARE
+  float. Same pattern H4a hit ("three overreaching claims inside a single commit that was itself fixing
+  overreaching claims"), now seen in a second slice.
+  MINOR WORTH GENERALIZING: the "alongside not instead of" rule was adopted to make task 18's retirement
+  cheap, but this task's test NAME and docstring embed the wholesale refusal — so retirement is deletion
+  PLUS rename PLUS docstring rewrite, not one line. A REFUSAL NAMED IN A TEST'S IDENTIFIER DEFEATS THE
+  RULE EVEN WHEN THE ASSERTION IS RIGHT. Later tasks: name tests for the behaviour, not for the refusal
+  that happens to co-occur.
+CARRY TO TASK 19: reference.md:456 now states the opposite of the code, and plan item (e) as drafted
+  replaces only the TRAILING PARENTHETICAL, leaving the earlier clause ("a typo inside
+  data.units.holdout ... is reached by no check at all") false. THE WHOLE ROW needs rewriting.
+Task 3: COMPLETE (commits 93372ce, 0c1f9b1, cdf7295). 1820 passed + 2 xfailed; ruff and mypy clean. The
+  false citation is gone — the comment now states plainly that the tuple documents what _is_type already
+  does for a bare float, dropping the comparison rather than repairing it. All four findings closed;
+  comment-only, so no new mutation round was owed and it said so rather than inventing one.
+  BASE for task 4 is cdf7295.
+Task 4: dispatched — design_digest excludes holdout.seed, and the open half of its spec-defects entry.
+Task 4: implemented, commit TBD. 1823 passed + 2 xfailed (baseline 1820 + 3 new); ruff and mypy clean.
+  `_units_excluding_assign_seed` renamed `_units_excluding_drawn_seeds`, now dropping `holdout.seed`
+  alongside each `assign.<axis>.seed`; sweep for the old name returned nothing except the two
+  narrative mentions in spec-defects.md that explain the rename by name (expected, per brief step 3's
+  own replacement text). spec-defects.md's open half struck and closed; its CLOSED half (task 16's
+  paragraph) also named the old function and was updated too, since the brief said every hit moves.
+  reference.md § What `auto` derives from already carried both the prose and the table row naming
+  `holdout.seed` and `E-DATA-HOLDOUT-SEED` (verified, not assumed) — no doc change owed there.
+  TWO ISSUES SURFACED AND BOTH FIXED BEFORE COMMIT, NOT AFTER:
+  (1) Step 4's literal command `uv run ruff format .` (not `--check`) rewrote 67 files, including
+  fenced Python inside README.md — reverted everything outside the three task files via
+  `git checkout --`, confirmed `ruff format --check` baseline back to 67 (was silently 66 for one
+  cycle). Future briefs should say `--check` in step 4.
+  (2) The brief's step-5 second mutation (`out = {**out, "holdout": None}` gated on
+  `isinstance(holdout, dict) and "seed" in holdout`) cannot discriminate `base` from `widened` in
+  `test_a_pinned_holdout_seed_does_not_move_the_design_digest` — NEITHER has a `seed` key, so that
+  branch never fires for either config, and the mutation instead fails on the EARLIER
+  `design_digest(base) == design_digest(pinned)` assertion (because `pinned` alone gets nulled).
+  A MUTATION WHOSE TWO BRANCHES CANNOT DIFFER, per CLAUDE.md's own catalogue. Substituted the
+  unguarded form `if isinstance(holdout, dict): out = {**out, "holdout": None}` (no `"seed" in
+  holdout` guard), which fails on the intended `design_digest(base) != design_digest(widened)`
+  assertion instead — that is the mutation that actually proves the positive companion. Both
+  mutations run, confirmed FAIL, reverted in place, diffed byte-identical against a pre-round backup,
+  confirmed PASS.
+  See task-4-report.md for the commit sha.
