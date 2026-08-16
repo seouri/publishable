@@ -132,9 +132,7 @@ def _units_with_arm(seed=1, method="blocked", from_="site", stratify_by="age_ban
 def test_design_digest_excludes_assign_seed_with_a_control():
     base = _units_with_arm(seed=1)
     reseeded = _units_with_arm(seed=2)
-    assert design_digest(base) == design_digest(reseeded), (
-        "assign.seed must not move the digest"
-    )
+    assert design_digest(base) == design_digest(reseeded), "assign.seed must not move the digest"
 
     # Control: a different key must still move it, proving the exclusion is
     # not "the whole config is ignored".

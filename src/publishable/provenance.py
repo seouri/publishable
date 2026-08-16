@@ -22,9 +22,7 @@ class GitInfo:
 
 
 def _git(repo: Path, *args: str) -> str:
-    result = subprocess.run(
-        ["git", *args], cwd=repo, capture_output=True, text=True, check=False
-    )
+    result = subprocess.run(["git", *args], cwd=repo, capture_output=True, text=True, check=False)
     return result.stdout.strip()
 
 
@@ -46,9 +44,7 @@ def find_repo_root(start: Path) -> Path:
     for candidate in (current, *current.parents):
         if (candidate / ".git").exists():
             return candidate
-    raise ContractError(
-        f"no git repository found from {current} upwards", code="E-GIT-NO-REPO"
-    )
+    raise ContractError(f"no git repository found from {current} upwards", code="E-GIT-NO-REPO")
 
 
 def git_provenance(start: Path, config_path: Path) -> GitInfo:

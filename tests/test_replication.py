@@ -126,7 +126,11 @@ def test_a_fold_level_resolves_to_k_members():
     levels = resolve_repeats(cfg([{"kind": "fold", "k": 5}]), "d", fold_basis=240)
     assert levels[0].kind == "fold"
     assert [m.label for m in levels[0].members] == [
-        "fold01", "fold02", "fold03", "fold04", "fold05"
+        "fold01",
+        "fold02",
+        "fold03",
+        "fold04",
+        "fold05",
     ]
 
 
@@ -185,7 +189,11 @@ def test_k_all_is_leave_one_cluster_out():
     levels = resolve_repeats(_clustered_cfg([{"kind": "fold", "k": "all"}]), "d", fold_basis=5)
     assert levels[0].n == 5
     assert [m.label for m in levels[0].members] == [
-        "fold01", "fold02", "fold03", "fold04", "fold05"
+        "fold01",
+        "fold02",
+        "fold03",
+        "fold04",
+        "fold05",
     ]
 
 
@@ -323,9 +331,12 @@ def test_two_levels_cross_with_the_inner_varying_fastest():
     assert len(leaves) == 6
     inner = [m.label for m in levels[1].members]
     assert [lf.label for lf in leaves] == [
-        f"batch01_{inner[0]}", f"batch01_{inner[1]}",
-        f"batch02_{inner[0]}", f"batch02_{inner[1]}",
-        f"batch03_{inner[0]}", f"batch03_{inner[1]}",
+        f"batch01_{inner[0]}",
+        f"batch01_{inner[1]}",
+        f"batch02_{inner[0]}",
+        f"batch02_{inner[1]}",
+        f"batch03_{inner[0]}",
+        f"batch03_{inner[1]}",
     ]
 
 
@@ -352,8 +363,9 @@ def test_as_declared_is_the_identity():
 
 
 def test_randomized_keeps_batches_in_declared_order():
-    levels = resolve_repeats({"replication": {"repeats": [
-        {"kind": "batch", "n": 3}, {"kind": "seed", "n": 2}]}}, "d")
+    levels = resolve_repeats(
+        {"replication": {"repeats": [{"kind": "batch", "n": 3}, {"kind": "seed", "n": 2}]}}, "d"
+    )
     pairs = [(c, lf.label) for c in (0, 1) for lf in cross_levels(levels)]
     out = realize_order(pairs, levels, "randomized", 7)
     batches = [lb.split("_")[0] for _, lb in out]
@@ -362,21 +374,25 @@ def test_randomized_keeps_batches_in_declared_order():
 
 
 def test_randomized_shuffles_within_a_batch():
-    levels = resolve_repeats({"replication": {"repeats": [
-        {"kind": "batch", "n": 2}, {"kind": "seed", "n": 4}]}}, "d")
+    levels = resolve_repeats(
+        {"replication": {"repeats": [{"kind": "batch", "n": 2}, {"kind": "seed", "n": 4}]}}, "d"
+    )
     pairs = [(c, lf.label) for c in (0, 1, 2) for lf in cross_levels(levels)]
     out = realize_order(pairs, levels, "randomized", 7)
     assert out != pairs, "some batch's interior must have been reordered"
 
 
 def test_the_same_order_seed_reproduces_the_same_order():
-    levels = resolve_repeats({"replication": {"repeats": [
-        {"kind": "batch", "n": 2}, {"kind": "seed", "n": 3}]}}, "d")
+    levels = resolve_repeats(
+        {"replication": {"repeats": [{"kind": "batch", "n": 2}, {"kind": "seed", "n": 3}]}}, "d"
+    )
     pairs = [(c, lf.label) for c in (0, 1) for lf in cross_levels(levels)]
-    assert realize_order(pairs, levels, "randomized", 7) == \
-           realize_order(pairs, levels, "randomized", 7)
-    assert realize_order(pairs, levels, "randomized", 7) != \
-           realize_order(pairs, levels, "randomized", 99)
+    assert realize_order(pairs, levels, "randomized", 7) == realize_order(
+        pairs, levels, "randomized", 7
+    )
+    assert realize_order(pairs, levels, "randomized", 7) != realize_order(
+        pairs, levels, "randomized", 99
+    )
 
 
 def test_with_no_batch_level_the_whole_run_is_one_block():
@@ -389,8 +405,9 @@ def test_with_no_batch_level_the_whole_run_is_one_block():
 
 
 def test_a_pair_matching_no_resolved_batch_is_a_contract_error():
-    levels = resolve_repeats({"replication": {"repeats": [
-        {"kind": "batch", "n": 2}, {"kind": "seed", "n": 2}]}}, "d")
+    levels = resolve_repeats(
+        {"replication": {"repeats": [{"kind": "batch", "n": 2}, {"kind": "seed", "n": 2}]}}, "d"
+    )
     pairs = [(0, "no-such-batch_seed01")]
     with pytest.raises(ContractError) as excinfo:
         realize_order(pairs, levels, "randomized", 7)
@@ -473,9 +490,9 @@ def test_the_key_closure_does_not_reach_a_seed_level():
     # The control that must report: the same closure over a `fold` field it does
     # not know still refuses, so this is not a test of a closure that gave up.
     assert (
-        resolve_repeats(
-            cfg([{"kind": "fold", "k": 2, "stratify_by": "label"}]), "d", fold_basis=4
-        )[0].stratify_by
+        resolve_repeats(cfg([{"kind": "fold", "k": 2, "stratify_by": "label"}]), "d", fold_basis=4)[
+            0
+        ].stratify_by
         == "label"
     )
     with pytest.raises(ContractError) as e:

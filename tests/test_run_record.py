@@ -68,9 +68,7 @@ def test_a_bare_value_beside_an_estimate_stays_bare():
     wrapped: a value with no interval makes no attribution claim, so there is
     nothing for `reported` to attribute."""
     doc = assemble_run_yaml(
-        **_minimal_kwargs(
-            summary_returned={"delta": Estimate(value=0.031), "converged": True}
-        )
+        **_minimal_kwargs(summary_returned={"delta": Estimate(value=0.031), "converged": True})
     )
     summary = doc["results"]["summary"]["step03_site_model"]
     assert summary["converged"] is True

@@ -392,10 +392,10 @@ def test_register_template_returns_the_class_and_records_the_name():
     class MyAssay(BaseTemplate):
         pass
 
-    assert MyAssay.__name__ == "MyAssay"          # returned unchanged
+    assert MyAssay.__name__ == "MyAssay"  # returned unchanged
     assert issubclass(MyAssay, BaseTemplate)
     assert drain_pending() == [("my_assay", MyAssay)]
-    assert drain_pending() == []                  # draining empties it
+    assert drain_pending() == []  # draining empties it
 
 
 ALPHA_TEMPLATE = """\
@@ -711,7 +711,7 @@ def test_stacked_decorators_are_refused_without_naming_one_provider_twice(tmp_pa
 
 
 def test_a_local_template_may_not_shadow_a_core_name(tmp_path: Path):
-    """"A plugin that could redefine `generic` could change what a config means
+    """ "A plugin that could redefine `generic` could change what a config means
     without changing the config." Refused at the merge, and the second provider
     named is core's own class — the thing a user cannot rename."""
     templates = tmp_path / "templates"
@@ -759,9 +759,7 @@ def test_validate_reports_a_collision_rather_than_raising(tmp_path: Path):
     (repo / ".git").mkdir()
     (repo / "configs" / "cohort-pilot").mkdir(parents=True)
     config = repo / "configs" / "cohort-pilot" / "config.yaml"
-    config.write_text(
-        "experiment_type: generic\nentrypoint: cohort_pilot.experiment:experiment\n"
-    )
+    config.write_text("experiment_type: generic\nentrypoint: cohort_pilot.experiment:experiment\n")
 
     clean = Collector()
     validate_config(config, clean)
@@ -999,9 +997,7 @@ def test_validate_reports_a_load_failure_rather_than_raising(tmp_path: Path):
     (repo / ".git").mkdir()
     (repo / "configs" / "cohort-pilot").mkdir(parents=True)
     config = repo / "configs" / "cohort-pilot" / "config.yaml"
-    config.write_text(
-        "experiment_type: generic\nentrypoint: cohort_pilot.experiment:experiment\n"
-    )
+    config.write_text("experiment_type: generic\nentrypoint: cohort_pilot.experiment:experiment\n")
 
     clean = Collector()
     validate_config(config, clean)

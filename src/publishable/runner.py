@@ -384,8 +384,10 @@ def step_dir_for(run_dir: Path, execution: Execution, collapse_repeats: bool) ->
         return run_dir / "summary" / execution.step_name
     base = run_dir
     if execution.condition_label is not None and execution.condition_index is not None:
-        base = base / "conditions" / condition_dir_name(
-            execution.condition_index, execution.condition_label
+        base = (
+            base
+            / "conditions"
+            / condition_dir_name(execution.condition_index, execution.condition_label)
         )
     if execution.scope == "repeat" and not collapse_repeats and execution.repeat_label:
         base = base / execution.repeat_label

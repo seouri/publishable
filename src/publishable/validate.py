@@ -345,9 +345,7 @@ def _check_shape(doc: dict[str, Any], c: Collector) -> bool:
                 by = entry.get("by")
                 if by is not None and not isinstance(by, str):
                     _bad(f"sweep.groups[{i}].by", by, "string")
-                elif isinstance(by, str) and not re.search(
-                    NAMEABLE_CHAR, by.rsplit(".", 1)[-1]
-                ):
+                elif isinstance(by, str) and not re.search(NAMEABLE_CHAR, by.rsplit(".", 1)[-1]):
                     # Checked on the axis name **as `label_for` renders it** —
                     # `path.rsplit('.', 1)[-1]` — not on `by` whole. Testing
                     # `by` whole left `by: "arm."` open, which renders to
@@ -1098,8 +1096,7 @@ def _check_measurements(
         c.error(
             "E-DATA-MEASUREMENTS-INVALID",
             "data.units.measurements.collapse",
-            "is missing; `collapse` is required alongside `by` — how rows sharing "
-            "a key become one",
+            "is missing; `collapse` is required alongside `by` — how rows sharing a key become one",
         )
         return
     rules = list(collapse.values()) if isinstance(collapse, dict) else [collapse]
@@ -1251,9 +1248,7 @@ def _check_weight_by(units: dict[str, Any], roster: UnitList | None, c: Collecto
         )
 
 
-def _warn_undeclared_weight(
-    units: dict[str, Any], roster: UnitList | None, c: Collector
-) -> None:
+def _warn_undeclared_weight(units: dict[str, Any], roster: UnitList | None, c: Collector) -> None:
     """`W-DATA-WEIGHT-UNDECLARED` — an attribute that looks like a sampling weight
     while `weight_by` is unset.
 
@@ -1934,9 +1929,7 @@ def _check_assign(
                     not _usable_ratio_share(value) for value in ratio.values()
                 ):
                     bad_keys = sorted(
-                        str(key)
-                        for key, value in ratio.items()
-                        if not _usable_ratio_share(value)
+                        str(key) for key, value in ratio.items() if not _usable_ratio_share(value)
                     )
                     noun = "value" if len(bad_keys) == 1 else "values"
                     c.error(
@@ -2192,7 +2185,7 @@ def _check_assign(
                             f"data.units.assign.{axis}.block_size",
                             f"is {declared_block_size!r}, which is not a positive "
                             f"whole number of units — a block is a count to cut "
-                            f"the roster into, and only `\"auto\"` or a positive "
+                            f'the roster into, and only `"auto"` or a positive '
                             f"`int` names one",
                         )
                     else:
@@ -3021,9 +3014,7 @@ def _check_holdout(
             )
 
 
-def _check_evaluation_split_cells(
-    doc: dict[str, Any], units: dict[str, Any], c: Collector
-) -> None:
+def _check_evaluation_split_cells(doc: dict[str, Any], units: dict[str, Any], c: Collector) -> None:
     """A roster-wide evaluation split beside a cell structure — refused, for
     both split kinds, from one site.
 
@@ -3949,9 +3940,7 @@ def _check_sweep(
         if len(modes) < 2:
             continue  # one mode naming a path repeatedly is that mode's own business
         last_mode = occurrences[-1][0]
-        earlier = ", ".join(
-            f"`{where}`" for mode, where in occurrences if mode != last_mode
-        )
+        earlier = ", ".join(f"`{where}`" for mode, where in occurrences if mode != last_mode)
         c.error(
             "E-SWEEP-PATH-DUPLICATE",
             f"sweep.{last_mode}.{path}",
@@ -4320,9 +4309,7 @@ def _check_sweep(
 
     if isinstance(ablate, dict):
         for i, path in enumerate(ablate.get("remove") or []):
-            if not isinstance(path, str) or not _path_resolves(
-                path, f"sweep.ablate.remove[{i}]"
-            ):
+            if not isinstance(path, str) or not _path_resolves(path, f"sweep.ablate.remove[{i}]"):
                 continue
             # § Validation, "Ablation targets": "`sweep.ablate.remove[0]` is
             # `analysis.min_samples` (int); `remove` needs a boolean or nullable
@@ -5733,9 +5720,7 @@ def _check_resample(
             # for real at `run`, same as the `basis` computation above handles it.
             groups = None
         if groups is not None and groups < min_clusters:
-            counted = (
-                "this holdout's test partition" if holdout_test is not None else "this roster"
-            )
+            counted = "this holdout's test partition" if holdout_test is not None else "this roster"
             c.warn(
                 "W-STATS-RESAMPLE-CLUSTERS",
                 "limits.min_clusters",

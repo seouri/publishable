@@ -9,15 +9,28 @@ _VS_BASELINE = {1: {"step03_analyze": {"r": {"delta": 0.026, "ci95": [-0.007, 0.
 # contrast it came from, so a verdict about `invariance` reported against
 # `sensitivity`'s numbers reads as a real answer.
 _CONTRASTS = [
-    {"id": "sensitivity", "of": "01_a", "against": "00_b",
-     "step03_screen": {"auroc": {"delta": 0.04, "ci95": [0.01, 0.07]}}},
-    {"id": "invariance", "of": "02_c", "against": "00_b",
-     "step03_screen": {"auroc": {"delta": -0.11, "ci95": [-0.19, -0.03]}}},
+    {
+        "id": "sensitivity",
+        "of": "01_a",
+        "against": "00_b",
+        "step03_screen": {"auroc": {"delta": 0.04, "ci95": [0.01, 0.07]}},
+    },
+    {
+        "id": "invariance",
+        "of": "02_c",
+        "against": "00_b",
+        "step03_screen": {"auroc": {"delta": -0.11, "ci95": [-0.19, -0.03]}},
+    },
 ]
 _SUMMARY = {
     "step04_agreement": {
-        "s_within": {"value": 0.9931, "reported": True, "ci95": [0.9931, 1.0],
-                     "n": None, "method": "one-sided BCa"}
+        "s_within": {
+            "value": 0.9931,
+            "reported": True,
+            "ci95": [0.9931, 1.0],
+            "n": None,
+            "method": "one-sided BCa",
+        }
     }
 }
 
@@ -35,20 +48,30 @@ def _resolve(hyp):
 def test_a_condition_hypothesis_reads_that_conditions_vs_baseline_block():
     """`compare` says where; `metric` says what. The label resolves to a
     condition index because that is how `cli` addresses a Member."""
-    got = _resolve({
-        "id": "h1", "metric": "step03_analyze.r",
-        "compare": {"condition": "method=spearman", "to": "baseline"},
-    })
+    got = _resolve(
+        {
+            "id": "h1",
+            "metric": "step03_analyze.r",
+            "compare": {"condition": "method=spearman", "to": "baseline"},
+        }
+    )
     assert got == Observation(
-        where="cond:1", step="step03_analyze", metric="r",
-        block={"delta": 0.026, "ci95": [-0.007, 0.059]}, rests_on="computed",
+        where="cond:1",
+        step="step03_analyze",
+        metric="r",
+        block={"delta": 0.026, "ci95": [-0.007, 0.059]},
+        rests_on="computed",
     )
 
 
 def test_a_contrast_hypothesis_reads_that_contrast_entry():
-    got = _resolve({
-        "id": "s", "metric": "step03_screen.auroc", "compare": {"contrast": "sensitivity"},
-    })
+    got = _resolve(
+        {
+            "id": "s",
+            "metric": "step03_screen.auroc",
+            "compare": {"contrast": "sensitivity"},
+        }
+    )
     assert got.where == "contrast:sensitivity"
     assert got.block == {"delta": 0.04, "ci95": [0.01, 0.07]}
     assert got.rests_on == "computed"
@@ -59,9 +82,13 @@ def test_a_contrast_hypothesis_reads_the_entry_it_names_not_the_first():
     step metric, so a resolver returning `contrasts[0]` regardless answers a
     hypothesis about `invariance` with `sensitivity`'s delta — and the record
     would not say so, because `observed` carries no contrast identifier."""
-    got = _resolve({
-        "id": "inv", "metric": "step03_screen.auroc", "compare": {"contrast": "invariance"},
-    })
+    got = _resolve(
+        {
+            "id": "inv",
+            "metric": "step03_screen.auroc",
+            "compare": {"contrast": "invariance"},
+        }
+    )
     assert got.where == "contrast:invariance"
     assert got.block == {"delta": -0.11, "ci95": [-0.19, -0.03]}
 
@@ -82,9 +109,10 @@ def test_a_plain_scalar_summary_return_is_no_block_rather_than_a_crash():
         summary={"step04_agreement": {"bare": "high"}},
     )
     assert got.block is None
-    assert verdict_for(
-        {"id": "h", "direction": "greater", "threshold": 0.02}, got, None
-    )["supported"] is None
+    assert (
+        verdict_for({"id": "h", "direction": "greater", "threshold": 0.02}, got, None)["supported"]
+        is None
+    )
 
 
 def test_a_summary_hypothesis_takes_no_compare_and_rests_on_reported():
@@ -101,33 +129,45 @@ def test_an_unresolvable_metric_yields_no_block_rather_than_raising():
     """A hypothesis may name a metric no run produced — its step failed, or every
     unit was ineligible. The verdict records that rather than a boolean, and a
     pure resolver has no diagnostic to raise into."""
-    got = _resolve({
-        "id": "h1", "metric": "step03_analyze.nosuch",
-        "compare": {"condition": "method=spearman", "to": "baseline"},
-    })
+    got = _resolve(
+        {
+            "id": "h1",
+            "metric": "step03_analyze.nosuch",
+            "compare": {"condition": "method=spearman", "to": "baseline"},
+        }
+    )
     assert got.block is None
     assert got.where == "cond:1"
 
 
 def test_an_unknown_condition_label_yields_no_block():
-    got = _resolve({
-        "id": "h1", "metric": "step03_analyze.r",
-        "compare": {"condition": "nosuch", "to": "baseline"},
-    })
+    got = _resolve(
+        {
+            "id": "h1",
+            "metric": "step03_analyze.r",
+            "compare": {"condition": "nosuch", "to": "baseline"},
+        }
+    )
     assert got.block is None
 
 
 _H1 = {
-    "id": "h1", "kind": "confirmatory", "metric": "step03_analyze.r",
+    "id": "h1",
+    "kind": "confirmatory",
+    "metric": "step03_analyze.r",
     "compare": {"condition": "method=spearman", "to": "baseline"},
-    "direction": "greater", "threshold": 0.02,
+    "direction": "greater",
+    "threshold": 0.02,
 }
 
 
 def _obs_h1():
     return Observation(
-        where="cond:1", step="step03_analyze", metric="r",
-        block={"delta": 0.026, "ci95": [-0.007, 0.059]}, rests_on="computed",
+        where="cond:1",
+        step="step03_analyze",
+        metric="r",
+        block={"delta": 0.026, "ci95": [-0.007, 0.059]},
+        rests_on="computed",
     )
 
 
@@ -159,11 +199,19 @@ def test_direction_less_inverts_the_comparison():
     `direction: less, threshold: 0.05` on the observed value and fails on the
     upper bound — and the second verdict is the correct one"."""
     obs = Observation(
-        where="cond:1", step="s", metric="m",
-        block={"delta": 0.01, "ci95": [0.001, 0.30]}, rests_on="computed",
+        where="cond:1",
+        step="s",
+        metric="m",
+        block={"delta": 0.01, "ci95": [0.001, 0.30]},
+        rests_on="computed",
     )
-    hyp = {"id": "i", "metric": "s.m", "compare": {"contrast": "x"},
-           "direction": "less", "threshold": 0.05}
+    hyp = {
+        "id": "i",
+        "metric": "s.m",
+        "compare": {"contrast": "x"},
+        "direction": "less",
+        "threshold": 0.05,
+    }
     assert verdict_for({**hyp, "evaluate_on": "observed"}, obs, None)["supported"] is True
     assert verdict_for({**hyp, "evaluate_on": "ci95_upper"}, obs, None)["supported"] is False
 
@@ -173,24 +221,45 @@ def test_a_corrected_bound_is_what_a_bound_test_reads_when_one_is_supplied():
     family implies". The raw interval would say supported; the corrected one does
     not, and the corrected one is the answer."""
     obs = Observation(
-        where="cond:1", step="s", metric="m",
-        block={"delta": 0.10, "ci95": [0.01, 0.19]}, rests_on="computed",
+        where="cond:1",
+        step="s",
+        metric="m",
+        block={"delta": 0.10, "ci95": [0.01, 0.19]},
+        rests_on="computed",
     )
-    hyp = {"id": "i", "metric": "s.m", "compare": {"contrast": "x"},
-           "direction": "greater", "threshold": 0.0, "evaluate_on": "ci95_lower"}
+    hyp = {
+        "id": "i",
+        "metric": "s.m",
+        "compare": {"contrast": "x"},
+        "direction": "greater",
+        "threshold": 0.0,
+        "evaluate_on": "ci95_lower",
+    }
     assert verdict_for(hyp, obs, None)["supported"] is True
     assert verdict_for(hyp, obs, (-0.02, 0.22))["supported"] is False
 
 
 def test_a_summary_hypothesis_reads_its_value_and_rests_on_reported():
     obs = Observation(
-        where=None, step="step04_agreement", metric="s_within",
-        block={"value": 0.9931, "reported": True, "ci95": [0.9931, 1.0],
-               "n": None, "method": "one-sided BCa"},
+        where=None,
+        step="step04_agreement",
+        metric="s_within",
+        block={
+            "value": 0.9931,
+            "reported": True,
+            "ci95": [0.9931, 1.0],
+            "n": None,
+            "method": "one-sided BCa",
+        },
         rests_on="reported",
     )
-    hyp = {"id": "h2", "metric": "step04_agreement.s_within",
-           "direction": "greater", "threshold": 0.99, "evaluate_on": "observed"}
+    hyp = {
+        "id": "h2",
+        "metric": "step04_agreement.s_within",
+        "direction": "greater",
+        "threshold": 0.99,
+        "evaluate_on": "observed",
+    }
     got = verdict_for(hyp, obs, None)
     assert got["supported"] is True
     assert got["verdict_rests_on"] == "reported"
@@ -202,20 +271,43 @@ def test_an_unresolvable_observation_is_supported_null_not_false():
     failed. `reference.md` covers no such case, so this is recorded in
     spec-defects rather than derived from it."""
     obs = Observation(where="cond:1", step="s", metric="m", block=None, rests_on="computed")
-    got = verdict_for({"id": "i", "metric": "s.m", "compare": {"contrast": "x"},
-                       "direction": "greater", "threshold": 0.0,
-                       "evaluate_on": "observed"}, obs, None)
+    got = verdict_for(
+        {
+            "id": "i",
+            "metric": "s.m",
+            "compare": {"contrast": "x"},
+            "direction": "greater",
+            "threshold": 0.0,
+            "evaluate_on": "observed",
+        },
+        obs,
+        None,
+    )
     assert got["supported"] is None
     assert got["observed"] is None
 
 
 def test_a_bound_test_on_a_metric_with_no_interval_is_supported_null():
     """Asking for a bound a metric does not have is unanswerable, not false."""
-    obs = Observation(where="cond:1", step="s", metric="m",
-                      block={"delta": 0.5, "ci95": None}, rests_on="computed")
-    got = verdict_for({"id": "i", "metric": "s.m", "compare": {"contrast": "x"},
-                       "direction": "greater", "threshold": 0.0,
-                       "evaluate_on": "ci95_lower"}, obs, None)
+    obs = Observation(
+        where="cond:1",
+        step="s",
+        metric="m",
+        block={"delta": 0.5, "ci95": None},
+        rests_on="computed",
+    )
+    got = verdict_for(
+        {
+            "id": "i",
+            "metric": "s.m",
+            "compare": {"contrast": "x"},
+            "direction": "greater",
+            "threshold": 0.0,
+            "evaluate_on": "ci95_lower",
+        },
+        obs,
+        None,
+    )
     assert got["supported"] is None
 
 
@@ -234,10 +326,21 @@ def test_a_value_exactly_at_the_threshold_is_not_supported():
     "clears" the threshold — a strict inequality. A value equal to the
     threshold has done neither, so `>`/`<` and not `>=`/`<=` is the reading
     pinned here."""
-    obs = Observation(where="cond:1", step="s", metric="m",
-                      block={"delta": 0.02, "ci95": [0.01, 0.03]}, rests_on="computed")
-    hyp = {"id": "i", "metric": "s.m", "compare": {"contrast": "x"},
-           "direction": "greater", "threshold": 0.02, "evaluate_on": "observed"}
+    obs = Observation(
+        where="cond:1",
+        step="s",
+        metric="m",
+        block={"delta": 0.02, "ci95": [0.01, 0.03]},
+        rests_on="computed",
+    )
+    hyp = {
+        "id": "i",
+        "metric": "s.m",
+        "compare": {"contrast": "x"},
+        "direction": "greater",
+        "threshold": 0.02,
+        "evaluate_on": "observed",
+    }
     assert verdict_for(hyp, obs, None)["supported"] is False
 
 
@@ -246,11 +349,21 @@ def test_a_sweep_ci95_corrected_is_not_relabelled_as_the_hypothesis_familys():
     `ci95_corrected`. Without a `bounds` from Task 5, `observed` must not show
     it — that would misattribute a different family's corrected interval to
     this hypothesis."""
-    obs = Observation(where="cond:1", step="s", metric="m",
-                      block={"delta": 0.5, "ci95": [0.1, 0.9], "ci95_corrected": [0.05, 0.95]},
-                      rests_on="computed")
-    hyp = {"id": "i", "metric": "s.m", "compare": {"contrast": "x"},
-           "direction": "greater", "threshold": 0.0, "evaluate_on": "observed"}
+    obs = Observation(
+        where="cond:1",
+        step="s",
+        metric="m",
+        block={"delta": 0.5, "ci95": [0.1, 0.9], "ci95_corrected": [0.05, 0.95]},
+        rests_on="computed",
+    )
+    hyp = {
+        "id": "i",
+        "metric": "s.m",
+        "compare": {"contrast": "x"},
+        "direction": "greater",
+        "threshold": 0.0,
+        "evaluate_on": "observed",
+    }
     got = verdict_for(hyp, obs, None)
     assert "ci95_corrected" not in got["observed"]
 
@@ -259,11 +372,20 @@ def test_observed_carries_exactly_the_named_block_keys():
     """`_observed_block` enumerates `delta`/`value`/`ci95`/`method` rather than
     copying the block, so a field the record entry carries for its own
     purposes — `n`, an unrelated note — does not leak into `observed`."""
-    obs = Observation(where="cond:1", step="s", metric="m",
-                      block={"delta": 0.5, "ci95": [0.1, 0.9], "n": 10, "note": "x"},
-                      rests_on="computed")
-    hyp = {"id": "i", "metric": "s.m", "compare": {"contrast": "x"},
-           "direction": "greater", "threshold": 0.0}
+    obs = Observation(
+        where="cond:1",
+        step="s",
+        metric="m",
+        block={"delta": 0.5, "ci95": [0.1, 0.9], "n": 10, "note": "x"},
+        rests_on="computed",
+    )
+    hyp = {
+        "id": "i",
+        "metric": "s.m",
+        "compare": {"contrast": "x"},
+        "direction": "greater",
+        "threshold": 0.0,
+    }
     got = verdict_for(hyp, obs, None)
     assert set(got["observed"]) == {"delta", "ci95"}
 
@@ -271,20 +393,36 @@ def test_observed_carries_exactly_the_named_block_keys():
 def test_omitting_evaluate_on_defaults_to_observed():
     """`reference.md`: "`direction` and `threshold` are compared to the observed
     value by default." Nothing must fail if that default silently changes."""
-    obs = Observation(where="cond:1", step="s", metric="m",
-                      block={"delta": 0.5, "ci95": [0.1, 0.9]}, rests_on="computed")
-    hyp = {"id": "i", "metric": "s.m", "compare": {"contrast": "x"},
-           "direction": "greater", "threshold": 0.0}
+    obs = Observation(
+        where="cond:1",
+        step="s",
+        metric="m",
+        block={"delta": 0.5, "ci95": [0.1, 0.9]},
+        rests_on="computed",
+    )
+    hyp = {
+        "id": "i",
+        "metric": "s.m",
+        "compare": {"contrast": "x"},
+        "direction": "greater",
+        "threshold": 0.0,
+    }
     got = verdict_for(hyp, obs, None)
     assert got["verdict_evaluated_on"] == "observed"
     assert got["supported"] is True
 
 
 def _member(where, step, metric, delta, ci95, decl=0):
-    return Member(where=where, step=step, metric=metric,
-                  delta=delta, ci95=ci95, pool=None,
-                  diffs=tuple(delta + 0.01 * ((i % 5) - 2) for i in range(60)),
-                  declaration_index=decl)
+    return Member(
+        where=where,
+        step=step,
+        metric=metric,
+        delta=delta,
+        ci95=ci95,
+        pool=None,
+        diffs=tuple(delta + 0.01 * ((i % 5) - 2) for i in range(60)),
+        declaration_index=decl,
+    )
 
 
 def test_only_confirmatory_computed_hypotheses_are_counted():
@@ -293,36 +431,73 @@ def test_only_confirmatory_computed_hypotheses_are_counted():
     the config." An exploratory one is evaluated and recorded, and counted by
     nothing."""
     hyps = [
-        {"id": "a", "kind": "confirmatory", "metric": "s.m",
-         "compare": {"contrast": "x"}, "direction": "greater", "threshold": 0.0,
-         "evaluate_on": "ci95_lower"},
-        {"id": "b", "kind": "exploratory", "metric": "s.m",
-         "compare": {"contrast": "x"}, "direction": "greater", "threshold": 0.0,
-         "evaluate_on": "ci95_lower"},
+        {
+            "id": "a",
+            "kind": "confirmatory",
+            "metric": "s.m",
+            "compare": {"contrast": "x"},
+            "direction": "greater",
+            "threshold": 0.0,
+            "evaluate_on": "ci95_lower",
+        },
+        {
+            "id": "b",
+            "kind": "exploratory",
+            "metric": "s.m",
+            "compare": {"contrast": "x"},
+            "direction": "greater",
+            "threshold": 0.0,
+            "evaluate_on": "ci95_lower",
+        },
     ]
     got = evaluate(
-        hyps, label_to_index={}, vs_baseline=None,
+        hyps,
+        label_to_index={},
+        vs_baseline=None,
         contrasts=[{"id": "x", "s": {"m": {"delta": 0.1, "ci95": [0.01, 0.19]}}}],
-        summary={}, members=[_member("contrast:x", "s", "m", 0.1, (0.01, 0.19))],
-        method="holm", parameters_hash="sha256:1a2b",
+        summary={},
+        members=[_member("contrast:x", "s", "m", 0.1, (0.01, 0.19))],
+        method="holm",
+        parameters_hash="sha256:1a2b",
     )
     by_id = {e["id"]: e for e in got}
     assert by_id["a"]["family_size"] == 1
     assert by_id["a"]["family"] == {"hypotheses": 1}
     assert "family_size" not in by_id["b"]
-    assert by_id["b"]["supported"] is not None   # still evaluated, just uncounted
+    assert by_id["b"]["supported"] is not None  # still evaluated, just uncounted
 
 
 def test_a_reported_estimate_hypothesis_is_evaluated_but_never_counted():
     """`reference.md`: its observation "is a reported `Estimate`, so core has
     nothing to correct — and therefore does not count it"."""
     got = evaluate(
-        [{"id": "h2", "kind": "confirmatory", "metric": "step04.s",
-          "direction": "greater", "threshold": 0.99, "evaluate_on": "observed"}],
-        label_to_index={}, vs_baseline=None, contrasts=None,
-        summary={"step04": {"s": {"value": 0.9931, "reported": True,
-                                  "ci95": [0.9931, 1.0], "n": None, "method": "BCa"}}},
-        members=[], method="holm", parameters_hash="sha256:1a2b",
+        [
+            {
+                "id": "h2",
+                "kind": "confirmatory",
+                "metric": "step04.s",
+                "direction": "greater",
+                "threshold": 0.99,
+                "evaluate_on": "observed",
+            }
+        ],
+        label_to_index={},
+        vs_baseline=None,
+        contrasts=None,
+        summary={
+            "step04": {
+                "s": {
+                    "value": 0.9931,
+                    "reported": True,
+                    "ci95": [0.9931, 1.0],
+                    "n": None,
+                    "method": "BCa",
+                }
+            }
+        },
+        members=[],
+        method="holm",
+        parameters_hash="sha256:1a2b",
     )
     assert got[0]["verdict_rests_on"] == "reported"
     assert got[0]["supported"] is True
@@ -334,11 +509,24 @@ def test_every_verdict_carries_the_hash_that_declared_it():
     that declared it. Add a hypothesis after seeing results and rerun, and the
     hash won't match the earlier run"."""
     got = evaluate(
-        [{"id": "a", "kind": "confirmatory", "metric": "s.m", "compare": {"contrast": "x"},
-          "direction": "greater", "threshold": 0.0, "evaluate_on": "observed"}],
-        label_to_index={}, vs_baseline=None,
+        [
+            {
+                "id": "a",
+                "kind": "confirmatory",
+                "metric": "s.m",
+                "compare": {"contrast": "x"},
+                "direction": "greater",
+                "threshold": 0.0,
+                "evaluate_on": "observed",
+            }
+        ],
+        label_to_index={},
+        vs_baseline=None,
         contrasts=[{"id": "x", "s": {"m": {"delta": 0.1, "ci95": [0.01, 0.19]}}}],
-        summary={}, members=[], method="none", parameters_hash="sha256:1a2b",
+        summary={},
+        members=[],
+        method="none",
+        parameters_hash="sha256:1a2b",
     )
     assert got[0]["declared_in"] == "parameters_hash sha256:1a2b"
 
@@ -354,20 +542,38 @@ def test_the_hypothesis_family_is_its_own_size_not_the_sweeps():
     `Member` list is passed through unfiltered. `family_size` must come from
     the two counted hypotheses, not from `len(members) == 3`."""
     hyps = [
-        {"id": f"h{i}", "kind": "confirmatory", "metric": f"s.m{i}",
-         "compare": {"contrast": "x"}, "direction": "greater", "threshold": 0.0,
-         "evaluate_on": "ci95_lower"}
+        {
+            "id": f"h{i}",
+            "kind": "confirmatory",
+            "metric": f"s.m{i}",
+            "compare": {"contrast": "x"},
+            "direction": "greater",
+            "threshold": 0.0,
+            "evaluate_on": "ci95_lower",
+        }
         for i in (1, 2)
     ]
     got = evaluate(
-        hyps, label_to_index={}, vs_baseline=None,
-        contrasts=[{"id": "x", "s": {"m1": {"delta": 0.10, "ci95": [0.01, 0.19]},
-                                     "m2": {"delta": 0.20, "ci95": [0.11, 0.29]}}}],
+        hyps,
+        label_to_index={},
+        vs_baseline=None,
+        contrasts=[
+            {
+                "id": "x",
+                "s": {
+                    "m1": {"delta": 0.10, "ci95": [0.01, 0.19]},
+                    "m2": {"delta": 0.20, "ci95": [0.11, 0.29]},
+                },
+            }
+        ],
         summary={},
-        members=[_member("contrast:x", "s", "m1", 0.10, (0.01, 0.19), decl=0),
-                 _member("contrast:x", "s", "m2", 0.20, (0.11, 0.29), decl=1),
-                 _member("contrast:x", "s", "m3", 0.30, (0.21, 0.39), decl=2)],
-        method="bonferroni", parameters_hash="sha256:1a2b",
+        members=[
+            _member("contrast:x", "s", "m1", 0.10, (0.01, 0.19), decl=0),
+            _member("contrast:x", "s", "m2", 0.20, (0.11, 0.29), decl=1),
+            _member("contrast:x", "s", "m3", 0.30, (0.21, 0.39), decl=2),
+        ],
+        method="bonferroni",
+        parameters_hash="sha256:1a2b",
     )
     assert {e["family_size"] for e in got} == {2}
 
@@ -379,18 +585,34 @@ def test_an_unresolvable_confirmatory_hypothesis_is_not_counted():
     or tighten the resolvable hypothesis's corrected bound. It is still
     evaluated: `supported` reads `None` rather than being counted."""
     hyps = [
-        {"id": "resolves", "kind": "confirmatory", "metric": "s.m1",
-         "compare": {"contrast": "x"}, "direction": "greater", "threshold": 0.0,
-         "evaluate_on": "ci95_lower"},
-        {"id": "missing", "kind": "confirmatory", "metric": "s.nosuch",
-         "compare": {"contrast": "x"}, "direction": "greater", "threshold": 0.0,
-         "evaluate_on": "ci95_lower"},
+        {
+            "id": "resolves",
+            "kind": "confirmatory",
+            "metric": "s.m1",
+            "compare": {"contrast": "x"},
+            "direction": "greater",
+            "threshold": 0.0,
+            "evaluate_on": "ci95_lower",
+        },
+        {
+            "id": "missing",
+            "kind": "confirmatory",
+            "metric": "s.nosuch",
+            "compare": {"contrast": "x"},
+            "direction": "greater",
+            "threshold": 0.0,
+            "evaluate_on": "ci95_lower",
+        },
     ]
     got = evaluate(
-        hyps, label_to_index={}, vs_baseline=None,
+        hyps,
+        label_to_index={},
+        vs_baseline=None,
         contrasts=[{"id": "x", "s": {"m1": {"delta": 0.10, "ci95": [0.01, 0.19]}}}],
-        summary={}, members=[_member("contrast:x", "s", "m1", 0.10, (0.01, 0.19))],
-        method="bonferroni", parameters_hash="sha256:1a2b",
+        summary={},
+        members=[_member("contrast:x", "s", "m1", 0.10, (0.01, 0.19))],
+        method="bonferroni",
+        parameters_hash="sha256:1a2b",
     )
     by_id = {e["id"]: e for e in got}
     assert by_id["resolves"]["family_size"] == 1
@@ -404,13 +626,24 @@ def test_a_counted_hypothesis_with_no_matching_member_still_gets_a_verdict():
     `cli` built `members` and what a hypothesis names). The hypothesis is still
     judged, on its raw bound rather than a corrected one it has no evidence to
     rebuild."""
-    hyp = {"id": "orphan", "kind": "confirmatory", "metric": "s.m",
-           "compare": {"contrast": "x"}, "direction": "greater", "threshold": 0.0,
-           "evaluate_on": "ci95_lower"}
+    hyp = {
+        "id": "orphan",
+        "kind": "confirmatory",
+        "metric": "s.m",
+        "compare": {"contrast": "x"},
+        "direction": "greater",
+        "threshold": 0.0,
+        "evaluate_on": "ci95_lower",
+    }
     got = evaluate(
-        [hyp], label_to_index={}, vs_baseline=None,
+        [hyp],
+        label_to_index={},
+        vs_baseline=None,
         contrasts=[{"id": "x", "s": {"m": {"delta": 0.10, "ci95": [0.01, 0.19]}}}],
-        summary={}, members=[], method="bonferroni", parameters_hash="sha256:1a2b",
+        summary={},
+        members=[],
+        method="bonferroni",
+        parameters_hash="sha256:1a2b",
     )
     assert got[0]["family_size"] == 1
     assert got[0]["supported"] is True
@@ -424,23 +657,40 @@ def _thin_member(where, step, metric, delta, ci95):
     `thin` — the real path is a family large enough that α/m outruns the 2000
     draws `cli` resamples with, which needs 26 hypotheses to reach and is
     covered end to end in `test_cli.py`."""
-    return Member(where=where, step=step, metric=metric,
-                  delta=delta, ci95=ci95,
-                  pool=tuple(sorted(delta + 0.001 * i for i in range(60))), diffs=None,
-                  declaration_index=0)
+    return Member(
+        where=where,
+        step=step,
+        metric=metric,
+        delta=delta,
+        ci95=ci95,
+        pool=tuple(sorted(delta + 0.001 * i for i in range(60))),
+        diffs=None,
+        declaration_index=0,
+    )
 
 
 _THIN_CONTRASTS = [{"id": "x", "s": {"m": {"delta": 0.10, "ci95": [0.01, 0.19]}}}]
 
 
 def _thin_verdict(evaluate_on, method="holm", threshold=0.0):
-    hyp = {"id": "h", "kind": "confirmatory", "metric": "s.m",
-           "compare": {"contrast": "x"}, "direction": "greater",
-           "threshold": threshold, "evaluate_on": evaluate_on}
+    hyp = {
+        "id": "h",
+        "kind": "confirmatory",
+        "metric": "s.m",
+        "compare": {"contrast": "x"},
+        "direction": "greater",
+        "threshold": threshold,
+        "evaluate_on": evaluate_on,
+    }
     return evaluate(
-        [hyp], label_to_index={}, vs_baseline=None, contrasts=_THIN_CONTRASTS,
-        summary={}, members=[_thin_member("contrast:x", "s", "m", 0.10, (0.01, 0.19))],
-        method=method, parameters_hash="sha256:1a2b",
+        [hyp],
+        label_to_index={},
+        vs_baseline=None,
+        contrasts=_THIN_CONTRASTS,
+        summary={},
+        members=[_thin_member("contrast:x", "s", "m", 0.10, (0.01, 0.19))],
+        method=method,
+        parameters_hash="sha256:1a2b",
     )[0]
 
 

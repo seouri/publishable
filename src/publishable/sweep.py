@@ -794,11 +794,7 @@ def _baseline_cells(
     lone baseline row standing in for a design that has no cells. It is
     `E-SWEEP-AXIS-EMPTY` that says why.
     """
-    unfixed = [
-        axis
-        for axis in axes
-        if not any(path in baseline for cell in axis for path in cell)
-    ]
+    unfixed = [axis for axis in axes if not any(path in baseline for cell in axis for path in cell)]
     cells: list[dict[str, Any]] = []
     for combo in itertools.product(*unfixed):
         cell: dict[str, Any] = {}
@@ -875,8 +871,10 @@ def expand(config: dict[str, Any]) -> list[Condition]:
     # deliberately declines to make one, and `contrasts` already pins what the
     # uncrossed shape does.
     group_paths = set(selector_paths(sweep))
-    crossed = bool(changes) and bool(axes) and all(
-        path in group_paths for axis in axes for cell in axis for path in cell
+    crossed = (
+        bool(changes)
+        and bool(axes)
+        and all(path in group_paths for axis in axes for cell in axis for path in cell)
     )
     # One cell list, read twice: the baseline's rows and — under `ablate × groups`
     # — the cells each ablation is repeated over. Computing it once is what makes
@@ -953,12 +951,16 @@ def expand(config: dict[str, Any]) -> list[Condition]:
     swept += [path for path in _swept_paths(sweep) if path not in swept]
     swept += [path for path in ablated_paths(sweep) if path not in swept]
     return [
-        Condition(index=i, label=label_for(labelled, swept, is_baseline),
-                  values=values, is_baseline=is_baseline,
-                  # Per row, not per sweep: a group path reaches a row's values
-                  # only when that row's cell or baseline actually fixed it, and
-                  # a row of parameter cells alone must mark nothing.
-                  selectors=frozenset(p for p in values if p in selectors))
+        Condition(
+            index=i,
+            label=label_for(labelled, swept, is_baseline),
+            values=values,
+            is_baseline=is_baseline,
+            # Per row, not per sweep: a group path reaches a row's values
+            # only when that row's cell or baseline actually fixed it, and
+            # a row of parameter cells alone must mark nothing.
+            selectors=frozenset(p for p in values if p in selectors),
+        )
         for i, (values, labelled, is_baseline) in enumerate(rows)
     ]
 
@@ -1032,8 +1034,12 @@ def sweep_document(
     doc: dict[str, Any] = {
         "design_digest": digest,
         "conditions": [
-            {"index": c.index, "label": c.label, "values": dict(c.values),
-             "is_baseline": c.is_baseline}
+            {
+                "index": c.index,
+                "label": c.label,
+                "values": dict(c.values),
+                "is_baseline": c.is_baseline,
+            }
             for c in conditions
         ],
         "repeats": repeat_entries,

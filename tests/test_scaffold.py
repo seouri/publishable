@@ -15,8 +15,14 @@ _REPO_PYPROJECT = Path(__file__).resolve().parents[1] / "pyproject.toml"
 
 def test_new_creates_the_fixed_layout_and_a_first_commit(tmp_path: Path):
     root = scaffold_project(tmp_path / "my-study")
-    for expected in ("README.md", "CITATION.cff", "LICENSE", "pyproject.toml",
-                     ".gitignore", ".env.example"):
+    for expected in (
+        "README.md",
+        "CITATION.cff",
+        "LICENSE",
+        "pyproject.toml",
+        ".gitignore",
+        ".env.example",
+    ):
         assert (root / expected).is_file(), expected
     for expected in ("src", "templates", "configs", "tests", "docs", ".git"):
         assert (root / expected).exists(), expected
@@ -38,8 +44,11 @@ def test_package_name_converts_the_kebab_config_name(tmp_path: Path):
 def test_generate_experiment_writes_config_package_and_a_runnable_step(tmp_path: Path):
     root = scaffold_project(tmp_path / "my-study")
     cfg_path = generate_experiment(
-        repo_root=root, name="cohort-pilot", template_name="generic",
-        input_dir=str(tmp_path / "data"), output_dir=str(tmp_path / "results"),
+        repo_root=root,
+        name="cohort-pilot",
+        template_name="generic",
+        input_dir=str(tmp_path / "data"),
+        output_dir=str(tmp_path / "results"),
     )
     assert cfg_path == root / "configs" / "cohort-pilot" / "config.yaml"
     doc = yaml.safe_load(cfg_path.read_text())
@@ -55,8 +64,11 @@ def test_generate_experiment_writes_config_package_and_a_runnable_step(tmp_path:
 def test_generate_step_numbers_the_next_file_and_registers_it(tmp_path: Path):
     root = scaffold_project(tmp_path / "my-study")
     generate_experiment(
-        repo_root=root, name="cohort-pilot", template_name="generic",
-        input_dir=str(tmp_path / "data"), output_dir=str(tmp_path / "results"),
+        repo_root=root,
+        name="cohort-pilot",
+        template_name="generic",
+        input_dir=str(tmp_path / "data"),
+        output_dir=str(tmp_path / "results"),
     )
     path = generate_step(repo_root=root, experiment="cohort-pilot", step_name="analyze")
     assert path.name == "step02_analyze.py"
@@ -68,8 +80,11 @@ def test_generate_experiment_refuses_paths_inside_the_repo(tmp_path: Path):
     root = scaffold_project(tmp_path / "my-study")
     with pytest.raises(ContractError) as e:
         generate_experiment(
-            repo_root=root, name="cohort-pilot", template_name="generic",
-            input_dir=str(root / "data"), output_dir=str(tmp_path / "results"),
+            repo_root=root,
+            name="cohort-pilot",
+            template_name="generic",
+            input_dir=str(root / "data"),
+            output_dir=str(tmp_path / "results"),
         )
     assert e.value.code == "E-DATA-IN-REPO"
 
@@ -77,8 +92,11 @@ def test_generate_experiment_refuses_paths_inside_the_repo(tmp_path: Path):
 def test_generate_step_refuses_a_duplicate_name(tmp_path: Path):
     root = scaffold_project(tmp_path / "my-study")
     generate_experiment(
-        repo_root=root, name="cohort-pilot", template_name="generic",
-        input_dir=str(tmp_path / "data"), output_dir=str(tmp_path / "results"),
+        repo_root=root,
+        name="cohort-pilot",
+        template_name="generic",
+        input_dir=str(tmp_path / "data"),
+        output_dir=str(tmp_path / "results"),
     )
     generate_step(repo_root=root, experiment="cohort-pilot", step_name="analyze")
     experiment_py = root / "src" / "cohort_pilot" / "experiment.py"
@@ -98,16 +116,22 @@ def test_generate_step_refuses_a_duplicate_name(tmp_path: Path):
 def test_generate_experiment_refuses_to_overwrite_an_existing_package(tmp_path: Path):
     root = scaffold_project(tmp_path / "my-study")
     generate_experiment(
-        repo_root=root, name="cohort-pilot", template_name="generic",
-        input_dir=str(tmp_path / "data"), output_dir=str(tmp_path / "results"),
+        repo_root=root,
+        name="cohort-pilot",
+        template_name="generic",
+        input_dir=str(tmp_path / "data"),
+        output_dir=str(tmp_path / "results"),
     )
     pkg_dir = root / "src" / "cohort_pilot"
     before_experiment_py = (pkg_dir / "experiment.py").read_text()
 
     with pytest.raises(ContractError) as e:
         generate_experiment(
-            repo_root=root, name="cohort-pilot", template_name="generic",
-            input_dir=str(tmp_path / "data2"), output_dir=str(tmp_path / "results2"),
+            repo_root=root,
+            name="cohort-pilot",
+            template_name="generic",
+            input_dir=str(tmp_path / "data2"),
+            output_dir=str(tmp_path / "results2"),
         )
     assert e.value.code == "E-EXPERIMENT-EXISTS"
     assert (pkg_dir / "experiment.py").read_text() == before_experiment_py
@@ -116,8 +140,11 @@ def test_generate_experiment_refuses_to_overwrite_an_existing_package(tmp_path: 
 def test_generate_step_keeps_generated_imports_contiguous(tmp_path: Path):
     root = scaffold_project(tmp_path / "my-study")
     generate_experiment(
-        repo_root=root, name="cohort-pilot", template_name="generic",
-        input_dir=str(tmp_path / "data"), output_dir=str(tmp_path / "results"),
+        repo_root=root,
+        name="cohort-pilot",
+        template_name="generic",
+        input_dir=str(tmp_path / "data"),
+        output_dir=str(tmp_path / "results"),
     )
     generate_step(repo_root=root, experiment="cohort-pilot", step_name="fit_model")
     generate_step(repo_root=root, experiment="cohort-pilot", step_name="analyze")
@@ -130,10 +157,20 @@ def test_generate_step_keeps_generated_imports_contiguous(tmp_path: Path):
         assert later == earlier + 1, "a blank line separates consecutive step imports"
 
     result = subprocess.run(
-        ["uv", "run", "ruff", "check", "--config", str(_REPO_PYPROJECT), "--select", "I001",
-         str(experiment_py)],
+        [
+            "uv",
+            "run",
+            "ruff",
+            "check",
+            "--config",
+            str(_REPO_PYPROJECT),
+            "--select",
+            "I001",
+            str(experiment_py),
+        ],
         cwd=Path(__file__).resolve().parents[1],
-        capture_output=True, text=True,
+        capture_output=True,
+        text=True,
     )
     assert result.returncode == 0, result.stdout + result.stderr
 

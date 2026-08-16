@@ -201,9 +201,7 @@ def _immediate_children(prefix: str) -> list[str]:
     return sorted(children)
 
 
-def _check_unknown_keys(
-    node: Any, findings: list[tuple[str, str, str]], prefix: str = ""
-) -> None:
+def _check_unknown_keys(node: Any, findings: list[tuple[str, str, str]], prefix: str = "") -> None:
     """Walk `node` reporting any key not implied by `LEAF_TYPES`, skipping the
     two exempt subtrees entirely and never descending into a known LEAF's
     value unless the table also declares paths BENEATH it — a `from` dict's
@@ -245,9 +243,7 @@ def _check_unknown_keys(
             continue
         near = difflib.get_close_matches(key_name, _immediate_children(prefix), n=1)
         hint = f" — did you mean `{near[0]}`?" if near else ""
-        findings.append(
-            ("E-CONFIG-KEY-UNKNOWN", path, f"is not a key this schema declares{hint}")
-        )
+        findings.append(("E-CONFIG-KEY-UNKNOWN", path, f"is not a key this schema declares{hint}"))
 
 
 ASSIGN_AXIS_KEYS = frozenset({"method", "from", "ratio", "block_size", "stratify_by", "seed"})

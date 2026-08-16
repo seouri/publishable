@@ -48,7 +48,5 @@ class Collector:
         problem_noun = "problem" if total == 1 else "problems"
         error_noun = "error" if n_err == 1 else "errors"
         warning_noun = "warning" if n_warn == 1 else "warnings"
-        lines.append(
-            f"{total} {problem_noun} ({n_err} {error_noun}, {n_warn} {warning_noun})"
-        )
+        lines.append(f"{total} {problem_noun} ({n_err} {error_noun}, {n_warn} {warning_noun})")
         return "\n".join(lines)

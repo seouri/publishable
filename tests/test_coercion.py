@@ -254,7 +254,5 @@ def test_an_equal_pair_is_allowed():
 def test_a_bare_value_beside_an_estimate_is_untouched():
     """The documented example returns `converged: True` alongside. A bare value
     stays bare — it is not wrapped into the Estimate shape."""
-    got = coerce_scalars(
-        {"delta": Estimate(value=0.031), "converged": True}, "s", scope="summary"
-    )
+    got = coerce_scalars({"delta": Estimate(value=0.031), "converged": True}, "s", scope="summary")
     assert got["converged"] is True

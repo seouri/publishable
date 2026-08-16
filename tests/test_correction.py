@@ -38,8 +38,13 @@ def test_a_member_with_an_interval_rejects_both_pool_and_diffs():
     *percentile* raw one — wrong by construction, not by evidence."""
     with pytest.raises(ValueError, match="both"):
         Member(
-            where="1", step="s", metric="r", delta=0.1,
-            ci95=(0.0, 0.2), pool=(0.1, 0.2, 0.3), diffs=(0.1, 0.2, 0.3),
+            where="1",
+            step="s",
+            metric="r",
+            delta=0.1,
+            ci95=(0.0, 0.2),
+            pool=(0.1, 0.2, 0.3),
+            diffs=(0.1, 0.2, 0.3),
             declaration_index=0,
         )
 
@@ -50,8 +55,13 @@ def test_a_member_with_an_interval_rejects_neither_pool_nor_diffs():
     would fire over a member that was never thin."""
     with pytest.raises(ValueError, match="neither"):
         Member(
-            where="1", step="s", metric="r", delta=0.1,
-            ci95=(0.0, 0.2), pool=None, diffs=None,
+            where="1",
+            step="s",
+            metric="r",
+            delta=0.1,
+            ci95=(0.0, 0.2),
+            pool=None,
+            diffs=None,
             declaration_index=0,
         )
 
@@ -62,8 +72,13 @@ def test_a_member_with_no_interval_is_not_in_the_family():
     consumes a rank. `cli` passes `ci95=None` for it."""
     with_interval = _m(metric="r")
     without = Member(
-        where="1", step="s", metric="n_units", delta=3.0,
-        ci95=None, pool=None, diffs=None,
+        where="1",
+        step="s",
+        metric="n_units",
+        delta=3.0,
+        ci95=None,
+        pool=None,
+        diffs=None,
         declaration_index=1,
     )
     assert family_members([with_interval, without]) == [with_interval]
@@ -73,11 +88,7 @@ def test_the_family_is_comparisons_times_metrics():
     """`reference.md`: "The family is comparisons × metrics, not comparisons." A
     six-condition sweep is five comparisons, but three metrics per step means a
     reader is shown fifteen intervals."""
-    members = [
-        _m(where=str(c), metric=k)
-        for c in (1, 2, 3, 4, 5)
-        for k in ("r", "rmse", "auc")
-    ]
+    members = [_m(where=str(c), metric=k) for c in (1, 2, 3, 4, 5) for k in ("r", "rmse", "auc")]
     size, shape = family_shape(family_members(members))
     assert shape == {"comparisons": 5, "metrics": 3}
     assert size == 15
@@ -232,9 +243,13 @@ def _from_diffs(where, mean, spread, metric="r", decl=0):
     interval = paired_t_over_units(diffs)
     assert interval is not None
     return Member(
-        where=where, step="step03_analyze", metric=metric,
-        delta=sum(diffs) / len(diffs), ci95=(interval.low, interval.high),
-        pool=None, diffs=diffs,
+        where=where,
+        step="step03_analyze",
+        metric=metric,
+        delta=sum(diffs) / len(diffs),
+        ci95=(interval.low, interval.high),
+        pool=None,
+        diffs=diffs,
         declaration_index=decl,
     )
 
@@ -412,13 +427,23 @@ def test_a_derived_member_is_corrected_off_its_own_pool():
     correct one."""
     pool = tuple(float(i) / 1000.0 for i in range(2000))
     member = Member(
-        where="1", step="s", metric="r", delta=1.0,
-        ci95=(0.049, 1.949), pool=pool, diffs=None,
+        where="1",
+        step="s",
+        metric="r",
+        delta=1.0,
+        ci95=(0.049, 1.949),
+        pool=pool,
+        diffs=None,
         declaration_index=0,
     )
     other = Member(
-        where="1", step="s", metric="rmse", delta=1.0,
-        ci95=(0.049, 1.949), pool=pool, diffs=None,
+        where="1",
+        step="s",
+        metric="rmse",
+        delta=1.0,
+        ci95=(0.049, 1.949),
+        pool=pool,
+        diffs=None,
         declaration_index=1,
     )
     got = corrected_fields([member, other], "bonferroni")[("1", "s", "r")]
@@ -435,8 +460,13 @@ def test_a_pool_too_small_for_the_level_reports_no_interval_and_says_so():
     pool = tuple(float(i) / 1000.0 for i in range(2000))
     members = [
         Member(
-            where=str(c), step="s", metric=k,
-            delta=1.0, ci95=(0.049, 1.949), pool=pool, diffs=None,
+            where=str(c),
+            step="s",
+            metric=k,
+            delta=1.0,
+            ci95=(0.049, 1.949),
+            pool=pool,
+            diffs=None,
             declaration_index=i,
         )
         for i, (c, k) in enumerate((c, k) for c in range(20) for k in ("r", "rmse"))

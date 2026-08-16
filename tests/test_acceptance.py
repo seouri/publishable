@@ -59,9 +59,7 @@ def test_scaffold_then_run_produces_a_real_record(tmp_path: Path, capsys):
     # `pyproject.toml` and `CITATION.cff`.
     import importlib.metadata
 
-    assert doc["provenance"]["publishable_version"] == importlib.metadata.version(
-        "publishable"
-    )
+    assert doc["provenance"]["publishable_version"] == importlib.metadata.version("publishable")
 
     commit = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=root, capture_output=True, text=True, check=True
@@ -185,9 +183,9 @@ def test_a_stale_cached_module_does_not_leak_between_same_named_projects(tmp_pat
     )
     subprocess.run(["git", "add", "."], cwd=root_b, check=True)
     subprocess.run(
-        ["git", "-c", "user.email=t@e.com", "-c", "user.name=t",
-         "commit", "-qm", "distinguish"],
-        cwd=root_b, check=True,
+        ["git", "-c", "user.email=t@e.com", "-c", "user.name=t", "commit", "-qm", "distinguish"],
+        cwd=root_b,
+        check=True,
     )
 
     assert main(["run", str(cfg_a)]) == EXIT_OK
@@ -218,9 +216,18 @@ def test_manifest_drift_mid_run_names_the_changed_path(tmp_path: Path, capsys):
     )
     subprocess.run(["git", "add", "."], cwd=root, check=True)
     subprocess.run(
-        ["git", "-c", "user.email=t@e.com", "-c", "user.name=t",
-         "commit", "-qm", "mutate input mid-run"],
-        cwd=root, check=True,
+        [
+            "git",
+            "-c",
+            "user.email=t@e.com",
+            "-c",
+            "user.name=t",
+            "commit",
+            "-qm",
+            "mutate input mid-run",
+        ],
+        cwd=root,
+        check=True,
     )
 
     assert main(["run", str(cfg)]) == EXIT_FAILED
@@ -418,7 +425,9 @@ def test_sweep_yaml_records_the_resolved_plan(tmp_path: Path):
     assert main(["run", str(cfg)]) == EXIT_OK
     sweep_doc = yaml.safe_load((next(results_dir.glob("run_*")) / "sweep.yaml").read_text())
     assert [c["label"] for c in sweep_doc["conditions"]] == [
-        "baseline", "method=spearman", "method=kendall",
+        "baseline",
+        "method=spearman",
+        "method=kendall",
     ]
     # `repeats` groups by kind (only `seed` exists yet), so one entry whose
     # `seeds` list carries all five — not five entries. See `sweep.sweep_document`.
@@ -451,7 +460,7 @@ def test_a_summary_step_reading_a_swept_parameter_is_refused_in_a_real_run(tmp_p
         "class Step(BaseStep):\n"
         '    scope = "summary"\n\n'
         "    def run(self, cfg, io):\n"
-        "        return {\"method\": cfg.parameters.analysis.method}\n"
+        '        return {"method": cfg.parameters.analysis.method}\n'
     )
     doc = yaml.safe_load(cfg.read_text())
     doc["sweep"] = {
@@ -603,7 +612,9 @@ def test_sweep_yaml_is_written_before_the_first_execution(tmp_path: Path, monkey
     run_dir = next(results_dir.glob("run_*"))
     sweep_doc = yaml.safe_load((run_dir / "sweep.yaml").read_text())
     assert [c["label"] for c in sweep_doc["conditions"]] == [
-        "baseline", "method=spearman", "method=kendall",
+        "baseline",
+        "method=spearman",
+        "method=kendall",
     ]
     assert len(sweep_doc["execution_order"]) == 15
 

@@ -77,24 +77,40 @@ class ReturnsNumpyScalar(BaseStep):
 
 
 def test_a_composed_repeat_label_is_one_directory_segment(tmp_path):
-    ex = Execution(step_cls=Analyze, step_name="fit", scope="repeat", condition_index=0,
-                   condition_label="baseline", repeat_label="batch01_seed42")
+    ex = Execution(
+        step_cls=Analyze,
+        step_name="fit",
+        scope="repeat",
+        condition_index=0,
+        condition_label="baseline",
+        repeat_label="batch01_seed42",
+    )
     assert step_dir_for(tmp_path, ex, collapse_repeats=False) == (
         tmp_path / "conditions" / "00_baseline" / "batch01_seed42" / "fit"
     )
 
 
 def test_a_single_level_run_is_unchanged(tmp_path):
-    ex = Execution(step_cls=Analyze, step_name="fit", scope="repeat", condition_index=None,
-                   condition_label=None, repeat_label="seed42")
-    assert step_dir_for(tmp_path, ex, collapse_repeats=False) == (
-        tmp_path / "seed42" / "fit"
+    ex = Execution(
+        step_cls=Analyze,
+        step_name="fit",
+        scope="repeat",
+        condition_index=None,
+        condition_label=None,
+        repeat_label="seed42",
     )
+    assert step_dir_for(tmp_path, ex, collapse_repeats=False) == (tmp_path / "seed42" / "fit")
 
 
 def test_a_collapsed_repeat_still_collapses_with_a_composed_label(tmp_path):
-    ex = Execution(step_cls=Analyze, step_name="fit", scope="repeat", condition_index=None,
-                   condition_label=None, repeat_label="batch01_seed42")
+    ex = Execution(
+        step_cls=Analyze,
+        step_name="fit",
+        scope="repeat",
+        condition_index=None,
+        condition_label=None,
+        repeat_label="batch01_seed42",
+    )
     assert step_dir_for(tmp_path, ex, collapse_repeats=True) == tmp_path / "fit"
 
 
@@ -190,8 +206,14 @@ def test_executions_jsonl_gets_one_record_per_finished_execution(tmp_path: Path)
 def test_per_repeat_holds_exactly_what_the_step_returned(tmp_path: Path):
     _, results, repeats = harness(tmp_path, [Load, Analyze])
     doc = assemble_run_yaml(
-        run_id="run_x", status="completed", config={"a": 1}, code_hash="sha256:c",
-        parameters_hash="sha256:p", provenance={}, results=results, repeats=repeats,
+        run_id="run_x",
+        status="completed",
+        config={"a": 1},
+        code_hash="sha256:c",
+        parameters_hash="sha256:p",
+        provenance={},
+        results=results,
+        repeats=repeats,
     )
     per_repeat = doc["results"]["conditions"][0]["per_repeat"]["analyze"]
     assert per_repeat == {"seed17": {"r": 0.5}, "seed42": {"r": 0.5}}
@@ -200,9 +222,14 @@ def test_per_repeat_holds_exactly_what_the_step_returned(tmp_path: Path):
 def test_run_yaml_carries_the_three_hashes_and_the_config_verbatim(tmp_path: Path):
     _, results, repeats = harness(tmp_path, [Load, Analyze])
     doc = assemble_run_yaml(
-        run_id="run_x", status="completed", config={"metadata": {"name": "c"}},
-        code_hash="sha256:c", parameters_hash="sha256:p",
-        provenance={"input_manifest_hash": "sha256:m"}, results=results, repeats=repeats,
+        run_id="run_x",
+        status="completed",
+        config={"metadata": {"name": "c"}},
+        code_hash="sha256:c",
+        parameters_hash="sha256:p",
+        provenance={"input_manifest_hash": "sha256:m"},
+        results=results,
+        repeats=repeats,
     )
     assert doc["code_hash"] == "sha256:c"
     assert doc["parameters_hash"] == "sha256:p"
@@ -1134,8 +1161,14 @@ def test_attrition_with_no_units_declared_is_zeroed_not_a_crash(tmp_path: Path):
 def test_a_condition_entry_carries_values_and_no_per_condition_key(tmp_path: Path):
     _, results, repeats = harness(tmp_path, [Load, Analyze])
     doc = assemble_run_yaml(
-        run_id="run_x", status="completed", config={"a": 1}, code_hash="sha256:c",
-        parameters_hash="sha256:p", provenance={}, results=results, repeats=repeats,
+        run_id="run_x",
+        status="completed",
+        config={"a": 1},
+        code_hash="sha256:c",
+        parameters_hash="sha256:p",
+        provenance={},
+        results=results,
+        repeats=repeats,
     )
     condition = doc["results"]["conditions"][0]
     assert condition["values"] == {}
@@ -1163,8 +1196,14 @@ def test_aggregated_sits_beside_per_repeat_without_altering_it(tmp_path: Path):
     counts = attrition(results, roster, "record", condition_index=0)
     summary = summarize_step(collapsed, counts)
     doc = assemble_run_yaml(
-        run_id="run_x", status="completed", config={"a": 1}, code_hash="sha256:c",
-        parameters_hash="sha256:p", provenance={}, results=results, repeats=repeats,
+        run_id="run_x",
+        status="completed",
+        config={"a": 1},
+        code_hash="sha256:c",
+        parameters_hash="sha256:p",
+        provenance={},
+        results=results,
+        repeats=repeats,
         aggregated={0: {"record": summary}},
     )
     condition = doc["results"]["conditions"][0]
@@ -1183,8 +1222,14 @@ def test_no_aggregated_means_no_aggregated_key(tmp_path: Path):
     rather than an empty or null placeholder."""
     _, results, repeats = harness(tmp_path, [Load, Analyze])
     doc = assemble_run_yaml(
-        run_id="run_x", status="completed", config={"a": 1}, code_hash="sha256:c",
-        parameters_hash="sha256:p", provenance={}, results=results, repeats=repeats,
+        run_id="run_x",
+        status="completed",
+        config={"a": 1},
+        code_hash="sha256:c",
+        parameters_hash="sha256:p",
+        provenance={},
+        results=results,
+        repeats=repeats,
     )
     condition = doc["results"]["conditions"][0]
     assert "aggregated" not in condition
@@ -1215,9 +1260,13 @@ def _two_condition_results(tmp_path: Path, roster: "UnitList"):
     run_dir.mkdir(parents=True, exist_ok=True)
     (tmp_path / "input").mkdir(parents=True, exist_ok=True)
     results = execute_plan(
-        plan=plan, run_dir=run_dir, input_dir=tmp_path / "input",
+        plan=plan,
+        run_dir=run_dir,
+        input_dir=tmp_path / "input",
         cfgs={0: Config({"parameters": {}}), 1: Config({"parameters": {}})},
-        repeats=repeats, digest="sha256:abc", units=roster,
+        repeats=repeats,
+        digest="sha256:abc",
+        units=roster,
     )
     return results, repeats
 
@@ -1235,8 +1284,14 @@ def test_aggregated_is_scoped_per_condition_not_shared(tmp_path: Path):
         aggregated[index] = {"record": summarize_step(collapsed, counts)}
 
     doc = assemble_run_yaml(
-        run_id="run_x", status="completed", config={"a": 1}, code_hash="sha256:c",
-        parameters_hash="sha256:p", provenance={}, results=results, repeats=repeats,
+        run_id="run_x",
+        status="completed",
+        config={"a": 1},
+        code_hash="sha256:c",
+        parameters_hash="sha256:p",
+        provenance={},
+        results=results,
+        repeats=repeats,
         aggregated=aggregated,
     )
     conds = doc["results"]["conditions"]
@@ -1261,8 +1316,14 @@ def test_a_condition_absent_from_aggregated_gets_an_empty_mapping(tmp_path: Path
     aggregated = {0: {"record": summarize_step(collapsed, counts)}}  # nothing for condition 1
 
     doc = assemble_run_yaml(
-        run_id="run_x", status="completed", config={"a": 1}, code_hash="sha256:c",
-        parameters_hash="sha256:p", provenance={}, results=results, repeats=repeats,
+        run_id="run_x",
+        status="completed",
+        config={"a": 1},
+        code_hash="sha256:c",
+        parameters_hash="sha256:p",
+        provenance={},
+        results=results,
+        repeats=repeats,
         aggregated=aggregated,
     )
     conds = doc["results"]["conditions"]
@@ -1294,9 +1355,13 @@ def test_attrition_is_scoped_per_condition(tmp_path: Path):
     run_dir.mkdir(parents=True, exist_ok=True)
     (tmp_path / "input").mkdir(parents=True, exist_ok=True)
     results = execute_plan(
-        plan=plan, run_dir=run_dir, input_dir=tmp_path / "input",
+        plan=plan,
+        run_dir=run_dir,
+        input_dir=tmp_path / "input",
         cfgs={0: Config({"parameters": {}}), 1: Config({"parameters": {}})},
-        repeats=repeats, digest="sha256:abc", units=roster,
+        repeats=repeats,
+        digest="sha256:abc",
+        units=roster,
     )
     assert attrition(results, roster, "record", condition_index=0)["completed"] == 1
     assert attrition(results, roster, "record", condition_index=1)["completed"] == 2
@@ -1656,9 +1721,7 @@ def test_n_gains_effective_under_a_weighted_design(tmp_path: Path):
     all five resolved units the answer would be 2.2857, and over four equal ones
     4.0."""
     roster, results = _weighted_harness(tmp_path)
-    counts = attrition(
-        results, roster, "record_four_skip_one", condition_index=0, weights=_WEIGHTS
-    )
+    counts = attrition(results, roster, "record_four_skip_one", condition_index=0, weights=_WEIGHTS)
     assert counts["effective"] == pytest.approx(_KISH_COMPLETED)
     assert counts["effective"] != pytest.approx(_KISH_RESOLVED)
     # `effective` sits beside `completed` rather than replacing it: weights change
@@ -1732,9 +1795,7 @@ def test_n_gains_clusters_under_a_clustered_design(tmp_path: Path):
     completed units' clusters), 3 (the resolved roster's clusters) and 4 (the
     completed unit count). All three are asserted."""
     roster, results = _clustered_harness(tmp_path)
-    counts = attrition(
-        results, roster, "record_four_skip_one", condition_index=0, clusters=_SITES
-    )
+    counts = attrition(results, roster, "record_four_skip_one", condition_index=0, clusters=_SITES)
     assert counts == {
         "resolved": 5,
         "completed": 4,

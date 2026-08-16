@@ -217,8 +217,7 @@ def _from_table(
                 code="E-UNITS-ATTR-MISSING",
             )
     return [
-        Unit(key=row[key_col], paths=(), attributes={a: row[a] for a in attrs})
-        for row in rows
+        Unit(key=row[key_col], paths=(), attributes={a: row[a] for a in attrs}) for row in rows
     ], frozenset(columns)
 
 
@@ -248,9 +247,7 @@ def _from_glob(
     # Lexicographic over relative paths: filesystems walk directories differently,
     # and a roster whose order depends on that is not reproducible.
     rels = sorted(
-        p.relative_to(input_dir).as_posix()
-        for p in input_dir.glob(pattern)
-        if p.is_file()
+        p.relative_to(input_dir).as_posix() for p in input_dir.glob(pattern) if p.is_file()
     )
     if not rels:
         raise ContractError(
@@ -675,9 +672,7 @@ def apply_rule(rule: str, values: list[Any]) -> Any:
     # to equal the input. `bool` is excluded from "numeric" explicitly:
     # `isinstance(True, int)` is `True` in Python, and summing booleans is a
     # different intent than summing depths.
-    numeric_values = all(
-        isinstance(v, (int, float)) and not isinstance(v, bool) for v in values
-    )
+    numeric_values = all(isinstance(v, (int, float)) and not isinstance(v, bool) for v in values)
     if all(v == values[0] for v in values) and not (
         rule in NUMERIC_COLLAPSE_RULES and numeric_values
     ):
@@ -1436,9 +1431,7 @@ def holdout_for(
             # attribute, never a `sweep.groups` axis (§ Validation,
             # *Stratification attribute exists*), and a holdout beside a group
             # axis is refused outright as `E-DATA-HOLDOUT-CELLS`.
-            groups = _stratum_groups(
-                list(roster), strata, "data.units.holdout.stratify_by"
-            )
+            groups = _stratum_groups(list(roster), strata, "data.units.holdout.stratify_by")
             for stratum_units in groups.values():
                 if clusters is not None:
                     # Whole clusters inside each stratum — sound only while
@@ -1492,9 +1485,7 @@ def holdout_for(
                 "`frac`, stratify on fewer attributes, or resolve a larger roster",
                 code="E-DATA-HOLDOUT-EMPTY",
             )
-        return HoldoutPlan(
-            train=tuple(train_keys), test=tuple(test_keys), seed=seed, strata=strata
-        )
+        return HoldoutPlan(train=tuple(train_keys), test=tuple(test_keys), seed=seed, strata=strata)
     raise NotImplementedError(
         f"`data.units.holdout.method: {method!r}` is not realized here — the methods "
         f"this build draws are {', '.join(HOLDOUT_METHODS_REALIZED)}. `validate` "
@@ -1667,9 +1658,7 @@ def _stratum_groups(
             continue
         if isinstance(name, str) and name in plans:
             plan = plans[name]
-            sources.append(
-                {key: level for level, keys in plan.members.items() for key in keys}
-            )
+            sources.append({key: level for level, keys in plan.members.items() for key in keys})
             continue
         if declaration.startswith("data.units.holdout"):
             raise NotImplementedError(
@@ -1698,9 +1687,7 @@ def _stratum_groups(
 
     groups: dict[tuple[str, ...], list[Unit]] = {}
     for unit in units:
-        key = tuple(
-            value(unit, name, source) for name, source in zip(names, sources, strict=True)
-        )
+        key = tuple(value(unit, name, source) for name, source in zip(names, sources, strict=True))
         groups.setdefault(key, []).append(unit)
     return groups
 
@@ -2114,9 +2101,7 @@ def assignment_for(
                     drawn,
                 )
         else:
-            _blocked_draw(
-                [unit.key for unit in roster], levels, weights, block_size, rng, drawn
-            )
+            _blocked_draw([unit.key for unit in roster], levels, weights, block_size, rng, drawn)
         empty = [level for level in levels if not drawn[level]]
         if empty:
             declaration = f"data.units.assign.{axis}.stratify_by"
@@ -2140,9 +2125,7 @@ def assignment_for(
         blocked_members: dict[str, tuple[str, ...]] = {
             level: tuple(keys_) for level, keys_ in drawn.items()
         }
-        return ArmPlan(
-            levels=tuple(levels), members=blocked_members, seed=seed, strata=strata
-        )
+        return ArmPlan(levels=tuple(levels), members=blocked_members, seed=seed, strata=strata)
     if method is not None and method != "by_attribute":
         # `method in DRAWN_ASSIGN_METHODS` is not checked here: both of that tuple's
         # members (`random`, `blocked`) are handled in their own branches above, so
@@ -2641,10 +2624,7 @@ def units_hash(units: UnitList) -> str:
     """Covers the list in resolved order — two runs that resolved the same units in a
     different sequence did not allocate the same trial."""
     payload = json.dumps(
-        [
-            {"key": u.key, "paths": list(u.paths), "attributes": dict(u.attributes)}
-            for u in units
-        ],
+        [{"key": u.key, "paths": list(u.paths), "attributes": dict(u.attributes)} for u in units],
         sort_keys=True,
         separators=(",", ":"),
         ensure_ascii=False,

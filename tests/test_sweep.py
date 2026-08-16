@@ -30,12 +30,14 @@ def test_a_bare_baseline_is_one_condition_but_labelled():
 
 
 def test_baseline_plus_grid_prepends_the_baseline():
-    conds = expand({
-        "sweep": {
-            "baseline": {"analysis.method": "pearson"},
-            "grid": {"analysis.method": ["spearman", "kendall"]},
+    conds = expand(
+        {
+            "sweep": {
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {"analysis.method": ["spearman", "kendall"]},
+            }
         }
-    })
+    )
     assert [c.index for c in conds] == [0, 1, 2]
     assert [c.label for c in conds] == ["baseline", "method=spearman", "method=kendall"]
     assert [c.is_baseline for c in conds] == [True, False, False]
@@ -50,9 +52,7 @@ def test_grid_without_a_baseline_starts_at_zero():
 
 def test_the_last_declared_axis_varies_fastest():
     """Numbering reads like nested loops written in declaration order."""
-    conds = expand({
-        "sweep": {"grid": {"a.x": [1, 2], "b.y": ["p", "q"]}}
-    })
+    conds = expand({"sweep": {"grid": {"a.x": [1, 2], "b.y": ["p", "q"]}}})
     assert [c.values for c in conds] == [
         {"a.x": 1, "b.y": "p"},
         {"a.x": 1, "b.y": "q"},
@@ -65,9 +65,7 @@ def test_grid_axes_vary_the_last_declared_axis_fastest() -> None:
     """`itertools.product` varies its last argument fastest, which is the
     declared-order nesting § Expansion modes asks for. The refactor moves this
     loop, so pin the order it produces before moving it."""
-    conditions = expand(
-        {"sweep": {"grid": {"a.x": [1, 2], "b.y": ["p", "q"]}}}
-    )
+    conditions = expand({"sweep": {"grid": {"a.x": [1, 2], "b.y": ["p", "q"]}}})
 
     assert [dict(c.values) for c in conditions] == [
         {"a.x": 1, "b.y": "p"},
@@ -111,16 +109,12 @@ def test_a_single_axis_uses_the_shortest_suffix():
 
 def test_a_shared_leaf_forces_both_keys_to_keep_a_segment():
     """The rule is shortest UNIQUE suffix, not shortest suffix."""
-    conds = expand({
-        "sweep": {"grid": {"analysis.method": ["pearson"], "scoring.method": ["auc"]}}
-    })
+    conds = expand({"sweep": {"grid": {"analysis.method": ["pearson"], "scoring.method": ["auc"]}}})
     assert conds[0].label == "analysis.method=pearson__scoring.method=auc"
 
 
 def test_a_three_segment_path_disambiguates_only_as_far_as_needed():
-    conds = expand({
-        "sweep": {"grid": {"a.b.method": ["x"], "c.d.method": ["y"]}}
-    })
+    conds = expand({"sweep": {"grid": {"a.b.method": ["x"], "c.d.method": ["y"]}}})
     assert conds[0].label == "b.method=x__d.method=y"
 
 
@@ -136,6 +130,7 @@ def test_booleans_and_floats_render_readably():
 
 def test_a_value_rendering_the_axis_separator_is_refused():
     from publishable.sweep import check_swept_value
+
     message = check_swept_value("a__b")
     assert message is not None
     assert "a__b" in message
@@ -146,6 +141,7 @@ def test_a_single_underscore_is_still_accepted():
     """Narrowing the pattern to exclude `_` entirely would be over-correction —
     only the two-character separator sequence is the conflict."""
     from publishable.sweep import check_swept_value
+
     assert check_swept_value("a_b") is None
 
 
@@ -187,6 +183,7 @@ def test_swept_paths_lists_a_paired_path_once_even_when_every_entry_names_it():
     `_keys_for` compare a path against itself (trivially "unique") instead of
     against every other swept path."""
     from publishable.sweep import _swept_paths
+
     paths = _swept_paths(
         {
             "grid": {"analysis.method": ["pearson", "spearman"]},
@@ -202,6 +199,7 @@ def test_swept_paths_lists_a_paired_path_once_even_when_every_entry_names_it():
 def test_values_already_refused_by_the_pattern_are_still_refused():
     """The separator check is on top of the pattern check, not instead of it."""
     from publishable.sweep import check_swept_value
+
     assert check_swept_value("a b") is not None
     assert check_swept_value("a/b") is not None
 
@@ -210,10 +208,15 @@ def test_every_generated_label_body_matches_the_selector_pattern():
     import re
 
     from publishable.sweep import SWEPT_VALUE_PATTERN
-    conds = expand({
-        "sweep": {"baseline": {"analysis.method": "pearson"},
-                  "grid": {"analysis.method": ["spearman", "kendall"]}}
-    })
+
+    conds = expand(
+        {
+            "sweep": {
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {"analysis.method": ["spearman", "kendall"]},
+            }
+        }
+    )
     for c in conds:
         for part in c.label.split("__"):
             value = part.split("=")[-1]
@@ -228,8 +231,14 @@ def test_the_sweep_document_records_the_resolved_plan():
     from publishable.replication import Repeat, RepeatLevel, RepeatMember
     from publishable.sweep import expand, sweep_document
 
-    conds = expand({"sweep": {"baseline": {"analysis.method": "pearson"},
-                              "grid": {"analysis.method": ["spearman"]}}})
+    conds = expand(
+        {
+            "sweep": {
+                "baseline": {"analysis.method": "pearson"},
+                "grid": {"analysis.method": ["spearman"]},
+            }
+        }
+    )
     repeats = [Repeat("seed", "seed17", 17), Repeat("seed", "seed42", 42)]
     levels = [RepeatLevel("seed", (RepeatMember("seed17", 17), RepeatMember("seed42", 42)))]
     execution_order = [(0, "seed17"), (0, "seed42"), (1, "seed17"), (1, "seed42")]
@@ -237,10 +246,18 @@ def test_the_sweep_document_records_the_resolved_plan():
 
     assert doc["design_digest"] == "sha256:abc"
     assert doc["conditions"] == [
-        {"index": 0, "label": "baseline", "values": {"analysis.method": "pearson"},
-         "is_baseline": True},
-        {"index": 1, "label": "method=spearman", "values": {"analysis.method": "spearman"},
-         "is_baseline": False},
+        {
+            "index": 0,
+            "label": "baseline",
+            "values": {"analysis.method": "pearson"},
+            "is_baseline": True,
+        },
+        {
+            "index": 1,
+            "label": "method=spearman",
+            "values": {"analysis.method": "spearman"},
+            "is_baseline": False,
+        },
     ]
     assert doc["repeats"] == [{"kind": "seed", "seeds": [17, 42]}]
     assert doc["labels"] == ["seed17", "seed42"]
@@ -262,8 +279,15 @@ def test_a_randomized_order_records_its_seed():
 
     conds = expand({"sweep": {"grid": {"a.x": [1]}}})
     levels = [RepeatLevel("seed", (RepeatMember("seed01", 1),))]
-    doc = sweep_document(conds, levels, [Repeat("seed", "seed01", 1)], "sha256:r",
-                         "randomized", [(0, "seed01")], order_seed=4417029)
+    doc = sweep_document(
+        conds,
+        levels,
+        [Repeat("seed", "seed01", 1)],
+        "sha256:r",
+        "randomized",
+        [(0, "seed01")],
+        order_seed=4417029,
+    )
 
     assert doc["order"] == "randomized"
     assert doc["order_seed"] == 4417029
@@ -276,10 +300,14 @@ def test_the_document_is_plain_yaml_safe_data():
     from publishable.replication import Repeat, RepeatLevel, RepeatMember
     from publishable.sweep import expand, sweep_document
 
-    doc = sweep_document(expand({"sweep": {"grid": {"a.x": [1]}}}),
-                         [RepeatLevel("seed", (RepeatMember("seed01", 1),))],
-                         [Repeat("seed", "seed01", 1)], "sha256:d",
-                         "as_declared", [(0, "seed01")])
+    doc = sweep_document(
+        expand({"sweep": {"grid": {"a.x": [1]}}}),
+        [RepeatLevel("seed", (RepeatMember("seed01", 1),))],
+        [Repeat("seed", "seed01", 1)],
+        "sha256:d",
+        "as_declared",
+        [(0, "seed01")],
+    )
     assert yaml.safe_load(yaml.safe_dump(doc)) == doc
 
 
@@ -296,8 +324,9 @@ def test_the_document_round_trips_a_float_and_a_boolean_condition_value():
     conds = expand({"sweep": {"grid": {"analysis.threshold": [0.5], "analysis.strict": [True]}}})
     repeats = [Repeat("seed", "seed01", 1), Repeat("seed", "seed02", 2)]
     levels = [RepeatLevel("seed", (RepeatMember("seed01", 1), RepeatMember("seed02", 2)))]
-    doc = sweep_document(conds, levels, repeats, "sha256:e", "as_declared",
-                         [(0, "seed01"), (0, "seed02")])
+    doc = sweep_document(
+        conds, levels, repeats, "sha256:e", "as_declared", [(0, "seed01"), (0, "seed02")]
+    )
     round_tripped = yaml.safe_load(yaml.safe_dump(doc))
 
     assert round_tripped == doc
@@ -335,17 +364,21 @@ def test_the_document_records_one_repeats_entry_per_level():
     ]
     leaves = cross_levels(levels)
     conds = expand({"sweep": {"grid": {"a.x": [1]}}})
-    doc = sweep_document(conds, levels, leaves, "sha256:n", "as_declared",
-                         [(0, lf.label) for lf in leaves])
+    doc = sweep_document(
+        conds, levels, leaves, "sha256:n", "as_declared", [(0, lf.label) for lf in leaves]
+    )
 
     assert doc["repeats"] == [
-        {"kind": "batch", "n": 3},                 # `n` alone — a batch has no parameter
-        {"kind": "seed", "seeds": [17, 42]},       # its own two, not one per execution
+        {"kind": "batch", "n": 3},  # `n` alone — a batch has no parameter
+        {"kind": "seed", "seeds": [17, 42]},  # its own two, not one per execution
     ]
     assert doc["labels"] == [
-        "batch01_seed17", "batch01_seed42",
-        "batch02_seed17", "batch02_seed42",
-        "batch03_seed17", "batch03_seed42",
+        "batch01_seed17",
+        "batch01_seed42",
+        "batch02_seed17",
+        "batch02_seed42",
+        "batch03_seed17",
+        "batch03_seed42",
     ]
 
 
@@ -357,8 +390,16 @@ def test_a_fold_level_records_its_partitions():
 
     levels = resolve_repeats(cfg([{"kind": "fold", "k": 2}]), "d", fold_basis=4)
     parts = [[_u("a"), _u("b")], [_u("c"), _u("d")]]
-    doc = sweep_document(expand({}), levels, cross_levels(levels), "sha256:x",
-                         "as_declared", [], None, partitions=parts)
+    doc = sweep_document(
+        expand({}),
+        levels,
+        cross_levels(levels),
+        "sha256:x",
+        "as_declared",
+        [],
+        None,
+        partitions=parts,
+    )
     assert doc["partitions"] == [
         {"fold": "fold01", "test": ["a", "b"], "train": ["c", "d"]},
         {"fold": "fold02", "test": ["c", "d"], "train": ["a", "b"]},
@@ -373,8 +414,9 @@ def test_no_fold_level_records_no_partitions_key():
     from publishable.sweep import expand, sweep_document
 
     levels = resolve_repeats(cfg([{"kind": "seed", "n": 2}]), "d")
-    doc = sweep_document(expand({}), levels, cross_levels(levels), "sha256:x",
-                         "as_declared", [], None)
+    doc = sweep_document(
+        expand({}), levels, cross_levels(levels), "sha256:x", "as_declared", [], None
+    )
     assert "partitions" not in doc
 
 
@@ -395,8 +437,16 @@ def test_partitions_with_no_fold_level_raise_a_coded_error_rather_than_asserting
 
     levels = resolve_repeats(cfg([{"kind": "seed", "n": 2}]), "d")
     with pytest.raises(ContractError) as excinfo:
-        sweep_document(expand({}), levels, cross_levels(levels), "sha256:x",
-                       "as_declared", [], None, partitions=[[_u("a")], [_u("b")]])
+        sweep_document(
+            expand({}),
+            levels,
+            cross_levels(levels),
+            "sha256:x",
+            "as_declared",
+            [],
+            None,
+            partitions=[[_u("a")], [_u("b")]],
+        )
     assert excinfo.value.code == "E-RUN-FOLD-UNRESOLVED"
 
 
@@ -542,8 +592,12 @@ def test_a_sample_axis_multiplies_with_grid() -> None:
         for c in conditions
     )
     assert [c.label.split("__")[0] for c in conditions] == [
-        "method=pearson", "method=pearson", "method=pearson",
-        "method=spearman", "method=spearman", "method=spearman",
+        "method=pearson",
+        "method=pearson",
+        "method=pearson",
+        "method=spearman",
+        "method=spearman",
+        "method=spearman",
     ]
 
 
@@ -551,6 +605,7 @@ def test_swept_paths_carries_the_sample_ranges() -> None:
     """`label_for` shortens a path against the whole swept set, so a path a mode
     sweeps but `_swept_paths` omits produces a silently ambiguous label."""
     from publishable.sweep import _swept_paths
+
     paths = _swept_paths(
         {
             "grid": {"analysis.method": ["pearson"]},
@@ -576,29 +631,29 @@ def test_a_malformed_sample_raises_a_coded_error_rather_than_crashing() -> None:
     from publishable.errors import ContractError
 
     malformed = [
-        {"ranges": {"a.b": {"uniform": [0, 1]}}},                       # no `n`
-        {"n": 0, "ranges": {"a.b": {"uniform": [0, 1]}}},               # n below 1
-        {"n": "8", "ranges": {"a.b": {"uniform": [0, 1]}}},             # n not an int
-        {"n": True, "ranges": {"a.b": {"uniform": [0, 1]}}},            # a bool is not an n
-        {"n": 4},                                                        # no `ranges`
-        {"n": 4, "ranges": {}},                                          # empty `ranges`
-        {"n": 4, "ranges": []},                                          # ranges not a mapping
-        {"n": 4, "ranges": {123: {"uniform": [0, 1]}}},                  # non-string path
-        {"n": 4, "ranges": {"a.b": "uniform"}},                          # entry not a mapping
-        {"n": 4, "ranges": {"a.b": {}}},                                 # no form
+        {"ranges": {"a.b": {"uniform": [0, 1]}}},  # no `n`
+        {"n": 0, "ranges": {"a.b": {"uniform": [0, 1]}}},  # n below 1
+        {"n": "8", "ranges": {"a.b": {"uniform": [0, 1]}}},  # n not an int
+        {"n": True, "ranges": {"a.b": {"uniform": [0, 1]}}},  # a bool is not an n
+        {"n": 4},  # no `ranges`
+        {"n": 4, "ranges": {}},  # empty `ranges`
+        {"n": 4, "ranges": []},  # ranges not a mapping
+        {"n": 4, "ranges": {123: {"uniform": [0, 1]}}},  # non-string path
+        {"n": 4, "ranges": {"a.b": "uniform"}},  # entry not a mapping
+        {"n": 4, "ranges": {"a.b": {}}},  # no form
         {"n": 4, "ranges": {"a.b": {"uniform": [0, 1], "int_uniform": [0, 1]}}},  # two forms
-        {"n": 4, "ranges": {"a.b": {123: [0, 1]}}},                      # non-string form
-        {"n": 4, "ranges": {"a.b": {"gaussian": [0, 1]}}},               # unknown form
-        {"n": 4, "ranges": {"a.b": {"uniform": 0.5}}},                   # bounds not a list
-        {"n": 4, "ranges": {"a.b": {"uniform": [0, 1, 2]}}},             # three bounds
-        {"n": 4, "ranges": {"a.b": {"uniform": ["0", "1"]}}},            # bounds not numbers
-        {"n": 4, "ranges": {"a.b": {"uniform": [True, False]}}},         # bools are not bounds
-        {"n": 4, "ranges": {"a.b": {"uniform": [1, 0]}}},                # lower above upper
-        {"n": 4, "ranges": {"a.b": {"uniform": [1, 1]}}},                # empty interval
-        {"n": 4, "ranges": {"a.b": {"log_uniform": [0, 1]}}},            # log of zero
-        {"n": 4, "ranges": {"a.b": {"int_uniform": [1.5, 3.5]}}},        # non-integer bounds
-        {"n": 4, "method": "gaussian", "ranges": {"a.b": {"uniform": [0, 1]}}},   # method
-        {"n": 4, "method": 5, "ranges": {"a.b": {"uniform": [0, 1]}}},   # method not a string
+        {"n": 4, "ranges": {"a.b": {123: [0, 1]}}},  # non-string form
+        {"n": 4, "ranges": {"a.b": {"gaussian": [0, 1]}}},  # unknown form
+        {"n": 4, "ranges": {"a.b": {"uniform": 0.5}}},  # bounds not a list
+        {"n": 4, "ranges": {"a.b": {"uniform": [0, 1, 2]}}},  # three bounds
+        {"n": 4, "ranges": {"a.b": {"uniform": ["0", "1"]}}},  # bounds not numbers
+        {"n": 4, "ranges": {"a.b": {"uniform": [True, False]}}},  # bools are not bounds
+        {"n": 4, "ranges": {"a.b": {"uniform": [1, 0]}}},  # lower above upper
+        {"n": 4, "ranges": {"a.b": {"uniform": [1, 1]}}},  # empty interval
+        {"n": 4, "ranges": {"a.b": {"log_uniform": [0, 1]}}},  # log of zero
+        {"n": 4, "ranges": {"a.b": {"int_uniform": [1.5, 3.5]}}},  # non-integer bounds
+        {"n": 4, "method": "gaussian", "ranges": {"a.b": {"uniform": [0, 1]}}},  # method
+        {"n": 4, "method": 5, "ranges": {"a.b": {"uniform": [0, 1]}}},  # method not a string
         {"n": 4, "seed": "17", "ranges": {"a.b": {"uniform": [0, 1]}}},  # a seed is auto or an int
         {"n": 4, "seed": True, "ranges": {"a.b": {"uniform": [0, 1]}}},  # a bool is not a seed
         "notamapping",
@@ -646,16 +701,28 @@ def test_the_sample_seed_is_recorded_in_the_sweep_document() -> None:
     assert sample_seed_for({"sweep": {"grid": {"a.x": [1]}}}) is None
 
     levels = [RepeatLevel("seed", (RepeatMember("seed01", 1),))]
-    doc = sweep_document(expand(config), levels, [Repeat("seed", "seed01", 1)], "sha256:d",
-                         "as_declared", [(0, "seed01")], sample_seed=seed)
+    doc = sweep_document(
+        expand(config),
+        levels,
+        [Repeat("seed", "seed01", 1)],
+        "sha256:d",
+        "as_declared",
+        [(0, "seed01")],
+        sample_seed=seed,
+    )
     assert doc["sample_seed"] == seed
     assert [c["values"]["analysis.confidence"] for c in doc["conditions"]] == [
         dict(c.values)["analysis.confidence"] for c in expand(config)
     ]
 
-    without = sweep_document(expand({"sweep": {"grid": {"a.x": [1]}}}), levels,
-                             [Repeat("seed", "seed01", 1)], "sha256:d",
-                             "as_declared", [(0, "seed01")])
+    without = sweep_document(
+        expand({"sweep": {"grid": {"a.x": [1]}}}),
+        levels,
+        [Repeat("seed", "seed01", 1)],
+        "sha256:d",
+        "as_declared",
+        [(0, "seed01")],
+    )
     assert "sample_seed" not in without
 
 
@@ -976,9 +1043,13 @@ def test_selector_paths_is_total_over_a_malformed_groups_block() -> None:
     assert selector_paths({"groups": [{"by": 3, "levels": ["control"]}]}) == []
     # Deduped in declared order, like `_swept_paths` and `ablated_paths`.
     assert selector_paths(
-        {"groups": [{"by": "sex", "levels": ["f", "m"]},
-                    {"by": "arm", "levels": ["control"]},
-                    {"by": "sex", "levels": ["f"]}]}
+        {
+            "groups": [
+                {"by": "sex", "levels": ["f", "m"]},
+                {"by": "arm", "levels": ["control"]},
+                {"by": "sex", "levels": ["f"]},
+            ]
+        }
     ) == ["sex", "arm"]
     # A grid path is never one: `groups` is the only mode outside
     # `PARAMETER_AXIS_MODES`, which is what `SELECTOR_MODES` derives from.
@@ -1209,9 +1280,7 @@ def test_a_group_axis_gives_one_condition_per_level() -> None:
     The control is the same call with `groups` removed: an empty `sweep` is one
     unlabelled condition, so the two conditions here are the group axis's and
     nothing else's."""
-    conditions = expand(
-        {"sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}}
-    )
+    conditions = expand({"sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}})
 
     assert [c.label for c in conditions] == ["arm=control", "arm=treatment"]
     assert [dict(c.values) for c in conditions] == [{"arm": "control"}, {"arm": "treatment"}]
@@ -1219,9 +1288,7 @@ def test_a_group_axis_gives_one_condition_per_level() -> None:
     assert [c.index for c in conditions] == [0, 1]
     assert [c.is_baseline for c in conditions] == [False, False]
 
-    assert expand({"sweep": {}}) == [
-        Condition(index=0, label=None, values={}, is_baseline=False)
-    ]
+    assert expand({"sweep": {}}) == [Condition(index=0, label=None, values={}, is_baseline=False)]
 
 
 def test_a_group_axis_crosses_a_parameter_axis_with_the_group_axis_outermost() -> None:
@@ -1364,8 +1431,10 @@ def test_a_group_key_is_disambiguated_against_a_parameter_path_ending_in_it() ->
             }
         }
     )
-    assert [c.label for c in conditions] == ["arm=control__data.arm=left",
-                                             "arm=control__data.arm=right"]
+    assert [c.label for c in conditions] == [
+        "arm=control__data.arm=left",
+        "arm=control__data.arm=right",
+    ]
 
     plain = expand({"sweep": {"grid": {"data.arm": ["left", "right"]}}})
     assert [c.label for c in plain] == ["arm=left", "arm=right"]

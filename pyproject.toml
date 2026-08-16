@@ -26,6 +26,11 @@ src = ["src", "tests"]
 select = ["E", "F", "I", "UP", "B"]
 
 [tool.ruff.format]
+# Ruff formats fenced Python inside Markdown by default, and this repo's four
+# normative documents are full of it — `README.md` and `docs/reference.md` both
+# carry config and step examples written for a reader, not for a formatter.
+# Without this exclusion `ruff format .` rewrites them, which happened once and
+# cost a repo-wide revert. Removing it puts the documents back in scope.
 exclude = ["*.md"]
 
 [tool.mypy]

@@ -916,9 +916,7 @@ def test_a_holdout_repeat_kind_still_routes_to_the_built_field(write_config):
     whose config also declares a real block; this test's own job is only the
     routing, which the first two assertions carry."""
     overrides = _holdout({"method": "random", "frac": 0.2})
-    overrides["replication"] = {
-        "repeats": [{"kind": "holdout", "n": 1}], "order": "as_declared"
-    }
+    overrides["replication"] = {"repeats": [{"kind": "holdout", "n": 1}], "order": "as_declared"}
     by_code = messages_by_code(write_config(overrides))
     assert "E-REPL-KIND" in by_code
     assert "data.units.holdout" in by_code["E-REPL-KIND"]
@@ -4085,10 +4083,12 @@ def test_an_unrelated_unsupported_field_does_not_suppress_a_real_roster_defect(
     (tmp_path / "input" / "index.csv").write_text("patient_id\np1\np1\n")
     units = {"from": "index.csv", "key": "patient_id"}
     found = codes(
-        write_config({
-            "data.units": units,
-            "statistics": {"null_test": {"method": "permutation", "n": 5000}},
-        })
+        write_config(
+            {
+                "data.units": units,
+                "statistics": {"null_test": {"method": "permutation", "n": 5000}},
+            }
+        )
     )
     assert "E-STATS-NULLTEST-UNSUPPORTED" in found
     assert "E-UNITS-KEY-DUPLICATE" in found
@@ -11702,9 +11702,7 @@ def test_a_holdout_beside_a_fold_repeat_is_refused(write_config):
     divided for evaluation — leaving "which units is this metric over?" with
     none."""
     overrides = _holdout({"method": "random", "frac": 0.2})
-    overrides["replication"] = {
-        "repeats": [{"kind": "fold", "k": 5}], "order": "as_declared"
-    }
+    overrides["replication"] = {"repeats": [{"kind": "fold", "k": 5}], "order": "as_declared"}
     found = codes(write_config(overrides))
     assert "E-DATA-HOLDOUT-FOLD" in found
 
@@ -11728,9 +11726,7 @@ _SPLIT_ROSTER_THREE = "patient_id,split\n" + "".join(
 _SPLIT_ROSTER_AB = "patient_id,split\n" + "".join(
     f"p{i},{'A' if i % 2 else 'B'}\n" for i in range(20)
 )
-_SPLIT_ROSTER_ONE_SIDED = "patient_id,split\n" + "".join(
-    f"p{i},train\n" for i in range(20)
-)
+_SPLIT_ROSTER_ONE_SIDED = "patient_id,split\n" + "".join(f"p{i},train\n" for i in range(20))
 _SPLIT_ROSTER_BLANK = "patient_id,split\n" + "".join(
     f"p{i},{'' if i == 0 else ('test' if i % 5 == 0 else 'train')}\n" for i in range(20)
 )
@@ -11793,11 +11789,7 @@ def test_a_by_attribute_holdout_column_must_hold_exactly_train_and_test(
     first row asserts the clause's ABSENCE — the code alone does not tell
     these branches apart (see task 7 review, finding 1)."""
     (tmp_path / "input" / "index.csv").write_text(roster_csv)
-    path = write_config(
-        _holdout(
-            {"method": "by_attribute", "from": "split"}, attributes=["split"]
-        )
-    )
+    path = write_config(_holdout({"method": "by_attribute", "from": "split"}, attributes=["split"]))
     found = codes(path)
     assert "E-DATA-HOLDOUT-VALUES" in found
     message = messages_by_code(path)["E-DATA-HOLDOUT-VALUES"]
@@ -11878,9 +11870,7 @@ def test_a_holdout_stratum_must_be_constant_within_a_cluster(
         assert "it carries x, y" in message
 
 
-def test_a_holdout_that_apportions_the_test_side_no_units_is_refused(
-    write_config, tmp_path
-):
+def test_a_holdout_that_apportions_the_test_side_no_units_is_refused(write_config, tmp_path):
     """§ Validation *Holdout leaves a test partition*. 4 units at `frac: 0.1`
     apportions `[4, 0]` — every metric would be over nothing.
 
@@ -11916,9 +11906,7 @@ def test_the_same_frac_over_a_larger_roster_is_accepted(write_config, tmp_path):
     (tmp_path / "input" / "index.csv").write_text(
         "patient_id\n" + "".join(f"p{i}\n" for i in range(40))
     )
-    found = codes(
-        write_config(_holdout({"method": "random", "frac": 0.1, "seed": "bogus"}))
-    )
+    found = codes(write_config(_holdout({"method": "random", "frac": 0.1, "seed": "bogus"})))
     assert "E-DATA-HOLDOUT-EMPTY" not in found
     assert "E-DATA-HOLDOUT-SEED" in found
 
@@ -11951,7 +11939,6 @@ def test_the_empty_test_partition_refusal_is_not_reported_for_a_clustered_split(
     )
     assert "E-DATA-HOLDOUT-EMPTY" not in found
     assert "E-DATA-HOLDOUT-SEED" in found
-
 
 
 def test_the_empty_test_partition_refusal_is_not_reported_for_a_stratified_split(
@@ -12005,9 +11992,7 @@ def test_the_empty_test_partition_refusal_is_not_stacked_on_a_frac_already_refus
     assert "E-DATA-HOLDOUT-EMPTY" not in found
 
 
-_CELL_ROSTER = "patient_id,arm\n" + "".join(
-    f"p{i},{'b' if i >= 12 else 'a'}\n" for i in range(15)
-)
+_CELL_ROSTER = "patient_id,arm\n" + "".join(f"p{i},{'b' if i >= 12 else 'a'}\n" for i in range(15))
 _ARM_GROUP_AXIS = [{"by": "arm", "levels": ["a", "b"]}]
 
 
@@ -12016,15 +12001,16 @@ def _cells(units_extra: dict, *, fold: bool) -> dict:
     split the caller asked for. 15 units, 12 in arm `a` and 3 in arm `b` — the
     exact shape both defects were reproduced at."""
     units = {
-        "from": "index.csv", "key": "patient_id", "attributes": ["arm"],
-        "allocation": "between", "assign": {"arm": {"method": "by_attribute"}},
+        "from": "index.csv",
+        "key": "patient_id",
+        "attributes": ["arm"],
+        "allocation": "between",
+        "assign": {"arm": {"method": "by_attribute"}},
         **units_extra,
     }
     out: dict = {"data.units": units, "sweep": {"groups": _ARM_GROUP_AXIS}}
     if fold:
-        out["replication"] = {
-            "repeats": [{"kind": "fold", "k": 5}], "order": "as_declared"
-        }
+        out["replication"] = {"repeats": [{"kind": "fold", "k": 5}], "order": "as_declared"}
     return out
 
 
@@ -12045,30 +12031,22 @@ def test_a_holdout_beside_a_cell_structure_is_refused(write_config, tmp_path):
     """The same fault, the same check site, the other split kind: a roster-wide
     `frac: 0.2` over 15 units gives arm `b` zero test units."""
     (tmp_path / "input" / "index.csv").write_text(_CELL_ROSTER)
-    found = codes(
-        write_config(_cells({"holdout": {"method": "random", "frac": 0.2}}, fold=False))
-    )
+    found = codes(write_config(_cells({"holdout": {"method": "random", "frac": 0.2}}, fold=False)))
     assert "E-DATA-HOLDOUT-CELLS" in found
 
 
-def test_both_split_kinds_beside_a_cell_structure_report_both_codes(
-    write_config, tmp_path
-):
+def test_both_split_kinds_beside_a_cell_structure_report_both_codes(write_config, tmp_path):
     """One check site, two codes — asserted together because a site that
     returned after the first finding would pass both tests above and still
     hide half the fault. `E-DATA-HOLDOUT-FOLD` rides along, which is correct:
     the two declarations are also mutually exclusive with each other."""
     (tmp_path / "input" / "index.csv").write_text(_CELL_ROSTER)
-    found = codes(
-        write_config(_cells({"holdout": {"method": "random", "frac": 0.2}}, fold=True))
-    )
+    found = codes(write_config(_cells({"holdout": {"method": "random", "frac": 0.2}}, fold=True)))
     assert "E-DATA-HOLDOUT-CELLS" in found
     assert "E-REPL-FOLD-CELLS" in found
 
 
-def test_allocation_between_alone_triggers_the_refusal_without_a_group_axis(
-    write_config, tmp_path
-):
+def test_allocation_between_alone_triggers_the_refusal_without_a_group_axis(write_config, tmp_path):
     """`allocation: between` and a non-empty `sweep.groups` are two spellings
     of the same cell structure, and EITHER is enough. Without this row a check
     reading only `sweep.groups` passes every test above.
@@ -12082,14 +12060,10 @@ def test_allocation_between_alone_triggers_the_refusal_without_a_group_axis(
     overrides["sweep"] = {}
     path = write_config(overrides)
     assert "E-DATA-HOLDOUT-CELLS" in codes(path)
-    assert "`data.units.allocation: between`" in (
-        messages_by_code(path)["E-DATA-HOLDOUT-CELLS"]
-    )
+    assert "`data.units.allocation: between`" in (messages_by_code(path)["E-DATA-HOLDOUT-CELLS"])
 
 
-def test_a_group_axis_alone_triggers_the_refusal_without_between(
-    write_config, tmp_path
-):
+def test_a_group_axis_alone_triggers_the_refusal_without_between(write_config, tmp_path):
     """The other half of the same pair: without this row a check reading only
     `allocation` passes every test above. The message is asserted for the
     reason its sibling above states."""
@@ -12098,9 +12072,7 @@ def test_a_group_axis_alone_triggers_the_refusal_without_between(
     overrides["data.units"]["allocation"] = "within"
     path = write_config(overrides)
     assert "E-DATA-HOLDOUT-CELLS" in codes(path)
-    assert "a non-empty `sweep.groups`" in (
-        messages_by_code(path)["E-DATA-HOLDOUT-CELLS"]
-    )
+    assert "a non-empty `sweep.groups`" in (messages_by_code(path)["E-DATA-HOLDOUT-CELLS"])
 
 
 def test_an_empty_group_axis_alone_does_not_trigger_the_refusal(write_config, tmp_path):
@@ -12128,9 +12100,7 @@ def test_an_empty_group_axis_alone_does_not_trigger_the_refusal(write_config, tm
     assert "E-DATA-HOLDOUT-CELLS" not in found
 
 
-def test_an_evaluation_split_without_a_cell_structure_is_not_refused(
-    write_config, tmp_path
-):
+def test_an_evaluation_split_without_a_cell_structure_is_not_refused(write_config, tmp_path):
     """The control. `allocation: within`, no `sweep.groups` — the shape all
     nine feasibility configs declare, and the shape this refusal must leave
     alone.
@@ -12139,11 +12109,7 @@ def test_an_evaluation_split_without_a_cell_structure_is_not_refused(
     itself; what proves this one is the pair of trigger tests above, which
     differ from it only in the cell structure."""
     (tmp_path / "input" / "index.csv").write_text(_CELL_ROSTER)
-    found = codes(
-        write_config(
-            _holdout({"method": "random", "frac": 0.2}, attributes=["arm"])
-        )
-    )
+    found = codes(write_config(_holdout({"method": "random", "frac": 0.2}, attributes=["arm"])))
     assert "E-DATA-HOLDOUT-CELLS" not in found
     assert "E-REPL-FOLD-CELLS" not in found
 
@@ -12153,9 +12119,7 @@ _FIFTY_CLUSTERS = "patient_id,animal_id,label\n" + "".join(
 )
 
 
-def test_the_resample_cluster_warning_counts_the_holdout_s_test_partition(
-    write_config, tmp_path
-):
+def test_the_resample_cluster_warning_counts_the_holdout_s_test_partition(write_config, tmp_path):
     """The warning is about how many INDEPENDENT DRAWS a percentile interval
     rests on, and under a holdout the draw runs over the test partition alone.
     50 clusters × `frac: 0.2` is ~10, so `min_clusters: 20` must warn — and at
@@ -12166,24 +12130,32 @@ def test_the_resample_cluster_warning_counts_the_holdout_s_test_partition(
     roster."""
     (tmp_path / "input" / "index.csv").write_text(_FIFTY_CLUSTERS)
     common = {
-        "from": "index.csv", "key": "patient_id",
-        "attributes": ["animal_id", "label"], "cluster_by": "animal_id",
+        "from": "index.csv",
+        "key": "patient_id",
+        "attributes": ["animal_id", "label"],
+        "cluster_by": "animal_id",
     }
     resample = {"resample": {"method": "bootstrap", "n": 2000}}
 
-    without = codes(write_config({
-        "data.units": dict(common),
-        "limits": {"min_clusters": 20},
-        "statistics": resample,
-    }))
+    without = codes(
+        write_config(
+            {
+                "data.units": dict(common),
+                "limits": {"min_clusters": 20},
+                "statistics": resample,
+            }
+        )
+    )
     # The control, and it must be silent: 50 clusters is above 20.
     assert "W-STATS-RESAMPLE-CLUSTERS" not in without
 
-    with_holdout_path = write_config({
-        "data.units": dict(common, holdout={"method": "random", "frac": 0.2}),
-        "limits": {"min_clusters": 20},
-        "statistics": resample,
-    })
+    with_holdout_path = write_config(
+        {
+            "data.units": dict(common, holdout={"method": "random", "frac": 0.2}),
+            "limits": {"min_clusters": 20},
+            "statistics": resample,
+        }
+    )
     with_holdout = codes(with_holdout_path)
     assert "W-STATS-RESAMPLE-CLUSTERS" in with_holdout
     # The message names what was actually counted — the test partition, not
@@ -12194,29 +12166,31 @@ def test_the_resample_cluster_warning_counts_the_holdout_s_test_partition(
     assert "roster" not in holdout_message
 
 
-def test_a_holdout_wide_enough_to_keep_the_clusters_does_not_warn(
-    write_config, tmp_path
-):
+def test_a_holdout_wide_enough_to_keep_the_clusters_does_not_warn(write_config, tmp_path):
     """The positive companion, produced by the code under test: the same
     roster and the same `min_clusters` under a `frac: 0.8` holdout keeps ~40
     clusters on the test side and stays silent. Without it, a fix that warned
     whenever a holdout was declared would pass the test above."""
     (tmp_path / "input" / "index.csv").write_text(_FIFTY_CLUSTERS)
-    found = codes(write_config({
-        "data.units": {
-            "from": "index.csv", "key": "patient_id",
-            "attributes": ["animal_id", "label"], "cluster_by": "animal_id",
-            "holdout": {"method": "random", "frac": 0.8},
-        },
-        "limits": {"min_clusters": 20},
-        "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
-    }))
+    found = codes(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv",
+                    "key": "patient_id",
+                    "attributes": ["animal_id", "label"],
+                    "cluster_by": "animal_id",
+                    "holdout": {"method": "random", "frac": 0.8},
+                },
+                "limits": {"min_clusters": 20},
+                "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
+            }
+        )
+    )
     assert "W-STATS-RESAMPLE-CLUSTERS" not in found
 
 
-def test_the_stratum_constancy_check_still_reads_the_whole_roster(
-    write_config, tmp_path
-):
+def test_the_stratum_constancy_check_still_reads_the_whole_roster(write_config, tmp_path):
     """`E-STATS-RESAMPLE-STRATIFY-VARIES` deliberately does NOT move: a
     stratum varying inside a cluster the holdout put on the TRAINING side is
     still an incoherent declaration, and refusing on the whole roster is the
@@ -12235,15 +12209,21 @@ def test_the_stratum_constancy_check_still_reads_the_whole_roster(
         "patient_id,animal_id,label\n"
         + "".join(f"p{i},a{i // 2},{'y' if i == 1 else 'x'}\n" for i in range(40))
     )
-    found = codes(write_config({
-        "data.units": {
-            "from": "index.csv", "key": "patient_id",
-            "attributes": ["animal_id", "label"], "cluster_by": "animal_id",
-            "holdout": {"method": "random", "frac": 0.2, "seed": 1234},
-        },
-        "limits": {"min_clusters": 2},
-        "statistics": {
-            "resample": {"method": "bootstrap", "n": 2000, "stratify_by": ["label"]}
-        },
-    }))
+    found = codes(
+        write_config(
+            {
+                "data.units": {
+                    "from": "index.csv",
+                    "key": "patient_id",
+                    "attributes": ["animal_id", "label"],
+                    "cluster_by": "animal_id",
+                    "holdout": {"method": "random", "frac": 0.2, "seed": 1234},
+                },
+                "limits": {"min_clusters": 2},
+                "statistics": {
+                    "resample": {"method": "bootstrap", "n": 2000, "stratify_by": ["label"]}
+                },
+            }
+        )
+    )
     assert "E-STATS-RESAMPLE-STRATIFY-VARIES" in found

@@ -229,9 +229,7 @@ def _apply_execution_order(
     )
 
 
-def _baseline_comparisons(
-    doc: dict[str, Any], conditions: "list[Condition]"
-) -> "list[Comparison]":
+def _baseline_comparisons(doc: dict[str, Any], conditions: "list[Condition]") -> "list[Comparison]":
     """The subset of `resolve_contrasts`'s list that belongs in `vs_baseline`.
 
     `resolve_contrasts` also returns declared `statistics.contrasts` entries —
@@ -421,9 +419,7 @@ def _resolved_group_axes(
         if not isinstance(axis, str) or not axis:
             continue
         levels = entry.get("levels")
-        if not (
-            isinstance(levels, list) and levels and all(isinstance(v, str) for v in levels)
-        ):
+        if not (isinstance(levels, list) and levels and all(isinstance(v, str) for v in levels)):
             continue
         block = blocks.get(axis)
         # The whole block, not a `from` this function resolved: `assignment_for`
@@ -610,9 +606,7 @@ def _cond_beside_n(
     return {k: v for k, v in beside_n.items() if k != "technical_n"}
 
 
-def _report_by_levels(
-    roster: "UnitList", attribute: str
-) -> dict[str, tuple[set[str], "UnitList"]]:
+def _report_by_levels(roster: "UnitList", attribute: str) -> dict[str, tuple[set[str], "UnitList"]]:
     """Each level of `attribute` over `roster`, paired with the roster VIEW
     `attrition` must count that level against — `report_by`'s per-level loop,
     extracted so the narrowing is a function with one roster parameter rather
@@ -847,9 +841,7 @@ def _comparison_step_blocks(
     non-empty, the same test the refusal runs today — rather than leaving
     `True` hard-coded against a comparison validation no longer rejects.
     """
-    differs_on = differing_axes(
-        conditions_by_index[comp.of], conditions_by_index[comp.against]
-    )
+    differs_on = differing_axes(conditions_by_index[comp.of], conditions_by_index[comp.against])
     confounded = len(differs_on) > 1
     allowed = units_matching(roster, comp.within)
     of_steps = {k[1] for k in collapsed_by_key if k[0] == comp.of}
@@ -873,9 +865,7 @@ def _comparison_step_blocks(
         for metric_key in sorted((set(of_summary) & set(against_summary)) - {"by"}):
             is_derived = metric_key in of_derived or metric_key in against_derived
             if is_derived:
-                compute_of = (resample_fns_by_key.get((comp.of, step_name)) or {}).get(
-                    metric_key
-                )
+                compute_of = (resample_fns_by_key.get((comp.of, step_name)) or {}).get(metric_key)
                 compute_against = (resample_fns_by_key.get((comp.against, step_name)) or {}).get(
                     metric_key
                 )
@@ -928,8 +918,7 @@ def _comparison_step_blocks(
                     if metric_key in of_collapsed[k] and metric_key in against_collapsed[k]
                 ]
                 diffs = [
-                    of_collapsed[k][metric_key] - against_collapsed[k][metric_key]
-                    for k in col_keys
+                    of_collapsed[k][metric_key] - against_collapsed[k][metric_key] for k in col_keys
                 ]
                 n_paired = len(col_keys)
                 resampled = None
@@ -1475,9 +1464,7 @@ def command_run(config_path: Path) -> int:
         strata: dict[str, str] | None = None
         if fold_level.stratify_by:
             strata = {u.key: str(u.attributes[fold_level.stratify_by]) for u in roster}
-        partitions = partition_units(
-            roster, fold_level.n, digest, clusters=clusters, strata=strata
-        )
+        partitions = partition_units(roster, fold_level.n, digest, clusters=clusters, strata=strata)
     fold_members = fold_members_for(levels, partitions) if partitions is not None else None
 
     conditions = expand(doc)
@@ -1836,7 +1823,8 @@ def command_run(config_path: Path) -> int:
             if resample_spec["declared"] and resample_spec["stratify_by"]:
                 resample_strata = {
                     u.key: "|".join(
-                        "<absent>" if u.attributes.get(name) is None
+                        "<absent>"
+                        if u.attributes.get(name) is None
                         else str(u.attributes.get(name))
                         for name in resample_spec["stratify_by"]
                     )
@@ -2120,9 +2108,9 @@ def command_run(config_path: Path) -> int:
                         # a level block carrying a derived metric its own parent
                         # does not have.
                         strata_derived: dict[str, Any] | None = None
-                        strata_resample: (
-                            dict[str, Callable[[UnitTable], float | None]] | None
-                        ) = None
+                        strata_resample: dict[str, Callable[[UnitTable], float | None]] | None = (
+                            None
+                        )
                     else:
                         strata_derived = derived
                         strata_resample = resample_fns
@@ -2278,9 +2266,7 @@ def command_run(config_path: Path) -> int:
                             # Taking the level's rows beside the condition's `n`
                             # is the S4b Critical's shape — a number reported
                             # against a denominator computed over other units.
-                            level_collapsed = {
-                                k: v for k, v in collapsed.items() if k in keys
-                            }
+                            level_collapsed = {k: v for k, v in collapsed.items() if k in keys}
                             level_counts = attrition(
                                 results,
                                 level_roster,
@@ -2747,8 +2733,7 @@ def _dispatch_generate(command: str, rest: list[str]) -> int:
         # tree that every later `discover_local` then reads.
         if len(positional) != 1:
             print(
-                "`generate template` takes one template name — "
-                "see docs/reference.md § Generators",
+                "`generate template` takes one template name — see docs/reference.md § Generators",
                 file=sys.stderr,
             )
             return EXIT_INVOCATION

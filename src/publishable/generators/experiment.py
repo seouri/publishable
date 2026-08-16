@@ -7,7 +7,7 @@ from publishable.materialize import materialize_config
 from publishable.provenance import resolves_inside_repo
 from publishable.templates.registry import resolve_template, unknown_template_message
 
-STARTER_STEP = '''\
+STARTER_STEP = """\
 # src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
 from publishable import BaseStep
 
@@ -20,9 +20,9 @@ class Step(BaseStep):
         for unit in units:
             io.record(unit.key, {{"present": True}})
         return {{"n_units": len(units)}}    # TODO: replace with your analysis
-'''
+"""
 
-EXPERIMENT_PY = '''\
+EXPERIMENT_PY = """\
 # src/{pkg}/experiment.py — order, nothing else
 from publishable import BaseExperiment
 
@@ -35,7 +35,7 @@ class {cls}(BaseExperiment):
     # Order, nothing else. Each step declares its own scope; core derives
     # the execution plan from that. Reordering here IS reordering the pipeline.
     steps = STEPS
-'''
+"""
 
 
 def package_name(experiment: str) -> str:
@@ -71,26 +71,25 @@ def generate_experiment(
     pkg_dir = repo_root / "src" / pkg
     if pkg_dir.exists():
         raise ContractError(
-            f"src/{pkg}/ already exists — `generate experiment` never modifies an "
-            "existing package",
+            f"src/{pkg}/ already exists — `generate experiment` never modifies an existing package",
             code="E-EXPERIMENT-EXISTS",
         )
     (pkg_dir / "steps").mkdir(parents=True, exist_ok=False)
     (pkg_dir / "__init__.py").touch()
     (pkg_dir / "steps" / "__init__.py").touch()
-    (pkg_dir / "steps" / "step01_summarize_units.py").write_text(
-        STARTER_STEP.format(pkg=pkg)
-    )
-    (pkg_dir / "experiment.py").write_text(
-        EXPERIMENT_PY.format(pkg=pkg, cls=class_name(name))
-    )
+    (pkg_dir / "steps" / "step01_summarize_units.py").write_text(STARTER_STEP.format(pkg=pkg))
+    (pkg_dir / "experiment.py").write_text(EXPERIMENT_PY.format(pkg=pkg, cls=class_name(name)))
 
     config_path = repo_root / "configs" / name / "config.yaml"
     config_path.parent.mkdir(parents=True, exist_ok=True)
     config_path.write_text(
         materialize_config(
-            template=template, template_name=template_name, name=name,
-            input_dir=input_dir, output_dir=output_dir, entrypoint=entrypoint,
+            template=template,
+            template_name=template_name,
+            name=name,
+            input_dir=input_dir,
+            output_dir=output_dir,
+            entrypoint=entrypoint,
         )
     )
     return config_path

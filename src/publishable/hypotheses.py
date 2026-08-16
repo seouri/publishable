@@ -244,9 +244,7 @@ def _is_counted(hyp: dict[str, Any], obs: Observation) -> bool:
     correct. Counted-iff-corrected is the same rule the sweep family follows.
     """
     return (
-        hyp.get("kind") == "confirmatory"
-        and obs.rests_on == "computed"
-        and obs.block is not None
+        hyp.get("kind") == "confirmatory" and obs.rests_on == "computed" and obs.block is not None
     )
 
 
@@ -268,8 +266,16 @@ def evaluate(
     draws, so a bound cannot be re-derived from it.
     """
     resolved = [
-        (hyp, resolve(hyp, label_to_index=label_to_index, vs_baseline=vs_baseline,
-                      contrasts=contrasts, summary=summary))
+        (
+            hyp,
+            resolve(
+                hyp,
+                label_to_index=label_to_index,
+                vs_baseline=vs_baseline,
+                contrasts=contrasts,
+                summary=summary,
+            ),
+        )
         for hyp in hyps
     ]
     counted = [(h, o) for h, o in resolved if _is_counted(h, o)]

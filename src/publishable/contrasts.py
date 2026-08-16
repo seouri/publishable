@@ -157,9 +157,7 @@ def baseline_for(
     return None
 
 
-def resolve_contrasts(
-    config: dict[str, Any], conditions: list["Condition"]
-) -> list[Comparison]:
+def resolve_contrasts(config: dict[str, Any], conditions: list["Condition"]) -> list[Comparison]:
     """Every non-baseline condition against its own cell's baseline, then declared
     entries.
 

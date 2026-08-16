@@ -156,9 +156,7 @@ def run_a_project(
     # caller-set override — a thin-pairing test wants a roster small enough that
     # `n_paired` trips `limits.min_reported_n` without inflating every other
     # caller's fixture to match.
-    patients = "\n".join(
-        f"p{i},{'ab'[i % 2]},{'xy'[(i // 2) % 2]}" for i in range(1, units + 1)
-    )
+    patients = "\n".join(f"p{i},{'ab'[i % 2]},{'xy'[(i // 2) % 2]}" for i in range(1, units + 1))
     (data / "index.csv").write_text(
         roster_csv if roster_csv is not None else f"patient_id,cohort,arm\n{patients}\n"
     )
@@ -173,9 +171,7 @@ def run_a_project(
             mp.setattr(
                 GenericTemplate,
                 "aggregate",
-                lambda self, units, cfg, _name=metric_name: {
-                    _name: sum(units.pred) / len(units)
-                },
+                lambda self, units, cfg, _name=metric_name: {_name: sum(units.pred) / len(units)},
             )
         if _starter_step is not None:
             import publishable.generators.experiment as experiment_gen
@@ -441,24 +437,40 @@ def test_generate_experiment_cli_resolves_a_project_local_template(
     )
     monkeypatch.chdir(root)
 
-    assert main(
-        [
-            "generate", "experiment", "my-experiment",
-            "--template", "my_assay",
-            "--input-dir", str(data),
-            "--output-dir", str(results_dir),
-        ]
-    ) == EXIT_OK
+    assert (
+        main(
+            [
+                "generate",
+                "experiment",
+                "my-experiment",
+                "--template",
+                "my_assay",
+                "--input-dir",
+                str(data),
+                "--output-dir",
+                str(results_dir),
+            ]
+        )
+        == EXIT_OK
+    )
     assert (root / "configs" / "my-experiment" / "config.yaml").exists()
 
-    assert main(
-        [
-            "generate", "experiment", "another-experiment",
-            "--template", "nope",
-            "--input-dir", str(data),
-            "--output-dir", str(results_dir),
-        ]
-    ) == EXIT_WRONG
+    assert (
+        main(
+            [
+                "generate",
+                "experiment",
+                "another-experiment",
+                "--template",
+                "nope",
+                "--input-dir",
+                str(data),
+                "--output-dir",
+                str(results_dir),
+            ]
+        )
+        == EXIT_WRONG
+    )
     assert "E-TEMPLATE-UNKNOWN" in capsys.readouterr().err
 
 
@@ -621,7 +633,11 @@ def test_the_generated_stub_declares_only_the_live_members(
     }
 
     assert declared == {
-        "parameter_spec", "validate", "aggregate", "naming_pattern", "default_repeats"
+        "parameter_spec",
+        "validate",
+        "aggregate",
+        "naming_pattern",
+        "default_repeats",
     }, declared
     for dead in ("field_convention", "required_env", "apparatus_probe", "apparatus_facts"):
         assert dead not in text, dead
@@ -648,13 +664,11 @@ def test_generate_template_takes_exactly_one_name_and_writes_nothing_otherwise(
 
     assert main(["generate", "template", "_probe_a", "_probe_b"]) == EXIT_INVOCATION
     assert capsys.readouterr().err == (
-        "`generate template` takes one template name — "
-        "see docs/reference.md § Generators\n"
+        "`generate template` takes one template name — see docs/reference.md § Generators\n"
     )
     assert main(["generate", "template"]) == EXIT_INVOCATION
     assert capsys.readouterr().err == (
-        "`generate template` takes one template name — "
-        "see docs/reference.md § Generators\n"
+        "`generate template` takes one template name — see docs/reference.md § Generators\n"
     )
 
     for rejected in ("my-assay", "__helper", "sub/dir"):
@@ -732,9 +746,7 @@ def test_command_run_aggregate_resolves_a_project_local_template(
     assert main(["run", str(cfg)]) == EXIT_OK
     run_dir = next(results_dir.glob("run_*"))
     run = yaml.safe_load((run_dir / "run.yaml").read_text())
-    metric = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"][
-        "n_units_seen"
-    ]
+    metric = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["n_units_seen"]
     assert metric["value"] == 3.0
 
 
@@ -766,9 +778,7 @@ def test_sweep_yaml_records_the_order_mode_and_seed(tmp_path: Path):
     assert sweep["order"] == "randomized"
     assert isinstance(sweep["order_seed"], int)
     assert len(sweep["execution_order"]) == len(sweep["labels"]) * len(sweep["conditions"])
-    declared = [
-        (c["index"], label) for c in sweep["conditions"] for label in sweep["labels"]
-    ]
+    declared = [(c["index"], label) for c in sweep["conditions"] for label in sweep["labels"]]
     recorded = [(e["condition"], e["repeat"]) for e in sweep["execution_order"]]
     assert recorded != declared, "the shuffle must actually move something"
     batches = [r.split(LABEL_JOIN)[0] for _, r in recorded]
@@ -793,8 +803,10 @@ def test_as_declared_executes_step_major(tmp_path: Path):
     )
     repeat_runs = [
         (e["step"], e["repeat"])
-        for e in (json.loads(line) for line in
-                  (doc["run_dir"] / "executions.jsonl").read_text().splitlines())
+        for e in (
+            json.loads(line)
+            for line in (doc["run_dir"] / "executions.jsonl").read_text().splitlines()
+        )
         if e["scope"] == "repeat"
     ]
     steps = [step for step, _ in repeat_runs]
@@ -1030,9 +1042,7 @@ def test_the_draw_order_is_the_declaration_order_by_contract():
         assert len(set(sex_arm) & set(plans["arm"].members["treatment"])) == 3
 
     with pytest.raises(NotImplementedError) as e:
-        _resolved_group_axes(
-            units_decl, {"groups": list(reversed(forward))}, roster, "digest"
-        )
+        _resolved_group_axes(units_decl, {"groups": list(reversed(forward))}, roster, "digest")
     assert "'sex'" in str(e.value)
     assert "E-DATA-ASSIGN-STRATIFY-FORWARD" in str(e.value)
 
@@ -1079,7 +1089,7 @@ def test_non_string_levels_make_arm_members_raise_rather_than_skip_narrowing():
         arm_members(group_axes, conditions)
 
 
-_ARM_STEP = '''\
+_ARM_STEP = """\
 # src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
 from publishable import BaseStep
 
@@ -1098,7 +1108,7 @@ class Step(BaseStep):
                 continue
             io.record(unit.key, {{"score": 1.0}})
         return {{}}
-'''
+"""
 
 
 def test_a_group_axis_actually_narrows_end_to_end(tmp_path: Path, monkeypatch):
@@ -1200,7 +1210,7 @@ def test_a_group_axis_repeating_a_level_never_reaches_a_run(tmp_path: Path, monk
     assert list(doc["results_dir"].glob("run_*")) == []
 
 
-_GROUPS_MEASURED_STEP = '''\
+_GROUPS_MEASURED_STEP = """\
 # src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
 from publishable import BaseStep
 
@@ -1219,7 +1229,7 @@ class Step(BaseStep):
                 continue
             io.record(unit.key, {{"score": 1.0}})
         return {{}}
-'''
+"""
 
 # `arm` (control/treatment) and `cohort` (a/b) are DIFFERENT partitions that
 # genuinely cross — `cohort=a` holds c1, c3 (control) and t1, t3 (treatment);
@@ -1312,16 +1322,28 @@ def test_groups_between_and_by_attribute_reach_all_three_narrowed_call_sites(
     control_by_cohort = control["by"]["cohort"]
     treatment_by_cohort = treatment["by"]["cohort"]
     assert control_by_cohort["a"]["score"]["n"] == {
-        "resolved": 2, "completed": 1, "ineligible": 1, "failed": 0,
+        "resolved": 2,
+        "completed": 1,
+        "ineligible": 1,
+        "failed": 0,
     }
     assert control_by_cohort["b"]["score"]["n"] == {
-        "resolved": 2, "completed": 2, "ineligible": 0, "failed": 0,
+        "resolved": 2,
+        "completed": 2,
+        "ineligible": 0,
+        "failed": 0,
     }
     assert treatment_by_cohort["a"]["score"]["n"] == {
-        "resolved": 2, "completed": 1, "ineligible": 0, "failed": 1,
+        "resolved": 2,
+        "completed": 1,
+        "ineligible": 0,
+        "failed": 1,
     }
     assert treatment_by_cohort["b"]["score"]["n"] == {
-        "resolved": 1, "completed": 1, "ineligible": 0, "failed": 0,
+        "resolved": 1,
+        "completed": 1,
+        "ineligible": 0,
+        "failed": 0,
     }
 
     # Call site 3: `_condition_beside_n` — `technical_n` is withheld from BOTH
@@ -1354,8 +1376,18 @@ def test_groups_between_and_by_attribute_reach_all_three_narrowed_call_sites(
 _GROUPS_CLUSTER_CONTROL = ["c0", "c1", "c2", "c3", "c4", "c5", "c6"]
 _GROUPS_CLUSTER_TREATMENT = ["t0", "t1", "t2", "t3", "t4"]
 _GROUPS_CLUSTER_SITE = {
-    "c0": "A", "c1": "A", "c2": "B", "c3": "B", "c4": "C", "c5": "C", "c6": "C",
-    "t0": "A", "t1": "B", "t2": "B", "t3": "D", "t4": "D",
+    "c0": "A",
+    "c1": "A",
+    "c2": "B",
+    "c3": "B",
+    "c4": "C",
+    "c5": "C",
+    "c6": "C",
+    "t0": "A",
+    "t1": "B",
+    "t2": "B",
+    "t3": "D",
+    "t4": "D",
 }
 
 
@@ -1452,10 +1484,18 @@ def test_groups_and_cluster_by_execute_with_per_arm_cluster_counting(tmp_path: P
     treatment = conditions[1]["aggregated"]["step01_summarize_units"]["pred"]
 
     assert control["n"] == {
-        "resolved": 7, "completed": 7, "ineligible": 0, "failed": 0, "clusters": 3,
+        "resolved": 7,
+        "completed": 7,
+        "ineligible": 0,
+        "failed": 0,
+        "clusters": 3,
     }
     assert treatment["n"] == {
-        "resolved": 5, "completed": 5, "ineligible": 0, "failed": 0, "clusters": 3,
+        "resolved": 5,
+        "completed": 5,
+        "ineligible": 0,
+        "failed": 0,
+        "clusters": 3,
     }
     assert control["method"] == "t_over_units_clustered"
     assert treatment["method"] == "t_over_units_clustered"
@@ -1507,9 +1547,7 @@ def test_allocation_json_is_written_with_exact_arm_keys_when_declared(tmp_path: 
     alloc = json.loads(alloc_path.read_text())
 
     assert set(alloc.keys()) == {"arms", "seed", "strata"}
-    assert alloc["arms"] == {
-        "arm": {"control": control_keys, "treatment": treatment_keys}
-    }
+    assert alloc["arms"] == {"arm": {"control": control_keys, "treatment": treatment_keys}}
     # `by_attribute` draws nothing and stratifies nothing — the addendum's own
     # finding that a writer emitting a seed anyway looks correct against a
     # fixture nobody checked the seed of. A drawn axis fills both keys instead;
@@ -1716,9 +1754,7 @@ def test_one_plan_per_axis_is_realized_once_and_both_consumers_get_that_same_pla
     alloc = json.loads((doc["run_dir"] / "allocation.json").read_text())
     # What the file records IS what the one plan says, key for key and in
     # order — not a second answer that happens to agree.
-    assert alloc["arms"]["arm"] == {
-        level: list(keys) for level, keys in plan.members.items()
-    }
+    assert alloc["arms"]["arm"] == {level: list(keys) for level, keys in plan.members.items()}
     assert alloc["arms"]["arm"]["control"] == control_keys
     assert alloc["arms"]["arm"]["treatment"] == treatment_keys
 
@@ -1961,9 +1997,7 @@ def test_condition_report_by_levels_narrows_a_crossing_stratum_to_the_condition_
 
     roster, arm_members_map = _crossing_stratum_fixture()
 
-    arm_keys, arm_roster = _condition_report_by_levels(
-        roster, 0, arm_members_map, "site"
-    )["north"]
+    arm_keys, arm_roster = _condition_report_by_levels(roster, 0, arm_members_map, "site")["north"]
     assert arm_keys == {"c0", "c1", "c2", "c3"}
     assert {u.key for u in arm_roster} == arm_keys
 
@@ -2105,15 +2139,21 @@ def test_a_five_fold_run_end_to_end(tmp_path, capsys):
     against the whole roster, so under `{k: 5}` every unit outside a fold's own
     partition counted as failed on that fold's execution and the run aborted at
     `max_failed_fraction` reporting `failed`, well short of every fold running."""
-    doc = run_a_project(tmp_path, capsys=capsys,
-                        replication={"repeats": [{"kind": "fold", "k": 5}]})
+    doc = run_a_project(
+        tmp_path, capsys=capsys, replication={"repeats": [{"kind": "fold", "k": 5}]}
+    )
     sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
     assert [p["fold"] for p in sweep["partitions"]] == [
-        "fold01", "fold02", "fold03", "fold04", "fold05"]
+        "fold01",
+        "fold02",
+        "fold03",
+        "fold04",
+        "fold05",
+    ]
     tested = [k for p in sweep["partitions"] for k in p["test"]]
-    assert len(tested) == len(set(tested))          # each unit tested exactly once
+    assert len(tested) == len(set(tested))  # each unit tested exactly once
     run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
-    assert run["status"] == "completed"             # the abort this slice fixes
+    assert run["status"] == "completed"  # the abort this slice fixes
 
     # The discriminating assertion: dropping `fold_members=` from `execute_plan`
     # disables the roster-wide subtraction `_units_failed_anywhere` does AND the
@@ -2128,7 +2168,7 @@ def test_a_five_fold_run_end_to_end(tmp_path, capsys):
 
 # --- Task 2 (derived-metrics): the live defect this slice closes ---------------
 
-_NUMPY_RETURN_STEP = '''\
+_NUMPY_RETURN_STEP = """\
 # src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
 import numpy as np
 
@@ -2140,7 +2180,7 @@ class Step(BaseStep):
 
     def run(self, cfg, io):
         return {{"score": np.float64(1.5)}}    # forces a NumPy scalar into run.yaml
-'''
+"""
 
 
 def test_a_numpy_scalar_return_produces_a_run_yaml_that_serializes(tmp_path, monkeypatch):
@@ -2161,7 +2201,7 @@ def test_a_numpy_scalar_return_produces_a_run_yaml_that_serializes(tmp_path, mon
 
 # --- Task 6 (derived-metrics): a template's `aggregate` reaches the record -----
 
-_AGGREGATE_STEP = '''\
+_AGGREGATE_STEP = """\
 # src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
 from publishable import BaseStep
 
@@ -2174,7 +2214,7 @@ class Step(BaseStep):
         for i, unit in enumerate(units):
             io.record(unit.key, {{"pred": float(i)}})
         return {{"n_units": len(units)}}
-'''
+"""
 
 
 def test_a_derived_metric_reaches_run_yaml_with_a_resampled_interval(tmp_path, monkeypatch):
@@ -2482,9 +2522,7 @@ def test_a_templates_aggregate_sees_declared_unit_attributes(tmp_path, monkeypat
     doc = run_a_project(tmp_path, capsys=capsys, unit_attributes=["cohort"])
     run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
     assert run["status"] == "completed"
-    metric = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"][
-        "n_cohort_a"
-    ]
+    metric = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["n_cohort_a"]
     assert metric["value"] == 5
     # An attribute-reading `aggregate` must survive the resampled draws too, or
     # the metric would reach `run.yaml` with no interval at all: a draw's table
@@ -2571,7 +2609,7 @@ def test_a_declared_attribute_is_not_in_the_recorded_column_namespace(
     assert "E-STEP-KEY-COLLISION" not in doc["stdout"]
 
 
-_METHOD_VARYING_STEP = '''\
+_METHOD_VARYING_STEP = """\
 # src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
 from publishable import BaseStep
 
@@ -2610,7 +2648,7 @@ class Step(BaseStep):
             extra = 0.5 if (i + shift) % 2 == 1 else 0.0
             io.record(unit.key, {{"pred": float(i) + float(shift) + extra}})
         return {{"n_units": len(units)}}
-'''
+"""
 
 
 def _first_contrast(run: dict[str, Any], label: str) -> dict[str, Any] | None:
@@ -2762,9 +2800,7 @@ def test_a_baseline_only_axis_still_counts_toward_confounded(tmp_path, capsys, m
     assert entry.get("differs_on") == ["analysis.method", "analysis.confidence"]
 
 
-def test_a_declared_contrast_crossing_two_axes_is_marked_confounded(
-    tmp_path, capsys, monkeypatch
-):
+def test_a_declared_contrast_crossing_two_axes_is_marked_confounded(tmp_path, capsys, monkeypatch):
     """The same marking logic in `_comparison_step_blocks` backs
     `_compute_declared_contrasts` too, since both call it — but every other
     declared-contrast test in this module (`_declared_contrast_run`) uses a
@@ -3000,9 +3036,7 @@ def test_a_comparison_reads_its_own_condition_not_condition_zero():
 
 
 @pytest.mark.parametrize("method", ["none", "bonferroni", "holm", "fdr_bh"])
-def test_the_configured_correction_method_decides_the_record(
-    tmp_path, capsys, monkeypatch, method
-):
+def test_the_configured_correction_method_decides_the_record(tmp_path, capsys, monkeypatch, method):
     """`statistics.correction` is read from the config, and each of its four
     values produces the record `reference.md` § Statistical reporting's table
     requires. Without this, hardcoding `"holm"` at the call site passes every
@@ -3130,9 +3164,7 @@ def test_a_contrast_named_after_a_condition_index_is_its_own_comparison(
             "baseline": {"analysis.method": "pearson"},
             "grid": {"analysis.method": ["spearman"]},
         },
-        statistics={
-            "contrasts": [{"id": "1", "of": "method=spearman", "against": "baseline"}]
-        },
+        statistics={"contrasts": [{"id": "1", "of": "method=spearman", "against": "baseline"}]},
     )
     run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
     from_baseline = _first_contrast(run, "method=spearman")
@@ -3162,9 +3194,7 @@ def _named_contrast(run: dict[str, Any], label: str, metric: str) -> dict[str, A
     return None
 
 
-def test_a_derived_contrast_resamples_each_side_with_its_own_formula(
-    tmp_path, capsys, monkeypatch
-):
+def test_a_derived_contrast_resamples_each_side_with_its_own_formula(tmp_path, capsys, monkeypatch):
     """The end-to-end guard on the shared-closure cancellation. The step records
     an identical `pred` under both conditions and only the *formula* differs by
     `analysis.method` — the documented worked example's shape, where
@@ -3185,9 +3215,7 @@ def test_a_derived_contrast_resamples_each_side_with_its_own_formula(
         GenericTemplate,
         "aggregate",
         lambda self, units, cfg: {
-            "score": (
-                2.0 if cfg.parameters.analysis.method == "spearman" else 1.0
-            )
+            "score": (2.0 if cfg.parameters.analysis.method == "spearman" else 1.0)
             * sum(units.pred)
             / len(units)
         },
@@ -3215,7 +3243,7 @@ def test_a_derived_contrast_resamples_each_side_with_its_own_formula(
     assert entry["cohens_d"] is None
 
 
-_COHORT_VARYING_STEP = '''\
+_COHORT_VARYING_STEP = """\
 # src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
 from publishable import BaseStep
 
@@ -3233,7 +3261,7 @@ class Step(BaseStep):
             offset = 0.0 if unit.attributes["cohort"] == "a" else 1000.0
             io.record(unit.key, {{"pred": float(i) + offset}})
         return {{"n_units": len(io.units)}}
-'''
+"""
 
 
 def _stratified_derived_run(tmp_path, capsys, monkeypatch, within):
@@ -3304,9 +3332,7 @@ def test_a_stratified_derived_delta_is_computed_over_its_own_intersection(
     assert low < entry["delta"] < high
 
 
-def test_a_derived_contrast_over_an_empty_stratum_reports_no_delta(
-    tmp_path, capsys, monkeypatch
-):
+def test_a_derived_contrast_over_an_empty_stratum_reports_no_delta(tmp_path, capsys, monkeypatch):
     """`reference.md` § Contrasts: "A contrast whose intersection is empty is
     reported as such rather than as a delta of zero." Reported as a *number* is
     worse than either — a confident 509.5 with no denominator beside it — which
@@ -3369,9 +3395,7 @@ def test_a_declared_contrast_lands_beside_the_conditions_not_inside_one(
     assert contrasts[0]["against"] == "00_baseline"
 
 
-def test_a_declared_contrast_does_not_displace_the_baseline_block(
-    tmp_path, capsys, monkeypatch
-):
+def test_a_declared_contrast_does_not_displace_the_baseline_block(tmp_path, capsys, monkeypatch):
     """The data-loss half of the same defect, and the half that a placement
     assertion alone would miss: the condition's own `vs_baseline` must still
     hold the *unrestricted* comparison over all 10 units, not the declared
@@ -3455,9 +3479,7 @@ def test_a_thin_within_contrast_warns(tmp_path, capsys, monkeypatch):
     assert "W-STATS-CONTRAST-THIN" in doc["stdout"]
 
 
-def test_an_unstratified_contrast_below_min_reported_n_does_not_warn(
-    tmp_path, capsys, monkeypatch
-):
+def test_an_unstratified_contrast_below_min_reported_n_does_not_warn(tmp_path, capsys, monkeypatch):
     """The other half of that scope, and the reason it matters: `min_reported_n:
     10` is in every generated config (`materialize.py`), so warning on every
     comparison would fire on any pilot under ten units — a disclosure warning
@@ -3493,9 +3515,7 @@ def _first_metric_width(run: dict[str, Any], condition_index: int) -> float:
     raise AssertionError("no numeric metric with a ci95 found in this condition")
 
 
-def test_a_paired_delta_is_narrower_than_the_conditions_it_compares(
-    tmp_path, capsys, monkeypatch
-):
+def test_a_paired_delta_is_narrower_than_the_conditions_it_compares(tmp_path, capsys, monkeypatch):
     """The contrast that `allocation: within` buys, end to end: per-condition
     intervals are wide and the delta's is narrow, over the same units.
 
@@ -3564,7 +3584,7 @@ def test_the_delta_interval_matches_this_fixture_s_own_arithmetic(tmp_path, caps
 
 # --- Task 9 (carries): limits.max_ineligible_fraction ------------------------
 
-_SKIP_MOST_STEP = '''\
+_SKIP_MOST_STEP = """\
 # src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
 from publishable import BaseStep
 
@@ -3582,7 +3602,7 @@ class Step(BaseStep):
             else:
                 io.record(unit.key, {{"pred": float(i)}})
         return {{"n_units": len(io.units)}}
-'''
+"""
 
 
 def test_a_condition_skipping_too_many_units_warns(tmp_path, capsys, monkeypatch):
@@ -3592,9 +3612,7 @@ def test_a_condition_skipping_too_many_units_warns(tmp_path, capsys, monkeypatch
     import publishable.generators.experiment as experiment_gen
 
     monkeypatch.setattr(experiment_gen, "STARTER_STEP", _SKIP_MOST_STEP)
-    doc = run_a_project(
-        tmp_path, capsys=capsys, units=10, limits={"max_ineligible_fraction": 0.2}
-    )
+    doc = run_a_project(tmp_path, capsys=capsys, units=10, limits={"max_ineligible_fraction": 0.2})
     assert "W-DATA-INELIGIBLE" in doc["stdout"]
 
 
@@ -3672,7 +3690,7 @@ def test_a_false_ineligible_limit_is_refused_at_validate_time(tmp_path, capsys, 
 
 # --- Task 10 (correction-family): acceptance ---------------------------------
 
-_WIDE_COLUMN_STEP = '''\
+_WIDE_COLUMN_STEP = """\
 # src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
 from publishable import BaseStep
 
@@ -3690,9 +3708,7 @@ class Step(BaseStep):
             base = float(i) + float(shift) + extra
             io.record(unit.key, {{f"pred{{j:02d}}": base * (j + 1) for j in range(14)}})
         return {{"n_units": len(units)}}
-'''
-
-
+"""
 
 
 def test_a_declared_contrast_with_a_stratum_joins_the_correction_family(
@@ -3751,9 +3767,10 @@ def test_a_declared_contrast_with_a_stratum_joins_the_correction_family(
         assert entry["family_size"] == 2
         assert entry["family"] == {"comparisons": 2, "metrics": 1}
         assert entry["correction"] == "holm"
-    assert sorted(
-        [baseline_entry["correction_level"], declared_entry["correction_level"]]
-    ) == [pytest.approx(0.025), pytest.approx(0.05)]
+    assert sorted([baseline_entry["correction_level"], declared_entry["correction_level"]]) == [
+        pytest.approx(0.025),
+        pytest.approx(0.05),
+    ]
 
 
 def test_fdr_bh_records_the_correction_it_could_not_apply(tmp_path, capsys, monkeypatch):
@@ -3879,9 +3896,7 @@ def test_a_family_too_wide_for_the_draws_reports_no_corrected_interval(
     assert {metric["family"]["comparisons"] for _, metric in entries} == {2}
     assert {metric["family"]["metrics"] for _, metric in entries} == {15}
     assert {metric["family_size"] for _, metric in entries} == {30}
-    assert all(
-        metric["correction_level"] == pytest.approx(0.05 / 30) for _, metric in entries
-    )
+    assert all(metric["correction_level"] == pytest.approx(0.05 / 30) for _, metric in entries)
     for metric in derived:
         assert metric["method"] == "paired_percentile_over_units"
         # Not a point mass: the raw interval this one could not be corrected
@@ -3953,9 +3968,7 @@ def test_a_derived_metric_is_corrected_off_its_own_draw_pool(tmp_path, capsys, m
     assert "W-STATS-CORRECTED-THIN" not in doc["stdout"]
 
 
-def test_a_reporting_stratum_repeats_the_metric_over_its_own_units(
-    tmp_path, capsys, monkeypatch
-):
+def test_a_reporting_stratum_repeats_the_metric_over_its_own_units(tmp_path, capsys, monkeypatch):
     """`reference.md` § Reporting strata: core "repeats the aggregation it already
     performs, over the subsets of the per-unit table each level picks out". Each
     level's `n` and `ci95` are its own — computed over that level's units, not
@@ -3995,9 +4008,7 @@ def test_a_reporting_stratum_repeats_the_metric_over_its_own_units(
     assert by["a"]["pred"]["ci95"] != step_block["pred"]["ci95"]
 
 
-def test_two_attributes_are_two_marginal_splits_not_their_cross(
-    tmp_path, capsys, monkeypatch
-):
+def test_two_attributes_are_two_marginal_splits_not_their_cross(tmp_path, capsys, monkeypatch):
     """`reference.md` § Reporting strata: "`report_by: [sex, site]` adds a `by.sex`
     block and a `by.site` block, each over the whole table; it does not produce a
     `f × site_03` cell." The cartesian product is the thing that section exists to
@@ -4108,9 +4119,7 @@ class Step(BaseStep):
 """
 
 
-def test_a_stratum_recomputes_a_derived_metric_over_its_own_units(
-    tmp_path, capsys, monkeypatch
-):
+def test_a_stratum_recomputes_a_derived_metric_over_its_own_units(tmp_path, capsys, monkeypatch):
     """`summarize_step` never recomputes a derived metric — it writes `value`
     straight through from the mapping it is handed, and takes only the interval
     and `n.completed` from the table beside it. So a stratum handed the parent's
@@ -4228,9 +4237,7 @@ def test_a_derived_metric_named_by_is_refused_not_silently_overwritten(
     assert step_block["pred"]["n"]["completed"] == 40
 
 
-def test_a_recorded_column_named_by_keeps_its_metric_and_warns(
-    tmp_path, capsys, monkeypatch
-):
+def test_a_recorded_column_named_by_keeps_its_metric_and_warns(tmp_path, capsys, monkeypatch):
     """The other half of the reserved key, and it cannot be refused where the
     derived half is: the retry that contains `E-STEP-KEY-COLLISION` passes the
     same collapsed table, so raising for a recorded column would re-raise
@@ -4256,9 +4263,7 @@ def test_a_recorded_column_named_by_keeps_its_metric_and_warns(
     assert "cohort" not in step_block["by"]
 
 
-def test_a_recorded_by_column_warns_even_with_no_report_by_declared(
-    tmp_path, capsys, monkeypatch
-):
+def test_a_recorded_by_column_warns_even_with_no_report_by_declared(tmp_path, capsys, monkeypatch):
     """The disclosure follows the column, not the strata block. `by` is dropped
     from every comparison's metric set unconditionally
     (`_comparison_step_blocks`), so a recorded column of that name loses its
@@ -4284,14 +4289,8 @@ def test_a_recorded_by_column_warns_even_with_no_report_by_declared(
     # The column is a real measurement and keeps its own number, warning or not.
     assert step_block["by"]["value"] == pytest.approx(39.0)
     # And the consequence the warning now names: no delta, no seat in the family.
-    compared = next(
-        c for c in run["results"]["conditions"] if c.get("label") == "method=spearman"
-    )
-    metrics = sorted(
-        name
-        for step_block in compared["vs_baseline"].values()
-        for name in step_block
-    )
+    compared = next(c for c in run["results"]["conditions"] if c.get("label") == "method=spearman")
+    metrics = sorted(name for step_block in compared["vs_baseline"].values() for name in step_block)
     assert metrics == ["pred"]
     assert _first_contrast(run, "method=spearman")["family_size"] == 1
 
@@ -4502,9 +4501,7 @@ def test_an_empty_level_produces_no_spurious_aggregate_failed(tmp_path, capsys, 
 # --- Task 7: acceptance — the three properties § Reporting strata claims -------
 
 
-def test_a_derived_metric_is_stratified_with_its_own_resample(
-    tmp_path, capsys, monkeypatch
-):
+def test_a_derived_metric_is_stratified_with_its_own_resample(tmp_path, capsys, monkeypatch):
     """A derived metric has no per-unit value, so its stratum interval is
     `aggregate` recomputed on that level's resampled table — the same
     construction the parent block uses, over fewer rows. A stratum reusing the
@@ -4632,7 +4629,7 @@ def test_report_by_adds_no_executions(tmp_path, capsys, monkeypatch):
 # `summary`-scoped step through `extra_steps`, so this is that route, established
 # here rather than assumed.
 
-_ESTIMATE_SUMMARY_STEP = '''\
+_ESTIMATE_SUMMARY_STEP = """\
 # generated, and runnable as-is
 from publishable import BaseStep, Estimate
 
@@ -4645,7 +4642,7 @@ class Step(BaseStep):
         # disclosure risk `min_reported_n` exists to catch.
         return {{"adjusted": Estimate(value=0.031, ci95=[0.008, 0.055],
                                       method="mixed model, REML")}}
-'''
+"""
 
 
 def test_an_estimate_with_an_interval_and_no_n_warns(tmp_path, capsys):
@@ -4667,7 +4664,7 @@ def test_an_estimate_with_an_interval_and_no_n_warns(tmp_path, capsys):
     assert entry["n"] is None
 
 
-_ESTIMATE_WITH_N_SUMMARY_STEP = '''\
+_ESTIMATE_WITH_N_SUMMARY_STEP = """\
 # generated, and runnable as-is
 from publishable import BaseStep, Estimate
 
@@ -4678,7 +4675,7 @@ class Step(BaseStep):
     def run(self, cfg, io):
         return {{"adjusted": Estimate(value=0.031, ci95=[0.008, 0.055], n=612,
                                       method="mixed model, REML")}}
-'''
+"""
 
 
 def test_an_estimate_with_an_n_does_not_warn(tmp_path, capsys):
@@ -4697,7 +4694,7 @@ def test_an_estimate_with_an_n_does_not_warn(tmp_path, capsys):
     assert run["results"]["summary"]["step02_summarize"]["adjusted"]["n"] == 612
 
 
-_BARE_ESTIMATE_SUMMARY_STEP = '''\
+_BARE_ESTIMATE_SUMMARY_STEP = """\
 # generated, and runnable as-is
 from publishable import BaseStep, Estimate
 
@@ -4707,7 +4704,7 @@ class Step(BaseStep):
 
     def run(self, cfg, io):
         return {{"adjusted": Estimate(value=0.031)}}
-'''
+"""
 
 
 def test_an_estimate_with_no_interval_does_not_warn(tmp_path, capsys):
@@ -4724,7 +4721,7 @@ def test_an_estimate_with_no_interval_does_not_warn(tmp_path, capsys):
     assert "W-STEP-ESTIMATE-N" not in doc["stdout"]
 
 
-_NO_UNITS_STARTER_STEP = '''\
+_NO_UNITS_STARTER_STEP = """\
 # generated, and runnable as-is — deliberately never touches `io.units`
 from publishable import BaseStep
 
@@ -4734,7 +4731,7 @@ class Step(BaseStep):
 
     def run(self, cfg, io):
         return {{"present": True}}
-'''
+"""
 
 
 def test_an_estimate_with_no_roster_still_warns(tmp_path, capsys, monkeypatch):
@@ -4769,7 +4766,7 @@ def test_an_estimate_with_no_roster_still_warns(tmp_path, capsys, monkeypatch):
 # `STEP_PY.format(step_name=step_name)`, which knows `step_name` and nothing
 # else, so a `{pkg}` placeholder here is a `KeyError` before the run starts.
 
-_NUMPY_ESTIMATE_SUMMARY_STEP = '''\
+_NUMPY_ESTIMATE_SUMMARY_STEP = """\
 # generated, and runnable as-is
 import numpy as np
 
@@ -4787,7 +4784,7 @@ class Step(BaseStep):
                                       n=np.int64(612),
                                       method="mixed model, REML"),
                  "converged": True}}
-'''
+"""
 
 
 def test_a_summary_estimate_reaches_run_yaml_marked_as_reported(tmp_path, capsys):
@@ -4875,9 +4872,7 @@ def test_a_summary_estimate_does_not_join_the_correction_family(tmp_path, capsys
         entry = _first_contrast(run, "method=spearman")
         assert entry is not None
         sizes.append((entry["family_size"], entry["family"]))
-        digests.append(
-            yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())["design_digest"]
-        )
+        digests.append(yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())["design_digest"])
         code_hashes.append(run["code_hash"])
         if extra:
             # Positive assertion, without which this test passes vacuously: a
@@ -4904,7 +4899,7 @@ def test_a_summary_estimate_does_not_join_the_correction_family(tmp_path, capsys
 # fixtures differ only on the axis under test: the scope fixture carries a
 # valid `method`, the method fixture is genuinely `summary`-scoped.
 
-_ESTIMATE_AT_REPEAT_SCOPE_STEP = '''\
+_ESTIMATE_AT_REPEAT_SCOPE_STEP = """\
 # generated, and runnable as-is
 from publishable import BaseStep, Estimate
 
@@ -4915,7 +4910,7 @@ class Step(BaseStep):
     def run(self, cfg, io):
         return {{"adjusted": Estimate(value=0.031, ci95=[0.008, 0.055],
                                       method="mixed model, REML")}}
-'''
+"""
 
 
 def test_an_estimate_outside_summary_scope_fails_that_execution(tmp_path, capsys):
@@ -4951,7 +4946,7 @@ def test_an_estimate_outside_summary_scope_fails_that_execution(tmp_path, capsys
     assert "E-STEP-ESTIMATE-SCOPE" not in doc["stderr"]
 
 
-_ESTIMATE_WITHOUT_METHOD_SUMMARY_STEP = '''\
+_ESTIMATE_WITHOUT_METHOD_SUMMARY_STEP = """\
 # generated, and runnable as-is
 from publishable import BaseStep, Estimate
 
@@ -4961,7 +4956,7 @@ class Step(BaseStep):
 
     def run(self, cfg, io):
         return {{"adjusted": Estimate(value=0.031, ci95=[0.008, 0.055])}}
-'''
+"""
 
 
 def test_an_interval_with_no_method_fails_that_execution(tmp_path, capsys):
@@ -5234,7 +5229,7 @@ def test_an_exploratory_hypothesis_is_evaluated_and_uncounted(tmp_path, capsys, 
     assert "family" not in h2
 
 
-_ESTIMATE_FOR_HYPOTHESIS_STEP = '''\
+_ESTIMATE_FOR_HYPOTHESIS_STEP = """\
 # generated, and runnable as-is
 from publishable import BaseStep, Estimate
 
@@ -5245,7 +5240,7 @@ class Step(BaseStep):
     def run(self, cfg, io):
         return {{"adjusted": Estimate(value=0.031, ci95=[0.008, 0.055], n=612,
                                       method="mixed model, REML")}}
-'''
+"""
 
 
 def test_a_reported_hypothesis_is_evaluated_and_uncounted(tmp_path, capsys, monkeypatch):
@@ -5303,7 +5298,7 @@ def test_a_reported_hypothesis_is_evaluated_and_uncounted(tmp_path, capsys, monk
     assert "family" not in verdict
 
 
-_NON_NUMERIC_ESTIMATE_STEP = '''\
+_NON_NUMERIC_ESTIMATE_STEP = """\
 # generated, and runnable as-is
 from publishable import BaseStep, Estimate
 
@@ -5313,7 +5308,7 @@ class Step(BaseStep):
 
     def run(self, cfg, io):
         return {{"adjusted": Estimate(value="high", ci95=None, n=None, method=None)}}
-'''
+"""
 
 
 def test_a_non_numeric_reported_estimate_does_not_cost_the_run_its_record(
@@ -5414,12 +5409,10 @@ def test_sweep_family_unmoved_by_declaring_hypotheses(tmp_path, capsys, monkeypa
         sweep=sweep,
         hypotheses=hypotheses,
     )
-    digest_without = yaml.safe_load(
-        (without["run_dir"] / "sweep.yaml").read_text()
-    )["design_digest"]
-    digest_with = yaml.safe_load((with_hyp["run_dir"] / "sweep.yaml").read_text())[
+    digest_without = yaml.safe_load((without["run_dir"] / "sweep.yaml").read_text())[
         "design_digest"
     ]
+    digest_with = yaml.safe_load((with_hyp["run_dir"] / "sweep.yaml").read_text())["design_digest"]
     assert digest_without == digest_with
     run_without = yaml.safe_load((without["run_dir"] / "run.yaml").read_text())
     run_with = yaml.safe_load((with_hyp["run_dir"] / "run.yaml").read_text())
@@ -5463,6 +5456,7 @@ def _acceptance_hypotheses() -> list[dict[str, Any]]:
     would make the pair differ in a field's presence rather than in its value,
     and the point of the pair is that one value flips the verdict.
     """
+
     def common() -> dict[str, Any]:
         # Rebuilt per entry rather than shared, so the two entries hold no object
         # in common: one shared `compare` dict made `yaml.safe_dump` anchor the
@@ -5660,7 +5654,7 @@ def test_a_sampled_sweep_runs_and_records_its_seed_and_draws(tmp_path: Path):
         assert (doc["run_dir"] / "conditions" / f"{i:02d}_confidence={value!r}").is_dir()
 
 
-_READS_A_SWEPT_PARAM_SUMMARY_STEP = '''\
+_READS_A_SWEPT_PARAM_SUMMARY_STEP = """\
 # generated, and runnable as-is
 from publishable import BaseStep
 
@@ -5672,7 +5666,7 @@ class Step(BaseStep):
         # `analysis.confidence` is sampled, so `summary` scope has no single
         # condition to read it from.
         return {{"confidence": cfg.parameters.analysis.confidence}}
-'''
+"""
 
 
 def test_a_sampled_path_is_unreadable_at_run_scope(tmp_path: Path, capsys):
@@ -6052,7 +6046,11 @@ def test_leave_one_out_draws_one_fold_per_cluster(tmp_path, monkeypatch):
     )
     sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
     assert [p["fold"] for p in sweep["partitions"]] == [
-        "fold01", "fold02", "fold03", "fold04", "fold05"
+        "fold01",
+        "fold02",
+        "fold03",
+        "fold04",
+        "fold05",
     ]
     assert len(doc["results"]) == 5
 
@@ -6405,9 +6403,7 @@ _STRATIFIED_ROSTER = "patient_id,label\n" + "".join(
 
 def _stratum_counts(run_dir: Path) -> dict[str, tuple[int, int]]:
     """Each fold's (label `0`, label `1`) counts, from its membership."""
-    labels = dict(
-        zip((f"p{i}" for i in range(14)), "00000000001111", strict=True)
-    )
+    labels = dict(zip((f"p{i}" for i in range(14)), "00000000001111", strict=True))
     return {
         fold: (
             sum(1 for key in keys if labels[key] == "0"),
@@ -6436,9 +6432,7 @@ def test_a_stratified_fold_balances_the_declared_stratum(tmp_path, monkeypatch):
     )
     assert _stratum_counts(doc["run_dir"]) == {"fold01": (5, 2), "fold02": (5, 2)}
     folds = _fold_membership(doc["run_dir"])
-    assert sorted(k for keys in folds.values() for k in keys) == sorted(
-        f"p{i}" for i in range(14)
-    )
+    assert sorted(k for keys in folds.values() for k in keys) == sorted(f"p{i}" for i in range(14))
 
 
 def test_an_unstratified_fold_of_the_same_roster_is_lopsided(tmp_path):
@@ -6739,7 +6733,7 @@ def test_a_command_group_answers_for_its_unbuilt_subcommands(capsys):
 # `percentile_over_units` into `summarize_step` -----------------------------
 
 
-_CONDITION_SCALED_STEP = '''\
+_CONDITION_SCALED_STEP = """\
 # src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
 from publishable import BaseStep
 
@@ -6774,7 +6768,7 @@ class Step(BaseStep):
         for i, unit in enumerate(units):
             io.record(unit.key, {{"pred": float(i) * scale}})
         return {{"n_units": len(units)}}
-'''
+"""
 
 
 def _assert_undeclared_resample_shape(run: dict[str, Any]) -> None:
@@ -6902,7 +6896,9 @@ def test_the_undeclared_resample_shape_is_pinned_explicit_null(tmp_path, capsys,
     bare `statistics={"resample": None}` would delete the correction
     `materialize.py` writes and move every `correction_level` below."""
     doc = _pinned_run(
-        tmp_path, capsys, monkeypatch,
+        tmp_path,
+        capsys,
+        monkeypatch,
         statistics={"correction": "holm", "resample": None},
     )
     run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
@@ -6920,8 +6916,7 @@ def test_a_declared_resample_n_changes_the_derived_draw_count(tmp_path, capsys):
         capsys=capsys,
         aggregate_returns="mean_pred",
         units=40,
-        statistics={"correction": "holm",
-                    "resample": {"method": "bootstrap", "n": 500}},
+        statistics={"correction": "holm", "resample": {"method": "bootstrap", "n": 500}},
     )
     run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
     metric = _first_metric(run, "mean_pred")
@@ -6948,8 +6943,7 @@ def test_an_undeclared_resample_still_draws_two_thousand(tmp_path, capsys):
         assert metric["resample_draws"] == 2000
         # Positive companion: the column is still a t-interval, so this cannot
         # pass by nothing having been resampled at all.
-        column = run["results"]["conditions"][0]["aggregated"][
-            "step01_summarize_units"]["pred"]
+        column = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["pred"]
         assert column["method"] == "t_over_units"
 
 
@@ -6968,21 +6962,32 @@ def test_the_resolver_fills_every_default_and_separates_declared_from_n():
     from publishable.cli import _resolved_resample
 
     assert _resolved_resample({}) == {
-        "method": "bootstrap", "n": 2000, "stratify_by": (), "declared": False,
+        "method": "bootstrap",
+        "n": 2000,
+        "stratify_by": (),
+        "declared": False,
     }
     assert _resolved_resample({"statistics": {"resample": None}}) == {
-        "method": "bootstrap", "n": 2000, "stratify_by": (), "declared": False,
+        "method": "bootstrap",
+        "n": 2000,
+        "stratify_by": (),
+        "declared": False,
     }
     assert _resolved_resample({"statistics": {"resample": {"n": 2000}}}) == {
-        "method": "bootstrap", "n": 2000, "stratify_by": (), "declared": True,
+        "method": "bootstrap",
+        "n": 2000,
+        "stratify_by": (),
+        "declared": True,
     }
     assert _resolved_resample(
-        {"statistics": {"resample": {"method": "bootstrap", "n": 500,
-                                     "stratify_by": "site"}}}
+        {"statistics": {"resample": {"method": "bootstrap", "n": 500, "stratify_by": "site"}}}
     ) == {"method": "bootstrap", "n": 500, "stratify_by": ("site",), "declared": True}
-    assert _resolved_resample(
-        {"statistics": {"resample": {"method": 123, "n": 10}}}
-    ) == {"method": "bootstrap", "n": 10, "stratify_by": (), "declared": True}
+    assert _resolved_resample({"statistics": {"resample": {"method": 123, "n": 10}}}) == {
+        "method": "bootstrap",
+        "n": 10,
+        "stratify_by": (),
+        "declared": True,
+    }
 
 
 def test_the_resample_block_is_resolved_exactly_once(tmp_path, capsys, monkeypatch):
@@ -7025,8 +7030,7 @@ def test_a_declared_resample_gives_every_column_a_percentile_interval(tmp_path, 
         capsys=capsys,
         aggregate_returns="mean_pred",
         units=40,
-        statistics={"correction": "holm",
-                    "resample": {"method": "bootstrap", "n": 500}},
+        statistics={"correction": "holm", "resample": {"method": "bootstrap", "n": 500}},
     )
     run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
     aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
@@ -7047,7 +7051,10 @@ def test_an_undeclared_resample_leaves_a_column_untouched_end_to_end(tmp_path, c
     column keeps its `t_over_units` interval and no `resample_draws` key at
     all, byte-identical to before this task's wiring landed."""
     doc = run_a_project(
-        tmp_path, capsys=capsys, aggregate_returns="mean_pred", units=40,
+        tmp_path,
+        capsys=capsys,
+        aggregate_returns="mean_pred",
+        units=40,
     )
     run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
     aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
@@ -7071,8 +7078,7 @@ def test_declaring_n_2000_still_gates_a_column_on_declared_not_on_n(tmp_path, ca
         capsys=capsys,
         aggregate_returns="mean_pred",
         units=40,
-        statistics={"correction": "holm",
-                    "resample": {"method": "bootstrap", "n": 2000}},
+        statistics={"correction": "holm", "resample": {"method": "bootstrap", "n": 2000}},
     )
     run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
     aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
@@ -7080,7 +7086,7 @@ def test_declaring_n_2000_still_gates_a_column_on_declared_not_on_n(tmp_path, ca
     assert aggregated["pred"]["resample_draws"] == 2000
 
 
-_COHORT_BANDED_STEP = '''\
+_COHORT_BANDED_STEP = """\
 # src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
 from publishable import BaseStep
 
@@ -7098,7 +7104,7 @@ class Step(BaseStep):
             )
             io.record(unit.key, {{"pred": pred}})
         return {{"n_units": len(units)}}
-'''
+"""
 
 
 def test_a_declared_stratify_by_reaches_the_column_interval(tmp_path, capsys):
@@ -7108,30 +7114,36 @@ def test_a_declared_stratify_by_reaches_the_column_interval(tmp_path, capsys):
     interval is measurably narrower than the unstratified one — a fixture where
     the two cohorts held the same values could not tell them apart."""
     doc_plain = run_a_project(
-        tmp_path / "plain", capsys=capsys, units=40, unit_attributes=["cohort"],
+        tmp_path / "plain",
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
         _starter_step=_COHORT_BANDED_STEP,
         statistics={"correction": "holm", "resample": {"method": "bootstrap", "n": 2000}},
     )
     doc_strat = run_a_project(
-        tmp_path / "strat", capsys=capsys, units=40, unit_attributes=["cohort"],
+        tmp_path / "strat",
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
         _starter_step=_COHORT_BANDED_STEP,
-        statistics={"correction": "holm",
-                    "resample": {"method": "bootstrap", "n": 2000,
-                                 "stratify_by": ["cohort"]}},
+        statistics={
+            "correction": "holm",
+            "resample": {"method": "bootstrap", "n": 2000, "stratify_by": ["cohort"]},
+        },
     )
+
     def width(doc):
         run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
-        metric = run["results"]["conditions"][0]["aggregated"][
-            "step01_summarize_units"]["pred"]
+        metric = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["pred"]
         assert metric["method"] == "percentile_over_units"
         low, high = metric["ci95"]
         return high - low
+
     assert width(doc_strat) < width(doc_plain)
 
 
-def test_a_unit_missing_a_stratum_attribute_joins_a_stratum_of_its_own(
-    tmp_path, capsys
-):
+def test_a_unit_missing_a_stratum_attribute_joins_a_stratum_of_its_own(tmp_path, capsys):
     """`strata.levels_for` drops such a unit from every reporting level, because
     "there is no honest level for 'we don't know'". A DRAW cannot drop it — that
     would change `n` silently — so it joins a stratum labelled from the absence.
@@ -7145,21 +7157,22 @@ def test_a_unit_missing_a_stratum_attribute_joins_a_stratum_of_its_own(
     omits it entirely leaves `DictReader`'s `restval` (`None`) in its place.
     Asserted because a fixture with every attribute present cannot see it."""
     header = "patient_id,arm,cohort\n"
-    rows = [
-        f"p{i},x" if i % 10 == 0 else f"p{i},x,{'a' if i % 2 else 'b'}"
-        for i in range(40)
-    ]
+    rows = [f"p{i},x" if i % 10 == 0 else f"p{i},x,{'a' if i % 2 else 'b'}" for i in range(40)]
     roster = header + "\n".join(rows) + "\n"
     doc = run_a_project(
-        tmp_path, capsys=capsys, units=40, unit_attributes=["cohort"],
-        roster_csv=roster, _starter_step=_COHORT_BANDED_STEP,
-        statistics={"correction": "holm",
-                    "resample": {"method": "bootstrap", "n": 2000,
-                                 "stratify_by": ["cohort"]}},
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
+        roster_csv=roster,
+        _starter_step=_COHORT_BANDED_STEP,
+        statistics={
+            "correction": "holm",
+            "resample": {"method": "bootstrap", "n": 2000, "stratify_by": ["cohort"]},
+        },
     )
     run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
-    metric = run["results"]["conditions"][0]["aggregated"][
-        "step01_summarize_units"]["pred"]
+    metric = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]["pred"]
     # Every completed unit is still in `n` — the draw dropped nobody.
     assert metric["n"]["completed"] == 40
     assert metric["ci95"] is not None
@@ -7176,17 +7189,27 @@ def test_a_declared_stratify_by_reaches_the_column_and_the_derived_interval_toge
     computed from one design and neither can move by accident while the
     other stays put."""
     doc_plain = run_a_project(
-        tmp_path / "plain", capsys=capsys, units=40, unit_attributes=["cohort"],
-        _starter_step=_COHORT_BANDED_STEP, aggregate_returns="mean_pred",
+        tmp_path / "plain",
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
+        _starter_step=_COHORT_BANDED_STEP,
+        aggregate_returns="mean_pred",
         statistics={"correction": "holm", "resample": {"method": "bootstrap", "n": 2000}},
     )
     doc_strat = run_a_project(
-        tmp_path / "strat", capsys=capsys, units=40, unit_attributes=["cohort"],
-        _starter_step=_COHORT_BANDED_STEP, aggregate_returns="mean_pred",
-        statistics={"correction": "holm",
-                    "resample": {"method": "bootstrap", "n": 2000,
-                                 "stratify_by": ["cohort"]}},
+        tmp_path / "strat",
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
+        _starter_step=_COHORT_BANDED_STEP,
+        aggregate_returns="mean_pred",
+        statistics={
+            "correction": "holm",
+            "resample": {"method": "bootstrap", "n": 2000, "stratify_by": ["cohort"]},
+        },
     )
+
     def widths(doc):
         run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
         agg = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
@@ -7197,13 +7220,14 @@ def test_a_declared_stratify_by_reaches_the_column_and_the_derived_interval_toge
             column["ci95"][1] - column["ci95"][0],
             derived["ci95"][1] - derived["ci95"][0],
         )
+
     plain_column_width, plain_derived_width = widths(doc_plain)
     strat_column_width, strat_derived_width = widths(doc_strat)
     assert strat_column_width < plain_column_width
     assert strat_derived_width < plain_derived_width
 
 
-_RAGGED_COLUMN_STEP = '''\
+_RAGGED_COLUMN_STEP = """\
 # src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
 from publishable import BaseStep
 
@@ -7229,7 +7253,7 @@ class Step(BaseStep):
                 values["sometimes"] = float(i) * 2.0 * scale
             io.record(unit.key, values)
         return {{"n_units": len(units)}}
-'''
+"""
 
 
 def test_a_column_contrast_takes_the_paired_percentile_under_resample(tmp_path, capsys):
@@ -7241,25 +7265,26 @@ def test_a_column_contrast_takes_the_paired_percentile_under_resample(tmp_path, 
     both conditions gives zero differences, and `cohens_dz` of those is `None`,
     so `cohens_d is not None` would fail under the correct implementation."""
     doc = run_a_project(
-        tmp_path, capsys=capsys, units=40,
+        tmp_path,
+        capsys=capsys,
+        units=40,
         _starter_step=_CONDITION_SCALED_STEP,
-        sweep={"baseline": {"analysis.method": "pearson"},
-               "grid": {"analysis.method": ["spearman"]}},
-        statistics={"correction": "holm",
-                    "resample": {"method": "bootstrap", "n": 2000}},
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+        statistics={"correction": "holm", "resample": {"method": "bootstrap", "n": 2000}},
     )
     run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
     entry = _named_contrast(run, "method=spearman", "pred")
     assert entry is not None
     assert entry["method"] == "paired_percentile_over_units"
-    assert entry["cohens_d"] is not None      # a column HAS a per-unit value
-    assert entry["paired"] is True            # still hard-coded; H4c owns it
+    assert entry["cohens_d"] is not None  # a column HAS a per-unit value
+    assert entry["paired"] is True  # still hard-coded; H4c owns it
     assert entry["ci95"] is not None
 
 
-def test_a_column_contrast_corrects_off_its_own_pool_not_a_t_interval(
-    tmp_path, capsys
-):
+def test_a_column_contrast_corrects_off_its_own_pool_not_a_t_interval(tmp_path, capsys):
     """THE test this task exists for. `_corrected_bounds` tests
     `member.diffs is not None` FIRST, so a `Member` still carrying diffs yields
     `ci95` from a percentile and `ci95_corrected` from `paired_t_over_units` on
@@ -7274,12 +7299,15 @@ def test_a_column_contrast_corrects_off_its_own_pool_not_a_t_interval(
     from publishable.stats import paired_t_over_units
 
     doc = run_a_project(
-        tmp_path, capsys=capsys, units=40,
+        tmp_path,
+        capsys=capsys,
+        units=40,
         _starter_step=_CONDITION_SCALED_STEP,
-        sweep={"baseline": {"analysis.method": "pearson"},
-               "grid": {"analysis.method": ["spearman", "kendall"]}},
-        statistics={"correction": "holm",
-                    "resample": {"method": "bootstrap", "n": 2000}},
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman", "kendall"]},
+        },
+        statistics={"correction": "holm", "resample": {"method": "bootstrap", "n": 2000}},
     )
     run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
     entry = _named_contrast(run, "method=spearman", "pred")
@@ -7322,10 +7350,8 @@ def test_a_column_contrast_corrects_off_its_own_pool_not_a_t_interval(
     level = entry["correction_level"]
     diffs = [2.0 * float(i) for i in range(40)]
     t_bound = paired_t_over_units(diffs, confidence=1.0 - level)
-    assert t_bound is not None      # non-degenerate, unlike an all-zero column
-    assert not (
-        math.isclose(corr_low, t_bound.low) and math.isclose(corr_high, t_bound.high)
-    )
+    assert t_bound is not None  # non-degenerate, unlike an all-zero column
+    assert not (math.isclose(corr_low, t_bound.low) and math.isclose(corr_high, t_bound.high))
 
 
 def test_a_column_contrast_draws_from_the_columns_own_keys(tmp_path, capsys):
@@ -7337,11 +7363,14 @@ def test_a_column_contrast_draws_from_the_columns_own_keys(tmp_path, capsys):
     under the fix. One unit missing would leave ~720 survivors and pass either
     way."""
     doc = run_a_project(
-        tmp_path, capsys=capsys, units=40,
-        sweep={"baseline": {"analysis.method": "pearson"},
-               "grid": {"analysis.method": ["spearman"]}},
-        statistics={"correction": "holm",
-                    "resample": {"method": "bootstrap", "n": 2000}},
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+        statistics={"correction": "holm", "resample": {"method": "bootstrap", "n": 2000}},
         _starter_step=_RAGGED_COLUMN_STEP,
     )
     run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
@@ -7349,7 +7378,7 @@ def test_a_column_contrast_draws_from_the_columns_own_keys(tmp_path, capsys):
     assert ragged is not None
     assert ragged["method"] == "paired_percentile_over_units"
     assert ragged["ci95"] is not None
-    assert ragged["n_paired"] == 30           # 40 units, every 4th missing
+    assert ragged["n_paired"] == 30  # 40 units, every 4th missing
     # The full column is unaffected, so this cannot pass by both being broken.
     full = _named_contrast(run, "method=spearman", "always")
     assert full is not None
@@ -7374,11 +7403,15 @@ def test_the_resolved_resample_is_recorded_beside_every_interval(tmp_path, capsy
     `_beside_n_copy` is the same fix for this carrier.
     """
     doc = run_a_project(
-        tmp_path, capsys=capsys, aggregate_returns="mean_pred", units=40,
+        tmp_path,
+        capsys=capsys,
+        aggregate_returns="mean_pred",
+        units=40,
         unit_attributes=["cohort"],
-        statistics={"correction": "holm",
-                    "resample": {"method": "bootstrap", "n": 500,
-                                 "stratify_by": ["cohort"]}},
+        statistics={
+            "correction": "holm",
+            "resample": {"method": "bootstrap", "n": 500, "stratify_by": ["cohort"]},
+        },
     )
     text = (doc["run_dir"] / "run.yaml").read_text()
     assert "&id" not in text
@@ -7387,7 +7420,9 @@ def test_the_resolved_resample_is_recorded_beside_every_interval(tmp_path, capsy
     aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
     for name in ("pred", "mean_pred"):
         assert aggregated[name]["resample"] == {
-            "method": "bootstrap", "n": 500, "stratify_by": ["cohort"]
+            "method": "bootstrap",
+            "n": 500,
+            "stratify_by": ["cohort"],
         }
     # `n` is what was REQUESTED; `resample_draws` is what the interval rests on.
     # Equal for a column by construction, and equal here for the derived metric
@@ -7397,9 +7432,7 @@ def test_the_resolved_resample_is_recorded_beside_every_interval(tmp_path, capsy
     assert aggregated["mean_pred"]["resample_draws"] == 500
 
 
-def test_the_resolved_resample_survives_report_by_without_aliasing(
-    tmp_path, capsys, monkeypatch
-):
+def test_the_resolved_resample_survives_report_by_without_aliasing(tmp_path, capsys, monkeypatch):
     """The `report_by` level path carries `weighted_beside`, not the parent's
     `beside_n` — the one call site the first test above never reaches, since it
     only reads `conditions[0]["aggregated"]` at the top level. Combining
@@ -7411,11 +7444,15 @@ def test_the_resolved_resample_survives_report_by_without_aliasing(
 
     monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
     doc = run_a_project(
-        tmp_path, capsys=capsys, units=40,
+        tmp_path,
+        capsys=capsys,
+        units=40,
         unit_attributes=["cohort"],
-        statistics={"correction": "holm", "report_by": ["cohort"],
-                    "resample": {"method": "bootstrap", "n": 500,
-                                 "stratify_by": ["cohort"]}},
+        statistics={
+            "correction": "holm",
+            "report_by": ["cohort"],
+            "resample": {"method": "bootstrap", "n": 500, "stratify_by": ["cohort"]},
+        },
     )
     text = (doc["run_dir"] / "run.yaml").read_text()
     assert "&id" not in text
@@ -7437,9 +7474,7 @@ def test_no_resample_block_is_recorded_when_none_was_declared(tmp_path, capsys):
     """Absent, not null: an explicit null would claim a resolution was performed.
     Paired with a positive assertion in the same test so it cannot pass by
     nothing having run."""
-    doc = run_a_project(
-        tmp_path, capsys=capsys, aggregate_returns="mean_pred", units=40
-    )
+    doc = run_a_project(tmp_path, capsys=capsys, aggregate_returns="mean_pred", units=40)
     run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
     aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
     assert "resample" not in aggregated["pred"]
@@ -7450,11 +7485,7 @@ def test_no_resample_block_is_recorded_when_none_was_declared(tmp_path, capsys):
     assert aggregated["mean_pred"]["method"] == "percentile_over_units"
 
 
-
-
-def test_a_report_by_level_resamples_without_joining_the_correction_family(
-    tmp_path, capsys
-):
+def test_a_report_by_level_resamples_without_joining_the_correction_family(tmp_path, capsys):
     """`Member`s are built in one place, `_comparison_step_blocks`'s per-metric
     loop, which excludes the `by` key the whole strata block lives under. That
     property already holds — Task 15's review confirmed it live (level blocks
@@ -7513,13 +7544,21 @@ def test_a_report_by_level_resamples_without_joining_the_correction_family(
       exclusion mints a genuine `"by"` entry in `vs_baseline`, which that
       assertion catches directly."""
     doc = run_a_project(
-        tmp_path, capsys=capsys, units=40, unit_attributes=["cohort"],
+        tmp_path,
+        capsys=capsys,
+        units=40,
+        unit_attributes=["cohort"],
         aggregate_returns="mean_pred",
         _starter_step=_METHOD_VARYING_STEP,
-        sweep={"baseline": {"analysis.method": "pearson"},
-               "grid": {"analysis.method": ["spearman"]}},
-        statistics={"correction": "holm", "report_by": ["cohort"],
-                    "resample": {"method": "bootstrap", "n": 2000}},
+        sweep={
+            "baseline": {"analysis.method": "pearson"},
+            "grid": {"analysis.method": ["spearman"]},
+        },
+        statistics={
+            "correction": "holm",
+            "report_by": ["cohort"],
+            "resample": {"method": "bootstrap", "n": 2000},
+        },
     )
     run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
     aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
@@ -7555,7 +7594,7 @@ def test_a_report_by_level_resamples_without_joining_the_correction_family(
             assert "by" not in step_block
 
 
-_SUMMARY_ESTIMATE_STEP = '''\
+_SUMMARY_ESTIMATE_STEP = """\
 # generated, and runnable as-is
 from publishable import BaseStep, Estimate
 
@@ -7570,7 +7609,7 @@ class Step(BaseStep):
             ),
             "converged": True,
         }}
-'''
+"""
 
 
 def test_a_summary_estimate_is_not_recomputed_by_the_resample_pass(tmp_path, capsys):
@@ -7587,12 +7626,13 @@ def test_a_summary_estimate_is_not_recomputed_by_the_resample_pass(tmp_path, cap
     run DID take a percentile interval, so this cannot pass by the resample
     having done nothing at all."""
     doc = run_a_project(
-        tmp_path, capsys=capsys, units=40,
+        tmp_path,
+        capsys=capsys,
+        units=40,
         extra_steps=["report"],
         extra_step_source=_SUMMARY_ESTIMATE_STEP,
         aggregate_returns="mean_pred",
-        statistics={"correction": "holm",
-                    "resample": {"method": "bootstrap", "n": 2000}},
+        statistics={"correction": "holm", "resample": {"method": "bootstrap", "n": 2000}},
     )
     run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
     estimate = run["results"]["summary"]["step02_report"]["site_adjusted_delta"]
@@ -7626,7 +7666,7 @@ def test_a_summary_estimate_is_not_recomputed_by_the_resample_pass(tmp_path, cap
     assert aggregated["pred"]["resample"]["n"] == 2000
 
 
-_TRAIN_TOUCHING_STEP = '''\
+_TRAIN_TOUCHING_STEP = """\
 # src/{pkg}/steps/step01_touch_train.py — generated, and runnable as-is
 from publishable import BaseStep
 
@@ -7642,7 +7682,7 @@ class Step(BaseStep):
         # nothing and write a plausible model.
         train = io.units.train
         return {{"n_train": len(train)}}
-'''
+"""
 
 
 def test_a_run_without_a_holdout_pins_its_denominators_and_artifacts(tmp_path, capsys):
@@ -7715,7 +7755,10 @@ def test_a_run_without_a_holdout_pins_its_denominators_and_artifacts(tmp_path, c
     for name in ("pred", "mean_pred"):
         metric = aggregated[name]
         assert metric["n"] == {
-            "resolved": 10, "completed": 10, "ineligible": 0, "failed": 0,
+            "resolved": 10,
+            "completed": 10,
+            "ineligible": 0,
+            "failed": 0,
         }, metric
         assert metric["value"] == pytest.approx(4.5), metric
         assert metric["ci95"] is not None, metric
@@ -7802,8 +7845,7 @@ def _cli_roster(n, **attrs_by_index):
 
     return UnitList(
         [
-            Unit(key=f"u{i}", paths=(),
-                 attributes={k: v(i) for k, v in attrs_by_index.items()})
+            Unit(key=f"u{i}", paths=(), attributes={k: v(i) for k, v in attrs_by_index.items()})
             for i in range(n)
         ]
     )
@@ -7819,9 +7861,10 @@ def test_the_holdout_is_realized_once_and_returns_none_when_undeclared():
     for decl in (None, {}, {"holdout": None}, {"holdout": {}}):
         assert _resolved_holdout(decl, roster, "sha256:aaa", None) is None
     # No roster is also `None`: there is nothing to partition.
-    assert _resolved_holdout(
-        {"holdout": {"method": "random", "frac": 0.2}}, None, "sha256:aaa", None
-    ) is None
+    assert (
+        _resolved_holdout({"holdout": {"method": "random", "frac": 0.2}}, None, "sha256:aaa", None)
+        is None
+    )
 
 
 def test_the_realized_holdout_uses_the_derived_seed_and_the_cluster_map():
@@ -7856,7 +7899,9 @@ def test_a_pinned_holdout_seed_reaches_the_realization():
     roster = _cli_roster(10)
     plan = _resolved_holdout(
         {"holdout": {"method": "random", "frac": 0.2, "seed": 4321}},
-        roster, "sha256:aaa", None,
+        roster,
+        "sha256:aaa",
+        None,
     )
     assert plan.seed == 4321
 
@@ -7979,9 +8024,7 @@ def test_compute_declared_contrasts_within_is_narrowed_by_the_test_partition():
     ]
     doc = {
         "statistics": {
-            "contrasts": [
-                {"id": "c1", "of": "m", "against": "baseline", "within": {"group": "x"}}
-            ]
+            "contrasts": [{"id": "c1", "of": "m", "against": "baseline", "within": {"group": "x"}}]
         }
     }
     aggregated = {0: {"s": {"r": 0.5}}, 1: {"s": {"r": 1.15}}}
@@ -8062,7 +8105,7 @@ def test_compute_vs_baseline_roster_argument_never_affects_the_auto_generated_fa
 
 # --- Task 18: retiring `E-DATA-HOLDOUT-UNSUPPORTED`, and the five end-to-end pins -----
 
-_HOLDOUT_SEEING_STEP = '''\
+_HOLDOUT_SEEING_STEP = """\
 # src/{pkg}/steps/step01_split.py — generated, and runnable as-is
 from publishable import BaseStep
 
@@ -8078,10 +8121,10 @@ class Step(BaseStep):
         for unit in io.units:
             io.record(unit.key, {{"value": 1.0}})
         return {{"n": len(io.units)}}
-'''
+"""
 
 
-_ALWAYS_FAILING_STEP = '''\
+_ALWAYS_FAILING_STEP = """\
 # src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
 from publishable import BaseStep
 
@@ -8118,7 +8161,7 @@ class Step(BaseStep):
             for unit in test_units:
                 io.record(unit.key, {{"value": 1.0}})
         return {{"n": len(io.units)}}
-'''
+"""
 
 
 def run_roster_keys(doc: dict[str, Any]) -> list[str]:
@@ -8162,7 +8205,9 @@ def test_a_declared_holdout_now_validates_and_runs(tmp_path, capsys):
     ledger field, so the ledger check below is a plain status assertion and
     the real denominator pin reads `run.yaml`'s `aggregated` block instead."""
     doc = run_a_project(
-        tmp_path, capsys=capsys, units=20,
+        tmp_path,
+        capsys=capsys,
+        units=20,
         units_overrides={"holdout": {"method": "random", "frac": 0.2, "seed": 4321}},
         _starter_step=_HOLDOUT_SEEING_STEP,
     )
@@ -8174,9 +8219,13 @@ def test_a_declared_holdout_now_validates_and_runs(tmp_path, capsys):
     assert alloc_path.exists()
     alloc = json.loads(alloc_path.read_text())
     assert run["provenance"]["allocation"] == "allocation.json"
-    assert run["provenance"]["allocation_hash"] == "sha256:" + hashlib.sha256(
-        json.dumps(alloc, sort_keys=True, separators=(",", ":")).encode()
-    ).hexdigest()
+    assert (
+        run["provenance"]["allocation_hash"]
+        == "sha256:"
+        + hashlib.sha256(
+            json.dumps(alloc, sort_keys=True, separators=(",", ":")).encode()
+        ).hexdigest()
+    )
 
     # Task 13: realized once, over the whole roster, at the pinned seed.
     assert alloc["holdout"]["seed"] == 4321
@@ -8261,7 +8310,9 @@ def test_a_holdouts_derived_seed_matches_its_own_digest(tmp_path, capsys):
     same ground-truth discipline `run_roster_keys` above uses for the roster.
     """
     doc = run_a_project(
-        tmp_path, capsys=capsys, units=20,
+        tmp_path,
+        capsys=capsys,
+        units=20,
         units_overrides={"holdout": {"method": "random", "frac": 0.2}},
         _starter_step=_HOLDOUT_SEEING_STEP,
     )
@@ -8270,12 +8321,8 @@ def test_a_holdouts_derived_seed_matches_its_own_digest(tmp_path, capsys):
 
     units_decl = run["config"]["data"]["units"]
     digest = design_digest(run["config"])
-    roster, _technical_n, _columns = resolve_units(
-        units_decl, doc["root"].parent / "data"
-    )
-    assert alloc["holdout"]["seed"] == holdout_seed_for(
-        units_decl["holdout"], digest, roster
-    )
+    roster, _technical_n, _columns = resolve_units(units_decl, doc["root"].parent / "data")
+    assert alloc["holdout"]["seed"] == holdout_seed_for(units_decl["holdout"], digest, roster)
 
 
 def test_max_failed_fraction_is_measured_against_the_test_partition(tmp_path, capsys):
@@ -8305,7 +8352,9 @@ def test_max_failed_fraction_is_measured_against_the_test_partition(tmp_path, ca
       `completed` even though the plan stops short — the guard and the
       execution-level exit code are two different mechanisms."""
     doc = run_a_project(
-        tmp_path, capsys=capsys, units=20,
+        tmp_path,
+        capsys=capsys,
+        units=20,
         units_overrides={"holdout": {"method": "random", "frac": 0.2, "seed": 4321}},
         limits={"max_failed_fraction": 0.5, "max_executions": 100},
         _starter_step=_ALWAYS_FAILING_STEP,
@@ -8320,4 +8369,3 @@ def test_max_failed_fraction_is_measured_against_the_test_partition(tmp_path, ca
     assert all(r["status"] == "completed" for r in ledger), ledger
     # The guard fired: the plan stopped short of its full length.
     assert len(ledger) < _planned_execution_count(doc)
-

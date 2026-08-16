@@ -5,11 +5,13 @@ from publishable.config import Config
 
 
 def cfg() -> Config:
-    return Config({
-        "parameters": {"analysis": {"method": "pearson", "min_samples": 30}},
-        "metadata": {"name": "cohort-pilot"},
-        "sweep": {"grid": {"analysis.method": ["spearman"]}},
-    })
+    return Config(
+        {
+            "parameters": {"analysis": {"method": "pearson", "min_samples": 30}},
+            "metadata": {"name": "cohort-pilot"},
+            "sweep": {"grid": {"analysis.method": ["spearman"]}},
+        }
+    )
 
 
 def test_dot_access_walks_nested_mappings():

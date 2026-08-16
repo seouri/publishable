@@ -387,9 +387,7 @@ def weighted_t_over_units_clustered(
     meat = sum(s * s for s in scores.values())
     variance = (groups / (groups - 1)) * meat / (total * total)
     half = _t_critical(groups - 1, confidence) * math.sqrt(variance)
-    return Interval(
-        low=mean - half, high=mean + half, method="weighted_t_over_units_clustered"
-    )
+    return Interval(low=mean - half, high=mean + half, method="weighted_t_over_units_clustered")
 
 
 def paired_t_over_units(diffs: Sequence[float], confidence: float = 0.95) -> Interval | None:
@@ -642,9 +640,7 @@ def percentile_over_units(
             # Each stratum contributes exactly as many rows as it holds: that
             # is the composition the design ruled the alternatives out of.
             drawn = [
-                group[rng.randrange(len(group))]
-                for group in ordered
-                for _ in range(len(group))
+                group[rng.randrange(len(group))] for group in ordered for _ in range(len(group))
             ]
             if carried is None:
                 means_out.append(sum(v for v, _ in drawn) / len(drawn))
@@ -911,9 +907,7 @@ def percentile_over_units_clustered(
             means.append(_weighted_mean([w for _, w in drawn], [v for v, _ in drawn]))
     means.sort()
     lo, hi = _percentile_ranks(draws, confidence)
-    return Interval(
-        low=means[lo], high=means[hi], method="percentile_over_units_clustered"
-    )
+    return Interval(low=means[lo], high=means[hi], method="percentile_over_units_clustered")
 
 
 def percentile_of_derived(
@@ -1823,9 +1817,7 @@ def summarize_step(
             interval = (
                 weighted_t_over_units(values, column_weights)
                 if clusters is None
-                else weighted_t_over_units_clustered(
-                    values, column_keys, clusters, column_weights
-                )
+                else weighted_t_over_units_clustered(values, column_keys, clusters, column_weights)
             )
         out[column] = {
             **_beside_n_copy(beside_n),

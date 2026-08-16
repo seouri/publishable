@@ -65,8 +65,9 @@ def test_declared_attributes_are_readable_directly(input_dir: Path):
 
 
 def test_an_undeclared_column_is_not_an_attribute(input_dir: Path):
-    units, _, _ = resolve_units({"from": "index.csv", "key": "patient_id", "attributes": ["label"]},
-                             input_dir)
+    units, _, _ = resolve_units(
+        {"from": "index.csv", "key": "patient_id", "attributes": ["label"]}, input_dir
+    )
     assert "site" not in units[0].attributes
     with pytest.raises(AttributeError):
         _ = units[0].site
@@ -174,10 +175,10 @@ def test_mutating_the_original_dict_after_construction_does_not_leak_in():
 
 def test_the_unit_list_is_exactly_four_operations(input_dir: Path):
     units, _, _ = resolve_units({"from": "index.csv", "key": "patient_id"}, input_dir)
-    assert len(list(units)) == 3          # iterate, repeatably
+    assert len(list(units)) == 3  # iterate, repeatably
     assert len(list(units)) == 3
-    assert len(units) == 3                # len
-    assert units[1].key == "p1"           # index
+    assert len(units) == 3  # len
+    assert units[1].key == "p1"  # index
     for absent in ("append", "index", "count", "sort", "__contains__"):
         assert not hasattr(units, absent), f"{absent} would make this a list"
 
@@ -436,9 +437,7 @@ def _clustered_by_stratum(
             cluster = f"{label}c{c}"
             for i in range(n):
                 key = f"{cluster}_{i}"
-                units.append(
-                    Unit(key=key, paths=(), attributes={"label": label, "site": cluster})
-                )
+                units.append(Unit(key=key, paths=(), attributes={"label": label, "site": cluster}))
                 clusters[key], strata[key] = cluster, label
     return UnitList(units), clusters, strata
 
@@ -496,9 +495,7 @@ def test_no_cluster_is_split_across_a_stratified_fold():
     them whole trivially.
     """
     roster, clusters, strata = _clustered_by_stratum({"A": [7, 3], "B": [3, 1, 1]})
-    folds = partition_units(
-        roster, k=2, digest="sha256:0000", clusters=clusters, strata=strata
-    )
+    folds = partition_units(roster, k=2, digest="sha256:0000", clusters=clusters, strata=strata)
     seen: dict[str, int] = {}
     for f, fold in enumerate(folds):
         for u in fold:
@@ -523,12 +520,8 @@ def test_the_clustered_stratified_split_pins_which_fold_each_cluster_lands_in():
     condemn it, and this test condemns it on the contract instead — which fold a unit
     lands in is a function of the digest, and `partition_units` says so.
     """
-    roster, clusters, strata = _clustered_by_stratum(
-        {"A": [3, 2, 2, 2], "B": [5, 1, 1, 1, 1]}
-    )
-    folds = partition_units(
-        roster, k=3, digest="sha256:0000", clusters=clusters, strata=strata
-    )
+    roster, clusters, strata = _clustered_by_stratum({"A": [3, 2, 2, 2], "B": [5, 1, 1, 1, 1]})
+    folds = partition_units(roster, k=3, digest="sha256:0000", clusters=clusters, strata=strata)
     assert [sorted({u.site for u in f}) for f in folds] == [
         ["Ac0", "Bc0"],
         ["Ac1", "Ac2", "Bc1", "Bc3"],
@@ -577,9 +570,7 @@ def test_a_k_past_a_single_stratum_leaves_a_fold_holding_none_of_it():
     """
     roster, clusters, strata = _clustered_by_stratum({"A": [2, 2, 2, 2], "B": [2, 2]})
     assert fold_basis(roster, "site") == 6, "so k=3 is well inside what validate allows"
-    folds = partition_units(
-        roster, k=3, digest="sha256:0000", clusters=clusters, strata=strata
-    )
+    folds = partition_units(roster, k=3, digest="sha256:0000", clusters=clusters, strata=strata)
     assert [dict(Counter(u.label for u in f)) for f in folds] == [
         {"A": 4, "B": 2},
         {"A": 2, "B": 2},
@@ -642,7 +633,7 @@ def test_a_unit_still_reads_normally() -> None:
     assert unit.site == "A"
     assert len(unit.attributes) == 1
     assert dict(unit.attributes) == {"site": "A"}
-    assert {unit} == {Unit(key="u1")}          # hashable by key
+    assert {unit} == {Unit(key="u1")}  # hashable by key
 
 
 def test_a_units_attributes_copy_the_input_mapping() -> None:
@@ -706,9 +697,9 @@ def test_rows_sharing_a_key_collapse_to_one_unit():
     collapsed, counts = collapse_measurements(units, by="read_id", collapse="mean")
     assert [u.key for u in collapsed] == ["p1", "p2"]
     assert counts == [2, 1]
-    assert collapsed[0].depth == 15.0        # mean of 10 and 20
-    assert collapsed[0].site == "A"          # non-numeric, constant: carried
-    assert "read_id" not in collapsed[0].attributes   # the measurement axis is consumed
+    assert collapsed[0].depth == 15.0  # mean of 10 and 20
+    assert collapsed[0].site == "A"  # non-numeric, constant: carried
+    assert "read_id" not in collapsed[0].attributes  # the measurement axis is consumed
 
 
 def test_mean_over_three_measurements_is_a_mean_and_not_a_median():
@@ -760,9 +751,9 @@ def test_the_constant_shortcut_does_not_corrupt_a_numeric_aggregation():
     not `5`, even though the two reads agree."""
     assert apply_rule("sum", [5, 5]) == 10
     assert apply_rule("sum", [1000, 1000]) == 2000
-    assert apply_rule("sum", [1, 2]) == 3          # already covered above; kept for contrast
-    assert apply_rule("mean", [5, 5]) == 5         # mean over constant numeric: still a mean
-    assert apply_rule("mean", ["A", "A"]) == "A"   # round-1 behaviour, must survive
+    assert apply_rule("sum", [1, 2]) == 3  # already covered above; kept for contrast
+    assert apply_rule("mean", [5, 5]) == 5  # mean over constant numeric: still a mean
+    assert apply_rule("mean", ["A", "A"]) == "A"  # round-1 behaviour, must survive
 
 
 def test_a_bogus_rule_raises_even_over_a_single_trivially_constant_value():
@@ -802,9 +793,7 @@ def test_a_column_absent_from_the_collapse_map_falls_back_to_first():
         Unit(key="p1", paths=(), attributes={"read_id": "r1", "depth": 10, "batch": "b1"}),
         Unit(key="p1", paths=(), attributes={"read_id": "r2", "depth": 20, "batch": "b2"}),
     ]
-    collapsed, counts = collapse_measurements(
-        units, by="read_id", collapse={"depth": "mean"}
-    )
+    collapsed, counts = collapse_measurements(units, by="read_id", collapse={"depth": "mean"})
     assert counts == [2]
     assert collapsed[0].depth == 15.0
     assert collapsed[0].batch == "b1"
@@ -1071,9 +1060,7 @@ def test_cluster_count_reads_the_same_authority():
     """The count is derived from the membership rather than counted separately:
     a count above the number of groups the partitioner can produce is a `k` that
     cannot be satisfied."""
-    roster = UnitList(
-        [Unit(key=f"u{i}", paths=(), attributes={"site": "S1"}) for i in range(4)]
-    )
+    roster = UnitList([Unit(key=f"u{i}", paths=(), attributes={"site": "S1"}) for i in range(4)])
     assert cluster_count(roster, "site") == 1
     with pytest.raises(ContractError):
         cluster_count(UnitList([Unit(key="u0", paths=(), attributes={})]), "site")
@@ -1951,9 +1938,7 @@ def test_a_clustered_stratified_draw_keeps_every_cluster_whole():
     for c in range(8):
         for m in range(2):
             key = f"c{c}_{m}"
-            units.append(
-                Unit(key=key, paths=(), attributes={"site": "A" if c < 4 else "B"})
-            )
+            units.append(Unit(key=key, paths=(), attributes={"site": "A" if c < 4 else "B"}))
             clusters[key] = f"c{c}"
     roster = UnitList(units)
     plan = assignment_for(
@@ -1977,7 +1962,14 @@ def test_a_clustered_stratified_draw_keeps_every_cluster_whole():
     # by the ratio and by `_assign_whole_clusters_by_ratio` respectively — so a
     # clustered draw that ignored its seed would satisfy both assertions above.
     assert plan.members["control"] == (
-        "c0_0", "c0_1", "c2_0", "c2_1", "c5_0", "c5_1", "c6_0", "c6_1",
+        "c0_0",
+        "c0_1",
+        "c2_0",
+        "c2_1",
+        "c5_0",
+        "c5_1",
+        "c6_0",
+        "c6_1",
     )
     other = assignment_for(
         roster,
@@ -2042,9 +2034,7 @@ def test_a_clustered_random_draw_keeps_every_cluster_whole():
     for cluster_name in set(clusters.values()):
         cluster_keys = [key for key, name in clusters.items() if name == cluster_name]
         levels_seen = {membership[key] for key in cluster_keys}
-        assert len(levels_seen) == 1, (
-            f"cluster {cluster_name!r} split across arms: {levels_seen}"
-        )
+        assert len(levels_seen) == 1, f"cluster {cluster_name!r} split across arms: {levels_seen}"
 
     # The realized split this seed happens to draw, pinned so the structural
     # check above has a concrete shape to be checked against too.
@@ -2225,9 +2215,7 @@ def test_blocked_reads_the_roster_order_as_data():
     random_plan = assignment_for(roster, "arm", random_block, levels, "digest")
     random_plan_swapped = assignment_for(swapped, "arm", random_block, levels, "digest")
     random_map = {k: lvl for lvl, ks in random_plan.members.items() for k in ks}
-    random_map_swapped = {
-        k: lvl for lvl, ks in random_plan_swapped.members.items() for k in ks
-    }
+    random_map_swapped = {k: lvl for lvl, ks in random_plan_swapped.members.items() for k in ks}
     assert random_map == random_map_swapped, (
         "the control must report: random reads no order, so the same units "
         "in a different order must land in the same arms"
@@ -2237,9 +2225,7 @@ def test_blocked_reads_the_roster_order_as_data():
     blocked_plan = assignment_for(roster, "arm", blocked_block, levels, "digest")
     blocked_plan_swapped = assignment_for(swapped, "arm", blocked_block, levels, "digest")
     blocked_map = {k: lvl for lvl, ks in blocked_plan.members.items() for k in ks}
-    blocked_map_swapped = {
-        k: lvl for lvl, ks in blocked_plan_swapped.members.items() for k in ks
-    }
+    blocked_map_swapped = {k: lvl for lvl, ks in blocked_plan_swapped.members.items() for k in ks}
     assert blocked_map != blocked_map_swapped
     assert blocked_map["u00"] == "treatment"
     assert blocked_map["u05"] == "control"
@@ -2853,9 +2839,7 @@ def test_the_three_codes_are_not_one_code_and_none_excludes_another():
     codes = set()
     for declaration in ("cluster_by", "weight_by", "assign.arm.from"):
         with pytest.raises(ContractError) as e:
-            collapse_measurements(
-                rows, by="read", collapse="first", constant={declaration: "col"}
-            )
+            collapse_measurements(rows, by="read", collapse="first", constant={declaration: "col"})
         codes.add(e.value.code)
     assert codes == {"E-DATA-CLUSTER-VARIES", "E-DATA-WEIGHT-VARIES", "E-DATA-ASSIGN-VARIES"}
 
@@ -2907,8 +2891,7 @@ def test_resolve_units_checks_holdout_after_assign_and_before_cluster(input_dir:
     comes back."""
     _write_reads(
         input_dir,
-        "patient_id,read_id,arm,split,site\n"
-        "p1,r1,control,train,S1\np1,r2,treatment,test,S2\n",
+        "patient_id,read_id,arm,split,site\np1,r1,control,train,S1\np1,r2,treatment,test,S2\n",
     )
     decl = {
         "from": "reads.csv",
@@ -3295,9 +3278,7 @@ def test_a_clustered_holdout_keeps_every_cluster_whole():
     rather than with clusters of one."""
     roster = _holdout_roster(12, animal=lambda i: f"a{i // 2}")
     clusters = {f"u{i}": f"a{i // 2}" for i in range(12)}
-    plan = holdout_for(
-        roster, {"method": "random", "frac": 0.5}, seed=99, clusters=clusters
-    )
+    plan = holdout_for(roster, {"method": "random", "frac": 0.5}, seed=99, clusters=clusters)
     train, test = set(plan.train), set(plan.test)
     assert train | test == {f"u{i}" for i in range(12)}
     assert not train & test
@@ -3326,9 +3307,7 @@ def test_the_clustered_and_unclustered_constructions_are_not_the_same_draw():
     roster = _holdout_roster(10, animal=lambda i: f"u{i}")
     singleton = {f"u{i}": f"u{i}" for i in range(10)}
     plain = holdout_for(roster, {"method": "random", "frac": 0.4}, seed=5)
-    clustered = holdout_for(
-        roster, {"method": "random", "frac": 0.4}, seed=5, clusters=singleton
-    )
+    clustered = holdout_for(roster, {"method": "random", "frac": 0.4}, seed=5, clusters=singleton)
     assert len(plain.test) == 4
     assert set(plain.test) != set(clustered.test)
 
@@ -3345,9 +3324,7 @@ def test_a_stratified_holdout_splits_within_each_stratum():
     sizes = {"big": 8, "mid": 4, "small": 2}
     labels = ["big"] * 8 + ["mid"] * 4 + ["small"] * 2
     roster = _holdout_roster(14, band=lambda i: labels[i])
-    plan = holdout_for(
-        roster, {"method": "random", "frac": 0.5, "stratify_by": ["band"]}, seed=17
-    )
+    plan = holdout_for(roster, {"method": "random", "frac": 0.5, "stratify_by": ["band"]}, seed=17)
     assert plan.strata == ("band",)
     per_stratum = {}
     for name in sizes:
@@ -3407,16 +3384,11 @@ def test_a_stratified_holdout_that_leaves_a_side_empty_across_every_stratum_rais
     the test side is empty across the whole draw."""
     roster = _holdout_roster(2, band=lambda i: f"b{i}")
     with pytest.raises(ContractError) as exc:
-        holdout_for(
-            roster, {"method": "random", "frac": 0.2, "stratify_by": ["band"]}, seed=1
-        )
+        holdout_for(roster, {"method": "random", "frac": 0.2, "stratify_by": ["band"]}, seed=1)
     assert exc.value.code == "E-DATA-HOLDOUT-EMPTY"
     # The full message, not only the code — pins the `", drawn within N stratum
     # declaration(s)"` fragment, unpinned by any test before this one.
-    assert (
-        "leaves the test side empty, drawn within 1 stratum declaration(s)"
-        in str(exc.value)
-    )
+    assert "leaves the test side empty, drawn within 1 stratum declaration(s)" in str(exc.value)
     assert "over whole clusters" not in str(exc.value)
 
 
@@ -3430,9 +3402,7 @@ def test_a_single_cluster_holdout_leaves_the_test_side_empty_over_whole_clusters
     roster = _holdout_roster(10)
     clusters = {f"u{i}": "c0" for i in range(10)}
     with pytest.raises(ContractError) as exc:
-        holdout_for(
-            roster, {"method": "random", "frac": 0.2}, seed=1, clusters=clusters
-        )
+        holdout_for(roster, {"method": "random", "frac": 0.2}, seed=1, clusters=clusters)
     assert exc.value.code == "E-DATA-HOLDOUT-EMPTY"
     assert "leaves the test side empty" in str(exc.value)
     assert "over whole clusters" in str(exc.value)
@@ -3466,9 +3436,7 @@ def test_a_thin_stratum_alone_does_not_raise():
     a per-stratum coverage rule."""
     labels = ["big"] * 9 + ["tiny"]
     roster = _holdout_roster(10, band=lambda i: labels[i])
-    plan = holdout_for(
-        roster, {"method": "random", "frac": 0.2, "stratify_by": ["band"]}, seed=3
-    )
+    plan = holdout_for(roster, {"method": "random", "frac": 0.2, "stratify_by": ["band"]}, seed=3)
     assert plan.test and plan.train
     tiny = {"u9"}
     # `tiny <= set(plan.train)` is forced by `holdout_sizes(1, 0.2) == (1, 0)`
@@ -3509,8 +3477,7 @@ _MEASUREMENT_ROWS = [
 
 def _units_from_rows(rows, attributes):
     return [
-        Unit(key=r["patient_id"], paths=(), attributes={a: r[a] for a in attributes})
-        for r in rows
+        Unit(key=r["patient_id"], paths=(), attributes={a: r[a] for a in attributes}) for r in rows
     ]
 
 
@@ -3538,7 +3505,9 @@ def test_a_constant_holdout_from_column_collapses_cleanly():
     rows = [dict(r, split="train") for r in _MEASUREMENT_ROWS]
     units = _units_from_rows(rows, ["read_id", "split", "value"])
     collapsed, counts = collapse_measurements(
-        units, "read_id", "first",
+        units,
+        "read_id",
+        "first",
         _holdout_constant_column({"method": "by_attribute", "from": "split"}),
     )
     assert [u.key for u in collapsed] == ["p1", "p2"]
@@ -3558,8 +3527,16 @@ def test_a_constant_holdout_from_column_collapses_cleanly():
         {"method": "by_attribute", "from": ""},
         {"method": "by_attribute", "from": 7},
     ],
-    ids=["absent", "empty", "not a mapping", "random", "random with a stray from",
-         "by_attribute with no from", "empty from", "non-string from"],
+    ids=[
+        "absent",
+        "empty",
+        "not a mapping",
+        "random",
+        "random with a stray from",
+        "by_attribute with no from",
+        "empty from",
+        "non-string from",
+    ],
 )
 def test_the_holdout_accessor_resolves_no_column_for_these(decl):
     """It resolves a column or it does not; it never reports a malformed
@@ -3601,9 +3578,7 @@ def test_collapse_stops_at_the_first_entry_of_the_constant_mapping_it_is_given()
 
     # Remove the highest-priority declaration and the NEXT one reports — which
     # is what proves the order rather than merely that `assign` reports.
-    without_assign = _holdout_constant_column(
-        {"method": "by_attribute", "from": "split"}
-    )
+    without_assign = _holdout_constant_column({"method": "by_attribute", "from": "split"})
     without_assign.update({"cluster_by": "site"})
     with pytest.raises(ContractError) as exc2:
         collapse_measurements(units, "read_id", "first", without_assign)

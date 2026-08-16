@@ -35,8 +35,9 @@ class Pipeline(BaseExperiment):
 
 def test_scope_decides_execution_count():
     plan = build_plan(Pipeline(), conditions=[(0, None)], repeat_labels=["seed17", "seed42"])
-    counts = {s: sum(1 for e in plan if e.step_name == s) for s in
-              ("load", "fit", "analyze", "compare")}
+    counts = {
+        s: sum(1 for e in plan if e.step_name == s) for s in ("load", "fit", "analyze", "compare")
+    }
     assert counts == {"load": 1, "fit": 1, "analyze": 2, "compare": 1}
 
 
@@ -107,8 +108,7 @@ def test_a_step_name_collision_across_modules_is_refused():
     message = str(e.value)
     assert f"{Analyze.__module__}.{Analyze.__qualname__}" in message
     assert (
-        f"{_scope_collision_other.Analyze.__module__}."
-        f"{_scope_collision_other.Analyze.__qualname__}"
+        f"{_scope_collision_other.Analyze.__module__}.{_scope_collision_other.Analyze.__qualname__}"
     ) in message
 
 

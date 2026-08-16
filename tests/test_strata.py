@@ -7,9 +7,7 @@ def _roster(*specs):
 
 
 def test_each_level_holds_the_units_that_carry_it():
-    roster = _roster(
-        ("u1", {"sex": "f"}), ("u2", {"sex": "m"}), ("u3", {"sex": "f"})
-    )
+    roster = _roster(("u1", {"sex": "f"}), ("u2", {"sex": "m"}), ("u3", {"sex": "f"}))
     assert levels_for(roster, "sex") == {"f": {"u1", "u3"}, "m": {"u2"}}
 
 

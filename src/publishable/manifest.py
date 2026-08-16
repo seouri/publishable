@@ -27,9 +27,7 @@ def build_manifest(
     for path in sorted(p for p in input_dir.rglob("*") if p.is_file()):
         rel = path.relative_to(input_dir).as_posix()
         stat = path.stat()
-        hash_it = policy == "hash_all" or (
-            policy == "hash_index" and rel in (index_names or set())
-        )
+        hash_it = policy == "hash_all" or (policy == "hash_index" and rel in (index_names or set()))
         files[rel] = {
             "size": stat.st_size,
             "mtime": stat.st_mtime_ns,

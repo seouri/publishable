@@ -460,9 +460,7 @@ class StepIO:
             return set()
         return set(self._units[0].attributes)
 
-    def record(
-        self, unit_key: str, values: dict[str, Any], measurement: str | None = None
-    ) -> None:
+    def record(self, unit_key: str, values: dict[str, Any], measurement: str | None = None) -> None:
         """Append one row, keyed by unit — or by `(unit, measurement)`.
 
         `measurement=` is the only thing separating a resumed retry from a second
@@ -781,8 +779,10 @@ class StepIO:
                 code="E-STEP-READ-CONDITION-UNKNOWN",
             )
         label = by_index[index]
-        base = self.run_dir if label is None else (
-            self.run_dir / "conditions" / condition_dir_name(index, label)
+        base = (
+            self.run_dir
+            if label is None
+            else (self.run_dir / "conditions" / condition_dir_name(index, label))
         )
         return self._read(self._nest_repeat(base, target, repeat) / step / name)
 
@@ -842,8 +842,10 @@ class StepIO:
             # the ordinary "second repeat step reads the first's artifact" case.
             base = self.run_dir
             if self._condition_label is not None and self._condition_index is not None:
-                base = base / "conditions" / condition_dir_name(
-                    self._condition_index, self._condition_label
+                base = (
+                    base
+                    / "conditions"
+                    / condition_dir_name(self._condition_index, self._condition_label)
                 )
             base = self._nest_repeat(base, target, self._repeat_label)
         return self._read(base / step / name)

@@ -28,9 +28,11 @@ def test_latest_points_at_the_real_id(tmp_path: Path):
     run_dir = allocate_run_dir(tmp_path, HASH, WHEN)
     point_latest(tmp_path, run_dir)
     latest = tmp_path / "latest"
-    resolved = latest.resolve() if latest.is_symlink() else tmp_path / (
-        tmp_path / "latest.txt"
-    ).read_text().strip()
+    resolved = (
+        latest.resolve()
+        if latest.is_symlink()
+        else tmp_path / (tmp_path / "latest.txt").read_text().strip()
+    )
     assert resolved.name == run_dir.name
 
 

@@ -1571,9 +1571,7 @@ def test_the_weighted_clustered_interval_needs_two_values(values):
     construction in this module refuses the same degenerate input."""
     keys = [f"u{i}" for i in range(len(values))]
     assert (
-        weighted_t_over_units_clustered(
-            values, keys, dict.fromkeys(keys, "c"), [1] * len(values)
-        )
+        weighted_t_over_units_clustered(values, keys, dict.fromkeys(keys, "c"), [1] * len(values))
         is None
     )
 
@@ -1720,9 +1718,7 @@ def test_a_weight_summarize_step_cannot_use_is_refused_under_the_shared_code():
     record: a weight that reached here unusable is refused with the identifier
     `validate` reports, not absorbed into a plausible mean."""
     with pytest.raises(ContractError) as exc:
-        summarize_step(
-            _WEIGHTED_COLLAPSED, _WEIGHTED_COUNTS, weights={**_WEIGHTS, "u4": "site-3"}
-        )
+        summarize_step(_WEIGHTED_COLLAPSED, _WEIGHTED_COUNTS, weights={**_WEIGHTS, "u4": "site-3"})
     assert exc.value.code == "E-DATA-WEIGHT-INVALID"
 
 
@@ -2039,9 +2035,7 @@ _POOL_CLUSTERS: dict[str, list[tuple[float, float]]] = {
     "D": [(6.0, 1.0), (18.0, 1.0)],
 }
 _POOL_KEYS = ["a1", "b1", "b2", "c1", "c2", "c3", "d1", "d2"]
-_POOL_MEMBERSHIP = dict(
-    zip(_POOL_KEYS, ["A", "B", "B", "C", "C", "C", "D", "D"], strict=True)
-)
+_POOL_MEMBERSHIP = dict(zip(_POOL_KEYS, ["A", "B", "B", "C", "C", "C", "D", "D"], strict=True))
 _POOL_VALUES = [4.0, 0.0, 22.0, 2.0, 12.0, 31.0, 6.0, 18.0]
 _POOL_WEIGHTS = [1.0, 1.0, 1.0, 1.0, 1.0, 9.0, 1.0, 1.0]
 
@@ -2063,8 +2057,7 @@ def _achievable(weighted=False):
     one's are not, which is what makes the membership assertion structural
     rather than a numeric coincidence."""
     return {
-        _pooled(combo, weighted)
-        for combo in itertools.combinations_with_replacement("ABCD", 4)
+        _pooled(combo, weighted) for combo in itertools.combinations_with_replacement("ABCD", 4)
     }
 
 
@@ -2086,9 +2079,7 @@ def test_the_clustered_percentile_draws_clusters_not_units():
     values: it reports [5.25, 19.0], neither endpoint achievable by any
     whole-cluster replicate, so the numbers above are the clustering and not the
     data's own spread."""
-    got = percentile_over_units_clustered(
-        _POOL_VALUES, _POOL_KEYS, _POOL_MEMBERSHIP, seed=7
-    )
+    got = percentile_over_units_clustered(_POOL_VALUES, _POOL_KEYS, _POOL_MEMBERSHIP, seed=7)
     assert got is not None
     assert got.method == "percentile_over_units_clustered"
     assert got.low == _pooled(("A", "A", "A", "D"))  # 36/5
@@ -2101,7 +2092,7 @@ def test_the_clustered_percentile_draws_clusters_not_units():
 
 
 def test_a_drawn_cluster_pools_its_units_rather_than_contributing_its_mean():
-    """"Core draws whole clusters with replacement, so a resampled table has a
+    """ "Core draws whole clusters with replacement, so a resampled table has a
     varying row count" — the row count varies because the units are POOLED, so a
     3-unit cluster carries three rows into the replicate and a 1-unit cluster
     one. Averaging the drawn clusters' means instead gives every cluster equal
@@ -2112,9 +2103,7 @@ def test_a_drawn_cluster_pools_its_units_rather_than_contributing_its_mean():
     absence from the mean one for these particular endpoints; the control that
     must report is that the mean-of-means construction is non-empty and does
     produce an interval-shaped pair of its own (6.0, 14.0 at this seed)."""
-    got = percentile_over_units_clustered(
-        _POOL_VALUES, _POOL_KEYS, _POOL_MEMBERSHIP, seed=7
-    )
+    got = percentile_over_units_clustered(_POOL_VALUES, _POOL_KEYS, _POOL_MEMBERSHIP, seed=7)
     assert got is not None
     of_means = {
         sum(sum(v for v, _ in _POOL_CLUSTERS[c]) / len(_POOL_CLUSTERS[c]) for c in combo) / 4
@@ -2139,14 +2128,10 @@ def test_the_clustered_percentile_keeps_each_value_with_its_cluster():
     The re-paired construction is built here, independently, and must report: it
     produces [2.0, 21.666…], a perfectly interval-shaped answer whose endpoints
     are not achievable by any whole-cluster replicate of the declared roster."""
-    got = percentile_over_units_clustered(
-        _POOL_VALUES, _POOL_KEYS, _POOL_MEMBERSHIP, seed=7
-    )
+    got = percentile_over_units_clustered(_POOL_VALUES, _POOL_KEYS, _POOL_MEMBERSHIP, seed=7)
     assert got is not None
     repaired: dict[str, list[tuple[float, float]]] = {}
-    for value, label in zip(
-        sorted(_POOL_VALUES), sorted(_POOL_MEMBERSHIP.values()), strict=True
-    ):
+    for value, label in zip(sorted(_POOL_VALUES), sorted(_POOL_MEMBERSHIP.values()), strict=True):
         repaired.setdefault(label, []).append((value, 1.0))
     rng = random.Random(7)
     ordered = sorted(sorted(pool) for pool in repaired.values())
@@ -2165,9 +2150,7 @@ def test_the_clustered_percentile_is_invariant_to_row_order_and_to_cluster_label
     not on the sequence the roster arrived in. Cluster labels, because the
     clusters are ordered by their own sorted contents rather than by name — a
     site renamed from `S1` to `zzz` is not a different experiment."""
-    got = percentile_over_units_clustered(
-        _POOL_VALUES, _POOL_KEYS, _POOL_MEMBERSHIP, seed=7
-    )
+    got = percentile_over_units_clustered(_POOL_VALUES, _POOL_KEYS, _POOL_MEMBERSHIP, seed=7)
     order = [5, 0, 3, 7, 1, 4, 2, 6]
     assert got == percentile_over_units_clustered(
         [_POOL_VALUES[i] for i in order],
@@ -2227,10 +2210,7 @@ def test_two_content_identical_clusters_refuse_a_zero_width_interval():
     values = [0.5, 0.5, 0.5, 0.5]
     keys = ["a1", "a2", "b1", "b2"]
     membership = {"a1": "A", "a2": "A", "b1": "B", "b2": "B"}
-    assert (
-        percentile_over_units_clustered(values, keys, membership, seed=1, draws=2000)
-        is None
-    )
+    assert percentile_over_units_clustered(values, keys, membership, seed=1, draws=2000) is None
     # Positive companion: `test_two_clusters_still_report_a_percentile` above is
     # the same `G == 2` shape with clusters that differ in content, and it must
     # keep reporting — this is a content check, not a second count floor.
@@ -2241,10 +2221,7 @@ def test_the_clustered_percentile_needs_two_values(values):
     """`percentile_over_units`' own floor, kept in front of the cluster one so the
     two constructions refuse the same degenerate inputs."""
     keys = [f"u{i}" for i in range(len(values))]
-    assert (
-        percentile_over_units_clustered(values, keys, dict.fromkeys(keys, "c"), seed=7)
-        is None
-    )
+    assert percentile_over_units_clustered(values, keys, dict.fromkeys(keys, "c"), seed=7) is None
 
 
 def test_the_clustered_percentile_refuses_a_draw_count_below_the_honest_floor():
@@ -2311,9 +2288,7 @@ def test_a_clustered_percentile_draw_is_by_cluster_while_its_statistic_is_weight
     assert got.low == _pooled(("A", "A", "A", "D"), weighted=True)
     assert got.high == _pooled(("C", "C", "C", "D"), weighted=True)
     assert got.low in _achievable(True) and got.high in _achievable(True)
-    unweighted = percentile_over_units_clustered(
-        _POOL_VALUES, _POOL_KEYS, _POOL_MEMBERSHIP, seed=7
-    )
+    unweighted = percentile_over_units_clustered(_POOL_VALUES, _POOL_KEYS, _POOL_MEMBERSHIP, seed=7)
     assert unweighted is not None
     assert unweighted.high == _pooled(("B", "C", "C", "C"))
     assert got.high > unweighted.high * 1.5
@@ -2385,9 +2360,12 @@ def _clustered_banded() -> tuple[list[float], list[str], dict[str, str], list[st
     membership: dict[str, str] = {}
     strata: list[str] = []
     plan = [
-        ("c0", "low", 4, 0.0), ("c1", "low", 3, 0.5),
-        ("c2", "mid", 3, 10.0), ("c3", "mid", 2, 10.5),
-        ("c4", "high", 2, 100.0), ("c5", "high", 1, 100.5),
+        ("c0", "low", 4, 0.0),
+        ("c1", "low", 3, 0.5),
+        ("c2", "mid", 3, 10.0),
+        ("c3", "mid", 2, 10.5),
+        ("c4", "high", 2, 100.0),
+        ("c5", "high", 1, 100.5),
     ]
     for cluster, stratum, size, base in plan:
         for i in range(size):
@@ -2463,9 +2441,7 @@ class _RecordingRandom(random.Random):
         return super().randrange(n, *args, **kwargs)  # type: ignore[arg-type]
 
 
-def _clustered_uneven_stratum_counts() -> tuple[
-    list[float], list[str], dict[str, str], list[str]
-]:
+def _clustered_uneven_stratum_counts() -> tuple[list[float], list[str], dict[str, str], list[str]]:
     """Three strata holding a DIFFERENT number of clusters each — 1, 2, 3 — so a
     mutation that draws every stratum's own count correctly is distinguishable
     from one that draws some OTHER stratum's count, or a constant, even when a
@@ -2477,8 +2453,11 @@ def _clustered_uneven_stratum_counts() -> tuple[
     strata: list[str] = []
     plan = [
         ("c0", "low", 4, 0.0),
-        ("c1", "mid", 3, 10.0), ("c2", "mid", 2, 10.5),
-        ("c3", "high", 2, 100.0), ("c4", "high", 1, 100.5), ("c5", "high", 1, 100.75),
+        ("c1", "mid", 3, 10.0),
+        ("c2", "mid", 2, 10.5),
+        ("c3", "high", 2, 100.0),
+        ("c4", "high", 1, 100.5),
+        ("c5", "high", 1, 100.75),
     ]
     for cluster, stratum, size, base in plan:
         for i in range(size):
@@ -2503,9 +2482,7 @@ def test_a_clustered_stratified_draw_gives_each_stratum_exactly_its_own_count(
     monkeypatch.setattr("publishable.stats.random.Random", _RecordingRandom)
     values, keys, membership, strata = _clustered_uneven_stratum_counts()
     _RecordingRandom.calls = []
-    percentile_over_units_clustered(
-        values, keys, membership, seed=1, draws=80, strata=strata
-    )
+    percentile_over_units_clustered(values, keys, membership, seed=1, draws=80, strata=strata)
     assert _RecordingRandom.calls[:6] == [1, 2, 2, 3, 3, 3]
     assert _RecordingRandom.calls == [1, 2, 2, 3, 3, 3] * 80
 
@@ -2526,9 +2503,10 @@ def test_a_clustered_stratified_draw_refuses_a_stratum_that_varies_within_a_clus
     # Positive companion: the UNMUTATED vector does not raise, so this cannot
     # pass by the construction refusing every stratified clustered draw.
     _, _, _, clean = _clustered_banded()
-    assert percentile_over_units_clustered(
-        values, keys, membership, seed=13, draws=2000, strata=clean
-    ) is not None
+    assert (
+        percentile_over_units_clustered(values, keys, membership, seed=13, draws=2000, strata=clean)
+        is not None
+    )
 
 
 def test_a_clustered_stratified_draws_constancy_check_agrees_with_validates():
@@ -2544,8 +2522,14 @@ def test_a_clustered_stratified_draws_constancy_check_agrees_with_validates():
     values = [0.0, 1.0, 2.0, 3.0, 10.0, 11.0, 12.0, 13.0]
     keys = ["c0_u0", "c0_u1", "c1_u0", "c1_u1", "c2_u0", "c2_u1", "c3_u0", "c3_u1"]
     membership = {
-        "c0_u0": "c0", "c0_u1": "c0", "c1_u0": "c1", "c1_u1": "c1",
-        "c2_u0": "c2", "c2_u1": "c2", "c3_u0": "c3", "c3_u1": "c3",
+        "c0_u0": "c0",
+        "c0_u1": "c0",
+        "c1_u0": "c1",
+        "c1_u1": "c1",
+        "c2_u0": "c2",
+        "c2_u1": "c2",
+        "c3_u0": "c3",
+        "c3_u1": "c3",
     }
     strata = [1, "1", "1", "1", "a", "a", "a", "a"]
     got = percentile_over_units_clustered(
@@ -2566,22 +2550,31 @@ def test_a_clustered_stratified_draw_refuses_a_zero_width_interval_too():
     values = [0.0, 1.0, 10.0, 11.0, 20.0, 21.0]
     keys = ["c0_u0", "c0_u1", "c1_u0", "c1_u1", "c2_u0", "c2_u1"]
     membership = {
-        "c0_u0": "c0", "c0_u1": "c0",
-        "c1_u0": "c1", "c1_u1": "c1",
-        "c2_u0": "c2", "c2_u1": "c2",
+        "c0_u0": "c0",
+        "c0_u1": "c0",
+        "c1_u0": "c1",
+        "c1_u1": "c1",
+        "c2_u0": "c2",
+        "c2_u1": "c2",
     }
     one_cluster_each = ["a", "a", "b", "b", "c", "c"]
-    assert percentile_over_units_clustered(
-        values, keys, membership, seed=1, draws=2000, strata=one_cluster_each
-    ) is None
+    assert (
+        percentile_over_units_clustered(
+            values, keys, membership, seed=1, draws=2000, strata=one_cluster_each
+        )
+        is None
+    )
     # Positive companion: the same roster, but `a` now holds two of the three
     # clusters — one stratum can vary, so the interval is reportable again,
     # which is what tells this apart from a construction that refuses every
     # stratified clustered draw regardless of shape.
     two_in_one_stratum = ["a", "a", "a", "a", "b", "b"]
-    assert percentile_over_units_clustered(
-        values, keys, membership, seed=1, draws=2000, strata=two_in_one_stratum
-    ) is not None
+    assert (
+        percentile_over_units_clustered(
+            values, keys, membership, seed=1, draws=2000, strata=two_in_one_stratum
+        )
+        is not None
+    )
 
 
 def test_a_clustered_stratified_draw_refuses_content_identical_strata_too():
@@ -2597,21 +2590,37 @@ def test_a_clustered_stratified_draw_refuses_content_identical_strata_too():
     values = [0.5, 0.5, 0.5, 0.5, 5.5, 5.5, 5.5, 5.5]
     keys = ["a1", "a2", "b1", "b2", "c1", "c2", "d1", "d2"]
     membership = {
-        "a1": "A", "a2": "A", "b1": "B", "b2": "B",
-        "c1": "C", "c2": "C", "d1": "D", "d2": "D",
+        "a1": "A",
+        "a2": "A",
+        "b1": "B",
+        "b2": "B",
+        "c1": "C",
+        "c2": "C",
+        "d1": "D",
+        "d2": "D",
     }
     identical_within_stratum = ["x", "x", "x", "x", "y", "y", "y", "y"]
-    assert percentile_over_units_clustered(
-        values, keys, membership, seed=1, draws=2000, strata=identical_within_stratum
-    ) is None
+    assert (
+        percentile_over_units_clustered(
+            values, keys, membership, seed=1, draws=2000, strata=identical_within_stratum
+        )
+        is None
+    )
     # Positive companion: giving stratum `y`'s two clusters different content
     # restores real variance, so this cannot pass by refusing every
     # two-cluster-per-stratum shape regardless of content.
     values_varying = [0.5, 0.5, 0.5, 0.5, 5.5, 5.5, 9.5, 9.5]
-    assert percentile_over_units_clustered(
-        values_varying, keys, membership, seed=1, draws=2000,
-        strata=identical_within_stratum,
-    ) is not None
+    assert (
+        percentile_over_units_clustered(
+            values_varying,
+            keys,
+            membership,
+            seed=1,
+            draws=2000,
+            strata=identical_within_stratum,
+        )
+        is not None
+    )
 
 
 def test_resample_seed_depends_on_the_digest():
@@ -2736,17 +2745,20 @@ def test_the_same_seed_reproduces_and_a_different_one_does_not_paired():
     of = {f"u{i}": {"m": float(i) + (1.0 if i % 2 == 0 else 0.0)} for i in range(60)}
     against = {f"u{i}": {"m": float(i)} for i in range(60)}
     k = sorted(of)
-    assert paired_percentile_of_derived(of, against, k, _mean_m, _mean_m, seed=7) == \
-        paired_percentile_of_derived(of, against, k, _mean_m, _mean_m, seed=7)
-    assert paired_percentile_of_derived(of, against, k, _mean_m, _mean_m, seed=7) != \
-        paired_percentile_of_derived(of, against, k, _mean_m, _mean_m, seed=99)
+    assert paired_percentile_of_derived(
+        of, against, k, _mean_m, _mean_m, seed=7
+    ) == paired_percentile_of_derived(of, against, k, _mean_m, _mean_m, seed=7)
+    assert paired_percentile_of_derived(
+        of, against, k, _mean_m, _mean_m, seed=7
+    ) != paired_percentile_of_derived(of, against, k, _mean_m, _mean_m, seed=99)
 
 
 def test_below_the_survivor_floor_there_is_no_interval_paired():
     of = {f"u{i}": {"m": float(i)} for i in range(60)}
     against = {f"u{i}": {"m": float(i)} for i in range(60)}
     result = paired_percentile_of_derived(
-        of, against, sorted(of), lambda t: None, lambda t: None, seed=7, draws=200)
+        of, against, sorted(of), lambda t: None, lambda t: None, seed=7, draws=200
+    )
     assert result.interval is None and result.draws_used == 0
 
 
@@ -2773,7 +2785,8 @@ def test_a_raising_compute_is_treated_as_degenerate_not_propagated_paired():
         raise ZeroDivisionError("degenerate draw")
 
     result = paired_percentile_of_derived(
-        of, against, sorted(of), always_raises, always_raises, seed=7, draws=20)
+        of, against, sorted(of), always_raises, always_raises, seed=7, draws=20
+    )
     assert result.interval is None
     assert result.draws_used == 0
 
@@ -2786,7 +2799,8 @@ def test_a_nan_compute_is_treated_as_degenerate_paired():
         return float("nan")
 
     result = paired_percentile_of_derived(
-        of, against, sorted(of), always_nan, always_nan, seed=7, draws=20)
+        of, against, sorted(of), always_nan, always_nan, seed=7, draws=20
+    )
     assert result.interval is None
     assert result.draws_used == 0
 
@@ -2812,7 +2826,8 @@ def test_a_one_sided_raise_drops_the_whole_draw_not_half():
 
     draws = 200
     result = paired_percentile_of_derived(
-        of, against, sorted(of), flaky_against_only, flaky_against_only, seed=7, draws=draws)
+        of, against, sorted(of), flaky_against_only, flaky_against_only, seed=7, draws=draws
+    )
     assert result.draws_used == draws // 2
     assert result.interval is not None
 
@@ -2834,7 +2849,8 @@ def test_a_one_sided_none_drops_the_whole_draw_not_half():
 
     draws = 200
     result = paired_percentile_of_derived(
-        of, against, sorted(of), flaky_against_only, flaky_against_only, seed=7, draws=draws)
+        of, against, sorted(of), flaky_against_only, flaky_against_only, seed=7, draws=draws
+    )
     assert result.draws_used == draws // 2
     assert result.interval is not None
 
@@ -3055,9 +3071,7 @@ def test_a_recorded_columns_interval_becomes_cluster_robust_when_a_cluster_is_de
     """
     out = summarize_step(_WEIGHTED_COLLAPSED, _WEIGHTED_COUNTS, clusters=_CLUSTERS)
     own = t_over_units_clustered([0.0, 1.0, 3.0], ["u1", "u2", "u4"], _CLUSTERS)
-    rival = t_over_units_clustered(
-        [1.0, 1.0, 2.0, 1.0], ["u1", "u2", "u3", "u4"], _CLUSTERS
-    )
+    rival = t_over_units_clustered([1.0, 1.0, 2.0, 1.0], ["u1", "u2", "u3", "u4"], _CLUSTERS)
     assert own is not None and rival is not None
     assert out["pred"]["method"] == "t_over_units_clustered"
     assert out["pred"]["ci95"] == [own.low, own.high]
@@ -3197,9 +3211,7 @@ def test_a_stratified_draw_is_invariant_to_stratum_labels():
     values, strata = _banded_strata()
     renamed = {"low": "z", "mid": "a", "high": "m"}
     a = percentile_over_units(values, seed=3, draws=2000, strata=strata)
-    b = percentile_over_units(
-        values, seed=3, draws=2000, strata=[renamed[s] for s in strata]
-    )
+    b = percentile_over_units(values, seed=3, draws=2000, strata=[renamed[s] for s in strata])
     assert a == b
 
 
@@ -3303,9 +3315,7 @@ def test_every_unit_its_own_stratum_gives_no_interval_at_all():
     assert got is None
 
 
-@pytest.mark.parametrize(
-    "bad", [0, 0.0, -1.0, float("nan"), float("inf"), "heavy", None, True]
-)
+@pytest.mark.parametrize("bad", [0, 0.0, -1.0, float("nan"), float("inf"), "heavy", None, True])
 def test_a_column_resample_refuses_a_bad_weight_before_any_draw(bad):
     """The invariant decision 2 rests on: a column metric's draw statistic is a
     mean over a non-empty sample, so it is ALWAYS defined and
@@ -3330,12 +3340,11 @@ def test_a_column_resample_is_never_degenerate_across_adversarial_columns_of_fin
     overflowing weight sum, which are a separate, real gap pinned (not fixed)
     by the tests below and recorded in `docs/superpowers/spec-defects.md`."""
     cases: list[tuple[list[float], dict]] = [
-        ([5.0, 5.0, 5.0, 5.0], {}),                                  # zero variance
-        ([0.0, 0.0, 0.0, 1e-12], {}),                                # near-zero spread
+        ([5.0, 5.0, 5.0, 5.0], {}),  # zero variance
+        ([0.0, 0.0, 0.0, 1e-12], {}),  # near-zero spread
         ([1.0, 2.0, 3.0, 4.0], {"weights": [1e-9, 1e-9, 1e-9, 1e9]}),  # extreme spread
-        ([1.0, 2.0, 3.0], {"strata": ["a", "b", "b"]}),               # one-unit stratum
-        ([1.0, 2.0, 3.0, 4.0], {"strata": ["a", "a", "b", "b"],
-                                "weights": [1.0, 2.0, 3.0, 4.0]}),
+        ([1.0, 2.0, 3.0], {"strata": ["a", "b", "b"]}),  # one-unit stratum
+        ([1.0, 2.0, 3.0, 4.0], {"strata": ["a", "a", "b", "b"], "weights": [1.0, 2.0, 3.0, 4.0]}),
     ]
     for values, kwargs in cases:
         got = percentile_over_units(values, seed=2, draws=100, **kwargs)
@@ -3454,8 +3463,13 @@ def test_a_clustered_and_weighted_column_pins_both_together_under_resample():
     weights = {f"u{i}": 1.0 + (i % 4) for i in range(40)}
     counts = {"resolved": 40, "completed": 40, "failed": 0}
     drawn = summarize_step(
-        collapsed, counts, seed=5, draws=2000,
-        clusters=clusters, weights=weights, resample_columns=True,
+        collapsed,
+        counts,
+        seed=5,
+        draws=2000,
+        clusters=clusters,
+        weights=weights,
+        resample_columns=True,
     )
     assert drawn["pred"]["method"] == "percentile_over_units_clustered"
     assert drawn["pred"]["n"]["clusters"] == 8
@@ -3514,9 +3528,7 @@ def test_a_column_below_two_units_reports_a_null_draw_count_under_resample():
     attempted, it just came back with nothing, which is a different fact from
     `resample_columns=False`'s "never asked" and must not collapse onto it."""
     counts = {"resolved": 1, "completed": 1, "failed": 0}
-    got = summarize_step(
-        {"u0": {"pred": 1.0}}, counts, seed=5, draws=2000, resample_columns=True
-    )
+    got = summarize_step({"u0": {"pred": 1.0}}, counts, seed=5, draws=2000, resample_columns=True)
     assert got["pred"]["ci95"] is None
     assert got["pred"]["method"] is None
     assert "resample_draws" in got["pred"]
@@ -3607,9 +3619,7 @@ def test_percentile_of_derived_draws_within_the_strata_it_is_given():
         return sum(units.pred)
 
     plain, plain_n = percentile_of_derived(collapsed, compute, seed=7, draws=2000)
-    drawn, drawn_n = percentile_of_derived(
-        collapsed, compute, seed=7, draws=2000, strata=strata
-    )
+    drawn, drawn_n = percentile_of_derived(collapsed, compute, seed=7, draws=2000, strata=strata)
     assert plain is not None and drawn is not None
     assert plain_n == 2000 and drawn_n == 2000
     plain_width = plain.high - plain.low

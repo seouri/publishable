@@ -5,7 +5,7 @@ from pathlib import Path
 from publishable.errors import ContractError
 from publishable.generators.experiment import package_name
 
-STEP_PY = '''\
+STEP_PY = """\
 from publishable import BaseStep
 
 
@@ -14,16 +14,14 @@ class Step(BaseStep):
 
     def run(self, cfg, io):
         return {{}}      # TODO: implement {step_name}
-'''
+"""
 
 
 def generate_step(*, repo_root: Path, experiment: str, step_name: str) -> Path:
     pkg = package_name(experiment)
     steps_dir = repo_root / "src" / pkg / "steps"
     if not steps_dir.is_dir():
-        raise ContractError(
-            f"no experiment package at src/{pkg}/", code="E-EXPERIMENT-UNKNOWN"
-        )
+        raise ContractError(f"no experiment package at src/{pkg}/", code="E-EXPERIMENT-UNKNOWN")
     existing = sorted(steps_dir.glob("step[0-9][0-9]_*.py"))
     for prior in existing:
         if prior.stem.split("_", 1)[1] == step_name:

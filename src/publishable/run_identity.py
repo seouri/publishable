@@ -27,9 +27,7 @@ def allocate_run_dir(output_dir: Path, code_hash: str, when: datetime) -> Path:
         except FileExistsError:
             continue
         return candidate
-    raise ContractError(
-        f"26 runs already share the id {base}", code="E-RUN-ID-EXHAUSTED"
-    )
+    raise ContractError(f"26 runs already share the id {base}", code="E-RUN-ID-EXHAUSTED")
 
 
 def point_latest(output_dir: Path, run_dir: Path) -> None:
@@ -72,9 +70,7 @@ class RunLock:
                 code="E-RUN-LOCKED",
             ) from None
         with os.fdopen(fd, "w") as fh:
-            json.dump(
-                {"host": socket.gethostname(), "pid": os.getpid()}, fh
-            )
+            json.dump({"host": socket.gethostname(), "pid": os.getpid()}, fh)
         return self
 
     def __exit__(

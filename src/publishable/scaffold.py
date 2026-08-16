@@ -96,9 +96,19 @@ def scaffold_project(root: Path, license_name: str = "MIT") -> Path:
         subprocess.run(
             # gpgsign=false so scaffolding cannot hang or fail on a machine that
             # has commit signing configured globally.
-            ["git", "-c", "user.email=you@example.com", "-c", "user.name=you",
-             "-c", "commit.gpgsign=false",
-             "commit", "-qm", "Scaffold a publishable experiment repository"],
-            cwd=root, check=True,
+            [
+                "git",
+                "-c",
+                "user.email=you@example.com",
+                "-c",
+                "user.name=you",
+                "-c",
+                "commit.gpgsign=false",
+                "commit",
+                "-qm",
+                "Scaffold a publishable experiment repository",
+            ],
+            cwd=root,
+            check=True,
         )
     return root

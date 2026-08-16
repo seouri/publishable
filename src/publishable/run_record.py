@@ -42,8 +42,9 @@ def _execution_block(results: list[ExecutionResult]) -> dict[str, Any]:
             summary[e.step_name] = entry
         else:
             index = e.condition_index or 0
-            cond = conditions.setdefault(index, {"index": index, "label": e.condition_label,
-                                                 "steps": {}})
+            cond = conditions.setdefault(
+                index, {"index": index, "label": e.condition_label, "steps": {}}
+            )
             if e.scope == "condition":
                 cond["steps"][e.step_name] = entry
             else:
