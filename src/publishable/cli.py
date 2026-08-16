@@ -476,8 +476,11 @@ def _resolved_holdout(
     `_check_holdout`'s own gate — an empty block declares nothing and
     partitions nothing — so the two readings of "is a holdout declared" agree
     rather than one drawing an unmethodded split the other validated as absent.
-    `None` for a roster that did not resolve too: there is nothing to partition,
-    and `_check_units` has already reported why.
+    `None` for a `roster` of `None` too: there is nothing to partition. That
+    argument is defensive rather than reachable — `resolve_units` never returns
+    `None`, so a `None` here means no `data.units` at all, which is a config
+    that cannot carry a `holdout` to declare. It costs one line and keeps the
+    helper total over its own signature.
 
     `clusters` is `cli.command_run`'s single cluster map, the same one the fold
     partition and the arm draw are handed — not re-derived here, `clusters_of`

@@ -579,3 +579,44 @@ Task 12: reviewed (opus). **BOTH VERDICTS PASS** — the second of the slice, an
 Task 12: complete. 1924 passed + 2 xfailed. BASE for task 13 is the commit below.
   For task 13's reviewer, from task 12's: `holdout_seed_for` has no production caller yet — task 13
   composes it — so confirm the digest it is passed is `design_digest(doc)` and not a neighbour.
+Task 13: dispatched — `cli._resolved_holdout`, composing the seed derivation and the draw once in
+  `command_run`. Pre-check found the brief's two mutations sound but reaching only one of three tests, so
+  I added two: ignore the pin, and delete the `roster is None` guard — the second with an explicit
+  instruction to report WHICH WAY it failed, since a guard deletion can fail a test by crashing rather
+  than by the assertion seeing a wrong value.
+  Also settled before dispatch that the two deliverables no test in this diff can reach — realized ONCE,
+  and passed the run's own digest — are deferred BY DESIGN, not missing. The spec records tasks 13-17 as
+  untestable end to end while the wholesale refusal stands, and task 18's brief already carries five
+  enumerated end-to-end pins, one per wiring task. I verified task 13's pin is written there before
+  dispatching rather than trusting the spec's promise of it.
+Task 13: implemented at 6c328a6. 1927 passed + 2 xfailed. Both added mutations behaved as asked, and the
+  implementer reported the distinction I asked for: (d) fails via a `TypeError` from `units_hash`
+  iterating a `None` roster, not via the final assertion.
+Task 13: reviewed (opus). **BOTH VERDICTS PASS** — the third of the slice, and the run of passes since
+  the Global Constraints landed is now three of the last four.
+  Task 12's open question is settled: `digest = design_digest(doc)` is the ONLY assignment in `cli.py`,
+  and every occurrence between it and the holdout call is a pass, so no rebinding and no shadow.
+  The siting question — the one deliverable NO test in this slice can catch, because a realization inside
+  a condition loop would draw the same partition each time and be behaviourally invisible — was settled by
+  READING, which is the only instrument available: the call sits at `command_run`'s own body indent, with
+  no `for` or `while` at that level anywhere in the surrounding 500 lines.
+  The gate agreement was checked at the stake that matters. `_resolved_holdout` matches `_check_holdout`'s
+  gate character-for-character; the bare-truthiness sites disagree only on a truthy NON-DICT holdout,
+  which cannot reach a run because `envelope.py` types the key as `dict`. So no shape is drawn-on by one
+  gate and validated-as-absent by the other. That is a stronger answer than task 8's equivalent, and it
+  needed to be, because this gate decides whether a split is drawn at all.
+  One Important carried forward as an OBLIGATION rather than a fix: the docstring says present-tense that
+  the runner's narrowing, the denominators and `allocation.json` "are all handed this one object", and at
+  this commit `holdout_plan` has exactly one occurrence in `src/` — its own assignment. It is verbatim
+  from the brief, the horizon is named in the code by `# noqa: F841 -- consumed starting task 14`, and it
+  is true by task 17. **Task 17's reviewer must confirm all three named consumers exist.**
+  One Minor closed by me directly: the `roster is None` guard claimed `_check_units` "has already reported
+  why", describing a shape that cannot occur — `resolve_units` never returns `None`, so a `None` there
+  means no `data.units` at all and no such diagnostic was emitted. Rewritten to say the argument is
+  defensive rather than reachable, which is what it is. Gates green after.
+  Ruling on the new format drift (M3): NOT fixed, consistent with the same ruling at task 7. The task's
+  new lines sit in `ruff format --diff` hunks, but `tests/test_cli.py` already carried drift, so
+  formatting it would bury a small wiring diff in an unrelated whole-file rewrite. The accumulation is
+  real and is now an item for the WHOLE-BRANCH REVIEW, where the repo's broken format baseline can be
+  decided once for the slice instead of argued per task.
+Task 13: complete. 1927 passed + 2 xfailed; ruff check and mypy clean. BASE for task 14 is the commit below.
