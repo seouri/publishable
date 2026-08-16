@@ -27,8 +27,11 @@ from typing import Any
 # wholesale refusal retired — a latent gap turning live. A path
 # that is both a leaf and a container is typed by the loop below AND descended
 # into by the closure, which is why the closure checks containers first.
-# `holdout` stays whole for now: `E-DATA-HOLDOUT-UNSUPPORTED` still refuses the
-# block, so its gap is latent, and H3d closes it. The optional blocks that
+# `holdout` is closed one level in too, at its own five keys, for the reason
+# `resample` is: `E-DATA-HOLDOUT-UNSUPPORTED` still refuses the block at this
+# commit, and the shape is checked ahead of that refusal lifting rather than
+# after it, so the slice that honours the block reads values whose shape a
+# check already approved. The optional blocks that
 # section documents but a materialized config omits — `sweep`'s modes,
 # `statistics.contrasts` / `.null_test` / `.report_by`, and `data.units.assign`
 # — are declared at their own key with the one outer type that section gives
@@ -43,11 +46,12 @@ from typing import Any
 # The table stopping at a key is the end of the line for everything under it:
 # the closure below never descends into a known leaf, and `_check_shape`
 # checks a container's *shape* and never the names inside one, so a
-# misspelled `resolverr` in a `data.units.from` mapping or `methodd` in
-# `holdout` is reported by no check in this build. That is the documented
-# cost of a whole leaf (`reference.md` § Validation names the blocks it
-# applies to and the slice that closes each), not a claim that such a key
-# could never be named: `holdout`'s children have fixed names. The keys that
+# misspelled `resolverr` in a `data.units.from` mapping is reported by no
+# check in this build. That is the documented cost of a whole leaf
+# (`reference.md` § Validation names the blocks it applies to and the slice
+# that closes each), not a claim that such a key could never be named — a
+# `methodd` in `holdout` was in exactly that position and is now reported,
+# its children's names being fixed. The keys that
 # genuinely cannot be named are the dynamic ones inside `grid`, `baseline`,
 # and `assign` — a swept parameter path, an axis name — which no fixed dotted
 # path reaches; closing the nameable leaves here and not those would leave a
@@ -84,6 +88,35 @@ LEAF_TYPES: dict[str, type | tuple[type, ...]] = {
     # like a `grid` axis's swept path.
     "data.units.measurements.collapse": (str, dict),
     "data.units.holdout": dict,
+    # Closed one level in, the arrangement `data.units.measurements` above and
+    # `statistics.resample` below both have, and for their reason: these five
+    # names are fixed, so leaving the block whole would make a `methodd` typo
+    # unreachable by any check. Closed *before* the block's own wholesale
+    # refusal retires, which is `resample`'s ordering rather than
+    # `measurements`': the slice that honours a block needs the shape checked
+    # before it can read the values.
+    "data.units.holdout.method": str,
+    # `(int, float)`, matching `limits.max_failed_fraction`'s entry: a `frac: 1`
+    # is a well-typed number that happens to fall outside the open interval
+    # (0, 1), which is a different fault with a different code
+    # (`E-DATA-HOLDOUT-FRAC`) and a different fix, not a type error. `_is_type`
+    # already promotes a plain `int` to satisfy a bare `float` declaration, so
+    # this tuple documents what the entry permits rather than changing it —
+    # `bool` stays excluded either way, by `_is_type`'s separate special case,
+    # since `True` is not a fraction however well `bool` subclasses `int`.
+    "data.units.holdout.frac": (int, float),
+    "data.units.holdout.from": str,
+    # `(str, int)`, matching what § What `auto` derives from permits: the
+    # string `auto` or a plain integer. `bool` is excluded by `_is_type`'s
+    # special case, which is exactly why `seed: true` must reach
+    # `E-CONFIG-TYPE` rather than being read as `1`.
+    "data.units.holdout.seed": (str, int),
+    # `(str, list)` for `statistics.resample.stratify_by`'s reason, one
+    # declaration over: `units.stratum_names` — the single authority a draw
+    # balances on — reads a bare `stratify_by: label` as one name exactly as
+    # `[label]` is, so typing this `list` alone would make the envelope and the
+    # draw disagree about the same declaration.
+    "data.units.holdout.stratify_by": (str, list),
     "data.units.assign": dict,
     "replication.repeats": list,
     "replication.order": str,
@@ -169,12 +202,12 @@ def _check_unknown_keys(
 ) -> None:
     """Walk `node` reporting any key not implied by `LEAF_TYPES`, skipping the
     two exempt subtrees entirely and never descending into a known LEAF's
-    value unless the table also declares paths BENEATH it — a leaf's own
-    children (`data.units.holdout`'s `method`, a `from` dict's `resolver`) are
-    reached by no check in this build: not here, and not by `_check_shape`,
-    which checks a container's shape and never the names inside one. See the
-    module docstring for why a leaf is left whole rather than half-closed, and
-    why `data.units.measurements` is not one of them.
+    value unless the table also declares paths BENEATH it — a `from` dict's
+    `resolver` is reached by no check in this build: not here, and not by
+    `_check_shape`, which checks a container's shape and never the names
+    inside one. See the module docstring for why a leaf is left whole rather
+    than half-closed, and why `data.units.measurements`, `statistics.resample`
+    and `data.units.holdout` are not among them.
     """
     if not isinstance(node, dict):
         return

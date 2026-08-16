@@ -2272,6 +2272,30 @@ def test_holdout_is_refused_on_its_own(write_config):
     assert "E-DATA-HOLDOUT-UNSUPPORTED" in codes(write_config({"data.units": units}))
 
 
+def test_a_misspelled_holdout_child_is_reported_alongside_the_wholesale_refusal(write_config):
+    """The envelope's new closure (`envelope.py`'s `data.units.holdout.*` entries)
+    and `_check_holdout`'s wholesale refusal are two different checks over the
+    same declaration, and both must fire: the shape fault from `check_envelope`
+    and `E-DATA-HOLDOUT-UNSUPPORTED` from `validate` itself. Pinning both, on
+    the same config, is what makes task 18's retirement of the wholesale
+    refusal a one-line deletion here rather than a rewrite — this test still
+    holds the shape assertion once that line is gone."""
+    units = {
+        "from": "index.csv",
+        "key": "patient_id",
+        "holdout": {"methodd": "random", "frac": 0.2},
+    }
+    path = write_config({"data.units": units})
+    c = Collector()
+    validate_config(path, c)
+    found = {f.code for f in c.findings}
+    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
+    assert any(
+        f.code == "E-CONFIG-KEY-UNKNOWN" and f.path == "data.units.holdout.methodd"
+        for f in c.findings
+    )
+
+
 def test_allocation_within_is_accepted_because_it_is_a_no_op_here(write_config):
     units = {"from": "index.csv", "key": "patient_id", "allocation": "within"}
     assert "E-DATA-ALLOCATION-METHOD" not in codes(write_config({"data.units": units}))
