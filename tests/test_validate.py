@@ -11484,25 +11484,70 @@ def test_a_bare_string_holdout_stratum_is_read_as_one_name(write_config, tmp_pat
     )
 
 
-@pytest.mark.parametrize("declared", ["", [], 7, [3]])
+@pytest.mark.parametrize(
+    "declared,fragment",
+    [
+        # `""` and `[]` both normalize to no names at all — the *empty
+        # declaration* branch (`raw_strata is not None and not strata`).
+        ("", "is empty, which names no attribute"),
+        ([], "is empty, which names no attribute"),
+        # `7` and `[3]` each carry one non-string entry — the
+        # *not-a-string-or-empty-entry* branch, a different message at the
+        # same path. Sharing one fragment with the two rows above would
+        # leave that branch deletable with the suite green, since both
+        # readings still emit `E-DATA-HOLDOUT-STRATIFY-UNKNOWN`.
+        (7, "is not the name of a unit attribute"),
+        ([3], "is not the name of a unit attribute"),
+        # `[""]` is the entry the `not name` half of that branch needs:
+        # `stratum_names([""])` returns `("",)`, a non-empty tuple, so the
+        # empty-declaration branch above never sees it — only `not name`
+        # catches it, one line down.
+        ([""], "is not the name of a unit attribute"),
+    ],
+)
 def test_a_holdout_stratum_that_names_no_attribute_at_all_is_refused(
-    write_config, tmp_path, declared
+    write_config, tmp_path, declared, fragment
 ):
-    """A non-string, an empty string, and an empty list each name no attribute.
-    `data.units.holdout.stratify_by` IS an `envelope.LEAF_TYPES` leaf as of task
-    3, so `7` also earns `E-CONFIG-TYPE` — absorbed here as well because a bare
-    type finding does not say what a stratum has to be."""
+    """A non-string, an empty string, and an empty list each name no
+    attribute — but not through the same branch. `""`/`[]` normalize to no
+    names and are refused as an empty declaration; `7`/`[3]`/`[""]` each
+    normalize to one non-string-or-empty entry and are refused per entry.
+    The two branches share a code, so only the message tells them apart —
+    asserting just the code left the second branch deletable (see the task
+    6 review, F1).
+
+    `data.units.holdout.stratify_by` IS an `envelope.LEAF_TYPES` leaf as of
+    task 3, so `7` also earns `E-CONFIG-TYPE` — absorbed here as well
+    because a bare type finding does not say what a stratum has to be."""
     (tmp_path / "input" / "index.csv").write_text(_HOLDOUT_STRATA_ROSTER)
+    path = write_config(
+        _holdout(
+            {"method": "random", "frac": 0.25, "stratify_by": declared},
+            attributes=["label", "site"],
+        )
+    )
+    found = codes(path)
+    assert "E-DATA-HOLDOUT-STRATIFY-UNKNOWN" in found
+    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
+    assert fragment in messages_by_code(path)["E-DATA-HOLDOUT-STRATIFY-UNKNOWN"]
+
+
+def test_a_holdout_stratum_check_fires_without_a_resolved_roster(write_config, tmp_path):
+    """§ Errors' `E-DATA-HOLDOUT-STRATIFY-UNKNOWN` row: 'Checked from the
+    declaration alone, so it reports whether or not a roster resolved.' No
+    test in the diff that added this check pinned that claim — every other
+    stratify test in this file writes `input/index.csv` first. Here it is
+    deliberately absent, so the roster never resolves at all, and the
+    stratify check has to fire anyway for the claim to be true."""
     found = codes(
         write_config(
             _holdout(
-                {"method": "random", "frac": 0.25, "stratify_by": declared},
+                {"method": "random", "frac": 0.25, "stratify_by": ["sex"]},
                 attributes=["label", "site"],
             )
         )
     )
     assert "E-DATA-HOLDOUT-STRATIFY-UNKNOWN" in found
-    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
 
 
 def test_a_holdout_stratum_naming_the_measurement_axis_is_refused(write_config, tmp_path):

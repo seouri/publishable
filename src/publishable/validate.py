@@ -2670,8 +2670,7 @@ def _check_holdout(
     c: Collector,
 ) -> None:
     """Every check `data.units.holdout` gets — seven findings at this commit,
-    in declaration order, and the enumeration is the list rather than a sample
-    of it:
+    in emit order, and the enumeration is the list rather than a sample of it:
 
     - `E-DATA-HOLDOUT-METHOD` — the `method` enum.
     - `E-DATA-HOLDOUT-FRAC` — `frac` in the open interval (0, 1), under `random`.
@@ -2809,8 +2808,10 @@ def _check_holdout(
                 "means nothing under `method: by_attribute`: `stratify_by` names how a "
                 "draw is BALANCED, and a split read out of a column was not drawn. The "
                 "same absorption `E-DATA-ASSIGN-NO-DRAW` performs for the same field "
-                "one declaration over — including its `!= []` exemption, since an "
-                "empty `stratify_by: []` is what `init` writes and changes no behavior",
+                "one declaration over — including its `!= []` exemption, which is not "
+                "this block's own reason: `init` never writes a `holdout` block at "
+                "all, and an empty `stratify_by: []` is not silently accepted here — "
+                "it is refused two checks later, as `E-DATA-HOLDOUT-STRATIFY-UNKNOWN`",
             )
 
     if "seed" in holdout:
@@ -2852,9 +2853,11 @@ def _check_holdout(
     raw_strata = holdout.get("stratify_by")
     strata = stratum_names(raw_strata)
     if raw_strata is not None and not strata:
-        # An empty string or an empty list: present, and naming nothing. Left
-        # silent it would be a declaration that changes no behaviour, which is
-        # exactly what a truthy read of it hides.
+        # Present, and normalizing to no names: `stratum_names` returns `()`
+        # not just for `""` and `[]` but for anything falsy — `0`, `False`,
+        # `{}` all reach here too. Left silent it would be a declaration that
+        # changes no behaviour, which is exactly what a truthy read of it
+        # hides.
         c.error(
             "E-DATA-HOLDOUT-STRATIFY-UNKNOWN",
             "data.units.holdout.stratify_by",
