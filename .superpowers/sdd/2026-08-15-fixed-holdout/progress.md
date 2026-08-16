@@ -647,3 +647,38 @@ Task 14: fix round 1. Commit f194d29. Both Importants were shapes CLAUDE.md name
   Both `pytest.raises` sites now carry `match=`, so each is pinned to its OWN assertion rather than to any
   `AssertionError` the call might raise, which was the residue of my misplaced worry being half right.
 Task 14: complete. 1937 passed + 2 xfailed; ruff check and mypy clean. BASE for task 15 is the commit below.
+Task 15: dispatched — the denominators, six sites narrowed and three deliberately not. The scoping names
+  this the task most likely to ship wrong, and the brief under-specified it in exactly that direction:
+  six sites, three deliberately-untouched, and only TWO tests. I checked what they reach — only
+  `_condition_counts` was pinned — and then checked task 18's five end-to-end pins, which cover
+  `n.resolved` and `max_failed_fraction` only. **Four of the six sites would have been unpinned even after
+  task 18.** The dispatch required a per-site answer: a test that fails when that site alone is reverted,
+  or a written statement that it is unpinnable naming which task-18 pin closes it. It also required the
+  "surplus keys are inert" claim about the three key-indexed sites to be CHECKED rather than restated,
+  because that is a claim like any other.
+Task 15: implemented at fa85b26. 1942 passed + 2 xfailed. The per-site requirement paid for itself: three
+  sites pinned with a mutation each, ONE genuinely unpinnable and deferred, and **two proven STRUCTURALLY
+  INERT by construction** — `_condition_beside_n`, whose answer is a function of `arm_members_map is None`
+  alone because it passes its own roster argument as both the input and the identity reference, and
+  `_compute_vs_baseline`, because `resolve_contrasts` builds every auto-generated `Comparison` without
+  `within`, so `units_matching(_, None)` is `None` whatever roster it holds. That second reason
+  corroborates something I had verified independently before this slice began.
+Task 15: reviewed (opus). Spec compliance PASS — exactly six sites and no seventh, verified by grepping
+  every remaining `roster` in `command_run`; `provenance.units.n` and `units_hash` correctly whole-roster.
+  Task quality FAIL with two Important and three Minor, and nothing shipping a wrong number.
+  Both inertness claims CONFIRMED by construction, including running `_compute_vs_baseline` over a doc
+  carrying a declared `within` — the arm that could have broken it. The reviewer declined a new
+  spec-defects entry for site 5 on the grounds that the dependency runs in the SAFE direction: if `within`
+  ever becomes settable, `eval_roster` is already the correct argument, so there is no failure mode to
+  file. I accept that; a deferral needs a failure mode, not just a coupling.
+  The finding worth carrying past this slice: **this task made a FILED remediation false.**
+  `spec-defects.md`'s OPEN `technical_n` entry said the fix was cheap because `_cond_beside_n` "already
+  takes the un-narrowed roster as its third argument and decides by identity" — and task 15 changed that
+  argument to `eval_roster`. A filed gap is not inert: it makes claims about the code, and those claims
+  go stale exactly like a docstring's. Nothing in this repo's process was checking them. That belongs in
+  the whole-branch review.
+  Also closed: a false docstring guarantee duplicated across `cli.py` and its test, disproved by running
+  the brief's OWN mutation over the full suite; a test that passed with `_compute_vs_baseline` returning
+  `None, []`; and an `assert` sited AFTER `execute_plan`, which is the shape that once cost this repo
+  every execution in a run with the record lost — moved before the call.
+Task 15: complete. 1942 passed + 2 xfailed; ruff check and mypy clean. BASE for task 16 is 2545dda.
