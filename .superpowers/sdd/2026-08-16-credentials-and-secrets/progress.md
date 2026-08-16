@@ -145,3 +145,11 @@ Task 3: reviewed (opus). Spec compliance PASS; task quality FAIL with two Import
   short-circuit and no collision relabel); storage is pinned by two `AttributeError` tests.
 Task 3: complete. 1962 passed + 2 xfailed; ruff check, format and mypy clean. **The H7b prerequisite
   has landed.** BASE for task 4 is below.
+Task 4: complete. `Param.comment()`'s `choices` branch now renders each choice through a new
+  `_choice_label` helper carrying its `requires_env` variables; `generic`'s two regression sites
+  (`test_param.py`'s existing assertion, `test_materialize.py`'s generated-config line) are
+  byte-identical since it declares no `requires_env`. Re-measured grep counts: `tests/` → 2 sites,
+  `docs/reference.md` → 4 sites — both matched the brief's `478c1f3` count. Both prescribed mutations
+  (annotate the written value everywhere; drop the `[]`-vs-missing-key distinction) were run, checked
+  against the test bodies, and discriminated. 1964 passed + 2 xfailed; ruff check, format and mypy
+  clean.

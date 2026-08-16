@@ -137,9 +137,16 @@ class Param:
         return isinstance(value, expected)
 
     def comment(self) -> str:
-        """The inline comment `init` renders. One constraint claims it, else `help`."""
+        """The inline comment `init` renders. One constraint claims it, else `help`.
+
+        A `choices` comment additionally carries each value's `requires_env`
+        variables. Those are not a constraint — see this module's docstring —
+        and they are rendered against *every* choice rather than the written
+        one, because nothing ever writes back into a config and a comment about
+        the current value would be wrong the first time the file was edited.
+        """
         if self.choices is not None:
-            return "choices: " + " | ".join(str(c) for c in self.choices)
+            return "choices: " + " | ".join(self._choice_label(c) for c in self.choices)
         if self.gt is not None and self.lt is not None:
             return f"float in ({self.gt}, {self.lt})"
         for bound, sym in ((self.ge, ">="), (self.gt, ">"), (self.le, "<="), (self.lt, "<")):
@@ -150,3 +157,9 @@ class Param:
         if self.type_ is list and self.item_type is not None:
             return f"list of {_TYPE_NAMES[self.item_type]}"
         return self.help or ""
+
+    def _choice_label(self, choice: Any) -> str:
+        needs = (self.requires_env or {}).get(choice) or []
+        if not needs:
+            return str(choice)
+        return f"{choice} (needs {', '.join(needs)})"

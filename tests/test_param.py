@@ -164,3 +164,38 @@ def test_a_total_requires_env_constructs_and_leaves_every_other_check_alone():
     assert p.check("a") is None
     assert p.check("zz") is not None
     assert p.check(None) is None
+
+
+def test_a_choices_comment_carries_each_value_s_credential_against_every_choice():
+    """`reference.md` § A credential can belong to a parameter value shows this
+    exact string. Every choice is annotated, not the default — a comment about
+    the current value would be wrong the first time the config was edited.
+
+    Three choices, not two, and the annotated ones are NOT contiguous with the
+    default: with two, "annotate every choice" and "annotate the written one"
+    both produce a one-annotation string for some arrangement.
+    """
+    p = Param(
+        str,
+        default="azure_openai",
+        choices=["azure_openai", "openai", "ollama"],
+        requires_env={
+            "azure_openai": ["AZURE_OPENAI_API_KEY"],
+            "openai": ["OPENAI_API_KEY"],
+            "ollama": [],
+        },
+    )
+    assert p.comment() == (
+        "choices: azure_openai (needs AZURE_OPENAI_API_KEY) | "
+        "openai (needs OPENAI_API_KEY) | ollama"
+    )
+
+
+def test_a_value_needing_two_variables_names_both_in_its_own_parenthesis():
+    p = Param(
+        str,
+        default="a",
+        choices=["a", "b"],
+        requires_env={"a": ["A_ONE", "A_TWO"], "b": []},
+    )
+    assert p.comment() == "choices: a (needs A_ONE, A_TWO) | b"
