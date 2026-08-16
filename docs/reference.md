@@ -944,6 +944,8 @@ today. The rows stay because this table is the enumerated surface every plugin i
 and a contract that appears only once its implementation lands is a contract nobody could have
 designed to.
 
+**Not everything core adds is a name on this table, and the credential mechanism is the example.** `required_env` is an attribute of a class you already subclass and [`requires_env`](#a-credential-can-belong-to-a-parameter-value) is a keyword of a construct you already import, so declaring either adds no import line to your template. A mechanism reaching you through a class you subclass and a keyword you pass is the shape to expect: this table enumerates what you *import*, and it moves only when there is a new name to import.
+
 **`cfg` and `io` are not on it, and that's the shape of the API rather than an omission.** Both are constructed by core and handed to your `run`, already scoped — there is nothing to import and nothing to construct, which is what lets core decide what backs them. Every other name above is one you subclass, instantiate, decorate with, or catch.
 
 **The root config node carries exactly one accessor, `raw`; every nested node carries none.** That
