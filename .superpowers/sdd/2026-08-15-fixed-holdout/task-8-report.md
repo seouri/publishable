@@ -2,7 +2,7 @@
 
 **Status:** DONE_WITH_CONCERNS
 
-**Commit:** (to be filled after commit)
+**Commit:** `fa6accc`
 
 **Test summary:** `uv run pytest` — 1878 passed, 2 xfailed (was 1872 passed + 2 xfailed; +6 new
 tests for this task). `uv run ruff check .` clean, `uv run mypy` clean (42 source files).
