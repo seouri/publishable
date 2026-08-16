@@ -14,10 +14,22 @@ entirely).
 
 Built a scratch project (`publishable new` + `publishable init … --template generic`, outside this repo,
 git-initialized, `input_dir`/`output_dir` outside the repo as required) with a 240-row synthetic table
-roster standing in for `growth-screen`'s patient index. Materialized all nine configs from the feasibility
-analysis (E1–E6, C1–C3) as scratch YAML and ran `publishable validate` against each, at HEAD.
+roster standing in for `growth-screen`'s patient index.
 
-Two substitutions were needed to reach `validate` at all, both disclosed in the appended section:
+**The measurement is narrower than "each of the nine configs as written," and that narrowing is
+disclosed rather than left implicit.** Only `data.units` (`from`, `attributes`, `holdout`, `weight_by`)
+and `statistics.resample`/`statistics.contrasts` were transplanted verbatim from each config shown in the
+analysis onto the scaffolded `generic` demo's own stand-in single-axis sweep, default seed repeat, and
+`analysis.*` parameters. `parameters`, the real `sweep`, `replication`, `statistics.report_by`, and
+`hypotheses` were **not** carried over: the demo entrypoint declares neither the real parameter names nor
+the `step03_screen`/`step05_agreement` steps E2's and E5's real `hypotheses` name, and a hypothesis
+naming an undeclared step earns `E-HYPOTHESIS-METRIC` regardless of anything H3d touched — testing them
+here would measure the entrypoint substitution, not the build. They are left assumed under "the plugin
+exists," which is the same stance the previous (2026-08-15) measurement already took for the whole
+config. This was an earlier draft's own defect, caught on review before commit: an initial pass implied
+the full nine configs validated as written, which was never actually run.
+
+Two further substitutions were needed to reach `validate` at all, both disclosed in the appended section:
 
 1. `entrypoint`/`experiment_type` point at this repo's own scaffolded `generic` demo rather than
    `growth_screen`/`growth_shortcut` (neither plugin is installed in any build; an unsubstituted config
@@ -27,19 +39,24 @@ Two substitutions were needed to reach `validate` at all, both disclosed in the 
    as-declared `{resolver: patient_trajectory}` — the table-roster substitution the analysis itself does
    not make.
 
-Mutation: `e1-table`'s clean validation was proven discriminating by setting
+Two warnings the fixture produced (`W-DATA-CLUSTER-UNDECLARED` on the synthetic table's own `age_band`
+shape, and `W-REPL-DETERMINISTIC` on E5 from the demo entrypoint's step not declaring
+`nondeterministic = True`) are fixture artifacts, not properties of these designs, and are named as such
+rather than left in the results table where they would read as belonging to the configs.
+
+Mutation: E1's clean validation under the table substitution was proven discriminating by setting
 `data.units.holdout.frac` to `0`, confirming `E-DATA-HOLDOUT-FRAC` fires, then reverting — diff empty
 afterward.
 
 ## The nine measured results
 
-| Config | `validate` reports (as declared, resolver-based) | Would execute? |
+| Config | `validate` reports on the transplanted `data`/`statistics` blocks | Would execute? |
 |---|---|---|
 | E1 | `E-DATA-RESOLVER-UNSUPPORTED` | No — plugin registry |
 | E2 | `E-DATA-RESOLVER-UNSUPPORTED` | No — plugin registry |
 | E3 | `E-DATA-RESOLVER-UNSUPPORTED` | No — plugin registry |
 | E4 | `E-DATA-RESOLVER-UNSUPPORTED` | No — plugin registry |
-| E5 | `E-DATA-RESOLVER-UNSUPPORTED`, `W-REPL-DETERMINISTIC` | No — plugin registry |
+| E5 | `E-DATA-RESOLVER-UNSUPPORTED` | No — plugin registry |
 | E6 | `E-DATA-RESOLVER-UNSUPPORTED` | No — plugin registry |
 | C1 | `E-DATA-RESOLVER-UNSUPPORTED`, `E-DATA-WEIGHT-CONTRAST` | No — two blockers |
 | C2 | `E-DATA-RESOLVER-UNSUPPORTED`, `E-DATA-WEIGHT-CONTRAST` | No — two blockers |
@@ -48,10 +65,15 @@ afterward.
 `E-DATA-HOLDOUT-UNSUPPORTED` appeared on **none** of the nine, at any substitution — confirmed retired
 (also confirmed absent from `src/publishable/*.py` by grep).
 
-Under the table-roster substitution: **E1, E2, E5 validate with zero errors.** E3, E4, E6 *also* validate
-with zero errors under the same substitution — but `io.reuse_from`, which their frozen-program reads
-depend on, does not exist anywhere in `src/publishable/` (confirmed by grep), so they still cannot run.
-The generous "would run under a substitution nobody has written" count is **three (E1, E2, E5), not six**.
+Under the table-roster substitution: **E1, E2, E5's transplanted blocks validate with zero errors.** E3,
+E4, E6's transplanted blocks *also* validate with zero errors under the same substitution — but
+`io.reuse_from`, which their frozen-program reads depend on, does not exist anywhere in
+`src/publishable/` (confirmed by grep), so they still cannot run. The generous "would run under a
+substitution nobody has written" count is **three (E1, E2, E5), not six**. C1–C3 do not join that three
+even once `E-DATA-WEIGHT-CONTRAST` lifts (H4b): the shortcut's confirmation run reads the development
+run's fitted artifact through the same missing `io.reuse_from`, per § Executability on this build's own
+"the shortcut's confirmation run uses [it] to read its fine-tuned artifact." This was checked against the
+analysis text, not assumed — see the CLAUDE.md correction below.
 
 ## Which of the spec's numbers this confirms, and which it does not
 
@@ -82,7 +104,11 @@ The generous "would run under a substitution nobody has written" count is **thre
   hit, one live defect closed — the two cells refusals now named — zero experiments newly executing); a
   pointer to the 2026-08-16 re-measurement added; the existing H3c-3 ownership sentence extended to also
   name retiring the two cells refusals once cells-drawing lands, rather than duplicating the ownership
-  statement in a second place. No spine-design reasoning restated, only cited.
+  statement in a second place. No spine-design reasoning restated, only cited. The first draft of this
+  paragraph also claimed H4b "unblocks... the three shortcut configs," which overclaims: the analysis's
+  own § Executability text says the shortcut's confirmation run depends on `io.reuse_from` too, the same
+  missing method that keeps E3/E4/E6 from running under the table substitution. Corrected before commit
+  to say H4b retires the refusal without implying the three configs become executable.
 
 ## Consistency passes
 
@@ -109,3 +135,8 @@ verified by diff.
   indistinguishable from E1/E2/E5 under the table substitution. The appended section says this explicitly
   and points at the grep, but it is worth the reviewer double-checking that grep still returns nothing at
   merge time.
+- The measurement's scope is `data.units` + `statistics.resample`/`contrasts` only, transplanted onto the
+  demo scaffold's own parameters/sweep/replication — not the full nine configs as the analysis writes
+  them. This is stated plainly in both the appended section and above, but a reader skimming only the
+  table could still mistake "validate reports on the transplanted blocks" for "the whole config
+  validates." Flagging in case the review wants the header sentence made even more explicit.

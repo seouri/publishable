@@ -44,8 +44,10 @@ beside the same structure are now a named refusal, `E-REPL-FOLD-CELLS` / `E-DATA
 [the feasibility analysis](docs/feasibility-llm-growth-studies.md) § Executability on this build, and it
 is the same lesson stated a third time: a retired-refusal count is not an executable-run count, which is
 exactly what step 10 of § Feasibility analyses exists to keep a reader from conflating. H4b (weighted
-contrasts) is the only remaining slice that unblocks any of the nine — the three shortcut configs, and
-**only for configs sourcing their roster from a table**; all nine as the analysis writes them declare a
+contrasts) retires the one refusal C1–C3 carry beyond the resolver — but their shortcut confirmation run
+reads a fitted artifact through `io.reuse_from`, same as E3/E4/E6's frozen program, so retiring it does
+not put C1–C3 among the configs a table-roster substitution alone would let run; **only for configs
+sourcing their roster from a table**, and even then, all nine as the analysis writes them declare a
 resolver, so *as written* none runs until H7b.
 
 A second amendment the same day scoped all five remaining slices against the code. **Every charter was
