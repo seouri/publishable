@@ -1633,8 +1633,7 @@ Required parameters get the same treatment `metadata.description` does — mater
 
 ```yaml
   llm:
-    provider: azure_openai
-    # choices: azure_openai (needs AZURE_OPENAI_API_KEY) | openai (needs OPENAI_API_KEY) | ollama
+    provider: azure_openai          # choices: azure_openai (needs AZURE_OPENAI_API_KEY) | openai (needs OPENAI_API_KEY) | ollama
 ```
 
 **`requires_env` needs `choices`, and the mapping must be total over them.** A credential requirement is only checkable if the set of values is closed, which is exactly what `choices` declares; and a partial mapping would leave "this value needs nothing" and "nobody wrote this value down" spelled identically, which is the [defaults-file problem](#there-is-no-separate-defaults-file) inside one dict. `validate` rejects a mapping with a missing or unknown key when the template loads, naming both sets — as [`E-TEMPLATE-LOAD`](#errors-validate-reports), which is that code's "raises while importing" shape and mints no identifier of its own, exactly as a `Param` declaring `default=None` without `nullable=True` already does. The consequence to plan for is real and is the point: **adding a choice breaks every template that declared `requires_env` until the new value states its requirement.** A new provider whose credentials nobody wrote down is a bug, and finding it at load beats finding it four hours into a sweep.

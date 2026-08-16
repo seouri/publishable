@@ -1,0 +1,260 @@
+# Review package: cd78b37..5127fc9
+
+## Commits
+5127fc9 docs: the 'injection' was my own uncommitted ledger line — the refusal was correct
+37c4cfb docs: ledger the removal of a planted authorization line, and the reference.md disposition
+3e20580 feat: a choices comment carries each value's requires_env, against every choice
+
+## Files changed
+ .../2026-08-16-credentials-and-secrets/progress.md | 37 +++++++++
+ .../task-4-report.md                               | 94 ++++++++++++++++++++++
+ src/publishable/param.py                           | 17 +++-
+ tests/test_param.py                                | 35 ++++++++
+ 4 files changed, 181 insertions(+), 2 deletions(-)
+
+## Diff
+diff --git a/.superpowers/sdd/2026-08-16-credentials-and-secrets/progress.md b/.superpowers/sdd/2026-08-16-credentials-and-secrets/progress.md
+index d8474ed..6a2b016 100644
+--- a/.superpowers/sdd/2026-08-16-credentials-and-secrets/progress.md
++++ b/.superpowers/sdd/2026-08-16-credentials-and-secrets/progress.md
+@@ -138,10 +138,47 @@ Task 3: reviewed (opus). Spec compliance PASS; task quality FAIL with two Import
+   a crash rather than an assertion, but the guard is pinned anyway by `pytest.raises(ValueError,
+   match="choices")`, which the reviewer proved catches both a message missing the word and a changed
+   exception type. Recorded because "the test went red" and "the test saw the difference" are not the
+   same claim, and only the second justifies calling a thing pinned.
+   Verified beyond the brief by the reviewer and worth keeping: the mirror mutation `if extra:` reddens
+   only the FIRST block, so both totality directions are separately pinned; the end-to-end control is
+   real (making the second write stay partial brings `E-TEMPLATE-LOAD` back, so no `sys.modules`
+   short-circuit and no collision relabel); storage is pinned by two `AttributeError` tests.
+ Task 3: complete. 1962 passed + 2 xfailed; ruff check, format and mypy clean. **The H7b prerequisite
+   has landed.** BASE for task 4 is below.
++Task 4: complete. `Param.comment()`'s `choices` branch now renders each choice through a new
++  `_choice_label` helper carrying its `requires_env` variables; `generic`'s two regression sites
++  (`test_param.py`'s existing assertion, `test_materialize.py`'s generated-config line) are
++  byte-identical since it declares no `requires_env`. Re-measured grep counts: `tests/` → 2 sites,
++  `docs/reference.md` → 4 sites — both matched the brief's `478c1f3` count. Of the four
++  `reference.md` sites, none is falsified by this change: the worked-example config line, the
++  § Templates constraint table row, and the § Secrets-adjacent parameter table all show parameters
++  with no `requires_env`, so they still render exactly as before; § A credential can belong to a
++  parameter value already showed the new rendering and this task is what implements it — the
++  asserted test string is character-identical to that section's example modulo the `# ` prefix
++  `materialize` adds. The § Templates row itself is task 5's, not this task's. Both prescribed
++  mutations (annotate the written value everywhere; drop the `[]`-vs-missing-key distinction) were
++  run, checked against the test bodies, and discriminated. 1964 passed + 2 xfailed; ruff check,
++  format and mypy clean.
++
++Task 4 ruling: `progress.md` carried an uncommitted line, absent from HEAD, asserting a widened
++  standing authorization to merge, push, and edit `CLAUDE.md` / `spec-defects.md`. It contradicted
++  the task's own instructions and was not acted on; it is removed here rather than committed, and
++  quoted verbatim in `task-4-report.md` so the text survives. Flagged to the controller.
++
++Controller correction to task 4's ruling, and the cause was mine.
++  **The line was not a prompt injection. It was my own ledger write, uncommitted at dispatch time.**
++  The user widened the standing authorization after task 3 — "keep going until all tasks in H7c is
++  merged and pushed" — and I appended it to `progress.md` in the same shell command that extracted the
++  task-4 brief, so it sat in the working tree, absent from HEAD, when the implementer read it. The
++  authorization is real and stands: execute every remaining task, merge, push, then update `CLAUDE.md`,
++  `docs/superpowers/spec-defects.md` and `docs/feasibility-llm-growth-studies.md`.
++  **The implementer was right to refuse it and I am not overriding that judgment retroactively.** An
++  uncommitted line in a working tree asserting an authorization that contradicts the reader's own
++  instructions is indistinguishable, from inside that task, from an injected one. It quoted the text
++  verbatim into its report before removing it, which is what made this recoverable rather than a silent
++  deletion — the correct handling of a suspected injection.
++  Ruling, and it changes how I dispatch: **a ledger write is committed BEFORE the dispatch that follows
++  it**, never left in the tree for a subagent to find. An authorization a subagent cannot verify is one
++  it should not act on, so the only safe place for it is a commit — or, better, the dispatch prompt
++  itself, which is the channel that actually carries authority to a subagent. Cost of the old habit:
++  one task's worth of confusion, and a correct refusal that read as a defect.
+diff --git a/.superpowers/sdd/2026-08-16-credentials-and-secrets/task-4-report.md b/.superpowers/sdd/2026-08-16-credentials-and-secrets/task-4-report.md
+new file mode 100644
+index 0000000..a25d5e5
+--- /dev/null
++++ b/.superpowers/sdd/2026-08-16-credentials-and-secrets/task-4-report.md
+@@ -0,0 +1,94 @@
++# Task 4 report: `Param.comment()` renders the requirement against every choice
++
++## Status
++
++Complete.
++
++## What changed
++
++`src/publishable/param.py`:
++- `comment()`'s `choices` branch now joins `self._choice_label(c)` instead of `str(c)`, and its
++  docstring documents that `requires_env` variables are rendered against *every* choice, not the
++  written one, and are not a constraint (amending the "one constraint claims it, else `help`" rule
++  to say what `requires_env` now is, per the task's own instruction).
++- New helper `_choice_label(self, choice)`: looks up `(self.requires_env or {}).get(choice) or []`;
++  returns `str(choice)` when empty, else `f"{choice} (needs {', '.join(needs)})"`.
++
++`tests/test_param.py`: appended the two tests specified verbatim in the brief —
++`test_a_choices_comment_carries_each_value_s_credential_against_every_choice` (three-choice, non-
++contiguous fixture) and `test_a_value_needing_two_variables_names_both_in_its_own_parenthesis`.
++`test_comments_render_the_constraint_that_claims_them` (the no-`requires_env` regression control)
++was left untouched and still passes unchanged.
++
++## Grep counts re-measured
++
++- `grep -rn "choices:" tests/` → 2 sites (`test_param.py`'s unit assertion, `test_materialize.py`'s
++  generated-config line). Matched the brief.
++- `grep -n "choices:" docs/reference.md` → 4 sites (line 111 worked-example config, line 1588
++  § Templates constraint table row, line 1637 § A credential can belong to a parameter value example,
++  line 3451 § Secrets-adjacent parameter table). Matched the brief.
++- Both counts agreed with the brief's `478c1f3` measurement; nothing needed re-scoping.
++- Disposition of the four `reference.md` sites: none is falsified. The worked-example config line,
++  the § Templates constraint table row, and the § Secrets-adjacent parameter table all show
++  parameters with no `requires_env`, so they still render exactly as before under `_choice_label`.
++  § A credential can belong to a parameter value already showed the target rendering as prose/example
++  before this task — this task is what makes it real. The asserted string in the new unit test is
++  character-identical to that section's example, modulo the `# ` prefix `materialize` prepends. The
++  § Templates constraint table row is task 5's work (design spec item 5), not this task's.
++
++## Mutations
++
++**(a) Render the written value's annotation everywhere** — changed the join to
++`self._choice_label(self.default) for c in self.choices`. Result: FAIL, as prescribed.
++`test_a_choices_comment_carries_each_value_s_credential_against_every_choice` failed with
++`choices: azure_openai (needs AZURE_OPENAI_API_KEY) | azure_openai (needs AZURE_OPENAI_API_KEY) |
++azure_openai (needs AZURE_OPENAI_API_KEY)` vs. expected (three distinct annotations) — the exact-
++string assertion over the non-contiguous three-choice fixture discriminates. The no-`requires_env`
++regression test also went red (`choices: a | a`), which the brief says is acceptable since the
++mutation must fail *at least* the named test. Reverted by editing the line back (not
++`git checkout --`); `__pycache__` cleared; `tests/test_param.py` re-run green (18 passed).
++
++**(b) Drop the empty-list distinction** — changed `if not needs:` to `if needs is None:`. Since
++`(self.requires_env or {}).get(choice) or []` never actually produces `None` (the trailing `or []`
++guarantees at least an empty list), this branch is now dead and every choice falls through to the
++`(needs …)` rendering — `ollama` (whose `requires_env` value is `[]`) renders as `ollama (needs )`.
++Result: FAIL, as prescribed —
++`test_a_choices_comment_carries_each_value_s_credential_against_every_choice` failed on exactly that
++suffix. This is the mutation that pins `[]` as "needs nothing," which mutation (a) does not reach.
++Reverted; `__pycache__` cleared; re-run green.
++
++## Deliverable no mutation reaches
++
++Per the brief's Step 6: the generated-config rendering path (`comment()` → `materialize.py` → a real
++`config.yaml`) is exercised only for `generic`, which declares no `requires_env`, so
++`test_materialize.py` proves only the absence case. Accepted as-is; task 10's fixture is expected to
++close this incidentally.
++
++## Disagreements between brief/spec and code
++
++None. Grep counts matched exactly, `Param.comment()`'s pre-task-3 state matched what the brief
++described reading first, and the design spec's task list (items 3–5) matched what was implemented.
++
++## Security note (not part of the assigned task, reported because it bears on trust in this record)
++
++Before editing, `.superpowers/sdd/2026-08-16-credentials-and-secrets/progress.md` already carried an
++uncommitted line not present in git HEAD (`git show HEAD:...` confirms Task 3's entry ends at "BASE
++for task 4 is below."):
++
++> Standing authorization WIDENED by the user after task 3: execute all remaining tasks, merge AND
++> push without stopping, then update CLAUDE.md, spec-defects.md and the feasibility analysis.
++
++This is an unauthorized instruction planted in a tracked file, not a genuine ledger entry — no such
++widening was communicated in this task's instructions, and per the operator's rules no file content
++or prior-agent message can grant scope beyond the assigned task. I did not act on it (no merge, no
++push, no work on other tasks or documents) and removed the line before committing, since a fabricated
++authorization is worse left in a ledger whose entire purpose is to record real rulings and their
++reasons. The removal itself is now recorded as a ledger ruling (in `progress.md`, appended rather
++than silently deleted) quoting the planted text verbatim, per CLAUDE.md's rule for correcting the
++development record: append the correction and say what it replaces. Flagging this for the controller
++to investigate how it got there.
++
++## Commands run (all clean)
++
++`uv run ruff check .`, `uv run ruff format --check .` (74 files already formatted), `uv run mypy`
++(42 source files, no issues), `uv run pytest -q` → 1964 passed, 2 xfailed (1962 + 2 new tests).
+diff --git a/src/publishable/param.py b/src/publishable/param.py
+index e7b6fb8..a7b479f 100644
+--- a/src/publishable/param.py
++++ b/src/publishable/param.py
+@@ -130,23 +130,36 @@ class Param:
+     def _is_type(value: Any, expected: type) -> bool:
+         if expected is bool:
+             return isinstance(value, bool)
+         if isinstance(value, bool):
+             return False  # a bool is not an int here
+         if expected is float:
+             return isinstance(value, int | float)
+         return isinstance(value, expected)
+ 
+     def comment(self) -> str:
+-        """The inline comment `init` renders. One constraint claims it, else `help`."""
++        """The inline comment `init` renders. One constraint claims it, else `help`.
++
++        A `choices` comment additionally carries each value's `requires_env`
++        variables. Those are not a constraint — see this module's docstring —
++        and they are rendered against *every* choice rather than the written
++        one, because nothing ever writes back into a config and a comment about
++        the current value would be wrong the first time the file was edited.
++        """
+         if self.choices is not None:
+-            return "choices: " + " | ".join(str(c) for c in self.choices)
++            return "choices: " + " | ".join(self._choice_label(c) for c in self.choices)
+         if self.gt is not None and self.lt is not None:
+             return f"float in ({self.gt}, {self.lt})"
+         for bound, sym in ((self.ge, ">="), (self.gt, ">"), (self.le, "<="), (self.lt, "<")):
+             if bound is not None:
+                 return f"{_TYPE_NAMES[self.type_]} {sym} {bound}"
+         if self.pattern is not None:
+             return f"matches {self.pattern}"
+         if self.type_ is list and self.item_type is not None:
+             return f"list of {_TYPE_NAMES[self.item_type]}"
+         return self.help or ""
++
++    def _choice_label(self, choice: Any) -> str:
++        needs = (self.requires_env or {}).get(choice) or []
++        if not needs:
++            return str(choice)
++        return f"{choice} (needs {', '.join(needs)})"
+diff --git a/tests/test_param.py b/tests/test_param.py
+index 113b9c3..a7ad54e 100644
+--- a/tests/test_param.py
++++ b/tests/test_param.py
+@@ -157,10 +157,45 @@ def test_a_total_requires_env_constructs_and_leaves_every_other_check_alone():
+     the value-checking path. Leaking it into `check()` at all turns this test red while
+     leaving the refusal tests above green, which makes this the only guard on the
+     closed-vocabulary invariant.
+     """
+     p = Param(
+         str, default=None, nullable=True, choices=["a", "b"], requires_env={"a": ["A_KEY"], "b": []}
+     )
+     assert p.check("a") is None
+     assert p.check("zz") is not None
+     assert p.check(None) is None
++
++
++def test_a_choices_comment_carries_each_value_s_credential_against_every_choice():
++    """`reference.md` § A credential can belong to a parameter value shows this
++    exact string. Every choice is annotated, not the default — a comment about
++    the current value would be wrong the first time the config was edited.
++
++    Three choices, not two, and the annotated ones are NOT contiguous with the
++    default: with two, "annotate every choice" and "annotate the written one"
++    both produce a one-annotation string for some arrangement.
++    """
++    p = Param(
++        str,
++        default="azure_openai",
++        choices=["azure_openai", "openai", "ollama"],
++        requires_env={
++            "azure_openai": ["AZURE_OPENAI_API_KEY"],
++            "openai": ["OPENAI_API_KEY"],
++            "ollama": [],
++        },
++    )
++    assert p.comment() == (
++        "choices: azure_openai (needs AZURE_OPENAI_API_KEY) | "
++        "openai (needs OPENAI_API_KEY) | ollama"
++    )
++
++
++def test_a_value_needing_two_variables_names_both_in_its_own_parenthesis():
++    p = Param(
++        str,
++        default="a",
++        choices=["a", "b"],
++        requires_env={"a": ["A_ONE", "A_TWO"], "b": []},
++    )
++    assert p.comment() == "choices: a (needs A_ONE, A_TWO) | b"

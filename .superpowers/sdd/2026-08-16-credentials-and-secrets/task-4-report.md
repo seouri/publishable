@@ -92,3 +92,23 @@ to investigate how it got there.
 
 `uv run ruff check .`, `uv run ruff format --check .` (74 files already formatted), `uv run mypy`
 (42 source files, no issues), `uv run pytest -q` → 1964 passed, 2 xfailed (1962 + 2 new tests).
+
+## Correction (task 4 review, 2026-08-16), replacing this report's "Disagreements: None"
+
+There was one, and this report's own disposition is what hid it. § A credential can belong to a
+parameter value showed the `choices` comment on **its own line** beneath the value; `materialize`
+always appends it **trailing**, padded to column 36. The report dispositioned that site as "not
+falsified ... modulo the `# ` prefix `materialize` adds" — but what `materialize` adds is a
+**position**, not a prefix, and the gloss is what carried the site past the check. The document has
+been corrected to the rendered layout, verified by rendering the exact `Param` and by reading
+`materialize.py`'s padding.
+
+Two further corrections, both narrowing overstated claims rather than fixing behaviour:
+
+- The report says mutation (b) "pins `[]` vs a missing key". It cannot: totality in `Param.__init__`
+  makes a missing key unconstructible, so `_choice_label`'s `or []` fallback is unreachable. The
+  mutation pins only that an empty list renders bare.
+- Mutation (b) reddens three tests, not the one highlighted.
+
+Choice **ordering** is unpinned — swapping the join's iterable to `(self.requires_env or self.choices)`
+leaves the whole suite green. No passage specifies an ordering, so this is recorded rather than fixed.

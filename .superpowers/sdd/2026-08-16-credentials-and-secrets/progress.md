@@ -182,3 +182,27 @@ Controller correction to task 4's ruling, and the cause was mine.
   it should not act on, so the only safe place for it is a commit — or, better, the dispatch prompt
   itself, which is the channel that actually carries authority to a subagent. Cost of the old habit:
   one task's worth of confusion, and a correct refusal that read as a defect.
+
+Task 4: implemented at 3e20580 / 37c4cfb. 1964 passed + 2 xfailed. `_choice_label` renders each choice
+  with its `requires_env` variables; `generic` is byte-identical because it declares none, which the
+  reviewer proved by A/B against the pre-task-4 `comment()` (2583 bytes, identical) rather than by
+  reading.
+Task 4: reviewed (opus). Spec compliance PASS; task quality FAIL with one Important and three Minor.
+  Important: § A credential can belong to a parameter value showed the `choices` comment on **its own
+  line**; `materialize` always appends it **trailing, padded to column 36**. Fixed in the document, and
+  I verified both ends myself — rendered the exact `Param` (`'choices: azure_openai (needs
+  AZURE_OPENAI_API_KEY) | openai (needs OPENAI_API_KEY) | ollama'`) and read `materialize.py`'s
+  `pad = " " * max(1, 36 - len(entry))`.
+  Ruling worth carrying past this slice: the report said "Disagreements: None" while dispositioning
+  that exact site as "not falsified ... **modulo the `# ` prefix** `materialize` adds". What
+  `materialize` adds is a POSITION, not a prefix. **A gloss that makes a difference sound incidental is
+  how a site gets carried past its own check** — the sweep looked at the right line and the wording
+  waved it through. That is a new entry for the catalogue and it is not the same as a missed site.
+  Two Minors corrected by appending, both narrowing overstated claims: mutation (b) cannot pin "`[]`
+  vs a missing key", because totality in `__init__` makes a missing key unconstructible and the `or []`
+  fallback unreachable; and it reddens three tests, not one.
+  Recorded, not fixed: choice ORDERING is unpinned — swapping the join's iterable to
+  `(self.requires_env or self.choices)` leaves the whole suite green. No passage specifies an ordering,
+  so there is nothing to be true to. If a later task specifies one, it owes the fixture.
+Task 4: complete. 1964 passed + 2 xfailed; ruff check, format and mypy clean. Part A's code half is
+  done; tasks 5 and 6 are its document half. BASE for task 5 is below.
