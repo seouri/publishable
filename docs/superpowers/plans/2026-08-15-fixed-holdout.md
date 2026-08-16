@@ -18,7 +18,7 @@
 
 Every task inherits all of these. They are copied verbatim rather than cross-referenced because an implementer sees only its own task brief.
 
-**Commands.** Tests `uv run pytest`. Lint `uv run ruff check .`. Format `uv run ruff format .`. Types `uv run mypy`. All four must pass before a commit.
+**Commands.** Tests `uv run pytest`. Lint `uv run ruff check .`. Format `uv run ruff format --check .`. Types `uv run mypy`. All four must pass before a commit.
 
 **Baseline.** `uv run pytest -q` at `78bb794` is **1801 passed, 2 xfailed**, ~96 s. A task that leaves the count below its own additions has broken something.
 
@@ -550,7 +550,7 @@ with
 # its children's names being fixed. The keys that
 ```
 
-- [ ] **Step 4: Run, confirm it passes** — `uv run pytest tests/test_envelope.py -k holdout`, then `uv run pytest`. Then `uv run ruff check . && uv run ruff format . && uv run mypy`.
+- [ ] **Step 4: Run, confirm it passes** — `uv run pytest tests/test_envelope.py -k holdout`, then `uv run pytest`. Then `uv run ruff check . && uv run ruff format --check . && uv run mypy`.
 
 - [ ] **Step 5: Mutate** — in `src/publishable/envelope.py`, change `"data.units.holdout.frac": (int, float),` to `"data.units.holdout.frac": (int, float, str),`. Run `uv run pytest tests/test_envelope.py -k each_holdout_child_is_typed`. The `{"frac": "0.2"}` row must **FAIL**. Delete `__pycache__`, edit the entry back in place, re-run; it passes. Then a second mutation, because the first only proves the type table is read: delete the `"data.units.holdout.method": str,` line entirely. `test_a_misspelled_holdout_child_is_reported` must **FAIL** — with no path beneath `holdout` in the table, `_known_containers` stops treating `holdout` as a container and the walk never descends. Restore the line in place and re-run.
 
@@ -715,7 +715,7 @@ gained the matching row and named `E-DATA-HOLDOUT-SEED` in the same slice.
 
   and change the entry's trailing "The `holdout.seed` half above remains open" sentence to say it is closed by H3d task 4.
 
-- [ ] **Step 4: Run, confirm it passes** — `uv run pytest tests/test_hashes.py -k "holdout_seed or exclusion"`, then `uv run pytest`, then `uv run ruff check . && uv run ruff format . && uv run mypy`. Then re-run `grep -rn _units_excluding_assign_seed src/ tests/ docs/` — it must return **nothing**. Prove the sweep can fail by running it against `_units_excluding_drawn_seeds`, which must return hits.
+- [ ] **Step 4: Run, confirm it passes** — `uv run pytest tests/test_hashes.py -k "holdout_seed or exclusion"`, then `uv run pytest`, then `uv run ruff check . && uv run ruff format --check . && uv run mypy`. Then re-run `grep -rn _units_excluding_assign_seed src/ tests/ docs/` — it must return **nothing**. Prove the sweep can fail by running it against `_units_excluding_drawn_seeds`, which must return hits.
 
 - [ ] **Step 5: Mutate** — in `src/publishable/hashes.py`, change the holdout branch's condition from `if isinstance(holdout, dict) and "seed" in holdout:` to `if False and isinstance(holdout, dict) and "seed" in holdout:`. Run `uv run pytest tests/test_hashes.py -k "holdout_seed or exclusion"`. Both `test_a_pinned_holdout_seed_does_not_move_the_design_digest` and `test_the_seed_exclusion_covers_assign_and_holdout_together` must **FAIL**. Delete `__pycache__`, edit the condition back in place, re-run; both pass. Then a second mutation proving the *positive* companion is not vacuous: change the exclusion to drop the whole block — `out = {**out, "holdout": None}` in place of the dict comprehension. `test_a_pinned_holdout_seed_does_not_move_the_design_digest` must **FAIL** on `design_digest(base) != design_digest(widened)`. Revert in place.
 
@@ -1041,7 +1041,7 @@ def _check_holdout(
     _check_holdout(doc, units_decl, roster, usable_cluster, c)
 ```
 
-- [ ] **Step 4: Run, confirm it passes** — `uv run pytest tests/test_validate.py -k holdout`, then `uv run pytest`, then `uv run ruff check . && uv run ruff format . && uv run mypy`.
+- [ ] **Step 4: Run, confirm it passes** — `uv run pytest tests/test_validate.py -k holdout`, then `uv run pytest`, then `uv run ruff check . && uv run ruff format --check . && uv run mypy`.
 
 - [ ] **Step 5: Mutate** — three, because three independent things could be dead.
 
@@ -1311,7 +1311,7 @@ def test_a_holdout_beside_a_seed_repeat_is_not_refused(write_config):
         )
 ```
 
-- [ ] **Step 4: Run, confirm it passes** — `uv run pytest tests/test_validate.py -k "holdout_stratum or holdout_beside"`, then `uv run pytest`, then `uv run ruff check . && uv run ruff format . && uv run mypy`.
+- [ ] **Step 4: Run, confirm it passes** — `uv run pytest tests/test_validate.py -k "holdout_stratum or holdout_beside"`, then `uv run pytest`, then `uv run ruff check . && uv run ruff format --check . && uv run mypy`.
 
 - [ ] **Step 5: Mutate** — two.
 
@@ -1742,7 +1742,7 @@ def holdout_values_fault(roster: UnitList, column: str) -> str | None:
             )
 ```
 
-- [ ] **Step 4: Run, confirm it passes** — the Step 2 command, then `uv run pytest`, then `uv run ruff check . && uv run ruff format . && uv run mypy`. Then the docstring sweep: `grep -rn "Fold strata survive clustering" src/ tests/ docs/` — every site claiming `stratum_varies_within_cluster` answers to *two* rows must now say four. Prove the sweep can fail by running it against `Holdout strata survive clustering`, which must return hits.
+- [ ] **Step 4: Run, confirm it passes** — the Step 2 command, then `uv run pytest`, then `uv run ruff check . && uv run ruff format --check . && uv run mypy`. Then the docstring sweep: `grep -rn "Fold strata survive clustering" src/ tests/ docs/` — every site claiming `stratum_varies_within_cluster` answers to *two* rows must now say four. Prove the sweep can fail by running it against `Holdout strata survive clustering`, which must return hits.
 
 - [ ] **Step 5: Mutate** — three.
 
@@ -2009,7 +2009,7 @@ config produced empty folds per arm — and is now closed as a refusal rather th
 capability.
 ```
 
-- [ ] **Step 4: Run, confirm it passes** — the Step 2 command, then `uv run pytest`, then `uv run ruff check . && uv run ruff format . && uv run mypy`. Then the **documents sweep, by claim not by file**: `grep -rn "within each cell" docs/reference.md docs/experimental-designs.md docs/design-principles.md README.md` — every remaining hit must be a statement this build actually honours, or must name the refusal. Prove the sweep can fail by running it against `each cell`, which returns more. Then the mechanical pass on both edited documents (trailing whitespace, tabs, anchors resolve, `×` not `x`, table rows match headers) and the cross-document pass: check § Mistakes core prevents in `experimental-designs.md` still lists nothing these edits make merely-discouraged rather than structurally impossible.
+- [ ] **Step 4: Run, confirm it passes** — the Step 2 command, then `uv run pytest`, then `uv run ruff check . && uv run ruff format --check . && uv run mypy`. Then the **documents sweep, by claim not by file**: `grep -rn "within each cell" docs/reference.md docs/experimental-designs.md docs/design-principles.md README.md` — every remaining hit must be a statement this build actually honours, or must name the refusal. Prove the sweep can fail by running it against `each cell`, which returns more. Then the mechanical pass on both edited documents (trailing whitespace, tabs, anchors resolve, `×` not `x`, table rows match headers) and the cross-document pass: check § Mistakes core prevents in `experimental-designs.md` still lists nothing these edits make merely-discouraged rather than structurally impossible.
 
 - [ ] **Step 5: Mutate** — three.
 
@@ -2294,7 +2294,7 @@ def _holdout_constant_column(holdout_decl: Any) -> dict[str, str]:
     genuine, independent finding
 ```
 
-- [ ] **Step 4: Run, confirm it passes** — the Step 2 command, then `uv run pytest`, then `uv run ruff check . && uv run ruff format . && uv run mypy`. Then sweep by claim: `grep -rn "not read by" src/publishable/*.py` and `grep -rn "holdout.from" src/ docs/` — every present-tense claim that `holdout.from` is unreachable must be gone. Prove the sweep can fail by running it against `_holdout_constant_column`, which must return hits.
+- [ ] **Step 4: Run, confirm it passes** — the Step 2 command, then `uv run pytest`, then `uv run ruff check . && uv run ruff format --check . && uv run mypy`. Then sweep by claim: `grep -rn "not read by" src/publishable/*.py` and `grep -rn "holdout.from" src/ docs/` — every present-tense claim that `holdout.from` is unreachable must be gone. Prove the sweep can fail by running it against `_holdout_constant_column`, which must return hits.
 
 - [ ] **Step 5: Mutate** — two.
 
@@ -2616,7 +2616,7 @@ def holdout_for(
 
   Then fill in the two `"REPLACE"` literals in `test_an_unclustered_holdout_cuts_the_shuffled_roster_at_the_apportioned_sizes` by running the function and printing `plan.train` and `plan.test`. Paste what it actually returns.
 
-- [ ] **Step 4: Run, confirm it passes** — the Step 2 command, then `uv run pytest`, then `uv run ruff check . && uv run ruff format . && uv run mypy`.
+- [ ] **Step 4: Run, confirm it passes** — the Step 2 command, then `uv run pytest`, then `uv run ruff check . && uv run ruff format --check . && uv run mypy`.
 
 - [ ] **Step 5: Mutate** — three.
 
@@ -2900,7 +2900,7 @@ def test_a_thin_stratum_alone_does_not_raise():
     paths rather than one with a `clusters or singletons` default.
 ```
 
-- [ ] **Step 4: Run, confirm it passes** — the Step 2 command, then the task 10 tests (`uv run pytest tests/test_units.py -k holdout`), then `uv run pytest`, then `uv run ruff check . && uv run ruff format . && uv run mypy`.
+- [ ] **Step 4: Run, confirm it passes** — the Step 2 command, then the task 10 tests (`uv run pytest tests/test_units.py -k holdout`), then `uv run pytest`, then `uv run ruff check . && uv run ruff format --check . && uv run mypy`.
 
 - [ ] **Step 5: Mutate** — three.
 
@@ -3038,7 +3038,7 @@ def holdout_seed_for(block: Mapping[str, Any], digest: str, roster: UnitList) ->
     return int.from_bytes(hashlib.sha256(payload).digest()[:4], "big")
 ```
 
-- [ ] **Step 4: Run, confirm it passes** — `uv run pytest tests/test_units.py -k holdout_seed`, then `uv run pytest`, then `uv run ruff check . && uv run ruff format . && uv run mypy`.
+- [ ] **Step 4: Run, confirm it passes** — `uv run pytest tests/test_units.py -k holdout_seed`, then `uv run pytest`, then `uv run ruff check . && uv run ruff format --check . && uv run mypy`.
 
 - [ ] **Step 5: Mutate** — two.
 
@@ -3201,7 +3201,7 @@ def _resolved_holdout(
     holdout_plan = _resolved_holdout(units_decl, roster, digest, clusters)
 ```
 
-- [ ] **Step 4: Run, confirm it passes** — the Step 2 command, then `uv run pytest`, then `uv run ruff check . && uv run ruff format . && uv run mypy`. `holdout_plan` is unused at this commit and `ruff` will say so — that is correct and is what task 14 consumes; if the lint rule is fatal, add the consumption in task 14 and keep this commit's line as the assignment it is, marking it with the narrowest possible suppression and a comment naming what consumes it next.
+- [ ] **Step 4: Run, confirm it passes** — the Step 2 command, then `uv run pytest`, then `uv run ruff check . && uv run ruff format --check . && uv run mypy`. `holdout_plan` is unused at this commit and `ruff` will say so — that is correct and is what task 14 consumes; if the lint rule is fatal, add the consumption in task 14 and keep this commit's line as the assignment it is, marking it with the narrowest possible suppression and a comment naming what consumes it next.
 
 - [ ] **Step 5: Mutate** — two.
 
@@ -3382,7 +3382,7 @@ def test_a_holdout_beside_a_fold_is_a_core_defect_not_a_silent_choice(tmp_path):
 
   Leave `units=roster` exactly as it is — **task 15 owns that line**, and changing both here would make the denominator fix untestable as a change of its own.
 
-- [ ] **Step 4: Run, confirm it passes** — the Step 2 command, then `uv run pytest` (task 1's two pins must still pass — they are the baseline this task is most likely to move), then `uv run ruff check . && uv run ruff format . && uv run mypy`.
+- [ ] **Step 4: Run, confirm it passes** — the Step 2 command, then `uv run pytest` (task 1's two pins must still pass — they are the baseline this task is most likely to move), then `uv run ruff check . && uv run ruff format --check . && uv run mypy`.
 
 - [ ] **Step 5: Mutate** — three.
 
@@ -3569,7 +3569,7 @@ def _evaluation_roster(
             # described.
 ```
 
-- [ ] **Step 4: Run, confirm it passes** — the Step 2 command, then `uv run pytest` (task 1's pins are the ones to watch: nothing about a no-holdout run may move, and `_evaluation_roster` returning the same object is what guarantees it), then `uv run ruff check . && uv run ruff format . && uv run mypy`. Then sweep the six sites by claim: `grep -n "roster" src/publishable/cli.py | grep -n "_condition_\|_compute_\|units=roster"` — every remaining `roster` at those functions must be intentional, and `provenance` must still read `roster`.
+- [ ] **Step 4: Run, confirm it passes** — the Step 2 command, then `uv run pytest` (task 1's pins are the ones to watch: nothing about a no-holdout run may move, and `_evaluation_roster` returning the same object is what guarantees it), then `uv run ruff check . && uv run ruff format --check . && uv run mypy`. Then sweep the six sites by claim: `grep -n "roster" src/publishable/cli.py | grep -n "_condition_\|_compute_\|units=roster"` — every remaining `roster` at those functions must be intentional, and `provenance` must still read `roster`.
 
 - [ ] **Step 5: Mutate** — three.
 
@@ -3800,7 +3800,7 @@ def _check_resample(
       half is incoherent and whose test half happens not to show it.
 ```
 
-- [ ] **Step 4: Run, confirm it passes** — the Step 2 command, then `uv run pytest`, then `uv run ruff check . && uv run ruff format . && uv run mypy`.
+- [ ] **Step 4: Run, confirm it passes** — the Step 2 command, then `uv run pytest`, then `uv run ruff check . && uv run ruff format --check . && uv run mypy`.
 
 - [ ] **Step 5: Mutate** — two.
 
@@ -4006,7 +4006,7 @@ def build_allocation_document(
         # than a second draw that happens to agree.
 ```
 
-- [ ] **Step 4: Run, confirm it passes** — the Step 2 command, then `uv run pytest` (task 1's `allocation.json` absence pin is the one to watch — a run declaring neither must still write nothing), then `uv run ruff check . && uv run ruff format . && uv run mypy`. Then check the document against § `allocation.json`'s printed example key by key: `seed`, `arms`, `holdout`, `strata` — the example's insertion order is for a human reader and `json.dumps(..., indent=2)` preserves it, so confirm the written file's key order matches what task 2 printed, or fix one of the two.
+- [ ] **Step 4: Run, confirm it passes** — the Step 2 command, then `uv run pytest` (task 1's `allocation.json` absence pin is the one to watch — a run declaring neither must still write nothing), then `uv run ruff check . && uv run ruff format --check . && uv run mypy`. Then check the document against § `allocation.json`'s printed example key by key: `seed`, `arms`, `holdout`, `strata` — the example's insertion order is for a human reader and `json.dumps(..., indent=2)` preserves it, so confirm the written file's key order matches what task 2 printed, or fix one of the two.
 
 - [ ] **Step 5: Mutate** — three.
 
@@ -4179,7 +4179,7 @@ def test_a_holdout_repeat_kind_still_routes_to_the_built_field(write_config):
 
   (e) `grep -n "findings\[0\]" tests/` and re-run the whole suite: pin any finding-order flip where it surfaces rather than reordering checks to preserve an accident.
 
-- [ ] **Step 4: Run, confirm it passes** — the Step 2 command, then `uv run pytest` in full — **this is the run that matters**, because every Part A test changed. Then `uv run ruff check . && uv run ruff format . && uv run mypy`. Then the mechanical and cross-document passes on `docs/reference.md`.
+- [ ] **Step 4: Run, confirm it passes** — the Step 2 command, then `uv run pytest` in full — **this is the run that matters**, because every Part A test changed. Then `uv run ruff check . && uv run ruff format --check . && uv run mypy`. Then the mechanical and cross-document passes on `docs/reference.md`.
 
 - [ ] **Step 5: Mutate** — three, each aimed at a different wiring task, because this is the first commit at which any of them is reachable end to end.
 
@@ -4315,7 +4315,7 @@ grep -rn "optional single fixed train/test split" src/ tests/ docs/
 
   (e) `docs/reference.md`, § `E-CONFIG-KEY-UNKNOWN`'s row — replace the parenthetical "and `holdout` is not among them only because the whole block is refused today as `E-DATA-HOLDOUT-UNSUPPORTED`, which makes its gap latent rather than live" with a statement that `data.units.holdout` **is** closed one level in, at its five fixed-name keys, so a typo inside it is reported — leaving `data.units.from`'s mapping as the leaf whose gap the row is actually about.
 
-- [ ] **Step 4: Run, confirm it passes** — re-run all three sweeps: the first returns only the eight forward references, each of which you have read and confirmed is still true; the second returns nothing; the third returns the new line and its test pin. Then `uv run pytest`, then `uv run ruff check . && uv run ruff format . && uv run mypy`. Then the mechanical pass on `docs/reference.md`.
+- [ ] **Step 4: Run, confirm it passes** — re-run all three sweeps: the first returns only the eight forward references, each of which you have read and confirmed is still true; the second returns nothing; the third returns the new line and its test pin. Then `uv run pytest`, then `uv run ruff check . && uv run ruff format --check . && uv run mypy`. Then the mechanical pass on `docs/reference.md`.
 
 - [ ] **Step 5: Mutate** — the sweep is the thing that can silently be wrong, so mutate it. Temporarily reintroduce the sentence "`holdout` stays whole for now" into `src/publishable/envelope.py`'s module docstring and re-run the first sweep: it must **return that line**. Remove it in place and re-run: gone. Then do the same for the documents sweep by temporarily adding `NOT BUILT` beside a `holdout` mention in `docs/reference.md`.
 
@@ -4377,7 +4377,7 @@ date -u +%Y-%m-%d           # the date to write
 
 Not a task — the whole-branch review's own list, gathered here so it is not re-derived.
 
-- `uv run pytest`, `uv run ruff check .`, `uv run ruff format .`, `uv run mypy` all clean.
+- `uv run pytest`, `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy` all clean.
 - `grep -rn "E-DATA-HOLDOUT-UNSUPPORTED" src/ tests/ docs/` returns nothing.
 - Task 1's two pins still pass, unedited. A no-holdout run is byte-identical to `78bb794`.
 - Every one of the thirteen codes in Global Constraints has a § Errors row, a check that emits it, and a test that sees it emitted. `CLAUDE.md`: a row and a code are the same check seen from two ends, and **either end can be missing**.

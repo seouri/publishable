@@ -252,3 +252,14 @@ Task 4: fix round 1 (fresh agent — the implementer's id did not survive compac
   is also why the brief's `ruff format .` accident rewrote fenced Python inside README. Both the fix
   agent's and the reviewer's numbers were right; they measured trees differing by one untracked file.
 Task 4: complete. 1824 passed + 2 xfailed; ruff check and mypy clean. BASE for task 5 is fe7fd01.
+Ruling (plan-wide, made before task 5 dispatched): all 19 verification steps in
+  `plans/2026-08-15-fixed-holdout.md` said `uv run ruff format .` and none said `--check`. That is a
+  MUTATING command standing in a verification step, and it is what rewrote 67 files including fenced
+  Python inside README.md during task 4. Rewritten in place to `--check`, all 19, because a plan is a
+  live instruction set that re-fires on every remaining brief — not dated evidence, which is corrected by
+  appending. Cost if wrong: a plan diff that does not match the plan as originally written, recorded
+  here.
+  Noted for the slice review, not acted on: `CLAUDE.md`'s command table lists Format as
+  `uv run ruff format .`, and running it rewrites 67 files including prose documents, because ruff's
+  formatter reaches fenced Python inside markdown here. The documented command damages the four
+  documents. Out of scope for H3d; belongs to whoever next edits that table.
