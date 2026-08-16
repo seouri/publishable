@@ -620,3 +620,30 @@ Task 13: reviewed (opus). **BOTH VERDICTS PASS** — the third of the slice, and
   real and is now an item for the WHOLE-BRANCH REVIEW, where the repo's broken format baseline can be
   decided once for the slice instead of argued per task.
 Task 13: complete. 1927 passed + 2 xfailed; ruff check and mypy clean. BASE for task 14 is the commit below.
+Task 14: dispatched — the runner narrowing: `io.units` is the test partition, `io.units.train` the training
+  one, at EVERY scope. Pre-check added two mutations to the brief's three: one for the holdout-beside-fold
+  seam (which no config can reach, so a direct-call test is its only instrument and it needed a mutation
+  or the seam was only NAMED), and one the implementer was asked to name itself for the control.
+Task 14: implemented at 8b3602a. 1933 passed + 2 xfailed. The implementer's own mutation (e) found the
+  precise defect shape the design warns about: dropping `fold_members is None or` from the outer guard
+  routes into the fold branch and yields `train=UnitList([])` — an EMPTY LIST where the contract requires a
+  RAISE. Two mypy-driven conjuncts were added beyond the brief and both were flagged.
+Task 14: reviewed (opus). Spec compliance PASS; task quality FAIL with two Important and four Minor.
+  The reviewer's answers to the four checks are the record worth keeping. (1) No fold regression: the
+  holdout narrowing sits inside the FIRST branch, whose condition is scope-independent, while the
+  `run`/`condition` -> `None` hole is a sibling `elif` reachable only when `fold_members is not None`,
+  which the new assertion makes mutually exclusive with a holdout. (2) Both mypy conjuncts are benign and
+  neither can silently skip the narrowing — the concern I raised was that a guard added for a type checker
+  can convert a crash into a skipped narrowing, which is worse than the crash; it cannot here, because the
+  only state it admits leaves no roster to execute over and `io.units` raises. (3) The control DOES
+  distinguish raise-from-empty rather than merely asserting a failure. (4) My worry about mutation (d)
+  failing for the wrong reason was MISPLACED, and the reviewer said so plainly: `pytest.raises(
+  AssertionError)` passes only on an `AssertionError`, so a silent-precedence implementation fails the
+  test whether it returns normally or raises a `ContractError`. Recorded because a controller's worry is a
+  claim too, and this one did not survive checking.
+Task 14: fix round 1. Commit f194d29. Both Importants were shapes CLAUDE.md names by hand: an assertion
+  deletable with the whole suite green — the very guard that makes a holdout beside a cell structure a core
+  defect rather than a silent precedence — and a test whose NAME claimed four scopes while exercising one.
+  Both `pytest.raises` sites now carry `match=`, so each is pinned to its OWN assertion rather than to any
+  `AssertionError` the call might raise, which was the residue of my misplaced worry being half right.
+Task 14: complete. 1937 passed + 2 xfailed; ruff check and mypy clean. BASE for task 15 is the commit below.
