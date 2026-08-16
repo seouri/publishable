@@ -85,12 +85,15 @@ from publishable.templates.base import BaseTemplate
 from publishable.templates.registry import get_template
 from publishable.units import (
     ArmPlan,
+    HoldoutPlan,
     Unit,
     UnitList,
     arm_members,
     assignment_for,
     clusters_of,
     fold_basis,
+    holdout_for,
+    holdout_seed_for,
     partition_units,
     resolve_units,
     stratum_names,
@@ -447,6 +450,50 @@ def _resolved_group_axes(
             dict(axes),
         )
     return axes
+
+
+def _resolved_holdout(
+    units_decl: dict[str, Any] | None,
+    roster: "UnitList | None",
+    digest: str,
+    clusters: dict[str, str] | None,
+) -> "HoldoutPlan | None":
+    """`data.units.holdout`, realized **once per run** — or `None` when the
+    design declares none.
+
+    The one object handed to the runner's narrowing, to the denominators, and
+    to `build_allocation_document`. `build_allocation_document`'s own docstring
+    makes the argument for arms and it transfers verbatim: it used to be handed
+    the roster and re-derive the partition, and *"under a draw that second
+    derivation is a second draw, and 'provably identical' is not something two
+    calls can be made to promise — only not calling twice can."* A `method:
+    random` holdout is a draw, so the partition the run executes, the
+    denominators it reports against, and the membership `allocation.json`
+    claims are the same object rather than three answers that happen to agree.
+
+    `None` for four shapes, and they are one shape: an absent `data.units`, an
+    absent `holdout`, a `holdout: null`, and a `holdout: {}`. The last is
+    `_check_holdout`'s own gate — an empty block declares nothing and
+    partitions nothing — so the two readings of "is a holdout declared" agree
+    rather than one drawing an unmethodded split the other validated as absent.
+    `None` for a roster that did not resolve too: there is nothing to partition,
+    and `_check_units` has already reported why.
+
+    `clusters` is `cli.command_run`'s single cluster map, the same one the fold
+    partition and the arm draw are handed — not re-derived here, `clusters_of`
+    being the single authority. `group_axes` is deliberately not a parameter: a
+    holdout beside a group axis is refused at this commit as
+    `E-DATA-HOLDOUT-CELLS`, so there is no cell structure for a split to be
+    drawn inside of.
+    """
+    if roster is None:
+        return None
+    block = (units_decl or {}).get("holdout")
+    if not isinstance(block, dict) or not block:
+        return None
+    return holdout_for(
+        roster, block, seed=holdout_seed_for(block, digest, roster), clusters=clusters
+    )
 
 
 def _cond_roster(
@@ -1409,6 +1456,13 @@ def command_run(config_path: Path) -> int:
     # caller-disagreement bug to see, not a config to silently accept — rather
     # than as a silently unnarrowed run.
     group_axes = _resolved_group_axes(units_decl, sweep_block, roster, digest, clusters)
+    # Realized here, once, and before anything reads it — the runner's
+    # narrowing, the denominators and `allocation.json` are all handed this one
+    # object. See `_resolved_holdout` for why not calling twice is the only
+    # thing that can promise the run and the record agree.
+    holdout_plan = _resolved_holdout(  # noqa: F841 -- consumed starting task 14
+        units_decl, roster, digest, clusters
+    )
     arm_members_map = (
         arm_members(group_axes, conditions)
         if selector_paths(sweep_block) and roster is not None

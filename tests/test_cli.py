@@ -15,6 +15,7 @@ from publishable.cli import (
     _cond_roster,
     _condition_counts,
     _resolved_group_axes,
+    _resolved_holdout,
     _wide_swept_paths,
     main,
 )
@@ -7791,4 +7792,67 @@ def test_io_units_train_raises_without_a_fold_or_holdout(tmp_path, capsys):
     assert all(r["step"] == "step02_control" for r in completed)
     assert len(failed) == len(completed) == 5
 
+
+def _cli_roster(n, **attrs_by_index):
+    from publishable.units import Unit, UnitList
+
+    return UnitList(
+        [
+            Unit(key=f"u{i}", paths=(),
+                 attributes={k: v(i) for k, v in attrs_by_index.items()})
+            for i in range(n)
+        ]
+    )
+
+
+def test_the_holdout_is_realized_once_and_returns_none_when_undeclared():
+    """`None` for every shape that declares no split — the gate
+    `build_allocation_document`'s "both absent" rule and the runner's narrowing
+    both read. An empty block is undeclared, matching `_check_holdout`'s own
+    gate, so a `holdout: {}` partitions nothing rather than drawing an
+    unmethodded split."""
+    roster = _cli_roster(10)
+    for decl in (None, {}, {"holdout": None}, {"holdout": {}}):
+        assert _resolved_holdout(decl, roster, "sha256:aaa", None) is None
+    # No roster is also `None`: there is nothing to partition.
+    assert _resolved_holdout(
+        {"holdout": {"method": "random", "frac": 0.2}}, None, "sha256:aaa", None
+    ) is None
+
+
+def test_the_realized_holdout_uses_the_derived_seed_and_the_cluster_map():
+    """One realization composing `holdout_seed_for` and `holdout_for` — and it
+    must be the SAME answer either helper gives on its own, or the run and the
+    record would be two draws.
+
+    The clustered arm is asserted separately because `clusters` reaching
+    `holdout_for` is a threading that a composition ignoring the argument would
+    pass every unclustered assertion for."""
+    from publishable.units import holdout_for, holdout_seed_for
+
+    roster = _cli_roster(12, animal=lambda i: f"a{i // 2}")
+    decl = {"holdout": {"method": "random", "frac": 0.5}}
+    plan = _resolved_holdout(decl, roster, "sha256:aaa", None)
+    seed = holdout_seed_for(decl["holdout"], "sha256:aaa", roster)
+    assert plan == holdout_for(roster, decl["holdout"], seed=seed)
+    assert plan.seed == seed
+
+    clusters = {f"u{i}": f"a{i // 2}" for i in range(12)}
+    clustered = _resolved_holdout(decl, roster, "sha256:aaa", clusters)
+    assert clustered == holdout_for(roster, decl["holdout"], seed=seed, clusters=clusters)
+    # The positive companion for "the cluster map was threaded": the two
+    # realizations differ, so a composition dropping `clusters` is visible.
+    assert set(clustered.test) != set(plan.test)
+
+
+def test_a_pinned_holdout_seed_reaches_the_realization():
+    """A pin is the deliberate act, so it has to survive the composition —
+    a realization deriving the seed unconditionally would pass every other
+    assertion in this file."""
+    roster = _cli_roster(10)
+    plan = _resolved_holdout(
+        {"holdout": {"method": "random", "frac": 0.2, "seed": 4321}},
+        roster, "sha256:aaa", None,
+    )
+    assert plan.seed == 4321
 
