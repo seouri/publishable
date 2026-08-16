@@ -622,11 +622,12 @@ def validate_config(
     # `replication._fold_k`, which sees the declaration and a count and never a
     # roster.
     _check_fold_stratify_by(doc, units_decl, roster, usable_cluster, c)
-    # Sited here for `_check_fold_stratify_by`'s reason and beside it: both read
-    # the resolved roster and the usable cluster name, and both check a
-    # partition's declaration rather than a repeat's. `usable_cluster` is
-    # already narrowed to a non-empty string or `None` above, so this call needs
-    # no guard of its own.
+    # Sited beside `_check_fold_stratify_by` because tasks 6-7 will read
+    # `roster` and `usable_cluster` here too, and taking both parameters now
+    # means the signature does not change under this caller later — at this
+    # commit `_check_holdout` reads neither (see its own docstring).
+    # `usable_cluster` is already narrowed to a non-empty string or `None`
+    # above, so this call needs no guard of its own.
     _check_holdout(doc, units_decl, roster, usable_cluster, c)
     _check_replication(
         doc,
@@ -1391,7 +1392,8 @@ HOLDOUT_METHODS = ("random", "by_attribute")
 
 Two values and no more, and stated as a closed enum for `ASSIGN_METHODS`'s
 reason: a third named here and realized nowhere would validate clean and then
-reach `units.holdout_for`, which refuses what it cannot draw. Which of the two
+reach `units.holdout_for`, which refuses what it cannot draw — not yet built
+at this commit; task 10 of this slice is where it lands. Which of the two
 reads a partition and which draws one is what decides every other field's
 meaning, so a malformed `method` is reported before any of them is read.
 """
@@ -2678,13 +2680,17 @@ def _check_holdout(
       method.
     - `E-DATA-HOLDOUT-SEED` — the seed pin.
 
-    **None of the five reads `roster` or `cluster_by`**, and both are in the
-    signature anyway, `units.assignment_for`'s reason: the caller already holds
-    both, and a caller told the signature changed under it is what a stable one
-    avoids. A check added here must state which side of that line it is on —
-    this list is what the next reader counts against, so a sixth finding
-    belongs in it, and a roster-reading one carries its own
-    `roster is not None` guard rather than leaning on a caller.
+    **None of the five reads `roster`, `cluster_by`, or `doc`**, and all three
+    are in the signature anyway, `units.assignment_for`'s reason: the caller
+    already holds them, and a caller told the signature changed under it is
+    what a stable one avoids. `doc` is genuinely unread at this commit, but
+    not for want of a use — task 6's `E-DATA-HOLDOUT-FOLD` reads
+    `doc.get("replication")` from inside this same function, so the parameter
+    is dead only until the next task, not dead in general. A check added here
+    must state which side of that line it is on — this list is what the next
+    reader counts against, so a sixth finding belongs in it, and a
+    roster-reading one carries its own `roster is not None` guard rather than
+    leaning on a caller.
 
     **An empty or non-mapping declaration returns reporting nothing**,
     `_check_resample`'s own gate one block over. `holdout: {}` and
@@ -2693,12 +2699,18 @@ def _check_holdout(
     misspelled child inside a non-empty block is `check_envelope`'s
     `E-CONFIG-KEY-UNKNOWN` rather than this function's.
 
-    Every value read here is `isinstance`-guarded and quietly skipped when it
-    is not the leaf `envelope.LEAF_TYPES` types, the same division
-    `_check_report_by` keeps: a leaf type fault is `E-CONFIG-TYPE`, reported
-    already and deliberately non-fatal, and reporting a second, derived fault
-    on top of the one the reader has to fix anyway is what
-    `validate_config`'s own `usable_cluster` guard avoids.
+    Every value-shape fault reported here — the `frac` interval, the
+    `method`/`from` type absorptions — is `isinstance`-guarded and quietly
+    skipped when the field is not the leaf `envelope.LEAF_TYPES` type, the
+    same division `_check_report_by` keeps: a leaf type fault is
+    `E-CONFIG-TYPE`, reported already and deliberately non-fatal, and
+    reporting a second, derived fault on top of the one the reader has to fix
+    anyway is what `validate_config`'s own `usable_cluster` guard avoids. The
+    three `NO-DRAW` checks are the exception: they test presence, not shape
+    (`is not None`, no `isinstance`), so a wrong-typed `frac`/`stratify_by`
+    still under the wrong method earns `E-CONFIG-TYPE` alongside `NO-DRAW`
+    rather than being absorbed — presence under the wrong method is the fault
+    regardless of what the value would have been.
 
     **`frac`'s interval is open at both ends.** `0` holds nothing out and `1`
     holds everything out; each leaves one side of the split empty, and a split
@@ -2787,14 +2799,16 @@ def _check_holdout(
                 "data already holds rather than drawing one to a size — the realized "
                 "proportion is whatever the column says it is",
             )
-        if holdout.get("stratify_by") is not None:
+        declared_stratify_by = holdout.get("stratify_by")
+        if declared_stratify_by is not None and declared_stratify_by != []:
             c.error(
                 "E-DATA-HOLDOUT-NO-DRAW",
                 "data.units.holdout.stratify_by",
                 "means nothing under `method: by_attribute`: `stratify_by` names how a "
                 "draw is BALANCED, and a split read out of a column was not drawn. The "
                 "same absorption `E-DATA-ASSIGN-NO-DRAW` performs for the same field "
-                "one declaration over",
+                "one declaration over — including its `!= []` exemption, since an "
+                "empty `stratify_by: []` is what `init` writes and changes no behavior",
             )
 
     if "seed" in holdout:

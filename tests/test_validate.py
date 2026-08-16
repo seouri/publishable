@@ -456,14 +456,12 @@ def test_a_missing_or_empty_experiment_type_is_the_same_unknown_template(write_c
     earlier schema check intercepting either shape first."""
     assert codes(write_config({"experiment_type": ""})) == {"E-TEMPLATE-UNKNOWN"}
     assert codes(write_config({"experiment_type": _DELETE})) == {"E-TEMPLATE-UNKNOWN"}
-    assert "names ``," in messages_by_code(write_config({"experiment_type": ""}))[
-        "E-TEMPLATE-UNKNOWN"
-    ]
+    assert (
+        "names ``," in messages_by_code(write_config({"experiment_type": ""}))["E-TEMPLATE-UNKNOWN"]
+    )
 
 
-def test_the_unknown_message_lists_local_templates_among_the_known(
-    git_repo: Path, write_config
-):
+def test_the_unknown_message_lists_local_templates_among_the_known(git_repo: Path, write_config):
     """The known-list is `template_names()`, which must be called with the repo
     root or a local template never appears in it. Distinct names throughout:
     the local template `cohort_local` is never the one asked for, and the
@@ -661,9 +659,7 @@ def test_a_local_templates_declared_version_draws_no_warning(git_repo: Path, wri
     )
 
     local_found = codes(
-        write_config(
-            {"experiment_type": "my_assay", "parameters": {}, "template_version": "0.9.0"}
-        )
+        write_config({"experiment_type": "my_assay", "parameters": {}, "template_version": "0.9.0"})
     )
     assert "W-TEMPLATE-VERSION" not in local_found
 
@@ -671,9 +667,7 @@ def test_a_local_templates_declared_version_draws_no_warning(git_repo: Path, wri
     assert "W-TEMPLATE-VERSION" in control_found
 
 
-def test_a_generated_local_config_validates_with_no_version_finding(
-    git_repo: Path, tmp_path: Path
-):
+def test_a_generated_local_config_validates_with_no_version_finding(git_repo: Path, tmp_path: Path):
     """The other half of task 10: the test above hand-writes a differing
     `template_version` to make the skip provable, but the config
     `materialize_config` actually produces against a local template carries
@@ -1019,11 +1013,7 @@ def test_a_paired_path_must_be_a_real_parameter(write_config):
     c = Collector()
     validate_config(
         write_config(
-            {
-                "sweep": {
-                    "paired": [{"analysis.methdo": "pearson"}, {"analysis.methdo": "spearman"}]
-                }
-            }
+            {"sweep": {"paired": [{"analysis.methdo": "pearson"}, {"analysis.methdo": "spearman"}]}}
         ),
         c,
     )
@@ -1665,9 +1655,7 @@ def test_ablate_without_a_baseline_is_refused(write_config):
     … It therefore **requires** `sweep.baseline`, which `validate` checks".
     Unrefused it expands to n conditions each carrying only its own change and no
     baseline row at all — a design the specification says cannot exist."""
-    found = _error_codes(
-        write_config({"sweep": {"ablate": {"remove": ["analysis.drop_missing"]}}})
-    )
+    found = _error_codes(write_config({"sweep": {"ablate": {"remove": ["analysis.drop_missing"]}}}))
     # Exactly one error: `E-SWEEP-ABLATE-TARGET`'s baseline branch is gated on a
     # declared baseline precisely so this config reports its one fault once.
     assert found == {"E-SWEEP-ABLATE-BASELINE-MISSING"}
@@ -1816,12 +1804,8 @@ def test_ablate_times_groups_gives_one_baseline_and_its_ablations_per_level(writ
     }
     # § Expansion modes' next two claims, pinned beside the count so a change to
     # either doesn't only surface as a stray label somewhere in the six above.
-    derivation_baseline = next(
-        c for c in conditions if c.label == "cohort=derivation__baseline"
-    )
-    validation_baseline = next(
-        c for c in conditions if c.label == "cohort=validation__baseline"
-    )
+    derivation_baseline = next(c for c in conditions if c.label == "cohort=derivation__baseline")
+    validation_baseline = next(c for c in conditions if c.label == "cohort=validation__baseline")
     assert derivation_baseline.values["features.labs"] is True
     assert validation_baseline.values["features.labs"] is True
     assert derivation_baseline.index != validation_baseline.index  # one baseline PER LEVEL
@@ -2322,8 +2306,9 @@ def test_an_out_of_enum_allocation_is_refused_by_its_own_check(write_config):
     assert "within" in message and "between" in message
 
     assert "E-DATA-ALLOCATION-METHOD" not in _error_codes(
-        write_config({"data.units": {"from": "index.csv", "key": "patient_id",
-                                      "allocation": "within"}})
+        write_config(
+            {"data.units": {"from": "index.csv", "key": "patient_id", "allocation": "within"}}
+        )
     )
     assert "E-DATA-ALLOCATION-METHOD" not in _error_codes(
         write_config(_between({"arm": {"method": "by_attribute"}}, attributes=["arm"]))
@@ -2721,9 +2706,7 @@ def test_a_numeric_looking_csv_string_column_is_accepted_under_mean(write_config
     refused. **Consequence, not yet closed**: `units.apply_rule`'s `sum`/`median` on
     these same strings raises a bare `TypeError` at run time until task 3 adds the
     coercion this check does not perform — a cross-task gap, not a bug here."""
-    (tmp_path / "input" / "index.csv").write_text(
-        "patient_id,depth,read_id\np1,10,r1\np2,20,r2\n"
-    )
+    (tmp_path / "input" / "index.csv").write_text("patient_id,depth,read_id\np1,10,r1\np2,20,r2\n")
     path = write_config(
         {
             "data.units": {
@@ -2898,9 +2881,7 @@ def test_a_mixed_column_under_mean_is_a_finding_rather_than_an_escaping_type_err
 _MEASURED_CSV = (
     # Asymmetric on purpose: mean 30, median 20, sum 90, first 10 all differ, so a
     # rule swapped for another one cannot pass by coincidence.
-    "patient_id,depth,read_id\n"
-    "p1,10,r1\np1,20,r2\np1,60,r3\n"
-    "p2,30,r1\np2,40,r2\np2,80,r3\n"
+    "patient_id,depth,read_id\np1,10,r1\np1,20,r2\np1,60,r3\np2,30,r1\np2,40,r2\np2,80,r3\n"
 )
 
 
@@ -2954,9 +2935,7 @@ def test_the_documents_own_fence_shape_is_accepted(write_config, tmp_path):
     assert not [c for c in found if c.startswith("E-")], found
 
 
-def test_a_by_no_column_carries_is_refused_even_with_no_attributes_declared(
-    write_config, tmp_path
-):
+def test_a_by_no_column_carries_is_refused_even_with_no_attributes_declared(write_config, tmp_path):
     """The control for the fence test above, and the wrong-answer path itself in
     the shape the documents print: the same config with a typo'd `by`, which names
     no column of `index.csv`, must still be refused."""
@@ -3469,8 +3448,7 @@ def test_a_resample_stratum_must_be_a_declared_attribute(write_config, tmp_path:
                     "attributes": ["cohort"],
                 },
                 "statistics": {
-                    "resample": {"method": "bootstrap", "n": 2000,
-                                 "stratify_by": ["count_stratum"]}
+                    "resample": {"method": "bootstrap", "n": 2000, "stratify_by": ["count_stratum"]}
                 },
             }
         )
@@ -3557,8 +3535,7 @@ def test_a_resample_stratum_naming_a_real_but_undeclared_column_is_refused(
                     "attributes": ["cohort"],
                 },
                 "statistics": {
-                    "resample": {"method": "bootstrap", "n": 2000,
-                                 "stratify_by": ["extra_col"]}
+                    "resample": {"method": "bootstrap", "n": 2000, "stratify_by": ["extra_col"]}
                 },
             }
         )
@@ -3568,7 +3545,7 @@ def test_a_resample_stratum_naming_a_real_but_undeclared_column_is_refused(
 
 _VARYING_STRATUM = (
     "patient_id,animal_id,label\n"
-    "p0,a0,x\np1,a0,y\n"          # animal a0 carries two labels
+    "p0,a0,x\np1,a0,y\n"  # animal a0 carries two labels
     + "".join(f"p{i},a{i},x\n" for i in range(2, 14))
 )
 
@@ -3583,12 +3560,15 @@ def test_a_resample_stratum_varying_within_a_cluster_is_refused(write_config, tm
         write_config(
             {
                 "data.units": {
-                    "from": "index.csv", "key": "patient_id",
-                    "attributes": ["animal_id", "label"], "cluster_by": "animal_id",
+                    "from": "index.csv",
+                    "key": "patient_id",
+                    "attributes": ["animal_id", "label"],
+                    "cluster_by": "animal_id",
                 },
                 "limits": {"min_clusters": 2},
-                "statistics": {"resample": {"method": "bootstrap", "n": 2000,
-                                            "stratify_by": ["label"]}},
+                "statistics": {
+                    "resample": {"method": "bootstrap", "n": 2000, "stratify_by": ["label"]}
+                },
             }
         )
     )
@@ -3606,12 +3586,15 @@ def test_a_constant_stratum_within_clusters_is_accepted(write_config, tmp_path):
         write_config(
             {
                 "data.units": {
-                    "from": "index.csv", "key": "patient_id",
-                    "attributes": ["animal_id", "label"], "cluster_by": "animal_id",
+                    "from": "index.csv",
+                    "key": "patient_id",
+                    "attributes": ["animal_id", "label"],
+                    "cluster_by": "animal_id",
                 },
                 "limits": {"min_clusters": 2},
-                "statistics": {"resample": {"method": "bootstrap", "n": 2000,
-                                            "stratify_by": ["label"]}},
+                "statistics": {
+                    "resample": {"method": "bootstrap", "n": 2000, "stratify_by": ["label"]}
+                },
             }
         )
     )
@@ -3628,10 +3611,10 @@ def test_a_bare_string_resample_stratum_is_read_as_one_name(write_config, tmp_pa
     validate_config(
         write_config(
             {
-                "data.units": {"from": "index.csv", "key": "patient_id",
-                               "attributes": ["cohort"]},
-                "statistics": {"resample": {"method": "bootstrap", "n": 2000,
-                                            "stratify_by": "site"}},
+                "data.units": {"from": "index.csv", "key": "patient_id", "attributes": ["cohort"]},
+                "statistics": {
+                    "resample": {"method": "bootstrap", "n": 2000, "stratify_by": "site"}
+                },
             }
         ),
         c,
@@ -3655,8 +3638,7 @@ def test_an_empty_resample_stratify_by_is_not_refused(write_config):
         write_config(
             {
                 "data.units": {"from": "index.csv", "key": "patient_id"},
-                "statistics": {"resample": {"method": "bootstrap", "n": 50,
-                                            "stratify_by": []}},
+                "statistics": {"resample": {"method": "bootstrap", "n": 50, "stratify_by": []}},
             }
         )
     )
@@ -3685,10 +3667,8 @@ def test_a_wrong_typed_resample_stratify_by_is_a_type_fault_not_a_second_finding
     found = codes(
         write_config(
             {
-                "data.units": {"from": "index.csv", "key": "patient_id",
-                               "attributes": ["cohort"]},
-                "statistics": {"resample": {"method": "bootstrap", "n": 50,
-                                            "stratify_by": 5}},
+                "data.units": {"from": "index.csv", "key": "patient_id", "attributes": ["cohort"]},
+                "statistics": {"resample": {"method": "bootstrap", "n": 50, "stratify_by": 5}},
             }
         )
     )
@@ -3719,8 +3699,7 @@ def test_a_non_string_resample_stratum_entry_is_absorbed_not_left_silent(
                     "attributes": ["cohort"],
                 },
                 "statistics": {
-                    "resample": {"method": "bootstrap", "n": 2000,
-                                 "stratify_by": [3, "cohort"]}
+                    "resample": {"method": "bootstrap", "n": 2000, "stratify_by": [3, "cohort"]}
                 },
             }
         ),
@@ -3731,9 +3710,7 @@ def test_a_non_string_resample_stratum_entry_is_absorbed_not_left_silent(
     assert "3" in offenders[0].message
 
 
-_FOUR_ANIMALS = "patient_id,animal_id\n" + "".join(
-    f"p{i},a{i % 4}\n" for i in range(12)
-)
+_FOUR_ANIMALS = "patient_id,animal_id\n" + "".join(f"p{i},a{i % 4}\n" for i in range(12))
 
 
 def test_a_clustered_resample_below_min_clusters_warns(write_config, tmp_path):
@@ -3769,8 +3746,10 @@ def test_the_cluster_warning_counts_clusters_not_units(write_config, tmp_path):
     path = write_config(
         {
             "data.units": {
-                "from": "index.csv", "key": "patient_id",
-                "attributes": ["animal_id"], "cluster_by": "animal_id",
+                "from": "index.csv",
+                "key": "patient_id",
+                "attributes": ["animal_id"],
+                "cluster_by": "animal_id",
             },
             "limits": {"min_clusters": 10},
             "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
@@ -3791,8 +3770,10 @@ def test_the_cluster_warning_is_silent_above_the_floor(write_config, tmp_path):
         write_config(
             {
                 "data.units": {
-                    "from": "index.csv", "key": "patient_id",
-                    "attributes": ["animal_id"], "cluster_by": "animal_id",
+                    "from": "index.csv",
+                    "key": "patient_id",
+                    "attributes": ["animal_id"],
+                    "cluster_by": "animal_id",
                 },
                 "limits": {"min_clusters": 3},
                 "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
@@ -3810,8 +3791,10 @@ def test_no_cluster_warning_without_a_declared_resample(write_config, tmp_path):
         write_config(
             {
                 "data.units": {
-                    "from": "index.csv", "key": "patient_id",
-                    "attributes": ["animal_id"], "cluster_by": "animal_id",
+                    "from": "index.csv",
+                    "key": "patient_id",
+                    "attributes": ["animal_id"],
+                    "cluster_by": "animal_id",
                 },
                 "limits": {"min_clusters": 10},
             }
@@ -3883,8 +3866,10 @@ def test_a_wrong_typed_min_clusters_is_a_type_fault_not_a_warning(
         write_config(
             {
                 "data.units": {
-                    "from": "index.csv", "key": "patient_id",
-                    "attributes": ["animal_id"], "cluster_by": "animal_id",
+                    "from": "index.csv",
+                    "key": "patient_id",
+                    "attributes": ["animal_id"],
+                    "cluster_by": "animal_id",
                 },
                 "limits": {"min_clusters": bad_min_clusters},
                 "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
@@ -3907,8 +3892,10 @@ def test_the_cluster_warning_tracks_the_cluster_count_at_a_fixed_floor(write_con
         write_config(
             {
                 "data.units": {
-                    "from": "index.csv", "key": "patient_id",
-                    "attributes": ["animal_id"], "cluster_by": "animal_id",
+                    "from": "index.csv",
+                    "key": "patient_id",
+                    "attributes": ["animal_id"],
+                    "cluster_by": "animal_id",
                 },
                 "limits": {"min_clusters": 10},
                 "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
@@ -3923,8 +3910,10 @@ def test_the_cluster_warning_tracks_the_cluster_count_at_a_fixed_floor(write_con
         write_config(
             {
                 "data.units": {
-                    "from": "index.csv", "key": "patient_id",
-                    "attributes": ["animal_id"], "cluster_by": "animal_id",
+                    "from": "index.csv",
+                    "key": "patient_id",
+                    "attributes": ["animal_id"],
+                    "cluster_by": "animal_id",
                 },
                 "limits": {"min_clusters": 10},
                 "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
@@ -5946,9 +5935,7 @@ def test_a_declared_contrast_needs_no_baseline_even_under_a_grid_only_sweep(
             {
                 "sweep": {"grid": {"analysis.method": ["spearman", "kendall"]}},
                 "statistics": {
-                    "contrasts": [
-                        {"id": "x", "of": "method=spearman", "against": "method=kendall"}
-                    ]
+                    "contrasts": [{"id": "x", "of": "method=spearman", "against": "method=kendall"}]
                 },
                 "hypotheses": [
                     {
@@ -5978,9 +5965,7 @@ def test_a_contrast_alongside_condition_needs_no_baseline_either(write_config_tw
             {
                 "sweep": {"grid": {"analysis.method": ["spearman", "kendall"]}},
                 "statistics": {
-                    "contrasts": [
-                        {"id": "x", "of": "method=spearman", "against": "method=kendall"}
-                    ]
+                    "contrasts": [{"id": "x", "of": "method=spearman", "against": "method=kendall"}]
                 },
                 "hypotheses": [
                     {
@@ -6759,9 +6744,7 @@ def test_a_declared_contrast_over_a_sample_sweep_stays_legal(write_config):
     )
     doc = yaml.safe_load(doc_path.read_text())
     labels = [c.label for c in expand(doc)]
-    doc["statistics"] = {
-        "contrasts": [{"id": "hi_vs_lo", "of": labels[0], "against": labels[1]}]
-    }
+    doc["statistics"] = {"contrasts": [{"id": "hi_vs_lo", "of": labels[0], "against": labels[1]}]}
     doc_path.write_text(yaml.safe_dump(doc))
     assert not [c for c in codes(doc_path) if c.startswith("E-")]
 
@@ -6770,16 +6753,19 @@ def test_a_baseline_beside_a_grid_is_untouched_by_the_sample_refusal(write_confi
     """The neighbouring shape the refusal must leave alone: a baseline over an
     enumerated axis is the ordinary design, its comparisons are the family the
     document counts, and nothing here changed."""
-    assert codes(
-        write_config(
-            {
-                "sweep": {
-                    "baseline": {"analysis.method": "pearson"},
-                    "grid": {"analysis.method": ["spearman", "kendall"]},
+    assert (
+        codes(
+            write_config(
+                {
+                    "sweep": {
+                        "baseline": {"analysis.method": "pearson"},
+                        "grid": {"analysis.method": ["spearman", "kendall"]},
+                    }
                 }
-            }
+            )
         )
-    ) == set()
+        == set()
+    )
 
 
 # --- `data.units.weight_by` ------------------------------------------------
@@ -6838,9 +6824,7 @@ def test_an_empty_weight_by_is_a_finding_not_a_default(write_config):
     code-only assertion cannot tell the two branches apart. What an empty
     declaration needs said is that it is empty — telling a reader that `''` is
     not among the declared attributes sends them to the wrong list."""
-    path = write_config(
-        {"data.units": {"from": "index.csv", "key": "patient_id", "weight_by": ""}}
-    )
+    path = write_config({"data.units": {"from": "index.csv", "key": "patient_id", "weight_by": ""}})
     found = messages_by_code(path)
     assert "E-DATA-WEIGHT-UNKNOWN" in found
     assert "is empty" in found["E-DATA-WEIGHT-UNKNOWN"]
@@ -6850,9 +6834,7 @@ def test_a_non_string_weight_by_is_left_to_the_envelope(write_config):
     """`envelope.LEAF_TYPES` types `data.units.weight_by` a `str`, so a number is
     already `E-CONFIG-TYPE`. Reporting it a second time as "empty" would both
     duplicate the finding and describe `3` with a word that does not fit it."""
-    path = write_config(
-        {"data.units": {"from": "index.csv", "key": "patient_id", "weight_by": 3}}
-    )
+    path = write_config({"data.units": {"from": "index.csv", "key": "patient_id", "weight_by": 3}})
     found = codes(path)
     assert "E-CONFIG-TYPE" in found
     assert "E-DATA-WEIGHT-UNKNOWN" not in found
@@ -6953,9 +6935,7 @@ def test_the_value_check_is_skipped_without_a_roster(write_config):
     the name check above still reports. Called directly so the two halves are
     distinguishable rather than inferred from one `validate_config` run."""
     c = Collector()
-    _check_weight_by(
-        {"attributes": ["sampling_weight"], "weight_by": "sampling_weight"}, None, c
-    )
+    _check_weight_by({"attributes": ["sampling_weight"], "weight_by": "sampling_weight"}, None, c)
     assert not c.findings
 
 
@@ -7469,9 +7449,7 @@ def test_an_empty_cluster_by_beside_a_comparison_is_not_the_contrast_refusal(
     assert codes(path) == {"E-DATA-CLUSTER-UNKNOWN"}
 
 
-def test_a_parameter_named_stratify_by_does_not_silence_the_cluster_warning(
-    write_config, tmp_path
-):
+def test_a_parameter_named_stratify_by_does_not_silence_the_cluster_warning(write_config, tmp_path):
     """The exclusion walk covers the four blocks that describe the design, not
     `parameters` — a template may declare a parameter of any name, and one called
     `stratify_by` silencing a real cluster column would be invisible to a reader."""
@@ -7577,7 +7555,7 @@ def test_no_cluster_warning_for_a_column_that_is_a_second_key(write_config, tmp_
 
 
 def test_no_cluster_warning_for_a_column_with_a_blank_cell(write_config, tmp_path):
-    """"Every unit carries a value for it" reads an empty cell as no value. A
+    """ "Every unit carries a value for it" reads an empty cell as no value. A
     sparse column would otherwise satisfy the type and repetition clauses on its
     blanks alone."""
     _clustered_table(
@@ -7757,9 +7735,7 @@ def test_a_declared_contrast_across_arms_is_refused(write_config):
         {
             "sweep": {"groups": axis},
             "statistics": {
-                "contrasts": [
-                    {"id": "t_vs_c", "of": "arm=treatment", "against": "arm=control"}
-                ]
+                "contrasts": [{"id": "t_vs_c", "of": "arm=treatment", "against": "arm=control"}]
             },
         }
     )
@@ -7808,8 +7784,18 @@ _GROUPS_CLUSTER_ARMS = {
 # does not affect what it checks — kept in sync purely so the "same design"
 # claim stays true rather than because this test needs the discrimination.
 _GROUPS_CLUSTER_SITES = {
-    "c0": "A", "c1": "A", "c2": "B", "c3": "B", "c4": "C", "c5": "C", "c6": "C",
-    "t0": "A", "t1": "B", "t2": "B", "t3": "D", "t4": "D",
+    "c0": "A",
+    "c1": "A",
+    "c2": "B",
+    "c3": "B",
+    "c4": "C",
+    "c5": "C",
+    "c6": "C",
+    "t0": "A",
+    "t1": "B",
+    "t2": "B",
+    "t3": "D",
+    "t4": "D",
 }
 
 
@@ -7858,9 +7844,7 @@ def test_a_contrast_beside_groups_and_cluster_by_draws_both_refusals(write_confi
     (tmp_path / "input" / "index.csv").write_text(_groups_cluster_csv())
     doc = _groups_cluster_doc(
         statistics={
-            "contrasts": [
-                {"id": "t_vs_c", "of": "arm=treatment", "against": "arm=control"}
-            ]
+            "contrasts": [{"id": "t_vs_c", "of": "arm=treatment", "against": "arm=control"}]
         }
     )
     assert _error_codes(write_config(doc)) == {
@@ -8117,9 +8101,7 @@ def test_leave_one_cluster_out_is_costed_in_clusters(write_config, tmp_path):
     assert found == set()
 
 
-def test_leave_one_out_is_costed_in_units_when_nothing_is_clustered(
-    write_config, tmp_path
-):
+def test_leave_one_out_is_costed_in_units_when_nothing_is_clustered(write_config, tmp_path):
     """The control that must report: the same roster and the same `k: all` with no
     `cluster_by` is 15 executions against the same budget of 8, and warns. The two
     together are what pin `k: all` to the cluster count rather than to the roster
@@ -8195,9 +8177,7 @@ def test_the_repeat_floor_counts_a_clustered_k_all_in_clusters_too(write_config)
     assert "W-REPL-FLOOR" not in {f.code for f in fifteen_units.findings}
 
 
-def test_an_unreadable_cluster_leaves_k_all_unresolved_rather_than_raising(
-    write_config, tmp_path
-):
+def test_an_unreadable_cluster_leaves_k_all_unresolved_rather_than_raising(write_config, tmp_path):
     """`cluster_by` names a column the roster carries but `attributes` never
     declared, so resolution never read it and `units.fold_basis` raises
     `E-DATA-CLUSTER-UNKNOWN`. `validate` collects and never raises: the basis is
@@ -8885,9 +8865,7 @@ def test_a_group_axis_may_not_name_a_declared_parameter_even_if_unswept(write_co
     conditions = expand(doc)
     spearman = next(c for c in conditions if c.label == "method=spearman")
     assert spearman.selectors == {"analysis.method"}
-    resolved = resolve_condition_cfg(
-        {"parameters": {"analysis": {"method": "pearson"}}}, spearman
-    )
+    resolved = resolve_condition_cfg({"parameters": {"analysis": {"method": "pearson"}}}, spearman)
     assert resolved.parameters.analysis.method == "pearson"  # not "spearman"
 
     assert _error_codes(write_config(doc)) == {
@@ -8911,9 +8889,7 @@ def test_a_group_level_must_render_into_a_condition_label(write_config):
     alone — none of these three configs declares `allocation`, which defaults
     to `within`, beside the declared `arm` axis."""
     assert _error_codes(
-        write_config(
-            {"sweep": {"groups": [{"by": "arm", "levels": ["control", "treat__ment"]}]}}
-        )
+        write_config({"sweep": {"groups": [{"by": "arm", "levels": ["control", "treat__ment"]}]}})
     ) == {
         "E-SWEEP-VALUE-UNNAMEABLE",
         "E-DATA-ALLOCATION-WITHIN-ARMS",
@@ -8927,9 +8903,7 @@ def test_a_group_level_must_render_into_a_condition_label(write_config):
     }
 
     assert _error_codes(
-        write_config(
-            {"sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}}
-        )
+        write_config({"sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}})
     ) == {"E-DATA-ALLOCATION-WITHIN-ARMS"}
 
 
@@ -9059,16 +9033,15 @@ def test_between_allocation_with_no_group_axis_has_no_arms(write_config):
     The control must report — it carries the one live refusal — so an exact-set
     assertion tells "the arms are declared" from "the check is dead"."""
     assert _error_codes(
-        write_config({"data.units": {"from": "index.csv", "key": "patient_id",
-                                     "allocation": "between"}})
+        write_config(
+            {"data.units": {"from": "index.csv", "key": "patient_id", "allocation": "between"}}
+        )
     ) == {"E-DATA-ALLOCATION-NO-ARMS"}
 
     # `_between` declares no `data.units.attributes` at all, so `arm` — defaulted
     # from the axis name — resolves to no unit attribute either: a live code,
     # `E-DATA-ASSIGN-UNKNOWN`.
-    assert _error_codes(
-        write_config(_between({"arm": {"method": "by_attribute"}}))
-    ) == {
+    assert _error_codes(write_config(_between({"arm": {"method": "by_attribute"}}))) == {
         "E-DATA-ASSIGN-UNKNOWN",
     }
 
@@ -9097,8 +9070,14 @@ def test_each_unassigned_axis_is_reported_on_its_own():
     give two."""
     c = Collector()
     _check_assign(
-        {"sweep": {"groups": [{"by": "sex", "levels": ["f", "m"]},
-                              {"by": "arm", "levels": ["control", "treatment"]}]}},
+        {
+            "sweep": {
+                "groups": [
+                    {"by": "sex", "levels": ["f", "m"]},
+                    {"by": "arm", "levels": ["control", "treatment"]},
+                ]
+            }
+        },
         {"allocation": "between", "assign": {"sex": {"method": "by_attribute"}}},
         None,
         c,
@@ -9471,9 +9450,7 @@ def test_a_partial_ratio_is_refused(write_config):
 def test_a_ratio_naming_an_undeclared_level_is_refused(write_config):
     """`ratio: {control: 1, f: 2}` against levels [control, treatment]."""
     found = _error_codes(
-        write_config(
-            _between({"arm": {"method": "blocked", "ratio": {"control": 1, "f": 2}}})
-        )
+        write_config(_between({"arm": {"method": "blocked", "ratio": {"control": 1, "f": 2}}}))
     )
     assert found == {"E-DATA-ASSIGN-RATIO"}
 
@@ -9646,9 +9623,7 @@ def test_a_well_formed_ratio_reports_nothing_of_its_own(write_config, tmp_path):
         {"sweep": {"groups": _ARM_AXIS}},
         {
             "allocation": "between",
-            "assign": {
-                "arm": {"method": "random", "ratio": {"control": 1, "treatment": 2}}
-            },
+            "assign": {"arm": {"method": "random", "ratio": {"control": 1, "treatment": 2}}},
         },
         None,
         c,
@@ -9710,9 +9685,7 @@ def test_a_full_ratio_under_a_drawn_method_is_accepted():
         {"sweep": {"groups": _ARM_AXIS}},
         {
             "allocation": "between",
-            "assign": {
-                "arm": {"method": "random", "ratio": {"control": 1, "treatment": 1}}
-            },
+            "assign": {"arm": {"method": "random", "ratio": {"control": 1, "treatment": 1}}},
         },
         None,
         c,
@@ -9720,9 +9693,7 @@ def test_a_full_ratio_under_a_drawn_method_is_accepted():
     assert [f.code for f in c.findings] == []
 
 
-def test_an_explicit_block_size_must_be_a_whole_multiple_of_the_ratio_sum(
-    write_config, tmp_path
-):
+def test_an_explicit_block_size_must_be_a_whole_multiple_of_the_ratio_sum(write_config, tmp_path):
     """*Block size fills the arms*: `block_size: 3` with `ratio: {control: 1,
     treatment: 1}` (sum 2) "can't hold each arm's share" — 3 does not divide
     into two equal-share slices. **The control is 4**, which can (twice the
@@ -10093,9 +10064,9 @@ def test_a_wrongly_typed_assign_seed_is_refused(write_config, tmp_path, seed):
     be an exact set: a `seed` fault must not suppress *Every arm draws units*
     by accident, nor be reported alongside a second, derived finding."""
     _wide_roster(tmp_path)
-    assert _error_codes(
-        write_config(_between({"arm": {"method": "random", "seed": seed}}))
-    ) == {"E-DATA-ASSIGN-SEED"}
+    assert _error_codes(write_config(_between({"arm": {"method": "random", "seed": seed}}))) == {
+        "E-DATA-ASSIGN-SEED"
+    }
 
     c = Collector()
     _check_assign(
@@ -10114,19 +10085,22 @@ def test_a_wrongly_typed_assign_seed_is_refused_under_blocked_too(write_config, 
     """The other drawn method reaches the same row — the check sits in the
     branch both take, not in `random`'s own."""
     _wide_roster(tmp_path)
-    assert _error_codes(
-        write_config(_between({"arm": {"method": "blocked", "seed": "1234"}}))
-    ) == {"E-DATA-ASSIGN-SEED"}
+    assert _error_codes(write_config(_between({"arm": {"method": "blocked", "seed": "1234"}}))) == {
+        "E-DATA-ASSIGN-SEED"
+    }
 
 
-@pytest.mark.parametrize("block", [
-    {"method": "random"},
-    {"method": "random", "seed": "auto"},
-    {"method": "random", "seed": None},
-    {"method": "random", "seed": 11},
-    {"method": "random", "seed": 0},
-    {"method": "blocked", "seed": 11},
-])
+@pytest.mark.parametrize(
+    "block",
+    [
+        {"method": "random"},
+        {"method": "random", "seed": "auto"},
+        {"method": "random", "seed": None},
+        {"method": "random", "seed": 11},
+        {"method": "random", "seed": 0},
+        {"method": "blocked", "seed": 11},
+    ],
+)
 def test_an_auto_or_pinned_assign_seed_reports_nothing(write_config, tmp_path, block):
     """The can-fail control. An absent key, an explicit `auto`, an explicit
     `null` (absent, the module's convention), and a pinned integer — `0`
@@ -10190,9 +10164,7 @@ def test_an_unknown_stratum_attribute_is_refused(write_config, stratify_by):
     nothing else in this build would report either — and a bare `site` read as a
     sequence of characters instead of one name would report four findings, not
     one, which the exact count below catches."""
-    path = write_config(
-        _between({"arm": {"method": "random", "stratify_by": stratify_by}})
-    )
+    path = write_config(_between({"arm": {"method": "random", "stratify_by": stratify_by}}))
     c = Collector()
     validate_config(path, c)
     strata = [f for f in c.findings if f.code == "E-DATA-ASSIGN-STRATIFY-UNKNOWN"]
@@ -10321,9 +10293,7 @@ def test_stratifying_on_an_earlier_axis_is_not_refused(write_config):
     assert "E-DATA-ASSIGN-STRATIFY-UNKNOWN" not in found
 
 
-def test_a_block_whose_axis_is_not_declared_is_not_ordered_against_anything(
-    write_config, tmp_path
-):
+def test_a_block_whose_axis_is_not_declared_is_not_ordered_against_anything(write_config, tmp_path):
     """**The `axis not in axes` guard, asserted rather than merely documented.**
     `assign.ghost` names an axis `sweep.groups` does not declare, so nothing
     draws it and it has no position for a stratum to be forward of. The row is
@@ -10386,9 +10356,7 @@ def test_an_empty_stratify_by_under_a_draw_is_not_refused(write_config, tmp_path
     is present" rather than "a name is declared" would report every generated
     config that also declares a drawn method."""
     _wide_roster(tmp_path)
-    found = _error_codes(
-        write_config(_between({"arm": {"method": "random", "stratify_by": []}}))
-    )
+    found = _error_codes(write_config(_between({"arm": {"method": "random", "stratify_by": []}})))
     assert found == set()
 
 
@@ -10412,9 +10380,7 @@ def test_a_ratio_that_starves_an_arm_over_this_roster_is_refused():
     are here, so a check that refused the ratio outright fails the second."""
     decl = {
         "allocation": "between",
-        "assign": {
-            "arm": {"method": "random", "ratio": {"control": 1, "treatment": 1000}}
-        },
+        "assign": {"arm": {"method": "random", "ratio": {"control": 1, "treatment": 1000}}},
     }
     c = Collector()
     _check_assign({"sweep": {"groups": _ARM_AXIS}}, decl, _plain_roster(10), c)
@@ -10578,10 +10544,7 @@ def test_the_draw_check_does_not_reach_a_stratified_or_clustered_block():
         },
     }
     roster = UnitList(
-        [
-            Unit(key=f"u{i}", paths=(), attributes={"site": f"S{i % 2}"})
-            for i in range(10)
-        ]
+        [Unit(key=f"u{i}", paths=(), attributes={"site": f"S{i % 2}"}) for i in range(10)]
     )
     c = Collector()
     _check_assign({"sweep": {"groups": _ARM_AXIS}}, stratified, roster, c)
@@ -10606,9 +10569,7 @@ def test_the_draw_check_does_not_reach_a_stratified_or_clustered_block():
         "attributes": ["site"],
         "allocation": "between",
         "cluster_by": "site",
-        "assign": {
-            "arm": {"method": "random", "ratio": {"control": 1, "treatment": 1000}}
-        },
+        "assign": {"arm": {"method": "random", "ratio": {"control": 1, "treatment": 1000}}},
     }
     c = Collector()
     _check_assign({"sweep": {"groups": _ARM_AXIS}}, clustered, roster, c)
@@ -10653,9 +10614,7 @@ def test_a_stratum_that_varies_within_a_cluster_is_refused():
         "assign": {"arm": {"method": "random", "stratify_by": ["label"]}},
     }
     c = Collector()
-    _check_assign(
-        {"sweep": {"groups": _ARM_AXIS}}, decl, _clustered_stratum_roster(True), c
-    )
+    _check_assign({"sweep": {"groups": _ARM_AXIS}}, decl, _clustered_stratum_roster(True), c)
     varies = [f for f in c.findings if f.code == "E-DATA-ASSIGN-STRATIFY-VARIES"]
     assert len(varies) == 1
     assert varies[0].path == "data.units.assign.arm.stratify_by"
@@ -10668,9 +10627,7 @@ def test_a_stratum_that_varies_within_a_cluster_is_refused():
     # earns nothing. A check that fired whenever a `stratify_by` and a
     # `cluster_by` were declared together passes the half above and fails here.
     c = Collector()
-    _check_assign(
-        {"sweep": {"groups": _ARM_AXIS}}, decl, _clustered_stratum_roster(False), c
-    )
+    _check_assign({"sweep": {"groups": _ARM_AXIS}}, decl, _clustered_stratum_roster(False), c)
     assert "E-DATA-ASSIGN-STRATIFY-VARIES" not in {f.code for f in c.findings}
 
 
@@ -10683,10 +10640,9 @@ def _straddling_cluster_roster(varying: bool) -> UnitList:
     resolves as a declared attribute on `validate`'s side and reaches the
     attribute half of the constancy check, so only a `from` that differs from
     the axis name reaches the axis half at all."""
+
     def unit(key: str, family: str, sex: str) -> Unit:
-        return Unit(
-            key=key, paths=(), attributes={"family_id": family, "patient_sex": sex}
-        )
+        return Unit(key=key, paths=(), attributes={"family_id": family, "patient_sex": sex})
 
     return UnitList(
         [
@@ -10844,10 +10800,7 @@ def test_an_assign_stratum_is_excluded_from_the_undeclared_cluster_warning():
     the same roster with the `stratify_by` removed, which must warn — otherwise
     this test would pass against a warning that had simply stopped firing."""
     roster = UnitList(
-        [
-            Unit(key=f"u{i}", paths=(), attributes={"site": "ABC"[i % 3]})
-            for i in range(6)
-        ]
+        [Unit(key=f"u{i}", paths=(), attributes={"site": "ABC"[i % 3]}) for i in range(6)]
     )
     doc = {
         "data": {
@@ -10954,9 +10907,7 @@ def test_an_assignment_declaring_no_method_is_refused(write_config):
     """§ Validation's example exactly: a block declaring `stratify_by` and no
     `method`. Which of the block's other fields are read follows from the
     discriminator, so a block without one describes no assignment."""
-    assert _error_codes(
-        write_config(_between({"arm": {"stratify_by": ["site"]}}))
-    ) == {
+    assert _error_codes(write_config(_between({"arm": {"stratify_by": ["site"]}}))) == {
         "E-DATA-ASSIGN-METHOD",
     }
 
@@ -10974,9 +10925,7 @@ def test_an_assignment_declaring_no_method_is_refused(write_config):
 def test_an_assignment_method_outside_the_enum_is_refused(write_config):
     """§ Validation's other example, `by_column`. A well-formed name that is not
     one of the three is the branch a presence check alone would let through."""
-    assert _error_codes(
-        write_config(_between({"arm": {"method": "by_column"}}))
-    ) == {
+    assert _error_codes(write_config(_between({"arm": {"method": "by_column"}}))) == {
         "E-DATA-ASSIGN-METHOD",
     }
 
@@ -11038,9 +10987,9 @@ def test_each_assign_axis_key_is_closed_key_by_key(write_config, key, value, typ
 @pytest.mark.parametrize(
     "assign",
     [
-        {"arm": "random"},                    # the block itself is not a block
-        {"arm": {"method": 3}},               # a non-string discriminator
-        {"arm": {"method": ["random"]}},      # a structural one
+        {"arm": "random"},  # the block itself is not a block
+        {"arm": {"method": 3}},  # a non-string discriminator
+        {"arm": {"method": ["random"]}},  # a structural one
     ],
 )
 def test_a_malformed_assignment_block_reports_rather_than_crashes(assign):
@@ -11089,8 +11038,7 @@ def _resample_family_config(write_config, *, n, correction, levels):
                 "baseline": {"analysis.min_samples": 30},
                 "grid": {"analysis.min_samples": levels},
             },
-            "statistics": {"correction": correction,
-                           "resample": {"method": "bootstrap", "n": n}},
+            "statistics": {"correction": correction, "resample": {"method": "bootstrap", "n": n}},
         }
     )
 
@@ -11107,9 +11055,7 @@ def test_a_resample_n_too_small_for_the_comparison_family_warns(write_config):
     inspects the body of user Python. So this is a LOWER bound — always true when
     it fires."""
     found = codes(
-        _resample_family_config(
-            write_config, n=200, correction="holm", levels=[31, 32, 33]
-        )
+        _resample_family_config(write_config, n=200, correction="holm", levels=[31, 32, 33])
     )
     assert "W-STATS-RESAMPLE-FAMILY" in found
     assert "E-STATS-RESAMPLE-N" not in found  # 200 is above the 80 floor
@@ -11121,14 +11067,10 @@ def test_the_family_bound_is_silent_when_n_clears_it(write_config):
     comparisons with `n: 240` — exactly `min_honest_draws(1 - 0.05/3)` — are
     silent. 239 and 240 is the boundary pair."""
     assert "W-STATS-RESAMPLE-FAMILY" in codes(
-        _resample_family_config(
-            write_config, n=239, correction="holm", levels=[31, 32, 33]
-        )
+        _resample_family_config(write_config, n=239, correction="holm", levels=[31, 32, 33])
     )
     assert "W-STATS-RESAMPLE-FAMILY" not in codes(
-        _resample_family_config(
-            write_config, n=240, correction="holm", levels=[31, 32, 33]
-        )
+        _resample_family_config(write_config, n=240, correction="holm", levels=[31, 32, 33])
     )
 
 
@@ -11140,9 +11082,7 @@ def test_the_family_bound_scales_with_the_comparison_count(write_config):
         _resample_family_config(write_config, n=100, correction="holm", levels=[31])
     )
     assert "W-STATS-RESAMPLE-FAMILY" in codes(
-        _resample_family_config(
-            write_config, n=100, correction="holm", levels=[31, 32, 33]
-        )
+        _resample_family_config(write_config, n=100, correction="holm", levels=[31, 32, 33])
     )
 
 
@@ -11153,7 +11093,9 @@ def test_the_family_bound_is_not_reported_where_no_level_exists(write_config, co
     whatever `n` is and this warning would be a false positive."""
     assert "W-STATS-RESAMPLE-FAMILY" not in codes(
         _resample_family_config(
-            write_config, n=100, correction=correction,
+            write_config,
+            n=100,
+            correction=correction,
             levels=[31, 32, 33],
         )
     )
@@ -11233,9 +11175,7 @@ def test_a_resample_with_no_unit_roster_is_refused(write_config):
     null_test". With the wholesale refusal retired (H4a task 12), this shape
     would otherwise validate clean and do nothing — the exact failure
     `_check_unimplemented`'s own `E-SWEEP-SAMPLE-BASELINE` comment records."""
-    found = codes(
-        write_config({"statistics": {"resample": {"method": "bootstrap", "n": 2000}}})
-    )
+    found = codes(write_config({"statistics": {"resample": {"method": "bootstrap", "n": 2000}}}))
     assert "E-STATS-RESAMPLE-UNITS" in found
     # Positive companion in the same test: the identical declaration WITH a real
     # roster validates completely clean now that the wholesale refusal has
@@ -11265,9 +11205,7 @@ def test_a_missing_roster_does_not_swallow_the_roster_independent_resample_fault
     roster-independent check unsafe to run. A version that `return`s after the units finding would
     report only `E-STATS-RESAMPLE-UNITS` here and silently drop the other two, so the reader who
     fixes the declaration then meets two more faults nobody told them about."""
-    found = codes(
-        write_config({"statistics": {"resample": {"method": "bootstap", "n": 50}}})
-    )
+    found = codes(write_config({"statistics": {"resample": {"method": "bootstap", "n": 50}}}))
     assert "E-STATS-RESAMPLE-UNITS" in found
     assert "E-STATS-RESAMPLE-METHOD" in found
     assert "E-STATS-RESAMPLE-N" in found
@@ -11335,10 +11273,12 @@ def _holdout(block, **extra) -> dict:
     `base_config` has no `data.units` key at all, so a dotted
     `{"data.units.holdout": ...}` override raises `KeyError` walking `units` —
     the whole block is what every other `data.units` test in this file writes.
-    """
-    units = {"from": "index.csv", "key": "patient_id", **extra}
-    if block is not None:
-        units["holdout"] = block
+
+    `block=None` writes an explicit `holdout: null` (via `yaml.safe_dump`, since
+    `write_config` assigns the value straight into the doc) rather than omitting
+    the key — the two are different configs, and `_check_holdout`'s empty/null
+    gate is only exercised by the former."""
+    units = {"from": "index.csv", "key": "patient_id", **extra, "holdout": block}
     return {"data.units": units}
 
 
@@ -11351,50 +11291,95 @@ def test_an_empty_or_null_holdout_validates_clean(write_config):
     both of these.
 
     The positive companion is the third assertion: a real declaration in the
-    same position DOES report, so this cannot pass by the check being dead."""
-    assert "E-DATA-HOLDOUT-METHOD" not in codes(write_config(_holdout({})))
-    assert "E-DATA-HOLDOUT-METHOD" not in codes(write_config(_holdout(None)))
+    same position DOES report, so this cannot pass by the check being dead.
+
+    Pinned against the written file's raw text, not just the codes: a prior
+    version of this helper omitted the `holdout` key entirely for `None`
+    rather than writing `holdout: null`, which validates clean for a
+    different reason (the key is simply absent) and would have let this test
+    pass without ever exercising the `null` case."""
+    empty_path = write_config(_holdout({}))
+    assert "holdout: {}" in empty_path.read_text()
+    assert "E-DATA-HOLDOUT-METHOD" not in codes(empty_path)
+
+    null_path = write_config(_holdout(None))
+    assert "holdout: null" in null_path.read_text()
+    assert "E-DATA-HOLDOUT-METHOD" not in codes(null_path)
+
     assert "E-DATA-HOLDOUT-METHOD" in codes(write_config(_holdout({"frac": 0.2})))
 
 
 @pytest.mark.parametrize(
-    "block,expected",
+    "block,expected,fragment",
     [
         # `method` — absent, wrong type, out of enum. An allowlist: a method
         # named here and realized nowhere would validate clean and then
-        # partition on something core never drew.
-        ({"frac": 0.2}, "E-DATA-HOLDOUT-METHOD"),
-        ({"method": ["random"], "frac": 0.2}, "E-DATA-HOLDOUT-METHOD"),
-        ({"method": "stratified", "frac": 0.2}, "E-DATA-HOLDOUT-METHOD"),
+        # partition on something core never drew. All three share
+        # `E-DATA-HOLDOUT-METHOD`, so the fragment is what tells the absent
+        # branch from the not-a-string branch from the out-of-enum branch —
+        # disabling any one of the three, or swapping its message for
+        # another's, must fail exactly this row.
+        ({"frac": 0.2}, "E-DATA-HOLDOUT-METHOD", "is not declared"),
+        ({"method": ["random"], "frac": 0.2}, "E-DATA-HOLDOUT-METHOD", "which names no method"),
+        ({"method": "stratified", "frac": 0.2}, "E-DATA-HOLDOUT-METHOD", "realized nowhere"),
         # `frac` under `random` — absent, and each end of the OPEN interval.
-        ({"method": "random"}, "E-DATA-HOLDOUT-FRAC"),
-        ({"method": "random", "frac": 0}, "E-DATA-HOLDOUT-FRAC"),
-        ({"method": "random", "frac": 1}, "E-DATA-HOLDOUT-FRAC"),
-        ({"method": "random", "frac": -0.5}, "E-DATA-HOLDOUT-FRAC"),
-        ({"method": "random", "frac": 1.5}, "E-DATA-HOLDOUT-FRAC"),
+        ({"method": "random"}, "E-DATA-HOLDOUT-FRAC", "draws the test side by fraction"),
+        ({"method": "random", "frac": 0}, "E-DATA-HOLDOUT-FRAC", "strictly between 0 and 1"),
+        ({"method": "random", "frac": 1}, "E-DATA-HOLDOUT-FRAC", "strictly between 0 and 1"),
+        ({"method": "random", "frac": -0.5}, "E-DATA-HOLDOUT-FRAC", "strictly between 0 and 1"),
+        ({"method": "random", "frac": 1.5}, "E-DATA-HOLDOUT-FRAC", "strictly between 0 and 1"),
         # `from` under `by_attribute` — absent and empty. There is no axis name
         # to default to, unlike `assign.<axis>.from`.
-        ({"method": "by_attribute"}, "E-DATA-HOLDOUT-FROM"),
-        ({"method": "by_attribute", "from": ""}, "E-DATA-HOLDOUT-FROM"),
-        # A field meaning nothing under the declared method, both directions.
-        ({"method": "by_attribute", "from": "split", "frac": 0.2},
-         "E-DATA-HOLDOUT-NO-DRAW"),
-        ({"method": "random", "frac": 0.2, "from": "split"},
-         "E-DATA-HOLDOUT-NO-DRAW"),
-        ({"method": "by_attribute", "from": "split", "stratify_by": ["label"]},
-         "E-DATA-HOLDOUT-NO-DRAW"),
+        ({"method": "by_attribute"}, "E-DATA-HOLDOUT-FROM", "no axis name to default to"),
+        (
+            {"method": "by_attribute", "from": ""},
+            "E-DATA-HOLDOUT-FROM",
+            "names no column to read the split out of",
+        ),
+        # A field meaning nothing under the declared method, three sites
+        # sharing `E-DATA-HOLDOUT-NO-DRAW` — the fragment tells `frac` under
+        # `by_attribute` from `from` under `random` from `stratify_by` under
+        # `by_attribute`.
+        (
+            {"method": "by_attribute", "from": "split", "frac": 0.2},
+            "E-DATA-HOLDOUT-NO-DRAW",
+            "reads a split the data already holds",
+        ),
+        (
+            {"method": "random", "frac": 0.2, "from": "split"},
+            "E-DATA-HOLDOUT-NO-DRAW",
+            "draws the split rather than reading",
+        ),
+        (
+            {"method": "by_attribute", "from": "split", "stratify_by": ["label"]},
+            "E-DATA-HOLDOUT-NO-DRAW",
+            "names how a draw is BALANCED",
+        ),
         # The seed pin — present and neither `auto` nor a plain int.
-        ({"method": "random", "frac": 0.2, "seed": "1234"}, "E-DATA-HOLDOUT-SEED"),
-        ({"method": "random", "frac": 0.2, "seed": 1.5}, "E-DATA-HOLDOUT-SEED"),
+        (
+            {"method": "random", "frac": 0.2, "seed": "1234"},
+            "E-DATA-HOLDOUT-SEED",
+            "a seed is `auto` or a plain integer",
+        ),
+        (
+            {"method": "random", "frac": 0.2, "seed": 1.5},
+            "E-DATA-HOLDOUT-SEED",
+            "a seed is `auto` or a plain integer",
+        ),
     ],
 )
-def test_a_malformed_holdout_declaration_is_refused(write_config, block, expected):
-    found = codes(write_config(_holdout(block)))
+def test_a_malformed_holdout_declaration_is_refused(write_config, block, expected, fragment):
+    path = write_config(_holdout(block))
+    found = codes(path)
     assert expected in found
     # Alongside, never instead of: `E-DATA-HOLDOUT-UNSUPPORTED` is still live
     # at this commit and task 18 retires it. Membership on its own line makes
     # that retirement a one-line deletion rather than a rewrite of this test.
     assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
+    # Pins the message to the specific branch this row exercises — two
+    # branches can share `expected`'s code, and without this the wrong one
+    # could fire silently.
+    assert fragment in messages_by_code(path)[expected]
 
 
 @pytest.mark.parametrize(
@@ -11406,6 +11391,7 @@ def test_a_malformed_holdout_declaration_is_refused(write_config, block, expecte
         {"method": "random", "frac": 0.999},
         {"method": "by_attribute", "from": "split"},
         {"method": "by_attribute", "from": "split", "seed": 1234},
+        {"method": "by_attribute", "from": "split", "stratify_by": []},
     ],
 )
 def test_a_well_formed_holdout_declaration_earns_none_of_the_five(write_config, block):
@@ -11415,11 +11401,20 @@ def test_a_well_formed_holdout_declaration_earns_none_of_the_five(write_config, 
 
     A pinned `seed` is legal under BOTH methods on purpose: `by_attribute`
     records no seed, but a config carrying one is not malformed, and refusing
-    it here would put the `NO-DRAW` rule somewhere this test would not see."""
+    it here would put the `NO-DRAW` rule somewhere this test would not see.
+
+    `stratify_by: []` under `by_attribute` is the last row on purpose: it is
+    what `init` writes and what most designs carry, exempted the same way
+    `E-DATA-ASSIGN-NO-DRAW` exempts an empty `ratio: {}`/`stratify_by: []` —
+    only a non-empty `stratify_by` means anything to refuse here."""
     found = codes(write_config(_holdout(block)))
-    for code in ("E-DATA-HOLDOUT-METHOD", "E-DATA-HOLDOUT-FRAC",
-                 "E-DATA-HOLDOUT-FROM", "E-DATA-HOLDOUT-NO-DRAW",
-                 "E-DATA-HOLDOUT-SEED"):
+    for code in (
+        "E-DATA-HOLDOUT-METHOD",
+        "E-DATA-HOLDOUT-FRAC",
+        "E-DATA-HOLDOUT-FROM",
+        "E-DATA-HOLDOUT-NO-DRAW",
+        "E-DATA-HOLDOUT-SEED",
+    ):
         assert code not in found
     # The positive companion: this config is not silently escaping the check
     # entirely — the wholesale refusal still fires on the same declaration.
