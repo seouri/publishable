@@ -1,6 +1,6 @@
 # Task 3 report: close `data.units.holdout` one level in
 
-**Status:** Complete. **Commit:** (to be filled after `git commit`, see below).
+**Status:** Complete. **Commit:** `93372ce` — `feat: close data.units.holdout one level in, ahead of its refusal lifting`.
 
 **Files changed:** `src/publishable/envelope.py`, `tests/test_envelope.py` (appended), `tests/test_validate.py` (appended, one test beyond the brief's file list — see **Deviations**).
 
