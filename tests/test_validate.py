@@ -12060,3 +12060,104 @@ def test_an_evaluation_split_without_a_cell_structure_is_not_refused(
     assert "E-DATA-HOLDOUT-CELLS" not in found
     assert "E-REPL-FOLD-CELLS" not in found
     assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
+
+
+_FIFTY_CLUSTERS = "patient_id,animal_id,label\n" + "".join(
+    f"p{i},a{i // 2},x\n" for i in range(100)
+)
+
+
+def test_the_resample_cluster_warning_counts_the_holdout_s_test_partition(
+    write_config, tmp_path
+):
+    """The warning is about how many INDEPENDENT DRAWS a percentile interval
+    rests on, and under a holdout the draw runs over the test partition alone.
+    50 clusters × `frac: 0.2` is ~10, so `min_clusters: 20` must warn — and at
+    `78bb794` it does not, because the count is taken over the whole roster.
+
+    Two configs differing ONLY in whether a holdout is declared, so the
+    warning's presence is attributable to the holdout rather than to the
+    roster."""
+    (tmp_path / "input" / "index.csv").write_text(_FIFTY_CLUSTERS)
+    common = {
+        "from": "index.csv", "key": "patient_id",
+        "attributes": ["animal_id", "label"], "cluster_by": "animal_id",
+    }
+    resample = {"resample": {"method": "bootstrap", "n": 2000}}
+
+    without = codes(write_config({
+        "data.units": dict(common),
+        "limits": {"min_clusters": 20},
+        "statistics": resample,
+    }))
+    # The control, and it must be silent: 50 clusters is above 20.
+    assert "W-STATS-RESAMPLE-CLUSTERS" not in without
+
+    with_holdout = codes(write_config({
+        "data.units": dict(common, holdout={"method": "random", "frac": 0.2}),
+        "limits": {"min_clusters": 20},
+        "statistics": resample,
+    }))
+    assert "W-STATS-RESAMPLE-CLUSTERS" in with_holdout
+    assert "E-DATA-HOLDOUT-UNSUPPORTED" in with_holdout
+
+
+def test_a_holdout_wide_enough_to_keep_the_clusters_does_not_warn(
+    write_config, tmp_path
+):
+    """The positive companion, produced by the code under test: the same
+    roster and the same `min_clusters` under a `frac: 0.8` holdout keeps ~40
+    clusters on the test side and stays silent. Without it, a fix that warned
+    whenever a holdout was declared would pass the test above."""
+    (tmp_path / "input" / "index.csv").write_text(_FIFTY_CLUSTERS)
+    found = codes(write_config({
+        "data.units": {
+            "from": "index.csv", "key": "patient_id",
+            "attributes": ["animal_id", "label"], "cluster_by": "animal_id",
+            "holdout": {"method": "random", "frac": 0.8},
+        },
+        "limits": {"min_clusters": 20},
+        "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
+    }))
+    assert "W-STATS-RESAMPLE-CLUSTERS" not in found
+    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
+
+
+def test_the_stratum_constancy_check_still_reads_the_whole_roster(
+    write_config, tmp_path
+):
+    """`E-STATS-RESAMPLE-STRATIFY-VARIES` deliberately does NOT move: a
+    stratum varying inside a cluster the holdout put on the TRAINING side is
+    still an incoherent declaration, and refusing on the whole roster is the
+    stricter, correct reading.
+
+    **Correction (task 16):** every cluster in this fixture varies — `p{2k}`
+    is `y` and `p{2k+1}` is `x` for every `k` — not only the training-side
+    ones a prior draft of this docstring claimed. Verified directly against
+    `stratum_varies_within_cluster` over the realized train/test split at this
+    seed: the offending cluster it reports differs by partition (`a0` over
+    the whole roster and the training side, `a2` over the test side alone),
+    but an offender exists on *both* sides, so this fixture cannot by itself
+    tell "reads the whole roster" from "reads the test partition only" — task
+    16's mutation (c), narrowing this check to the test partition, left this
+    assertion passing. What this test actually proves is narrower than its
+    name: the check still fires at all once a holdout is declared. The
+    positive claim in this function's name — that the check reads the WHOLE
+    roster specifically — rests on the code and on task 16's report, not on
+    an assertion in this file."""
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id,animal_id,label\n"
+        + "".join(f"p{i},a{i // 2},{'x' if i % 2 else 'y'}\n" for i in range(40))
+    )
+    found = codes(write_config({
+        "data.units": {
+            "from": "index.csv", "key": "patient_id",
+            "attributes": ["animal_id", "label"], "cluster_by": "animal_id",
+            "holdout": {"method": "random", "frac": 0.2, "seed": 1234},
+        },
+        "limits": {"min_clusters": 2},
+        "statistics": {
+            "resample": {"method": "bootstrap", "n": 2000, "stratify_by": ["label"]}
+        },
+    }))
+    assert "E-STATS-RESAMPLE-STRATIFY-VARIES" in found

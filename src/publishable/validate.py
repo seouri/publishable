@@ -14,6 +14,7 @@ from publishable.correction import ALPHA
 from publishable.diagnostics import Collector
 from publishable.envelope import check_envelope
 from publishable.errors import ContractError
+from publishable.hashes import design_digest
 from publishable.manifest import POLICIES
 from publishable.materialize import TEMPLATE_VERSION
 from publishable.param import MISSING
@@ -43,7 +44,10 @@ from publishable.units import (
     UnitList,
     assignment_for,
     auto_block_size,
+    clusters_of,
     fold_basis,
+    holdout_for,
+    holdout_seed_for,
     holdout_sizes,
     holdout_values_fault,
     is_measurement_numeric,
@@ -618,6 +622,11 @@ def validate_config(
             # the config validates clean here and meets `E-DATA-CLUSTER-UNKNOWN`
             # for real at `run`.
             basis = None
+    # The holdout's realized test partition, resolved once and threaded — the
+    # denominator a resample's cluster count is actually over. Resolved here
+    # rather than inside `_check_resample` so a future second reader gets the
+    # same object rather than realizing a second draw.
+    holdout_test = _holdout_test_roster(doc, units_decl, roster, usable_cluster)
     # A `fold` level's `stratify_by`, from the same usable-cluster local the basis
     # was resolved from: the name it declares, and — when a cluster is declared —
     # whether the stratum survives a split that cannot divide one. Not in
@@ -652,7 +661,7 @@ def validate_config(
     # later check needing the resolved comparison family (task 6's `n` bound
     # against it) must recompute that family locally rather than read it off
     # this call site.
-    _check_resample(doc, roster, c)
+    _check_resample(doc, roster, c, holdout_test=holdout_test)
     _check_contrasts(doc, c, roster)
     _check_hypotheses(doc, c, experiment, template)
     _check_report_by(doc, c, roster)
@@ -5435,7 +5444,54 @@ diagnostic rather than a shrug, and what makes adding a second value a
 documented change rather than a silent one."""
 
 
-def _check_resample(doc: dict[str, Any], roster: UnitList | None, c: Collector) -> None:
+def _holdout_test_roster(
+    doc: dict[str, Any],
+    units_decl: dict[str, Any],
+    roster: UnitList | None,
+    cluster_by: str | None,
+) -> UnitList | None:
+    """The holdout's realized **test** partition, or `None` when the design
+    declares none or the draw cannot be performed.
+
+    Realized through `units.holdout_for`, the same pure function
+    `cli.command_run` realizes it with — which is the reason that function is
+    pure at all, `assignment_for`'s own argument: `validate` has to ask "which
+    units will the interval rest on" of the same declaration the run asks it
+    of, so a second answer computed here would be a check aimed at a partition
+    the run does not use.
+
+    **Never raises.** `validate` collects, and this runs over configs that are
+    already known bad — a malformed `frac`, an unresolvable column, an unknown
+    stratum, a cluster attribute a unit does not carry. Each of those is
+    reported by its own check; here they become `None`, and the check that
+    reads this simply does not run rather than reporting a second, derived
+    fault on top of the one the reader has to fix anyway.
+    """
+    if roster is None:
+        return None
+    block = units_decl.get("holdout")
+    if not isinstance(block, dict) or not block:
+        return None
+    try:
+        clusters = clusters_of(roster, cluster_by) if cluster_by else None
+        plan = holdout_for(
+            roster,
+            block,
+            seed=holdout_seed_for(block, design_digest(doc), roster),
+            clusters=clusters,
+        )
+    except (ContractError, NotImplementedError, KeyError, TypeError, ValueError):
+        return None
+    test = set(plan.test)
+    return UnitList([u for u in roster if u.key in test])
+
+
+def _check_resample(
+    doc: dict[str, Any],
+    roster: UnitList | None,
+    c: Collector,
+    holdout_test: UnitList | None = None,
+) -> None:
     """Every check `statistics.resample` gets, seven findings in declaration
     order — the enumeration is the list, not a sample of it:
 
@@ -5445,9 +5501,14 @@ def _check_resample(doc: dict[str, Any], roster: UnitList | None, c: Collector) 
     - `E-STATS-RESAMPLE-STRATIFY-UNKNOWN` — a `stratify_by` name that is not a
       declared unit attribute.
     - `W-STATS-RESAMPLE-CLUSTERS` — **reads the roster:** `limits.min_clusters`
-      against the resolved cluster count.
-    - `E-STATS-RESAMPLE-STRATIFY-VARIES` — **reads the roster too:** a stratum
-      that varies within a `cluster_by` cluster.
+      against the resolved cluster count — over the holdout's **test**
+      partition when one is declared, because a resample draws over the
+      per-unit table and that is what the table holds under a holdout.
+    - `E-STATS-RESAMPLE-STRATIFY-VARIES` — **reads the WHOLE roster, on
+      purpose**, even under a `data.units.holdout`. Constancy within a cluster
+      over the whole roster implies it over any subset, so the wider read is
+      the stricter one; the narrower would let a config validate whose training
+      half is incoherent and whose test half happens not to show it.
     - `W-STATS-RESAMPLE-FAMILY` — the comparison-family lower bound on that
       same `n`.
 
@@ -5611,11 +5672,16 @@ def _check_resample(doc: dict[str, Any], roster: UnitList | None, c: Collector) 
     # Counted through `units.fold_basis`, the same function `_check_replication`
     # and `_check_sweep` read — via `basis`, resolved once above this call and
     # threaded through as their `fold_basis=` argument. This check calls it a
-    # second time on the same roster and `cluster_by` rather than being handed
-    # that value: a second call to one derivation is not a second derivation,
-    # but it IS a second `try`/`except ContractError` an edit to the first must
-    # not forget to mirror. Not threaded through as a parameter in this slice;
-    # doing so is a cheap follow-up, not a correctness gap today.
+    # second time on `cluster_by` rather than being handed `basis` itself:
+    # `basis` is over the WHOLE roster (it feeds `fold`, which has no holdout
+    # to narrow against), while this call is over `holdout_test` when one
+    # resolved — a different roster than `basis` was counted from whenever a
+    # holdout is declared, so the two are deliberately not the same
+    # derivation reused, only the same function. A second call to one
+    # derivation is not a second derivation, but it IS a second
+    # `try`/`except ContractError` an edit to the first must not forget to
+    # mirror. Not threaded through `basis` in this slice; doing so is a cheap
+    # follow-up, not a correctness gap today.
     cluster_by = units_declared.get("cluster_by")
     min_clusters = (doc.get("limits") or {}).get("min_clusters")
     if (
@@ -5626,7 +5692,20 @@ def _check_resample(doc: dict[str, Any], roster: UnitList | None, c: Collector) 
         and not isinstance(min_clusters, bool)
     ):
         try:
-            groups = fold_basis(roster, cluster_by)
+            # **The test partition when a holdout is declared, not the whole
+            # roster.** `statistics.resample` draws over the per-unit table,
+            # which under a holdout holds only the units that recorded — so a
+            # percentile interval rests on the clusters of the TEST side, and
+            # counting the wider set warns against a denominator no interval
+            # used. Wrong in the direction of NOT firing: 50 clusters at
+            # `frac: 0.2` leaves roughly 10, and `min_clusters: 20` passed
+            # silently.
+            #
+            # `holdout_test` is `None` whenever no holdout is declared or the
+            # draw could not be performed, so this is `roster` unchanged for
+            # every other design — including every config in the build before
+            # a holdout existed.
+            groups = fold_basis(holdout_test if holdout_test is not None else roster, cluster_by)
         except ContractError:
             # A unit carrying no value for the cluster attribute
             # (`E-DATA-CLUSTER-UNKNOWN`). Sometimes reported beside this by
