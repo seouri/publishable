@@ -17,10 +17,13 @@ git-initialized, `input_dir`/`output_dir` outside the repo as required) with a 2
 roster standing in for `growth-screen`'s patient index.
 
 **The measurement is narrower than "each of the nine configs as written," and that narrowing is
-disclosed rather than left implicit.** Only `data.units` (`from`, `attributes`, `holdout`, `weight_by`)
-and `statistics.resample`/`statistics.contrasts` were transplanted verbatim from each config shown in the
-analysis onto the scaffolded `generic` demo's own stand-in single-axis sweep, default seed repeat, and
-`analysis.*` parameters. `parameters`, the real `sweep`, `replication`, `statistics.report_by`, and
+disclosed rather than left implicit.** `data.units` (`from`, `attributes`, `holdout`, `weight_by`) and
+`statistics.resample` were transplanted verbatim from each config shown in the analysis onto the
+scaffolded `generic` demo's own stand-in single-axis sweep, default seed repeat, and `analysis.*`
+parameters. `statistics.contrasts` was a stand-in single entry over the demo's own axis, not the declared
+set — C2 declares two contrasts and C3 declares four, only one of each was run — which changes the
+comparison count `E-DATA-WEIGHT-CONTRAST`'s message prints and nothing about whether the code fires.
+`parameters`, the real `sweep`, `replication`, `statistics.report_by`, and
 `hypotheses` were **not** carried over: the demo entrypoint declares neither the real parameter names nor
 the `step03_screen`/`step05_agreement` steps E2's and E5's real `hypotheses` name, and a hypothesis
 naming an undeclared step earns `E-HYPOTHESIS-METRIC` regardless of anything H3d touched — testing them
@@ -76,8 +79,8 @@ none of the three declares a reused artifact in its own YAML (C1's regimes are
 also does not make C1–C3 executable on its own, since all nine still declare a resolver. An earlier
 draft of this claim asserted the shortcut's confirmation run gives C1–C3 that same `io.reuse_from`
 dependency; that conflated the *shortcut project's* confirmation-run lineage (§ Shortcut: three runs)
-with C1/C2/C3 specifically, which is not established by their configs, and was corrected before commit —
-see the CLAUDE.md correction below.
+with C1/C2/C3 specifically, which is not established by their configs, and was corrected in a
+follow-up commit (`534d41b`) — see the CLAUDE.md correction below.
 
 ## Which of the spec's numbers this confirms, and which it does not
 
@@ -109,7 +112,8 @@ see the CLAUDE.md correction below.
   pointer to the 2026-08-16 re-measurement added; the existing H3c-3 ownership sentence extended to also
   name retiring the two cells refusals once cells-drawing lands, rather than duplicating the ownership
   statement in a second place. No spine-design reasoning restated, only cited. Two drafts of this
-  paragraph overclaimed and were corrected before commit: the first said H4b "unblocks... the three
+  paragraph overclaimed and were corrected in follow-up commits (`88a3df4`, `534d41b`): the first said
+  H4b "unblocks... the three
   shortcut configs" outright; the second, trying to fix that, asserted the shortcut's confirmation run
   gives C1–C3 the same `io.reuse_from` dependency E3/E4/E6 have — which conflates the shortcut project's
   confirmation-run lineage with C1/C2/C3 specifically and is not what their configs declare (C1's regimes
