@@ -1621,11 +1621,13 @@ def command_run(config_path: Path) -> int:
 
         # `allocation.json` — settled beside `sweep.yaml`, before the first
         # execution and never touched again, per § The other files a run
-        # writes: both are partitions of one roster drawn once. `None` when
-        # `group_axes` is empty — no arm assignment resolved for this run —
-        # matching "present when either [an arm assignment or a holdout] is
-        # declared"; `holdout` is never in this build's document at all
-        # (`E-DATA-HOLDOUT-UNSUPPORTED` refuses every declaration of it).
+        # writes: both are partitions of one roster drawn once. `None` only
+        # when NEITHER partition resolved — no arm assignment and no
+        # `data.units.holdout` — matching "present when either is declared".
+        # `holdout_plan` is `_resolved_holdout`'s single realization, the same
+        # object the runner narrowed and the denominators counted against, so
+        # the membership this file claims is the membership the run used rather
+        # than a second draw that happens to agree.
         #
         # `group_axes` — the same object `arm_members` narrowed every
         # condition's roster with above, not a second resolution of the same
@@ -1636,7 +1638,7 @@ def command_run(config_path: Path) -> int:
         # guard is needed here either: `_resolved_group_axes` already returns
         # `{}` when none resolved, and the empty mapping is what makes this
         # `None`.
-        alloc_doc = build_allocation_document(group_axes)
+        alloc_doc = build_allocation_document(group_axes, holdout_plan)
         alloc_hash: str | None = None
         if alloc_doc is not None:
             (run_dir / "allocation.json").write_text(json.dumps(alloc_doc, indent=2))

@@ -18,7 +18,7 @@ from publishable.errors import ArtifactError, ArtifactExistsError, ContractError
 from publishable.sweep import condition_dir_name
 
 if TYPE_CHECKING:
-    from publishable.units import ArmPlan, UnitList
+    from publishable.units import ArmPlan, HoldoutPlan, UnitList
 
 SCOPE_ORDER = {"run": 0, "condition": 1, "repeat": 2, "summary": 3}
 
@@ -169,7 +169,9 @@ def _suffix_for(name: str) -> str | None:
     return best
 
 
-def build_allocation_document(group_axes: Mapping[str, "ArmPlan"]) -> dict[str, Any] | None:
+def build_allocation_document(
+    group_axes: Mapping[str, "ArmPlan"], holdout: "HoldoutPlan | None" = None
+) -> dict[str, Any] | None:
     """`allocation.json`'s payload — `reference.md` § `allocation.json` — who
     went where prints it in full: four top-level keys, `arms`/`seed`/`strata`
     keyed by axis name, `holdout` sharing the file because both are
@@ -227,13 +229,27 @@ def build_allocation_document(group_axes: Mapping[str, "ArmPlan"]) -> dict[str, 
     than "no axis drew or stratified this run." `reference.md`
     § `allocation.json` prints a document of each shape.
 
-    **`holdout` is never written here.** `E-DATA-HOLDOUT-UNSUPPORTED`
-    refuses every `data.units.holdout` declaration in this build, so there
-    is never a holdout partition to record; the key is omitted entirely
-    rather than written `null`, matching `manifest/input.json`'s own
-    "absent rather than null, so 'not hashed' can't be misread as 'hashed
-    to nothing'" — here, "no holdout key" rather than "a holdout of
-    nothing." H3d adds the key once that refusal lifts.
+    **`holdout` is the fourth key, and it is self-contained.** `train` and
+    `test` hold unit keys, in the plan's own order — roster order under
+    `by_attribute`, the shuffle's order under a draw — recorded rather than
+    re-sorted, for the reason `arms` is. Its `seed` appears only when the split
+    was DRAWN and its `strata` only when non-empty, `arms`' own rule one
+    declaration over: a `by_attribute` holdout reads a partition the data
+    already holds, so a seed would be a false record of a draw that never
+    happened and a `stratify_by` would describe how a draw was balanced when
+    none was. Both are omitted rather than written `null`, matching
+    `manifest/input.json`'s "absent rather than null, so 'not hashed' can't be
+    misread as 'hashed to nothing'".
+
+    **Unlike the axis-keyed `seed` and `strata`, the holdout's own two live
+    INSIDE its block.** Those two are keyed by axis name and a holdout has no
+    axis name; hanging it off a fabricated key would invite a reader to index
+    it as one, and `reference.md` § `allocation.json` prints the shape this
+    produces.
+
+    **This function still takes no roster**, and the holdout arrives realized
+    for the same reason the arms do: `cli._resolved_holdout` draws it once, and
+    a second draw here would be a second allocation.
 
     **This is the file `resume` must read rather than re-draw.**
     `reference.md` § Allocation and § Resuming both say `allocation.json` is
@@ -269,8 +285,10 @@ def build_allocation_document(group_axes: Mapping[str, "ArmPlan"]) -> dict[str, 
     # `axes` ... raises a bare `KeyError`"). So a malformed axis never
     # reaches this call at all; this gate would need reconsidering only if a
     # future caller ever invoked `build_allocation_document` without that
-    # upstream call already having succeeded.
-    if not group_axes:
+    # upstream call already having succeeded. `holdout` carries no such shape
+    # hazard: it reaches this function already realized by `cli._resolved_holdout`,
+    # a single call with no per-condition narrowing beside it to compare against.
+    if not group_axes and holdout is None:
         return None
     arms = {
         axis: {level: list(keys) for level, keys in plan.members.items()}
@@ -278,7 +296,16 @@ def build_allocation_document(group_axes: Mapping[str, "ArmPlan"]) -> dict[str, 
     }
     seed = {axis: plan.seed for axis, plan in group_axes.items() if plan.seed is not None}
     strata = {axis: list(plan.strata) for axis, plan in group_axes.items() if plan.strata}
-    return {"seed": seed, "arms": arms, "strata": strata}
+    document: dict[str, Any] = {"seed": seed, "arms": arms}
+    if holdout is not None:
+        block: dict[str, Any] = {"train": list(holdout.train), "test": list(holdout.test)}
+        if holdout.seed is not None:
+            block["seed"] = holdout.seed
+        if holdout.strata:
+            block["strata"] = list(holdout.strata)
+        document["holdout"] = block
+    document["strata"] = strata
+    return document
 
 
 def allocation_hash(document: dict[str, Any]) -> str:
