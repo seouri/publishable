@@ -1446,7 +1446,10 @@ def command_run(config_path: Path) -> int:
         # `E-DATA-CLUSTER-UNKNOWN`, a code naming the wrong declaration for a reader
         # whose config declares `fold.stratify_by`, and which code a missing value
         # belongs under is a property of the declaration being served — `holdout`
-        # and `assign` will each read the same attribute under their own.
+        # and `assign` each read the same attribute under their own
+        # (`E-DATA-HOLDOUT-STRATIFY-VARIES`, `E-DATA-ASSIGN-STRATIFY-VARIES`),
+        # which is why three declarations naming one attribute produce three
+        # codes rather than one shared one.
         #
         # Indexed, not `.get`-ed, and total over the roster because it has to be
         # (`units.partition_units` raises `KeyError` on a gap, by contract): every
@@ -2635,10 +2638,13 @@ def command_run(config_path: Path) -> int:
                 else None
             ),
             "units_hash": units_hash(roster) if roster is not None else None,
-            # "allocation.json" and its hash, when an arm assignment or a
-            # holdout is declared — `None`/`None` together exactly when
-            # `alloc_doc` was never written, the same pairing `units`/
-            # `units_hash` already use above.
+            # "allocation.json" and its hash, `None`/`None` together exactly
+            # when `alloc_doc` was never written — which is now when NEITHER an
+            # arm assignment nor a `data.units.holdout` resolved, the gate
+            # `build_allocation_document` widened. The same pairing `units`/
+            # `units_hash` already use above, and the same reason: a file named
+            # in the record and absent from disk is worse than an honest
+            # `None`.
             "allocation": "allocation.json" if alloc_doc is not None else None,
             "allocation_hash": alloc_hash,
         }

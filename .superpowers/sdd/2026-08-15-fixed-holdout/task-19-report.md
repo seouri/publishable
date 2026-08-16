@@ -1,0 +1,55 @@
+# Task 19 report: the owned prose sweep
+
+## Re-derived site table
+
+The brief's thirteen, re-checked against the code as it now stands, plus what the re-sweep found beyond it.
+
+| # | Site | Brief said | Found | Action |
+|---|---|---|---|---|
+| 1 | `validate.py`, `_check_unimplemented`'s tuple-loop entry | Owner: Task 18 | Already fixed — the function's docstring and the `null_test`-only remainder carry no false holdout claim | none |
+| 2 | `validate.py`, `_check_sweep`'s "two `data.units` sub-fields ... still read by nothing" | Owner: Task 18 | Already fixed — now reads "one `data.units` sub-field — a `resolver` source — is still read by nothing. `data.units.holdout` is no longer among them either: ..." | none |
+| 3 | `validate.py`, `_check_fold_stratify_by`'s "... halves belong to the slices that build those blocks" | Owner: this task | **Still present, false** — `_check_assign` and `_check_holdout` both exist and both check their own `stratify_by` half | **Fixed** |
+| 4 | `validate.py`, `_check_units`' "`cluster_by`, `weight_by`, and `holdout` are not read by `resolve_units` at all" | Owner: Task 9 | Already fixed — no such string found anywhere in `units.py`/`validate.py` | none |
+| 5 | `artifacts.py`, `build_allocation_document`'s "`holdout` is never written here" | Owner: Task 17 | Already fixed — function now takes a `holdout` param, documents the fourth key, and writes it | none |
+| 6 | `cli.py`, the `allocation.json` write site's "`holdout` is never in this build's document at all" | Owner: Task 17 | Already fixed — no such claim found | none |
+| 7 | `cli.py`, the provenance write site's `None`/`None` pairing comment | Owner: this task | **Still present, stale** — described the pairing as gated only by "an arm assignment or a holdout is declared" without naming that `build_allocation_document`'s gate was widened to include holdout | **Fixed** |
+| 8 | `cli.py`, the `clusters_of` note's "`holdout` and `assign` **will** each read the same attribute under their own" | Owner: this task | **Still present, future-tense** — both codes (`E-DATA-HOLDOUT-STRATIFY-VARIES`, `E-DATA-ASSIGN-STRATIFY-VARIES`) already exist and fire today | **Fixed** |
+| 9 | `envelope.py`'s "`holdout` stays whole for now ... H3d closes it" | Owner: Task 3 | Already fixed — module docstring says "`holdout` is closed one level in too, at its own five keys" | none |
+| 10 | `envelope.py`'s "a misspelled `methodd` in `holdout` is reported by no check in this build" | Owner: Task 3 | Already fixed — now reads "was in exactly that position and is now reported" | none |
+| 11 | `units.py`, `resolve_units`' "`holdout.from` still is not [reachable]" | Owner: Task 9 | Already fixed — no such string found; comments describe `holdout.from` as reachable through the registry | none |
+| 12 | `units.py`, `CONSTANT_COLUMN_RULES`' "`holdout.from` is not reachable through this registry today" | Owner: Task 9 | Already fixed — same as above | none |
+| 13 | `materialize.py`'s generated `holdout: null # optional single fixed train/test split` line | Owner: this task | **Still present** — a plain adjective ("optional"), not the shape comment `measurements` carries | **Fixed** |
+
+Also checked and confirmed already correct, not part of the numbered thirteen: `docs/reference.md` § `E-CONFIG-KEY-UNKNOWN`'s row (Step 3(e) of the brief) already reads "`data.units.holdout` is **not** one of them: the table declares each of its leaves, so a misspelled child inside a non-empty `holdout` block is reported here" — this was one of the sites task 18's fix round corrected per `CLAUDE.md`'s note, and the brief's Step 3(e) instruction is already satisfied verbatim.
+
+**Tally: 9 of the brief's thirteen were already fixed by earlier tasks; 4 were fixed by this task (3, 7, 8, 13); 0 unnamed false sites were found by the re-sweep** — the re-derived set matches the brief's thirteen exactly, once "already fixed" is separated from "still owed." The brief's count and site list held up; only the *ownership status* (marked "Task N" vs. actually landed) needed re-verification, which is exactly what `CLAUDE.md` warned a stale scoping would require.
+
+## Disagreements with the brief
+
+None on substance — every site the brief named was real (present at some point) and every "already fixed" claim double-checked against the current file contents, not trusted from the table. The only friction was mechanical: the brief's suggested `materialize.py` replacement line, used verbatim as a single string, is 109 characters and fails `E501` (limit 100). Used the brief's own two-string implicit-concatenation form instead (already the file's own style at lines 97–98), which fits under the limit and needed no test change since `tests/test_materialize.py` does not pin the comment text.
+
+## Changes made
+
+1. `src/publishable/validate.py`, `_check_fold_stratify_by` docstring — names the two checks and codes that now discharge the `assign`/`holdout` halves.
+2. `src/publishable/cli.py`, provenance write site — states the widened gate (`build_allocation_document` writes `alloc_doc` when *either* an arm assignment or a holdout resolved).
+3. `src/publishable/cli.py`, `clusters_of` note — states the two codes (`E-DATA-HOLDOUT-STRATIFY-VARIES`, `E-DATA-ASSIGN-STRATIFY-VARIES`) rather than "will... under their own."
+4. `src/publishable/materialize.py` — generated `holdout: null` comment now carries the shape (`# e.g. {method: random, frac: 0.2} — one fixed train/test split`), matching `measurements`' convention for a built-but-materialized-null block. `tests/test_materialize.py` needed no change (it doesn't pin this literal).
+
+Also restored `.superpowers/sdd/.gitignore` after it was found clobbered to a bare `*` during this session (the known `scripts/sdd-workspace` failure mode `CLAUDE.md` documents) — restored via `git checkout --`, verified content matches the tracked original, no data lost since nothing new had been added to that directory in this session.
+
+## Verification
+
+- `grep -rn "holdout" src/publishable/ | grep -in "not yet\|never\|not read\|no check\|still is not\|not reachable\|will \|for now\|NOT BUILT\|this build"` — before: returned sites 3, 7, 8 plus the unowned-but-fine hits; after: returns only 5 lines, all read and confirmed true (`init` never writes a `holdout` block — true; `holdout_test is None whenever no holdout is declared` — true; the two `never a...axis`/`never a sibling axis's seed` — true; `methodd` sentence — true, it's stating the *old* position of a now-fixed gap, correctly past-tense).
+- Same sweep over `README.md docs/design-principles.md docs/experimental-designs.md docs/reference.md` (named individually) filtered for `NOT BUILT|not yet|refused today|when its slice` — the only two remaining hits (`reference.md` § Expansion modes area, and `experimental-designs.md`'s cells section) are the genuine forward references about drawing a holdout/fold *within* a cell, which is still unbuilt (H3c-3's scope) — not touched, per the brief's explicit "do not touch" list.
+- `grep -rn "optional single fixed train/test split" src/ tests/ docs/` — only hits left are in `docs/superpowers/**` (development record, out of scope) — none in `src/`, `tests/`, or the four documents.
+- Mutation test 1: reintroduced "holdout stays whole for now" into `envelope.py`'s module docstring — sweep 1 caught it (new line appeared in the grep output); removed — sweep clean again.
+- Mutation test 2: reintroduced `NOT BUILT` beside the `data.units.holdout left it with H3d` sentence in `docs/reference.md` — sweep 2 caught it; removed — sweep clean again, confirmed with `git diff --stat docs/reference.md` showing no residual diff.
+- Proved the sweep can fail (not just filter to nothing): `grep -rn "holdout" src/publishable/units.py` returns 90 hits.
+- `uv run pytest` — 1954 passed, 2 xfailed (matches the pinned baseline).
+- `uv run ruff check .` — all checks passed. `uv run mypy` — no issues in 42 source files.
+- `uv run ruff format --check` on the touched files shows pre-existing unrelated deviations elsewhere in `cli.py` and `validate.py` (none on the lines this task touched) — confirms the project's convention of never running `ruff format .` bare; not reformatted.
+- Mechanical pass on `docs/reference.md`: no edits were made to that file (the one row the brief pointed at, § `E-CONFIG-KEY-UNKNOWN`, was already corrected), so no new mechanical check was needed; re-ran the link/anchor/table checks informally via the sweep commands above and found nothing disturbed.
+
+## Status
+
+Complete. All four owned sites fixed, all nine previously-fixed sites verified still correct, the generated-config line updated to match its `measurements` sibling's convention, and both sweeps proven to fail via mutation.

@@ -123,7 +123,8 @@ def materialize_config(
         "    cluster_by: null               # e.g. site, when units aren't independent",
         "    weight_by: null                # e.g. sampling_weight, when the sample is enriched",
         "    measurements: null             # e.g. {by: read_id, collapse: mean}",
-        "    holdout: null                  # optional single fixed train/test split",
+        "    holdout: null                  # e.g. {method: random, frac: 0.2}"
+        " — one fixed train/test split",
         "",
         "parameters:",
         "  # ---- Base values. Everything below is defined by the template, not by core. ----",
