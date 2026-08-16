@@ -1445,11 +1445,7 @@ def command_run(config_path: Path) -> int:
         # `clusters_of`, and the difference is deliberate: `clusters_of` raises
         # `E-DATA-CLUSTER-UNKNOWN`, a code naming the wrong declaration for a reader
         # whose config declares `fold.stratify_by`, and which code a missing value
-        # belongs under is a property of the declaration being served — `holdout`
-        # and `assign` each read the same attribute under their own
-        # (`E-DATA-HOLDOUT-STRATIFY-VARIES`, `E-DATA-ASSIGN-STRATIFY-VARIES`),
-        # which is why three declarations naming one attribute produce three
-        # codes rather than one shared one.
+        # belongs under is a property of the declaration being served.
         #
         # Indexed, not `.get`-ed, and total over the roster because it has to be
         # (`units.partition_units` raises `KeyError` on a gap, by contract): every

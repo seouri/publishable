@@ -2551,13 +2551,13 @@ def _check_fold_stratify_by(
     clustering that decides what a split cannot divide.
 
     `reference.md` § Validation, rows "Stratification attribute exists" and "Fold
-    strata survive clustering". **Only the `fold` level's**: the first row names no
-    particular `stratify_by`, and its `data.units.assign.<axis>.stratify_by` and
-    `data.units.holdout.stratify_by` halves are `_check_assign`'s and
-    `_check_holdout`'s, under their own codes
-    (`E-DATA-ASSIGN-STRATIFY-UNKNOWN`, `E-DATA-HOLDOUT-STRATIFY-UNKNOWN`), so
-    neither is discharged by this. Three checks answer to one row, and the row
-    carries no code for that reason.
+    strata survive clustering". **Only the `fold` level's**: the first row names a
+    `fold` level's *or* `holdout`'s `stratify_by`, and its `holdout` half is
+    `_check_holdout`'s, under its own code (`E-DATA-HOLDOUT-STRATIFY-UNKNOWN`), so
+    that half is not discharged by this. Two checks answer to that one row.
+    `data.units.assign.<axis>.stratify_by` is not this row's at all — `reference.md`
+    routes it to *Allocation strata exist* instead, under
+    `E-DATA-ASSIGN-STRATIFY-UNKNOWN`.
 
     **`data.units.attributes` is the reference set for the name**, the side of the
     line `_check_cluster_by` and `_check_weight_by` read, and for the same reason: a
