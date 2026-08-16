@@ -25,6 +25,9 @@ src = ["src", "tests"]
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP", "B"]
 
+[tool.ruff.format]
+exclude = ["*.md"]
+
 [tool.mypy]
 files = ["src"]
 python_version = "3.11"

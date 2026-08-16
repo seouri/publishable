@@ -922,6 +922,10 @@ def test_a_holdout_repeat_kind_still_routes_to_the_built_field(write_config):
     by_code = messages_by_code(write_config(overrides))
     assert "E-REPL-KIND" in by_code
     assert "data.units.holdout" in by_code["E-REPL-KIND"]
+    # `E-DATA-HOLDOUT-UNSUPPORTED` is gone from `src/` entirely (task 18), so
+    # this line alone can never fail — a deliberate retirement regression
+    # guard, not a live check, and defensible only because the two positive
+    # assertions above are what actually exercise this test's claim.
     assert "E-DATA-HOLDOUT-UNSUPPORTED" not in by_code
 
 
@@ -8055,6 +8059,73 @@ def test_validate_reports_rather_than_raising_on_a_varying_arm(write_config, tmp
     c = Collector()
     validate_config(path, c)
     assert any(f.code == "E-DATA-ASSIGN-VARIES" for f in c.findings)
+
+
+# --- `holdout.from` must not vary within a unit's measurement rows ----------
+#
+# The fourth member of the `CONSTANT_COLUMN_RULES` family, alongside
+# `cluster_by`, `weight_by` and `assign.<axis>.from` above — I2 in the H3d
+# whole-branch review: `E-DATA-HOLDOUT-VARIES` had a § Errors core raises row
+# claiming parity with its three siblings but no § Errors validate reports row
+# and no validate-surface test, unlike all three. Same route, same
+# `except ContractError` in `_check_units`.
+
+_HOLDOUT_MEASURED_UNITS = {
+    "from": "index.csv",
+    "key": "patient_id",
+    "attributes": ["read_id", "split"],
+    "holdout": {"method": "by_attribute", "from": "split"},
+    "measurements": {"by": "read_id", "collapse": "first"},
+}
+
+
+def test_a_holdout_column_varying_within_a_units_rows_is_reported(write_config, tmp_path):
+    """§ Errors core raises, `E-DATA-HOLDOUT-VARIES`: replicate rows declaring
+    `train` and `test` would collapse to whichever the file lists first,
+    filing the unit on an accident of row order rather than a real split."""
+    _clustered_table(
+        tmp_path,
+        "patient_id,read_id,split",
+        "p1,r1,train\np1,r2,test\np2,r3,train\n",
+    )
+    path = write_config({"data.units": _HOLDOUT_MEASURED_UNITS})
+    assert "E-DATA-HOLDOUT-VARIES" in codes(path)
+
+
+def test_agreeing_holdout_rows_are_not_reported(write_config, tmp_path):
+    """The holdout half's own control. Same shape, rows that agree — must not
+    report — and the config declares `holdout` at all, so a check that never
+    ran would also pass this."""
+    _clustered_table(
+        tmp_path,
+        "patient_id,read_id,split",
+        "p1,r1,train\np1,r2,train\np2,r3,test\n",
+    )
+    path = write_config({"data.units": _HOLDOUT_MEASURED_UNITS})
+    assert "E-DATA-HOLDOUT-VARIES" not in codes(path)
+
+
+def test_validate_reports_rather_than_raising_on_a_varying_holdout(write_config, tmp_path):
+    """`validate` collects findings and never raises. The same `except
+    ContractError` in `_check_units` that catches the cluster/weight/arm raise
+    catches this one too, and calling `validate_config` directly proves
+    nothing escaped it. The message is pinned, not only the code — `find` the
+    varying column, `who` the offending unit, and the `why` from
+    `CONSTANT_COLUMN_RULES["holdout"]`, none of which a bare code check
+    exercises."""
+    _clustered_table(
+        tmp_path,
+        "patient_id,read_id,split",
+        "p1,r1,train\np1,r2,test\n",
+    )
+    path = write_config({"data.units": _HOLDOUT_MEASURED_UNITS})
+    c = Collector()
+    validate_config(path, c)
+    assert any(f.code == "E-DATA-HOLDOUT-VARIES" for f in c.findings)
+    message = messages_by_code(path)["E-DATA-HOLDOUT-VARIES"]
+    assert "`data.units.holdout.from` names 'split'" in message
+    assert "unit 'p1'" in message
+    assert "decided by the order the rows happen to be in" in message
 
 
 # --- `k` and `k: all` are bounded by clusters -------------------------------

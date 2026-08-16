@@ -334,11 +334,13 @@ def allocation_hash(document: dict[str, Any]) -> str:
     placement, not `hashes.py`'s: it hashes `build_allocation_document`'s
     own return value, and that function lives in `artifacts.py` because
     `allocation.json` is an artifact `cli.command_run` writes alongside the
-    others this module already handles. A future reader adding H3d's
-    `holdout` half should draw the same conclusion: `holdout_hash` (if one
-    is ever needed) belongs beside whatever builds the holdout partition's
-    document, not in `hashes.py` either — the module boundary here is "hashes
-    a document this file assembles," not "is a hash."
+    others this module already handles. H3d's `holdout` half landed the same
+    way this reasoning predicted: task 17 gave `build_allocation_document` a
+    fourth key for the drawn holdout's block rather than adding a separate
+    `holdout_hash` in `hashes.py` — this function already hashes whatever
+    `build_allocation_document` returns, so the holdout's block needed no
+    hash of its own. The module boundary stays "hashes a document this file
+    assembles," not "is a hash."
     """
     payload = json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
     return "sha256:" + hashlib.sha256(payload).hexdigest()

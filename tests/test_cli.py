@@ -8218,6 +8218,21 @@ def test_a_declared_holdout_now_validates_and_runs(tmp_path, capsys):
     # Task 15: the denominator is the TEST partition, and the roster's identity
     # is not. The two numbers asserted side by side, which is the ruling.
     assert run["provenance"]["units"]["n"] == 20
+
+    # `units_hash` stays whole-roster too — the other half of the same
+    # invariant, and the half the no-holdout sibling test cannot pin because
+    # `eval_roster is roster` there. Recomputed over the whole 20-unit roster
+    # and compared for EQUALITY (review Important #3): mutating `cli.py`'s
+    # `units_hash(roster)` to `units_hash(eval_roster)` at the provenance
+    # call site passed the entire suite before this assertion existed, since
+    # nothing declared a holdout where the two rosters differ.
+    from publishable.units import resolve_units, units_hash
+
+    whole_roster, _technical_n, _columns = resolve_units(
+        run["config"]["data"]["units"], doc["root"].parent / "data"
+    )
+    assert run["provenance"]["units_hash"] == units_hash(whole_roster)
+
     checked = 0
     for block in run["results"]["conditions"][0]["aggregated"].values():
         for metric in block.values():

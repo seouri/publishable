@@ -18,7 +18,7 @@ This repository holds both the normative specification and the tool it specifies
 |---|---|
 | Tests | `uv run pytest` |
 | Lint | `uv run ruff check .` |
-| Format | `uv run ruff format .` |
+| Format | `uv run ruff format --check .` (the unchecked form is safe to run only on a branch where reformatting the 39 currently-unformatted Python files is the intended change) |
 | Types | `uv run mypy` |
 
 `docs/reference.md` § Package layout describes a tree that now **partially** exists.
@@ -184,7 +184,7 @@ class's module is gone, while an external one is still cached.
   verdict computed then would be computed over a partial set of claims. Both properties cannot hold.
 - **A safety argument in a comment is a claim, and needs a mutation like any other.** A retry inside an `except` was widened, and its new comment argued the retry could never raise because the faults it handles "surface on the first call". **The first call was inside the `try`.** Patching the widened function to raise gave exit 1 with no `run.yaml` and no run directory — every execution paid for, the record lost. Written by someone whose task was closing findings about false comments, and it passed a review. If a comment says *this cannot happen*, make it happen.
 - **Sweep for the claim, not for the file the claim was first noticed in.** Three sweeps in one slice stopped one file short — one covered `src/` and `docs/` but not `tests/`, one fixed a sentence in `correction.py` and missed the same sentence in the function that falsified it, one stopped at the file its brief happened to name.
-- **A ledger line saying "filed" is not a filing.** A gap recorded as "registered against \<owner\>" existed only in the ledger; the defects file had no such entry. And an entry naming its owner as *"whichever slice does X"* points at a closed slice once X lands — **re-owner a deferral when the slice that filed it finishes**, or it reads as live work nobody holds.
+- **A ledger line saying "filed" is not a filing.** A gap recorded as "registered against \<owner\>" existed only in the ledger; the defects file had no such entry. And an entry naming its owner as *"whichever slice does X"* points at a closed slice once X lands — **re-owner a deferral when the slice that filed it finishes**, or it reads as live work nobody holds. A filing's claims about the code go stale like any other comment; when you change code a `spec-defects.md` entry describes, re-read the entry.
 - **Rewriting a sentence when a table row was the thing that was wrong.** "Importing one raises
   `ImportError` today" was false only while `register_template` sat in a row marked `not yet built` —
   splitting the row repaired it, because the sentence **derives** its claim from the `Status` column.
