@@ -12227,3 +12227,59 @@ def test_the_stratum_constancy_check_still_reads_the_whole_roster(write_config, 
         )
     )
     assert "E-STATS-RESAMPLE-STRATIFY-VARIES" in found
+
+
+_CRED_TOTALITY_TEMPLATE = """\
+from publishable import BaseTemplate, Param, register_template
+
+
+@register_template("cred_assay")
+class CredAssay(BaseTemplate):
+    parameter_spec = {
+        "llm.provider": Param(
+            str,
+            default="azure_openai",
+            choices=["azure_openai", "openai", "ollama"],
+            requires_env={"azure_openai": ["AZURE_OPENAI_API_KEY"]},
+        )
+    }
+"""
+
+
+def test_a_requires_env_totality_fault_surfaces_as_a_template_load_finding(
+    git_repo: Path, write_config
+):
+    """The route, probed end to end rather than reasoned from the phrasing:
+    `Param.__init__` raises `ValueError`, `discover_local` catches it and
+    interpolates `{exc!r}` into an `E-TEMPLATE-LOAD` message. No new identifier.
+
+    `!r` is why the fragments below are quoted the way they are — the message
+    carries `ValueError('...')`, not the bare text.
+    """
+    templates = git_repo / "templates"
+    templates.mkdir()
+    (templates / "cred_assay.py").write_text(_CRED_TOTALITY_TEMPLATE)
+
+    found = messages_by_code(write_config({"experiment_type": "cred_assay", "parameters": {}}))
+    assert "E-CRED-MISSING" not in found  # a load fault is not a credential finding
+    assert "E-CRED-PARAM-MISSING" not in found
+    message = found["E-TEMPLATE-LOAD"]
+    assert "cred_assay.py" in message
+    assert "ValueError(" in message  # the repr, per `{exc!r}`
+    assert "no key for openai, ollama" in message
+    assert "choices are azure_openai, openai, ollama" in message
+
+    # THE CONTROL, and it is what makes the assertion above about the totality
+    # check rather than about local discovery: the same template with a total
+    # mapping loads, and `E-TEMPLATE-LOAD` disappears.
+    (templates / "cred_assay.py").write_text(
+        _CRED_TOTALITY_TEMPLATE.replace(
+            'requires_env={"azure_openai": ["AZURE_OPENAI_API_KEY"]},',
+            'requires_env={"azure_openai": ["AZURE_OPENAI_API_KEY"],\n'
+            '                          "openai": ["OPENAI_API_KEY"],\n'
+            '                          "ollama": []},',
+        )
+    )
+    assert "E-TEMPLATE-LOAD" not in codes(
+        write_config({"experiment_type": "cred_assay", "parameters": {}})
+    )

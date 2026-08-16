@@ -1,6 +1,12 @@
 """One parameter's type, default, constraints and help text.
 
 The constraint vocabulary is closed on purpose: docs/reference.md § Templates.
+
+`requires_env` is the one keyword here that is **not** a constraint and is
+deliberately absent from that closed table: it constrains the *environment* a
+value may be used in, not the value. § A credential can belong to a parameter
+value states the boundary and the reason — the provider is something you decide,
+so it is a `Param`, and what that decision requires travels with it.
 """
 
 import re
@@ -9,6 +15,10 @@ from typing import Any
 
 MISSING = object()
 _TYPE_NAMES = {str: "string", int: "integer", float: "float", bool: "bool", list: "list"}
+
+
+def _joined(values: list[Any]) -> str:
+    return ", ".join(str(v) for v in values)
 
 
 class Param:
@@ -27,6 +37,7 @@ class Param:
         min_items: int | None = None,
         max_items: int | None = None,
         nullable: bool = False,
+        requires_env: dict[Any, list[str]] | None = None,
         help: str | None = None,
     ) -> None:
         if type_ not in _TYPE_NAMES:
@@ -42,6 +53,25 @@ class Param:
             raise ValueError(
                 f"ge/gt/le/lt require type_=int or type_=float, not {_TYPE_NAMES[type_]}"
             )
+        if requires_env is not None:
+            if choices is None:
+                raise ValueError(
+                    "requires_env requires choices: a credential requirement is "
+                    "only checkable over a closed set of values"
+                )
+            absent = [c for c in choices if c not in requires_env]
+            extra = [k for k in requires_env if k not in choices]
+            if absent or extra:
+                detail = ""
+                if absent:
+                    detail += f"; no key for {_joined(absent)}"
+                if extra:
+                    detail += f"; keys naming no choice: {_joined(extra)}"
+                raise ValueError(
+                    "requires_env must be total over choices: "
+                    f"choices are {_joined(choices)}; "
+                    f"requires_env names {_joined(list(requires_env))}{detail}"
+                )
         self.type_ = type_
         self.default = default
         self.choices = choices
@@ -50,6 +80,7 @@ class Param:
         self.item_type = item_type
         self.min_items, self.max_items = min_items, max_items
         self.nullable = nullable
+        self.requires_env = requires_env
         self.help = help
 
     @property
