@@ -442,3 +442,39 @@ Task 8: fix round 1. Commit aff6ca5. One Important closed — the `and groups` e
   uncommented. Recording it here so it is not re-derived: an unreachable guard is not a testable one, and
   a comment asserting it is reachable would be this repo's most recurring defect in its purest form.
 Task 8: complete. 1879 passed + 2 xfailed; ruff check and mypy clean. BASE for task 9 is aff6ca5.
+Task 9: dispatched — `holdout.from`'s constant-column accessor, its `CONSTANT_COLUMN_RULES` entry, and its
+  place in the severity ordering.
+Task 9: implemented at bf27897 / 08351ff. 1891 passed + 2 xfailed.
+  MY FIFTH BLIND MUTATION, and the pre-check that was supposed to catch it did not. The brief's mutation
+  (b) claimed moving the `constant.update` ordering would fail a named test. The implementer ran it: the
+  named test PASSED and so did all 175 tests in the file — zero effect. The test builds its `constant`
+  dict BY HAND and never calls `resolve_units`, so it only ever proved `collapse_measurements` stops at
+  the first key of whatever dict it is handed. CLAUDE.md's "a seam named in the brief and instantiated by
+  no fixture", exactly.
+  Ruling: the discipline is amended a second time. After task 6 it became "check the mutation against the
+  ASSERTIONS the fixture makes". That was still not enough here, because I read the BRIEF'S ARGUMENT about
+  the test — which was articulate, cited the right fixture, and was wrong — instead of the test body. The
+  rule is now: **read the test body, and where the brief argues for discrimination in prose rather than
+  arithmetic, run the mutation before dispatching.** Prose confidence is not evidence. Cost of the weaker
+  form: a mutation recorded as proof that proves nothing, which is what five of my mutations across two
+  slices have now been.
+  The implementer closed the gap itself with `test_resolve_units_checks_holdout_after_assign_and_before_
+  cluster`, which calls `resolve_units` directly, and the reviewer independently re-ran the mutation and
+  confirmed the replacement discriminates where the original did not.
+Task 9: reviewed (opus). Spec compliance PASS; task quality FAIL with four Important and four Minor.
+  The substantive one: adding `"holdout"` to `CONSTANT_COLUMN_RULES` opened a SECOND route into the
+  registry that the accessor was built to be the only one for — `resolve_units`' flat comprehension
+  admits a string-valued `data.units.holdout` and emits `E-DATA-HOLDOUT-VARIES` at a path with no
+  `.from`, bypassing the accessor's `by_attribute` gate. Covered by no § Errors row, pinned by no test,
+  and falsifying two sentences written in this same task.
+  Ruling: close the route, do not document it. A second route that bypasses the gate makes the gate
+  decorative, and both sentences describing the design were already written as though one route exists.
+  The alternative — keeping the route and correcting the sentences — would have preserved a behaviour
+  nobody designed. Cost if wrong: a string-valued holdout now reaches `validate`'s refusals rather than
+  resolution's, which is where a malformed declaration belongs anyway.
+Task 9: fix round 1. Commit c799d2f. All eight closed, plus the report correction. The route is closed and
+  pinned; `E-DATA-HOLDOUT-VARIES` is dual-listed like its three siblings; two stale enumerations were
+  replaced by pointers rather than by corrected counts, which is the form that does not go stale again;
+  and the test whose NAME claimed an ordering guarantee it never tested was renamed to the property it
+  actually pins.
+Task 9: complete. 1892 passed + 2 xfailed; ruff check and mypy clean. BASE for task 10 is c799d2f.
