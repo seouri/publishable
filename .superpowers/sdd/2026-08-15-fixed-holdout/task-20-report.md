@@ -69,11 +69,15 @@ Under the table-roster substitution: **E1, E2, E5's transplanted blocks validate
 E4, E6's transplanted blocks *also* validate with zero errors under the same substitution — but
 `io.reuse_from`, which their frozen-program reads depend on, does not exist anywhere in
 `src/publishable/` (confirmed by grep), so they still cannot run. The generous "would run under a
-substitution nobody has written" count is **three (E1, E2, E5), not six**. C1–C3 do not join that three
-even once `E-DATA-WEIGHT-CONTRAST` lifts (H4b): the shortcut's confirmation run reads the development
-run's fitted artifact through the same missing `io.reuse_from`, per § Executability on this build's own
-"the shortcut's confirmation run uses [it] to read its fine-tuned artifact." This was checked against the
-analysis text, not assumed — see the CLAUDE.md correction below.
+substitution nobody has written" count is **three (E1, E2, E5), not six**. C1–C3 are a separate case:
+none of the three declares a reused artifact in its own YAML (C1's regimes are
+`utilization_only`/`clinical_physiology`/`zero_shot`, none fine-tuned), so H4b retiring
+`E-DATA-WEIGHT-CONTRAST` does not carry the same second `io.reuse_from` blocker E3/E4/E6 do — but it
+also does not make C1–C3 executable on its own, since all nine still declare a resolver. An earlier
+draft of this claim asserted the shortcut's confirmation run gives C1–C3 that same `io.reuse_from`
+dependency; that conflated the *shortcut project's* confirmation-run lineage (§ Shortcut: three runs)
+with C1/C2/C3 specifically, which is not established by their configs, and was corrected before commit —
+see the CLAUDE.md correction below.
 
 ## Which of the spec's numbers this confirms, and which it does not
 
@@ -104,11 +108,14 @@ analysis text, not assumed — see the CLAUDE.md correction below.
   hit, one live defect closed — the two cells refusals now named — zero experiments newly executing); a
   pointer to the 2026-08-16 re-measurement added; the existing H3c-3 ownership sentence extended to also
   name retiring the two cells refusals once cells-drawing lands, rather than duplicating the ownership
-  statement in a second place. No spine-design reasoning restated, only cited. The first draft of this
-  paragraph also claimed H4b "unblocks... the three shortcut configs," which overclaims: the analysis's
-  own § Executability text says the shortcut's confirmation run depends on `io.reuse_from` too, the same
-  missing method that keeps E3/E4/E6 from running under the table substitution. Corrected before commit
-  to say H4b retires the refusal without implying the three configs become executable.
+  statement in a second place. No spine-design reasoning restated, only cited. Two drafts of this
+  paragraph overclaimed and were corrected before commit: the first said H4b "unblocks... the three
+  shortcut configs" outright; the second, trying to fix that, asserted the shortcut's confirmation run
+  gives C1–C3 the same `io.reuse_from` dependency E3/E4/E6 have — which conflates the shortcut project's
+  confirmation-run lineage with C1/C2/C3 specifically and is not what their configs declare (C1's regimes
+  are `utilization_only`/`clinical_physiology`/`zero_shot`, none fine-tuned). The final wording says only
+  what both the code and the configs support: H4b retires the refusal, a retired refusal is not an
+  execution, and all nine still declare a resolver.
 
 ## Consistency passes
 

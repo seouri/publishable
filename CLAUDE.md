@@ -44,11 +44,9 @@ beside the same structure are now a named refusal, `E-REPL-FOLD-CELLS` / `E-DATA
 [the feasibility analysis](docs/feasibility-llm-growth-studies.md) § Executability on this build, and it
 is the same lesson stated a third time: a retired-refusal count is not an executable-run count, which is
 exactly what step 10 of § Feasibility analyses exists to keep a reader from conflating. H4b (weighted
-contrasts) retires the one refusal C1–C3 carry beyond the resolver — but their shortcut confirmation run
-reads a fitted artifact through `io.reuse_from`, same as E3/E4/E6's frozen program, so retiring it does
-not put C1–C3 among the configs a table-roster substitution alone would let run; **only for configs
-sourcing their roster from a table**, and even then, all nine as the analysis writes them declare a
-resolver, so *as written* none runs until H7b.
+contrasts) retires the one refusal C1–C3 carry beyond the resolver — a retired refusal is not an
+execution, and all nine, C1–C3 included, still declare a resolver, so *as written* none runs until H7b,
+and even under a table-roster substitution **only for configs sourcing their roster from a table**.
 
 A second amendment the same day scoped all five remaining slices against the code. **Every charter was
 stale in the same direction**: H4 is ~54 tasks split four ways, H7's remainder 38 split three ways, H3d
