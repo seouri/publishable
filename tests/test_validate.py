@@ -12393,6 +12393,49 @@ def test_a_template_declaring_no_required_env_reports_nothing(write_config, monk
     assert "E-CRED-MISSING" not in codes(write_config())
 
 
+_CRED_IMPORT_TEMPLATE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("cred_import_assay")
+class CredImportAssay(BaseTemplate):
+    required_env = ["PUBLISHABLE_TEST_ENTRYPOINT_TOKEN"]
+    parameter_spec = {}
+"""
+
+_BROKEN_EXPERIMENT_WITH_CRED = (
+    "import os\nraise RuntimeError('boom ' + os.environ['PUBLISHABLE_TEST_ENTRYPOINT_TOKEN'])\n"
+)
+
+
+def test_a_credential_in_an_entrypoint_import_failure_is_redacted_through_render(
+    git_repo: Path, write_config, monkeypatch
+):
+    """`validate.py`'s `c.credentials = credential_values(declared_credential_names_for(...))`
+    line, and all of `declared_credential_names_for`, are read by nothing in the
+    suite before this: `codes()`/`messages_by_code()` only ever inspect
+    `c.findings` directly, never call `c.render()`, so a mutation emptying that
+    assignment leaves the full suite green. It is not dead code — a declared
+    credential surfacing in an entrypoint's import failure is a real path, and
+    without the assignment it reaches `render()` unredacted. This pins the
+    assignment and the helper together, through the boundary a reader actually
+    sees output from."""
+    monkeypatch.setenv("PUBLISHABLE_TEST_ENTRYPOINT_TOKEN", "sk-i1-sentinel-7788")
+    templates = git_repo / "templates"
+    templates.mkdir()
+    (templates / "cred_import_assay.py").write_text(_CRED_IMPORT_TEMPLATE)
+    write_experiment_module(git_repo, _BROKEN_EXPERIMENT_WITH_CRED)
+
+    path = write_config({"experiment_type": "cred_import_assay", "parameters": {}})
+    c = Collector()
+    validate_config(path, c)
+    assert "E-ENTRYPOINT-IMPORT" in {f.code for f in c.findings}  # the fault actually fired
+
+    rendered = c.render()
+    assert "sk-i1-sentinel-7788" not in rendered
+    assert "<redacted:PUBLISHABLE_TEST_ENTRYPOINT_TOKEN>" in rendered
+
+
 _UNION_TEMPLATE = """\
 from publishable import BaseTemplate, Param, register_template
 

@@ -692,8 +692,32 @@ def validate_config(
     _check_contrasts(doc, c, roster)
     _check_hypotheses(doc, c, experiment, template)
     _check_report_by(doc, c, roster)
-    for message in template.validate(doc):
-        c.error("E-TEMPLATE-RULE", "parameters", message)
+    # `template.validate` is contracted to return `list[str]` (`BaseTemplate.validate`),
+    # never to raise — but it is user code, reachable through a project-local
+    # `templates/*.py`, and `validate` collects rather than raises. Unguarded, a
+    # raise here would propagate out of `validate_config`, out of `_dispatch`, and
+    # land in `main`'s bare `except PublishableError`, which prints straight to
+    # stderr and bypasses `c.render()` — the one place a credential in the text
+    # gets redacted. `c.credentials` is already set above, so catching here keeps
+    # this inside the same collector every other `E-TEMPLATE-RULE` finding goes
+    # through, rather than opening a second, unredacted exit for the same fault.
+    # Mirrors `load_experiment`'s guard above: `SystemExit` is a `BaseException`
+    # and would otherwise end the process with the user's own exit code.
+    try:
+        for message in template.validate(doc):
+            c.error("E-TEMPLATE-RULE", "parameters", message)
+    except SystemExit as exc:
+        c.error(
+            "E-TEMPLATE-RULE",
+            "parameters",
+            f"raised while validating: SystemExit: {exc.code}",
+        )
+    except Exception as exc:
+        c.error(
+            "E-TEMPLATE-RULE",
+            "parameters",
+            f"raised while validating: {type(exc).__name__}: {exc}",
+        )
     return doc
 
 

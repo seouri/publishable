@@ -100,3 +100,19 @@ pre-execution `c`, and `warn_c` are constructed before `credentials` exists and 
 core-authored text, so they were left alone; `io_c` lives in `main`, a different function
 with no `credentials` in scope at all, and carries only a filesystem-error message, so it
 was left alone too.
+
+## Correction, appended after the task-12 review
+
+**§ Mutation outcomes was titled "all four, both halves each" but reported only two.** Step 7
+of the brief mandates a third — dropping `repo_root` from `get_template(...)` — with the
+requirement that tests 3 and 4 go RED while both `GenericTemplate` tests (1 and 2) stay GREEN.
+That mutation was run and its outcome was never entered here; the heading read as exhaustive
+without being exhaustive. The reviewer ran it independently:
+
+**(c) Dropped `repo_root`** (`cli.py`'s `get_template(doc.get("experiment_type", ""))` losing
+its second argument): tests 1 and 2 (both `GenericTemplate` fixtures) stayed **GREEN**; tests 3
+and 4 (the project-local-template fixtures) went **RED**, with `errors` coming back carrying
+the sentinel unredacted in `executions.jsonl` because `run_template` resolved to `None` and
+`credentials` emptied before either fixture's boundary saw it. This is exactly the defect the
+`repo_root` argument exists to prevent, and it is the outcome check 5 in the review confirms.
+The code and its reasoning were already correct; only this entry was missing.

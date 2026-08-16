@@ -378,7 +378,7 @@ The design is shaped around a specific claim: most irreproducible results are no
 | **A stale summary reported as fresh** | Steps that consume an earlier run's artifacts record it as an upstream with its hashes |
 | **Confounding by run order** | `order: randomized` shuffles execution under a recorded seed; the realized order and each execution's `started_at` are recorded either way |
 | **Drift reported as randomness** | A `batch` level's dispersion is labelled `kind: batch`, separately from a `seed` level's, so movement in an external service isn't presented as RNG variation the tool controls |
-| **Credentials in a shared config** | The config stores variable names; values live in `.env` and are never captured, logged, or written to any artifact |
+| **Credentials in a shared config** | The config stores variable names; values live in `.env`. Core never writes one into the config, and redacts a **declared** credential's value out of an exception's text at the two places one can surface — see `reference.md` § Secrets & credentials for that boundary and its limit |
 | **A credential missing for one arm of a sweep** | A parameter value declares the credential it needs in [`requires_env`](reference.md#a-credential-can-belong-to-a-parameter-value), so `validate` checks the union over the conditions the sweep actually resolves — rather than a static list that must either demand a key no condition uses or stay silent about one a later condition will |
 | **Patient data in a public repo** | `input_dir` and `output_dir` may not resolve inside the repo, checked at generate, validate, and run |
 
