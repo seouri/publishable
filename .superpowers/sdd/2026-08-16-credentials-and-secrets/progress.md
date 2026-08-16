@@ -304,3 +304,39 @@ Task 8: reviewed (opus). Spec compliance PASS; task quality FAIL with two Import
   `resolve_template` anyway. Task 9 can only pin "before the first check that reads the environment".
   It should pin that and reword, or state the stronger position is unpinned by design.
 Task 8: complete. 1973 passed + 2 xfailed; ruff check, format and mypy clean. BASE for task 9 is below.
+
+Task 9: implemented at 36a7778. 1977 passed + 2 xfailed. `_check_required_env` is the FIRST READER of
+  `BaseTemplate.required_env`, which closes the defect `CLAUDE.md` names by hand — and the example was
+  replaced with `field_convention`, re-verified unread rather than carried from the brief's grep, which
+  was taken seven tasks earlier.
+  It also acted on task 8's handed-forward correction properly: it pinned the WEAKER, testable position
+  ("before the first check that reads the environment") and verified both directions by hand beyond
+  the brief's mutation set.
+Task 9: reviewed (opus). Spec compliance PASS; task quality FAIL on one Important.
+  **The reworded comment justified the weaker position with a FALSE safety argument** — "`resolve_
+  template` reads no environment variable". It does, transitively: `resolve_template` imports every
+  project-local `templates/*.py`, which `registry.py` itself describes as "executing every user top
+  level", and user code may read anything. The placement is right and the reason was wrong, which is
+  the shape that invites a future reader to move it. Rewritten to say the stronger claim is one the
+  suite cannot hold, and that loading before user top level executes is WHY the call sits where it
+  does — the true reason, which is stronger than the one it replaced.
+  Ruling: this is the second time in two tasks that a correct decision carried a false justification
+  (task 8's `.gitignore`/dirty-tree chain was the first). A comment that argues for a placement is a
+  claim about the code around it, not about the line it sits on.
+  Marked the forward reference to `_check_requires_env` as forward — it was present-tense and
+  therefore indistinguishable from a stale reference to something deleted.
+  **m1 was mine and it is the second occurrence: 33 `__pycache__` files were tracked**, force-added by
+  a `git add -f tests/` at task 7's commit — the same mistake I made and fixed on the H3d branch.
+  Untracked. `-f` on a DIRECTORY overrides `.gitignore` for everything beneath it, and the `-f` is only
+  ever needed for `.superpowers/sdd/`, whose `.gitignore` the tooling clobbers. **From here I stage
+  `.superpowers/sdd/` with `-f` and everything else without it.**
+  Routed to task 13, with the reviewer's hand-off warning attached: this commit falsified
+  `generators/template.py`'s "read by nothing in this build" and `reference.md`'s "read nowhere in
+  `src/`" — and task 13's disposition table entry for that `reference.md` site is about the managed
+  README region, NOT this clause, so a sweep that trusts the table will read straight past it.
+  The reviewer ran two mutations the implementer never reached, one of which — `reversed(missing_env(
+  ...))` — matters: since reversed IS sorted order for this fixture, it proves the declared-vs-sorted
+  hole task 7 nearly shipped is closed here rather than merely absent.
+  It also probed the security property directly and found it holds STRUCTURALLY: the emit site never
+  obtains a value, so task 9 cannot violate it. Task 12 is where it is actually pinned.
+Task 9: complete. 1977 passed + 2 xfailed; ruff check, format and mypy clean. BASE for task 10 is below.

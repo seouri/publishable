@@ -511,9 +511,12 @@ def validate_config(
     # `.env`, once, before the first check that reads the environment —
     # `_check_required_env` below, today, which is what
     # `test_a_required_env_variable_may_be_supplied_by_dot_env` pins. That is
-    # weaker than "before `resolve_template`": nothing here depends on the
-    # stronger position, since `resolve_template` reads no environment
-    # variable, and no test distinguishes the two placements.
+    # weaker than "before `resolve_template`", and deliberately so: no test
+    # distinguishes the two placements, so the stronger claim would be one the
+    # suite cannot hold. It is not that resolution is environment-free —
+    # `resolve_template` imports every project-local `templates/*.py`, executing
+    # user top level, which may read anything. Loading before that is why the
+    # call sits here rather than lower; only the weaker property is pinned.
     # `reference.md` § CLI reference promises `validate` "creates nothing and
     # reaches nothing off the machine"; a file in the repository root is
     # on-machine, so this is inside that promise rather than an exception to it.
@@ -730,8 +733,8 @@ def _check_required_env(doc: dict[str, Any], template: Any, c: Collector) -> Non
 
     Read from the class, so it needs no roster and no expansion: a `required_env`
     list says what an experiment *type* always needs, which is the wrong shape
-    exactly when the credential follows a choice, and that case is
-    `_check_requires_env`'s.
+    exactly when the credential follows a choice. That case belongs to
+    `_check_requires_env`, which the next task in this slice adds.
 
     Reported at `experiment_type`, the field that decided which template's list
     applies. The value is never printed — the message names the variable and
