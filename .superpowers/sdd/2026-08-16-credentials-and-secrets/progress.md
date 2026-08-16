@@ -107,3 +107,41 @@ Task 2: reviewed (opus). Spec compliance PASS; task quality FAIL with one Import
   reviewer must confirm it became true**, or the comment is an unbuilt reader of a shipped surface —
   the defect shape this very slice exists to close elsewhere.
 Task 2: complete. 1957 passed + 2 xfailed; ruff check, format and mypy clean. BASE for task 3 is below.
+
+Task 3: dispatched — `Param(requires_env=)`, the H7b prerequisite. Pre-checked all three mutations
+  against the BODIES of the tests the brief supplies. Mutation (b) is the one that matters and it is
+  sound: the unknown-key fixture is `choices=["a","b"]` fully keyed PLUS `"zz"`, so `absent` is empty
+  and dropping the `extra` half silences only the second block. Carried task 2's obligation explicitly.
+Task 3: implemented at fbab1e8 / ceff925. 1962 passed + 2 xfailed (+5).
+  **Task 2's forward reference is now true**, confirmed two ways rather than asserted: directly, and
+  end to end through a real `templates/cred_assay.py` driven through `validate_config`, landing under
+  `E-TEMPLATE-LOAD` and NOT under any `E-CRED-*` code — which is what decision 2 turns on.
+Task 3: reviewed (opus). Spec compliance PASS; task quality FAIL with two Important and two Minor,
+  and **no shipped behaviour wrong** — both Importants are false prose.
+  The first is a docstring that claimed the honouring test guards against "ignoring `requires_env`
+  entirely — storing it and checking nothing". Falsified by mutation: deleting the whole validation
+  block while keeping the store turns BOTH refusal tests red, so that is not what this test uniquely
+  guards. The sentence was transplanted from the spec, where it is about the ENVIRONMENT check that
+  tasks 9-11 build and is true there. Ruling: fix the docstring, not the test — the reviewer measured
+  that the test is the only one of five that goes red when `requires_env` leaks into `check()`, which
+  makes it the sole guard on the closed-vocabulary invariant. It now says that.
+  My first replacement named a specific value (`check("b")`) I had not verified; the leak would most
+  plausibly bite on a value with a NON-empty list, so I removed the specific rather than guess. A
+  correction that adds an unverified detail is how the third generation of a false claim starts.
+  The second Important is a report inference: "the `TypeError` confirms the guard is correctly
+  ordered" does not follow — a `TypeError` from iterating `None` proves the comprehensions RAN, which
+  is what an absent guard looks like. And the report said "no disagreements found" while the brief's
+  own rule ("if it is a `TypeError` the guard order was transcribed wrong") is FALSE: `DID NOT RAISE`
+  is unreachable for that mutation under any correct transcription. Another brief defect that went
+  unfiled. Both corrected by appending to the report.
+  Ruling on mutation (c): the reviewer's verdict — **blunt, not blind** — is accepted. It reddens via
+  a crash rather than an assertion, but the guard is pinned anyway by `pytest.raises(ValueError,
+  match="choices")`, which the reviewer proved catches both a message missing the word and a changed
+  exception type. Recorded because "the test went red" and "the test saw the difference" are not the
+  same claim, and only the second justifies calling a thing pinned.
+  Verified beyond the brief by the reviewer and worth keeping: the mirror mutation `if extra:` reddens
+  only the FIRST block, so both totality directions are separately pinned; the end-to-end control is
+  real (making the second write stay partial brings `E-TEMPLATE-LOAD` back, so no `sys.modules`
+  short-circuit and no collision relabel); storage is pinned by two `AttributeError` tests.
+Task 3: complete. 1962 passed + 2 xfailed; ruff check, format and mypy clean. **The H7b prerequisite
+  has landed.** BASE for task 4 is below.

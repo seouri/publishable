@@ -150,8 +150,14 @@ def test_requires_env_must_be_total_over_choices_and_the_message_names_both_sets
 
 
 def test_a_total_requires_env_constructs_and_leaves_every_other_check_alone():
-    """The honouring. Without it, ignoring `requires_env` entirely — storing it and
-    checking nothing — passes every refusal test above."""
+    """The honouring: a total `requires_env` constructs, and every other check on the
+    same `Param` still answers as it did.
+
+    What this pins that the refusal tests above do not: `requires_env` must stay OUT of
+    the value-checking path. Leaking it into `check()` at all turns this test red while
+    leaving the refusal tests above green, which makes this the only guard on the
+    closed-vocabulary invariant.
+    """
     p = Param(
         str, default=None, nullable=True, choices=["a", "b"], requires_env={"a": ["A_KEY"], "b": []}
     )

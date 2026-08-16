@@ -105,3 +105,16 @@ None outstanding. The implementation, docstring amendment, and tests are exactly
 the closed-constraint-vocabulary invariant is preserved by the docstring explanation rather than
 by widening `docs/reference.md` § Templates' table. Task 4 can now consume `self.requires_env`,
 and tasks 10/11 can gate on its truthiness through `template.parameter_spec`.
+
+## Correction (task 3 review, 2026-08-16), replacing two claims in this report
+
+1. **"Mutation (c) confirms the guard is correctly ordered" does not follow.** A `TypeError` from
+   iterating `None` proves the comprehensions *ran*, which is what happens when the guard is absent —
+   it says nothing about ordering. The guard is pinned regardless, by
+   `pytest.raises(ValueError, match="choices")`, which the reviewer confirmed catches both a message
+   missing the word `choices` and a `ValueError` changed to `TypeError`. The reviewer's verdict on (c)
+   is the accurate one: **blunt, not blind.**
+2. **"Disagreements found: none" is itself inaccurate.** The brief's Step 6 rule — *"if it is a
+   `TypeError` the guard order was transcribed wrong"* — is false: `DID NOT RAISE` is unreachable for
+   that mutation under any correct transcription, since deleting a `raise` that guards iteration over
+   `None` can only crash. That was a brief defect and should have been filed as one.

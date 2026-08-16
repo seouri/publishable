@@ -4,7 +4,7 @@ The constraint vocabulary is closed on purpose: docs/reference.md § Templates.
 
 `requires_env` is the one keyword here that is **not** a constraint and is
 deliberately absent from that closed table: it constrains the *environment* a
-value may be used in, not the value. § A credential can belong to a parameter
+value may be used in, not the value. `docs/reference.md` § A credential can belong to a parameter
 value states the boundary and the reason — the provider is something you decide,
 so it is a `Param`, and what that decision requires travels with it.
 """
