@@ -11908,3 +11908,128 @@ def test_the_empty_test_partition_refusal_is_not_stacked_on_a_frac_already_refus
     assert "E-DATA-HOLDOUT-FRAC" in found
     assert "E-DATA-HOLDOUT-EMPTY" not in found
     assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
+
+
+_CELL_ROSTER = "patient_id,arm\n" + "".join(
+    f"p{i},{'b' if i >= 12 else 'a'}\n" for i in range(15)
+)
+_ARM_GROUP_AXIS = [{"by": "arm", "levels": ["a", "b"]}]
+
+
+def _cells(units_extra: dict, *, fold: bool) -> dict:
+    """A `between` design with an `arm` group axis, plus whichever evaluation
+    split the caller asked for. 15 units, 12 in arm `a` and 3 in arm `b` — the
+    exact shape both defects were reproduced at."""
+    units = {
+        "from": "index.csv", "key": "patient_id", "attributes": ["arm"],
+        "allocation": "between", "assign": {"arm": {"method": "by_attribute"}},
+        **units_extra,
+    }
+    out: dict = {"data.units": units, "sweep": {"groups": _ARM_GROUP_AXIS}}
+    if fold:
+        out["replication"] = {
+            "repeats": [{"kind": "fold", "k": 5}], "order": "as_declared"
+        }
+    return out
+
+
+def test_a_fold_beside_a_cell_structure_is_refused(write_config, tmp_path):
+    """A LIVE defect at `78bb794`: this config validates clean, and `k: 5` is
+    permitted because `fold_basis` answers 15 over the whole roster while arm
+    `b` holds 3 — so arm `b` gets two folds holding none of its units.
+
+    Refused rather than disclosed: `sweep.yaml`'s partitions would record the
+    membership truthfully and no reader crosses it against the arms list by
+    hand."""
+    (tmp_path / "input" / "index.csv").write_text(_CELL_ROSTER)
+    found = codes(write_config(_cells({}, fold=True)))
+    assert "E-REPL-FOLD-CELLS" in found
+
+
+def test_a_holdout_beside_a_cell_structure_is_refused(write_config, tmp_path):
+    """The same fault, the same check site, the other split kind: a roster-wide
+    `frac: 0.2` over 15 units gives arm `b` zero test units."""
+    (tmp_path / "input" / "index.csv").write_text(_CELL_ROSTER)
+    found = codes(
+        write_config(_cells({"holdout": {"method": "random", "frac": 0.2}}, fold=False))
+    )
+    assert "E-DATA-HOLDOUT-CELLS" in found
+    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
+
+
+def test_both_split_kinds_beside_a_cell_structure_report_both_codes(
+    write_config, tmp_path
+):
+    """One check site, two codes — asserted together because a site that
+    returned after the first finding would pass both tests above and still
+    hide half the fault. `E-DATA-HOLDOUT-FOLD` rides along, which is correct:
+    the two declarations are also mutually exclusive with each other."""
+    (tmp_path / "input" / "index.csv").write_text(_CELL_ROSTER)
+    found = codes(
+        write_config(_cells({"holdout": {"method": "random", "frac": 0.2}}, fold=True))
+    )
+    assert "E-DATA-HOLDOUT-CELLS" in found
+    assert "E-REPL-FOLD-CELLS" in found
+
+
+def test_allocation_between_alone_triggers_the_refusal_without_a_group_axis(
+    write_config, tmp_path
+):
+    """`allocation: between` and a non-empty `sweep.groups` are two spellings
+    of the same cell structure, and EITHER is enough. Without this row a check
+    reading only `sweep.groups` passes every test above.
+
+    The message is asserted, not just the code: `where` is a two-branch
+    ternary and BOTH branches emit the same code at the same path, so a
+    code-only assertion here and in its sibling below passes identically if
+    the ternary is collapsed to either branch."""
+    (tmp_path / "input" / "index.csv").write_text(_CELL_ROSTER)
+    overrides = _cells({"holdout": {"method": "random", "frac": 0.2}}, fold=False)
+    overrides["sweep"] = {}
+    path = write_config(overrides)
+    assert "E-DATA-HOLDOUT-CELLS" in codes(path)
+    assert "`data.units.allocation: between`" in (
+        messages_by_code(path)["E-DATA-HOLDOUT-CELLS"]
+    )
+
+
+def test_a_group_axis_alone_triggers_the_refusal_without_between(
+    write_config, tmp_path
+):
+    """The other half of the same pair: without this row a check reading only
+    `allocation` passes every test above. The message is asserted for the
+    reason its sibling above states."""
+    (tmp_path / "input" / "index.csv").write_text(_CELL_ROSTER)
+    overrides = _cells({"holdout": {"method": "random", "frac": 0.2}}, fold=False)
+    overrides["data.units"]["allocation"] = "within"
+    path = write_config(overrides)
+    assert "E-DATA-HOLDOUT-CELLS" in codes(path)
+    assert "a non-empty `sweep.groups`" in (
+        messages_by_code(path)["E-DATA-HOLDOUT-CELLS"]
+    )
+
+
+def test_an_evaluation_split_without_a_cell_structure_is_not_refused(
+    write_config, tmp_path
+):
+    """The control. `allocation: within`, no `sweep.groups` — the shape all
+    nine feasibility configs declare, and the shape this refusal must leave
+    alone.
+
+    **`E-DATA-HOLDOUT-UNSUPPORTED` below is NOT positive attribution.** It is
+    emitted by `_check_unimplemented`, a different function, so it would appear
+    unchanged if this check never ran — task 7's review found three controls
+    resting on exactly that mistake. It is asserted here only so the row
+    survives task 18's retirement as a one-line deletion. A control over a
+    check that correctly reports nothing cannot prove itself; what proves this
+    one is the pair of trigger tests above, which differ from it only in the
+    cell structure."""
+    (tmp_path / "input" / "index.csv").write_text(_CELL_ROSTER)
+    found = codes(
+        write_config(
+            _holdout({"method": "random", "frac": 0.2}, attributes=["arm"])
+        )
+    )
+    assert "E-DATA-HOLDOUT-CELLS" not in found
+    assert "E-REPL-FOLD-CELLS" not in found
+    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found

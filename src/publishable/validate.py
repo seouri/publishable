@@ -631,6 +631,10 @@ def validate_config(
     # `usable_cluster` is already narrowed to a non-empty string or `None`
     # above, so this call needs no guard of its own.
     _check_holdout(doc, units_decl, roster, usable_cluster, c)
+    # One site for both split kinds, deliberately: see this function's own
+    # docstring for why a second site is the thing being avoided rather than a
+    # cost being paid.
+    _check_evaluation_split_cells(doc, units_decl, c)
     _check_replication(
         doc,
         template,
@@ -3000,6 +3004,79 @@ def _check_holdout(
                 "the test side zero of them — every metric would be over nothing. Widen "
                 "`frac`, or resolve a larger roster",
             )
+
+
+def _check_evaluation_split_cells(
+    doc: dict[str, Any], units: dict[str, Any], c: Collector
+) -> None:
+    """A roster-wide evaluation split beside a cell structure — refused, for
+    both split kinds, from one site.
+
+    **The two faults are one fault**, which is why they share a site: a
+    `data.units.holdout` and a `{kind: fold}` level each partition the WHOLE
+    roster once, and `data.units.allocation: between` or a non-empty
+    `sweep.groups` divides that same roster into cells. A partition drawn
+    across the cells rather than within them gives them unequal test sizes and,
+    once the split is fine enough, a cell holding none of its own units at all
+    — a cell-level metric computed from nothing.
+
+    **Two codes, one site.** `E-DATA-HOLDOUT-CELLS` and `E-REPL-FOLD-CELLS`
+    send a reader to the declaration they actually wrote; a single code would
+    name one of the two and be wrong for the other. A second check *site* is
+    what this deliberately does not have — that is how two answers to one
+    question come to disagree.
+
+    **Refused rather than disclosed.** The disclosure route would be
+    `allocation.json` and `sweep.yaml` recording a truthful membership whose
+    imbalance is visible only to a reader who crosses it against the arms list
+    by hand — the silently-wrong class. The repo's own precedent is to refuse
+    the COMBINATION while honouring both DECLARATIONS, and to route it:
+    `E-DATA-WEIGHT-CONTRAST`, `E-DATA-CLUSTER-CONTRAST`,
+    `E-DATA-ALLOCATION-CONTRAST`, `E-DATA-ASSIGN-BLOCKED-CLUSTER`.
+
+    **The `fold` half closes a defect that is live at this commit**, not a
+    hypothetical: `replication._fold_k` bounds `k` against `units.fold_basis`
+    over the WHOLE roster, so 15 units split 12/3 by arm permit `k: 5` and
+    leave the 3-unit arm with two empty folds. Nothing else scheduled closes
+    it sooner, which is why it ships here rather than with the slice that owns
+    cells.
+
+    **The route is a design that draws within each cell**, which this build
+    does not have. `docs/superpowers/spec-defects.md` carries the entry and
+    names **H3c-3** as the owner of this refusal's retirement.
+
+    Knowable from the declarations alone — no roster, no resolution — so this
+    takes neither.
+    """
+    allocation = units.get("allocation")
+    groups = (doc.get("sweep") or {}).get("groups")
+    cells = allocation == "between" or bool(isinstance(groups, list) and groups)
+    if not cells:
+        return
+    where = (
+        "`data.units.allocation: between`"
+        if allocation == "between"
+        else "a non-empty `sweep.groups`"
+    )
+    reason = (
+        f"is declared beside {where}, which divides the roster into cells. One "
+        "roster-wide split across those cells gives them unequal test sizes and, "
+        "once it is fine enough, a cell holding none of its own units — a "
+        "cell-level metric computed from nothing. Drawing the split within each "
+        "cell is the design that lifts this, and it is not built: declare one or "
+        "the other, or run each arm as its own run and join them in a `study`"
+    )
+    if units.get("holdout"):
+        c.error("E-DATA-HOLDOUT-CELLS", "data.units.holdout", reason)
+    repeats = (doc.get("replication") or {}).get("repeats")
+    if isinstance(repeats, list) and any(
+        isinstance(level, dict) and level.get("kind") == "fold" for level in repeats
+    ):
+        c.error(
+            "E-REPL-FOLD-CELLS",
+            "replication.repeats",
+            f"declares a `fold` level, which {reason}",
+        )
 
 
 def _accounted_attribute_names(doc: dict[str, Any], units: dict[str, Any]) -> set[str]:

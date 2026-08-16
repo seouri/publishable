@@ -5709,3 +5709,26 @@ edits `units.stratum_names` — re-owner this entry when that slice finishes rat
 leaving it pointing at a closed one.
 **Severity:** Minor. A stale count in a docstring misleads a reader deciding whether a change
 is safe, which is exactly the decision this repo's § Development record exists to support.
+
+## OPEN — an evaluation split cannot be drawn within a cell
+
+`data.units.holdout` and a `{kind: fold}` repeat both partition the whole roster once, and
+`data.units.allocation: between` / a non-empty `sweep.groups` divides that same roster into
+cells. `reference.md` § A fixed holdout split and `experimental-designs.md` both now name the
+refusal this entry documents and record drawing the split **within** each cell as the design
+that would lift it. **No build draws one.**
+
+H3d refuses the combination instead, at one site under two codes — `E-DATA-HOLDOUT-CELLS`
+and `E-REPL-FOLD-CELLS` — because the `fold` half was a live defect: `replication._fold_k`
+bounds `k` against `units.fold_basis` over the whole roster, so 15 units split 12/3 by arm
+permitted `k: 5` and left the 3-unit arm with two empty folds, and the config validated
+clean. Refusing rather than disclosing follows `E-DATA-ASSIGN-BLOCKED-CLUSTER`'s precedent:
+a truthful record of an imbalance no reader crosses by hand is the silently-wrong class.
+
+**Owner of the retirement: H3c-3**, the slice that builds folds and holdouts inside cells.
+Re-owner this entry if that slice's scope changes, rather than leaving it pointing at a
+closed one.
+
+**Found by:** H3d, Task 8. **Severity:** Was Major for `fold` while open — a validated
+config produced empty folds per arm — and is now closed as a refusal rather than as a
+capability.
