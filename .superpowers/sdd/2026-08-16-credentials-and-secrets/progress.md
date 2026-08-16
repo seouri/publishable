@@ -406,3 +406,42 @@ Task 11: reviewed (opus). **BOTH VERDICTS PASS** — the first double pass since
   mutation they think is missing.
 Task 11: complete. 1989 passed + 2 xfailed; ruff check, format and mypy clean. **Part B is done.**
   BASE for task 12 is below.
+
+Task 12: implemented at 248c152 / 1979a78. Redaction at the two serialization boundaries,
+  `Collector.render()` and the step-error path, plus decision 4a's bound written into the document.
+Task 12: reviewed (opus). **BOTH VERDICTS FAIL on a CRITICAL, and the error was mine.**
+  A **SIXTH** exception-serialization site bypassed both boundaries, and the reviewer REPRODUCED a
+  declared credential arriving on stderr verbatim: `error E-TEMPLATE-RULE upstream key
+  sk-probe-sentinel-4242`. It was reachable because `validate.py` called `template.validate(doc)`
+  unguarded, so a template raising went to `main`'s last-resort printer.
+  **My five-site measurement was itself a proxy.** I grepped `type(exc).__name__` — one SPELLING of
+  the thing — and this site formats a bare `{exc}`, so it matched nothing. That is the exact
+  substitution decision 4 forbids for leak detection, committed by the author of decision 4 while
+  measuring for it. Appended to the spec as a correction to correction 1.
+  Ruling: **the two-boundary design is vindicated rather than weakened by this.** Had redaction been
+  placed at construction sites, the sixth would have been missed and nothing would have caught it —
+  the reviewer found it precisely because the document now claims a COMPLETE boundary set, which is a
+  claim strong enough to falsify. A weaker design would have failed silently.
+  The fix is the right shape: `template.validate(doc)` is now guarded and reports through `c.error`,
+  so the sixth site was brought INSIDE the existing boundaries rather than given a third redaction
+  edit. Leak reproduced before (sentinel on stderr) and redacted after
+  (`<redacted:PUBLISHABLE_PROBE_TOK>`).
+  Second Important: mutating `c.credentials = {}` left the FULL SUITE at 1993 passed — 45 lines of
+  `declared_credential_names_for` pinned by nothing, and not dead code, since removing it leaks an
+  entrypoint-import exception through `render()`. Now pinned, mutation proven.
+  Two normative documents were overpromising and both were corrected: "Declare it, and it is covered"
+  (a declared credential passed through `io.record` lands in `units.parquet`, and core should NOT
+  scrub what a step deliberately records), and `experimental-designs.md`'s "never captured, logged, or
+  written to any artifact".
+  RESIDUAL, checked by me and ROUTED TO TASK 14 rather than reopened: `main`'s last-resort handler
+  still prints `{exc}` to stderr un-redacted. It is outside both boundaries **by construction** — it
+  catches whatever escaped every collector, and `main` has no config context to know credentials from,
+  so redacting there would need a global, which is worse than the gap. Core never puts credential
+  values in its own exception messages, and user code escaping to that level is decision 4a's stated
+  territory. The demonstrated path into it is closed. Filed rather than fixed.
+Task 12: fix round. Commit cd72c3a. 1994 passed + 2 xfailed; all gates clean.
+  Verified by the reviewer and worth keeping: redaction really is by exact value — `instrument_pw` IS
+  redacted and a random-looking config value is NOT touched, both probed. The empty string is doubly
+  guarded and cannot corrupt messages. Short values over-redact, which fails CLOSED and has no
+  security consequence; the claim was corrected rather than the behaviour.
+Task 12: complete. BASE for task 13 is below.
