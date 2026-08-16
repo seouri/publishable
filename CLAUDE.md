@@ -25,7 +25,7 @@ This repository holds both the normative specification and the tool it specifies
 Modules not yet built are still planned, and the slices that build them are listed in
 `docs/superpowers/specs/2026-08-08-implementation-spine-design.md`.
 
-**Order of the slices that remain: H3d (+3) → H4b → H7b → the rest.** Amended twice on 2026-08-14
+**Order of the slices that remain: H4b → H7b → the rest.** Amended twice on 2026-08-14
 against outside evidence — all nine experiments in
 [the feasibility analysis](docs/feasibility-llm-growth-studies.md) were run through `validate`, and
 **none executed**. The gate was the **template registry**, not the plugin system: `get_template` read a
@@ -35,9 +35,18 @@ through an entry point. **H7a was that subset** — `register_template` exported
 by path, `generate template` — and it needed none of entry-point resolution, probes or the change gate.
 **It merged on 2026-08-15 and that gate is gone.** **H4a (`resample`) merged the same day** — one refusal
 retired that 8 of 9 configs hit, a regression preserved, and **zero experiments newly executing**, which
-is the honest form of that number. H3d (`holdout`) then unblocks six and H4b (weighted contrasts) the
-last three — **but only for configs sourcing their roster from a table**; all nine as the analysis writes
-them declare a resolver, so *as written* none runs until H7b.
+is the honest form of that number. **H3d (`holdout`) has now merged too, in the identical honest form**:
+one refusal retired that 6 of 9 configs hit (`E-DATA-HOLDOUT-UNSUPPORTED`), one live defect closed (a
+`fold` beside a cell structure validated clean and produced empty per-arm folds; both that and a holdout
+beside the same structure are now a named refusal, `E-REPL-FOLD-CELLS` / `E-DATA-HOLDOUT-CELLS`), and
+**zero experiments newly executing** — all nine still declare a resolver and still earn
+`E-DATA-RESOLVER-UNSUPPORTED`, which is H7b's. A re-measurement dated 2026-08-16 is in
+[the feasibility analysis](docs/feasibility-llm-growth-studies.md) § Executability on this build, and it
+is the same lesson stated a third time: a retired-refusal count is not an executable-run count, which is
+exactly what step 10 of § Feasibility analyses exists to keep a reader from conflating. H4b (weighted
+contrasts) is the only remaining slice that unblocks any of the nine — the three shortcut configs, and
+**only for configs sourcing their roster from a table**; all nine as the analysis writes them declare a
+resolver, so *as written* none runs until H7b.
 
 A second amendment the same day scoped all five remaining slices against the code. **Every charter was
 stale in the same direction**: H4 is ~54 tasks split four ways, H7's remainder 38 split three ways, H3d
@@ -49,9 +58,11 @@ because `fold_basis` answers over the whole roster. That refusal ships with H3d;
 for a design that needs folds inside cells.
 
 The cost is that H3d now precedes the cells work it was scheduled to consume, so **H3c-3 owns
-retrofitting the holdout to cells** — acceptable only because no experiment in that analysis declares a
-group axis. The reasoning lives in the spine design's *Order, amended against outside evidence*, which
-is now tracked — cite it rather than restating it.
+retrofitting the holdout to cells, and — now that H3d has merged and named both refusals —
+retiring `E-DATA-HOLDOUT-CELLS` and `E-REPL-FOLD-CELLS` once drawing within a cell is built** —
+acceptable only because no experiment in that analysis declares a group axis. The reasoning lives in the
+spine design's *Order, amended against outside evidence*, which is now tracked — cite it rather than
+restating it.
 
 ## The documents
 

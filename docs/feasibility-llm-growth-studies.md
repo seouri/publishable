@@ -968,6 +968,37 @@ Everything above asks what the specification permits. This section asks a narrow
 
 **Why this section is dated.** Every refusal above is a build fact with a shelf life, and the commit is what makes the claim re-checkable rather than merely re-assertable. The cost and execution figures below are unaffected either way: they describe what these designs *would* meter, which is a property of the configs and not of the build.
 
+### Measured on 2026-08-16 against commit `d72724bc150ec0d2373ccd71a9784d994215f90a`
+
+H3d landed between the previous measurement and this one and retires `E-DATA-HOLDOUT-UNSUPPORTED`. This is the re-measurement that finding calls for, run rather than re-derived: each of the nine configs above, materialized as a scratch file and put through `publishable validate` against a real repo and a 240-row table roster standing in for `growth-screen`'s patient index (`weight_by`, `attributes` and `holdout` populated exactly as shown). Two substitutions were needed to reach `validate` at all, and both are named so the result is checkable rather than merely asserted:
+
+- **`entrypoint` and `experiment_type` point at this repo's own scaffolded `generic` demo, not at `growth_screen`/`growth_shortcut`.** Neither plugin is installed in any build, so an unsubstituted config fails at template resolution (`E-TEMPLATE-UNKNOWN`) or at entrypoint import (`E-ENTRYPOINT-IMPORT`) before reaching any of the codes this measurement is about — the identical "plugin assumed to exist" stance the previous measurement already took, made concrete instead of assumed.
+- **For E1, E2, E3, E4, E5 and E6**, `data.units.from` was additionally tried as `index.csv` beside the as-declared `{resolver: patient_trajectory}` — the table-roster substitution the analysis itself does not make, run here rather than left hypothetical.
+
+**`E-DATA-HOLDOUT-UNSUPPORTED` did not appear on any of the nine, at any substitution.** Grepping the tool's own source confirms it: the code is gone from `validate.py`. That is the retirement working as designed.
+
+**Zero of the nine execute, and the honest count is not "6 of 9 unblocked."** All nine still declare a resolver and still earn `E-DATA-RESOLVER-UNSUPPORTED` — this is H7b's gate, untouched by H3d. C1–C3 keep `E-DATA-WEIGHT-CONTRAST` on top of that, exactly as before.
+
+| Config | `validate` reports (as declared) | Would execute? |
+|---|---|---|
+| E1 | `E-DATA-RESOLVER-UNSUPPORTED` | No — blocked on the plugin registry |
+| E2 | `E-DATA-RESOLVER-UNSUPPORTED` | No — blocked on the plugin registry |
+| E3 | `E-DATA-RESOLVER-UNSUPPORTED` | No — blocked on the plugin registry |
+| E4 | `E-DATA-RESOLVER-UNSUPPORTED` | No — blocked on the plugin registry |
+| E5 | `E-DATA-RESOLVER-UNSUPPORTED`, `W-REPL-DETERMINISTIC` | No — blocked on the plugin registry |
+| E6 | `E-DATA-RESOLVER-UNSUPPORTED` | No — blocked on the plugin registry |
+| C1 | `E-DATA-RESOLVER-UNSUPPORTED`, `E-DATA-WEIGHT-CONTRAST` | No — two independent blockers |
+| C2 | `E-DATA-RESOLVER-UNSUPPORTED`, `E-DATA-WEIGHT-CONTRAST` | No — two independent blockers |
+| C3 | `E-DATA-RESOLVER-UNSUPPORTED`, `E-DATA-WEIGHT-CONTRAST` | No — two independent blockers |
+
+**Under the table-roster substitution, the generous count is three, not six.** E1, E2 and E5 validate with zero errors (`W-DATA-CLUSTER-UNDECLARED` fires on the `age_band` attribute regardless of substitution, and is a pre-existing warning unrelated to this slice; E5 additionally carries its own `W-REPL-DETERMINISTIC`, also pre-existing). E3, E4 and E6 validate equally clean under the same substitution — the same zero-error result as E1/E2/E5 — **but still cannot run**: each reads its frozen compiled program through `io.reuse_from`, and `grep -rn "reuse_from" src/publishable/` returns nothing in this build. A config validating clean is not a config that can execute when the method its steps call does not exist; § E5 — Binary-output repeatability and the `io.reuse_from` paragraph above are what this depends on, not anything H3d touched. So "six of nine, one substitution away" is not the number this measurement supports — three are one substitution away from `validate`, and the other three need that same substitution plus a method this build does not have.
+
+**The mutation this table rests on.** `e1-table`'s clean validation was proven discriminating, not assumed: setting `data.units.holdout.frac` to `0` on the otherwise-clean config immediately produces `E-DATA-HOLDOUT-FRAC` ("is 0, and a test fraction is strictly between 0 and 1"), and reverting the field restores the zero-error result byte-for-byte. A table that could not fail this way would not be a measurement.
+
+**Confirms the previous measurement's structure and corrects its headline framing.** `E-DATA-HOLDOUT-UNSUPPORTED`'s retirement, `E-DATA-RESOLVER-UNSUPPORTED` firing on all nine, and `E-DATA-WEIGHT-CONTRAST` firing on exactly C1–C3 are all confirmed by running rather than by re-deriving from `validate.py`'s emit sites. What this measurement does **not** confirm is "6 of 9 unblocked" as an executable count: that figure was always a count of configs that stop hitting one particular refusal, not a count of configs that reach `run`, and the honest generous figure under a substitution nobody has written is three.
+
+Full local `pytest`/`ruff`/`mypy` gates at this commit: 1954 passed + 2 xfailed, ruff and mypy both clean — unaffected by this section, which only runs `validate` against scratch files outside the repo.
+
 ---
 
 ## Cost and execution summary
