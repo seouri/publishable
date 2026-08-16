@@ -27,11 +27,11 @@ from typing import Any
 # wholesale refusal retired — a latent gap turning live. A path
 # that is both a leaf and a container is typed by the loop below AND descended
 # into by the closure, which is why the closure checks containers first.
-# `holdout` is closed one level in too, at its own five keys, for the reason
-# `resample` is: `E-DATA-HOLDOUT-UNSUPPORTED` still refuses the block at this
-# commit, and the shape is checked ahead of that refusal lifting rather than
-# after it, so the slice that honours the block reads values whose shape a
-# check already approved. The optional blocks that section documents but a
+# `holdout` is closed one level in too, at its own five keys, the same way
+# `resample` was: the shape was checked ahead of the block's wholesale
+# refusal lifting rather than after it, so the slice that honours the block
+# (task 18) reads values whose shape a check already approved. The optional
+# blocks that section documents but a
 # materialized config omits — `sweep`'s modes, `statistics.contrasts` /
 # `.null_test` / `.report_by`, and `data.units.assign` — are declared at their
 # own key with the one outer type that section gives them.

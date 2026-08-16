@@ -898,6 +898,25 @@ def test_an_unknown_repeat_kind_is_refused_through_validate(write_config):
     )
 
 
+def test_a_holdout_repeat_kind_still_routes_to_the_built_field(write_config):
+    """`{kind: holdout}` reports `E-REPL-KIND` pointing at
+    `data.units.holdout` — and that field is now BUILT, so the message names a
+    real destination rather than a refused one. Both halves asserted, because
+    the route being correct and the destination existing are two claims: this
+    test belongs beside `_holdout`'s other consumers in this file rather than
+    in `test_cli.py`, since it is a pure validate-time check with no run to
+    drive — `write_config`, `_holdout` and `messages_by_code` are this
+    module's, not `test_cli.py`'s."""
+    overrides = _holdout(None)
+    overrides["replication"] = {
+        "repeats": [{"kind": "holdout", "n": 1}], "order": "as_declared"
+    }
+    by_code = messages_by_code(write_config(overrides))
+    assert "E-REPL-KIND" in by_code
+    assert "data.units.holdout" in by_code["E-REPL-KIND"]
+    assert "E-DATA-HOLDOUT-UNSUPPORTED" not in by_code
+
+
 def test_colliding_seeds_are_refused_through_validate(write_config, monkeypatch):
     import publishable.replication as replication
 
@@ -2235,7 +2254,7 @@ def test_a_plain_units_block_is_now_accepted(write_config):
     assert not [c for c in found if c.endswith("-UNSUPPORTED")]
 
 
-def test_holdout_is_refused_on_its_own(write_config):
+def test_a_plain_holdout_declaration_is_now_accepted(write_config, tmp_path):
     """`allocation` and `assign` were rows of this same family until task 17
     retired their `-UNSUPPORTED` refusals — `_check_assign` now checks both for
     real, see `test_by_attribute_assignment_is_accepted` and its neighbors.
@@ -2246,24 +2265,31 @@ def test_holdout_is_refused_on_its_own(write_config):
     column and interval. What either may not yet be combined with is checked by
     `test_a_clustered_generated_comparison_is_refused` and
     `test_a_weighted_generated_comparison_is_refused` below, and, at run time,
-    by `test_cli.py`'s `E-DATA-CLUSTER-DERIVED`. `holdout` is the one field
-    left in this family — read by nothing yet."""
+    by `test_cli.py`'s `E-DATA-CLUSTER-DERIVED`. `holdout` left the same family
+    with task 18: `_check_holdout` checks the declaration for real, and a
+    plain, well-formed one earns none of its findings.
+
+    `write_config`'s default roster is a single unit, over which any nonzero
+    `frac` apportions the test side zero — `E-DATA-HOLDOUT-EMPTY`, a real and
+    unrelated finding this test must not trip. 20 units avoids it."""
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id\n" + "".join(f"p{i}\n" for i in range(20))
+    )
     units = {
         "from": "index.csv",
         "key": "patient_id",
         "holdout": {"method": "random", "frac": 0.2},
     }
-    assert "E-DATA-HOLDOUT-UNSUPPORTED" in codes(write_config({"data.units": units}))
+    found = codes(write_config({"data.units": units}))
+    assert not [c for c in found if c.endswith("-UNSUPPORTED")]
+    assert not [c for c in found if c.startswith("E-DATA-HOLDOUT-")]
 
 
-def test_a_misspelled_holdout_child_is_reported_alongside_the_wholesale_refusal(write_config):
-    """The envelope's new closure (`envelope.py`'s `data.units.holdout.*` entries)
-    and `_check_holdout`'s wholesale refusal are two different checks over the
-    same declaration, and both must fire: the shape fault from `check_envelope`
-    and `E-DATA-HOLDOUT-UNSUPPORTED` from `validate` itself. Pinning both, on
-    the same config, is what makes task 18's retirement of the wholesale
-    refusal a one-line deletion here rather than a rewrite — this test still
-    holds the shape assertion once that line is gone."""
+def test_a_misspelled_holdout_child_is_reported(write_config):
+    """The envelope's closure (`envelope.py`'s `data.units.holdout.*` entries)
+    catches a misspelled child key on its own terms — `E-CONFIG-KEY-UNKNOWN` at
+    the misspelled path — independent of `_check_holdout`'s real checks over
+    the same declaration."""
     units = {
         "from": "index.csv",
         "key": "patient_id",
@@ -2272,8 +2298,6 @@ def test_a_misspelled_holdout_child_is_reported_alongside_the_wholesale_refusal(
     path = write_config({"data.units": units})
     c = Collector()
     validate_config(path, c)
-    found = {f.code for f in c.findings}
-    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
     assert any(
         f.code == "E-CONFIG-KEY-UNKNOWN" and f.path == "data.units.holdout.methodd"
         for f in c.findings
@@ -2526,22 +2550,24 @@ def test_a_resolver_source_is_refused_until_plugins_exist(write_config):
 
 
 @pytest.mark.parametrize(
-    "units",
+    "overrides",
     [
-        {"from": {"resolver": "plate_wells"}, "key": "well"},
-        {"from": "index.csv", "key": "patient_id", "holdout": {"method": "random", "frac": 0.2}},
+        {"data.units": {"from": {"resolver": "plate_wells"}, "key": "well"}},
+        {"statistics": {"null_test": {"method": "permutation", "n": 5000}}},
     ],
 )
-def test_every_unsupported_message_defers_rather_than_scolds(write_config, units):
+def test_every_unsupported_message_defers_rather_than_scolds(write_config, overrides):
     """The `-UNSUPPORTED` family exists so a refusal reads as 'not built yet', not as
     'your config is wrong'. Every message in this family must say so explicitly, or a
     user has no way to tell a refusal from a validation error. `allocation: between` and
-    `assign` were rows here until task 17 retired their `-UNSUPPORTED` refusals — each
-    now draws a real, behavior-specific finding instead (`E-DATA-ALLOCATION-NO-ARMS`,
-    `E-DATA-ASSIGN-MISSING`, and so on), not a deferral."""
-    found = messages_by_code(write_config({"data.units": units}))
+    `assign` were rows here until task 17 retired their `-UNSUPPORTED` refusals, and
+    `data.units.holdout` left with task 18 — each now draws a real, behavior-specific
+    finding instead (`E-DATA-ALLOCATION-NO-ARMS`, `E-DATA-ASSIGN-MISSING`, and so on, or
+    validates clean), not a deferral. `E-DATA-RESOLVER-UNSUPPORTED` and
+    `E-STATS-NULLTEST-UNSUPPORTED` are what remains of the family."""
+    found = messages_by_code(write_config(overrides))
     unsupported = {code: msg for code, msg in found.items() if code.endswith("-UNSUPPORTED")}
-    assert unsupported, f"expected an -UNSUPPORTED finding for {units}"
+    assert unsupported, f"expected an -UNSUPPORTED finding for {overrides}"
     for code, message in unsupported.items():
         assert "later slice" in message, f"{code} message does not defer: {message!r}"
 
@@ -4038,17 +4064,21 @@ def test_a_resolver_source_does_not_also_raise_source_missing(write_config):
 def test_an_unrelated_unsupported_field_does_not_suppress_a_real_roster_defect(
     write_config, tmp_path
 ):
-    """`holdout` is refused, but it is not read by `resolve_units` at all — a
-    duplicate key in the roster is a real, independent defect and must still be
-    reported alongside the refusal, not swallowed by it."""
+    """`statistics.null_test` is refused wholesale, but it is not read by
+    `resolve_units` at all — a duplicate key in the roster is a real,
+    independent defect and must still be reported alongside the refusal, not
+    swallowed by it. `holdout` no longer serves this example: task 18 retired
+    its wholesale refusal, so `statistics.null_test` is the field that still
+    validates clean while changing no behavior."""
     (tmp_path / "input" / "index.csv").write_text("patient_id\np1\np1\n")
-    units = {
-        "from": "index.csv",
-        "key": "patient_id",
-        "holdout": {"method": "random", "frac": 0.2},
-    }
-    found = codes(write_config({"data.units": units}))
-    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
+    units = {"from": "index.csv", "key": "patient_id"}
+    found = codes(
+        write_config({
+            "data.units": units,
+            "statistics": {"null_test": {"method": "permutation", "n": 5000}},
+        })
+    )
+    assert "E-STATS-NULLTEST-UNSUPPORTED" in found
     assert "E-UNITS-KEY-DUPLICATE" in found
 
 
@@ -11372,10 +11402,6 @@ def test_a_malformed_holdout_declaration_is_refused(write_config, block, expecte
     path = write_config(_holdout(block))
     found = codes(path)
     assert expected in found
-    # Alongside, never instead of: `E-DATA-HOLDOUT-UNSUPPORTED` is still live
-    # at this commit and task 18 retires it. Membership on its own line makes
-    # that retirement a one-line deletion rather than a rewrite of this test.
-    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
     # Pins the message to the specific branch this row exercises — two
     # branches can share `expected`'s code, and without this the wrong one
     # could fire silently.
@@ -11416,9 +11442,10 @@ def test_a_well_formed_holdout_declaration_earns_none_of_the_five(write_config, 
         "E-DATA-HOLDOUT-SEED",
     ):
         assert code not in found
-    # The positive companion: this config is not silently escaping the check
-    # entirely — the wholesale refusal still fires on the same declaration.
-    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
+    # The can-fail control for this absence-only test:
+    # `test_a_malformed_holdout_declaration_is_refused` above proves each of
+    # these five codes fires on its own offending shape, so an empty
+    # intersection here is not "nothing ran".
 
 
 _HOLDOUT_STRATA_ROSTER = "patient_id,label,site\n" + "".join(
@@ -11451,7 +11478,6 @@ def test_a_holdout_stratum_naming_no_declared_attribute_is_refused(write_config,
     # time would give a count of 2 and be wrong about which attributes failed.
     joined = " ".join(f.message for f in unknown)
     assert "'sex'" in joined and "'cohort'" in joined, joined
-    assert "E-DATA-HOLDOUT-UNSUPPORTED" in {f.code for f in c.findings}
 
 
 def test_a_bare_string_holdout_stratum_is_read_as_one_name(write_config, tmp_path):
@@ -11528,7 +11554,6 @@ def test_a_holdout_stratum_that_names_no_attribute_at_all_is_refused(
     )
     found = codes(path)
     assert "E-DATA-HOLDOUT-STRATIFY-UNKNOWN" in found
-    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
     assert fragment in messages_by_code(path)["E-DATA-HOLDOUT-STRATIFY-UNKNOWN"]
 
 
@@ -11568,14 +11593,16 @@ def test_a_holdout_stratum_naming_the_measurement_axis_is_refused(write_config, 
         )
     )
     assert "E-DATA-HOLDOUT-STRATIFY-UNKNOWN" in found
-    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
 
 
 def test_a_declared_holdout_stratum_is_accepted(write_config, tmp_path):
     """The positive companion, produced by the code under test: the same
     declaration over a name `data.units.attributes` DOES declare reports
     nothing, so the check reads the declaration rather than refusing every
-    `stratify_by`."""
+    `stratify_by`. The can-fail control is
+    `test_a_holdout_stratum_naming_no_declared_attribute_is_refused` above,
+    which proves `E-DATA-HOLDOUT-STRATIFY-UNKNOWN` fires on an undeclared
+    name — so an absence here is not "nothing ran"."""
     (tmp_path / "input" / "index.csv").write_text(_HOLDOUT_STRATA_ROSTER)
     found = codes(
         write_config(
@@ -11586,31 +11613,28 @@ def test_a_declared_holdout_stratum_is_accepted(write_config, tmp_path):
         )
     )
     assert "E-DATA-HOLDOUT-STRATIFY-UNKNOWN" not in found
-    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
 
 
 def test_a_holdout_beside_a_fold_repeat_is_refused(write_config):
     """§ A fixed holdout split: two answers to one question — how the data is
     divided for evaluation — leaving "which units is this metric over?" with
-    none. Probed at `78bb794`: this config reports ONLY
-    `E-DATA-HOLDOUT-UNSUPPORTED` today, with no exclusion check at all."""
+    none."""
     overrides = _holdout({"method": "random", "frac": 0.2})
     overrides["replication"] = {
         "repeats": [{"kind": "fold", "k": 5}], "order": "as_declared"
     }
     found = codes(write_config(overrides))
     assert "E-DATA-HOLDOUT-FOLD" in found
-    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
 
 
 def test_a_holdout_beside_a_seed_repeat_is_not_refused(write_config):
-    """The control, and it must report something: a `seed` repeat divides
-    nothing, so the exclusion is about `fold` specifically rather than about
-    `replication` being declared at all. Without the second assertion this
-    passes identically if the check is dead."""
+    """The control: a `seed` repeat divides nothing, so the exclusion is about
+    `fold` specifically rather than about `replication` being declared at all.
+    The can-fail control is `test_a_holdout_beside_a_fold_repeat_is_refused`
+    above, which proves `E-DATA-HOLDOUT-FOLD` fires on the same block beside a
+    `fold` repeat — so an absence here is not "nothing ran"."""
     found = codes(write_config(_holdout({"method": "random", "frac": 0.2})))
     assert "E-DATA-HOLDOUT-FOLD" not in found
-    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
 
 
 _SPLIT_ROSTER_OK = "patient_id,split\n" + "".join(
@@ -11694,7 +11718,6 @@ def test_a_by_attribute_holdout_column_must_hold_exactly_train_and_test(
     )
     found = codes(path)
     assert "E-DATA-HOLDOUT-VALUES" in found
-    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
     message = messages_by_code(path)["E-DATA-HOLDOUT-VALUES"]
     assert fragment in message
     if missing_fragment is None:
@@ -11710,9 +11733,8 @@ def test_a_by_attribute_holdout_column_holding_exactly_the_two_literals_is_accep
     declaration over a column that IS exactly `{train, test}` reports nothing,
     so the refusal reads the roster rather than refusing `by_attribute`.
 
-    An absence alone does not attribute to `_check_holdout` — `E-DATA-HOLDOUT-
-    UNSUPPORTED` is `_check_unimplemented`'s, not this function's, and both
-    assertions below pass identically with `_check_holdout` returning
+    An absence alone does not attribute to `_check_holdout` — a bare "no
+    findings" assertion would pass identically with `_check_holdout` returning
     immediately (task 7 review, finding 3). A malformed `seed` — legal under
     every method, so it is orthogonal to the roster property this test is
     about — earns `E-DATA-HOLDOUT-SEED`, a code only `_check_holdout` emits,
@@ -11728,7 +11750,6 @@ def test_a_by_attribute_holdout_column_holding_exactly_the_two_literals_is_accep
     )
     assert "E-DATA-HOLDOUT-VALUES" not in found
     assert "E-DATA-HOLDOUT-SEED" in found
-    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
 
 
 _VARYING_HOLDOUT_STRATUM = "patient_id,animal_id,label\n" + "".join(
@@ -11769,7 +11790,6 @@ def test_a_holdout_stratum_must_be_constant_within_a_cluster(
     )
     found = codes(path)
     assert ("E-DATA-HOLDOUT-STRATIFY-VARIES" in found) is expected
-    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
     if expected:
         message = messages_by_code(path)["E-DATA-HOLDOUT-STRATIFY-VARIES"]
         assert "names 'label', which varies within `animal_id` a0" in message
@@ -11795,7 +11815,6 @@ def test_a_holdout_that_apportions_the_test_side_no_units_is_refused(
     path = write_config(_holdout({"method": "random", "frac": 0.1}))
     found = codes(path)
     assert "E-DATA-HOLDOUT-EMPTY" in found
-    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
     message = messages_by_code(path)["E-DATA-HOLDOUT-EMPTY"]
     assert "is 0.1 over 4 resolved units" in message
     assert "apportions the test side zero of them" in message
@@ -11806,9 +11825,8 @@ def test_the_same_frac_over_a_larger_roster_is_accepted(write_config, tmp_path):
     test and differing ONLY in roster size — so the refusal is the
     apportionment's answer rather than a refusal of small `frac` values.
 
-    An absence alone does not attribute to `_check_holdout` — `E-DATA-HOLDOUT-
-    UNSUPPORTED` is `_check_unimplemented`'s, not this function's, and both
-    assertions below pass identically with `_check_holdout` returning
+    An absence alone does not attribute to `_check_holdout` — a bare "no
+    findings" assertion would pass identically with `_check_holdout` returning
     immediately (task 7 review, finding 3). A malformed `seed` — legal under
     every method, so it is orthogonal to the roster-size property this test is
     about — earns `E-DATA-HOLDOUT-SEED`, a code only `_check_holdout` emits,
@@ -11821,7 +11839,6 @@ def test_the_same_frac_over_a_larger_roster_is_accepted(write_config, tmp_path):
     )
     assert "E-DATA-HOLDOUT-EMPTY" not in found
     assert "E-DATA-HOLDOUT-SEED" in found
-    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
 
 
 def test_the_empty_test_partition_refusal_is_not_reported_for_a_clustered_split(
@@ -11832,9 +11849,8 @@ def test_the_empty_test_partition_refusal_is_not_reported_for_a_clustered_split(
     the smallest thing that can move and only the draw knows what it moved.
     The same 4-unit roster that reports above must not report here.
 
-    An absence alone does not attribute to `_check_holdout` — `E-DATA-HOLDOUT-
-    UNSUPPORTED` is `_check_unimplemented`'s, not this function's, and both
-    assertions below pass identically with `_check_holdout` returning
+    An absence alone does not attribute to `_check_holdout` — a bare "no
+    findings" assertion would pass identically with `_check_holdout` returning
     immediately (task 7 review, finding 3). A malformed `seed` — legal under
     every method, so it is orthogonal to the siting property this test is
     about — earns `E-DATA-HOLDOUT-SEED`, a code only `_check_holdout` emits,
@@ -11853,7 +11869,6 @@ def test_the_empty_test_partition_refusal_is_not_reported_for_a_clustered_split(
     )
     assert "E-DATA-HOLDOUT-EMPTY" not in found
     assert "E-DATA-HOLDOUT-SEED" in found
-    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
 
 
 
@@ -11889,7 +11904,6 @@ def test_the_empty_test_partition_refusal_is_not_reported_for_a_stratified_split
     )
     assert "E-DATA-HOLDOUT-EMPTY" not in found
     assert "E-DATA-HOLDOUT-SEED" in found
-    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
 
 
 def test_the_empty_test_partition_refusal_is_not_stacked_on_a_frac_already_refused(
@@ -11907,7 +11921,6 @@ def test_the_empty_test_partition_refusal_is_not_stacked_on_a_frac_already_refus
     found = codes(write_config(_holdout({"method": "random", "frac": 0})))
     assert "E-DATA-HOLDOUT-FRAC" in found
     assert "E-DATA-HOLDOUT-EMPTY" not in found
-    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
 
 
 _CELL_ROSTER = "patient_id,arm\n" + "".join(
@@ -11954,7 +11967,6 @@ def test_a_holdout_beside_a_cell_structure_is_refused(write_config, tmp_path):
         write_config(_cells({"holdout": {"method": "random", "frac": 0.2}}, fold=False))
     )
     assert "E-DATA-HOLDOUT-CELLS" in found
-    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
 
 
 def test_both_split_kinds_beside_a_cell_structure_report_both_codes(
@@ -12019,13 +12031,11 @@ def test_an_empty_group_axis_alone_does_not_trigger_the_refusal(write_config, tm
 
     A `grid` axis is added so the empty `groups` doesn't leave the sweep
     expanding to nothing on its own (which would earn its own unrelated
-    refusal and make this control roster-incidental). As with the control
-    above, a companion positive assertion here would have to rest on
-    `E-DATA-HOLDOUT-UNSUPPORTED`, which is not positive attribution for this
-    check — so this row's evidence is the paired trigger test above
-    (`test_a_holdout_beside_a_cell_structure_is_refused`, identical roster and
-    holdout, differing only in `sweep.groups` being non-empty there and empty
-    here) rather than a second assertion in this test."""
+    refusal and make this control roster-incidental). This is a control
+    asserting only an absence, so it cannot prove itself: its evidence is the
+    paired trigger test above (`test_a_holdout_beside_a_cell_structure_is_refused`,
+    identical roster and holdout, differing only in `sweep.groups` being
+    non-empty there and empty here)."""
     (tmp_path / "input" / "index.csv").write_text(_CELL_ROSTER)
     overrides = _holdout({"method": "random", "frac": 0.2}, attributes=["arm"])
     overrides["sweep"] = {
@@ -12043,14 +12053,9 @@ def test_an_evaluation_split_without_a_cell_structure_is_not_refused(
     nine feasibility configs declare, and the shape this refusal must leave
     alone.
 
-    **`E-DATA-HOLDOUT-UNSUPPORTED` below is NOT positive attribution.** It is
-    emitted by `_check_unimplemented`, a different function, so it would appear
-    unchanged if this check never ran — task 7's review found three controls
-    resting on exactly that mistake. It is asserted here only so the row
-    survives task 18's retirement as a one-line deletion. A control over a
-    check that correctly reports nothing cannot prove itself; what proves this
-    one is the pair of trigger tests above, which differ from it only in the
-    cell structure."""
+    A control over a check that correctly reports nothing cannot prove
+    itself; what proves this one is the pair of trigger tests above, which
+    differ from it only in the cell structure."""
     (tmp_path / "input" / "index.csv").write_text(_CELL_ROSTER)
     found = codes(
         write_config(
@@ -12059,7 +12064,6 @@ def test_an_evaluation_split_without_a_cell_structure_is_not_refused(
     )
     assert "E-DATA-HOLDOUT-CELLS" not in found
     assert "E-REPL-FOLD-CELLS" not in found
-    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
 
 
 _FIFTY_CLUSTERS = "patient_id,animal_id,label\n" + "".join(
@@ -12100,7 +12104,6 @@ def test_the_resample_cluster_warning_counts_the_holdout_s_test_partition(
     })
     with_holdout = codes(with_holdout_path)
     assert "W-STATS-RESAMPLE-CLUSTERS" in with_holdout
-    assert "E-DATA-HOLDOUT-UNSUPPORTED" in with_holdout
     # The message names what was actually counted — the test partition, not
     # the roster it was drawn from — so a reader is not sent looking for the
     # missing clusters in a roster that still has them.
@@ -12127,7 +12130,6 @@ def test_a_holdout_wide_enough_to_keep_the_clusters_does_not_warn(
         "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
     }))
     assert "W-STATS-RESAMPLE-CLUSTERS" not in found
-    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
 
 
 def test_the_stratum_constancy_check_still_reads_the_whole_roster(

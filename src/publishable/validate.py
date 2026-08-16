@@ -3444,8 +3444,14 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     real, `units.arm_members` narrows a condition's roster to its own arm, and
     `cli.py` writes `allocation.json` and `provenance.allocation_hash` — so each
     declaration changes the record, which is the test this family applies. It
-    resolves a unit roster, but two `data.units` sub-fields — `holdout` and a
-    `resolver` source — are still read by nothing.
+    resolves a unit roster, but one `data.units` sub-field — a `resolver`
+    source — is still read by nothing. `data.units.holdout` is no longer among
+    them either: `_check_holdout` checks the declaration for real,
+    `_resolved_holdout` realizes the partition once per run over the run's own
+    digest, `io.units`/`io.units.train` see the test and training halves,
+    and `cli.py` narrows every denominator to the test partition and writes
+    `allocation.json` and `provenance.allocation_hash` — so the declaration
+    changes the record, which is the test this family applies.
     `data.units.measurements` is no longer among them either: `resolve_units` collapses
     the rows an input table carries, `StepIO.finalize` collapses the ones a step
     records under `measurement=`, and `technical_n` reaches every metric block,
@@ -3547,56 +3553,55 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
             "plugin registry is not implemented in this build; resolvers will be honored "
             "in a later slice. Use a table or a glob for now",
         )
-    for field, code in (
-        # `allocation: between` and `assign` were checked here, as a standalone
-        # `if` and as a loop entry respectively. `_check_assign` now checks both
-        # — against each other and against `sweep.groups` — for real: it reports
-        # an out-of-enum `allocation` value under `E-DATA-ALLOCATION-METHOD`, the
-        # pairing faults under `E-DATA-ALLOCATION-NO-ARMS`/`E-DATA-ASSIGN-MISSING`/
-        # `E-DATA-ALLOCATION-WITHIN-ARMS`, and a malformed or unresolvable `assign`
-        # block under `E-DATA-ASSIGN-METHOD`/`E-DATA-ASSIGN-UNKNOWN`/
-        # `E-DATA-ASSIGN-LEVELS`. `units.arm_members` narrows a condition's roster
-        # to its own arm, and `cli.py` writes `allocation.json` and
-        # `provenance.allocation_hash` — so the declaration changes the record,
-        # which is the test this family applies. What an allocated run may *not*
-        # yet do is publish a cross-arm contrast: `_check_sweep` refuses that
-        # combination under `E-DATA-ALLOCATION-CONTRAST`, a refusal of a
-        # combination rather than of a declaration, so it belongs there rather
-        # than in this loop.
-        # `cluster_by` was here. `_check_cluster_by` checks the declaration for
-        # real, `attrition` counts the clusters, `partition_units` keeps one out
-        # of two folds, and `summarize_step` gives every `basis: units` column a
-        # cluster-robust interval — so the declaration changes the record, which
-        # is the test this family applies. What a clustered run may *not* yet do
-        # is publish a contrast (`_check_sweep` refuses that combination
-        # under `E-DATA-CLUSTER-CONTRAST`) or resample a derived metric
-        # (`stats.summarize_step` raises `E-DATA-CLUSTER-DERIVED` at run time,
-        # that one not being knowable from a declaration at all). Both refuse a
-        # combination rather than a declaration, which is why neither is in this
-        # loop.
-        # `weight_by` was here. `_check_weight_by` checks the declaration for
-        # real, `attrition` computes Kish's effective size from it, and
-        # `summarize_step` weights every `basis: units` column's value and
-        # interval — so the declaration changes the record, which is the test
-        # this family applies. What a weighted run may *not* yet do is publish a
-        # contrast: `_check_sweep` refuses that combination under
-        # `E-DATA-WEIGHT-CONTRAST`, which is a refusal of a combination rather
-        # than of a declaration and so belongs there rather than in this loop.
-        # `measurements` was here. `_check_measurements` now checks the block for
-        # real, `resolve_units` collapses the input path, `finalize` collapses the
-        # step path, and `technical_n` reaches every metric block — so the
-        # declaration changes the record, which is the test this family applies.
-        ("holdout", "E-DATA-HOLDOUT-UNSUPPORTED"),
-    ):
-        # `init` writes these as null; only a real declaration is refused.
-        if units.get(field):
-            c.error(
-                code,
-                f"data.units.{field}",
-                "is specified but not implemented in this build — it is read by nothing "
-                "here, and a declaration that changes no behavior is the failure this "
-                "refusal exists to prevent; it will be honored in a later slice",
-            )
+    # No `data.units` sub-field is refused wholesale any more. Each one this
+    # function used to hold — `allocation`/`assign`, `cluster_by`, `weight_by`,
+    # `measurements`, and now `holdout` — is checked for real by its own
+    # function instead, and each changes the run's record rather than
+    # validating clean and then doing nothing:
+    #
+    # `allocation: between` and `assign` are checked by `_check_assign` —
+    # against each other and against `sweep.groups` — reporting an out-of-enum
+    # `allocation` value under `E-DATA-ALLOCATION-METHOD`, the pairing faults
+    # under `E-DATA-ALLOCATION-NO-ARMS`/`E-DATA-ASSIGN-MISSING`/
+    # `E-DATA-ALLOCATION-WITHIN-ARMS`, and a malformed or unresolvable `assign`
+    # block under `E-DATA-ASSIGN-METHOD`/`E-DATA-ASSIGN-UNKNOWN`/
+    # `E-DATA-ASSIGN-LEVELS`. `units.arm_members` narrows a condition's roster
+    # to its own arm, and `cli.py` writes `allocation.json` and
+    # `provenance.allocation_hash`. What an allocated run may *not* yet do is
+    # publish a cross-arm contrast: `_check_sweep` refuses that combination
+    # under `E-DATA-ALLOCATION-CONTRAST`, a refusal of a combination rather
+    # than of a declaration, so it lives there rather than here.
+    #
+    # `cluster_by` is checked by `_check_cluster_by`; `attrition` counts the
+    # clusters, `partition_units` keeps one out of two folds, and
+    # `summarize_step` gives every `basis: units` column a cluster-robust
+    # interval. What a clustered run may *not* yet do is publish a contrast
+    # (`_check_sweep` refuses that combination under `E-DATA-CLUSTER-CONTRAST`)
+    # or resample a derived metric (`stats.summarize_step` raises
+    # `E-DATA-CLUSTER-DERIVED` at run time, that one not being knowable from a
+    # declaration at all). Both refuse a combination rather than a
+    # declaration, which is why neither is here.
+    #
+    # `weight_by` is checked by `_check_weight_by`; `attrition` computes
+    # Kish's effective size from it, and `summarize_step` weights every
+    # `basis: units` column's value and interval. What a weighted run may
+    # *not* yet do is publish a contrast: `_check_sweep` refuses that
+    # combination under `E-DATA-WEIGHT-CONTRAST`, a refusal of a combination
+    # rather than of a declaration, so it lives there rather than here.
+    #
+    # `measurements` is checked by `_check_measurements`; `resolve_units`
+    # collapses the input path, `finalize` collapses the step path, and
+    # `technical_n` reaches every metric block.
+    #
+    # `holdout` is checked by `_check_holdout`; `_resolved_holdout` realizes the
+    # partition once per run, `io.units`/`io.units.train` see the two halves,
+    # `cli.py` narrows the denominator to the test partition and writes
+    # `allocation.json` and `provenance.allocation_hash`.
+    #
+    # One `data.units` sub-field remains read by nothing: a `resolver` source
+    # (checked above, under `E-DATA-RESOLVER-UNSUPPORTED`, since resolvers are
+    # plugin artifacts and the plugin registry is not implemented in this
+    # build). `holdout` left this family with this slice.
 
     # `statistics.null_test` validates clean today and is read by nothing —
     # the same silent-no-op class as the fields above. `statistics.resample`

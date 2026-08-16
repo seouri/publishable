@@ -1,3 +1,4 @@
+import hashlib
 import json
 import re
 import subprocess
@@ -8056,4 +8057,200 @@ def test_compute_vs_baseline_roster_argument_never_affects_the_auto_generated_fa
     assert result is not None
     assert result[1]["s"]["r"]["n_paired"] == 4
     assert result == _run(eval_roster)
+
+
+# --- Task 18: retiring `E-DATA-HOLDOUT-UNSUPPORTED`, and the five end-to-end pins -----
+
+_HOLDOUT_SEEING_STEP = '''\
+# src/{pkg}/steps/step01_split.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        io.write("split.json", {{
+            "test": sorted(u.key for u in io.units),
+            "train": sorted(u.key for u in io.units.train),
+        }})
+        for unit in io.units:
+            io.record(unit.key, {{"value": 1.0}})
+        return {{"n": len(io.units)}}
+'''
+
+
+_ALWAYS_FAILING_STEP = '''\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+_recorded_test_once = False
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        global _recorded_test_once
+        train_keys = {{u.key for u in io.units.train}}
+        test_units = [u for u in io.units if u.key not in train_keys]
+        train_units = [u for u in io.units if u.key in train_keys]
+        # The training partition is recorded EVERY execution, whenever it is
+        # visible at all — which is only when `io.units` is NOT narrowed to
+        # the test partition. This is what keeps the un-narrowed denominator's
+        # failure fraction at 4 of 20 rather than 4 of 4: the same 4
+        # physical test-partition units are the only ones ever left
+        # unresolved, whether `io.units` hands the step 4 keys or 20.
+        for unit in train_units:
+            io.record(unit.key, {{"value": 1.0}})
+        # The test partition is recorded successfully exactly ONCE, on the
+        # very first execution — just enough for
+        # `runner._units_failed_anywhere` to classify this step as
+        # "recording" at all (its own docstring: a step whose every
+        # execution crashes or produces no row can never trip the guard).
+        # Every execution after the first leaves the test partition
+        # untouched; `_units_failed_anywhere` unions failures ACROSS every
+        # recording execution of the run, so those units still end up
+        # counted as failed overall even though they succeeded once.
+        if not _recorded_test_once:
+            _recorded_test_once = True
+            for unit in test_units:
+                io.record(unit.key, {{"value": 1.0}})
+        return {{"n": len(io.units)}}
+'''
+
+
+def run_roster_keys(doc: dict[str, Any]) -> list[str]:
+    """The whole roster's keys, resolved fresh from the run's own recorded
+    config and the same `data/` directory `run_a_project` wrote the roster
+    into — the ground truth `train ∪ test` is checked against, rather than
+    re-deriving it from anything the run itself wrote (`allocation.json`
+    included)."""
+    from publishable.units import resolve_units
+
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    roster, _technical_n, _columns = resolve_units(
+        run["config"]["data"]["units"], doc["root"].parent / "data"
+    )
+    return [u.key for u in roster]
+
+
+def _planned_execution_count(doc: dict[str, Any]) -> int:
+    """The whole plan's length, from `sweep.yaml`'s own `execution_order` —
+    conditions × repeat labels, exactly the construction
+    `test_sweep_yaml_records_the_order_mode_and_seed` above reads
+    (`len(sweep["execution_order"]) == len(sweep["labels"]) * len(sweep["conditions"])`)
+    — regardless of how many of them the run actually reached before
+    `max_failed_fraction` aborted it."""
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+    return len(sweep["execution_order"])
+
+
+def test_a_declared_holdout_now_validates_and_runs(tmp_path, capsys):
+    """`E-DATA-HOLDOUT-UNSUPPORTED` is retired, so this config reaches
+    `command_run` for the first time. Pins tasks 13, 14, 15 and 17 end to end —
+    the five wiring tasks had no config that could reach the CLI while the
+    wholesale refusal stood, and this is where they get one.
+
+    Departure from the brief this test started from (recorded here rather
+    than silently "fixed", the same convention task 1's own end-to-end test
+    documents): `executions.jsonl` records carry no `n` key at all —
+    `runner.execute_plan` writes `step`/`scope`/`condition`/`repeat`/`status`/
+    `started_at`/`wall_seconds`/`error`, nothing else, both before this slice
+    and after it. Task 15's denominator is `run.yaml`'s per-metric `n`, not a
+    ledger field, so the ledger check below is a plain status assertion and
+    the real denominator pin reads `run.yaml`'s `aggregated` block instead."""
+    doc = run_a_project(
+        tmp_path, capsys=capsys, units=20,
+        units_overrides={"holdout": {"method": "random", "frac": 0.2, "seed": 4321}},
+        _starter_step=_HOLDOUT_SEEING_STEP,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "completed"
+
+    # Task 17: the file, the provenance pair, and the hash.
+    alloc_path = doc["run_dir"] / "allocation.json"
+    assert alloc_path.exists()
+    alloc = json.loads(alloc_path.read_text())
+    assert run["provenance"]["allocation"] == "allocation.json"
+    assert run["provenance"]["allocation_hash"] == "sha256:" + hashlib.sha256(
+        json.dumps(alloc, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+    # Task 13: realized once, over the whole roster, at the pinned seed.
+    assert alloc["holdout"]["seed"] == 4321
+    assert len(alloc["holdout"]["test"]) == 4
+    assert len(alloc["holdout"]["train"]) == 16
+    assert set(alloc["holdout"]["train"]) | set(alloc["holdout"]["test"]) == set(
+        run_roster_keys(doc)
+    )
+    assert not set(alloc["holdout"]["train"]) & set(alloc["holdout"]["test"])
+
+    # Task 14: the step saw the same two lists the record claims.
+    seen = json.loads(next(doc["run_dir"].rglob("split.json")).read_text())
+    assert seen["test"] == sorted(alloc["holdout"]["test"])
+    assert seen["train"] == sorted(alloc["holdout"]["train"])
+
+    # The ledger carries no denominator (see the docstring); what it does
+    # guarantee is that every recorded execution completed, over the test
+    # partition, with nothing lost to a step that never ran.
+    ledger = [
+        json.loads(line)
+        for line in (doc["run_dir"] / "executions.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert ledger
+    assert all(record["status"] == "completed" for record in ledger), ledger
+
+    # Task 15: the denominator is the TEST partition, and the roster's identity
+    # is not. The two numbers asserted side by side, which is the ruling.
+    assert run["provenance"]["units"]["n"] == 20
+    for block in run["results"]["conditions"][0]["aggregated"].values():
+        for metric in block.values():
+            if isinstance(metric, dict) and isinstance(metric.get("n"), dict):
+                assert metric["n"]["resolved"] == 4, metric
+
+
+def test_max_failed_fraction_is_measured_against_the_test_partition(tmp_path, capsys):
+    """Task 15's second pin. A step leaving every test unit unresolved is 4
+    of 4 over the narrowed denominator — over the un-narrowed roster it
+    would be 4 of 20, two-fifths of the declared threshold, and the guard
+    would not fire. The number is what separates the two readings, so the
+    fraction is chosen to sit between them.
+
+    Two departures from the brief this test started from, recorded here
+    rather than silently "fixed" (the convention task 1's own end-to-end test
+    documents):
+
+    - `executions.jsonl` records carry no `n` key (see the test above), so
+      what proves the narrowed denominator is the guard actually firing —
+      `len(ledger) < _planned_execution_count(doc)` — not a per-record count
+      the ledger does not write.
+    - `_ALWAYS_FAILING_STEP` never raises: `runner._units_failed_anywhere`
+      only ever classifies a step as "recording" units once it has produced
+      at least one row, and a step whose every execution crashes before that
+      is exempt from the guard entirely (its own docstring) — a single
+      always-raising step trips nothing over EITHER denominator, since
+      `io.units` narrows to the test partition either way and a step that
+      never records loses the very distinction this test needs. Every
+      execution here completes; `max_failed_fraction` is a fraction of
+      UNRESOLVED units, not of raised executions, and `run_status` reports
+      `completed` even though the plan stops short — the guard and the
+      execution-level exit code are two different mechanisms."""
+    doc = run_a_project(
+        tmp_path, capsys=capsys, units=20,
+        units_overrides={"holdout": {"method": "random", "frac": 0.2, "seed": 4321}},
+        limits={"max_failed_fraction": 0.5, "max_executions": 100},
+        _starter_step=_ALWAYS_FAILING_STEP,
+        expect_exit=EXIT_OK,
+    )
+    ledger = [
+        json.loads(line)
+        for line in (doc["run_dir"] / "executions.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert ledger
+    assert all(r["status"] == "completed" for r in ledger), ledger
+    # The guard fired: the plan stopped short of its full length.
+    assert len(ledger) < _planned_execution_count(doc)
 
