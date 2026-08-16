@@ -5653,8 +5653,19 @@ test partition alone.
 `data.units.holdout` declared together, which no config in
 `docs/feasibility-llm-growth-studies.md` does, and closing it inside H3d's task 15 would
 add an unbudgeted behaviour change to the task the scoping already names as the one most
-likely to ship wrong. The mechanism is cheap when it is wanted: `_cond_beside_n` already
-takes the un-narrowed roster as its third argument and decides by identity.
+likely to ship wrong.
+
+**Correction (H3d task 15, `fa85b26`), replacing the "mechanism is cheap" sentence above:**
+task 15 narrowed `_condition_beside_n`'s call into `_cond_beside_n` to pass `eval_roster`
+(the holdout's test partition) as the third argument in place of the whole `roster`. Both
+the `cond_roster` argument and that third argument now derive from the same narrowed
+value, so the identity check `cond_roster is roster` can no longer distinguish "narrowed
+to an arm" from "narrowed to a holdout's test partition" — it never could tell those apart
+by the roster's *content*, but before this task the identity reference was still the
+whole roster, and the mechanism only worked by accident of that specific pairing. Closing
+this gap now needs a fourth parameter carrying the un-narrowed roster as a separate
+identity reference (or the whole roster threaded alongside), not merely reading the
+existing third argument.
 
 **Found by:** H3d, Task 2 (documents-only). **Owner:** whichever slice next changes
 `_cond_beside_n`, or H3c-3 if it retrofits the holdout to cells first — re-owner this entry

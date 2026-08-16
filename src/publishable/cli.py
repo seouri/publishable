@@ -516,10 +516,13 @@ def _evaluation_roster(
     so a 0.2 holdout over 240 would report 192 failures and trip
     `max_failed_fraction` on a run in which nothing failed.
 
-    **The same object, not a copy, when no holdout is declared.**
-    `_cond_beside_n` decides whether `technical_n` survives by IDENTITY
-    (`cond_roster is roster`), so a copy here would silently withhold it from
-    every run in the build.
+    **The same object, not a copy, when no holdout is declared.** There is
+    nothing to copy: `roster` is unchanged, so returning it as-is is the
+    correct answer, not a guard against a downstream identity check. (The
+    identity `_cond_beside_n` tests is between `_cond_roster`'s return and the
+    roster `_condition_beside_n` was given — both derived from that same
+    single argument — so which object this function returns never reaches
+    that decision.)
 
     Roster order is preserved: it is part of the roster's identity, and
     `_report_by_levels` walks it to build each level's table.
@@ -1517,6 +1520,12 @@ def command_run(config_path: Path) -> int:
     # than a metric's denominator, and rebinding the name would narrow every
     # future call site silently, including theirs.
     eval_roster = _evaluation_roster(roster, holdout_plan)
+    # Checked here, before `execute_plan` spends anything: `_evaluation_roster`
+    # returns `None` only when its own `roster` argument is `None`, so this
+    # invariant either holds for free or is worth knowing about before the
+    # first execution runs, not after — a crash once executions are already
+    # paid for loses the record along with the money (see `4b1aebf`).
+    assert (eval_roster is None) == (roster is None)
     arm_members_map = (
         arm_members(group_axes, conditions)
         if selector_paths(sweep_block) and roster is not None
@@ -1714,11 +1723,9 @@ def command_run(config_path: Path) -> int:
                         "exists to catch, and `study add` cannot check what it cannot see",
                     )
         if roster is not None:
-            # `_evaluation_roster` returns `None` only when its own `roster`
-            # argument is `None` (`_resolved_holdout`'s docstring: a `None`
-            # roster has nothing to partition), so `eval_roster` is `None`
-            # exactly when `roster` is — narrowed here for the type checker,
-            # not a new runtime possibility.
+            # Already checked once, before `execute_plan`, where a failure
+            # would still cost nothing run. Restated here only for the type
+            # checker, which cannot see across that earlier `assert`.
             assert eval_roster is not None
             # `condition_index` is guarded per condition: core aggregates within
             # each condition and never pools across conditions — an unguarded
@@ -2615,10 +2622,11 @@ def command_run(config_path: Path) -> int:
             # `n` reports.** Under a `data.units.holdout` a metric's
             # `n.resolved` counts the TEST partition — 48 where this says 240
             # — and both are true: this is the identity of the roster the run
-            # resolved, which is what `units_hash` pins and what `reproduce`
-            # checks, where `n` is the denominator of an estimate. Narrowing
-            # this would make the hash cover a subset the config never
-            # described.
+            # resolved, which is what `units_hash` pins, and what makes a
+            # roster that resolved differently detectable when the run is
+            # reproduced, where `n` is the denominator of an estimate.
+            # Narrowing this would make the hash cover a subset the config
+            # never described.
             "units": (
                 {"n": len(roster), "key": units_decl["key"]}
                 if roster is not None and units_decl is not None

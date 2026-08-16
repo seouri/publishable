@@ -7873,9 +7873,12 @@ def test_the_evaluation_roster_is_the_test_partition_and_preserves_roster_order(
     tables are built by walking it.
 
     The `None` arm is the no-holdout case and must return the SAME OBJECT, not
-    a copy: `_cond_beside_n` decides whether `technical_n` survives by identity
-    (`cond_roster is roster`), so returning a copy here would silently withhold
-    it from every unswept run."""
+    a copy: there is nothing to copy since the roster is unchanged, so
+    identity here is a cheap, checkable invariant of the return contract, not
+    a guard against a downstream identity check (`_cond_beside_n`'s identity
+    test is between `_cond_roster`'s return and the roster
+    `_condition_beside_n` was given, both derived from that same argument —
+    which object this function returns never reaches that decision)."""
     from publishable.units import HoldoutPlan
 
     roster = _cli_roster(10)
@@ -8049,5 +8052,8 @@ def test_compute_vs_baseline_roster_argument_never_affects_the_auto_generated_fa
         )
         return out
 
-    assert _run(roster) == _run(eval_roster)
+    result = _run(roster)
+    assert result is not None
+    assert result[1]["s"]["r"]["n_paired"] == 4
+    assert result == _run(eval_roster)
 
