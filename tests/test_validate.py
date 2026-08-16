@@ -12009,6 +12009,33 @@ def test_a_group_axis_alone_triggers_the_refusal_without_between(
     )
 
 
+def test_an_empty_group_axis_alone_does_not_trigger_the_refusal(write_config, tmp_path):
+    """The emptiness half of the `cells` predicate: `sweep.groups: []` beside
+    `holdout` (no `allocation` declared) must NOT earn `E-DATA-HOLDOUT-CELLS`.
+    All three document sites (`reference.md`'s *One split, not one cell each*
+    and both § Errors rows) specify a *non-empty* `sweep.groups` — an empty
+    list is not a cell structure, and this row is what proves the code honours
+    that word rather than just `isinstance(groups, list)`.
+
+    A `grid` axis is added so the empty `groups` doesn't leave the sweep
+    expanding to nothing on its own (which would earn its own unrelated
+    refusal and make this control roster-incidental). As with the control
+    above, a companion positive assertion here would have to rest on
+    `E-DATA-HOLDOUT-UNSUPPORTED`, which is not positive attribution for this
+    check — so this row's evidence is the paired trigger test above
+    (`test_a_holdout_beside_a_cell_structure_is_refused`, identical roster and
+    holdout, differing only in `sweep.groups` being non-empty there and empty
+    here) rather than a second assertion in this test."""
+    (tmp_path / "input" / "index.csv").write_text(_CELL_ROSTER)
+    overrides = _holdout({"method": "random", "frac": 0.2}, attributes=["arm"])
+    overrides["sweep"] = {
+        "groups": [],
+        "grid": {"analysis.method": ["pearson", "spearman"]},
+    }
+    found = codes(write_config(overrides))
+    assert "E-DATA-HOLDOUT-CELLS" not in found
+
+
 def test_an_evaluation_split_without_a_cell_structure_is_not_refused(
     write_config, tmp_path
 ):

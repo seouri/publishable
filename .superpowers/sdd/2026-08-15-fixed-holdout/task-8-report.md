@@ -153,3 +153,22 @@ a refusal, so nothing there needed updating, and I edited none of the four docum
 - `docs/experimental-designs.md`, `docs/reference.md` — **not edited**; both already correct
   from task 2.
 - `.superpowers/sdd/.gitignore` — restored after an incidental clobber by `scripts/task-brief`.
+
+## Correction, appended after review (task-8-review.md, findings 3 and 4)
+
+- **The `experimental-designs.md` claim above was overstated.** "What was done" says that
+  document's "Every cell is a condition" paragraph "already states the refusal
+  (`E-REPL-FOLD-CELLS`, `E-DATA-HOLDOUT-CELLS`)". `grep -n "HOLDOUT-CELLS\|REPL-FOLD-CELLS"
+  docs/experimental-designs.md` returns nothing: that file states the refusal in prose and
+  cross-references `reference.md` § A fixed holdout split, but names neither code — the codes
+  live only in `reference.md` § Errors. The conclusion this report drew from the claim ("no
+  document edit was owed") still holds; the parenthetical citing codes in
+  `experimental-designs.md` was wrong and is retracted.
+- **Step 4's `ruff format --check` was run but never reported.** Re-run now, for the record:
+  `uv run ruff format --check src/publishable/validate.py tests/test_validate.py` reports "2
+  files would be reformatted" (checked again on 2026-08-16, after the review-finding fixes:
+  same result, same pre-existing hunks elsewhere in both files plus this task's own lines).
+  Both files were already unformatted before this task touched them, so this is not a gate
+  failure — but the step should have been run and its output judged rather than skipped, and
+  no wholesale reformat was applied, since that would bury this task's diff in an unrelated
+  repo-wide change.

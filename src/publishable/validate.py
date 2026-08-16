@@ -3058,16 +3058,20 @@ def _check_evaluation_split_cells(
         if allocation == "between"
         else "a non-empty `sweep.groups`"
     )
-    reason = (
-        f"is declared beside {where}, which divides the roster into cells. One "
-        "roster-wide split across those cells gives them unequal test sizes and, "
-        "once it is fine enough, a cell holding none of its own units — a "
-        "cell-level metric computed from nothing. Drawing the split within each "
-        "cell is the design that lifts this, and it is not built: declare one or "
-        "the other, or run each arm as its own run and join them in a `study`"
+    consequence = (
+        "which divides the roster into cells. One roster-wide split across "
+        "those cells gives them unequal test sizes and, once it is fine "
+        "enough, a cell holding none of its own units — a cell-level metric "
+        "computed from nothing. Drawing the split within each cell is the "
+        "design that lifts this, and it is not built: declare one or the "
+        "other, or run each arm as its own run and join them in a `study`"
     )
     if units.get("holdout"):
-        c.error("E-DATA-HOLDOUT-CELLS", "data.units.holdout", reason)
+        c.error(
+            "E-DATA-HOLDOUT-CELLS",
+            "data.units.holdout",
+            f"is declared beside {where}, {consequence}",
+        )
     repeats = (doc.get("replication") or {}).get("repeats")
     if isinstance(repeats, list) and any(
         isinstance(level, dict) and level.get("kind") == "fold" for level in repeats
@@ -3075,7 +3079,7 @@ def _check_evaluation_split_cells(
         c.error(
             "E-REPL-FOLD-CELLS",
             "replication.repeats",
-            f"declares a `fold` level, which {reason}",
+            f"declares a `fold` level beside {where}, {consequence}",
         )
 
 
