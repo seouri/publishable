@@ -342,3 +342,43 @@ Task 6: fix round 1. Commit 062253f. All five actionable findings closed; F6 lef
   in a scratch worktree with `validate.py` ALREADY among them, and the two added files are this task's own
   review and report records.
 Task 6: complete. 1859 passed + 2 xfailed; ruff check and mypy clean. BASE for task 7 is 062253f.
+Task 7: dispatched — the roster half: `E-DATA-HOLDOUT-VALUES`, `-STRATIFY-VARIES`, `-EMPTY`, plus
+  `units.holdout_sizes` and `units.holdout_values_fault`. Pre-checked all three brief mutations against
+  the ASSERTIONS their fixtures make, per task 6's amended discipline. All three discriminate. I briefly
+  believed mutation (a)'s arithmetic was wrong — `_apportion(4, [0.2, 0.8])` is `[1, 3]`, not the `(0, 4)`
+  the brief claims — and was about to dispatch a correction. The brief was right and I was wrong: I had
+  taken `frac: 0.2` from the mutation's `-k` filter instead of reading the fixture, which declares
+  `frac: 0.1`. At 0.1 the numbers are exactly as written, `[4, 0]` against `[0, 4]` and `[36, 4]` against
+  `[4, 36]`. Recorded because the near-miss is the lesson: the amended discipline says read the
+  assertions, and reading half of them is how you manufacture a false correction.
+Task 7: implemented at 880750c. 1869 passed + 2 xfailed. `stratum_varies_within_cluster`'s docstring
+  corrected from two call sites to four, as the design assigned. `stratum_names`'s stale docstring left
+  again, correctly — this task adds no call site, so the deferral stands rather than being absorbed.
+Task 7: reviewed (opus). Spec compliance PASS; task quality FAIL with one Critical and three Important.
+  Critical: the same defect for the FOURTH consecutive task in this one function — three new error sites
+  and no test reading any message. Inverting `missing` to `if lit in seen` left 67 holdout tests green.
+  Both the task 5 and task 6 reviews prescribed the `fragment` + `messages_by_code` remedy, and it was
+  applied at none of the three new sites. That the remedy exists in the same file and was still not
+  reached for is the finding worth carrying: a defect closed in one task is not closed in the next unless
+  the next task's brief says so. **Every remaining brief in this slice must name it.**
+  RULING — AND THE INSTRUCTION THAT WAS WRONG WAS MINE. I told every implementer in this slice to assert
+  each finding ALONGSIDE `E-DATA-HOLDOUT-UNSUPPORTED`, so the assertion survives task 17 as a one-line
+  deletion. That part stands. But three of this task's controls went further and claimed that companion
+  gave POSITIVE ATTRIBUTION — "without it this passes identically if `_check_holdout` never ran". False:
+  `-UNSUPPORTED` is emitted by `_check_unimplemented`, a different function entirely. With
+  `_check_holdout` returning immediately, all four controls passed. This is CLAUDE.md's "a control
+  asserting only absences" wearing a companion assertion as a disguise, and the disguise is what I
+  supplied. Closed by giving each control a `seed: "bogus"` earning `E-DATA-HOLDOUT-SEED`, a code only
+  `_check_holdout` emits. I verified this myself rather than take it on report: inserting `return` as
+  `_check_holdout`'s first statement now FAILS all three, where all three passed before. Reverted by
+  editing back, byte-identical to HEAD, 3 passed.
+  It matters past today: at task 17 the `-UNSUPPORTED` lines get deleted, and any control resting on them
+  would silently become absence-only. **Task 17's brief must re-verify every control it touches.**
+Task 7: fix round 1. Commit 00114d3. All nine findings closed; two Do-Not-Fix items held —
+  `stratum_names`'s docstring, and the typo'd-`from` diagnostic gap routed to spec-defects.md.
+  Ruling: the five added lines sitting in `ruff format` would-reformat hunks are NOT to be formatted.
+  `validate.py` and `tests/test_validate.py` were already unformatted at 880750c, so formatting either
+  wholesale would bury a one-function task's diff inside an unrelated repo-wide rewrite — the exact
+  accident this slice already had once. The claim was corrected in the report instead. Cost if wrong:
+  five lines that a future repo-wide format will touch anyway.
+Task 7: complete. 1872 passed + 2 xfailed; ruff check and mypy clean. BASE for task 8 is 00114d3.
