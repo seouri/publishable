@@ -372,3 +372,37 @@ Task 10: reviewed (opus). Spec compliance PASS; task quality FAIL with three Imp
   config is refused either way — but the message asserts a resolution that never happened.
 Task 10: fix round. Commit 18e1ede. All six closed. 1985 passed + 2 xfailed; all gates clean.
 Task 10: complete. BASE for task 11 is below.
+
+Task 11: implemented at e74f39a / fc093e0. 1989 passed + 2 xfailed. Four tests proving the union
+  reaches `baseline`, `paired`, `groups` and `ablate.remove`. **No production change was needed** —
+  task 10's code was already correct across all four modes.
+  Two of the brief's literal fixtures had the WRONG SHAPE — `sweep.groups` written as a dict where the
+  schema is a list of `{by, levels}`, and `sweep.ablate` as a list where it is `{remove: [...]}` — both
+  caught by actually running `expand()`/`validate_config` rather than trusting the brief's YAML.
+  The implementer also caught a real testing-infrastructure defect in its own code, via self-review:
+  **`messages_by_code` collapses duplicate-code findings LAST-WINS**, which made two of its "positive
+  companion" assertions non-functional. Switched to counted `_findings_of` assertions.
+Task 11: reviewed (opus). **BOTH VERDICTS PASS** — the first double pass since tasks 5-6.
+  I asked the reviewer to scope the `messages_by_code` finding across the whole slice, since 48 sites
+  use it and the Global Constraints told every task to pin messages with it. Answer: **zero remaining
+  weakened assertions**, and it was established structurally rather than assumed — of four
+  message-pinning sites written across the slice, two were genuinely weakened (both this task's own,
+  both already fixed) and the two survivors are single-finding by construction, one because
+  `E-TEMPLATE-LOAD` is emitted per file and every branch `continue`s. Both plural-by-design codes are
+  pinned everywhere else by counted `len(found)` assertions. The concern was real and its blast radius
+  was one task.
+  The reviewer also named and RAN a discriminating mutation for each of the four tests, where the brief
+  prescribed one — closing the "four tests, one mutation" gap before it could become another deliverable
+  pinned by nothing.
+  Two Minors closed by me, both false comments: a docstring claiming a roster rewrite is what keeps the
+  test from "passing for the wrong reason" (deleting the rewrite leaves all four assertions passing,
+  because `expand` reads the document, not the roster — the rewrite buys realism and the docstring now
+  says so), and a comment calling an ABSENCE assertion "the positive companion" when the round that
+  introduced `len(found) == 1` had already moved that role.
+  One Minor the reviewer raised against the REPORT rather than the code, worth keeping: the report
+  UNDER-claimed. It said the ablate property was "covered by count, not mutation", and the reviewer
+  found `if path in resolved:` -> `if resolved.get(path) is not None:` — the realistic slip — reddens
+  the ablate test and only it. A report that undersells its own coverage costs the next reader a
+  mutation they think is missing.
+Task 11: complete. 1989 passed + 2 xfailed; ruff check, format and mypy clean. **Part B is done.**
+  BASE for task 12 is below.

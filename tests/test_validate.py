@@ -12685,8 +12685,9 @@ def test_a_paired_cell_resolves_both_of_its_paths(git_repo: Path, write_config, 
     found = [f for f in _findings_of(path) if f.code == "E-CRED-PARAM-MISSING"]
     assert len(found) == 1, [f.message for f in found]
     assert "OLLAMA_TEST_KEY" in found[0].message
-    # Azure's key IS set, so the union reports one variable and not two — the
-    # positive companion that keeps this from being an absence-only control.
+    # Azure's key IS set, so the union reports one variable and not two. The
+    # `len(found) == 1` above is what keeps this from being absence-only; this
+    # line narrows WHICH variable, and is not itself the positive half.
     assert "AZURE_TEST_KEY" not in found[0].message
 
 
@@ -12697,10 +12698,12 @@ def test_a_groups_axis_contributes_no_parameter_value(
     over a groups-only sweep is the base value's requirement — which is the
     correct answer rather than a gap.
 
-    The roster is rewritten first: the `write_config` fixture writes
-    `patient_id\\np1\\n` and nothing else, so `attributes: ["cohort"]` over that
-    file earns `E-UNITS-ATTR-MISSING` and this test would pass for the wrong
-    reason. `tmp_path / "input" / "index.csv"` is the file that fixture writes.
+    The roster is rewritten first so the config is realistic: without it,
+    `attributes: ["cohort"]` over the `write_config` fixture's one-column file
+    earns `E-UNITS-ATTR-MISSING`. That extra finding changes no assertion here —
+    `expand` reads the document, not the roster, so deleting the rewrite leaves
+    all four assertions passing — which is why the rewrite buys realism rather
+    than being what keeps this test honest.
     """
     _union_project(git_repo, monkeypatch, set_names=())
     (tmp_path / "input" / "index.csv").write_text(
