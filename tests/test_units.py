@@ -3243,9 +3243,11 @@ def test_a_holdout_that_leaves_a_side_empty_raises(n, frac, empty_side):
     assert exc.value.code == "E-DATA-HOLDOUT-EMPTY"
     # The invariant tail names both "the training side" and "the test side" in
     # every instance of this message, so `empty_side in str(exc.value)` alone
-    # cannot discriminate which one is actually empty. `apportions the {side}
-    # side zero` is the one phrase that names the computed side specifically.
-    assert f"apportions the {empty_side} side zero" in str(exc.value)
+    # cannot discriminate which one is actually empty. `leaves the {side} side
+    # empty` is the one phrase that names the computed side specifically —
+    # task 11 merged this with the clustered/stratified coverage check, one
+    # refusal rather than two of the same fault.
+    assert f"leaves the {empty_side} side empty" in str(exc.value)
 
 
 @pytest.mark.parametrize("method", ["stratified", "", None, "by_attributes"])
@@ -3280,20 +3282,133 @@ def test_holdout_methods_realized_is_pinned_by_what_it_documents():
         assert isinstance(plan, HoldoutPlan)
 
 
-@pytest.mark.parametrize(
-    "block",
-    [{"method": "random", "frac": 0.2, "stratify_by": ["x"]}, {"method": "random", "frac": 0.2}],
-    ids=["a non-empty stratify_by", "a clusters mapping"],
-)
-def test_a_clustered_or_stratified_holdout_raises_not_realized(block):
-    """Neither construction is built at this commit — ignoring either would be
-    a split `validate` called clustered or stratified and the draw balanced on
-    nothing, so both raise rather than silently falling through to the
-    unclustered draw."""
-    clusters = None if "stratify_by" in block else {f"u{i}": "c0" for i in range(10)}
-    with pytest.raises(NotImplementedError) as exc:
-        holdout_for(_holdout_roster(10), block, seed=1, clusters=clusters)
-    assert "clustered or stratified" in str(exc.value)
+def test_a_clustered_holdout_keeps_every_cluster_whole():
+    """`reference.md` § Clustered units: "core computed the partition, so core
+    keeps it indivisible." A holdout that trains on one cell of an animal and
+    tests on another leaks just as thoroughly for happening only once.
+
+    Twelve units in six clusters of two, so both a correct draw and a
+    unit-level one give the same SIZES — the cluster-integrity assertion is the
+    only thing that separates them, which is why the fixture is built this way
+    rather than with clusters of one."""
+    roster = _holdout_roster(12, animal=lambda i: f"a{i // 2}")
+    clusters = {f"u{i}": f"a{i // 2}" for i in range(12)}
+    plan = holdout_for(
+        roster, {"method": "random", "frac": 0.5}, seed=99, clusters=clusters
+    )
+    train, test = set(plan.train), set(plan.test)
+    assert train | test == {f"u{i}" for i in range(12)}
+    assert not train & test
+    for cluster in {f"a{i}" for i in range(6)}:
+        members = {k for k, c in clusters.items() if c == cluster}
+        assert members <= train or members <= test, (cluster, plan)
+    # A positive companion for the integrity assertion above, which a draw
+    # putting EVERY unit on one side would also satisfy.
+    assert train and test
+
+
+def test_the_clustered_and_unclustered_constructions_are_not_the_same_draw():
+    """The relation between the two constructions, pinned — H3c-2's own
+    experience is that a fixture cannot tell them apart unless it is built to.
+
+    With one cluster per unit the two agree on SIZES and differ on MEMBERSHIP:
+    the unclustered path shuffles unit keys and cuts two consecutive slices,
+    while the clustered path shuffles cluster names, sorts largest-first, and
+    deals each to the bucket furthest below its own target share — which
+    interleaves by ratio rather than slicing. A fixture asserting only the
+    sizes would pass under either construction for either call."""
+    roster = _holdout_roster(10, animal=lambda i: f"u{i}")
+    singleton = {f"u{i}": f"u{i}" for i in range(10)}
+    plain = holdout_for(roster, {"method": "random", "frac": 0.4}, seed=5)
+    clustered = holdout_for(
+        roster, {"method": "random", "frac": 0.4}, seed=5, clusters=singleton
+    )
+    assert len(plain.test) == len(clustered.test) == 4
+    assert set(plain.test) != set(clustered.test)
+
+
+def test_a_stratified_holdout_splits_within_each_stratum():
+    """`stratify_by` balances the split inside each stratum rather than only
+    over the roster. Three UNEQUAL strata — 8, 4 and 2 units — so an
+    unstratified draw, a correct stratified one, and one that weighted the
+    strata equally each produce a different per-stratum test count.
+
+    At `frac: 0.5` the correct per-stratum test counts are 4, 2 and 1; an
+    unstratified draw of the same roster gives 7 test units spread by chance,
+    which this asserts against directly."""
+    sizes = {"big": 8, "mid": 4, "small": 2}
+    labels = ["big"] * 8 + ["mid"] * 4 + ["small"] * 2
+    roster = _holdout_roster(14, band=lambda i: labels[i])
+    plan = holdout_for(
+        roster, {"method": "random", "frac": 0.5, "stratify_by": ["band"]}, seed=17
+    )
+    assert plan.strata == ("band",)
+    per_stratum = {}
+    for name in sizes:
+        members = {f"u{i}" for i, lab in enumerate(labels) if lab == name}
+        per_stratum[name] = len(members & set(plan.test))
+    assert per_stratum == {"big": 4, "mid": 2, "small": 1}
+    # Membership too, not only counts: the counts are FORCED by the
+    # apportionment, so no count assertion can see a change in how the
+    # generator is carried across strata — the same dimension-no-assertion-
+    # can-see shape that let a deleted shuffle pass an earlier slice's suite.
+    # PINNED LITERAL — derived by running the implementation (see task-11-report.md).
+    assert set(plan.test) == {"u2", "u5", "u6", "u7", "u8", "u11", "u13"}
+
+
+def test_a_stratified_clustered_holdout_composes_both_rules():
+    """The composition: strata outside, whole clusters inside — the same
+    arrangement `assignment_for` uses, and sound only while
+    `E-DATA-HOLDOUT-STRATIFY-VARIES` refuses a cluster carrying two stratum
+    values, since such a cluster would belong to two groups and be divided.
+
+    Every cluster whole AND every stratum represented on both sides."""
+    labels = ["x"] * 8 + ["y"] * 8
+    roster = _holdout_roster(16, animal=lambda i: f"a{i // 2}", band=lambda i: labels[i])
+    clusters = {f"u{i}": f"a{i // 2}" for i in range(16)}
+    plan = holdout_for(
+        roster,
+        {"method": "random", "frac": 0.5, "stratify_by": ["band"]},
+        seed=23,
+        clusters=clusters,
+    )
+    train, test = set(plan.train), set(plan.test)
+    for cluster in {f"a{i}" for i in range(8)}:
+        members = {k for k, c in clusters.items() if c == cluster}
+        assert members <= train or members <= test, cluster
+    for band in ("x", "y"):
+        members = {f"u{i}" for i, lab in enumerate(labels) if lab == band}
+        assert members & train and members & test, band
+
+
+def test_a_stratified_holdout_that_leaves_a_side_empty_across_every_stratum_raises():
+    """Coverage over the MERGED draw, `assignment_for`'s rule for the identical
+    composition: a side a small stratum apportioned nothing is fine while
+    another stratum covered it, and only a side empty everywhere is refused.
+
+    Two strata of one unit each at `frac: 0.2` apportion `(1, 0)` in both, so
+    the test side is empty across the whole draw."""
+    roster = _holdout_roster(2, band=lambda i: f"b{i}")
+    with pytest.raises(ContractError) as exc:
+        holdout_for(
+            roster, {"method": "random", "frac": 0.2, "stratify_by": ["band"]}, seed=1
+        )
+    assert exc.value.code == "E-DATA-HOLDOUT-EMPTY"
+
+
+def test_a_thin_stratum_alone_does_not_raise():
+    """The positive companion for the rule above, produced by the code under
+    test: one stratum apportioning the test side nothing is accepted while
+    another covers it. Without this the refusal above is indistinguishable from
+    a per-stratum coverage rule."""
+    labels = ["big"] * 9 + ["tiny"]
+    roster = _holdout_roster(10, band=lambda i: labels[i])
+    plan = holdout_for(
+        roster, {"method": "random", "frac": 0.2, "stratify_by": ["band"]}, seed=3
+    )
+    assert plan.test and plan.train
+    tiny = {"u9"}
+    assert tiny <= set(plan.train)
 
 
 def test_a_by_attribute_holdout_with_no_from_raises_not_realized():

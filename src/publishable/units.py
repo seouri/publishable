@@ -1347,31 +1347,41 @@ def holdout_for(
       function has no default method to fall back to, since an absent holdout
       declares no holdout at all rather than an unnamed one.
 
-    **A `clusters` mapping and a non-empty `stratify_by` are not realized at
-    this commit** and raise `NotImplementedError` rather than being silently
-    ignored — an ignored `stratify_by` is a split `validate` called stratified
-    and the draw balanced on nothing. `clusters` is a parameter anyway, for
-    `assignment_for`'s reason: a caller that already has to hold the cluster
-    map must not be told the signature changed under it.
+    **`clusters` and `stratify_by` compose, both inside the `random` draw.**
+    A `stratify_by` splits the roster into `_stratum_groups` first, one
+    generator carried across every stratum in roster order, `assignment_for`'s
+    own convention: the seed determines the whole split together rather than
+    each stratum in isolation. `clusters`, present or not, then decides how
+    each stratum (or the whole roster, unstratified) is drawn — whole clusters
+    through `_assign_whole_clusters_by_ratio` at weights `[1 - frac, frac]`, or
+    the unclustered shuffle-and-slice above.
 
-    **Both sides are refused empty**, under `E-DATA-HOLDOUT-EMPTY`.
-    `validate._check_holdout` refuses a zero *test* side from the declaration
-    and the roster size, and does not refuse a zero *train* side — 2 units at
-    `frac: 0.9` apportions `(0, 2)`, which would fit a model on nothing. The
-    draw holds the realized sizes and is the last place that can see them,
-    which is `assignment_for`'s own posture for a zero-size arm.
+    **The two constructions are deliberately not one, and are not
+    bit-identical.** The unclustered draw shuffles unit keys and cuts two
+    consecutive slices; the clustered draw shuffles cluster names, sorts
+    largest-first and deals each cluster to the bucket furthest below its own
+    target share. With one cluster per unit the two agree on the SIZES and
+    differ on the MEMBERSHIP — the second interleaves by ratio where the first
+    slices — so a fixture that cannot tell them apart proves nothing about
+    either. `_assign_whole_clusters_by_ratio` takes a non-optional `Mapping`
+    and indexes it, unlike `_assign_whole_clusters`, which is why this is two
+    paths rather than one with a `clusters or singletons` default.
+
+    **Both sides are refused empty**, under `E-DATA-HOLDOUT-EMPTY`, checked
+    over the MERGED draw rather than per stratum — `assignment_for`'s rule for
+    the identical composition: a side a small stratum apportioned nothing is
+    fine while another stratum covered it, and only a side empty across the
+    whole draw is refused. `validate._check_holdout` refuses a zero *test*
+    side from the declaration and the roster size, and does not refuse a zero
+    *train* side — 2 units at `frac: 0.9` apportions `(0, 2)`, which would fit
+    a model on nothing. The draw holds the realized sizes and is the last
+    place that can see them, which is `assignment_for`'s own posture for a
+    zero-size arm — including a clustered draw's realized sizes, which a
+    declared `frac` alone cannot predict.
     """
     block_map: Mapping[str, Any] = block if isinstance(block, Mapping) else {}
     method = block_map.get("method")
     strata = stratum_names(block_map.get("stratify_by"))
-    if strata or clusters is not None:
-        raise NotImplementedError(
-            "a clustered or stratified `data.units.holdout` is not realized at this "
-            "commit — the draw that keeps whole clusters on one side, and the one that "
-            "balances the split within each stratum, are not built here. Ignoring "
-            "either would be a split `validate` called clustered or stratified and the "
-            "draw balanced on nothing"
-        )
     if method == "by_attribute":
         column = block_map.get("from")
         if not isinstance(column, str) or not column:
@@ -1403,24 +1413,74 @@ def holdout_for(
                 "`data.units.holdout.method: random` declares no usable `frac`; "
                 "`validate` refuses this as `E-DATA-HOLDOUT-FRAC`"
             )
-        train_size, test_size = holdout_sizes(len(roster), float(frac))
-        if train_size == 0 or test_size == 0:
-            side = "train" if train_size == 0 else "test"
+        weights = [1.0 - float(frac), float(frac)]
+        rng = random.Random(seed)
+        train_keys: list[str] = []
+        test_keys: list[str] = []
+        if strata:
+            # One generator across every stratum, `assignment_for`'s own
+            # convention: the strata are drawn in roster order from one carried
+            # state, so the seed determines the whole split together rather
+            # than each stratum in isolation. `_stratum_groups` is handed no
+            # `resolved`: a holdout's `stratify_by` admits only a unit
+            # attribute, never a `sweep.groups` axis (§ Validation,
+            # *Stratification attribute exists*), and a holdout beside a group
+            # axis is refused outright as `E-DATA-HOLDOUT-CELLS`.
+            groups = _stratum_groups(
+                list(roster), strata, "data.units.holdout.stratify_by"
+            )
+            for stratum_units in groups.values():
+                if clusters is not None:
+                    # Whole clusters inside each stratum — sound only while
+                    # `E-DATA-HOLDOUT-STRATIFY-VARIES` refuses a cluster
+                    # carrying two stratum values, which would belong to two of
+                    # these groups and be divided here. The identical argument
+                    # `assignment_for` makes for the identical composition.
+                    train_bucket, test_bucket = _assign_whole_clusters_by_ratio(
+                        stratum_units, weights, rng, clusters
+                    )
+                    train_keys.extend(u.key for u in train_bucket)
+                    test_keys.extend(u.key for u in test_bucket)
+                else:
+                    keys = [u.key for u in stratum_units]
+                    rng.shuffle(keys)
+                    cut, _rest = holdout_sizes(len(stratum_units), float(frac))
+                    train_keys.extend(keys[:cut])
+                    test_keys.extend(keys[cut:])
+        elif clusters is not None:
+            train_bucket, test_bucket = _assign_whole_clusters_by_ratio(
+                list(roster), weights, rng, clusters
+            )
+            train_keys.extend(u.key for u in train_bucket)
+            test_keys.extend(u.key for u in test_bucket)
+        else:
+            train_size, test_size = holdout_sizes(len(roster), float(frac))
+            keys = [unit.key for unit in roster]
+            rng.shuffle(keys)
+            train_keys.extend(keys[:train_size])
+            test_keys.extend(keys[train_size:])
+        # Coverage over the MERGED draw, never per stratum — `assignment_for`'s
+        # rule for the identical composition: a side a small stratum
+        # apportioned nothing is fine while another stratum covered it, and
+        # only a side empty across the whole draw leaves one half of the split
+        # with no units. Also the one refusal the unclustered and clustered
+        # paths share: a cluster is the smallest thing that can move, so a
+        # clustered draw reaches an empty side more easily rather than being
+        # exempt from the refusal.
+        if not train_keys or not test_keys:
+            side = "train" if not train_keys else "test"
             raise ContractError(
                 f"`data.units.holdout.frac: {frac}` over {len(roster)} resolved units "
-                f"apportions the {side} side zero of them. Every split needs both "
-                "sides — the training side has nothing to fit on, or the test side has "
-                "nothing to report over; widen or narrow `frac`, or resolve a larger "
-                "roster",
+                f"leaves the {side} side empty"
+                + (f", drawn within {len(strata)} stratum declaration(s)" if strata else "")
+                + (" over whole clusters" if clusters is not None else "")
+                + ". Every split needs both sides — the training side has nothing to fit "
+                "on, or the test side has nothing to report over; widen or narrow "
+                "`frac`, stratify on fewer attributes, or resolve a larger roster",
                 code="E-DATA-HOLDOUT-EMPTY",
             )
-        shuffled = [unit.key for unit in roster]
-        random.Random(seed).shuffle(shuffled)
         return HoldoutPlan(
-            train=tuple(shuffled[:train_size]),
-            test=tuple(shuffled[train_size:]),
-            seed=seed,
-            strata=(),
+            train=tuple(train_keys), test=tuple(test_keys), seed=seed, strata=strata
         )
     raise NotImplementedError(
         f"`data.units.holdout.method: {method!r}` is not realized here — the methods "
@@ -1515,7 +1575,7 @@ def stratum_names(stratify_by: Any) -> tuple[str, ...]:
 def _stratum_groups(
     units: list[Unit],
     names: Sequence[Any],
-    axis: str,
+    declaration: str,
     resolved: Mapping[str, ArmPlan] | None = None,
 ) -> dict[tuple[str, ...], list[Unit]]:
     """The roster split into strata — one entry per distinct combination of the
@@ -1573,6 +1633,13 @@ def _stratum_groups(
     no level of it holds — renders as `no value`, the attribute path's own
     convention for the same absence. Unreachable through `assignment_for`'s two
     producers, which both partition the whole roster they are given.
+
+    **`declaration` is the full dotted path of the declaration being served**,
+    not an axis name: this function has more than one caller and the message it
+    raises names the config path a reader has to go and fix. An axis name
+    interpolated into a fixed `data.units.assign.<...>` template would print
+    `data.units.assign.holdout.stratify_by` for a holdout — a path no config
+    can hold.
     """
     plans = resolved or {}
     sources: list[Mapping[str, str] | None] = []
@@ -1587,7 +1654,7 @@ def _stratum_groups(
             )
             continue
         raise NotImplementedError(
-            f"`data.units.assign.{axis}.stratify_by` names {name!r}, which no resolved "
+            f"`{declaration}` names {name!r}, which no resolved "
             "unit carries as an attribute and no already-drawn `sweep.groups` axis "
             "resolves — a stratum is read per unit when the draw is balanced. A stratum "
             "naming an axis declared AFTER this one names membership no draw has "
@@ -1873,7 +1940,9 @@ def assignment_for(
             # each stratum in isolation.
             stratified_rng = random.Random(seed)
             stratified: dict[str, list[str]] = {level: [] for level in levels}
-            groups = _stratum_groups(list(roster), strata, axis, resolved)
+            groups = _stratum_groups(
+                list(roster), strata, f"data.units.assign.{axis}.stratify_by", resolved
+            )
             for stratum_units in groups.values():
                 if clusters is not None:
                     # The same whole-cluster rule the unstratified clustered
@@ -2006,7 +2075,9 @@ def assignment_for(
             # stratum, which is what a stratified block design is. Cutting the
             # whole roster into blocks and balancing each block's strata
             # instead would be a different design and a second blocking rule.
-            for stratum_units in _stratum_groups(list(roster), strata, axis, resolved).values():
+            for stratum_units in _stratum_groups(
+                list(roster), strata, f"data.units.assign.{axis}.stratify_by", resolved
+            ).values():
                 _blocked_draw(
                     [unit.key for unit in stratum_units],
                     levels,
@@ -2021,8 +2092,10 @@ def assignment_for(
             )
         empty = [level for level in levels if not drawn[level]]
         if empty:
+            declaration = f"data.units.assign.{axis}.stratify_by"
             within = (
-                f" within each of the {len(_stratum_groups(list(roster), strata, axis, resolved))} "
+                f" within each of the "
+                f"{len(_stratum_groups(list(roster), strata, declaration, resolved))} "
                 f"strata of {', '.join(str(name) for name in strata)}"
                 if strata
                 else ""
