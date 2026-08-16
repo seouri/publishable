@@ -478,3 +478,38 @@ Task 9: fix round 1. Commit c799d2f. All eight closed, plus the report correctio
   and the test whose NAME claimed an ordering guarantee it never tested was renamed to the property it
   actually pins.
 Task 9: complete. 1892 passed + 2 xfailed; ruff check and mypy clean. BASE for task 10 is c799d2f.
+Task 10: dispatched — `units.holdout_for` construction 1: the unclustered draw and the column read. First
+  task in the slice that draws anything. Pre-checked all three mutations by READING THE TEST BODIES, per
+  the discipline amended twice; all three discriminate, and the brief rejects its own candidate for (c)
+  as a no-op with the correct reason (the function indexes `arms_of`'s mapping by level, not by position).
+Task 10: implemented at a6c6945 / 30a9338. 1902 passed + 2 xfailed.
+  Real disagreement found: the brief's test helper `_roster(n, **attrs_by_index)` would have SHADOWED an
+  existing module-level `_roster(n)` in `tests/test_units.py` used by a dozen tests, three of which pin
+  zero-padded key literals. Appending it verbatim would have silently rebound the name and broken them.
+  Renamed to `_holdout_roster`. This is the plan authoring a name collision, not the implementer missing
+  one — worth carrying: a brief that appends test helpers to an existing file must be read against that
+  file's existing names.
+Task 10: reviewed (opus). BOTH verdicts FAIL, but the behaviour is correct and independently confirmed —
+  a testing-and-claims round rather than a rewrite.
+  The affirmative result is the one worth recording: the reviewer did not trust the pinned membership
+  literals and re-derived the construction, finding `holdout_for` and `assignment_for`'s `random` branch
+  return BYTE-IDENTICAL membership for the same seed and weights — same `_apportion`, same single
+  whole-roster shuffle, same consecutive slices, both refusing the zero-size case before shuffling.
+  **No bit-stability reconciliation is owed to task 11**, which the spec listed as a trap.
+  Ruling on finding 3, where I made the code follow the claim rather than the reverse. The docstring said
+  in bold that both sides are refused empty; the guard checked TYPE only, so `frac: -0.5` returned a plan
+  with an empty test side and `frac: 2.0` one with an empty train side. `holdout_for` is public and a
+  later task wires it from `cli.command_run`, so a silent degenerate partition is worse than a refusal,
+  and the function already raises for the zero-size case. The guard was widened to the open interval,
+  deliberately duplicating a rule `validate` also enforces — `validate` refuses the config, this refuses
+  the call. Cost if wrong: one range test in two places, which is the cheap direction.
+  Carried to task 11, from the reviewer: the empty-side refusal reads `holdout_sizes`' DECLARED sizes,
+  which a clustered draw's REALIZED sizes are not, so task 11 must restate that refusal per branch. The
+  seam is otherwise sound — task 11's only undo is swapping the `strata=()` literal and deleting the
+  up-front raise.
+Task 10: fix round 1. Commit f48cd68. All eight closed. Two of the three vacuous assertions were the exact
+  shape the Global Constraint targets and had slipped past it: `assert empty_side in str(exc.value)`
+  matched whichever side was passed, because the message's invariant tail names BOTH sides — so inverting
+  the side-naming line left the full suite green. A message assertion is not automatically a
+  discriminating one, and that is a new entry for the catalogue.
+Task 10: complete. 1913 passed + 2 xfailed; ruff check and mypy clean. BASE for task 11 is f48cd68.
