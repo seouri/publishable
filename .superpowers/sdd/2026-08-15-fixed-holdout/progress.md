@@ -546,3 +546,36 @@ Task 11: fix round 1. Commit fb78340. All six closed. The false size-agreement c
   `_stratum_groups`' message now branches on the declaration so a holdout reader is no longer sent to two
   `E-DATA-ASSIGN-*` codes and a `sweep.groups` path their declaration cannot take.
 Task 11: complete. 1919 passed + 2 xfailed; ruff check and mypy clean. BASE for task 12 is fb78340.
+Task 12: dispatched — `units.holdout_seed_for`, the derivation and its own digest suffix. FIRST TASK
+  DISPATCHED UNDER THE AMENDED CHECK from task 11: I asked not only whether each prescribed mutation
+  discriminates, but which of the task's deliverables NO mutation reaches. The brief prescribed two; two
+  of the five tests were reached by neither. I added three — ignore the pin, drop the roster from the
+  payload, and one the implementer was told to name itself for the fold-distinctness test — and told it
+  to report rather than invent if no single-line mutation reached the last.
+Task 12: implemented at 605f63c. 1924 passed + 2 xfailed. The implementer returned an honest NEGATIVE on
+  mutation (e): no single-line mutation isolates the fold-distinctness test from the roster-mixing test,
+  because any edit that collides `holdout_seed_for` with `_seed_from` necessarily also drops the roster
+  term. It reported the coupling rather than claiming a clean proof, which is the behaviour the "name it
+  yourself, and report if none exists" framing was for.
+Task 12: reviewed (opus). **BOTH VERDICTS PASS** — the second of the slice, and the reviewer ran three
+  mutations beyond the five. It independently confirmed the negative finding by constructing the narrower
+  variant and watching the suite stay green, and ruled it a property of `_seed_from`'s roster-free payload
+  rather than a weakness the implementer chose.
+  Verified for the record: the pin gate is character-identical to `validate._check_holdout`'s
+  `E-DATA-HOLDOUT-SEED` predicate across eight shapes; the digest consumed is the one task 4 strips
+  `holdout.seed` from, so the derivation is not self-referential; the payload is distinct from all seven
+  other digest-derived seeds in `src/`.
+  One Important, closed by me directly rather than by a fix round — a single false docstring sentence,
+  "one derivation shape for every drawn partition in the config". False: `_seed_from`'s fold payload is
+  `f"{digest}|folds"` and carries no `units_hash` at all, which I confirmed by reading it. My first
+  replacement asserted a REASON for the difference that I had not verified — that a partition reading the
+  resolved roster mixes it in and one deriving boundaries without it does not — which is the same defect
+  I was fixing, since a fold's boundaries do partition resolved units. Replaced with the checked fact
+  alone and an explicit statement that only the resemblance to `assign_seed_for` is claimed. Gates green
+  after: 1924 passed, ruff and mypy clean.
+  Two Minors carried without action: the payload literal is pinned by no golden value, which matches
+  every sibling and is the house standard; and the implementer used `git checkout --` on the clobbered
+  `.gitignore`, which was safe here but is the move CLAUDE.md names by hand.
+Task 12: complete. 1924 passed + 2 xfailed. BASE for task 13 is the commit below.
+  For task 13's reviewer, from task 12's: `holdout_seed_for` has no production caller yet — task 13
+  composes it — so confirm the digest it is passed is `design_digest(doc)` and not a neighbour.

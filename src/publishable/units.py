@@ -2611,8 +2611,11 @@ def holdout_seed_for(block: Mapping[str, Any], digest: str, roster: UnitList) ->
 
     **Not `assign_seed_for` either**, whose payload carries an axis name a
     holdout does not have. The construction is otherwise copied deliberately:
-    the same digest, the same `units_hash`, the same four bytes read big-endian
-    — one derivation shape for every drawn partition in the config.
+    the same digest, the same `units_hash`, the same four bytes read big-endian.
+    That shape is shared with `assign_seed_for`, and **not** with every drawn
+    partition: `_seed_from`'s fold payload carries no `units_hash` at all, and
+    `sweep`'s sample seed differs again. Only the resemblance to
+    `assign_seed_for` is claimed here.
 
     A pinned integer is returned literally, and — the load-bearing half, copied
     from `sweep.sample_seed_for`'s own docstring — **the digest is not consulted
