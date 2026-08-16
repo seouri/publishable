@@ -12283,3 +12283,29 @@ def test_a_requires_env_totality_fault_surfaces_as_a_template_load_finding(
     assert "E-TEMPLATE-LOAD" not in codes(
         write_config({"experiment_type": "cred_assay", "parameters": {}})
     )
+
+
+def test_validate_loads_dot_env_from_the_repository_root(git_repo: Path, write_config, monkeypatch):
+    """`validate` reads `.env`. Not a breach of its promise — `reference.md`
+    § Validation promises it "creates nothing and reaches nothing **off the
+    machine**", and a file in the repository root is on-machine.
+
+    `delenv` first: `load_dotenv` writes straight into `os.environ` and only
+    monkeypatch puts it back.
+    """
+    import os
+
+    monkeypatch.delenv("PUBLISHABLE_TEST_TOKEN", raising=False)
+    (git_repo / ".env").write_text("PUBLISHABLE_TEST_TOKEN=from-the-file\n")
+
+    path = write_config()
+    assert codes(path) == set()  # the config itself is clean
+    assert os.environ.get("PUBLISHABLE_TEST_TOKEN") == "from-the-file"
+
+    # THE CONTROL: with no `.env`, the same validate leaves the name unset — so
+    # this test fails on a build that never loads rather than passing on a
+    # machine that happened to export it.
+    (git_repo / ".env").unlink()
+    monkeypatch.delenv("PUBLISHABLE_TEST_TOKEN", raising=False)
+    assert codes(write_config()) == set()
+    assert os.environ.get("PUBLISHABLE_TEST_TOKEN") is None

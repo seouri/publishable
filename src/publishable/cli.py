@@ -56,6 +56,7 @@ from publishable.runner import (
 )
 from publishable.scaffold import scaffold_project
 from publishable.scope import Execution, build_plan
+from publishable.secrets import load_env
 from publishable.stats import (
     UnitTable,
     cohens_dz,
@@ -1272,6 +1273,12 @@ def command_run(config_path: Path) -> int:
         return EXIT_WRONG
 
     repo_root = find_repo_root(config_path)
+    # The second load site, and it is not redundant. Loading is a precondition of
+    # *executing*, not a side effect of checking: `validate` loads because three
+    # § Validation rows ask whether a variable is set, and `run` loads because a
+    # step is about to read one. Idempotent and never overriding, so the second
+    # call costs nothing. `reference.md` § Secrets & credentials.
+    load_env(repo_root)
     git = git_provenance(config_path, config_path)  # phase 3: clean src/**+templates/**
     if git.code_dirty:
         dirty_c = Collector()

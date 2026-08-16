@@ -21,6 +21,7 @@ from publishable.param import MISSING
 from publishable.provenance import find_repo_root, resolves_inside_repo
 from publishable.replication import resolve_repeats
 from publishable.scope import step_name as _step_name
+from publishable.secrets import load_env
 from publishable.stats import min_honest_draws
 from publishable.strata import levels_for
 from publishable.sweep import (
@@ -507,6 +508,12 @@ def validate_config(
         # skipped rather than reported here — `generic` still resolves as a
         # core template regardless.
         repo_root = None
+    # `.env`, once, before any check that asks whether a variable is set.
+    # `reference.md` § Validation promises `validate` "creates nothing and
+    # reaches nothing off the machine"; a file in the repository root is
+    # on-machine, so this is inside that promise rather than an exception to it.
+    # Never overrides an exported variable — see `secrets.load_env`.
+    load_env(repo_root)
     try:
         # One merge, so one local discovery: the known-name list the unknown-name
         # finding prints comes back from the same call that resolved the name.

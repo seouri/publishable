@@ -49,6 +49,8 @@ def run_a_project(
     roster_csv: str | None = None,
     units_overrides: dict[str, Any] | None = None,
     expect_exit: int = EXIT_OK,
+    _env_file: str | None = None,
+    _local_template: str | None = None,
     **overrides: Any,
 ) -> dict[str, Any]:
     """Scaffold, configure, commit, and `run` a project end to end.
@@ -144,6 +146,16 @@ def run_a_project(
     read — a caller expecting `EXIT_WRONG` gets `run_dir`/`results` back as
     `None` rather than this function raising `StopIteration` looking for output
     that a refused config never produced.
+
+    `_env_file` writes a `.env` at the project root with the given text, before
+    the scaffold is committed — the scaffold's own `.gitignore` opens with
+    `.env`, so the file never reaches the `git add .` below and never makes
+    `src/**`+`templates/**` dirty.
+
+    `_local_template` writes a project-local template module at
+    `templates/cred_assay.py` with the given source, before the config is
+    generated — `code_hash` covers `templates/**`, so the file must exist
+    before `git add .` or `run` refuses the tree as dirty.
     """
     tmp_path.mkdir(parents=True, exist_ok=True)
     root = tmp_path / "proj"
@@ -161,6 +173,18 @@ def run_a_project(
         roster_csv if roster_csv is not None else f"patient_id,cohort,arm\n{patients}\n"
     )
     assert main(["new", str(root)]) == EXIT_OK
+    if _env_file is not None:
+        # The scaffold's own `.gitignore` opens with `.env`, so this never reaches
+        # the commit below and never makes `src/**`+`templates/**` dirty.
+        (root / ".env").write_text(_env_file)
+    if _local_template is not None:
+        # The opposite property, and it is why this is written HERE rather than
+        # after the config is generated: `code_hash` covers `templates/**`, so this
+        # file must exist before the `git add .` below or `run` refuses the tree as
+        # dirty. Written as `templates/cred_assay.py`, the one name every caller
+        # that passes this registers.
+        (root / "templates").mkdir(exist_ok=True)
+        (root / "templates" / "cred_assay.py").write_text(_local_template)
     with pytest.MonkeyPatch.context() as mp:
         if aggregate_returns is not None:
             import publishable.generators.experiment as experiment_gen
@@ -7685,6 +7709,26 @@ class Step(BaseStep):
 """
 
 
+_ENV_READING_STEP = """\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+import os
+
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        # Reads the environment directly, which is how `reference.md` § Secrets &
+        # credentials says a step gets a credential: core hands it none.
+        token = os.environ["PUBLISHABLE_TEST_TOKEN"]
+        for unit in io.units:
+            io.record(unit.key, {{"present": True}})
+        return {{"token_len": len(token)}}
+"""
+
+
 def test_a_run_without_a_holdout_pins_its_denominators_and_artifacts(tmp_path, capsys):
     """The whole-roster shape a run with no `data.units.holdout` produces.
 
@@ -8369,3 +8413,31 @@ def test_max_failed_fraction_is_measured_against_the_test_partition(tmp_path, ca
     assert all(r["status"] == "completed" for r in ledger), ledger
     # The guard fired: the plan stopped short of its full length.
     assert len(ledger) < _planned_execution_count(doc)
+
+
+def test_run_loads_dot_env_itself_rather_than_relying_on_validate(tmp_path, monkeypatch):
+    """The second load site earns its existence. `publishable.validate.load_env` is
+    patched to a no-op — NOT `publishable.cli.load_env`, which is a different
+    module attribute and the one under test — so if `command_run` did not load
+    for itself, the step's `os.environ[...]` would raise `KeyError` and the
+    execution would land `failed`.
+
+    `expect_exit=EXIT_OK` is the assertion: a `KeyError` in the one step makes the
+    run `partial`, which is `EXIT_PARTIAL`.
+    """
+    import publishable.validate as validate_mod
+
+    monkeypatch.delenv("PUBLISHABLE_TEST_TOKEN", raising=False)
+    monkeypatch.setattr(validate_mod, "load_env", lambda repo_root: False)
+
+    doc = run_a_project(
+        tmp_path,
+        units=4,
+        _starter_step=_ENV_READING_STEP,
+        _env_file="PUBLISHABLE_TEST_TOKEN=abcdefgh\n",
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    per_repeat = run["results"]["conditions"][0]
+    # Something that must REPORT, not an absence: the step got the real value and
+    # returned its length. 8 is `len("abcdefgh")`, derived from the fixture above.
+    assert json.dumps(per_repeat).count('"token_len": 8') >= 1
