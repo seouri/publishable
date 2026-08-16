@@ -11625,15 +11625,50 @@ _SPLIT_ROSTER_AB = "patient_id,split\n" + "".join(
 _SPLIT_ROSTER_ONE_SIDED = "patient_id,split\n" + "".join(
     f"p{i},train\n" for i in range(20)
 )
+_SPLIT_ROSTER_BLANK = "patient_id,split\n" + "".join(
+    f"p{i},{'' if i == 0 else ('test' if i % 5 == 0 else 'train')}\n" for i in range(20)
+)
 
 
 @pytest.mark.parametrize(
-    "roster_csv",
-    [_SPLIT_ROSTER_THREE, _SPLIT_ROSTER_AB, _SPLIT_ROSTER_ONE_SIDED],
-    ids=["a third value", "neither literal", "one literal unused"],
+    "roster_csv,fragment,missing_fragment",
+    [
+        # No literal is missing here — both `train` and `test` are present,
+        # just alongside a third value — so the message carries no `names no
+        # unit` clause at all. `missing_fragment=None` means "assert this
+        # phrase is ABSENT", which is what tells this branch from the other
+        # two: sharing one fragment across all three rows would leave the
+        # conditional clause deletable with the suite green.
+        (
+            _SPLIT_ROSTER_THREE,
+            "has values dev, test, train over this roster",
+            None,
+        ),
+        (
+            _SPLIT_ROSTER_AB,
+            "has values A, B over this roster",
+            "and train, test names no unit",
+        ),
+        (
+            _SPLIT_ROSTER_ONE_SIDED,
+            "has values train over this roster",
+            "and test names no unit",
+        ),
+        # A unit carries the column but the cell is blank — the value is `""`,
+        # not absent, so it still reaches `seen`. `units.py`'s established
+        # convention renders this `no value` (`stratum_varies_within_cluster`,
+        # `arms_of`); `holdout_values_fault` used to drop it, rendering as an
+        # invisible empty slot between two commas (task 7 review, finding 5).
+        (
+            _SPLIT_ROSTER_BLANK,
+            "has values no value, test, train over this roster",
+            None,
+        ),
+    ],
+    ids=["a third value", "neither literal", "one literal unused", "a blank cell"],
 )
 def test_a_by_attribute_holdout_column_must_hold_exactly_train_and_test(
-    write_config, tmp_path, roster_csv
+    write_config, tmp_path, roster_csv, fragment, missing_fragment
 ):
     """The two literals are fixed, settled in task 2: a holdout declares no
     `levels`, and inferring an order from the data would make which side is
@@ -11643,17 +11678,29 @@ def test_a_by_attribute_holdout_column_must_hold_exactly_train_and_test(
     roster CONTENT, and varying config shape over one roster is what made
     nineteen adversary configs roster-incidental in an earlier slice. Each
     roster fails a different way — a third value, neither literal present, and
-    both literals declared but one naming no unit."""
+    both literals declared but one naming no unit.
+
+    `holdout_values_fault` has two message shapes, not one: the `, and
+    <literals> names no unit` clause only appears when a literal is actually
+    missing. `fragment` pins the values list every row shares; `missing_fragment`
+    pins the conditional clause when it should fire, and its `None` on the
+    first row asserts the clause's ABSENCE — the code alone does not tell
+    these branches apart (see task 7 review, finding 1)."""
     (tmp_path / "input" / "index.csv").write_text(roster_csv)
-    found = codes(
-        write_config(
-            _holdout(
-                {"method": "by_attribute", "from": "split"}, attributes=["split"]
-            )
+    path = write_config(
+        _holdout(
+            {"method": "by_attribute", "from": "split"}, attributes=["split"]
         )
     )
+    found = codes(path)
     assert "E-DATA-HOLDOUT-VALUES" in found
     assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
+    message = messages_by_code(path)["E-DATA-HOLDOUT-VALUES"]
+    assert fragment in message
+    if missing_fragment is None:
+        assert "names no unit" not in message
+    else:
+        assert missing_fragment in message
 
 
 def test_a_by_attribute_holdout_column_holding_exactly_the_two_literals_is_accepted(
@@ -11661,16 +11708,26 @@ def test_a_by_attribute_holdout_column_holding_exactly_the_two_literals_is_accep
 ):
     """The positive companion, produced by the code under test: the same
     declaration over a column that IS exactly `{train, test}` reports nothing,
-    so the refusal reads the roster rather than refusing `by_attribute`."""
+    so the refusal reads the roster rather than refusing `by_attribute`.
+
+    An absence alone does not attribute to `_check_holdout` — `E-DATA-HOLDOUT-
+    UNSUPPORTED` is `_check_unimplemented`'s, not this function's, and both
+    assertions below pass identically with `_check_holdout` returning
+    immediately (task 7 review, finding 3). A malformed `seed` — legal under
+    every method, so it is orthogonal to the roster property this test is
+    about — earns `E-DATA-HOLDOUT-SEED`, a code only `_check_holdout` emits,
+    which is the genuine positive companion."""
     (tmp_path / "input" / "index.csv").write_text(_SPLIT_ROSTER_OK)
     found = codes(
         write_config(
             _holdout(
-                {"method": "by_attribute", "from": "split"}, attributes=["split"]
+                {"method": "by_attribute", "from": "split", "seed": "bogus"},
+                attributes=["split"],
             )
         )
     )
     assert "E-DATA-HOLDOUT-VALUES" not in found
+    assert "E-DATA-HOLDOUT-SEED" in found
     assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
 
 
@@ -11696,19 +11753,27 @@ def test_a_holdout_stratum_must_be_constant_within_a_cluster(
 
     Two ROSTERS with the SAME config: `label` alternates per unit in one and
     per animal in the other, so a check that ignored the roster gives the same
-    answer for both and this pair separates them."""
+    answer for both and this pair separates them.
+
+    The `varies` row also pins the message: the code alone does not tell this
+    finding's wording from `fold`/`resample`/`assign`'s siblings at the same
+    `stratum_varies_within_cluster` call, all four of which now share one
+    authority (task 7 review, finding 1)."""
     (tmp_path / "input" / "index.csv").write_text(roster_csv)
-    found = codes(
-        write_config(
-            _holdout(
-                {"method": "random", "frac": 0.25, "stratify_by": ["label"]},
-                attributes=["animal_id", "label"],
-                cluster_by="animal_id",
-            )
+    path = write_config(
+        _holdout(
+            {"method": "random", "frac": 0.25, "stratify_by": ["label"]},
+            attributes=["animal_id", "label"],
+            cluster_by="animal_id",
         )
     )
+    found = codes(path)
     assert ("E-DATA-HOLDOUT-STRATIFY-VARIES" in found) is expected
     assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
+    if expected:
+        message = messages_by_code(path)["E-DATA-HOLDOUT-STRATIFY-VARIES"]
+        assert "names 'label', which varies within `animal_id` a0" in message
+        assert "it carries x, y" in message
 
 
 def test_a_holdout_that_apportions_the_test_side_no_units_is_refused(
@@ -11719,24 +11784,43 @@ def test_a_holdout_that_apportions_the_test_side_no_units_is_refused(
 
     The fixture is 4 units and not 40 because the roster size is what decides
     the answer: at 40 the same `frac` apportions `[36, 4]` and reports
-    nothing, which is the second row below."""
+    nothing, which is the second row below.
+
+    Message pinned too: the code alone does not distinguish this wording from
+    `E-DATA-HOLDOUT-FRAC`'s interval refusal, which fires under a related but
+    different condition (task 7 review, finding 1)."""
     (tmp_path / "input" / "index.csv").write_text(
         "patient_id\n" + "".join(f"p{i}\n" for i in range(4))
     )
-    found = codes(write_config(_holdout({"method": "random", "frac": 0.1})))
+    path = write_config(_holdout({"method": "random", "frac": 0.1}))
+    found = codes(path)
     assert "E-DATA-HOLDOUT-EMPTY" in found
     assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
+    message = messages_by_code(path)["E-DATA-HOLDOUT-EMPTY"]
+    assert "is 0.1 over 4 resolved units" in message
+    assert "apportions the test side zero of them" in message
 
 
 def test_the_same_frac_over_a_larger_roster_is_accepted(write_config, tmp_path):
     """The positive companion for the row above, produced by the code under
     test and differing ONLY in roster size — so the refusal is the
-    apportionment's answer rather than a refusal of small `frac` values."""
+    apportionment's answer rather than a refusal of small `frac` values.
+
+    An absence alone does not attribute to `_check_holdout` — `E-DATA-HOLDOUT-
+    UNSUPPORTED` is `_check_unimplemented`'s, not this function's, and both
+    assertions below pass identically with `_check_holdout` returning
+    immediately (task 7 review, finding 3). A malformed `seed` — legal under
+    every method, so it is orthogonal to the roster-size property this test is
+    about — earns `E-DATA-HOLDOUT-SEED`, a code only `_check_holdout` emits,
+    which is the genuine positive companion."""
     (tmp_path / "input" / "index.csv").write_text(
         "patient_id\n" + "".join(f"p{i}\n" for i in range(40))
     )
-    found = codes(write_config(_holdout({"method": "random", "frac": 0.1})))
+    found = codes(
+        write_config(_holdout({"method": "random", "frac": 0.1, "seed": "bogus"}))
+    )
     assert "E-DATA-HOLDOUT-EMPTY" not in found
+    assert "E-DATA-HOLDOUT-SEED" in found
     assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
 
 
@@ -11748,19 +11832,79 @@ def test_the_empty_test_partition_refusal_is_not_reported_for_a_clustered_split(
     the smallest thing that can move and only the draw knows what it moved.
     The same 4-unit roster that reports above must not report here.
 
-    The wholesale refusal is the positive companion — without it this passes
-    identically if `_check_holdout` never ran at all."""
+    An absence alone does not attribute to `_check_holdout` — `E-DATA-HOLDOUT-
+    UNSUPPORTED` is `_check_unimplemented`'s, not this function's, and both
+    assertions below pass identically with `_check_holdout` returning
+    immediately (task 7 review, finding 3). A malformed `seed` — legal under
+    every method, so it is orthogonal to the siting property this test is
+    about — earns `E-DATA-HOLDOUT-SEED`, a code only `_check_holdout` emits,
+    which is the genuine positive companion."""
     (tmp_path / "input" / "index.csv").write_text(
         "patient_id,animal_id\n" + "".join(f"p{i},a{i // 2}\n" for i in range(4))
     )
     found = codes(
         write_config(
             _holdout(
-                {"method": "random", "frac": 0.1},
+                {"method": "random", "frac": 0.1, "seed": "bogus"},
                 attributes=["animal_id"],
                 cluster_by="animal_id",
             )
         )
     )
+    assert "E-DATA-HOLDOUT-EMPTY" not in found
+    assert "E-DATA-HOLDOUT-SEED" in found
+    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
+
+
+
+def test_the_empty_test_partition_refusal_is_not_reported_for_a_stratified_split(
+    write_config, tmp_path
+):
+    """The stratified half of trap 5's siting rule, alongside the clustered
+    half above: a stratified draw apportions INSIDE each stratum, so the
+    realized test size is not `holdout_sizes(len(roster), frac)`'s answer and
+    only the draw knows what it moved. The same 4-unit roster that reports
+    `E-DATA-HOLDOUT-EMPTY` unstratified must not report it once `stratify_by`
+    is declared — no fixture pinned this half before (task 7 review, finding
+    4); deleting `and not strata` from the guard left this branch reachable
+    with the whole suite green.
+
+    A malformed `seed` is the genuine positive companion, exactly as in the
+    clustered control above."""
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id,label\n" + "".join(f"p{i},{'x' if i % 2 else 'y'}\n" for i in range(4))
+    )
+    found = codes(
+        write_config(
+            _holdout(
+                {
+                    "method": "random",
+                    "frac": 0.1,
+                    "stratify_by": ["label"],
+                    "seed": "bogus",
+                },
+                attributes=["label"],
+            )
+        )
+    )
+    assert "E-DATA-HOLDOUT-EMPTY" not in found
+    assert "E-DATA-HOLDOUT-SEED" in found
+    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
+
+
+def test_the_empty_test_partition_refusal_is_not_stacked_on_a_frac_already_refused(
+    write_config, tmp_path
+):
+    """The third guard clause, `0.0 < frac < 1.0`: a `frac` already refused as
+    `E-DATA-HOLDOUT-FRAC` (here, `0`) must not ALSO earn `E-DATA-HOLDOUT-EMPTY`
+    — `frac: 0` apportions `(n, 0)` under `holdout_sizes`, and stacking a
+    second, derived refusal on top of the one the reader already has to fix is
+    exactly what this clause avoids. Deleting it left this branch reachable
+    with the whole suite green (task 7 review, finding 4)."""
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id\n" + "".join(f"p{i}\n" for i in range(4))
+    )
+    found = codes(write_config(_holdout({"method": "random", "frac": 0})))
+    assert "E-DATA-HOLDOUT-FRAC" in found
     assert "E-DATA-HOLDOUT-EMPTY" not in found
     assert "E-DATA-HOLDOUT-UNSUPPORTED" in found

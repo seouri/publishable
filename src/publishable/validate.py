@@ -2944,9 +2944,11 @@ def _check_holdout(
     # `stratum_varies_within_cluster` call site. Reusing that function rather
     # than minting a second notion of constancy is the point: whole clusters go
     # to one side of a holdout, exactly as they do to one side of a fold, so
-    # the holdout inherits the rule rather than inventing one. Names already
-    # refused above are skipped, so a config with one undeclared and one
-    # varying stratum gets one finding for each rather than two for one.
+    # the holdout inherits the rule rather than inventing one. Skipping a name
+    # already refused above is not load-bearing here — an undeclared or
+    # non-string name carries no value on any unit, so it is constant within
+    # every cluster and this loop would report nothing for it either way — but
+    # it matches the resample site's shape at the same call, one call over.
     if roster is not None and cluster_by:
         for name in strata:
             if not isinstance(name, str) or name not in declared_names:

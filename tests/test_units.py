@@ -3062,14 +3062,21 @@ def test_holdout_sizes_is_the_single_authority_for_the_split_sizes():
     truncation, rounding, and largest-remainder disagree on at least one."""
     assert holdout_sizes(10, 0.2) == (8, 2)
     assert holdout_sizes(240, 0.2) == (192, 48)
-    # 7 × 0.2 = 1.4: truncation gives 1, rounding gives 1, largest-remainder
-    # gives 1 — and the train side is what separates a rule that apportions
-    # from one that subtracts a rounded test size.
+    # 7 × 0.2 = 1.4: truncation gives 1 — this row separates largest-remainder
+    # (and rounding) from truncation, not from each other.
     assert holdout_sizes(7, 0.2) == (6, 1)
     # 4 × 0.2 = 0.8: the floor is 0 and the remainder goes to the LARGEST
     # fractional part, which is the test side's 0.8 against the train side's
     # 3.2 — so largest-remainder gives 1 here where truncation gives 0.
     assert holdout_sizes(4, 0.2) == (3, 1)
+    # 6 × 0.25 = 1.5: banker's-rounding `round()` rounds a .5 tie to the
+    # nearest EVEN integer, giving `test = 2`; largest-remainder allots the
+    # single remainder unit to the side with the larger fractional part when
+    # there is one, and ties broken any other way from `round()`'s still
+    # disagree here. This is the row task 7's review named as missing — a
+    # rounding-based reimplementation of this function passes every other row
+    # in this test (task 7 review, finding 2).
+    assert holdout_sizes(6, 0.25) == (5, 1)
     # The case the refusal exists for: no rule can give the test side a unit.
     assert holdout_sizes(2, 0.2) == (2, 0)
     assert sum(holdout_sizes(13, 0.3)) == 13

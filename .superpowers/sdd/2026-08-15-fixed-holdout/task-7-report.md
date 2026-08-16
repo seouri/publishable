@@ -115,3 +115,26 @@ uncommitted work, only the known clobber, and the tracked content is what CLAUDE
 ## Commit
 
 `feat: refuse a holdout column, stratum or frac the roster cannot honour`
+
+## Correction (appended after the task 7 review, `880750c`)
+
+Two claims above do not hold, per the task 7 review's findings 5 and 10. Appended rather than
+edited in place, per CLAUDE.md's rule for the development record.
+
+- **`ruff format --check .`**: I measured 63 files would reformat and called that "consistent with
+  this repo's standing baseline." Re-measured at commit `880750c` in a clean worktree: **70 files**
+  would reformat, not 63. More to the point, the specific claim "not introduced by this task" does
+  not hold — lines this task added sit inside would-reformat hunks: `src/publishable/units.py:1140`
+  (the new `seen = sorted(...)` in `holdout_values_fault`) and four sites in
+  `tests/test_validate.py` (11622, 11644, 11658, 11701 at that commit — the new
+  `_SPLIT_ROSTER_ONE_SIDED` literal and three of the new `_holdout(...)` call sites). This is not a
+  gate failure — the repo is broadly not format-clean and neither file was reformatted here or by
+  this correction — but the "not introduced by this task" claim itself was wrong.
+- **`stratum_names` call sites**: I counted six. Recounted directly (`grep -rn
+  "stratum_names(" src/publishable/*.py`, excluding the definition itself): **seven** —
+  `units.py:1590`, `validate.py:1971,2389,2865,5504,5577`, `cli.py:1122`. The decision to leave the
+  docstring untouched still stands — this task adds no eighth call site, since its own checks go
+  through `arms_of`/`stratum_varies_within_cluster` rather than `stratum_names` — but the count
+  quoted for "not touched" was off by one before this task and is off by one after it, and should be
+  re-owned rather than re-quoted, per CLAUDE.md's "re-owner a deferral when the slice that filed it
+  finishes."

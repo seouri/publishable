@@ -276,7 +276,7 @@ The table below states each check by the mistake it catches. What `validate` *pr
 | Holdout is resolvable | `holdout.method: random` needs `frac` in (0, 1); `by_attribute` needs `from`, and column `split` has values `{train, test, dev}`, expected exactly two |
 | Holdout strata survive clustering | `holdout.stratify_by: label` with `cluster_by: animal_id`, but `label` varies within animal `A3` |
 | One split, not one cell each | `data.units.holdout` or a `{kind: fold}` level is declared beside `allocation: between` or a non-empty `sweep.groups` — one roster-wide evaluation split would give the cells unequal test sizes, and a cell none at all once the split is fine enough |
-| Holdout leaves a test partition | `holdout.method: random` with `frac: 0.01` over 40 units apportions the test side zero units, so every metric would be over nothing |
+| Holdout leaves a test partition | `holdout.method: random` with `frac: 0.01` over 40 units apportions the test side zero units, so every metric would be over nothing. Reported for the unstratified, unclustered draw only — a clustered draw and either kind of stratified draw are checked where the run performs them |
 | Biological replicates are units | `{kind: biological}` is not a repeat kind — independent samples are rows in the unit table |
 | Allocation is a known value | `allocation: sideways` — not `within` or `between` |
 | Allocation needs arms | `allocation: between` but `sweep.groups` declares no axis to say what the arms are |

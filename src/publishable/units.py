@@ -1144,7 +1144,11 @@ def holdout_values_fault(roster: UnitList, column: str) -> str | None:
         arms_of(roster, column, HOLDOUT_LEVELS)
     except ContractError:
         seen = sorted(
-            {str(u.attributes[column]) for u in roster if column in u.attributes}
+            {
+                "no value" if u.attributes[column] in (None, "") else str(u.attributes[column])
+                for u in roster
+                if column in u.attributes
+            }
         )
         missing = [lit for lit in HOLDOUT_LEVELS if lit not in seen]
         return (
