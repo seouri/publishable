@@ -12652,9 +12652,13 @@ def test_a_baseline_is_a_resolved_condition_whose_credential_joins_the_union(
             },
         }
     )
-    message = messages_by_code(path)["E-CRED-PARAM-MISSING"]
-    assert "OPENAI_TEST_KEY" in message
-    assert "OLLAMA_TEST_KEY" not in message
+    # `messages_by_code` collapses same-code findings last-wins, so it cannot
+    # see a spurious second one; count explicitly via `_findings_of` instead,
+    # the way the groups and ablate tests below do.
+    found = [f for f in _findings_of(path) if f.code == "E-CRED-PARAM-MISSING"]
+    assert len(found) == 1, [f.message for f in found]
+    assert "OPENAI_TEST_KEY" in found[0].message
+    assert "OLLAMA_TEST_KEY" not in found[0].message
 
 
 def test_a_paired_cell_resolves_both_of_its_paths(git_repo: Path, write_config, monkeypatch):
@@ -12674,11 +12678,16 @@ def test_a_paired_cell_resolves_both_of_its_paths(git_repo: Path, write_config, 
             },
         }
     )
-    message = messages_by_code(path)["E-CRED-PARAM-MISSING"]
-    assert "OLLAMA_TEST_KEY" in message
+    # `messages_by_code` collapses same-code findings last-wins: if the union
+    # wrongly reported both cells, insertion order (azure cell first, ollama
+    # cell second) would keep ollama's message and this test would pass while
+    # missing a spurious azure finding. Count explicitly instead.
+    found = [f for f in _findings_of(path) if f.code == "E-CRED-PARAM-MISSING"]
+    assert len(found) == 1, [f.message for f in found]
+    assert "OLLAMA_TEST_KEY" in found[0].message
     # Azure's key IS set, so the union reports one variable and not two — the
     # positive companion that keeps this from being an absence-only control.
-    assert "AZURE_TEST_KEY" not in message
+    assert "AZURE_TEST_KEY" not in found[0].message
 
 
 def test_a_groups_axis_contributes_no_parameter_value(
@@ -12713,11 +12722,12 @@ def test_a_groups_axis_contributes_no_parameter_value(
     assert len(found) == 1, [f.message for f in found]
     assert "AZURE_TEST_KEY" in found[0].message  # the base value's, in both cells
     assert "OPENAI_TEST_KEY" not in found[0].message
-    # Both group cells resolve the identical `llm.provider` value and so need the
-    # identical variable — the one attribution race this file's fixtures carry
-    # that the paired fixture above does not, since its two paths need two
-    # different variables. `expand` emits `cohort=derivation` before
-    # `cohort=validation`, so first-attribution names the former.
+    # Both group cells resolve the identical `llm.provider` value, so one
+    # variable is required by two conditions carrying two different labels —
+    # the same first-wins-attribution shape task 10's
+    # `test_a_variable_two_conditions_need_is_reported_once` pins for `grid`.
+    # `expand` emits `cohort=derivation` before `cohort=validation`, so
+    # first-attribution names the former.
     assert "condition `cohort=derivation`" in found[0].message
 
 
