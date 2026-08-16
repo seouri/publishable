@@ -44,6 +44,8 @@ from publishable.units import (
     assignment_for,
     auto_block_size,
     fold_basis,
+    holdout_sizes,
+    holdout_values_fault,
     is_measurement_numeric,
     resolve_units,
     rule_for,
@@ -2669,7 +2671,7 @@ def _check_holdout(
     cluster_by: str | None,
     c: Collector,
 ) -> None:
-    """Every check `data.units.holdout` gets — seven findings at this commit,
+    """Every check `data.units.holdout` gets — ten findings at this commit,
     in emit order, and the enumeration is the list rather than a sample of it:
 
     - `E-DATA-HOLDOUT-METHOD` — the `method` enum.
@@ -2683,15 +2685,24 @@ def _check_holdout(
       the name of an attribute at all.
     - `E-DATA-HOLDOUT-FOLD` — a `{kind: fold}` repeat declared beside this
       block. The only check here that reads a block other than `data.units`.
+    - `E-DATA-HOLDOUT-VALUES` — **reads the roster:** under `by_attribute`, the
+      named column resolving to exactly `train` and `test`.
+    - `E-DATA-HOLDOUT-STRATIFY-VARIES` — **reads the roster:** a stratum that
+      varies within a `cluster_by` cluster.
+    - `E-DATA-HOLDOUT-EMPTY` — **reads the roster:** a `random`, unstratified,
+      unclustered split that apportions the test side zero units.
 
-    **Only `E-DATA-HOLDOUT-FOLD` reads `doc`**, and none reads `roster` or
-    `cluster_by`; all three are in the signature anyway, `units.assignment_for`'s
-    reason: the caller already holds them, and a caller told the signature
-    changed under it is what a stable one avoids. A check added here must
-    state which side of that line it is on — this list is what the next
-    reader counts against, so an eighth finding belongs in it, and a
-    roster-reading one carries its own `roster is not None` guard rather than
-    leaning on a caller.
+    **Three of the ten read `roster`**, and each carries its own
+    `roster is not None` guard rather than leaning on a caller — `_check_resample`'s
+    stated convention.
+
+    **Only `E-DATA-HOLDOUT-FOLD` reads `doc`**; `roster` and `cluster_by` are
+    both in the signature anyway, `units.assignment_for`'s reason: the caller
+    already holds them, and a caller told the signature changed under it is
+    what a stable one avoids. A check added here must state which side of
+    that line it is on — this list is what the next reader counts against,
+    so an eleventh finding belongs in it, and a roster-reading one carries
+    its own `roster is not None` guard rather than leaning on a caller.
 
     **An empty or non-mapping declaration returns reporting nothing**,
     `_check_resample`'s own gate one block over. `holdout: {}` and
@@ -2912,6 +2923,81 @@ def _check_holdout(
             "hold out a final test set AND cross-validate for model selection, declare "
             "the holdout and do the inner search inside the step over `io.units.train`",
         )
+
+    # `by_attribute`'s two literals, through `units.holdout_values_fault` — one
+    # authority for both the verdict (`arms_of`'s set equality) and the wording,
+    # so this collected finding and the one `holdout_for` raises at run time
+    # cannot drift apart. `stratum_varies_within_cluster`'s own arrangement:
+    # the function returns a fault and each caller decides whether to collect
+    # it or raise it.
+    if (
+        method == "by_attribute"
+        and roster is not None
+        and isinstance(declared_from, str)
+        and declared_from
+    ):
+        fault = holdout_values_fault(roster, declared_from)
+        if fault is not None:
+            c.error("E-DATA-HOLDOUT-VALUES", "data.units.holdout.from", fault)
+
+    # *Holdout strata survive clustering*, through the fourth
+    # `stratum_varies_within_cluster` call site. Reusing that function rather
+    # than minting a second notion of constancy is the point: whole clusters go
+    # to one side of a holdout, exactly as they do to one side of a fold, so
+    # the holdout inherits the rule rather than inventing one. Names already
+    # refused above are skipped, so a config with one undeclared and one
+    # varying stratum gets one finding for each rather than two for one.
+    if roster is not None and cluster_by:
+        for name in strata:
+            if not isinstance(name, str) or name not in declared_names:
+                continue  # already refused above
+            try:
+                offender = stratum_varies_within_cluster(roster, cluster_by, name)
+            except ContractError:
+                # `clusters_of` refuses a unit carrying no cluster value
+                # (`E-DATA-CLUSTER-UNKNOWN`), reported beside this by
+                # `_check_cluster_by` or by `_check_units`' own resolution. This
+                # module collects rather than raises.
+                break
+            if offender is not None:
+                cluster, values = offender
+                c.error(
+                    "E-DATA-HOLDOUT-STRATIFY-VARIES",
+                    "data.units.holdout.stratify_by",
+                    f"names {name!r}, which varies within `{cluster_by}` {cluster} — it "
+                    f"carries {', '.join(values)}. A cluster is indivisible and goes "
+                    "whole to one side of the split, so a cluster carrying two stratum "
+                    "values can be dealt to neither; stratify on an attribute constant "
+                    "within a cluster",
+                )
+
+    # The zero-size test partition, sited exactly as *Every arm draws units* is:
+    # **the unstratified, unclustered `random` draw only**. A stratified or
+    # clustered split apportions inside each stratum or moves whole clusters,
+    # so the realized test size is not this arithmetic's answer and only the
+    # draw knows what it moved — that one is checked where the run performs it.
+    # `by_attribute` needs nothing here: `arms_of` above already refuses a
+    # literal no unit's value names, which is an empty side by another name,
+    # and a second refusal of one fault under two codes is what this omission
+    # avoids.
+    if (
+        method == "random"
+        and roster is not None
+        and not strata
+        and not cluster_by
+        and isinstance(declared_frac, (int, float))
+        and not isinstance(declared_frac, bool)
+        and 0.0 < float(declared_frac) < 1.0
+    ):
+        _train_size, test_size = holdout_sizes(len(roster), float(declared_frac))
+        if test_size == 0:
+            c.error(
+                "E-DATA-HOLDOUT-EMPTY",
+                "data.units.holdout.frac",
+                f"is {declared_frac} over {len(roster)} resolved units, which apportions "
+                "the test side zero of them — every metric would be over nothing. Widen "
+                "`frac`, or resolve a larger roster",
+            )
 
 
 def _accounted_attribute_names(doc: dict[str, Any], units: dict[str, Any]) -> set[str]:

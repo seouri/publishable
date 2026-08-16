@@ -11611,3 +11611,156 @@ def test_a_holdout_beside_a_seed_repeat_is_not_refused(write_config):
     found = codes(write_config(_holdout({"method": "random", "frac": 0.2})))
     assert "E-DATA-HOLDOUT-FOLD" not in found
     assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
+
+
+_SPLIT_ROSTER_OK = "patient_id,split\n" + "".join(
+    f"p{i},{'test' if i % 5 == 0 else 'train'}\n" for i in range(20)
+)
+_SPLIT_ROSTER_THREE = "patient_id,split\n" + "".join(
+    f"p{i},{['train', 'test', 'dev'][i % 3]}\n" for i in range(20)
+)
+_SPLIT_ROSTER_AB = "patient_id,split\n" + "".join(
+    f"p{i},{'A' if i % 2 else 'B'}\n" for i in range(20)
+)
+_SPLIT_ROSTER_ONE_SIDED = "patient_id,split\n" + "".join(
+    f"p{i},train\n" for i in range(20)
+)
+
+
+@pytest.mark.parametrize(
+    "roster_csv",
+    [_SPLIT_ROSTER_THREE, _SPLIT_ROSTER_AB, _SPLIT_ROSTER_ONE_SIDED],
+    ids=["a third value", "neither literal", "one literal unused"],
+)
+def test_a_by_attribute_holdout_column_must_hold_exactly_train_and_test(
+    write_config, tmp_path, roster_csv
+):
+    """The two literals are fixed, settled in task 2: a holdout declares no
+    `levels`, and inferring an order from the data would make which side is
+    evaluated depend on a lexical accident of the input.
+
+    Three ROSTERS against one config shape, deliberately: the property is about
+    roster CONTENT, and varying config shape over one roster is what made
+    nineteen adversary configs roster-incidental in an earlier slice. Each
+    roster fails a different way — a third value, neither literal present, and
+    both literals declared but one naming no unit."""
+    (tmp_path / "input" / "index.csv").write_text(roster_csv)
+    found = codes(
+        write_config(
+            _holdout(
+                {"method": "by_attribute", "from": "split"}, attributes=["split"]
+            )
+        )
+    )
+    assert "E-DATA-HOLDOUT-VALUES" in found
+    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
+
+
+def test_a_by_attribute_holdout_column_holding_exactly_the_two_literals_is_accepted(
+    write_config, tmp_path
+):
+    """The positive companion, produced by the code under test: the same
+    declaration over a column that IS exactly `{train, test}` reports nothing,
+    so the refusal reads the roster rather than refusing `by_attribute`."""
+    (tmp_path / "input" / "index.csv").write_text(_SPLIT_ROSTER_OK)
+    found = codes(
+        write_config(
+            _holdout(
+                {"method": "by_attribute", "from": "split"}, attributes=["split"]
+            )
+        )
+    )
+    assert "E-DATA-HOLDOUT-VALUES" not in found
+    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
+
+
+_VARYING_HOLDOUT_STRATUM = "patient_id,animal_id,label\n" + "".join(
+    f"p{i},a{i // 2},{'x' if i % 2 else 'y'}\n" for i in range(28)
+)
+_CONSTANT_HOLDOUT_STRATUM = "patient_id,animal_id,label\n" + "".join(
+    f"p{i},a{i // 2},{'x' if (i // 2) % 2 else 'y'}\n" for i in range(28)
+)
+
+
+@pytest.mark.parametrize(
+    "roster_csv,expected",
+    [(_VARYING_HOLDOUT_STRATUM, True), (_CONSTANT_HOLDOUT_STRATUM, False)],
+    ids=["varies within the animal", "constant within the animal"],
+)
+def test_a_holdout_stratum_must_be_constant_within_a_cluster(
+    write_config, tmp_path, roster_csv, expected
+):
+    """§ Validation *Holdout strata survive clustering* — whole clusters go to
+    one side of a holdout, so a cluster carrying two stratum values can be
+    dealt to neither. The fourth `stratum_varies_within_cluster` call site.
+
+    Two ROSTERS with the SAME config: `label` alternates per unit in one and
+    per animal in the other, so a check that ignored the roster gives the same
+    answer for both and this pair separates them."""
+    (tmp_path / "input" / "index.csv").write_text(roster_csv)
+    found = codes(
+        write_config(
+            _holdout(
+                {"method": "random", "frac": 0.25, "stratify_by": ["label"]},
+                attributes=["animal_id", "label"],
+                cluster_by="animal_id",
+            )
+        )
+    )
+    assert ("E-DATA-HOLDOUT-STRATIFY-VARIES" in found) is expected
+    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
+
+
+def test_a_holdout_that_apportions_the_test_side_no_units_is_refused(
+    write_config, tmp_path
+):
+    """§ Validation *Holdout leaves a test partition*. 4 units at `frac: 0.1`
+    apportions `[4, 0]` — every metric would be over nothing.
+
+    The fixture is 4 units and not 40 because the roster size is what decides
+    the answer: at 40 the same `frac` apportions `[36, 4]` and reports
+    nothing, which is the second row below."""
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id\n" + "".join(f"p{i}\n" for i in range(4))
+    )
+    found = codes(write_config(_holdout({"method": "random", "frac": 0.1})))
+    assert "E-DATA-HOLDOUT-EMPTY" in found
+    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
+
+
+def test_the_same_frac_over_a_larger_roster_is_accepted(write_config, tmp_path):
+    """The positive companion for the row above, produced by the code under
+    test and differing ONLY in roster size — so the refusal is the
+    apportionment's answer rather than a refusal of small `frac` values."""
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id\n" + "".join(f"p{i}\n" for i in range(40))
+    )
+    found = codes(write_config(_holdout({"method": "random", "frac": 0.1})))
+    assert "E-DATA-HOLDOUT-EMPTY" not in found
+    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
+
+
+def test_the_empty_test_partition_refusal_is_not_reported_for_a_clustered_split(
+    write_config, tmp_path
+):
+    """Trap 5's siting rule, mirroring *Every arm draws units*: a clustered or
+    stratified split is checked where the RUN performs it, because a cluster is
+    the smallest thing that can move and only the draw knows what it moved.
+    The same 4-unit roster that reports above must not report here.
+
+    The wholesale refusal is the positive companion — without it this passes
+    identically if `_check_holdout` never ran at all."""
+    (tmp_path / "input" / "index.csv").write_text(
+        "patient_id,animal_id\n" + "".join(f"p{i},a{i // 2}\n" for i in range(4))
+    )
+    found = codes(
+        write_config(
+            _holdout(
+                {"method": "random", "frac": 0.1},
+                attributes=["animal_id"],
+                cluster_by="animal_id",
+            )
+        )
+    )
+    assert "E-DATA-HOLDOUT-EMPTY" not in found
+    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found

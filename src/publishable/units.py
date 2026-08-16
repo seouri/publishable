@@ -1077,6 +1077,87 @@ def _apportion(n: int, weights: Sequence[float]) -> list[int]:
     return sizes
 
 
+HOLDOUT_LEVELS = ("train", "test")
+"""`data.units.holdout`'s two sides, in apportionment order — train first.
+
+Fixed literals rather than "the two values the column happens to hold", because
+a holdout declares no `levels` for core to read an order out of, and inferring
+one from the data would make which side is *evaluated* depend on a lexical
+accident of the input. `reference.md` § A fixed holdout split states the rule
+and § Errors names the refusal, `E-DATA-HOLDOUT-VALUES`.
+
+Order is load-bearing twice: it is the order `holdout_sizes` apportions in, so
+`frac` is the SECOND weight, and it is the order `arms_of` is handed for a
+`by_attribute` read.
+"""
+
+
+def holdout_sizes(n: int, frac: float) -> tuple[int, int]:
+    """`(train, test)` — `n` apportioned across `[1 - frac, frac]`.
+
+    **One arithmetic for the split, and two callers**: `validate._check_holdout`
+    refuses a `frac` that apportions the test side zero units, and
+    `holdout_for`'s unclustered draw cuts the shuffled roster at exactly these
+    sizes. Two derivations of the same number would mean `validate` approving a
+    `frac` whose realized test side the draw then sized differently — the
+    validate-clean-then-disagree gap `arms_of`'s own docstring is written to
+    prevent a third instance of.
+
+    `_apportion`'s largest-remainder rule, which `assignment_for`'s `random`
+    branch already uses for `assign.<axis>.ratio`: each side's exact share
+    floors and the remainder goes to the larger fractional part. Every size is
+    within one of its exact proportional share, which is the strongest claim a
+    fraction that doesn't divide `n` supports.
+
+    **A test size of 0 is possible and is the caller's to refuse.** Two units at
+    `frac: 0.2` gives `(2, 0)`. Nothing here raises: `validate` holds the
+    declared `frac` and the roster a message has to name, so the refusal lives
+    there — `_apportion`'s own convention, one construction over.
+    """
+    train, test = _apportion(n, [1.0 - frac, frac])
+    return train, test
+
+
+def holdout_values_fault(roster: UnitList, column: str) -> str | None:
+    """How `column` fails to resolve to exactly `train` and `test` over this
+    roster — as a message — or `None` when it does not fail.
+
+    **One authority, two reporting surfaces**, which is
+    `stratum_varies_within_cluster`'s own arrangement: `validate._check_holdout`
+    collects this as `E-DATA-HOLDOUT-VALUES` and `holdout_for` raises it under
+    the same code, so the two cannot come to disagree about either the verdict
+    or the wording. Two independent wrappings of one raise is exactly how two
+    messages drift apart.
+
+    The **verdict** is `arms_of`'s, unchanged: that function stays the authority
+    for a column-read partition and promises set equality in both directions —
+    no unit's value outside the pair, and neither literal left holding nothing.
+    Only the **wording** is rebuilt here, because `arms_of`'s own message names
+    an arm and an axis's declared levels and would send a holdout's reader to
+    the wrong section.
+
+    Returns a message rather than raising, so `validate` — contracted never to
+    raise — can report it beside every other finding, and so `holdout_for` can
+    raise it with the code that belongs to a holdout rather than to an arm.
+    """
+    try:
+        arms_of(roster, column, HOLDOUT_LEVELS)
+    except ContractError:
+        seen = sorted(
+            {str(u.attributes[column]) for u in roster if column in u.attributes}
+        )
+        missing = [lit for lit in HOLDOUT_LEVELS if lit not in seen]
+        return (
+            f"the holdout column {column!r} has values {', '.join(seen) or 'none'} over "
+            f"this roster — a `by_attribute` holdout needs exactly "
+            f"`{HOLDOUT_LEVELS[0]}` and `{HOLDOUT_LEVELS[1]}`"
+            + (f", and {', '.join(missing)} names no unit" if missing else "")
+            + ". A holdout declares no levels for core to read an order out of, so the "
+            "two names are fixed rather than inferred from the data"
+        )
+    return None
+
+
 def auto_block_size(weights: Sequence[float]) -> int:
     """`block_size: "auto"`'s resolved value for `assign.<axis>.method: blocked` —
     `reference.md` § Allocation: twice `ratio`'s sum, rounded to a whole number of
@@ -1834,9 +1915,14 @@ def stratum_varies_within_cluster(
     different sides, and a cluster that carries two of them cannot be dealt out at
     all, being indivisible. Rather than silently prioritizing one of the two
     constraints, core refuses the pair — so this reports the pair, and the caller
-    decides which declaration to name (`reference.md` § Validation, rows *Fold
-    strata survive clustering* and *Holdout strata survive clustering*, which is why
-    this returns a fault rather than raising one code).
+    decides which declaration to name — **four callers today, under four codes**:
+    `E-DATA-ASSIGN-STRATIFY-VARIES`, `E-REPL-FOLD-STRATIFY-VARIES`,
+    `E-STATS-RESAMPLE-STRATIFY-VARIES` and `E-DATA-HOLDOUT-STRATIFY-VARIES`,
+    answering to `reference.md` § Validation's *Allocation strata survive
+    clustering*, *Fold strata survive clustering*, *Resample strata survive
+    clustering* and *Holdout strata survive clustering*. That is why this returns
+    a fault rather than raising one code: a code chosen here would be right for
+    one caller and wrong for three.
 
     Membership comes from `clusters_of`, the single authority, so a unit carrying no
     cluster value raises `E-DATA-CLUSTER-UNKNOWN` from there rather than being

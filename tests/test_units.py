@@ -20,6 +20,7 @@ from publishable.units import (
     clusters_of,
     collapse_measurements,
     fold_basis,
+    holdout_sizes,
     partition_units,
     resolve_units,
     stratum_varies_within_cluster,
@@ -3049,3 +3050,26 @@ def test_the_stratum_check_reads_cluster_membership_from_the_one_authority():
     with pytest.raises(ContractError) as e:
         stratum_varies_within_cluster(roster, "animal_id", "label")
     assert e.value.code == "E-DATA-CLUSTER-UNKNOWN"
+
+
+def test_holdout_sizes_is_the_single_authority_for_the_split_sizes():
+    """One arithmetic for the split, shared by `validate`'s refusal and the
+    draw. `_apportion`'s largest-remainder rule, which `assignment_for`'s
+    `random` branch already uses — so a `frac` `validate` approves is a `frac`
+    the draw realizes at the same sizes.
+
+    Each row is chosen so a DIFFERENT wrong rule gives a different answer:
+    truncation, rounding, and largest-remainder disagree on at least one."""
+    assert holdout_sizes(10, 0.2) == (8, 2)
+    assert holdout_sizes(240, 0.2) == (192, 48)
+    # 7 × 0.2 = 1.4: truncation gives 1, rounding gives 1, largest-remainder
+    # gives 1 — and the train side is what separates a rule that apportions
+    # from one that subtracts a rounded test size.
+    assert holdout_sizes(7, 0.2) == (6, 1)
+    # 4 × 0.2 = 0.8: the floor is 0 and the remainder goes to the LARGEST
+    # fractional part, which is the test side's 0.8 against the train side's
+    # 3.2 — so largest-remainder gives 1 here where truncation gives 0.
+    assert holdout_sizes(4, 0.2) == (3, 1)
+    # The case the refusal exists for: no rule can give the test side a unit.
+    assert holdout_sizes(2, 0.2) == (2, 0)
+    assert sum(holdout_sizes(13, 0.3)) == 13
