@@ -7621,3 +7621,150 @@ def test_a_summary_estimate_is_not_recomputed_by_the_resample_pass(tmp_path, cap
     assert aggregated["pred"]["resample"]["n"] == 2000
 
 
+_TRAIN_TOUCHING_STEP = '''\
+# src/{pkg}/steps/step01_touch_train.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        # Reaches for the training partition with no `fold` repeat and no
+        # `data.units.holdout` declared. At this commit that raises
+        # `E-STEP-UNITS-UNAVAILABLE` from `UnitList.train`, which is the
+        # property being pinned: an empty list here would let a fit run on
+        # nothing and write a plausible model.
+        train = io.units.train
+        return {{"n_train": len(train)}}
+'''
+
+
+def test_a_run_without_a_holdout_pins_its_denominators_and_artifacts(tmp_path, capsys):
+    """The whole-roster shape a run with no `data.units.holdout` produces.
+
+    Pinned FIRST, before any narrowing exists: tasks 14 and 15 narrow
+    `io.units` and four denominators onto a holdout's test partition, and
+    after that there is no un-narrowed build left to compare against. Every
+    number here is over the full 10-unit roster, and every one of them must
+    still be 10 when this slice is done.
+
+    Two departures from the brief this test started from, both because the
+    brief's assumption did not match what this commit's code actually
+    produces (recorded here rather than silently "fixed" — see the task 1
+    report for the fuller account):
+
+    - `executions.jsonl` records carry no `n` key at all (`runner.execute_plan`
+      writes `step`/`scope`/`condition`/`repeat`/`status`/`started_at`/
+      `wall_seconds`/`error`, nothing else) — that was true before this slice
+      and stays true after it; task 15's denominator is `_condition_counts`'
+      per-metric `n` in `run.yaml`, not a ledger field. Asserting a ledger `n`
+      would have been asserting a fact about a document this build does not
+      write, so it is replaced with a plain status check.
+    - The scaffold's one auto-generated step never yields a real `aggregated`
+      metric on its own: it records `present: True`, and `stats.summarize_step`
+      drops a bool column outright ("skipped entirely... a string, or a bool").
+      So the un-narrowed `run_a_project(tmp_path, units=10)` call produces
+      `aggregated == {"step01_summarize_units": {}}` — non-empty at the top
+      level, empty where the pin needs to look, which is exactly the
+      "assertion implied by another" trap: the `assert aggregated` guard would
+      have passed while the loop beneath it never executed. `aggregate_returns`
+      is used instead, the same helper every other end-to-end test in this
+      file reaches for to get a real `basis: units` metric with a real `n`.
+    """
+    doc = run_a_project(tmp_path, capsys=capsys, units=10, aggregate_returns="mean_pred")
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+
+    # `materialize.py` writes the key as an explicit `null`. Asserted rather
+    # than assumed: an absent key and an explicit `null` are different
+    # documents that must produce one shape, and this is the one a generated
+    # project actually has.
+    assert run["config"]["data"]["units"]["holdout"] is None
+
+    # The ledger itself carries no denominator (see the docstring); what it
+    # does guarantee is that every recorded execution completed, over the
+    # whole roster, with nothing skipped by a holdout that doesn't exist.
+    ledger = [
+        json.loads(line)
+        for line in (doc["run_dir"] / "executions.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert ledger, "no executions were recorded — the pin would be vacuous"
+    assert all(record["status"] == "completed" for record in ledger), ledger
+
+    # The denominator a reader actually cites: `run.yaml`'s aggregated block.
+    # Both the recorded column (`pred`) and the template-derived metric
+    # (`mean_pred`) must report the full 10-unit roster — task 15 narrows
+    # both onto a holdout's test partition, and this is the pre-narrowing
+    # value each must still equal when there is no holdout at all.
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert set(aggregated) == {"pred", "mean_pred"}, aggregated
+    for name in ("pred", "mean_pred"):
+        assert aggregated[name]["n"]["resolved"] == 10, aggregated[name]
+
+    # The roster's IDENTITY, which is deliberately NOT a metric's denominator
+    # and which task 15 must leave whole. Pinned beside the denominators above
+    # precisely so a change that narrows both is distinguishable from one that
+    # narrows only what it should.
+    provenance = run["provenance"]
+    assert provenance["units"]["n"] == 10
+    assert provenance["units"]["key"] == "patient_id"
+    assert provenance["units_hash"].startswith("sha256:")
+
+    # No arm assignment and no holdout, so no `allocation.json` and no hash —
+    # the "both absent" gate task 17 widens.
+    assert not (doc["run_dir"] / "allocation.json").exists()
+    assert provenance["allocation"] is None
+    assert provenance["allocation_hash"] is None
+
+
+def test_io_units_train_raises_without_a_fold_or_holdout(tmp_path, capsys):
+    """`io.units.train` with neither partition declared raises rather than
+    handing back an empty list — `reference.md` § Steps and artifacts. Pinned
+    here because task 14 teaches `execute_plan` to populate `.train` from a
+    holdout plan, and a narrowing written one branch too wide would start
+    handing a train list to a run that declared no partition at all.
+
+    The step's failure is CONTAINED: the plan runs to its end and the run
+    directory exists with the ledger readable for the code. Getting a
+    genuinely `partial` status (rather than a wholly `failed` one) needs a
+    SECOND step that actually completes: the generated scaffold has exactly
+    one step, and if `_TRAIN_TOUCHING_STEP` replaces it and fails on every one
+    of its repeats, `run_status` sees no completed execution anywhere and
+    returns `"failed"` (`EXIT_FAILED`), not `"partial"` — a real mismatch
+    against the brief this test started from, which assumed the single
+    failing step alone would leave the run `partial`. `extra_steps=["control"]`
+    adds the generated no-op step (`return {{}}`, always completes) so the run
+    genuinely mixes a failure with a success, the shape `run_status` actually
+    names `partial`."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=10,
+        _starter_step=_TRAIN_TOUCHING_STEP,
+        extra_steps=["control"],
+        expect_exit=EXIT_PARTIAL,
+    )
+    ledger = [
+        json.loads(line)
+        for line in (doc["run_dir"] / "executions.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    failed = [r for r in ledger if r["status"] == "failed"]
+    completed = [r for r in ledger if r["status"] == "completed"]
+    # A positive companion for the absence below: something must actually have
+    # run and failed, or the code assertion would pass over an empty list.
+    assert failed, "no execution failed — the step never ran"
+    assert all("E-STEP-UNITS-UNAVAILABLE" in (r["error"] or "") for r in failed)
+    # `_starter_step` overrides the scaffolded step's SOURCE, not its generated
+    # filename — the scaffold always names its one step `step01_summarize_units`
+    # regardless of what source it was written from.
+    assert all(r["step"] == "step01_summarize_units" for r in failed)
+    # The positive half: the control step, over the same 10-unit roster and
+    # the same five seed repeats, completed every time — the run is
+    # genuinely mixed, not accidentally all-failed.
+    assert completed, "no execution completed — the run would not be genuinely partial"
+    assert all(r["step"] == "step02_control" for r in completed)
+    assert len(failed) == len(completed) == 5
+
+
