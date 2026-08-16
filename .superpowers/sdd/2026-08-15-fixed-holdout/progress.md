@@ -821,3 +821,40 @@ Task 19: fix round 1. Commit a5e7ba4. Both Criticals closed, and the implementer
   no count at all rather than by "four", following the pointer-not-enumeration form tasks 9, 10, 12 and 17
   each adopted.
 Task 19: complete. 1954 passed + 2 xfailed; ruff check and mypy clean. BASE for task 20 is a5e7ba4.
+Task 20: dispatched — the reader-facing half: the dated build claim, the two normative sections, CLAUDE.md.
+  The core instruction was MEASURE, DO NOT ASSERT: run the nine feasibility configs through `validate` and
+  report what each does, rather than copying a predicted number from the spec. Also carried the brief's
+  known defect — it misattributes a `reference.md` rewrite to task 8.
+Task 20: implemented across 0ee62c6..3dab906. 1954 passed + 2 xfailed. It built a scratch project OUTSIDE
+  the repo and actually ran `validate` against all nine, then SELF-CORRECTED TWICE in follow-up commits —
+  first that the configs ran "as written" when only `data.units`/`statistics.resample` were transplanted
+  verbatim, then an unsupported claim that C1-C3 share E3/E4/E6's `io.reuse_from` blocker. It corrected the
+  report's own narrative to match rather than fixing silently.
+  Measured and confirmed: `E-DATA-HOLDOUT-UNSUPPORTED` fires on none of the nine at any substitution;
+  `E-DATA-RESOLVER-UNSUPPORTED` fires on all nine; the generous count is THREE (E1, E2, E5), not six. I
+  verified the `io.reuse_from` grep myself with a working control — absent from `src/` entirely.
+Task 20: reviewed (opus). Both verdicts FAIL on three false or unestablished sentences, with the underlying
+  work credited as strong.
+  **C1 IS MINE.** CLAUDE.md claimed "H3d has now merged" — it has not; the branch is unmerged and the merge
+  decision is the user's. I noticed it, CORRECTED THE ONE SENTENCE I HAD READ, and did not sweep the claim.
+  Two more sites survived: a second in CLAUDE.md and one in the dated section, pinned to a commit reachable
+  only from the branch. **That is the third instance in this slice of correcting a sentence instead of
+  sweeping the claim** — task 18 scoped a sweep to a symbol, task 19 verified what it replaced but not what
+  it wrote, and I did the shortest version of the same thing. The rule is in CLAUDE.md under my own hand
+  and I still did it, which is worth recording plainly: the habit survives knowing the rule.
+  C3 is the one to carry into the review: the dated section said `replication` was NOT carried over, yet
+  reported `W-REPL-DETERMINISTIC` on E5 — and that warning requires a `batch` level, which a default
+  seed-repeat config cannot have. One of the two sentences had to be false. The implementer declined to
+  guess, WITHDREW the reported warning as unattributable under the declared scope, and said explicitly
+  that it had not re-run the measurement to determine which sentence was originally at fault. Recorded as
+  a withdrawal rather than a determination — honest, and a residue the whole-branch review should see.
+Task 20: fix round 1. Commit 452062d. All seven closed. The merged-claim sweep was run properly this time,
+  with a control, and found exactly the two named sites and no others. The `io.reuse_from` asymmetry —
+  arguing the blocker is invisible to `validate` and then using absence-from-YAML to clear C1-C3 — is now
+  stated as an open question rather than resolved on the weaker evidence. CLAUDE.md's paragraph is back
+  from twelve lines to a citation plus one clause, and its own bad citation to a nonexistent
+  `reference.md` § What core will not do for you is fixed: only `experimental-designs.md` carries it.
+Task 20: complete. 1954 passed + 2 xfailed; ruff check and mypy clean.
+
+ALL TWENTY TASKS COMPLETE. Whole-branch review next; then STOP AND ASK before merge or push — the user
+chose the subagent-driven variant without standing merge authorization for this slice.
