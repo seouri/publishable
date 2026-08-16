@@ -892,12 +892,15 @@ def _check_units(
       resolver either, and without this skip it raises `E-UNITS-SOURCE-MISSING`
       for the same declaration, describing a resolver as a missing file.
 
-    No other `-UNSUPPORTED` field is skipped on: `allocation`, `assign`,
-    `cluster_by`, `weight_by`, and `holdout` are not read by
-    `resolve_units` at all, so resolving against a real table or glob alongside
-    one of those refusals adds a genuine, independent finding — a duplicate key
-    in the roster is a real defect whether or not `holdout` is also declared —
-    rather than noise about the same problem twice.
+    No other `-UNSUPPORTED` field is skipped on: `allocation` and `assign`'s
+    method are not read by `resolve_units` at all, and the three that ARE read
+    — `cluster_by`, `weight_by`, and (under `by_attribute`) `holdout.from` —
+    are read only where a `data.units.measurements` collapse could file a unit
+    by row order, which is an independent fault of its own. So resolving
+    against a real table or glob alongside one of those refusals adds a
+    genuine, independent finding — a duplicate key in the roster is a real
+    defect whether or not `holdout` is also declared — rather than noise about
+    the same problem twice.
 
     Returns the resolved roster, or `None` when resolution did not happen or did
     not succeed — `_check_replication` uses its length to check a `fold` count

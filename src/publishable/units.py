@@ -313,8 +313,9 @@ def resolve_units(
         # want this rule, and neither is a flat string: `assign` is a mapping of
         # axis blocks and `holdout` is a mapping with its own `from`. Task 11 adds
         # `_assign_constant_columns` below as `assign`'s accessor, so that one is
-        # now reachable; **`holdout.from` still is not** — its shape is a single
-        # key under a fixed mapping, not one-per-declared-axis, and needs its own
+        # now reachable; **`holdout.from` reaches it through
+        # `_holdout_constant_column`** — its shape is a single key under a
+        # fixed mapping, not one-per-declared-axis, so it needed its own
         # accessor rather than this one's `axis` loop. Verified by probe, not
         # assumed: adding `"assign"` to `CONSTANT_COLUMN_RULES` alone changed
         # nothing, because this comprehension's `isinstance(..., str)` filter
@@ -333,6 +334,16 @@ def resolve_units(
         # states" `CONSTANT_COLUMN_RULES` warns against, now stated in both
         # places rather than left implicit.
         constant = _assign_constant_columns(units_decl.get("assign"))
+        # `holdout.from` next, between `assign` and the flat pair. `assign` is
+        # documented as the worst of the family (§ Allocation: a mis-collapsed
+        # arm decides which CONDITION a unit is measured in), so it stays
+        # first. `holdout.from` and `cluster_by` say the same thing about the
+        # damage — which side of a split the unit lands on — so the order
+        # BETWEEN those two is fixed here deterministically rather than left to
+        # an accident of dict-building, and is **not** a claim that one fault
+        # is worse than the other. `weight_by` stays last, which is the
+        # documented ordering.
+        constant.update(_holdout_constant_column(units_decl.get("holdout")))
         constant.update(
             {
                 declaration: units_decl[declaration]
@@ -428,6 +439,45 @@ def _assign_constant_columns(assign_decl: Any) -> dict[str, str]:
         if resolved_from:
             resolved[f"assign.{axis}.from"] = resolved_from
     return resolved
+
+
+def _holdout_constant_column(holdout_decl: Any) -> dict[str, str]:
+    """`holdout.from` when a `by_attribute` holdout declares one — at most one
+    entry, keyed by the literal dotted path a reader would look for.
+
+    `_assign_constant_columns`' sibling, one declaration over, and narrower for
+    the reason that one is narrow: this function's only job is deciding which
+    column, if any, a holdout's constancy has to hold — not reporting a
+    malformed declaration. An absent block, a non-mapping block, a missing
+    `from`, an empty `from` and a non-`str` `from` are shapes
+    `validate._check_holdout` reports (`E-DATA-HOLDOUT-METHOD`,
+    `E-DATA-HOLDOUT-FROM`) and this function is silent on, each because it
+    resolves to no column to check: those are `validate`'s findings to raise,
+    not a `ContractError` from a run that resolution has no path to report
+    through.
+
+    **Gated on `method == "by_attribute"`**, matching `_assign_constant_columns`'
+    own gate and for its reason: `random` draws the split rather than reading
+    one, so no column is read, and a `from` declared beside it means nothing —
+    already refused as `E-DATA-HOLDOUT-NO-DRAW`. Without this gate a drawn
+    split whose declaration carried a stray `from` naming a column that varies
+    within a unit's rows would raise `E-DATA-HOLDOUT-VARIES` over a column its
+    draw never reads, which is the validate-clean-then-crash gap in the
+    opposite direction: a config no check approves, refused anyway by a rule
+    that assumed a read `by_attribute` alone performs.
+
+    **There is no axis-name default**, unlike `assign.<axis>.from`: a holdout
+    has no axis name, which is why `validate` requires `from` outright under
+    `by_attribute` rather than defaulting it.
+    """
+    if not isinstance(holdout_decl, dict):
+        return {}
+    if holdout_decl.get("method") != "by_attribute":
+        return {}
+    declared_from = holdout_decl.get("from")
+    if isinstance(declared_from, str) and declared_from:
+        return {"holdout.from": declared_from}
+    return {}
 
 
 def _measurement_axis(measurements: Any) -> str:
@@ -661,18 +711,30 @@ CONSTANT_COLUMN_RULES: dict[str, tuple[str, str]] = {
         "leave that decision to the order the rows happen to be in. An arm is "
         "a fact about the unit, not about the measurement",
     ),
+    "holdout": (
+        "E-DATA-HOLDOUT-VARIES",
+        "A holdout decides which side of a train/test split the unit lands on, "
+        "so collapsing disagreeing rows would leave that decision to the order "
+        "the rows happen to be in — a unit evaluated against a model it was "
+        "fitted on, or held back from one it should have been evaluated by. "
+        "Which side of a split a unit is on is a fact about the unit, not "
+        "about the measurement",
+    ),
 }
 """The declarations whose column may not vary within a unit's measurement rows.
 
-**Three codes, not one**, deliberately: `reference.md` § Clustered units,
-§ Weighted samples and § Allocation state the same rule about three different
-columns, and each says a different thing about what breaks — a mis-collapsed
-weight mis-sizes what one unit stands for, a mis-collapsed cluster decides which
-side of a split that unit lands on, and a mis-collapsed arm decides which
-*condition* the unit is measured in, the worst of the three because it changes
-what the run claims to have compared rather than how confidently it says so. One
-identifier for any pair of them would send the reader to a section that does not
-describe the damage.
+**Four codes, not one**, deliberately: `reference.md` § Clustered units,
+§ Weighted samples, § Allocation and § A fixed holdout split state the same
+rule about four different columns, and each of the first three says a
+different thing about what breaks — a mis-collapsed weight mis-sizes what one
+unit stands for, a mis-collapsed cluster decides which side of a split that
+unit lands on, and a mis-collapsed arm decides which *condition* the unit is
+measured in, the worst of the three because it changes what the run claims to
+have compared rather than how confidently it says so. **`holdout` is the one
+exception**: it says the *same* thing about the damage `cluster_by` does —
+which side of a split the unit lands on — and still gets its own code, because
+one identifier for either would send the reader naming the other to a section
+that does not describe their input field at all.
 
 Keyed by the *declaration* rather than by the column, so a config naming one
 column under two declarations is checked once for each **declaration considered
@@ -717,10 +779,15 @@ scatter this docstring's reasoning across every call site that builds a
 `constant` entries keyed `assign.<axis>.from` — the literal dotted path, for the
 error message — and `collapse_measurements`'s lookup strips back to the segment
 before the first `.`, which is a no-op for `cluster_by`/`weight_by` and finds
-`assign` for every axis alike. **`holdout.from` is not reachable through this
-registry today** — it is a single key under a fixed mapping, not one per
-declared axis, so it needs its own accessor the same shape `_assign_constant_columns`
-is for `assign`, and nothing in this task builds one.
+`assign` for every axis alike. **`holdout.from` reaches this registry through
+its own accessor**, `_holdout_constant_column` below — a single key under a
+fixed mapping rather than one per declared axis, so it could not use
+`_assign_constant_columns`'s `axis` loop, and it could not be a flat entry
+either: `resolve_units`' comprehension filters on `isinstance(..., str)` and
+drops a mapping before the registry is consulted. Its `constant` key is the
+dotted `holdout.from`, for the message, and the lookup strips it back to the
+bare `holdout` here, exactly as it strips `assign.<axis>.from` back to
+`assign`.
 
 **Every key in this dict must itself contain no `.`.** `collapse_measurements`'s
 lookup strips a `constant` key back to the segment before its first `.` before

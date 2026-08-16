@@ -11,6 +11,8 @@ from publishable.units import (
     Unit,
     UnitList,
     _apportion,
+    _assign_constant_columns,
+    _holdout_constant_column,
     apply_rule,
     arm_members,
     arms_of,
@@ -2885,6 +2887,43 @@ def test_one_column_named_by_both_cluster_and_arm_reports_exactly_one_code(input
     assert e.value.code == "E-DATA-ASSIGN-VARIES"
 
 
+def test_resolve_units_checks_holdout_after_assign_and_before_cluster(input_dir: Path):
+    """`test_the_holdout_rule_is_checked_after_assign_and_before_the_flat_pair`
+    (`test_units.py`, `_holdout_constant_column` fixture) pins the ordering
+    against a `constant` mapping the test itself builds by hand — it proves
+    `collapse_measurements` stops at whichever entry is first in the dict it
+    is given, never that `resolve_units` actually builds that dict in this
+    order. This is the companion that calls `resolve_units` on a real
+    declaration, the way `test_one_column_named_by_both_cluster_and_arm_reports_exactly_one_code`
+    above does for `assign` vs. `cluster_by` alone: one unit's rows disagree
+    under `assign`, `holdout.from` and `cluster_by` at once, so only the
+    `constant.update` order `resolve_units` itself builds decides which code
+    comes back."""
+    _write_reads(
+        input_dir,
+        "patient_id,read_id,arm,split,site\n"
+        "p1,r1,control,train,S1\np1,r2,treatment,test,S2\n",
+    )
+    decl = {
+        "from": "reads.csv",
+        "key": "patient_id",
+        "attributes": ["arm", "split", "site", "read_id"],
+        "cluster_by": "site",
+        "assign": {"arm": {"method": "by_attribute"}},
+        "holdout": {"method": "by_attribute", "from": "split"},
+        "measurements": {"by": "read_id", "collapse": "first"},
+    }
+    with pytest.raises(ContractError) as e:
+        resolve_units(decl, input_dir)
+    assert e.value.code == "E-DATA-ASSIGN-VARIES"
+
+    without_assign = dict(decl)
+    del without_assign["assign"]
+    with pytest.raises(ContractError) as e2:
+        resolve_units(without_assign, input_dir)
+    assert e2.value.code == "E-DATA-HOLDOUT-VARIES"
+
+
 def test_roster_order_not_severity_decides_when_different_units_violate_different_declarations(
     input_dir: Path,
 ):
@@ -3080,3 +3119,108 @@ def test_holdout_sizes_is_the_single_authority_for_the_split_sizes():
     # The case the refusal exists for: no rule can give the test side a unit.
     assert holdout_sizes(2, 0.2) == (2, 0)
     assert sum(holdout_sizes(13, 0.3)) == 13
+
+
+_MEASUREMENT_ROWS = [
+    {"patient_id": "p1", "read_id": "r1", "split": "train", "value": "1"},
+    {"patient_id": "p1", "read_id": "r2", "split": "test", "value": "2"},
+    {"patient_id": "p2", "read_id": "r3", "split": "test", "value": "3"},
+]
+
+
+def _units_from_rows(rows, attributes):
+    return [
+        Unit(key=r["patient_id"], paths=(), attributes={a: r[a] for a in attributes})
+        for r in rows
+    ]
+
+
+def test_a_holdout_from_column_varying_within_a_unit_is_refused():
+    """A `by_attribute` holdout reading a column that disagrees between two
+    rows of one unit would file that unit on whichever side the row the
+    collapse kept says — a train/test membership decided by row order.
+
+    `p1` carries `train` and `test`; `p2` carries one value, so the fixture
+    also proves the check is per-unit rather than per-roster."""
+    units = _units_from_rows(_MEASUREMENT_ROWS, ["read_id", "split", "value"])
+    constant = _holdout_constant_column({"method": "by_attribute", "from": "split"})
+    assert constant == {"holdout.from": "split"}
+    with pytest.raises(ContractError) as exc:
+        collapse_measurements(units, "read_id", "first", constant)
+    assert exc.value.code == "E-DATA-HOLDOUT-VARIES"
+    assert "split" in str(exc.value)
+
+
+def test_a_constant_holdout_from_column_collapses_cleanly():
+    """The positive companion, produced by the code under test: the same
+    declaration over rows that AGREE collapses without raising, and the
+    surviving unit keeps the value. Without this the test above passes
+    identically if the rule refused every `holdout.from`."""
+    rows = [dict(r, split="train") for r in _MEASUREMENT_ROWS]
+    units = _units_from_rows(rows, ["read_id", "split", "value"])
+    collapsed, counts = collapse_measurements(
+        units, "read_id", "first",
+        _holdout_constant_column({"method": "by_attribute", "from": "split"}),
+    )
+    assert [u.key for u in collapsed] == ["p1", "p2"]
+    assert [u.attributes["split"] for u in collapsed] == ["train", "train"]
+    assert counts == [2, 1]
+
+
+@pytest.mark.parametrize(
+    "decl",
+    [
+        None,
+        {},
+        "nonsense",
+        {"method": "random", "frac": 0.2},
+        {"method": "random", "frac": 0.2, "from": "split"},
+        {"method": "by_attribute"},
+        {"method": "by_attribute", "from": ""},
+        {"method": "by_attribute", "from": 7},
+    ],
+    ids=["absent", "empty", "not a mapping", "random", "random with a stray from",
+         "by_attribute with no from", "empty from", "non-string from"],
+)
+def test_the_holdout_accessor_resolves_no_column_for_these(decl):
+    """It resolves a column or it does not; it never reports a malformed
+    declaration. `E-DATA-HOLDOUT-METHOD`, `-FROM` and `-NO-DRAW` are
+    `validate`'s findings to raise, not a `ContractError` from a run that
+    resolution has no path to report through.
+
+    The `random with a stray from` row is the load-bearing one: the gate is on
+    the METHOD, so a drawn split whose declaration happens to carry a `from`
+    still reads no column — a run that raised `E-DATA-HOLDOUT-VARIES` there
+    would be refusing a config over a column its draw never reads."""
+    assert _holdout_constant_column(decl) == {}
+
+
+def test_the_holdout_rule_is_checked_after_assign_and_before_the_flat_pair():
+    """`constant`'s iteration order decides which code a unit violating more
+    than one declaration gets, and `collapse_measurements` stops at the first.
+    Pinned as an order rather than left to dict-building accident.
+
+    The fixture makes ONE unit violate `assign`, `holdout` and `cluster_by`
+    at once — three declarations, so the three candidate orderings each give a
+    different answer, which two declarations could not distinguish."""
+    rows = [
+        {"patient_id": "p1", "read_id": "r1", "split": "train", "arm": "a", "site": "s1"},
+        {"patient_id": "p1", "read_id": "r2", "split": "test", "arm": "b", "site": "s2"},
+    ]
+    units = _units_from_rows(rows, ["read_id", "split", "arm", "site"])
+    constant = _assign_constant_columns({"arm": {"method": "by_attribute"}})
+    constant.update(_holdout_constant_column({"method": "by_attribute", "from": "split"}))
+    constant.update({"cluster_by": "site"})
+    with pytest.raises(ContractError) as exc:
+        collapse_measurements(units, "read_id", "first", constant)
+    assert exc.value.code == "E-DATA-ASSIGN-VARIES"
+
+    # Remove the highest-priority declaration and the NEXT one reports — which
+    # is what proves the order rather than merely that `assign` reports.
+    without_assign = _holdout_constant_column(
+        {"method": "by_attribute", "from": "split"}
+    )
+    without_assign.update({"cluster_by": "site"})
+    with pytest.raises(ContractError) as exc2:
+        collapse_measurements(units, "read_id", "first", without_assign)
+    assert exc2.value.code == "E-DATA-HOLDOUT-VARIES"
