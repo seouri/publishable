@@ -7697,19 +7697,43 @@ def test_a_run_without_a_holdout_pins_its_denominators_and_artifacts(tmp_path, c
     # (`mean_pred`) must report the full 10-unit roster — task 15 narrows
     # both onto a holdout's test partition, and this is the pre-narrowing
     # value each must still equal when there is no holdout at all.
+    # Full `n` (all four keys), plus the metric's own arithmetic — not just
+    # `resolved`. Review finding (Important #2): a call-site narrowing that
+    # left only `resolved` pinned moved `completed`/`failed`/`value`/`ci95`
+    # right under this run (0/10 units narrowed to 3, `EXIT_OK` unchanged
+    # because `max_failed_fraction` is scoped to the same narrowed list) while
+    # both original assertions kept passing. `pred` is `0.0..9.0` (mean 4.5)
+    # and `mean_pred` is `aggregate`'s mean of the same column — both must
+    # read as a completed, unfailed, whole-roster computation.
     aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
     assert set(aggregated) == {"pred", "mean_pred"}, aggregated
     for name in ("pred", "mean_pred"):
-        assert aggregated[name]["n"]["resolved"] == 10, aggregated[name]
+        metric = aggregated[name]
+        assert metric["n"] == {
+            "resolved": 10, "completed": 10, "ineligible": 0, "failed": 0,
+        }, metric
+        assert metric["value"] == pytest.approx(4.5), metric
+        assert metric["ci95"] is not None, metric
 
     # The roster's IDENTITY, which is deliberately NOT a metric's denominator
     # and which task 15 must leave whole. Pinned beside the denominators above
     # precisely so a change that narrows both is distinguishable from one that
     # narrows only what it should.
+    #
+    # `units_hash` recomputed and compared for EQUALITY, not merely a
+    # `sha256:` prefix (review Important #3): a prefix check survives a call
+    # site narrowed to `units_hash(UnitList(list(roster)[:3]))` — a digest is
+    # still a digest — so this recomputes the hash over the same input
+    # directory the run actually resolved from and compares the two values.
+    from publishable.units import resolve_units, units_hash
+
     provenance = run["provenance"]
     assert provenance["units"]["n"] == 10
     assert provenance["units"]["key"] == "patient_id"
-    assert provenance["units_hash"].startswith("sha256:")
+    whole_roster, _technical_n, _columns = resolve_units(
+        run["config"]["data"]["units"], tmp_path / "data"
+    )
+    assert provenance["units_hash"] == units_hash(whole_roster)
 
     # No arm assignment and no holdout, so no `allocation.json` and no hash —
     # the "both absent" gate task 17 widens.
