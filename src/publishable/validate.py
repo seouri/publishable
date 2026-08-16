@@ -589,6 +589,7 @@ def validate_config(
     _check_metadata(doc, config_path, template, c)
     _check_entrypoint(doc, c)
     _check_required_env(doc, template, c)
+    _check_requires_env(doc, template, c)
     _check_parameters(doc, template, c)
     _check_versions(doc, template, c)
     _check_data(doc, config_path, c)
@@ -752,6 +753,75 @@ def _check_required_env(doc: dict[str, Any], template: Any, c: Collector) -> Non
             f"template `{name}` requires `{variable}`, which has no value in the "
             "environment or in `.env` — the config records the NAME, so put the value "
             "in `.env` at the repository root",
+        )
+
+
+def _check_requires_env(doc: dict[str, Any], template: Any, c: Collector) -> None:
+    """The union over the conditions the sweep actually resolves.
+
+    That union is the entire reason a value carries its own credential
+    requirement instead of a template carrying a static list: a config selecting
+    Azure and OpenAI must say nothing about Ollama's key, and one selecting none
+    of them must say nothing about any. `reference.md` § A credential can belong
+    to a parameter value.
+
+    A condition's value is resolved the way `runner.resolve_condition_cfg`
+    resolves it — declared parameters, then each of `condition.values` whose path
+    is not a **selector**, a group cell naming no parameter at all — computed
+    locally rather than by importing the runner, since this needs one path's
+    value rather than a whole `Config`.
+
+    A resolved value with no key in the mapping requires nothing. `requires_env`
+    is total over `choices`, so that case is exactly the values `choices` does
+    not hold: `sweep.ablate.remove` sets a nullable parameter to `null`, which is
+    a legal resolved value and not a choice. Reporting it here would be a second
+    report of a fault `_check_sweep` already owns.
+
+    One finding per variable, attributed to the first condition that selected it:
+    one missing value is one thing to fix, whatever selected it.
+    """
+    spec = getattr(template, "parameter_spec", None) or {}
+    wanted = {path: p for path, p in spec.items() if getattr(p, "requires_env", None)}
+    if not wanted:
+        return
+    try:
+        conditions = expand(doc)
+    except Exception:
+        # Guarded the same way `_condition_labels` guards its own `expand(doc)`:
+        # an unexpandable sweep is `_check_sweep`'s to report, and this module
+        # collects rather than raises.
+        return
+    declared = _flatten(doc.get("parameters"), "")
+    # `dict`, so insertion order is condition order then declared-parameter
+    # order — a deterministic finding order without sorting away the attribution.
+    first_seen: dict[str, tuple[str, Any, str | None]] = {}
+    for condition in conditions:
+        resolved = dict(declared)
+        for path, value in condition.values.items():
+            if path in condition.selectors:
+                continue
+            resolved[path] = value
+        for path, param in wanted.items():
+            if path in resolved:
+                value = resolved[path]
+            elif param.default is not MISSING:
+                value = param.default
+            else:
+                continue  # required and absent — `E-PARAM-MISSING`'s finding, not this one
+            try:
+                needs = param.requires_env.get(value)
+            except TypeError:
+                continue  # an unhashable resolved value cannot key the mapping
+            for variable in needs or []:
+                first_seen.setdefault(variable, (path, value, condition.label))
+    for variable in missing_env(first_seen):
+        path, value, label = first_seen[variable]
+        where = f"condition `{label}`" if label else "the base parameters"
+        c.error(
+            "E-CRED-PARAM-MISSING",
+            f"parameters.{path}",
+            f"is `{value}` in {where}, which requires `{variable}` — no value in the "
+            "environment or in `.env`",
         )
 
 

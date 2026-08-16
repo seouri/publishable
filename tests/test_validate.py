@@ -12391,3 +12391,143 @@ def test_a_template_declaring_no_required_env_reports_nothing(write_config, monk
     so the reason a green suite is green is stated rather than assumed."""
     monkeypatch.delenv("PUBLISHABLE_TEST_TOKEN", raising=False)
     assert "E-CRED-MISSING" not in codes(write_config())
+
+
+_UNION_TEMPLATE = """\
+from publishable import BaseTemplate, Param, register_template
+
+
+@register_template("cred_assay")
+class CredAssay(BaseTemplate):
+    parameter_spec = {
+        "llm.provider": Param(
+            str,
+            default="azure_openai",
+            choices=["azure_openai", "openai", "ollama"],
+            requires_env={
+                "azure_openai": ["AZURE_TEST_KEY"],
+                "openai": ["OPENAI_TEST_KEY"],
+                "ollama": ["OLLAMA_TEST_KEY"],
+            },
+        ),
+        "llm.retries": Param(int, default=2, ge=0),
+    }
+"""
+
+_UNION_NAMES = ("AZURE_TEST_KEY", "OPENAI_TEST_KEY", "OLLAMA_TEST_KEY")
+
+
+def _union_project(git_repo: Path, monkeypatch, *, set_names: tuple[str, ...]) -> None:
+    """The decision-6 fixture: three choices, a sweep selecting two, a third whose
+    variable is deliberately unset and whose requirement is deliberately NON-empty.
+
+    `reference.md`'s own example gives `ollama` an empty `[]`; copying it here
+    would collapse "union over resolved conditions" into "union over all
+    choices", since an unselected choice requiring nothing answers the same
+    either way.
+
+    Every one of the three names is `delenv`-ed first and only `set_names` is
+    exported, so the answer is a property of the check rather than of the machine
+    the suite runs on.
+    """
+    for name in _UNION_NAMES:
+        monkeypatch.delenv(name, raising=False)
+    for name in set_names:
+        monkeypatch.setenv(name, "value")
+    templates = git_repo / "templates"
+    templates.mkdir(exist_ok=True)
+    (templates / "cred_assay.py").write_text(_UNION_TEMPLATE)
+
+
+def test_the_union_is_over_the_conditions_the_sweep_resolves(
+    git_repo: Path, write_config, monkeypatch
+):
+    """Reading A. B would additionally report `OLLAMA_TEST_KEY`; C would report
+    nothing, `azure_openai` being the written value and its key set."""
+    _union_project(git_repo, monkeypatch, set_names=("AZURE_TEST_KEY",))
+    path = write_config(
+        {
+            "experiment_type": "cred_assay",
+            "parameters": {"llm": {"provider": "azure_openai", "retries": 2}},
+            "sweep": {"grid": {"llm.provider": ["azure_openai", "openai"]}},
+        }
+    )
+
+    c = Collector()
+    validate_config(path, c)
+    found = [f for f in c.findings if f.code == "E-CRED-PARAM-MISSING"]
+
+    assert len(found) == 1, [f.message for f in found]
+    message = found[0].message
+    assert found[0].path == "parameters.llm.provider"
+    assert "OPENAI_TEST_KEY" in message  # reading A's answer …
+    assert "OLLAMA_TEST_KEY" not in message  # … and not reading B's
+    # The three facts this code's message must name and the other one cannot:
+    # the parameter (via `path` above), the value, and the condition.
+    assert "`openai`" in message
+    assert "condition `provider=openai`" in message
+
+
+def test_the_union_says_nothing_when_every_selected_value_s_key_is_set(
+    git_repo: Path, write_config, monkeypatch
+):
+    """The honouring. The unselected `ollama`'s key stays unset throughout — so a
+    check that reported over all `choices` fails here while passing the test
+    above."""
+    _union_project(git_repo, monkeypatch, set_names=("AZURE_TEST_KEY", "OPENAI_TEST_KEY"))
+    assert (
+        codes(
+            write_config(
+                {
+                    "experiment_type": "cred_assay",
+                    "parameters": {"llm": {"provider": "azure_openai", "retries": 2}},
+                    "sweep": {"grid": {"llm.provider": ["azure_openai", "openai"]}},
+                }
+            )
+        )
+        == set()
+    )
+
+
+def test_an_undeclared_parameter_falls_back_to_the_template_s_default(
+    git_repo: Path, write_config, monkeypatch
+):
+    """A config that omits the parameter still resolves to a value — the
+    template's default — and that value's credential is still required."""
+    _union_project(git_repo, monkeypatch, set_names=())
+    path = write_config({"experiment_type": "cred_assay", "parameters": {}})
+    message = messages_by_code(path)["E-CRED-PARAM-MISSING"]
+    assert "AZURE_TEST_KEY" in message
+    assert "the base parameters" in message  # no sweep, so no condition label
+
+
+def test_a_variable_two_conditions_need_is_reported_once(git_repo: Path, write_config, monkeypatch):
+    """One missing value is one thing to fix. Attributed to the first condition
+    that selected it, which is why the assertion below names `openai` and not the
+    later duplicate."""
+    _union_project(git_repo, monkeypatch, set_names=("AZURE_TEST_KEY",))
+    path = write_config(
+        {
+            "experiment_type": "cred_assay",
+            "parameters": {"llm": {"provider": "azure_openai", "retries": 2}},
+            "sweep": {
+                "grid": {
+                    "llm.provider": ["openai", "azure_openai"],
+                    "llm.retries": [1, 2],
+                }
+            },
+        }
+    )
+    c = Collector()
+    validate_config(path, c)
+    found = [f for f in c.findings if f.code == "E-CRED-PARAM-MISSING"]
+    assert len(found) == 1, [f.message for f in found]
+    assert "OPENAI_TEST_KEY" in found[0].message
+
+
+def test_a_template_declaring_no_requires_env_reports_nothing(write_config, monkeypatch):
+    """`generic`'s four parameters declare none, which is why the other 1957 tests
+    are unaffected. Asserted rather than assumed."""
+    for name in _UNION_NAMES:
+        monkeypatch.delenv(name, raising=False)
+    assert "E-CRED-PARAM-MISSING" not in codes(write_config())
