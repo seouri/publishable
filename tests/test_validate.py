@@ -11327,3 +11327,100 @@ def test_the_retired_resample_code_appears_nowhere_in_src():
     assert len(files) > 20
     hits = [path for path in files if "E-STATS-RESAMPLE-UNSUPPORTED" in path.read_text()]
     assert hits == []
+
+
+def _holdout(block, **extra) -> dict:
+    """`write_config`'s whole-block override for a config declaring a holdout.
+
+    `base_config` has no `data.units` key at all, so a dotted
+    `{"data.units.holdout": ...}` override raises `KeyError` walking `units` —
+    the whole block is what every other `data.units` test in this file writes.
+    """
+    units = {"from": "index.csv", "key": "patient_id", **extra}
+    if block is not None:
+        units["holdout"] = block
+    return {"data.units": units}
+
+
+def test_an_empty_or_null_holdout_validates_clean(write_config):
+    """`holdout: {}` and `holdout: null` declare nothing and partition nothing,
+    so neither is refused — `_check_resample`'s own `not isinstance(...) or not
+    ...: return` gate, one block over. Pinned because the shape looks like a
+    hole and is not: a misspelled child inside a NON-empty block is reported by
+    `check_envelope`, and `_check_unimplemented`'s truthiness test is false for
+    both of these.
+
+    The positive companion is the third assertion: a real declaration in the
+    same position DOES report, so this cannot pass by the check being dead."""
+    assert "E-DATA-HOLDOUT-METHOD" not in codes(write_config(_holdout({})))
+    assert "E-DATA-HOLDOUT-METHOD" not in codes(write_config(_holdout(None)))
+    assert "E-DATA-HOLDOUT-METHOD" in codes(write_config(_holdout({"frac": 0.2})))
+
+
+@pytest.mark.parametrize(
+    "block,expected",
+    [
+        # `method` — absent, wrong type, out of enum. An allowlist: a method
+        # named here and realized nowhere would validate clean and then
+        # partition on something core never drew.
+        ({"frac": 0.2}, "E-DATA-HOLDOUT-METHOD"),
+        ({"method": ["random"], "frac": 0.2}, "E-DATA-HOLDOUT-METHOD"),
+        ({"method": "stratified", "frac": 0.2}, "E-DATA-HOLDOUT-METHOD"),
+        # `frac` under `random` — absent, and each end of the OPEN interval.
+        ({"method": "random"}, "E-DATA-HOLDOUT-FRAC"),
+        ({"method": "random", "frac": 0}, "E-DATA-HOLDOUT-FRAC"),
+        ({"method": "random", "frac": 1}, "E-DATA-HOLDOUT-FRAC"),
+        ({"method": "random", "frac": -0.5}, "E-DATA-HOLDOUT-FRAC"),
+        ({"method": "random", "frac": 1.5}, "E-DATA-HOLDOUT-FRAC"),
+        # `from` under `by_attribute` — absent and empty. There is no axis name
+        # to default to, unlike `assign.<axis>.from`.
+        ({"method": "by_attribute"}, "E-DATA-HOLDOUT-FROM"),
+        ({"method": "by_attribute", "from": ""}, "E-DATA-HOLDOUT-FROM"),
+        # A field meaning nothing under the declared method, both directions.
+        ({"method": "by_attribute", "from": "split", "frac": 0.2},
+         "E-DATA-HOLDOUT-NO-DRAW"),
+        ({"method": "random", "frac": 0.2, "from": "split"},
+         "E-DATA-HOLDOUT-NO-DRAW"),
+        ({"method": "by_attribute", "from": "split", "stratify_by": ["label"]},
+         "E-DATA-HOLDOUT-NO-DRAW"),
+        # The seed pin — present and neither `auto` nor a plain int.
+        ({"method": "random", "frac": 0.2, "seed": "1234"}, "E-DATA-HOLDOUT-SEED"),
+        ({"method": "random", "frac": 0.2, "seed": 1.5}, "E-DATA-HOLDOUT-SEED"),
+    ],
+)
+def test_a_malformed_holdout_declaration_is_refused(write_config, block, expected):
+    found = codes(write_config(_holdout(block)))
+    assert expected in found
+    # Alongside, never instead of: `E-DATA-HOLDOUT-UNSUPPORTED` is still live
+    # at this commit and task 18 retires it. Membership on its own line makes
+    # that retirement a one-line deletion rather than a rewrite of this test.
+    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
+
+
+@pytest.mark.parametrize(
+    "block",
+    [
+        {"method": "random", "frac": 0.2},
+        {"method": "random", "frac": 0.2, "seed": "auto"},
+        {"method": "random", "frac": 0.2, "seed": 1234},
+        {"method": "random", "frac": 0.999},
+        {"method": "by_attribute", "from": "split"},
+        {"method": "by_attribute", "from": "split", "seed": 1234},
+    ],
+)
+def test_a_well_formed_holdout_declaration_earns_none_of_the_five(write_config, block):
+    """The success path for every arm above. A parametrization asserting only
+    failures proves nothing about either method's accepted shape — the shape
+    that left `blocked`'s stratified draw fully threaded and never exercised.
+
+    A pinned `seed` is legal under BOTH methods on purpose: `by_attribute`
+    records no seed, but a config carrying one is not malformed, and refusing
+    it here would put the `NO-DRAW` rule somewhere this test would not see."""
+    found = codes(write_config(_holdout(block)))
+    for code in ("E-DATA-HOLDOUT-METHOD", "E-DATA-HOLDOUT-FRAC",
+                 "E-DATA-HOLDOUT-FROM", "E-DATA-HOLDOUT-NO-DRAW",
+                 "E-DATA-HOLDOUT-SEED"):
+        assert code not in found
+    # The positive companion: this config is not silently escaping the check
+    # entirely — the wholesale refusal still fires on the same declaration.
+    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found

@@ -622,6 +622,12 @@ def validate_config(
     # `replication._fold_k`, which sees the declaration and a count and never a
     # roster.
     _check_fold_stratify_by(doc, units_decl, roster, usable_cluster, c)
+    # Sited here for `_check_fold_stratify_by`'s reason and beside it: both read
+    # the resolved roster and the usable cluster name, and both check a
+    # partition's declaration rather than a repeat's. `usable_cluster` is
+    # already narrowed to a non-empty string or `None` above, so this call needs
+    # no guard of its own.
+    _check_holdout(doc, units_decl, roster, usable_cluster, c)
     _check_replication(
         doc,
         template,
@@ -1378,6 +1384,17 @@ method at all.
 # nothing from here). This module's use of the tuple outlived the refusal it was
 # minted for: it named the methods `E-DATA-ASSIGN-DRAWN` refused, and now names
 # the branch a drawn method takes through `_check_assign`.
+
+
+HOLDOUT_METHODS = ("random", "by_attribute")
+"""`data.units.holdout.method`'s enum — `reference.md` § A fixed holdout split.
+
+Two values and no more, and stated as a closed enum for `ASSIGN_METHODS`'s
+reason: a third named here and realized nowhere would validate clean and then
+reach `units.holdout_for`, which refuses what it cannot draw. Which of the two
+reads a partition and which draws one is what decides every other field's
+meaning, so a malformed `method` is reported before any of them is read.
+"""
 
 
 def _declared_levels(sweep: Any, axis: str) -> list[str] | None:
@@ -2640,6 +2657,157 @@ def _check_fold_stratify_by(
                 "indivisible, so a stratum cannot be balanced across a split that cannot "
                 "divide the cluster carrying both values; stratify on an attribute that is "
                 "constant within a cluster, or drop the stratification",
+            )
+
+
+def _check_holdout(
+    doc: dict[str, Any],
+    units: dict[str, Any],
+    roster: UnitList | None,
+    cluster_by: str | None,
+    c: Collector,
+) -> None:
+    """Every check `data.units.holdout` gets — five findings at this commit, in
+    declaration order, and the enumeration is the list rather than a sample of
+    it:
+
+    - `E-DATA-HOLDOUT-METHOD` — the `method` enum.
+    - `E-DATA-HOLDOUT-FRAC` — `frac` in the open interval (0, 1), under `random`.
+    - `E-DATA-HOLDOUT-FROM` — `from` required, under `by_attribute`.
+    - `E-DATA-HOLDOUT-NO-DRAW` — a field meaning nothing under the declared
+      method.
+    - `E-DATA-HOLDOUT-SEED` — the seed pin.
+
+    **None of the five reads `roster` or `cluster_by`**, and both are in the
+    signature anyway, `units.assignment_for`'s reason: the caller already holds
+    both, and a caller told the signature changed under it is what a stable one
+    avoids. A check added here must state which side of that line it is on —
+    this list is what the next reader counts against, so a sixth finding
+    belongs in it, and a roster-reading one carries its own
+    `roster is not None` guard rather than leaning on a caller.
+
+    **An empty or non-mapping declaration returns reporting nothing**,
+    `_check_resample`'s own gate one block over. `holdout: {}` and
+    `holdout: null` declare nothing and partition nothing;
+    `_check_unimplemented`'s truthiness test is false for both, and a
+    misspelled child inside a non-empty block is `check_envelope`'s
+    `E-CONFIG-KEY-UNKNOWN` rather than this function's.
+
+    Every value read here is `isinstance`-guarded and quietly skipped when it
+    is not the leaf `envelope.LEAF_TYPES` types, the same division
+    `_check_report_by` keeps: a leaf type fault is `E-CONFIG-TYPE`, reported
+    already and deliberately non-fatal, and reporting a second, derived fault
+    on top of the one the reader has to fix anyway is what
+    `validate_config`'s own `usable_cluster` guard avoids.
+
+    **`frac`'s interval is open at both ends.** `0` holds nothing out and `1`
+    holds everything out; each leaves one side of the split empty, and a split
+    with an empty side is not a split. A `frac` small enough to apportion the
+    test side zero units over *this* roster is a different fault with a
+    different fix — widen it, or resolve more units — and is not this check's.
+    """
+    holdout = units.get("holdout")
+    if not isinstance(holdout, dict) or not holdout:
+        return
+
+    method = holdout.get("method")
+    if method is None:
+        c.error(
+            "E-DATA-HOLDOUT-METHOD",
+            "data.units.holdout.method",
+            f"is not declared; the methods are {', '.join(HOLDOUT_METHODS)}, and which "
+            "one is declared decides what every other field of the block means — "
+            "`random` draws a split and `by_attribute` reads one already in the data",
+        )
+    elif not isinstance(method, str):
+        # Absorbed here rather than left to `E-CONFIG-TYPE` alone: the reader's
+        # question is which method they meant, and a bare type finding does not
+        # enumerate the two.
+        c.error(
+            "E-DATA-HOLDOUT-METHOD",
+            "data.units.holdout.method",
+            f"is {method!r}, which names no method; the methods are {', '.join(HOLDOUT_METHODS)}",
+        )
+    elif method not in HOLDOUT_METHODS:
+        c.error(
+            "E-DATA-HOLDOUT-METHOD",
+            "data.units.holdout.method",
+            f"is {method!r}, which is not one of {', '.join(HOLDOUT_METHODS)}. A method "
+            "named here and realized nowhere would validate clean and then partition "
+            "on something core never drew",
+        )
+
+    declared_frac = holdout.get("frac")
+    declared_from = holdout.get("from")
+    if method == "random":
+        if declared_frac is None:
+            c.error(
+                "E-DATA-HOLDOUT-FRAC",
+                "data.units.holdout.frac",
+                "is not declared, and `method: random` draws the test side by "
+                "fraction — there is nothing to draw without one",
+            )
+        elif isinstance(declared_frac, (int, float)) and not isinstance(declared_frac, bool):
+            if not 0.0 < float(declared_frac) < 1.0:
+                c.error(
+                    "E-DATA-HOLDOUT-FRAC",
+                    "data.units.holdout.frac",
+                    f"is {declared_frac}, and a test fraction is strictly between 0 and "
+                    "1 — `0` holds nothing out and `1` holds everything out, and each "
+                    "leaves one side of the split empty",
+                )
+        if declared_from is not None:
+            c.error(
+                "E-DATA-HOLDOUT-NO-DRAW",
+                "data.units.holdout.from",
+                "means nothing under `method: random`, which draws the split rather "
+                "than reading one out of a column — declare `method: by_attribute` to "
+                "read the column, or drop `from`",
+            )
+    elif method == "by_attribute":
+        if declared_from is None:
+            c.error(
+                "E-DATA-HOLDOUT-FROM",
+                "data.units.holdout.from",
+                "is not declared, and `method: by_attribute` reads the split out of a "
+                "column — unlike an assignment axis there is no axis name to default "
+                "to, so the column has to be named",
+            )
+        elif isinstance(declared_from, str) and not declared_from:
+            c.error(
+                "E-DATA-HOLDOUT-FROM",
+                "data.units.holdout.from",
+                "is empty, which names no column to read the split out of",
+            )
+        if declared_frac is not None:
+            c.error(
+                "E-DATA-HOLDOUT-NO-DRAW",
+                "data.units.holdout.frac",
+                "means nothing under `method: by_attribute`, which reads a split the "
+                "data already holds rather than drawing one to a size — the realized "
+                "proportion is whatever the column says it is",
+            )
+        if holdout.get("stratify_by") is not None:
+            c.error(
+                "E-DATA-HOLDOUT-NO-DRAW",
+                "data.units.holdout.stratify_by",
+                "means nothing under `method: by_attribute`: `stratify_by` names how a "
+                "draw is BALANCED, and a split read out of a column was not drawn. The "
+                "same absorption `E-DATA-ASSIGN-NO-DRAW` performs for the same field "
+                "one declaration over",
+            )
+
+    if "seed" in holdout:
+        seed = holdout["seed"]
+        pinned = isinstance(seed, int) and not isinstance(seed, bool)
+        if not pinned and seed != "auto":
+            c.error(
+                "E-DATA-HOLDOUT-SEED",
+                "data.units.holdout.seed",
+                f"is {seed!r}, and a seed is `auto` or a plain integer. A quoted "
+                "number, a float, or a boolean is a pin nothing can honour, and "
+                "deriving one anyway would record a derived seed under a key the "
+                "config wrote deliberately",
             )
 
 
