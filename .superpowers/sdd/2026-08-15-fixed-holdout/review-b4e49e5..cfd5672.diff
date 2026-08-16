@@ -1,0 +1,542 @@
+# Review package: b4e49e5..cfd5672
+
+## Commits
+cfd5672 docs: task 16 report -- resample cluster warning against the test partition
+30f18b2 fix: count a resample's clusters over the holdout's test partition
+
+## Files changed
+ .../sdd/2026-08-15-fixed-holdout/task-16-report.md | 128 +++++++++++++++++++++
+ docs/reference.md                                  |   2 +-
+ src/publishable/validate.py                        | 101 ++++++++++++++--
+ tests/test_validate.py                             | 101 ++++++++++++++++
+ 4 files changed, 320 insertions(+), 12 deletions(-)
+
+## Diff
+diff --git a/.superpowers/sdd/2026-08-15-fixed-holdout/task-16-report.md b/.superpowers/sdd/2026-08-15-fixed-holdout/task-16-report.md
+new file mode 100644
+index 0000000..999d6cd
+--- /dev/null
++++ b/.superpowers/sdd/2026-08-15-fixed-holdout/task-16-report.md
+@@ -0,0 +1,128 @@
++# Task 16 report: `W-STATS-RESAMPLE-CLUSTERS` against the test partition
++
++## Status
++
++DONE
++
++## Commit
++
++`30f18b2` — `fix: count a resample's clusters over the holdout's test partition`
++
++## What was built
++
++`src/publishable/validate.py`: added `clusters_of`, `holdout_for`, `holdout_seed_for` to the
++`publishable.units` import list and `design_digest` from `publishable.hashes` (new import, no
++cycle — `hashes.py` imports only the standard library). Added `_holdout_test_roster(doc,
++units_decl, roster, cluster_by) -> UnitList | None`, verbatim from the brief, immediately before
++`_check_resample`. In `validate_config`, resolved `holdout_test = _holdout_test_roster(doc,
++units_decl, roster, usable_cluster)` immediately after `basis` is resolved (before
++`_check_fold_stratify_by`), and changed the `_check_resample` call to pass
++`holdout_test=holdout_test`. In `_check_resample`, added the `holdout_test` keyword parameter and
++changed the `W-STATS-RESAMPLE-CLUSTERS` count from `fold_basis(roster, cluster_by)` to
++`fold_basis(holdout_test if holdout_test is not None else roster, cluster_by)`. Left
++`E-STATS-RESAMPLE-STRATIFY-VARIES` reading `roster` unchanged, with a docstring sentence saying
++why (constancy over the whole roster implies it over any subset; the narrower read would let a
++config validate whose training half is incoherent).
++
++`tests/test_validate.py`: appended the brief's two tests verbatim
++(`test_the_resample_cluster_warning_counts_the_holdout_s_test_partition`,
++`test_a_holdout_wide_enough_to_keep_the_clusters_does_not_warn`) and its third,
++`test_the_stratum_constancy_check_still_reads_the_whole_roster` — but corrected that third test's
++docstring, which made a false claim about its own fixture (see below).
++
++`docs/reference.md` § Errors: updated the `W-STATS-RESAMPLE-CLUSTERS` row to say the count is
++"over `data.units.holdout`'s realized test partition when one is declared, the roster otherwise" —
++the check's behavior changed, so the row had to change with it. The two
++`E-STATS-RESAMPLE-STRATIFY-VARIES` rows needed no edit; they already describe a whole-roster read
++and stay true.
++
++## The under-warning fixed, on a concrete fixture
++
++100 units in 50 clusters of 2 (`cluster_by: animal_id`), `limits.min_clusters: 20`,
++`data.units.holdout: {method: random, frac: 0.2}`. Old check: `fold_basis(roster, ...)` = 50 (the
++whole roster), `50 >= 20` → silent. New check: `fold_basis(holdout_test, ...)` = 10 (the realized
++test partition at this seed, confirmed directly against `holdout_for`), `10 < 20` → fires. That is
++a 5x under-count in the direction the brief names — roughly `1/frac`. The companion fixture
++(`frac: 0.8`, test side ~40 clusters) stays silent under both old and new code, confirming the fix
++is attributable to the partition read, not to "warn whenever a holdout is declared."
++
++## Mutations run
++
++All reverted by editing the file back (never `git checkout --`), `__pycache__` deleted between
++runs, each revert verified by re-running the affected test(s). A final `diff` against a
++post-implementation backup of `validate.py` confirmed byte-identical restoration before committing.
++
++**(a) Brief's — revert the `fold_basis` argument to `roster`.** Result: **FAIL** —
++`test_the_resample_cluster_warning_counts_the_holdout_s_test_partition` failed on `assert
++"W-STATS-RESAMPLE-CLUSTERS" in with_holdout` (nothing fired, since 50 ≥ 20 again).
++`test_a_holdout_wide_enough_to_keep_the_clusters_does_not_warn` still passed. Reverted; both pass
++again.
++
++**(b) Brief's — change `_holdout_test_roster`'s return to select `plan.train`.** Result: **FAIL —
++both tests**, not the one the brief predicted. `test_a_holdout_wide_enough_to_keep_the_clusters_does_not_warn`
++failed as the brief said (train side at `frac: 0.8` is ~10 clusters, below 20, so it now warns).
++But `test_the_resample_cluster_warning_counts_the_holdout_s_test_partition` also failed: at `frac:
++0.2` the train side is ~40 clusters (verified directly: `clusters_of` + `holdout_for` at this
++digest/seed gives test=10, train=40), which is *above* 20, so the warning goes silent exactly where
++the test expects it to fire. **This is a real disagreement with the brief**, which claimed this
++test "must PASS" under mutation (b) and reasoned that "a single-config fixture cannot tell 'counts
++the test side' from 'counts the smaller side'" — true of a single config, but the frac-0.2 fixture
++by itself already distinguishes "test" from "train" (10 vs. 40), so it fails under the train
++mutation same as the frac-0.8 one does under the reverse. Both companion tests are needed, as the
++brief says, but for a stronger reason than stated: each one independently rules out the *opposite*
++partition, not just the smaller-side reading. Reverted; both pass again.
++
++**(c) Mine — narrow the `E-STATS-RESAMPLE-STRATIFY-VARIES` check to the test partition too.**
++Result: **PASS — an honest negative, not a failure.** Narrowing
++`stratum_varies_within_cluster(roster, ...)` to `holdout_test` left
++`test_the_stratum_constancy_check_still_reads_the_whole_roster` passing unchanged. I verified this
++wasn't a mistake in my mutation by computing the fixture's realized partitions directly
++(`clusters_of` + `holdout_for` at seed 1234): the 40-unit fixture's label column is `'y'` for even
++`i` and `'x'` for odd `i`, and each cluster is `{2k, 2k+1}` — so **every** cluster carries one `x`
++and one `y`, not only the training-side ones the test's docstring claimed. `stratum_varies_within_cluster`
++reports an offender on the whole roster (`a0`), on the training side alone (`a0`), and on the test
++side alone (`a2`) — a violation exists on both partitions, so this fixture cannot distinguish "reads
++the whole roster" from "reads the test partition only." Reverted the mutation; the test still
++passes on the un-mutated code, as it did before.
++
++Given the check itself is correctly unchanged (per the brief's own argument, which stands
++independently of this fixture), I did not invent a new fixture to force a discriminating case.
++Instead I corrected the test's docstring, which asserted a false guarantee about its own fixture —
++exactly the recurring defect shape CLAUDE.md names ("A comment or docstring claiming a guarantee the
++code does not provide"). The corrected docstring states what the fixture actually does (every
++cluster varies), what mutation (c) showed (narrowing here is a no-op for this fixture), and that the
++test's real content is narrower than its name: it proves the check still fires once a holdout is
++declared, not that it reads the whole roster specifically. That claim rests on the code and this
++report, not on an assertion in the test file.
++
++## Test summary
++
++`uv run pytest` — 1945 passed, 2 xfailed (1942 baseline + 3 new tests). `uv run ruff check .` and
++`uv run mypy` clean (42 source files). `uv run ruff format --check .` shows only pre-existing drift
++(63 files), none introduced by this task's own new lines.
++
++## Where the brief disagreed with the code
++
++One disagreement, found by running mutation (b) rather than trusting its predicted outcome: the
++brief asserts `test_the_resample_cluster_warning_counts_the_holdout_s_test_partition` (frac 0.2)
++would still **pass** under the train-side mutation. It does not — see mutation (b) above. The
++frac-0.2 and frac-0.8 fixtures each independently rule out the opposite partition reading, which is
++a *stronger* justification for needing both tests than the brief gave, not a weaker one; the fix
++itself, and both tests as written, are correct.
++
++A second, smaller disagreement: the brief's third test's docstring claimed a false fact about its
++own fixture (only training-side clusters vary). Corrected in `tests/test_validate.py` rather than
++left standing; see mutation (c) above for the verification.
++
++## Process notes
++
++`.superpowers/sdd/.gitignore` was clobbered to a bare `*` (the standing `scripts/sdd-workspace` /
++`task-brief` behavior CLAUDE.md documents) when this task's brief was read. Restored via `git
++checkout -- .superpowers/sdd/.gitignore` before committing — safe here, since that file carried no
++uncommitted content of its own and `git diff` showed nothing remaining against it afterward.
++
++## Concerns
++
++None outstanding. `E-DATA-HOLDOUT-UNSUPPORTED` is still asserted alongside the new warning in both
++brief tests, never in place of it, and the assertion is a one-line deletion when task 18 retires
++that code.
+diff --git a/docs/reference.md b/docs/reference.md
+index eaa1cf3..b292432 100644
+--- a/docs/reference.md
++++ b/docs/reference.md
+@@ -375,21 +375,21 @@ Each row states the condition, not the wording.
+ | `conditions × repeat total` exceeds `limits.max_executions`, checked wherever the total is resolvable outright — not under an unresolved `{kind: fold, k: all}`, where an unknown total must not be reported as though it were a small one | `W-EXEC-BUDGET` |
+ | A [hypothesis](#pre-registration) names a metric under a run where `data.units` is undeclared and the template defines no `aggregate` — every metric will be `basis: repeats`, reportable but not testable against an interval | `W-HYPOTHESIS-INFERENCE-BASE` |
+ | [`replication.repeats`](#a-batch-says-when-not-what) declares a `batch` level but no step in the pipeline sets `nondeterministic = True` | `W-REPL-DETERMINISTIC` |
+ | `replication.repeats`'s total across every declared level is below the template's `default_repeats`, checked only once every level's count is resolvable — a floor warning derived from an already-invalid design would be noise | `W-REPL-FLOOR` |
+ | A template's `aggregate` produced no usable value for a completed condition and step — it raised, a returned key collided with one a step already recorded, or every resample draw of it was degenerate. Reported at `run` time; the recorded columns' own summaries are unaffected, and only the derived metric is lost | `W-STATS-AGGREGATE-FAILED` |
+ | A [comparison](#contrasts-claims-that-arent-condition-vs-baseline) declaring `within` is thinner than `limits.min_reported_n`, at either of two points: at `validate`, when fewer units of the roster it can already see match the stratum — skipped for a `within` naming an attribute `E-STATS-CONTRAST-WITHIN` just refused — and at `run`, when the comparison's realized `n_paired` is below it | `W-STATS-CONTRAST-THIN` |
+ | A family's size implies a corrected level (`correction_level`) smaller than the resample's surviving draws can support — the *corrected*, smaller level is the one that can't be met, so `ci95_corrected` is left `null` rather than reported too narrow | `W-STATS-CORRECTED-THIN` |
+ | `statistics.correction: fdr_bh` is declared over a family with at least one comparison, but nothing in it will carry a p-value — `statistics.null_test` is undeclared, or a parameter-axis contrast, which can never supply one, accounts for every member — so every `ci95_corrected` will be `null` | `W-STATS-CORRECTION-INAPPLICABLE` |
+ | A family of more than zero comparisons per metric exists and `statistics.correction` is `none` — every interval is reported uncorrected, and each records `correction: null` to say so | `W-STATS-FAMILY` |
+ | A level of a [`statistics.report_by`](#reporting-strata) attribute would hold fewer units than `limits.min_reported_n`, checked at `validate` against the roster it can already see — the WHOLE roster, not a group axis's own arm, a gap [§ What isn't a repeat](#what-isnt-a-repeat) records and, with a declared group axis no longer refused at `validate`, a live one rather than a latent one | `W-STATS-REPORTBY-THIN` |
+-| `statistics.resample` is declared beside `data.units.cluster_by` and the roster falls in fewer clusters than `limits.min_clusters` — a resample draws whole clusters, so the interval rests on that many independent draws however many units they hold | `W-STATS-RESAMPLE-CLUSTERS` |
++| `statistics.resample` is declared beside `data.units.cluster_by` and falls in fewer clusters than `limits.min_clusters` — counted over `data.units.holdout`'s realized **test** partition when one is declared, the roster otherwise, because a resample draws from the per-unit table and that is what the table holds; a resample draws whole clusters, so the interval rests on that many independent draws however many units they hold | `W-STATS-RESAMPLE-CLUSTERS` |
+ | `statistics.resample.n` is below the draw count the resolved comparison family's tightest corrected level needs, under `holm` or `bonferroni` — a **lower** bound, since the family is comparisons × metrics and the metric count is not knowable before the run | `W-STATS-RESAMPLE-FAMILY` |
+ | A derived metric's resample produced fewer surviving draws than were requested, though not zero — the interval is still reported, but rests on less than it claims | `W-STATS-RESAMPLE-THIN` |
+ | A step records a metric named `by` — the reserved key the reporting strata are attached under — so that column keeps its recorded value but is reported with no contrast delta, and no strata are reported for the step at all | `W-STATS-STRATUM-SHADOWED` |
+ | A `statistics.report_by` level *completed* fewer units than `limits.min_reported_n`, checked at `run` time against what actually finished — the attrition between the roster `validate` saw and what a run completes is exactly what this catches beyond `W-STATS-REPORTBY-THIN` | `W-STATS-STRATUM-THIN` |
+ | A `summary`-step [`Estimate`](#estimate-carries-your-interval-without-core-claiming-it) carries a `ci95` but no `n` — an interval with no stated denominator is the disclosure risk `limits.min_reported_n` exists to catch, and `study add` cannot check what it cannot see | `W-STEP-ESTIMATE-N` |
+ | A [`sweep.baseline`](#expansion-modes) fixing a value on every `sweep.grid` axis leaves at least one condition differing from it on more than one of them, so that comparison is reported `confounded: true` and its delta mixes two effects. Checked at `validate` over `sweep.grid`'s axes alone — no other mode's — and only for a baseline that fixes every one of them. A baseline leaving a *`grid`* axis free is a different shape rather than this fault, expanding to [one baseline per cell](#expansion-modes) of the free axes instead of one reference for the whole run, so the row's condition does not hold and nothing is reported. **That mechanism is the `grid` case only, and every other mode is silence for a narrower reason.** A baseline fixing *some* of the paths a multi-path [`sweep.paired`](#expansion-modes) axis varies counts that axis **fixed**, so nothing expands per cell: there is one baseline, and every comparison against it still differs on the paths the baseline left alone — and is reported `confounded: true` at run time for each level that *also* differs on a fixed path, since `confounded` is more than one differing path rather than any. A level whose value on the fixed path happens to equal the baseline's differs on one path only and is reported clean, so the same half-fixed axis can yield both verdicts at once. And a `sweep.paired` axis is outside the check whether the baseline touches it or not, so the remedy in the message — leave the axis you are stratifying over free — names an outcome a free `grid` axis delivers and a free `paired` one does not. A free [`sweep.groups`](#expansion-modes) axis does deliver it, [expanding per cell](#expansion-modes) exactly as a `grid` axis does, and is silent here for its own reason: this check reads neither a group axis nor a baseline fixing one, so a design confounded across an arm and a parameter is marked at run time and warned about by nothing — deliberately, the marking being the disclosure and this warning a `grid`-only convenience over it, so nothing is owed here. Silence under any of them is not a verdict that the design confounds nothing: what each comparison is taken against is [`vs_baseline`](#expansion-modes)'s question, not this row's | `W-SWEEP-BASELINE-CONFOUNDED` |
+ | A config's declared `template_version` differs from the installed template's reported version — in this build, compared against the one version core itself writes, since `generic` is the only installed template and a template class reports no version of its own; a plugin's own version is read once the [registry](#creating-a-plugin-publishable-plugin-new) resolves it. Never checked for a [project-local template](#templates-where-parameters-are-defined): `init` writes no `template_version` line against one, and a declared value is not compared against core's constant whatever it says — the reason is [§ Three hashes](#three-hashes)'s. The message also names every `parameter_spec` parameter carrying a default that this config does not set — computed only under that mismatch, and stated as unset-and-defaulted rather than as new, since the declaration does not say which | `W-TEMPLATE-VERSION` |
+ 
+ `W-ENV-UNLOCKED` is the one row above whose *firing condition* is a gap in this project rather than in yours: it fires on every scaffolded run right now, because `publishable` cannot yet be resolved from an index a lockfile pins against. That is bootstrapping, not a defect — a reader hitting it on their first run is seeing an accurate, expected state, not a misconfigured one. (`W-STATS-REPORTBY-THIN` above still fires on your thin stratum, not on this project's state — only its *precision*, counting the whole roster instead of a group axis's own arm, is a gap in this build.)
+ 
+diff --git a/src/publishable/validate.py b/src/publishable/validate.py
+index 3e060b6..c796735 100644
+--- a/src/publishable/validate.py
++++ b/src/publishable/validate.py
+@@ -7,20 +7,21 @@ from pathlib import Path
+ from typing import Any
+ 
+ import yaml
+ 
+ from publishable.base_experiment import load_experiment
+ from publishable.contrasts import differing_axes, resolve_contrasts, units_matching
+ from publishable.correction import ALPHA
+ from publishable.diagnostics import Collector
+ from publishable.envelope import check_envelope
+ from publishable.errors import ContractError
++from publishable.hashes import design_digest
+ from publishable.manifest import POLICIES
+ from publishable.materialize import TEMPLATE_VERSION
+ from publishable.param import MISSING
+ from publishable.provenance import find_repo_root, resolves_inside_repo
+ from publishable.replication import resolve_repeats
+ from publishable.scope import step_name as _step_name
+ from publishable.stats import min_honest_draws
+ from publishable.strata import levels_for
+ from publishable.sweep import (
+     NAMEABLE_CHAR,
+@@ -36,21 +37,24 @@ from publishable.sweep import (
+ from publishable.templates.base import BaseTemplate
+ from publishable.templates.discovery import is_local_template
+ from publishable.templates.registry import resolve_template, unknown_template_message
+ from publishable.units import (
+     COLLAPSE_RULES,
+     DRAWN_ASSIGN_METHODS,
+     NUMERIC_COLLAPSE_RULES,
+     UnitList,
+     assignment_for,
+     auto_block_size,
++    clusters_of,
+     fold_basis,
++    holdout_for,
++    holdout_seed_for,
+     holdout_sizes,
+     holdout_values_fault,
+     is_measurement_numeric,
+     resolve_units,
+     rule_for,
+     stratum_names,
+     stratum_varies_within_cluster,
+     usable_weight,
+ )
+ 
+@@ -611,20 +615,25 @@ def validate_config(
+             # `measurements.by` where every unit has one measurement row; see
+             # `cli`'s note at the `clusters_of` call. With no `fold` level, this
+             # `basis` local itself goes unused — but `_check_resample`'s own
+             # `limits.min_clusters` check (below) resolves the identical
+             # roster/`cluster_by` pair a second time and meets the same
+             # `ContractError`, so "nothing downstream needs it" is no longer
+             # true in general, only true of this particular local. Either way
+             # the config validates clean here and meets `E-DATA-CLUSTER-UNKNOWN`
+             # for real at `run`.
+             basis = None
++    # The holdout's realized test partition, resolved once and threaded — the
++    # denominator a resample's cluster count is actually over. Resolved here
++    # rather than inside `_check_resample` so a future second reader gets the
++    # same object rather than realizing a second draw.
++    holdout_test = _holdout_test_roster(doc, units_decl, roster, usable_cluster)
+     # A `fold` level's `stratify_by`, from the same usable-cluster local the basis
+     # was resolved from: the name it declares, and — when a cluster is declared —
+     # whether the stratum survives a split that cannot divide one. Not in
+     # `replication._fold_k`, which sees the declaration and a count and never a
+     # roster.
+     _check_fold_stratify_by(doc, units_decl, roster, usable_cluster, c)
+     # Sited beside `_check_fold_stratify_by` because tasks 6-7 will read
+     # `roster` and `usable_cluster` here too, and taking both parameters now
+     # means the signature does not change under this caller later — at this
+     # commit `_check_holdout` reads neither (see its own docstring).
+@@ -645,21 +654,21 @@ def validate_config(
+     _check_unimplemented(doc, c)
+     _check_sweep(doc, template, c, fold_basis=basis)
+     # After `_check_sweep`, before `_check_contrasts`: `roster` is already in
+     # hand three calls earlier (`_check_fold_stratify_by` reads it too), so
+     # position here buys grouping with the other `statistics.*` checks and a
+     # sensible finding order, not roster availability. `_check_sweep` returns
+     # `None` and stores nothing on `doc` — it hands nothing forward — so a
+     # later check needing the resolved comparison family (task 6's `n` bound
+     # against it) must recompute that family locally rather than read it off
+     # this call site.
+-    _check_resample(doc, roster, c)
++    _check_resample(doc, roster, c, holdout_test=holdout_test)
+     _check_contrasts(doc, c, roster)
+     _check_hypotheses(doc, c, experiment, template)
+     _check_report_by(doc, c, roster)
+     for message in template.validate(doc):
+         c.error("E-TEMPLATE-RULE", "parameters", message)
+     return doc
+ 
+ 
+ def _check_metadata(doc: dict[str, Any], config_path: Path, template: Any, c: Collector) -> None:
+     metadata = doc.get("metadata") or {}
+@@ -5428,33 +5437,85 @@ tuple enforces.
+ 
+ **A closed, one-value enum on purpose.** `bootstrap` is the only value the
+ schema shows and the only construction `stats.py` has, and § Statistical
+ reporting's construction tables enumerate the method strings core *emits*
+ (`percentile_over_units`, `paired_percentile_over_units`) — outputs, not inputs
+ a config may name. Stating the enum is what makes `method: bootstap` a
+ diagnostic rather than a shrug, and what makes adding a second value a
+ documented change rather than a silent one."""
+ 
+ 
+-def _check_resample(doc: dict[str, Any], roster: UnitList | None, c: Collector) -> None:
++def _holdout_test_roster(
++    doc: dict[str, Any],
++    units_decl: dict[str, Any],
++    roster: UnitList | None,
++    cluster_by: str | None,
++) -> UnitList | None:
++    """The holdout's realized **test** partition, or `None` when the design
++    declares none or the draw cannot be performed.
++
++    Realized through `units.holdout_for`, the same pure function
++    `cli.command_run` realizes it with — which is the reason that function is
++    pure at all, `assignment_for`'s own argument: `validate` has to ask "which
++    units will the interval rest on" of the same declaration the run asks it
++    of, so a second answer computed here would be a check aimed at a partition
++    the run does not use.
++
++    **Never raises.** `validate` collects, and this runs over configs that are
++    already known bad — a malformed `frac`, an unresolvable column, an unknown
++    stratum, a cluster attribute a unit does not carry. Each of those is
++    reported by its own check; here they become `None`, and the check that
++    reads this simply does not run rather than reporting a second, derived
++    fault on top of the one the reader has to fix anyway.
++    """
++    if roster is None:
++        return None
++    block = units_decl.get("holdout")
++    if not isinstance(block, dict) or not block:
++        return None
++    try:
++        clusters = clusters_of(roster, cluster_by) if cluster_by else None
++        plan = holdout_for(
++            roster,
++            block,
++            seed=holdout_seed_for(block, design_digest(doc), roster),
++            clusters=clusters,
++        )
++    except (ContractError, NotImplementedError, KeyError, TypeError, ValueError):
++        return None
++    test = set(plan.test)
++    return UnitList([u for u in roster if u.key in test])
++
++
++def _check_resample(
++    doc: dict[str, Any],
++    roster: UnitList | None,
++    c: Collector,
++    holdout_test: UnitList | None = None,
++) -> None:
+     """Every check `statistics.resample` gets, seven findings in declaration
+     order — the enumeration is the list, not a sample of it:
+ 
+     - `E-STATS-RESAMPLE-UNITS` — a `resample` with no `data.units` at all.
+     - `E-STATS-RESAMPLE-METHOD` — the `method` enum.
+     - `E-STATS-RESAMPLE-N` — the `n` floor.
+     - `E-STATS-RESAMPLE-STRATIFY-UNKNOWN` — a `stratify_by` name that is not a
+       declared unit attribute.
+     - `W-STATS-RESAMPLE-CLUSTERS` — **reads the roster:** `limits.min_clusters`
+-      against the resolved cluster count.
+-    - `E-STATS-RESAMPLE-STRATIFY-VARIES` — **reads the roster too:** a stratum
+-      that varies within a `cluster_by` cluster.
++      against the resolved cluster count — over the holdout's **test**
++      partition when one is declared, because a resample draws over the
++      per-unit table and that is what the table holds under a holdout.
++    - `E-STATS-RESAMPLE-STRATIFY-VARIES` — **reads the WHOLE roster, on
++      purpose**, even under a `data.units.holdout`. Constancy within a cluster
++      over the whole roster implies it over any subset, so the wider read is
++      the stricter one; the narrower would let a config validate whose training
++      half is incoherent and whose test half happens not to show it.
+     - `W-STATS-RESAMPLE-FAMILY` — the comparison-family lower bound on that
+       same `n`.
+ 
+     **Two of the seven read `roster`, not one**, and each carries its own
+     `roster is not None` guard rather than leaning on a caller or on the
+     no-`return` gate below. A check added here must state which side of that
+     line it is on; this list is what the next reader counts against, so an
+     eighth finding belongs in it.
+ 
+     `_check_unimplemented`'s wholesale refusal of a declared `resample`
+@@ -5604,36 +5665,54 @@ def _check_resample(doc: dict[str, Any], roster: UnitList | None, c: Collector)
+     # `limits.min_clusters`: materialized in every generated config, typed by
+     # `envelope.py`, and — until this slice — read by nothing. § Validation's
+     # *Clusters enough to resample*: "`statistics.resample` with `cluster_by:
+     # animal_id` over 4 animals bootstraps 4 draws; below `limits.min_clusters`
+     # (warning)". Scoped to `resample` WITH `cluster_by`, because `cluster_by`
+     # alone decides each condition's own interval and draws nothing.
+     #
+     # Counted through `units.fold_basis`, the same function `_check_replication`
+     # and `_check_sweep` read — via `basis`, resolved once above this call and
+     # threaded through as their `fold_basis=` argument. This check calls it a
+-    # second time on the same roster and `cluster_by` rather than being handed
+-    # that value: a second call to one derivation is not a second derivation,
+-    # but it IS a second `try`/`except ContractError` an edit to the first must
+-    # not forget to mirror. Not threaded through as a parameter in this slice;
+-    # doing so is a cheap follow-up, not a correctness gap today.
++    # second time on `cluster_by` rather than being handed `basis` itself:
++    # `basis` is over the WHOLE roster (it feeds `fold`, which has no holdout
++    # to narrow against), while this call is over `holdout_test` when one
++    # resolved — a different roster than `basis` was counted from whenever a
++    # holdout is declared, so the two are deliberately not the same
++    # derivation reused, only the same function. A second call to one
++    # derivation is not a second derivation, but it IS a second
++    # `try`/`except ContractError` an edit to the first must not forget to
++    # mirror. Not threaded through `basis` in this slice; doing so is a cheap
++    # follow-up, not a correctness gap today.
+     cluster_by = units_declared.get("cluster_by")
+     min_clusters = (doc.get("limits") or {}).get("min_clusters")
+     if (
+         roster is not None
+         and isinstance(cluster_by, str)
+         and cluster_by
+         and isinstance(min_clusters, int)
+         and not isinstance(min_clusters, bool)
+     ):
+         try:
+-            groups = fold_basis(roster, cluster_by)
++            # **The test partition when a holdout is declared, not the whole
++            # roster.** `statistics.resample` draws over the per-unit table,
++            # which under a holdout holds only the units that recorded — so a
++            # percentile interval rests on the clusters of the TEST side, and
++            # counting the wider set warns against a denominator no interval
++            # used. Wrong in the direction of NOT firing: 50 clusters at
++            # `frac: 0.2` leaves roughly 10, and `min_clusters: 20` passed
++            # silently.
++            #
++            # `holdout_test` is `None` whenever no holdout is declared or the
++            # draw could not be performed, so this is `roster` unchanged for
++            # every other design — including every config in the build before
++            # a holdout existed.
++            groups = fold_basis(holdout_test if holdout_test is not None else roster, cluster_by)
+         except ContractError:
+             # A unit carrying no value for the cluster attribute
+             # (`E-DATA-CLUSTER-UNKNOWN`). Sometimes reported beside this by
+             # `_check_cluster_by` (which tests the DECLARATION against
+             # `attributes`) or by `_check_units` (a column that never resolved
+             # at all) — but NOT always: `cluster_by: measurements.by`, naming a
+             # measurement rather than an input column, resolves the roster and
+             # `_check_units` cleanly, and `_check_cluster_by` has nothing to
+             # say about a name that isn't a unit attribute in the first place.
+             # That combination reaches here with no companion finding. Swallowed
+diff --git a/tests/test_validate.py b/tests/test_validate.py
+index 70de430..648b905 100644
+--- a/tests/test_validate.py
++++ b/tests/test_validate.py
+@@ -12053,10 +12053,111 @@ def test_an_evaluation_split_without_a_cell_structure_is_not_refused(
+     cell structure."""
+     (tmp_path / "input" / "index.csv").write_text(_CELL_ROSTER)
+     found = codes(
+         write_config(
+             _holdout({"method": "random", "frac": 0.2}, attributes=["arm"])
+         )
+     )
+     assert "E-DATA-HOLDOUT-CELLS" not in found
+     assert "E-REPL-FOLD-CELLS" not in found
+     assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
++
++
++_FIFTY_CLUSTERS = "patient_id,animal_id,label\n" + "".join(
++    f"p{i},a{i // 2},x\n" for i in range(100)
++)
++
++
++def test_the_resample_cluster_warning_counts_the_holdout_s_test_partition(
++    write_config, tmp_path
++):
++    """The warning is about how many INDEPENDENT DRAWS a percentile interval
++    rests on, and under a holdout the draw runs over the test partition alone.
++    50 clusters × `frac: 0.2` is ~10, so `min_clusters: 20` must warn — and at
++    `78bb794` it does not, because the count is taken over the whole roster.
++
++    Two configs differing ONLY in whether a holdout is declared, so the
++    warning's presence is attributable to the holdout rather than to the
++    roster."""
++    (tmp_path / "input" / "index.csv").write_text(_FIFTY_CLUSTERS)
++    common = {
++        "from": "index.csv", "key": "patient_id",
++        "attributes": ["animal_id", "label"], "cluster_by": "animal_id",
++    }
++    resample = {"resample": {"method": "bootstrap", "n": 2000}}
++
++    without = codes(write_config({
++        "data.units": dict(common),
++        "limits": {"min_clusters": 20},
++        "statistics": resample,
++    }))
++    # The control, and it must be silent: 50 clusters is above 20.
++    assert "W-STATS-RESAMPLE-CLUSTERS" not in without
++
++    with_holdout = codes(write_config({
++        "data.units": dict(common, holdout={"method": "random", "frac": 0.2}),
++        "limits": {"min_clusters": 20},
++        "statistics": resample,
++    }))
++    assert "W-STATS-RESAMPLE-CLUSTERS" in with_holdout
++    assert "E-DATA-HOLDOUT-UNSUPPORTED" in with_holdout
++
++
++def test_a_holdout_wide_enough_to_keep_the_clusters_does_not_warn(
++    write_config, tmp_path
++):
++    """The positive companion, produced by the code under test: the same
++    roster and the same `min_clusters` under a `frac: 0.8` holdout keeps ~40
++    clusters on the test side and stays silent. Without it, a fix that warned
++    whenever a holdout was declared would pass the test above."""
++    (tmp_path / "input" / "index.csv").write_text(_FIFTY_CLUSTERS)
++    found = codes(write_config({
++        "data.units": {
++            "from": "index.csv", "key": "patient_id",
++            "attributes": ["animal_id", "label"], "cluster_by": "animal_id",
++            "holdout": {"method": "random", "frac": 0.8},
++        },
++        "limits": {"min_clusters": 20},
++        "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
++    }))
++    assert "W-STATS-RESAMPLE-CLUSTERS" not in found
++    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
++
++
++def test_the_stratum_constancy_check_still_reads_the_whole_roster(
++    write_config, tmp_path
++):
++    """`E-STATS-RESAMPLE-STRATIFY-VARIES` deliberately does NOT move: a
++    stratum varying inside a cluster the holdout put on the TRAINING side is
++    still an incoherent declaration, and refusing on the whole roster is the
++    stricter, correct reading.
++
++    **Correction (task 16):** every cluster in this fixture varies — `p{2k}`
++    is `y` and `p{2k+1}` is `x` for every `k` — not only the training-side
++    ones a prior draft of this docstring claimed. Verified directly against
++    `stratum_varies_within_cluster` over the realized train/test split at this
++    seed: the offending cluster it reports differs by partition (`a0` over
++    the whole roster and the training side, `a2` over the test side alone),
++    but an offender exists on *both* sides, so this fixture cannot by itself
++    tell "reads the whole roster" from "reads the test partition only" — task
++    16's mutation (c), narrowing this check to the test partition, left this
++    assertion passing. What this test actually proves is narrower than its
++    name: the check still fires at all once a holdout is declared. The
++    positive claim in this function's name — that the check reads the WHOLE
++    roster specifically — rests on the code and on task 16's report, not on
++    an assertion in this file."""
++    (tmp_path / "input" / "index.csv").write_text(
++        "patient_id,animal_id,label\n"
++        + "".join(f"p{i},a{i // 2},{'x' if i % 2 else 'y'}\n" for i in range(40))
++    )
++    found = codes(write_config({
++        "data.units": {
++            "from": "index.csv", "key": "patient_id",
++            "attributes": ["animal_id", "label"], "cluster_by": "animal_id",
++            "holdout": {"method": "random", "frac": 0.2, "seed": 1234},
++        },
++        "limits": {"min_clusters": 2},
++        "statistics": {
++            "resample": {"method": "bootstrap", "n": 2000, "stratify_by": ["label"]}
++        },
++    }))
++    assert "E-STATS-RESAMPLE-STRATIFY-VARIES" in found

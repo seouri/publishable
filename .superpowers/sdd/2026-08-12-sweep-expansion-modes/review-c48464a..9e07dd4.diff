@@ -1,0 +1,988 @@
+# Review package: c48464a..HEAD
+
+## Commits
+9e07dd4 test: pin an ablate override path as unreadable at run scope
+e2f85e7 feat: expand ablate as one change at a time, not an axis
+
+## Files changed
+ docs/reference.md           |   4 +-
+ src/publishable/cli.py      |  13 +++-
+ src/publishable/sweep.py    | 113 ++++++++++++++++++++++++++++++--
+ src/publishable/validate.py | 103 +++++++++++++++++++++++++----
+ tests/test_cli.py           |  24 +++++++
+ tests/test_sweep.py         | 154 ++++++++++++++++++++++++++++++++++++++++++++
+ tests/test_validate.py      | 151 ++++++++++++++++++++++++++++++++++++++++---
+ 7 files changed, 532 insertions(+), 30 deletions(-)
+
+## Diff
+diff --git a/docs/reference.md b/docs/reference.md
+index 513551f..00e0f1b 100644
+--- a/docs/reference.md
++++ b/docs/reference.md
+@@ -108,21 +108,21 @@ parameters:
+ 
+ sweep:
+   # ---- What varies. Omit entirely for a single-condition experiment. ----
+   # Keys are dotted paths into `parameters`; modes compose. See "Sweeps and repeats".
+   baseline: {analysis.method: pearson}   # optional reference condition; enables deltas
+   groups: []                             # NOT BUILT; optional list of unit-group axes,
+                                          #   e.g. [{by: arm, levels: [...]}]
+   paired: []                             # optional coupled settings,
+                                          #   e.g. [{analysis.min_samples: 30,
+                                          #   analysis.confidence: 0.95}] — one axis, not a product
+-  ablate: null                           # NOT BUILT; optional; 1 + n one-change conditions, e.g.
++  ablate: null                           # optional; 1 + n one-change conditions, e.g.
+                                          #   {from: baseline, remove: [...]} or {override: [...]}
+                                          #   — requires baseline
+   sample: null                           # optional; continuous ranges instead of
+                                          #   enumeration, e.g. {n: 40, method: sobol, seed: auto,
+                                          #   ranges: {...}} — one axis of n drawn conditions
+   grid:
+     analysis.method: [spearman, kendall]
+   # 1 baseline + 2 grid = 3 conditions
+ 
+ replication:
+@@ -171,21 +171,21 @@ hypotheses:
+   - id: h1
+     kind: confirmatory                   # confirmatory | exploratory
+     statement: "Spearman correlation exceeds Pearson on this cohort."
+     metric: step03_analyze.r
+     compare: {condition: "method=spearman", to: baseline}
+     direction: greater
+     threshold: 0.02
+     evaluate_on: observed                # observed | ci95_lower | ci95_upper
+ ```
+ 
+-`init` materializes **every parameter the template declares**, each with its default and its inline comment. The four optional `statistics` sub-blocks are shown above at their full expansion because this section is the complete config *schema*, which is a wider thing than the literal output of `init`; a materialized file that does not carry them is not an incomplete config. For `contrasts` and `report_by`, declaring one by hand is how a run asks for it, and `validate` accepts the key whether or not `init` wrote it. **Twelve declarations above are not yet built, and each is marked `NOT BUILT` where it appears**: `sweep.groups` and `sweep.ablate`; `data.units.assign`, `.cluster_by`, `.weight_by`, `.measurements` and `.holdout`, the `{resolver: <name>}` form of `data.units.from`, and any `data.units.allocation` other than `within`; a `fold` repeat level's `stratify_by`; and `statistics.resample` and `statistics.null_test`. A config declaring any of them is refused today, naming the `-UNSUPPORTED` code its slice will retire — the same treatment [an unbuilt module](#package-layout) and [an unbuilt import](#the-importable-surface) get, because a contract that appears only once its implementation lands is a contract nobody could have designed to. That whole family is [deliberately absent from the validate-time registry](#errors-validate-reports) for the same reason, which is why this list, and not that table, is where a refused block is named. What `init` writes is complete with respect to [`parameter_spec`](#templates-where-parameters-are-defined), which is the only source of truth there is one of.
++`init` materializes **every parameter the template declares**, each with its default and its inline comment. The four optional `statistics` sub-blocks are shown above at their full expansion because this section is the complete config *schema*, which is a wider thing than the literal output of `init`; a materialized file that does not carry them is not an incomplete config. For `contrasts` and `report_by`, declaring one by hand is how a run asks for it, and `validate` accepts the key whether or not `init` wrote it. **Eleven declarations above are not yet built, and each is marked `NOT BUILT` where it appears**: `sweep.groups`; `data.units.assign`, `.cluster_by`, `.weight_by`, `.measurements` and `.holdout`, the `{resolver: <name>}` form of `data.units.from`, and any `data.units.allocation` other than `within`; a `fold` repeat level's `stratify_by`; and `statistics.resample` and `statistics.null_test`. A config declaring any of them is refused today, naming the `-UNSUPPORTED` code its slice will retire — the same treatment [an unbuilt module](#package-layout) and [an unbuilt import](#the-importable-surface) get, because a contract that appears only once its implementation lands is a contract nobody could have designed to. That whole family is [deliberately absent from the validate-time registry](#errors-validate-reports) for the same reason, which is why this list, and not that table, is where a refused block is named. What `init` writes is complete with respect to [`parameter_spec`](#templates-where-parameters-are-defined), which is the only source of truth there is one of.
+ 
+ **The four identifying fields above `metadata` say what this config is written against, and `validate` checks each.** `experiment_type` names the template and must resolve to one an installed package registers; `template_version` records the spec this file was materialized from, and a mismatch with the installed template gets a [warning](#warnings-core-reports) — `W-TEMPLATE-VERSION` — not an error, because upgrading a plugin is ordinary and [nothing ever writes back into your config](#the-one-config-file). What makes an incompatibility *fail* is already covered without a version check: a retired parameter is an unknown key, and a new required one is a missing key. So the version tells you where to look and the existing checks decide whether it matters; `plugin` names where the template came from, and is a readable note beside the authoritative pin in `uv.lock` rather than a second one — core never installs from it. `schema_version` is the config format's own version: core reads any minor at or below its own and refuses a higher one, or a major it doesn't implement, rather than guessing at a field it doesn't recognize. Through v0.x a change that would break an existing config bumps the major, and there is no migration command — a config is small, `init` writes a fresh one, and the [defaults-file argument](#there-is-no-separate-defaults-file) applies to a migration file too. What protects an old *result* is that `run.yaml` embeds its config verbatim alongside the `schema_version` it was written under, so a record stays readable whether or not the format moved. All four are inside [`parameters_hash`](#three-hashes), because a config read against a different spec is a different declaration.
+ 
+ This file is three things at once: the scaffold (you didn't type it), the documentation (every available parameter is present, with its constraints in a comment), and the config (it's what `run` consumes). Keeping them as one artifact is what prevents the usual drift where documentation lists options the code no longer accepts.
+ 
+ **The file is freely editable, and nothing `publishable` does ever writes back into it.** Edit it as much as you like; each run embeds the config it used verbatim into its own `run.yaml`, which is where parameter provenance actually lives.
+ 
+ **Whether you commit it is your call, and core takes no position.** Reproducibility doesn't depend on it either way: `run.yaml` embeds the config verbatim and fingerprints it with `parameters_hash`, so a run is fully reportable whether or not its config was ever tracked. Because of that, the scaffold's `.gitignore` says nothing about `configs/` — imposing a policy there would be the tool overriding a judgment that belongs to you.
+ 
+ Two things worth weighing when you decide:
+diff --git a/src/publishable/cli.py b/src/publishable/cli.py
+index c9976f7..d41fe77 100644
+--- a/src/publishable/cli.py
++++ b/src/publishable/cli.py
+@@ -59,20 +59,21 @@ from publishable.stats import (
+     paired_percentile_of_derived,
+     paired_t_over_units,
+     repeat_spread,
+     resample_seed,
+     summarize_step,
+     unit_table_from_rows,
+ )
+ from publishable.strata import levels_for
+ from publishable.sweep import (
+     _swept_paths,
++    ablated_paths,
+     condition_dir_name,
+     expand,
+     sample_seed_for,
+     sweep_document,
+ )
+ from publishable.templates.base import BaseTemplate
+ from publishable.templates.registry import get_template
+ from publishable.units import Unit, UnitList, partition_units, resolve_units, units_hash
+ from publishable.uv_support import uv_lock_info
+ from publishable.validate import load_document, validate_config
+@@ -728,21 +729,31 @@ def command_run(config_path: Path) -> int:
+     # config's — so it is exactly as unreadable at `run`/`summary` scope as a
+     # grid axis is. Reading the grid alone left a baseline-only path resolving
+     # to the base value, which is a value no condition in the run used.
+     sweep_block = doc.get("sweep") or {}
+     # `_swept_paths` rather than `grid` alone: every axis-shaped mode's paths vary
+     # across conditions, and `paired`'s and `sample`'s did not reach here when each
+     # became a real axis — a sampled path stayed readable at `run`/`summary` scope
+     # and resolved to the base config's value, which is exactly the "a value no
+     # condition in the run used" failure the baseline half of this line exists to
+     # prevent, reached through a mode added after it was written.
+-    swept_paths = set(_swept_paths(sweep_block)) | set(sweep_block.get("baseline") or {})
++    # `ablated_paths` is unioned in for the same reason and by the same rule,
++    # from the other side of the axis/non-axis split: an ablated path varies
++    # across conditions too. Most are already covered by the `baseline` term —
++    # a removed path is one the baseline fixes — but an `override` path the
++    # baseline leaves alone is not, and it is exactly the residue this line has
++    # now been widened for three times.
++    swept_paths = (
++        set(_swept_paths(sweep_block))
++        | set(ablated_paths(sweep_block))
++        | set(sweep_block.get("baseline") or {})
++    )
+     plan = build_plan(  # phase 4
+         experiment,
+         conditions=[(c.index, c.label) for c in conditions],
+         repeat_labels=labels,
+     )
+     cfgs: dict[int, Config] = {
+         c.index: resolve_condition_cfg(doc, dict(c.values)) for c in conditions
+     }
+     cfgs[-1] = resolve_wide_cfg(doc, swept_paths)
+ 
+diff --git a/src/publishable/sweep.py b/src/publishable/sweep.py
+index 0948ecb..43e1169 100644
+--- a/src/publishable/sweep.py
++++ b/src/publishable/sweep.py
+@@ -381,20 +381,87 @@ def _swept_paths(sweep: dict[str, Any]) -> list[str]:
+         # cleared yet, and a malformed `sample` must not stop the swept-path
+         # list — which `E-SWEEP-BASELINE-PARTIAL` reads — from being built out
+         # of the modes that *are* well-formed. `_sample_cells` is where a
+         # malformed `sample` is refused.
+         for path in sample["ranges"]:
+             if isinstance(path, str) and path not in paths:
+                 paths.append(path)
+     return paths
+ 
+ 
++def ablation_changes(sweep: dict[str, Any]) -> list[dict[str, Any]]:
++    """One `{path: value}` change per `ablate` entry, in declared order.
++
++    `ablate` is not an axis, so it produces changes rather than cells: § Expansion
++    modes says it "emits `n` conditions, each one change away from the baseline",
++    and `expand` applies each of these *after* the product rather than crossing
++    them into it.
++
++    `remove` and `override` are read in the order the `ablate` mapping declares
++    them, not `remove`-then-`override`, so the condition numbering a reader sees
++    is the order they wrote. Any other key is ignored here — `expand` cannot
++    refuse, and a typo (`removes:`) is a value-level fault for `validate` to
++    report, not a shape one (see `docs/superpowers/spec-defects.md`).
++
++    **What `remove` sets is decided by the baseline's value for that path**, and
++    it has to be: § Expansion modes says `remove` "sets a boolean parameter to
++    `false` or a nullable one to `null`", which is a fact about the parameter's
++    `Param` — and this module is pure, with no template and so no
++    `parameter_spec` to consult. The baseline is the one thing `ablate` is
++    defined against (§ Validation, "Ablation targets": every removed path is one
++    the baseline fixes), so a boolean *there* is what selects `false`; anything
++    else takes the nullable reading and sets `null`. A path the baseline does not
++    fix takes the same `null` reading, and is `validate`'s to refuse rather than
++    this function's to guess at.
++    """
++    ablate = sweep.get("ablate")
++    if not isinstance(ablate, dict):
++        return []
++    baseline = sweep.get("baseline") or {}
++    changes: list[dict[str, Any]] = []
++    for key, block in ablate.items():
++        if key == "remove":
++            for path in block or []:
++                changes.append({path: False if isinstance(baseline.get(path), bool) else None})
++        elif key == "override":
++            for entry in block or []:
++                changes.append(dict(entry))
++    return changes
++
++
++def ablated_paths(sweep: dict[str, Any]) -> list[str]:
++    """Every path `ablate` changes, deduped, in declared order.
++
++    Deliberately NOT part of `_swept_paths`, which is the axis-shaped modes' set
++    and is what `validate`'s `E-SWEEP-BASELINE-PARTIAL` reads: that refusal is
++    about a baseline leaving an *axis* free, which expands to one baseline per
++    cell — a sentence with no meaning for a mode that is not an axis and cannot
++    compose with one. An ablated path in there would refuse a legal `override`
++    on a path the baseline does not fix, with a message about cells.
++
++    The two places that need it say so themselves instead. `expand` labels
++    against the union of both, because `_keys_for` can only shorten a path
++    unambiguously when it sees every path in the run — `features.notes` and
++    `clinical.notes` both fall back to `notes` otherwise, and two conditions
++    would share a label that is also a selector. `cli.command_run` unions it
++    into the paths made unreadable at `run`/`summary` scope, for the reason the
++    comment there already gives twice over: a path that varies across conditions
++    resolves, at those scopes, to a value no condition in the run used.
++    """
++    paths: list[str] = []
++    for change in ablation_changes(sweep):
++        for path in change:
++            if isinstance(path, str) and path not in paths:
++                paths.append(path)
++    return paths
++
++
+ def label_for(values: dict[str, Any], swept: list[str], is_baseline: bool) -> str:
+     if is_baseline:
+         return "baseline"
+     keys = _keys_for(swept)
+     return AXIS_SEPARATOR.join(
+         f"{keys.get(path, path.rsplit('.', 1)[-1])}={render_value(value)}"
+         for path, value in values.items()
+     )
+ 
+ 
+@@ -439,50 +506,82 @@ def _axes(sweep: dict[str, Any], sample_seed: int | None = None) -> list[list[di
+             raise ContractError(
+                 "`sweep.sample` is declared but no sample seed was derived; `expand` "
+                 "derives it from the design digest and is the only caller of `_axes`",
+                 code="E-SWEEP-SAMPLE-INVALID",
+             )
+         axes.append(_sample_cells(sample, sample_seed))
+     return axes
+ 
+ 
+ def expand(config: dict[str, Any]) -> list[Condition]:
+-    """Ordered conditions: a declared baseline as 00, then the product of every axis.
++    """Ordered conditions: a declared baseline as 00, then the product of every axis,
++    then one condition per `ablate` entry.
+ 
+     With no `sweep` block, one condition whose label is None — which is what
+     keeps the `conditions/` level out of the artifact tree.
++
++    Two phases, because `ablate` is not an axis: everything axis-shaped is
++    crossed into the product, and `ablate` is applied to the result. § Expansion
++    modes: it "emits `n` conditions, each one change away from the baseline, and
++    it **reads** the baseline rather than re-emitting it — so a declared baseline
++    is condition `00` exactly once, never both as `00_baseline` and as an ablate
++    row". That reading is why the baseline row is appended once, above, and each
++    ablate row starts from a *copy* of the same values.
++
++    A row therefore carries a third thing: the values its label is rendered from.
++    For a product row that is the whole cell; for an ablate row it is the one
++    change alone, which is what makes `01_labs=false` — the label § Expansion
++    modes shows — rather than a label restating every baseline value the
++    condition inherited but did not vary.
+     """
+     sweep = config.get("sweep") or {}
+     if not sweep:
+         return [Condition(index=0, label=None, values={}, is_baseline=False)]
+ 
+-    rows: list[tuple[dict[str, Any], bool]] = []
++    rows: list[tuple[dict[str, Any], dict[str, Any], bool]] = []
+     baseline = sweep.get("baseline")
+     if baseline:
+-        rows.append((dict(baseline), True))
++        rows.append((dict(baseline), dict(baseline), True))
+ 
+     axes = _axes(sweep, sample_seed_for(config))
+     if axes:
+         # `itertools.product` varies its LAST argument fastest, which is the
+         # declared-order nesting the specification asks for. Preserved from the
+         # grid-only implementation this replaces.
+         for combo in itertools.product(*axes):
+             values: dict[str, Any] = {}
+             for cell in combo:
+                 values.update(cell)
+-            rows.append((values, False))
+-
++            rows.append((values, values, False))
++
++    for change in ablation_changes(sweep):
++        # `dict(baseline or {})` first, then the change: an ablation is the
++        # baseline with one thing different, so it has to carry the baseline's
++        # other values — a row holding the change alone would leave every other
++        # parameter at the base config's value and measure two differences at
++        # once. `validate` refuses `ablate` without a `baseline`; expanding one
++        # anyway (as the change alone) keeps this function total.
++        ablated = dict(baseline or {})
++        ablated.update(change)
++        rows.append((ablated, dict(change), False))
++
++    # The union, not `_swept_paths` alone: `_keys_for` shortens each path to a
++    # suffix unique among the ones it is *shown*, so an ablated path missing here
++    # falls back to `label_for`'s last-segment rule and two paths ending in the
++    # same segment produce one label for two conditions. See `ablated_paths` for
++    # why the union is taken here rather than inside `_swept_paths`.
+     swept = _swept_paths(sweep)
++    swept += [path for path in ablated_paths(sweep) if path not in swept]
+     return [
+-        Condition(index=i, label=label_for(values, swept, is_baseline),
++        Condition(index=i, label=label_for(labelled, swept, is_baseline),
+                   values=values, is_baseline=is_baseline)
+-        for i, (values, is_baseline) in enumerate(rows)
++        for i, (values, labelled, is_baseline) in enumerate(rows)
+     ]
+ 
+ 
+ def sweep_document(
+     conditions: list[Condition],
+     levels: list["RepeatLevel"],
+     repeats: list["Repeat"],
+     digest: str,
+     order: str,
+     execution_order: list[tuple[int, str]],
+diff --git a/src/publishable/validate.py b/src/publishable/validate.py
+index b146f9a..1fa4e27 100644
+--- a/src/publishable/validate.py
++++ b/src/publishable/validate.py
+@@ -183,20 +183,66 @@ def _check_shape(doc: dict[str, Any], c: Collector) -> bool:
+             _bad("sweep.paired", paired, "list")
+         elif isinstance(paired, list):
+             for i, entry in enumerate(paired):
+                 if not isinstance(entry, dict):
+                     _bad(f"sweep.paired[{i}]", entry, "mapping")
+                     continue
+                 for key in entry:
+                     if not isinstance(key, str):
+                         _bad(f"sweep.paired[{i}]", key, "string")
+ 
++        # `ablate` gets the same walk `paired` gets, at every depth
++        # `sweep.ablation_changes` reads — enumerated from the operations that
++        # function performs, not from inputs someone imagined:
++        #   `ablate.items()`                → the block must be a mapping
++        #   `for path in remove`            → a list (a bare string iterates
++        #                                     character by character into one
++        #                                     condition per letter, the quiet
++        #                                     failure `grid`'s axis guard closed)
++        #   `{path: ...}` then `.split(".")` in `_keys_for` → a string path
++        #                                     (a list entry is unhashable and
++        #                                     raises at the dict literal; an int
++        #                                     is hashable and raises later, in
++        #                                     `_keys_for`)
++        #   `for entry in override`         → a list, same reasoning
++        #   `dict(entry)`                   → a mapping, exactly `paired`'s guard
++        #   each override key               → a string, for `_keys_for` again
++        # `from` is deliberately absent: `expand` reads `sweep.baseline`
++        # directly and performs no operation on `from` at all, so there is no
++        # type that makes it raise, and guarding it here would be guessing at
++        # inputs rather than closing a crash. A `from` naming anything but
++        # `baseline` is a value fault nothing yet reports — recorded in
++        # `docs/superpowers/spec-defects.md`. `dict(baseline)` is now read by
++        # ablate rows too; its guard is `sweep.baseline`'s above, unchanged.
++        ablate = sweep.get("ablate")
++        if ablate is not None and not isinstance(ablate, dict):
++            _bad("sweep.ablate", ablate, "mapping")
++        elif isinstance(ablate, dict):
++            remove = ablate.get("remove")
++            if remove is not None and not isinstance(remove, list):
++                _bad("sweep.ablate.remove", remove, "list")
++            elif isinstance(remove, list):
++                for i, path in enumerate(remove):
++                    if not isinstance(path, str):
++                        _bad(f"sweep.ablate.remove[{i}]", path, "string")
++            override = ablate.get("override")
++            if override is not None and not isinstance(override, list):
++                _bad("sweep.ablate.override", override, "list")
++            elif isinstance(override, list):
++                for i, entry in enumerate(override):
++                    if not isinstance(entry, dict):
++                        _bad(f"sweep.ablate.override[{i}]", entry, "mapping")
++                        continue
++                    for key in entry:
++                        if not isinstance(key, str):
++                            _bad(f"sweep.ablate.override[{i}]", key, "string")
++
+         # `sample` gets the same treatment at every depth `_sample_cells` reads,
+         # rather than one guard per input someone thought of: the container, then
+         # `n`/`method`/`seed`, then the `ranges` mapping, then each range's path,
+         # its single form key, and the two-element bound list the scaling
+         # indexes into. Each of these is an operation on user data — a
+         # comparison, a `dict` key, a `.split(".")`, a subscript — and each has a
+         # YAML-expressible type that makes it raise, which is why the walk is
+         # exhaustive over the *shapes* rather than over the examples. `bool` is
+         # excluded from `n` deliberately (`n: true` is an `int` to Python and
+         # nothing to a reader), and from a bound for the same reason.
+@@ -857,35 +903,42 @@ def _check_replication(
+         c.error(
+             "E-REPL-ORDER",
+             "replication.order",
+             f"is `{order}`; the only orders are `as_declared` and `randomized`",
+         )
+ 
+ 
+ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
+     """Declared-but-unimplemented blocks, refused rather than silently ignored.
+ 
+-    This build expands `sweep.baseline`, `sweep.grid`, `sweep.paired`, and
+-    `sweep.sample` only. Both declared orders are honored — `randomized`
++    This build expands `sweep.baseline`, `sweep.grid`, `sweep.paired`,
++    `sweep.sample` and `sweep.ablate` only. Both declared orders are honored — `randomized`
+     shuffles within each batch and `as_declared` leaves the plan's step-major
+     layout alone. `sweep.paired` is no longer refused here: `_axes` composes it
+     as a single axis whose cells set several paths at once, per § Expansion
+     modes — `_check_shape` guards its container and entry shapes, and
+     `_check_sweep` refuses a path it shares with another axis-shaped mode
+     (`E-SWEEP-PATH-DUPLICATE`), the same way a bad `grid` shape or an
+     unresolvable `grid` path already were. Neither is `sweep.sample`, which
+     composes as one axis of `n` realized draws seeded from the design digest:
+     `_check_shape` guards every shape `_sample_cells` reads and `_check_sweep`
+     reports the value-level residue as `E-SWEEP-SAMPLE-INVALID`, its paths
+     through the same `E-SWEEP-PATH-UNKNOWN` `grid` uses, and its bounds through
+-    the same `E-PARAM-VALUE` (§ Validation, "Sample ranges"). `.ablate` and
+-    `.groups` are read by nothing yet. It resolves a unit roster, but
++    the same `E-PARAM-VALUE` (§ Validation, "Sample ranges"). Neither is
++    `sweep.ablate`, which `expand` applies after the product as the one mode that
++    does not multiply: `_check_shape` guards every shape `ablation_changes`
++    reads, and `_check_sweep` checks each `override` value against its own
++    `Param` on the same `E-PARAM-VALUE`/`E-SWEEP-VALUE-UNNAMEABLE` pair a `grid`
++    value gets. Its remaining composition rules — a `remove` on a parameter that
++    is neither boolean nor nullable, `ablate` without a `baseline`, and `ablate`
++    crossed with a parameter axis — are the next slice's checks, named in
++    § Validation. `.groups` is read by nothing yet. It resolves a unit roster, but
+     several `data.units` sub-fields — allocation other than
+     `within`, `assign`, `cluster_by`, `weight_by`, `measurements`, `holdout`,
+     and a `resolver` source — are read by nothing yet either. Each of these
+     would otherwise validate clean and then run something other than what the
+     config describes — the same class of failure `resolve_repeats` already
+     refuses for repeat levels: `E-REPL-FOLD-STRATIFY-UNSUPPORTED` for
+     `fold.stratify_by`, `E-REPL-LEVEL-DUPLICATE` for two levels of the same
+     kind, and `E-REPL-LEVEL-DEPTH` past two levels, and
+     `E-REPL-LEVEL-BATCH-INNER` for a `batch` that is not the outermost level.
+     `batch` and `fold` themselves are no longer refused — both are supported
+@@ -901,54 +954,53 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
+     `correction_level`, `family_size`, and `family`, so what this module owes it
+     is the value checks below (`E-STATS-CORRECTION-UNKNOWN`,
+     `W-STATS-CORRECTION-INAPPLICABLE`) plus `W-STATS-FAMILY` on the one value that
+     opts out — `none`, which corrects nothing and records `correction: null` to
+     say so. Each remaining message says
+     plainly that the block is honored in a later slice, so a user does not read this as
+     their config being malformed.
+     """
+     sweep = doc.get("sweep") or {}
+     for mode, code, why in (
+-        (
+-            "ablate",
+-            "E-SWEEP-ABLATE-UNSUPPORTED",
+-            "emits 1 + n one-change conditions and reads the baseline rather than re-emitting it",
+-        ),
+         (
+             "groups",
+             "E-SWEEP-GROUPS-UNSUPPORTED",
+             "is an axis over units rather than parameters, so it needs "
+             "`data.units.allocation` and `data.units.assign`",
+         ),
+     ):
+         if sweep.get(mode):
+             c.error(
+                 code,
+                 f"sweep.{mode}",
+                 f"{why}, and is specified but not implemented in this build — this build "
+-                "expands `baseline`, `grid`, `paired`, and `sample` only; the other modes "
++                "expands `baseline`, `grid`, `paired`, `sample` and `ablate` only; `groups` "
+                 "will be "
+                 "honored in a later slice",
+             )
+ 
+     # A baseline that leaves some swept PATH unfixed. `reference.md`:1415-1422
+     # states one rule with two cases: the baseline expands over whichever axes it
+     # does not fix, giving one baseline condition per cell of the unfixed axes.
+     # `expand` emits exactly one `00_baseline` row carrying only what the baseline
+     # literally names, so the declared design is not the executed design — the
+     # failure every other refusal in this function exists to prevent. Per-cell
+     # expansion is a real feature; until it lands, refuse rather than diverge.
+     # A baseline fixing every swept path (including the no-sweep-axis case) is
+     # the supported row and is unaffected. `_swept_paths` is every axis-shaped
+     # mode's paths, not `grid`'s alone — `paired` composes into this same product
+     # now, and a baseline that fixes `grid` but leaves a `paired` axis free is the
+-    # identical declared-vs-executed mismatch this check exists to catch.
++    # identical declared-vs-executed mismatch this check exists to catch. An
++    # *ablated* path is deliberately not in that set (see `sweep.ablated_paths`):
++    # `ablate` is not an axis, there are no cells for a baseline to expand over,
++    # and firing this refusal on an `override` path the baseline does not fix
++    # would refuse a legal config with a message about cells that do not exist.
+     #
+     # This check is path-granular, not axis-granular: it asks "does every swept
+     # path have some baseline value", not "does the baseline supply a whole cell
+     # of a `paired` axis". A baseline naming only half of one `paired` entry's
+     # paths passes this check pointing at the still-unfixed path, exactly as it
+     # would for two independent `grid` axes — and a value that isn't any declared
+     # `paired` cell (a mix-and-match the axis never produces) is not itself
+     # caught here, since per-cell baseline expansion (which would need to resolve
+     # a baseline against actual cells) is Task 6's feature, not this refusal's.
+     baseline = sweep.get("baseline") or {}
+@@ -1164,21 +1216,21 @@ def _check_sweep(
+     sweep = doc.get("sweep") or {}
+     known = {"baseline", "grid", "paired", "ablate", "sample", "groups"}
+     for key in sweep:
+         if key not in known:
+             near = difflib.get_close_matches(key, sorted(known), n=1)
+             hint = f" — did you mean `{near[0]}`?" if near else ""
+             c.error(
+                 "E-SWEEP-KEY-UNKNOWN",
+                 f"sweep.{key}",
+                 f"is not a sweep mode{hint} — `expand` understands only `baseline`, "
+-                "`grid`, `paired` and `sample` in this build, so an unrecognised key "
++                "`grid`, `paired`, `sample` and `ablate` in this build, so an unrecognised key "
+                 "would expand to zero conditions and the run would execute nothing "
+                 "while reporting success",
+             )
+ 
+     spec = template.parameter_spec
+ 
+     def _path_resolves(path: str, where: str) -> bool:
+         """`path` names a parameter this template declares. Shared by `grid` and
+         `baseline` deliberately: both fix a value at a dotted `parameters` path,
+         and two copies of this check is how the two drift apart."""
+@@ -1309,20 +1361,47 @@ def _check_sweep(
+     # `reference.md`:218 names this by example ("Baseline is a valid condition |
+     # `sweep.baseline` sets `analysis.method: pearsonn`"). Unchecked, a misspelled
+     # path was planted verbatim into condition `00`'s config by
+     # `resolve_condition_cfg`'s `setdefault` walk, so `00_baseline` ran the base
+     # config under a label claiming otherwise and the run reported success.
+     baseline = sweep.get("baseline") or {}
+     for path, value in baseline.items():
+         if _path_resolves(path, f"sweep.baseline.{path}"):
+             _value_checks(path, value, f"sweep.baseline.{path}", nameable=False)
+ 
++    # `sweep.ablate.override`, through the same two checks, because an override
++    # entry is structurally a `grid` value: a value the user wrote at a dotted
++    # path, planted into a condition's config and rendered into its label. Left
++    # unchecked, `override: [{analysis.method: pearsonn}]` executes a condition
++    # whose config holds a value § Validation's "Choices" row promises to refuse,
++    # and `nameable=True` because an override value — unlike a `baseline` one —
++    # *is* what `label_for` renders, so a value carrying the axis separator would
++    # produce a label that cannot be parsed back into axes.
++    #
++    # Gated on `_path_resolves` first, exactly as the `grid` and `sample` loops
++    # are: `_value_checks` indexes `spec[path]` unguarded, so an unknown path
++    # would raise `KeyError` inside a function contracted never to raise.
++    #
++    # `remove` is NOT checked here: what it produces is `false` or `null`
++    # depending on the parameter, which is § Validation's "Ablation targets" row
++    # ("`remove` needs a boolean or nullable parameter — use `override`") and the
++    # next slice's check to mint, not a second reading of it here.
++    ablate = sweep.get("ablate")
++    if isinstance(ablate, dict):
++        for i, entry in enumerate(ablate.get("override") or []):
++            if not isinstance(entry, dict):
++                continue  # `_check_shape` already refused it, fatally
++            for path, value in entry.items():
++                where = f"sweep.ablate.override[{i}].{path}"
++                if _path_resolves(path, where):
++                    _value_checks(path, value, where, nameable=True)
++
+     # Guarded the same way `_condition_labels` guards its own `expand(doc)`:
+     # `validate` collects findings and never raises. A `sweep.grid` axis value
+     # of `null` reaches here — past the per-axis `E-SWEEP-AXIS-EMPTY` check
+     # above, which fires only on a value that is *present and falsy* and then
+     # `continue`s past the rest of the per-axis body, and past `_check_shape`'s
+     # per-axis `list` guard, which refuses only a *present, non-list* value —
+     # and makes `itertools.product` raise `TypeError` inside `expand`.
+     # `E-SWEEP-EXPANDS-EMPTY` below is deliberately skipped rather than fired
+     # on the caught exception: that check means "this sweep is shaped well
+     # enough to expand, and expanding it yields nothing," a different and more
+diff --git a/tests/test_cli.py b/tests/test_cli.py
+index eb2e4f7..06c52a5 100644
+--- a/tests/test_cli.py
++++ b/tests/test_cli.py
+@@ -3962,10 +3962,34 @@ def test_a_sampled_path_is_unreadable_at_run_scope(tmp_path: Path, capsys):
+         sweep={
+             "sample": {
+                 "n": 2,
+                 "ranges": {"analysis.confidence": {"uniform": [0.80, 0.99]}},
+             }
+         },
+     )
+     ledger = (doc["run_dir"] / "executions.jsonl").read_text()
+     assert '"status": "failed"' in ledger
+     assert "E-STEP-SWEPT-PARAM" in doc["stdout"] + ledger
++
++
++def test_an_ablate_override_path_is_unreadable_at_run_scope(tmp_path: Path, capsys):
++    """The same rule from the other side of the axis/non-axis split. `ablate` is
++    not an axis, so its paths are deliberately not in `_swept_paths`; they still
++    vary across conditions, so `command_run` unions `ablated_paths` into the set
++    it makes unreadable. A `remove` path is already covered by the `baseline`
++    term — the baseline is what an ablation removes from — so the residue this
++    test pins is an `override` path the baseline leaves alone."""
++    doc = run_a_project(
++        tmp_path,
++        capsys=capsys,
++        replication={"repeats": [{"kind": "seed", "n": 1}], "order": "as_declared"},
++        extra_steps=["summarize"],
++        extra_step_source=_READS_A_SWEPT_PARAM_SUMMARY_STEP,
++        expect_exit=EXIT_PARTIAL,
++        sweep={
++            "baseline": {"analysis.method": "pearson"},
++            "ablate": {"override": [{"analysis.confidence": 0.9}]},
++        },
++    )
++    ledger = (doc["run_dir"] / "executions.jsonl").read_text()
++    assert '"status": "failed"' in ledger
++    assert "E-STEP-SWEPT-PARAM" in doc["stdout"] + ledger
+diff --git a/tests/test_sweep.py b/tests/test_sweep.py
+index 40982da..fd6ad6e 100644
+--- a/tests/test_sweep.py
++++ b/tests/test_sweep.py
+@@ -661,10 +661,164 @@ def test_a_pinned_integer_seed_overrides_the_derivation() -> None:
+     other = _sample_config(seed=7)
+     other["data"] = {"units": {"from": "other.csv", "key": "patient_id"}}
+ 
+     assert sample_seed_for(one) == 7
+     assert [dict(c.values) for c in expand(one)] == [dict(c.values) for c in expand(other)]
+     # And it is a different design from the derived one, which is the half that
+     # says the pin was read rather than merely accepted.
+     assert [dict(c.values) for c in expand(one)] != [
+         dict(c.values) for c in expand(_sample_config())
+     ]
++
++
++def test_ablate_emits_one_baseline_and_one_condition_per_removal() -> None:
++    """§ Expansion modes: 1 + n conditions, not 2^n, and the baseline appears
++    exactly once — read, not re-emitted."""
++    conditions = expand(
++        {
++            "sweep": {
++                "baseline": {
++                    "features.demographics": True,
++                    "features.labs": True,
++                    "features.notes": True,
++                },
++                "ablate": {
++                    "from": "baseline",
++                    "remove": ["features.demographics", "features.labs", "features.notes"],
++                },
++            }
++        }
++    )
++
++    assert len(conditions) == 4
++    assert conditions[0].is_baseline
++    assert [c.is_baseline for c in conditions[1:]] == [False, False, False]
++    assert dict(conditions[1].values)["features.demographics"] is False
++    assert dict(conditions[1].values)["features.labs"] is True
++
++
++def test_an_ablation_is_labelled_by_its_one_change_not_by_what_it_inherited() -> None:
++    """§ Expansion modes labels an ablation `labs=false` (in the `groups` example,
++    `01_cohort=derivation__labs=false`) — the change alone. An ablate row carries
++    the whole baseline in `values` because it must *run* as the baseline with one
++    thing different, but a label restating every inherited value would name the
++    condition by what it did not vary, and a label is also a selector."""
++    conditions = expand(
++        {
++            "sweep": {
++                "baseline": {"features.labs": True, "features.notes": True},
++                "ablate": {"from": "baseline", "remove": ["features.labs", "features.notes"]},
++            }
++        }
++    )
++
++    assert [c.label for c in conditions] == ["baseline", "labs=false", "notes=false"]
++
++
++def test_an_ablated_path_is_disambiguated_against_every_other_ablated_path() -> None:
++    """`_keys_for` can only shorten a path unambiguously when it is shown every
++    path in the run. `features.notes` and `clinical.notes` share a leaf, so
++    ablated paths must reach the labelling set — otherwise both render as
++    `notes=false` and two conditions share one label, which is also a selector
++    and a directory name."""
++    conditions = expand(
++        {
++            "sweep": {
++                "baseline": {"features.notes": True, "clinical.notes": True},
++                "ablate": {"from": "baseline", "remove": ["features.notes", "clinical.notes"]},
++            }
++        }
++    )
++
++    assert [c.label for c in conditions] == [
++        "baseline",
++        "features.notes=false",
++        "clinical.notes=false",
++    ]
++
++
++def test_ablated_paths_are_not_axis_shaped_paths() -> None:
++    """`_swept_paths` is the axis-shaped modes' set, and `E-SWEEP-BASELINE-PARTIAL`
++    reads it to ask which axis a baseline leaves free. `ablate` is not an axis and
++    has no cells to expand a baseline over, so its paths are carried separately —
++    `expand` and `cli` union the two where labelling and scope-readability need
++    the whole set."""
++    from publishable.sweep import _swept_paths, ablated_paths
++
++    sweep = {
++        "grid": {"analysis.method": ["pearson"]},
++        "baseline": {"features.labs": True},
++        "ablate": {
++            "from": "baseline",
++            "remove": ["features.labs"],
++            "override": [{"analysis.min_samples": 10}, {"analysis.min_samples": 20}],
++        },
++    }
++
++    assert _swept_paths(sweep) == ["analysis.method"]
++    assert ablated_paths(sweep) == ["features.labs", "analysis.min_samples"]
++
++
++def test_override_is_the_non_boolean_one_at_a_time_form() -> None:
++    """§ Expansion modes: "Use `override` for non-boolean one-at-a-time
++    variation". Each entry is one condition, one change from the baseline, and
++    the baseline's other values come with it."""
++    conditions = expand(
++        {
++            "sweep": {
++                "baseline": {"analysis.method": "pearson", "analysis.min_samples": 30},
++                "ablate": {
++                    "override": [
++                        {"analysis.method": "spearman"},
++                        {"analysis.min_samples": 10},
++                    ]
++                },
++            }
++        }
++    )
++
++    assert len(conditions) == 3
++    assert dict(conditions[1].values) == {
++        "analysis.method": "spearman",
++        "analysis.min_samples": 30,
++    }
++    assert dict(conditions[2].values) == {
++        "analysis.method": "pearson",
++        "analysis.min_samples": 10,
++    }
++    assert [c.label for c in conditions] == ["baseline", "method=spearman", "min_samples=10"]
++
++
++def test_remove_sets_false_for_a_boolean_and_null_for_anything_else() -> None:
++    """§ Expansion modes: "`remove` sets a boolean parameter to `false` or a
++    nullable one to `null`". This module is pure and has no `parameter_spec` to
++    consult, so the baseline's own value — the value the ablation is defined
++    against — is what says which of the two a path takes."""
++    conditions = expand(
++        {
++            "sweep": {
++                "baseline": {"features.labs": True, "analysis.cutoff": 0.5},
++                "ablate": {"from": "baseline", "remove": ["features.labs", "analysis.cutoff"]},
++            }
++        }
++    )
++
++    assert dict(conditions[1].values)["features.labs"] is False
++    assert dict(conditions[2].values)["analysis.cutoff"] is None
++
++
++def test_ablate_declares_its_conditions_in_the_order_it_writes_them() -> None:
++    """`remove` and `override` are read in the order the `ablate` mapping declares
++    them, so the condition numbering matches what the user wrote."""
++    conditions = expand(
++        {
++            "sweep": {
++                "baseline": {"features.labs": True, "analysis.method": "pearson"},
++                "ablate": {
++                    "override": [{"analysis.method": "spearman"}],
++                    "remove": ["features.labs"],
++                },
++            }
++        }
++    )
++
++    assert [c.label for c in conditions] == ["baseline", "method=spearman", "labs=false"]
+diff --git a/tests/test_validate.py b/tests/test_validate.py
+index 2d99d88..20673f8 100644
+--- a/tests/test_validate.py
++++ b/tests/test_validate.py
+@@ -1057,31 +1057,31 @@ def test_baseline_and_grid_are_now_accepted(write_config):
+                 }
+             }
+         )
+     )
+     assert not [c for c in found if c.startswith("E-SWEEP")]
+ 
+ 
+ @pytest.mark.parametrize(
+     "mode,value,code",
+     [
+-        ("ablate", {"from": "baseline", "remove": ["a.b"]}, "E-SWEEP-ABLATE-UNSUPPORTED"),
+         ("groups", [{"by": "arm", "levels": ["a", "b"]}], "E-SWEEP-GROUPS-UNSUPPORTED"),
+     ],
+ )
+ def test_each_unimplemented_mode_is_refused_on_its_own(write_config, mode, value, code):
+-    """`ablate` and `groups` each get their own refusal now that the old
+-    blanket sweep refusal is retired — otherwise each would fall through into
+-    silence the moment `baseline`/`grid`/`paired`/`sample` stopped covering the
+-    whole block. `paired` and `sample` are no longer in this family: both expand
+-    for real now, see `test_paired_is_accepted_and_expands_for_real` and
+-    `test_sample_is_accepted_and_expands_for_real` below."""
++    """`groups` keeps its own refusal now that the old blanket sweep refusal is
++    retired — otherwise it would fall through into silence the moment
++    `baseline`/`grid`/`paired`/`sample`/`ablate` stopped covering the whole
++    block. `paired`, `sample` and `ablate` are no longer in this family: all
++    three expand for real now, see `test_paired_is_accepted_and_expands_for_real`,
++    `test_sample_is_accepted_and_expands_for_real` and
++    `test_ablate_is_accepted_and_expands_for_real` below."""
+     assert code in codes(write_config({"sweep": {mode: value}}))
+ 
+ 
+ def test_paired_is_accepted_and_expands_for_real(write_config):
+     """§ Expansion modes retires `E-SWEEP-PAIRED-UNSUPPORTED`: `paired` is now one
+     of the axis-shaped modes `_axes` composes, and a config declaring it validates
+     clean rather than tripping the refusal `ablate`/`sample`/`groups` still get."""
+     found = codes(
+         write_config(
+             {
+@@ -1117,20 +1117,156 @@ def test_sample_is_accepted_and_expands_for_real(write_config):
+                         },
+                     }
+                 }
+             }
+         )
+     )
+     assert "E-SWEEP-SAMPLE-UNSUPPORTED" not in found
+     assert not [c for c in found if c.startswith("E-SWEEP")]
+ 
+ 
++def test_ablate_is_accepted_and_expands_for_real(write_config):
++    """§ Expansion modes retires `E-SWEEP-ABLATE-UNSUPPORTED`: `ablate` is the one
++    mode that does not multiply, applied after the product and reading the
++    baseline rather than re-emitting it, and a config declaring it validates
++    clean rather than tripping the refusal `groups` still gets."""
++    found = codes(
++        write_config(
++            {
++                "sweep": {
++                    "baseline": {"analysis.method": "pearson", "analysis.drop_missing": True},
++                    "ablate": {
++                        "from": "baseline",
++                        "remove": ["analysis.drop_missing"],
++                        "override": [{"analysis.method": "spearman"}],
++                    },
++                }
++            }
++        )
++    )
++    assert "E-SWEEP-ABLATE-UNSUPPORTED" not in found
++    assert not [c for c in found if c.startswith("E-SWEEP")]
++
++
++def test_an_ablate_override_value_is_checked_against_its_own_param(write_config):
++    """An `override` entry is structurally a `grid` value — user-written, planted
++    into a condition's config and rendered into its label — so it goes through the
++    same `Param.check` on the same identifier. Unchecked, the condition would run
++    a value § Validation's "Choices" row promises to refuse."""
++    c = Collector()
++    validate_config(
++        write_config(
++            {
++                "sweep": {
++                    "baseline": {"analysis.method": "pearson"},
++                    "ablate": {"override": [{"analysis.method": "pearsonn"}]},
++                }
++            }
++        ),
++        c,
++    )
++    finding = next(f for f in c.findings if f.code == "E-PARAM-VALUE")
++    assert finding.path == "sweep.ablate.override[0].analysis.method"
++
++
++def test_an_ablate_override_path_the_template_does_not_declare_is_refused(write_config):
++    """Gated on `_path_resolves` before `_value_checks` indexes `spec[path]`, the
++    same order `grid` and `sample` use — otherwise an unknown path is a `KeyError`
++    inside a function contracted never to raise."""
++    found = codes(
++        write_config(
++            {
++                "sweep": {
++                    "baseline": {"analysis.method": "pearson"},
++                    "ablate": {"override": [{"analysis.methdo": "spearman"}]},
++                }
++            }
++        )
++    )
++    assert "E-SWEEP-PATH-UNKNOWN" in found
++    assert "E-PARAM-VALUE" not in found
++
++
++def test_an_ablate_override_value_carrying_the_axis_separator_is_refused(write_config):
++    """Unlike a `baseline` value, an `override` value IS rendered into the label,
++    so it takes the nameability check too: a value containing `__` makes a label
++    that cannot be parsed back into axes, and a label is also a selector."""
++    found = codes(
++        write_config(
++            {
++                "sweep": {
++                    "baseline": {"analysis.method": "pearson"},
++                    "ablate": {"override": [{"analysis.method": "a__b"}]},
++                }
++            }
++        )
++    )
++    assert "E-SWEEP-VALUE-UNNAMEABLE" in found
++
++
++@pytest.mark.parametrize(
++    "ablate",
++    [
++        "notamapping",
++        ["notamapping"],
++        {"remove": "analysis.drop_missing"},
++        {"remove": {"analysis.drop_missing": True}},
++        {"remove": [123]},
++        {"remove": [["analysis.drop_missing"]]},
++        {"override": {"analysis.method": "spearman"}},
++        {"override": "analysis.method"},
++        {"override": [None]},
++        {"override": ["analysis.method"]},
++        {"override": [{123: "spearman"}]},
++    ],
++)
++def test_a_misshapen_ablate_is_refused_as_a_shape_fault(write_config, ablate):
++    """The class, not the inputs: every type `ablation_changes` would iterate, use
++    as a dict key or feed into `_keys_for`'s `.split(".")` is guarded in
++    `_check_shape`, fatally, exactly as `grid`, `paired` and `sample` are —
++    `validate` swallows expansion crashes, so a shape that makes `expand` raise
++    must never reach it."""
++    assert "E-CONFIG-SHAPE" in codes(write_config({"sweep": {"ablate": ablate}}))
++
++
++def test_every_misshapen_ablate_really_does_break_expand():
++    """The other half of the guard's claim, asserted rather than argued. Each
++    shape above breaks `expand` in one of the two documented ways: a bare
++    exception out of a function `validate` calls inside a bare `except`, or —
++    for a string where a list belongs — the quiet failure `grid`'s own axis
++    guard closed, iterating character by character into one condition per letter.
++    `remove: [123]` is the one that raises late, inside `_keys_for`'s
++    `.split(".")`, which is why the guard is at the path level and not only at
++    the list level."""
++    from publishable.sweep import expand
++
++    def _expand(ablate):
++        return expand({"sweep": {"baseline": {"analysis.method": "pearson"}, "ablate": ablate}})
++
++    for ablate in (
++        {"remove": [123]},
++        {"remove": [["analysis.drop_missing"]]},
++        {"override": [None]},
++        {"override": ["analysis.method"]},
++        {"override": [{123: "spearman"}]},
++        {"override": "analysis.method"},
++    ):
++        with pytest.raises((TypeError, AttributeError, ValueError)):
++            _expand(ablate)
++
++    # `remove` is the one that fails quietly rather than loudly: one condition
++    # per letter of `analysis.drop_missing`, plus the baseline — legal-looking
++    # output for a design nobody declared, which is why a string is refused as a
++    # shape fault rather than left to expand.
++    assert len(_expand({"remove": "analysis.drop_missing"})) == len("analysis.drop_missing") + 1
++
++
+ def test_a_sample_range_bound_outside_its_parameters_constraint_is_refused(write_config):
+     """§ Validation, "Sample ranges": `sweep.sample.ranges.analysis.confidence`
+     upper bound 1.4 violates the parameter's `lt=1`. The bound is checked with
+     the parameter's own `Param`, so it reports `E-PARAM-VALUE` like every other
+     illegal value rather than minting a code for the same question."""
+     c = Collector()
+     validate_config(
+         write_config(
+             {
+                 "sweep": {
+@@ -1297,21 +1433,20 @@ def test_an_empty_or_null_mode_is_not_a_declaration(write_config):
+                     "groups": [],
+                 }
+             }
+         )
+     )
+     assert not [c for c in found if c.endswith("-UNSUPPORTED")]
+ 
+ 
+ def test_every_sweep_refusal_message_defers_rather_than_scolds(write_config):
+     for mode, value, code in [
+-        ("ablate", {"from": "baseline"}, "E-SWEEP-ABLATE-UNSUPPORTED"),
+         ("groups", [{"by": "arm"}], "E-SWEEP-GROUPS-UNSUPPORTED"),
+     ]:
+         c = Collector()
+         validate_config(write_config({"sweep": {mode: value}}), c)
+         message = next(f.message for f in c.findings if f.code == code)
+         assert "later slice" in message, f"{code} must defer, not scold"
+ 
+ 
+ def test_randomized_replication_order_validates_clean(write_config):
+     """`as_declared` and `randomized` both ship in this build — neither is refused."""

@@ -1,3 +1,4 @@
+import hashlib
 import json
 import re
 import subprocess
@@ -14,7 +15,9 @@ from publishable.cli import (
     _apply_execution_order,
     _cond_roster,
     _condition_counts,
+    _evaluation_roster,
     _resolved_group_axes,
+    _resolved_holdout,
     _wide_swept_paths,
     main,
 )
@@ -22,9 +25,11 @@ from publishable.diagnostics import EXIT_INVOCATION, EXIT_OK, EXIT_PARTIAL, EXIT
 from publishable.errors import ContractError
 from publishable.generators.experiment import generate_experiment
 from publishable.generators.step import generate_step
+from publishable.hashes import design_digest
 from publishable.replication import LABEL_JOIN
 from publishable.runner import attrition
 from publishable.scope import Execution
+from publishable.units import HoldoutPlan, holdout_seed_for, resolve_units
 from publishable.validate import validate_config
 
 Ran = namedtuple("Ran", ["condition_index", "repeat_label"])
@@ -7620,4 +7625,699 @@ def test_a_summary_estimate_is_not_recomputed_by_the_resample_pass(tmp_path, cap
     assert aggregated["pred"]["method"] == "percentile_over_units"
     assert aggregated["pred"]["resample"]["n"] == 2000
 
+
+_TRAIN_TOUCHING_STEP = '''\
+# src/{pkg}/steps/step01_touch_train.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        # Reaches for the training partition with no `fold` repeat and no
+        # `data.units.holdout` declared. At this commit that raises
+        # `E-STEP-UNITS-UNAVAILABLE` from `UnitList.train`, which is the
+        # property being pinned: an empty list here would let a fit run on
+        # nothing and write a plausible model.
+        train = io.units.train
+        return {{"n_train": len(train)}}
+'''
+
+
+def test_a_run_without_a_holdout_pins_its_denominators_and_artifacts(tmp_path, capsys):
+    """The whole-roster shape a run with no `data.units.holdout` produces.
+
+    Pinned FIRST, before any narrowing exists: tasks 14 and 15 narrow
+    `io.units` and four denominators onto a holdout's test partition, and
+    after that there is no un-narrowed build left to compare against. Every
+    number here is over the full 10-unit roster, and every one of them must
+    still be 10 when this slice is done.
+
+    Two departures from the brief this test started from, both because the
+    brief's assumption did not match what this commit's code actually
+    produces (recorded here rather than silently "fixed" — see the task 1
+    report for the fuller account):
+
+    - `executions.jsonl` records carry no `n` key at all (`runner.execute_plan`
+      writes `step`/`scope`/`condition`/`repeat`/`status`/`started_at`/
+      `wall_seconds`/`error`, nothing else) — that was true before this slice
+      and stays true after it; task 15's denominator is `_condition_counts`'
+      per-metric `n` in `run.yaml`, not a ledger field. Asserting a ledger `n`
+      would have been asserting a fact about a document this build does not
+      write, so it is replaced with a plain status check.
+    - The scaffold's one auto-generated step never yields a real `aggregated`
+      metric on its own: it records `present: True`, and `stats.summarize_step`
+      drops a bool column outright ("skipped entirely... a string, or a bool").
+      So the un-narrowed `run_a_project(tmp_path, units=10)` call produces
+      `aggregated == {"step01_summarize_units": {}}` — non-empty at the top
+      level, empty where the pin needs to look, which is exactly the
+      "assertion implied by another" trap: the `assert aggregated` guard would
+      have passed while the loop beneath it never executed. `aggregate_returns`
+      is used instead, the same helper every other end-to-end test in this
+      file reaches for to get a real `basis: units` metric with a real `n`.
+    """
+    doc = run_a_project(tmp_path, capsys=capsys, units=10, aggregate_returns="mean_pred")
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+
+    # `materialize.py` writes the key as an explicit `null`. Asserted rather
+    # than assumed: an absent key and an explicit `null` are different
+    # documents that must produce one shape, and this is the one a generated
+    # project actually has.
+    assert run["config"]["data"]["units"]["holdout"] is None
+
+    # The ledger itself carries no denominator (see the docstring); what it
+    # does guarantee is that every recorded execution completed, over the
+    # whole roster, with nothing skipped by a holdout that doesn't exist.
+    ledger = [
+        json.loads(line)
+        for line in (doc["run_dir"] / "executions.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert ledger, "no executions were recorded — the pin would be vacuous"
+    assert all(record["status"] == "completed" for record in ledger), ledger
+
+    # The denominator a reader actually cites: `run.yaml`'s aggregated block.
+    # Both the recorded column (`pred`) and the template-derived metric
+    # (`mean_pred`) must report the full 10-unit roster — task 15 narrows
+    # both onto a holdout's test partition, and this is the pre-narrowing
+    # value each must still equal when there is no holdout at all.
+    # Full `n` (all four keys), plus the metric's own arithmetic — not just
+    # `resolved`. Review finding (Important #2): a call-site narrowing that
+    # left only `resolved` pinned moved `completed`/`failed`/`value`/`ci95`
+    # right under this run (0/10 units narrowed to 3, `EXIT_OK` unchanged
+    # because `max_failed_fraction` is scoped to the same narrowed list) while
+    # both original assertions kept passing. `pred` is `0.0..9.0` (mean 4.5)
+    # and `mean_pred` is `aggregate`'s mean of the same column — both must
+    # read as a completed, unfailed, whole-roster computation.
+    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
+    assert set(aggregated) == {"pred", "mean_pred"}, aggregated
+    for name in ("pred", "mean_pred"):
+        metric = aggregated[name]
+        assert metric["n"] == {
+            "resolved": 10, "completed": 10, "ineligible": 0, "failed": 0,
+        }, metric
+        assert metric["value"] == pytest.approx(4.5), metric
+        assert metric["ci95"] is not None, metric
+
+    # The roster's IDENTITY, which is deliberately NOT a metric's denominator
+    # and which task 15 must leave whole. Pinned beside the denominators above
+    # precisely so a change that narrows both is distinguishable from one that
+    # narrows only what it should.
+    #
+    # `units_hash` recomputed and compared for EQUALITY, not merely a
+    # `sha256:` prefix (review Important #3): a prefix check survives a call
+    # site narrowed to `units_hash(UnitList(list(roster)[:3]))` — a digest is
+    # still a digest — so this recomputes the hash over the same input
+    # directory the run actually resolved from and compares the two values.
+    from publishable.units import resolve_units, units_hash
+
+    provenance = run["provenance"]
+    assert provenance["units"]["n"] == 10
+    assert provenance["units"]["key"] == "patient_id"
+    whole_roster, _technical_n, _columns = resolve_units(
+        run["config"]["data"]["units"], tmp_path / "data"
+    )
+    assert provenance["units_hash"] == units_hash(whole_roster)
+
+    # No arm assignment and no holdout, so no `allocation.json` and no hash —
+    # the "both absent" gate task 17 widens.
+    assert not (doc["run_dir"] / "allocation.json").exists()
+    assert provenance["allocation"] is None
+    assert provenance["allocation_hash"] is None
+
+
+def test_io_units_train_raises_without_a_fold_or_holdout(tmp_path, capsys):
+    """`io.units.train` with neither partition declared raises rather than
+    handing back an empty list — `reference.md` § Steps and artifacts. Pinned
+    here because task 14 teaches `execute_plan` to populate `.train` from a
+    holdout plan, and a narrowing written one branch too wide would start
+    handing a train list to a run that declared no partition at all.
+
+    The step's failure is CONTAINED: the plan runs to its end and the run
+    directory exists with the ledger readable for the code. Getting a
+    genuinely `partial` status (rather than a wholly `failed` one) needs a
+    SECOND step that actually completes: the generated scaffold has exactly
+    one step, and if `_TRAIN_TOUCHING_STEP` replaces it and fails on every one
+    of its repeats, `run_status` sees no completed execution anywhere and
+    returns `"failed"` (`EXIT_FAILED`), not `"partial"` — a real mismatch
+    against the brief this test started from, which assumed the single
+    failing step alone would leave the run `partial`. `extra_steps=["control"]`
+    adds the generated no-op step (`return {{}}`, always completes) so the run
+    genuinely mixes a failure with a success, the shape `run_status` actually
+    names `partial`."""
+    doc = run_a_project(
+        tmp_path,
+        capsys=capsys,
+        units=10,
+        _starter_step=_TRAIN_TOUCHING_STEP,
+        extra_steps=["control"],
+        expect_exit=EXIT_PARTIAL,
+    )
+    ledger = [
+        json.loads(line)
+        for line in (doc["run_dir"] / "executions.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    failed = [r for r in ledger if r["status"] == "failed"]
+    completed = [r for r in ledger if r["status"] == "completed"]
+    # A positive companion for the absence below: something must actually have
+    # run and failed, or the code assertion would pass over an empty list.
+    assert failed, "no execution failed — the step never ran"
+    assert all("E-STEP-UNITS-UNAVAILABLE" in (r["error"] or "") for r in failed)
+    # `_starter_step` overrides the scaffolded step's SOURCE, not its generated
+    # filename — the scaffold always names its one step `step01_summarize_units`
+    # regardless of what source it was written from.
+    assert all(r["step"] == "step01_summarize_units" for r in failed)
+    # The positive half: the control step, over the same 10-unit roster and
+    # the same five seed repeats, completed every time — the run is
+    # genuinely mixed, not accidentally all-failed.
+    assert completed, "no execution completed — the run would not be genuinely partial"
+    assert all(r["step"] == "step02_control" for r in completed)
+    assert len(failed) == len(completed) == 5
+
+
+def _cli_roster(n, **attrs_by_index):
+    from publishable.units import Unit, UnitList
+
+    return UnitList(
+        [
+            Unit(key=f"u{i}", paths=(),
+                 attributes={k: v(i) for k, v in attrs_by_index.items()})
+            for i in range(n)
+        ]
+    )
+
+
+def test_the_holdout_is_realized_once_and_returns_none_when_undeclared():
+    """`None` for every shape that declares no split — the gate
+    `build_allocation_document`'s "both absent" rule and the runner's narrowing
+    both read. An empty block is undeclared, matching `_check_holdout`'s own
+    gate, so a `holdout: {}` partitions nothing rather than drawing an
+    unmethodded split."""
+    roster = _cli_roster(10)
+    for decl in (None, {}, {"holdout": None}, {"holdout": {}}):
+        assert _resolved_holdout(decl, roster, "sha256:aaa", None) is None
+    # No roster is also `None`: there is nothing to partition.
+    assert _resolved_holdout(
+        {"holdout": {"method": "random", "frac": 0.2}}, None, "sha256:aaa", None
+    ) is None
+
+
+def test_the_realized_holdout_uses_the_derived_seed_and_the_cluster_map():
+    """One realization composing `holdout_seed_for` and `holdout_for` — and it
+    must be the SAME answer either helper gives on its own, or the run and the
+    record would be two draws.
+
+    The clustered arm is asserted separately because `clusters` reaching
+    `holdout_for` is a threading that a composition ignoring the argument would
+    pass every unclustered assertion for."""
+    from publishable.units import holdout_for, holdout_seed_for
+
+    roster = _cli_roster(12, animal=lambda i: f"a{i // 2}")
+    decl = {"holdout": {"method": "random", "frac": 0.5}}
+    plan = _resolved_holdout(decl, roster, "sha256:aaa", None)
+    seed = holdout_seed_for(decl["holdout"], "sha256:aaa", roster)
+    assert plan == holdout_for(roster, decl["holdout"], seed=seed)
+    assert plan.seed == seed
+
+    clusters = {f"u{i}": f"a{i // 2}" for i in range(12)}
+    clustered = _resolved_holdout(decl, roster, "sha256:aaa", clusters)
+    assert clustered == holdout_for(roster, decl["holdout"], seed=seed, clusters=clusters)
+    # The positive companion for "the cluster map was threaded": the two
+    # realizations differ, so a composition dropping `clusters` is visible.
+    assert set(clustered.test) != set(plan.test)
+
+
+def test_a_pinned_holdout_seed_reaches_the_realization():
+    """A pin is the deliberate act, so it has to survive the composition —
+    a realization deriving the seed unconditionally would pass every other
+    assertion in this file."""
+    roster = _cli_roster(10)
+    plan = _resolved_holdout(
+        {"holdout": {"method": "random", "frac": 0.2, "seed": 4321}},
+        roster, "sha256:aaa", None,
+    )
+    assert plan.seed == 4321
+
+
+_HOLDOUT_PLAN_8_2 = HoldoutPlan(
+    train=tuple(f"u{i}" for i in range(8)),
+    test=("u8", "u9"),
+    seed=1234,
+    strata=(),
+)
+
+
+def test_the_evaluation_roster_is_the_test_partition_and_preserves_roster_order():
+    """The denominator every metric counts against. Order preserved because
+    the roster's order is part of its identity and `report_by`'s per-level
+    tables are built by walking it.
+
+    The `None` arm is the no-holdout case and must return the SAME OBJECT, not
+    a copy: there is nothing to copy since the roster is unchanged, so
+    identity here is a cheap, checkable invariant of the return contract, not
+    a guard against a downstream identity check (`_cond_beside_n`'s identity
+    test is between `_cond_roster`'s return and the roster
+    `_condition_beside_n` was given, both derived from that same argument —
+    which object this function returns never reaches that decision)."""
+    from publishable.units import HoldoutPlan
+
+    roster = _cli_roster(10)
+    assert _evaluation_roster(roster, None) is roster
+    assert _evaluation_roster(None, None) is None
+
+    plan = HoldoutPlan(
+        train=("u3", "u1", "u0", "u2", "u4", "u6", "u5", "u7"),
+        test=("u9", "u8"),
+        seed=1234,
+        strata=(),
+    )
+    narrowed = _evaluation_roster(roster, plan)
+    assert [u.key for u in narrowed] == ["u8", "u9"]
+    assert len(narrowed) == 2
+
+
+def test_the_narrowed_roster_is_what_attrition_counts_against():
+    """The composition this task exists for: `attrition` hands out whatever
+    roster it is given, so a training unit that recorded nothing lands in
+    `failed` unless the roster it sees is already the test partition.
+
+    Asserted through `_condition_counts` — the one function `command_run`
+    calls for a condition's counts — rather than through `attrition` directly,
+    because `attrition` counting correctly over a roster nobody narrowed is
+    the defect, not the fix. `_repeat_result` (already used throughout this
+    file's `attrition`/`_condition_counts` fixtures) builds the
+    `list[ExecutionResult]` `attrition` reads; nothing new is needed for that
+    part."""
+    roster = _cli_roster(10)
+    eval_roster = _evaluation_roster(roster, _HOLDOUT_PLAN_8_2)
+    results = [_repeat_result("step01", "seed01", 0, {"u8": {}, "u9": {}})]
+
+    whole = _condition_counts(results, roster, "step01", 0, None)
+    narrowed = _condition_counts(results, eval_roster, "step01", 0, None)
+
+    # The defect, stated as a number: 8 training units counted as failures.
+    assert whole["resolved"] == 10 and whole["failed"] == 8
+    # The fix.
+    assert narrowed["resolved"] == 2
+    assert narrowed["completed"] == 2
+    assert narrowed["failed"] == 0
+
+
+def test_condition_report_by_levels_omits_a_level_confined_to_training_units():
+    """The third of the six sites the brief names with no test of its own:
+    `_condition_report_by_levels(roster, cond.index, arm_members_map,
+    attribute)`, called with `eval_roster` at `command_run`.
+
+    A `report_by` level built over the whole roster includes a level that
+    exists only among training units — units that never executed and have no
+    row in `collapsed`. Built over the test partition, that level is absent
+    entirely rather than reported with a training-only key set no result
+    backs. `cohort` is confined here so the two readings can't coincidentally
+    agree: `early` (`u0`..`u4`) is entirely training, `late` (`u5`..`u9`)
+    straddles the 8/2 holdout split at `u8`/`u9`."""
+    from publishable.cli import _condition_report_by_levels
+
+    roster = _cli_roster(10, cohort=lambda i: "early" if i < 5 else "late")
+    eval_roster = _evaluation_roster(roster, _HOLDOUT_PLAN_8_2)
+
+    whole = _condition_report_by_levels(roster, 0, None, "cohort")
+    assert set(whole) == {"early", "late"}
+    assert whole["late"][0] == {"u5", "u6", "u7", "u8", "u9"}
+
+    narrowed = _condition_report_by_levels(eval_roster, 0, None, "cohort")
+    # The level confined to training units is gone, not reported empty.
+    assert "early" not in narrowed
+    assert narrowed["late"][0] == {"u8", "u9"}
+
+
+def test_compute_declared_contrasts_within_is_narrowed_by_the_test_partition():
+    """The sixth site: `_compute_declared_contrasts(..., roster=roster, ...)`,
+    called with `eval_roster` at `command_run` — the route that reaches
+    `units_matching(roster, comp.within)` inside `_comparison_step_blocks`, so
+    a contrast's `within` subgroup is over test units too.
+
+    `within={"group": "x"}` matches `u0` and `u2` in the whole 4-unit roster
+    but only `u2` once the roster is narrowed to the 2-unit test partition
+    `{u2, u3}` — `u0`'s membership is real but inert once it can never be a
+    training unit's, and this is what makes that observable: `n_paired` counts
+    2 over the whole roster and 1 over the narrowed one, for the identical
+    `collapsed_by_key` input."""
+    from publishable.cli import _compute_declared_contrasts
+    from publishable.sweep import Condition
+    from publishable.units import UnitList
+
+    roster = _cli_roster(4, group=lambda i: "x" if i % 2 == 0 else "y")
+    eval_roster = UnitList([u for u in roster if u.key in {"u2", "u3"}])
+
+    of_collapsed = {f"u{i}": {"r": 1.0 + 0.1 * i} for i in range(4)}
+    against_collapsed = {f"u{i}": {"r": 0.5} for i in range(4)}
+    conditions = [
+        Condition(index=0, label="baseline", is_baseline=True),
+        Condition(index=1, label="m"),
+    ]
+    doc = {
+        "statistics": {
+            "contrasts": [
+                {"id": "c1", "of": "m", "against": "baseline", "within": {"group": "x"}}
+            ]
+        }
+    }
+    aggregated = {0: {"s": {"r": 0.5}}, 1: {"s": {"r": 1.15}}}
+    collapsed_by_key = {(0, "s"): against_collapsed, (1, "s"): of_collapsed}
+
+    def _run(eval_or_whole):
+        out, _members = _compute_declared_contrasts(
+            doc=doc,
+            conditions=conditions,
+            roster=eval_or_whole,
+            aggregated=aggregated,
+            collapsed_by_key=collapsed_by_key,
+            derived_by_key={},
+            resample_fns_by_key={},
+            seed=7,
+            draws=200,
+            findings=Collector(),
+            resample_columns=False,
+        )
+        return out[0]["s"]["r"]["n_paired"]
+
+    assert _run(roster) == 2
+    assert _run(eval_roster) == 1
+
+
+def test_compute_vs_baseline_roster_argument_never_affects_the_auto_generated_family():
+    """A finding, not a pin: `_compute_vs_baseline`'s only use of `roster` is
+    `units_matching(roster, comp.within)` inside `_comparison_step_blocks`
+    (via `_baseline_comparisons`/`resolve_contrasts`), and `resolve_contrasts`
+    never sets `within` on an auto-generated (non-`declared`) comparison —
+    every `Comparison(..., declared=False)` it builds omits the keyword, so it
+    takes the dataclass default of `None`.  `units_matching(_, None)` returns
+    `None` ("unrestricted") regardless of which roster object is passed, so
+    this site's `roster=eval_roster` at `command_run` cannot be shown to
+    differ from `roster=roster` through this function's return value — the
+    difference is inert here for the same reason `_condition_beside_n`'s is
+    (see the report), not because no fixture was clever enough. Recorded
+    rather than silently asserted so a future change that lets an
+    auto-generated comparison carry `within` is what would make this
+    observable, and this test's failure is what would say so."""
+    from publishable.cli import _compute_vs_baseline
+    from publishable.sweep import Condition
+    from publishable.units import UnitList
+
+    roster = _cli_roster(4, group=lambda i: "x" if i % 2 == 0 else "y")
+    eval_roster = UnitList([u for u in roster if u.key in {"u2", "u3"}])
+
+    of_collapsed = {f"u{i}": {"r": 1.0 + 0.1 * i} for i in range(4)}
+    against_collapsed = {f"u{i}": {"r": 0.5} for i in range(4)}
+    conditions = [
+        Condition(index=0, label="baseline", is_baseline=True),
+        Condition(index=1, label="m"),
+    ]
+    aggregated = {0: {"s": {"r": 0.5}}, 1: {"s": {"r": 1.15}}}
+    collapsed_by_key = {(0, "s"): against_collapsed, (1, "s"): of_collapsed}
+
+    def _run(eval_or_whole):
+        out, _members = _compute_vs_baseline(
+            doc={},
+            conditions=conditions,
+            roster=eval_or_whole,
+            aggregated=aggregated,
+            collapsed_by_key=collapsed_by_key,
+            derived_by_key={},
+            resample_fns_by_key={},
+            seed=7,
+            draws=200,
+            findings=Collector(),
+            resample_columns=False,
+        )
+        return out
+
+    result = _run(roster)
+    assert result is not None
+    assert result[1]["s"]["r"]["n_paired"] == 4
+    assert result == _run(eval_roster)
+
+
+# --- Task 18: retiring `E-DATA-HOLDOUT-UNSUPPORTED`, and the five end-to-end pins -----
+
+_HOLDOUT_SEEING_STEP = '''\
+# src/{pkg}/steps/step01_split.py — generated, and runnable as-is
+from publishable import BaseStep
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        io.write("split.json", {{
+            "test": sorted(u.key for u in io.units),
+            "train": sorted(u.key for u in io.units.train),
+        }})
+        for unit in io.units:
+            io.record(unit.key, {{"value": 1.0}})
+        return {{"n": len(io.units)}}
+'''
+
+
+_ALWAYS_FAILING_STEP = '''\
+# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+from publishable import BaseStep
+
+_recorded_test_once = False
+
+
+class Step(BaseStep):
+    scope = "repeat"
+
+    def run(self, cfg, io):
+        global _recorded_test_once
+        train_keys = {{u.key for u in io.units.train}}
+        test_units = [u for u in io.units if u.key not in train_keys]
+        train_units = [u for u in io.units if u.key in train_keys]
+        # The training partition is recorded EVERY execution, whenever it is
+        # visible at all — which is only when `io.units` is NOT narrowed to
+        # the test partition. This is what keeps the un-narrowed denominator's
+        # failure fraction at 4 of 20 rather than 4 of 4: the same 4
+        # physical test-partition units are the only ones ever left
+        # unresolved, whether `io.units` hands the step 4 keys or 20.
+        for unit in train_units:
+            io.record(unit.key, {{"value": 1.0}})
+        # The test partition is recorded successfully exactly ONCE, on the
+        # very first execution — just enough for
+        # `runner._units_failed_anywhere` to classify this step as
+        # "recording" at all (its own docstring: a step whose every
+        # execution crashes or produces no row can never trip the guard).
+        # Every execution after the first leaves the test partition
+        # untouched; `_units_failed_anywhere` unions failures ACROSS every
+        # recording execution of the run, so those units still end up
+        # counted as failed overall even though they succeeded once.
+        if not _recorded_test_once:
+            _recorded_test_once = True
+            for unit in test_units:
+                io.record(unit.key, {{"value": 1.0}})
+        return {{"n": len(io.units)}}
+'''
+
+
+def run_roster_keys(doc: dict[str, Any]) -> list[str]:
+    """The whole roster's keys, resolved fresh from the run's own recorded
+    config and the same `data/` directory `run_a_project` wrote the roster
+    into — the ground truth `train ∪ test` is checked against, rather than
+    re-deriving it from anything the run itself wrote (`allocation.json`
+    included)."""
+    from publishable.units import resolve_units
+
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    roster, _technical_n, _columns = resolve_units(
+        run["config"]["data"]["units"], doc["root"].parent / "data"
+    )
+    return [u.key for u in roster]
+
+
+def _planned_execution_count(doc: dict[str, Any]) -> int:
+    """The whole plan's length, from `sweep.yaml`'s own `execution_order` —
+    conditions × repeat labels, exactly the construction
+    `test_sweep_yaml_records_the_order_mode_and_seed` above reads
+    (`len(sweep["execution_order"]) == len(sweep["labels"]) * len(sweep["conditions"])`)
+    — regardless of how many of them the run actually reached before
+    `max_failed_fraction` aborted it."""
+    sweep = yaml.safe_load((doc["run_dir"] / "sweep.yaml").read_text())
+    return len(sweep["execution_order"])
+
+
+def test_a_declared_holdout_now_validates_and_runs(tmp_path, capsys):
+    """`E-DATA-HOLDOUT-UNSUPPORTED` is retired, so this config reaches
+    `command_run` for the first time. Pins tasks 13, 14, 15 and 17 end to end —
+    the five wiring tasks had no config that could reach the CLI while the
+    wholesale refusal stood, and this is where they get one.
+
+    Departure from the brief this test started from (recorded here rather
+    than silently "fixed", the same convention task 1's own end-to-end test
+    documents): `executions.jsonl` records carry no `n` key at all —
+    `runner.execute_plan` writes `step`/`scope`/`condition`/`repeat`/`status`/
+    `started_at`/`wall_seconds`/`error`, nothing else, both before this slice
+    and after it. Task 15's denominator is `run.yaml`'s per-metric `n`, not a
+    ledger field, so the ledger check below is a plain status assertion and
+    the real denominator pin reads `run.yaml`'s `aggregated` block instead."""
+    doc = run_a_project(
+        tmp_path, capsys=capsys, units=20,
+        units_overrides={"holdout": {"method": "random", "frac": 0.2, "seed": 4321}},
+        _starter_step=_HOLDOUT_SEEING_STEP,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    assert run["status"] == "completed"
+
+    # Task 17: the file, the provenance pair, and the hash.
+    alloc_path = doc["run_dir"] / "allocation.json"
+    assert alloc_path.exists()
+    alloc = json.loads(alloc_path.read_text())
+    assert run["provenance"]["allocation"] == "allocation.json"
+    assert run["provenance"]["allocation_hash"] == "sha256:" + hashlib.sha256(
+        json.dumps(alloc, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
+
+    # Task 13: realized once, over the whole roster, at the pinned seed.
+    assert alloc["holdout"]["seed"] == 4321
+    assert len(alloc["holdout"]["test"]) == 4
+    assert len(alloc["holdout"]["train"]) == 16
+    assert set(alloc["holdout"]["train"]) | set(alloc["holdout"]["test"]) == set(
+        run_roster_keys(doc)
+    )
+    assert not set(alloc["holdout"]["train"]) & set(alloc["holdout"]["test"])
+
+    # Task 14: the step saw the same two lists the record claims — and saw
+    # them identically every repeat. Five `split.json` files exist (one per
+    # seed repeat); reading only one, as an earlier version of this test did,
+    # cannot tell "realized once outside the loop" from "re-realized inside
+    # it off the same seed and roster" — the two are behaviourally identical
+    # from a single file's contents, so all five are collected and compared
+    # rather than one read at random. This still cannot see a re-realization
+    # keyed off the repeat's OWN RNG rather than the run's; only a mis-siting
+    # that draws differently per repeat is ruled out here.
+    split_files = sorted(doc["run_dir"].rglob("split.json"))
+    assert len(split_files) == 5
+    seen_all = [json.loads(p.read_text()) for p in split_files]
+    assert all(seen == seen_all[0] for seen in seen_all[1:]), seen_all
+    seen = seen_all[0]
+    assert seen["test"] == sorted(alloc["holdout"]["test"])
+    assert seen["train"] == sorted(alloc["holdout"]["train"])
+
+    # The ledger carries no denominator (see the docstring); what it does
+    # guarantee is that every recorded execution completed, over the test
+    # partition, with nothing lost to a step that never ran.
+    ledger = [
+        json.loads(line)
+        for line in (doc["run_dir"] / "executions.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert ledger
+    assert all(record["status"] == "completed" for record in ledger), ledger
+
+    # Task 15: the denominator is the TEST partition, and the roster's identity
+    # is not. The two numbers asserted side by side, which is the ruling.
+    assert run["provenance"]["units"]["n"] == 20
+
+    # `units_hash` stays whole-roster too — the other half of the same
+    # invariant, and the half the no-holdout sibling test cannot pin because
+    # `eval_roster is roster` there. Recomputed over the whole 20-unit roster
+    # and compared for EQUALITY (review Important #3): mutating `cli.py`'s
+    # `units_hash(roster)` to `units_hash(eval_roster)` at the provenance
+    # call site passed the entire suite before this assertion existed, since
+    # nothing declared a holdout where the two rosters differ.
+    from publishable.units import resolve_units, units_hash
+
+    whole_roster, _technical_n, _columns = resolve_units(
+        run["config"]["data"]["units"], doc["root"].parent / "data"
+    )
+    assert run["provenance"]["units_hash"] == units_hash(whole_roster)
+
+    checked = 0
+    for block in run["results"]["conditions"][0]["aggregated"].values():
+        for metric in block.values():
+            if isinstance(metric, dict) and isinstance(metric.get("n"), dict):
+                assert metric["n"]["resolved"] == 4, metric
+                checked += 1
+    # A guard with nothing to guard passes vacuously: if `aggregated` ever
+    # stops carrying a dict `n` (a renamed key, a shape change), this loop
+    # would execute zero times and the assertion above would never run. The
+    # counter makes that silent-pass state itself a failure.
+    assert checked > 0
+
+
+def test_a_holdouts_derived_seed_matches_its_own_digest(tmp_path, capsys):
+    """The brief's pin 1 seed clause, actually exercised: the sibling test above
+    declares `seed: 4321`, so its `alloc["holdout"]["seed"] == 4321` assertion
+    checks the **pinned** literal came back unchanged — `holdout_seed_for`'s
+    derivation branch (the `auto` path) never runs, and pinning a constant at
+    `_resolved_holdout`'s call site in `cli.py` (`digest` → `"sha256:constant"`
+    in `holdout_plan = _resolved_holdout(units_decl, roster, digest, clusters)`)
+    left the whole suite green, this test included, before this test existed.
+
+    This config declares no `seed` at all, so `allocation.json`'s recorded
+    seed is `holdout_seed_for`'s derived value — recomputed here from the
+    run's own recorded config, not re-read from anything the run wrote, the
+    same ground-truth discipline `run_roster_keys` above uses for the roster.
+    """
+    doc = run_a_project(
+        tmp_path, capsys=capsys, units=20,
+        units_overrides={"holdout": {"method": "random", "frac": 0.2}},
+        _starter_step=_HOLDOUT_SEEING_STEP,
+    )
+    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+    alloc = json.loads((doc["run_dir"] / "allocation.json").read_text())
+
+    units_decl = run["config"]["data"]["units"]
+    digest = design_digest(run["config"])
+    roster, _technical_n, _columns = resolve_units(
+        units_decl, doc["root"].parent / "data"
+    )
+    assert alloc["holdout"]["seed"] == holdout_seed_for(
+        units_decl["holdout"], digest, roster
+    )
+
+
+def test_max_failed_fraction_is_measured_against_the_test_partition(tmp_path, capsys):
+    """Task 15's second pin. A step leaving every test unit unresolved is 4
+    of 4 over the narrowed denominator — over the un-narrowed roster it
+    would be 4 of 20, two-fifths of the declared threshold, and the guard
+    would not fire. The number is what separates the two readings, so the
+    fraction is chosen to sit between them.
+
+    Two departures from the brief this test started from, recorded here
+    rather than silently "fixed" (the convention task 1's own end-to-end test
+    documents):
+
+    - `executions.jsonl` records carry no `n` key (see the test above), so
+      what proves the narrowed denominator is the guard actually firing —
+      `len(ledger) < _planned_execution_count(doc)` — not a per-record count
+      the ledger does not write.
+    - `_ALWAYS_FAILING_STEP` never raises: `runner._units_failed_anywhere`
+      only ever classifies a step as "recording" units once it has produced
+      at least one row, and a step whose every execution crashes before that
+      is exempt from the guard entirely (its own docstring) — a single
+      always-raising step trips nothing over EITHER denominator, since
+      `io.units` narrows to the test partition either way and a step that
+      never records loses the very distinction this test needs. Every
+      execution here completes; `max_failed_fraction` is a fraction of
+      UNRESOLVED units, not of raised executions, and `run_status` reports
+      `completed` even though the plan stops short — the guard and the
+      execution-level exit code are two different mechanisms."""
+    doc = run_a_project(
+        tmp_path, capsys=capsys, units=20,
+        units_overrides={"holdout": {"method": "random", "frac": 0.2, "seed": 4321}},
+        limits={"max_failed_fraction": 0.5, "max_executions": 100},
+        _starter_step=_ALWAYS_FAILING_STEP,
+        expect_exit=EXIT_OK,
+    )
+    ledger = [
+        json.loads(line)
+        for line in (doc["run_dir"] / "executions.jsonl").read_text().splitlines()
+        if line.strip()
+    ]
+    assert ledger
+    assert all(r["status"] == "completed" for r in ledger), ledger
+    # The guard fired: the plan stopped short of its full length.
+    assert len(ledger) < _planned_execution_count(doc)
 

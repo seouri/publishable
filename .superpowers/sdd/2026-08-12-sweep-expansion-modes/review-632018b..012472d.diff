@@ -1,0 +1,394 @@
+# Review package: 632018b..HEAD
+
+## Commits
+012472d fix: refuse a baseline beside a sample axis until the family excludes draws
+24cb017 test: pin the two sample claims task 6 left unprotected
+
+## Files changed
+ docs/reference.md           |  2 +
+ src/publishable/validate.py | 41 +++++++++++++++++++++
+ tests/test_contrasts.py     | 54 +++++++++++++++++++++++++++
+ tests/test_sweep.py         | 36 ++++++++++++++++++
+ tests/test_validate.py      | 90 ++++++++++++++++++++++++++++++++++++++-------
+ 5 files changed, 210 insertions(+), 13 deletions(-)
+
+## Diff
+diff --git a/docs/reference.md b/docs/reference.md
+index 6b39288..88626f4 100644
+--- a/docs/reference.md
++++ b/docs/reference.md
+@@ -221,20 +221,21 @@ The table below states each check by the mistake it catches. What `validate` *pr
+ | Template is installed | `experiment_type` names `llm_diagnostic`, which no installed plugin registers — `plugin` says it should come from `someuser/publishable-llm` |
+ | Template version moved | `template_version` is `1.0.0` but installed `generic` reports `1.2.0`; `request.timeout` is new and unset (warning) |
+ | Replication floor | `repeats` total of 1 is below this convention class's default of 5 (warning) |
+ | Sweep paths resolve | `sweep.grid` key `analysis.methd` is not a parameter of template `generic` |
+ | Swept values legal | `sweep.grid.analysis.method[1]` is `spearmann`, expected one of pearson, spearman, kendall |
+ | Ablation targets | `sweep.ablate.remove[0]` is `analysis.min_samples` (int); `remove` needs a boolean or nullable parameter — use `override` |
+ | Ablation needs a baseline | `sweep.ablate` is declared but `sweep.baseline` is not — there is nothing to ablate from |
+ | Ablation doesn't compose with a parameter axis | `sweep.ablate` cannot be combined with `grid`, `paired`, or `sample`; one change at a time and a second parameter axis are contradictory. `groups` is permitted — it varies no parameter |
+ | Ablation baseline isn't a group level | `sweep.baseline` fixes `cohort: derivation` while `ablate` is declared; each cell gets its own baseline condition, so the arms can't have one designated between them |
+ | Sample ranges | `sweep.sample.ranges.analysis.confidence` upper bound 1.4 violates the parameter's `lt=1`; and `{uniform: [10, 200]}` over an integer parameter draws `118.385…`, which no bound of it is |
++| Sample draws aren't compared to a baseline | `sweep.baseline` is declared beside a `sweep.sample` axis; each draw would be a comparison against it, and the correction family skips drawn conditions — specified, not built in this build |
+ | Sample is drawable | `sweep.sample.method` is `gaussian` — the methods are sobol, latin_hypercube, random; and `{uniform: [0.99, 0.80]}` has its bounds the wrong way round |
+ | Baseline is a valid condition | `sweep.baseline` sets `analysis.method: pearsonn` |
+ | Swept values are nameable | `sweep.grid.prompt.text[1]` renders as `a long sentence`, which can't be a [condition label](#how-artifacts-are-organized) — a swept value must render as `[A-Za-z0-9._+-]+` |
+ | Repeat kind coherence | `{kind: bootstrap}` is not a repeat kind — declare `statistics.resample` instead |
+ | Batch has something to measure | `{kind: batch, n: 5}` is declared but no step sets `nondeterministic = True`, so five batches recompute one answer (warning) |
+ | Batch takes no fields | `{kind: batch, k: 3}` — a batch varies nothing, so `n` is the only field it accepts |
+ | Each kind takes its own count | `{kind: fold, k: 2, n: 5}` — `n` is a `seed`/`batch` field and a fold's count is `k`, so this executes two folds while the [execution count](#repeat-kinds) reads five. A count one reader believes and the other ignores is refused, not resolved by precedence |
+ | Null test coherence | `statistics.null_test` requires `shuffle` to name a unit attribute |
+ | Shuffle level is unambiguous | `null_test.shuffle: status` varies within `match_set` `M07` but is constant within `M12`, so neither a within-cluster nor a whole-cluster null applies |
+ | Clusters enough to resample | `statistics.resample` with `cluster_by: animal_id` over 4 animals bootstraps 4 draws; below `limits.min_clusters` (warning) |
+@@ -448,20 +449,21 @@ likewise apart from those same two envelope rows, none of the others.
+ | `statistics.correction` is set and is a value other than `none`, `bonferroni`, `holm`, or `fdr_bh` — unset (`null`) is accepted | `E-STATS-CORRECTION-UNKNOWN` |
+ | A `statistics.report_by` entry is not a string, or names an attribute `data.units.attributes` does not declare | `E-STATS-REPORTBY-UNKNOWN` |
+ | `sweep.ablate` is declared and `sweep.baseline` is not, so no condition is one change away from anything and the ablated conditions carry only their own change. Both sides are read for a *truthy* value, so `ablate: null` is not a declaration and an empty `baseline: {}` is not one either | `E-SWEEP-ABLATE-BASELINE-MISSING` |
+ | `sweep.ablate` is declared (truthy) alongside a non-empty `sweep.grid`, `sweep.paired` or `sweep.sample` — the axis-shaped modes, read as one set rather than named here, so a later axis mode joins this refusal by being classified as one (the mode vocabulary is a closed partition of axis and non-axis modes, and a mode outside it is refused by `E-SWEEP-KEY-UNKNOWN` before it can be used at all). `sweep.groups` is a non-axis mode and composes freely, varying units rather than parameters | `E-SWEEP-ABLATE-CROSSED` |
+ | A `sweep.ablate.remove` entry names a path `remove` cannot act on, in either of two ways: the parameter is neither a boolean nor `nullable`, so neither `false` nor `null` is a value it may hold (reported whatever the baseline says); or — for a boolean, and only when a `sweep.baseline` is declared at all — the baseline fixes no *boolean* value for that path, so `remove` finds nothing to turn off and sets `null` rather than `false`, planting it at a parameter that is not nullable. Reported only for a path the template declares, since an unknown one is `E-SWEEP-PATH-UNKNOWN`; the baseline reading is `remove`'s alone, an `override` stating its own value | `E-SWEEP-ABLATE-TARGET` |
+ | A `sweep.grid` axis declares an empty (falsy) list of values, so the sweep would expand to zero conditions | `E-SWEEP-AXIS-EMPTY` |
+ | `sweep` is declared and resolves to zero conditions, whatever shape produced that — a backstop beneath the per-axis checks above | `E-SWEEP-EXPANDS-EMPTY` |
+ | `sweep` declares a key that is not one of the six recognized sweep modes (`baseline`, `grid`, `paired`, `ablate`, `sample`, `groups`) | `E-SWEEP-KEY-UNKNOWN` |
+ | Two axis-shaped modes — any two of `sweep.grid`, `sweep.paired` and `sweep.sample` — write the same dotted path, so `expand`'s product would let whichever mode is later silently overwrite the other's value on every combination | `E-SWEEP-PATH-DUPLICATE` |
+ | `sweep.grid`, `sweep.baseline` or a `sweep.sample.ranges` key names a dotted path the template's `parameter_spec` does not declare | `E-SWEEP-PATH-UNKNOWN` |
++| `sweep.baseline` is declared alongside a `sweep.sample` axis, so every draw becomes a `vs_baseline` comparison — while a `sample` draw is [not a comparison](#sweeps-and-repeats) and the correction family skips it, which is specified but not implemented in this build. A `sample` sweep with no baseline is unaffected, since a comparison is generated only against a declared one, and so is a declared [`statistics.contrasts`](#contrasts-claims-that-arent-condition-vs-baseline) entry, whose members are named rather than generated | `E-SWEEP-SAMPLE-BASELINE` |
+ | `sweep.sample` cannot be drawn from: no `n` or an `n` below 1, no `ranges` or an empty one, a `method` outside `sobol` \| `latin_hypercube` \| `random`, a `seed` that is neither `auto` nor a pinned integer, a range that is not exactly one of `uniform` \| `int_uniform` \| `log_uniform`, or a range whose bounds are not two ordered numbers (positive ones, under `log_uniform`; integral ones, under `int_uniform`). A bound — or a drawn value — that is legal here but violates its own parameter's constraints is `E-PARAM-VALUE` | `E-SWEEP-SAMPLE-INVALID` |
+ | A `sweep.grid` value cannot be rendered into a condition label — a `sweep.baseline` value is exempt, since it is never rendered into one | `E-SWEEP-VALUE-UNNAMEABLE` |
+ | `template.validate(doc)` yields a message — run last, after every other check in this table, and ungated by their findings, so a cross-block rule can report on `parameters` another row already refused | `E-TEMPLATE-RULE` |
+ | `experiment_type` names a template no installed package registers | `E-TEMPLATE-UNKNOWN` |
+ | `data.units.attributes` names a value the source table has no column for, or names any value at all under a `{glob: ...}` source, which yields a key and a path and nothing else — reported for the first such name, and after `E-UNITS-ATTR-RESERVED` under either source; or — for a table source only — names a non-string item | `E-UNITS-ATTR-MISSING` |
+ | `data.units.attributes` names a field of `Unit` itself (`key`, `paths`, or `attributes`), which cannot also be a declared attribute | `E-UNITS-ATTR-RESERVED` |
+ | The table `data.units.from` names has no data rows, or the `glob` it names matches no files under `input_dir` | `E-UNITS-EMPTY` |
+ | Two resolved units share the same `data.units.key` value | `E-UNITS-KEY-DUPLICATE` |
+ | `data.units.key` names a column the source table does not have | `E-UNITS-KEY-MISSING` |
+ | `data.units.from` names a table that is not a file under `input_dir`, or is neither a table name nor a `{glob: ...}` mapping | `E-UNITS-SOURCE-MISSING` |
+diff --git a/src/publishable/validate.py b/src/publishable/validate.py
+index 2c9d618..f552980 100644
+--- a/src/publishable/validate.py
++++ b/src/publishable/validate.py
+@@ -986,20 +986,61 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
+         if sweep.get(mode):
+             c.error(
+                 code,
+                 f"sweep.{mode}",
+                 f"{why}, and is specified but not implemented in this build — this build "
+                 "expands `baseline`, `grid`, `paired`, `sample` and `ablate` only; `groups` "
+                 "will be "
+                 "honored in a later slice",
+             )
+ 
++    # A `baseline` declared beside a `sample` axis. `reference.md` § Sweeps and
++    # repeats states that the correction family "counts conditions from `grid`,
++    # `paired`, `ablate`, and `groups`, and skips `sample`", because "forty sobol
++    # draws … are forty points feeding one downstream curve, and nobody claims a
++    # finding about draw 17 against draw 1". Nothing in this build implements
++    # that exclusion: `contrasts.resolve_contrasts` emits one `vs_baseline`
++    # comparison per non-baseline condition whatever mode produced it, and
++    # `cli.command_run` corrects every interval against the whole set — so a
++    # `grid × sample` design is corrected against six comparisons where the
++    # document says two, and the intervals a reader is shown are narrower than
++    # the design supports. The declared design is not the executed design, which
++    # is the failure every other refusal in this function exists to prevent.
++    #
++    # **A `sample` sweep with no `baseline` is untouched and stays legal**:
++    # `resolve_contrasts` generates a comparison only against a *declared*
++    # baseline, so a sample-only sweep produces none and nothing is inflated. A
++    # declared `statistics.contrasts` entry is untouched too — its members are
++    # named by the user rather than generated per condition, so the family is
++    # exactly what was asked for.
++    #
++    # This restores, narrowly, the protection `E-SWEEP-BASELINE-PARTIAL` gave
++    # until it was retired: that refusal is what made `baseline` + `sample`
++    # unreachable, which is why the family semantics were never needed. Retiring
++    # it made the shape reachable without implementing them. The exclusion is
++    # `statistics`-family work rather than sweep work, so it lands with the slice
++    # that owns the correction family, and this refusal retires with it.
++    if sweep.get("baseline") and sweep.get("sample"):
++        c.error(
++            "E-SWEEP-SAMPLE-BASELINE",
++            "sweep.baseline",
++            "is declared beside a `sweep.sample` axis, so every draw becomes a comparison "
++            "against it — and a `sample` draw is not a comparison: the correction family "
++            "skips `sample` conditions, which is specified but not implemented in this "
++            "build, so each interval would be corrected against a family several times the "
++            "size the design has. Sample draws feed one downstream fit rather than being "
++            "compared to a reference, so drop the `baseline` here; compare a specific pair "
++            "with a declared `statistics.contrasts` entry, or run the reference condition "
++            "as its own run and join the two in a `study`. The combination will be honored "
++            "once the family excludes drawn conditions",
++        )
++
+     units = _units_declaration(doc.get("data") or {}, c) or {}
+     source = units.get("from")
+     if isinstance(source, dict) and "resolver" in source:
+         c.error(
+             "E-DATA-RESOLVER-UNSUPPORTED",
+             "data.units.from.resolver",
+             f"names `{source['resolver']}`, but resolvers are plugin artifacts and the "
+             "plugin registry is not implemented in this build; resolvers will be honored "
+             "in a later slice. Use a table or a glob for now",
+         )
+diff --git a/tests/test_contrasts.py b/tests/test_contrasts.py
+index 117245e..547abc2 100644
+--- a/tests/test_contrasts.py
++++ b/tests/test_contrasts.py
+@@ -1,10 +1,12 @@
++import pytest
++
+ from publishable.cli import _differing_axes
+ from publishable.contrasts import resolve_contrasts, units_matching
+ from publishable.sweep import Condition, expand
+ from publishable.units import Unit, UnitList
+ 
+ 
+ def _cond(i, label, baseline=False):
+     return Condition(index=i, label=label, values={}, is_baseline=baseline)
+ 
+ 
+@@ -272,10 +274,62 @@ def test_no_comparison_has_a_baseline_condition_as_its_subject():
+                     "analysis.method": ["pearson", "spearman"],
+                     "data.sex": ["f", "m"],
+                 },
+             }
+         }
+     )
+     baselines = {c.index for c in conditions if c.is_baseline}
+ 
+     subjects = [c.id for c in resolve_contrasts({}, conditions) if c.of in baselines]
+     assert subjects == []
++
++
++@pytest.mark.xfail(
++    strict=True,
++    reason="reference.md § Sweeps and repeats says the family skips `sample`; resolve_contrasts "
++    "counts every draw. No config reaches it today — `E-SWEEP-SAMPLE-BASELINE` refuses "
++    "`baseline` + `sample` — so this pins unimplemented semantics, not a live user-facing "
++    "defect. Owner: the slice that owns the correction family, which lands the exclusion and "
++    "retires the refusal together. Recorded in docs/superpowers/spec-defects.md by H2 task 9",
++)
++def test_sample_draws_are_not_comparisons_in_the_correction_family() -> None:
++    """§ Sweeps and repeats: "So `family` counts conditions from `grid`, `paired`,
++    `ablate`, and `groups`, and skips `sample`" — because "forty sobol draws over
++    `drug.dose_mg` are forty points feeding one downstream curve, and nobody claims a
++    finding about draw 17 against draw 1 … it would shrink every interval the curve is
++    fitted through."
++
++    The tracked handle for a claim this slice made live. Task 3 verified the sibling
++    § Validation exemption and recorded that it held *structurally*, because
++    `resolve_contrasts` needs a declared baseline and `E-SWEEP-BASELINE-PARTIAL`
++    refused `baseline` + `sample`. Task 6 retired that refusal, which removed the
++    protection; nothing re-derived the verdict.
++
++    `grid × sample` is the shape that breaks the claim under any reading of
++    "sample-only": counting the grid's two levels and skipping the three draws gives
++    two comparisons, and the code gives six. Strict, so the marker cannot survive the
++    fix.
++
++    **What ships instead is a refusal, not the semantics.** `validate` rejects
++    `sweep.baseline` beside `sweep.sample` with `E-SWEEP-SAMPLE-BASELINE`, which is
++    the protection `E-SWEEP-BASELINE-PARTIAL` used to give incidentally, so no user
++    reaches the inflated family. The expected count here is **2, not 0** — the
++    document collapses the three draws into the grid's own comparisons rather than
++    dropping sampled conditions as subjects, and a filter that skipped them would
++    ship a second wrong number under this same assertion. That is why the semantics
++    belong to whoever owns the family, and why this test is written at
++    `expand`/`resolve_contrasts` level rather than through `validate`."""
++    conditions = expand(
++        {
++            "sweep": {
++                "baseline": {"analysis.method": "pearson"},
++                "grid": {"analysis.method": ["spearman", "kendall"]},
++                "sample": {
++                    "n": 3,
++                    "method": "random",
++                    "seed": 7,
++                    "ranges": {"analysis.confidence": {"uniform": [0.8, 0.99]}},
++                },
++            }
++        }
++    )
++    assert len(resolve_contrasts({}, conditions)) == 2
+diff --git a/tests/test_sweep.py b/tests/test_sweep.py
+index 17ca9e3..a1b40df 100644
+--- a/tests/test_sweep.py
++++ b/tests/test_sweep.py
+@@ -1039,10 +1039,46 @@ def test_a_baseline_fixing_no_swept_path_expands_over_every_axis() -> None:
+         assert dict(baseline.values) == dict(product.values) | {"analysis.drop_missing": True}
+ 
+ 
+ def test_an_empty_axis_leaves_no_conditions_even_under_a_baseline() -> None:
+     """An axis with no cells carries no paths, so nothing can fix it and the
+     product over it is empty — for the baseline's rows exactly as for the
+     product's. `expand` returns nothing rather than a lone baseline row standing
+     in for a design with no cells; `E-SWEEP-AXIS-EMPTY` is the refusal."""
+     assert expand({"sweep": {"baseline": {"a.x": 1}, "grid": {"a.x": []}}}) == []
+     assert expand({"sweep": {"baseline": {"b.y": 1}, "grid": {"a.x": []}}}) == []
++
++
++@pytest.mark.xfail(
++    strict=True,
++    reason="reference.md § How artifacts are organized specifies `01_sample`; `label_for` renders "
++    "the drawn value. Recorded in docs/superpowers/spec-defects.md by H2 Sweeps task 9",
++)
++def test_a_sampled_condition_is_labelled_sample_not_by_its_drawn_value() -> None:
++    """§ How artifacts are organized: "`sample` conditions are the exception, and
++    deliberately: a sobol draw of `dose_mg` has no short exact spelling, and rounding
++    one into a directory name makes two distinct conditions collide at some
++    precision. Sampled conditions are labelled `01_sample`, `02_sample`, with the
++    drawn values in `sweep.yaml` and in `results.conditions[i].values`."
++
++    The tracked handle for a claim this slice made live: `sample` was refused until
++    task 3, so the rule was dormant. Today the labels are
++    `confidence=0.8615282253183009`, and the condition directories are named from
++    them. Strict, so whoever implements the rule is forced to remove this marker
++    rather than leaving a passing-for-the-wrong-reason test behind.
++
++    Implementing it is a ruling, not a rendering tweak: every draw's label *body*
++    becomes the literal `sample`, while a selector names the body rather than the
++    prefix — see the spec-defects entry."""
++    conditions = expand(
++        {
++            "sweep": {
++                "sample": {
++                    "n": 2,
++                    "method": "random",
++                    "seed": 7,
++                    "ranges": {"analysis.confidence": {"uniform": [0.8, 0.99]}},
++                }
++            }
++        }
++    )
++    assert [c.label for c in conditions] == ["sample", "sample"]
+diff --git a/tests/test_validate.py b/tests/test_validate.py
+index fc41a1d..df7fd91 100644
+--- a/tests/test_validate.py
++++ b/tests/test_validate.py
+@@ -4524,41 +4524,43 @@ def test_a_sample_only_sweep_is_not_a_correction_family(write_config):
+                     "sample": {"n": 6, "ranges": {"analysis.confidence": {"uniform": [0.8, 0.99]}}}
+                 },
+                 "statistics": {"correction": "none"},
+             }
+         ),
+         c,
+     )
+     assert not c.findings, [f.code for f in c.findings]
+ 
+ 
+-def test_a_baseline_that_leaves_a_sampled_axis_free_doubles_the_draws(write_config):
+-    """A `sample` axis is an axis, so a baseline fixing none of its paths expands
+-    over every drawn cell: `n: 6` gives 6 baseline conditions beside the 6 draws.
+-
+-    Pinned as the behaviour that *ships*, not as the behaviour that is wanted.
+-    `sweep._baseline_cells` reads fixedness off the cells' paths and the rule §
+-    Expansion modes states is unconditional, so this falls out of it — and here
+-    the baseline fixes no swept path at all, which is one of the three shapes
+-    `docs/superpowers/spec-defects.md`, "Three baseline shapes per-cell expansion
+-    makes reachable", records as open. If a later slice warns or refuses, this
+-    test is where the decision lands rather than somewhere the doubling shows up
+-    as a surprising condition count."""
++def test_a_baseline_beside_a_sampled_axis_is_refused(write_config):
++    """§ Sweeps and repeats: the correction family "counts conditions from `grid`,
++    `paired`, `ablate`, and `groups`, and skips `sample`". Nothing implements that
++    exclusion, so every draw beside a declared baseline becomes a comparison and
++    every interval is corrected against a family several times the documented size.
++    `E-SWEEP-SAMPLE-BASELINE` refuses the combination until the family excludes
++    drawn conditions.
++
++    This is the decision the previous version of this test invited: it pinned the
++    doubling "as the behaviour that ships, not as the behaviour that is wanted",
++    and said "if a later slice warns or refuses, this test is where the decision
++    lands". It lands here. The expansion assertions below are kept unchanged
++    — `expand` is not what moved, and § Expansion modes' rule that a baseline
++    expands over the axes it does not fix still holds of a `sample` axis."""
+     path = write_config(
+         {
+             "sweep": {
+                 "baseline": {"analysis.method": "pearson"},
+                 "sample": {"n": 6, "ranges": {"analysis.confidence": {"uniform": [0.8, 0.99]}}},
+             }
+         }
+     )
+-    assert codes(path) == set()
++    assert codes(path) == {"E-SWEEP-SAMPLE-BASELINE"}
+ 
+     conditions = expand(yaml.safe_load(path.read_text()))
+     assert [c.is_baseline for c in conditions] == [True] * 6 + [False] * 6
+     # Each baseline carries its own draw, and the draws are the same six values.
+     assert [c.values["analysis.confidence"] for c in conditions[:6]] == [
+         c.values["analysis.confidence"] for c in conditions[6:]
+     ]
+ 
+ 
+ def test_a_uniform_range_over_an_int_parameter_is_refused_by_what_it_draws(write_config):
+@@ -4641,10 +4643,72 @@ def test_a_well_typed_sample_draws_no_value_findings(write_config):
+                         "ranges": {
+                             "analysis.min_samples": {"int_uniform": [10, 200]},
+                             "analysis.confidence": {"uniform": [0.80, 0.99]},
+                         },
+                     }
+                 }
+             }
+         )
+     )
+     assert "E-PARAM-VALUE" not in found
++
++
++def test_a_sample_sweep_with_no_baseline_stays_legal(write_config):
++    """The refusal above is scoped to the combination that inflates the family, and
++    this is the shape it must not touch: `resolve_contrasts` generates a comparison
++    only against a *declared* baseline, so a sample-only sweep produces none and
++    nothing is corrected against anything. A refusal wider than the harm would
++    strand `sample` for the dose-response designs § Expansion modes shows it for."""
++    path = write_config(
++        {
++            "sweep": {
++                "sample": {
++                    "n": 4,
++                    "seed": 7,
++                    "ranges": {"analysis.confidence": {"uniform": [0.8, 0.99]}},
++                }
++            }
++        }
++    )
++    assert codes(path) == set()
++    assert len(expand(yaml.safe_load(path.read_text()))) == 4
++
++
++def test_a_declared_contrast_over_a_sample_sweep_stays_legal(write_config):
++    """A declared `statistics.contrasts` entry names its two sides, so it adds
++    exactly the members the user asked for rather than one per drawn condition.
++    The refusal is about the *generated* family, and this pins that it does not
++    reach a declared one."""
++    doc_path = write_config(
++        {
++            "sweep": {
++                "sample": {
++                    "n": 2,
++                    "seed": 7,
++                    "ranges": {"analysis.confidence": {"uniform": [0.8, 0.99]}},
++                }
++            }
++        }
++    )
++    doc = yaml.safe_load(doc_path.read_text())
++    labels = [c.label for c in expand(doc)]
++    doc["statistics"] = {
++        "contrasts": [{"id": "hi_vs_lo", "of": labels[0], "against": labels[1]}]
++    }
++    doc_path.write_text(yaml.safe_dump(doc))
++    assert not [c for c in codes(doc_path) if c.startswith("E-")]
++
++
++def test_a_baseline_beside_a_grid_is_untouched_by_the_sample_refusal(write_config):
++    """The neighbouring shape the refusal must leave alone: a baseline over an
++    enumerated axis is the ordinary design, its comparisons are the family the
++    document counts, and nothing here changed."""
++    assert codes(
++        write_config(
++            {
++                "sweep": {
++                    "baseline": {"analysis.method": "pearson"},
++                    "grid": {"analysis.method": ["spearman", "kendall"]},
++                }
++            }
++        )
++    ) == set()

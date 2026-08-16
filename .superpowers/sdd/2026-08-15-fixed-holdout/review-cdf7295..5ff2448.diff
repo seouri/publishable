@@ -1,0 +1,527 @@
+# Review package: cdf7295..5ff2448
+
+## Commits
+5ff2448 docs: task 4 report — record the commit sha and two brief/behavior disagreements
+2196a45 fix: exclude data.units.holdout.seed from the design digest
+
+## Files changed
+ .../sdd/2026-08-15-fixed-holdout/progress.md       | 135 +++++++++++++++++++++
+ .../sdd/2026-08-15-fixed-holdout/task-4-report.md  |  82 +++++++++++++
+ docs/superpowers/spec-defects.md                   |  32 ++---
+ src/publishable/hashes.py                          |  75 +++++++-----
+ tests/test_hashes.py                               |  93 ++++++++++++++
+ 5 files changed, 373 insertions(+), 44 deletions(-)
+
+## Diff
+diff --git a/.superpowers/sdd/2026-08-15-fixed-holdout/progress.md b/.superpowers/sdd/2026-08-15-fixed-holdout/progress.md
+index 880aecf..97ef0dd 100644
+--- a/.superpowers/sdd/2026-08-15-fixed-holdout/progress.md
++++ b/.superpowers/sdd/2026-08-15-fixed-holdout/progress.md
+@@ -65,10 +65,145 @@ Task 1 review: spec ✅, quality 1 CRITICAL + 2 Important + 1 Minor. All three b
+   and the run still exits EXIT_OK because _units_failed_anywhere is scoped to the same narrowed list so
+   max_failed_fraction: 0.2 never fires on 7/10 — AND BOTH TESTS PASS, because the pin asserts
+   n["resolved"] alone. Same shape as the previous slice's pin, which is why this one was promoted to
+   first.
+   IMPORTANT: units_hash pinned as a SHAPE (startswith("sha256:")) on one of the two values task 15 must
+   not touch. A shape assertion survives any change to the thing it names. Ruled: recompute and compare,
+   not a literal digest.
+ CARRY FORWARD (task 1 Minor, shapes tasks 14-17): executions.jsonl carries NO `n` field, so ALL OF TASK
+   15'S DENOMINATORS ARE run.yaml-SIDE. Any test of a narrowing that looks for it in the ledger is
+   looking in the wrong artifact.
++Task 1: COMPLETE (commits 889de01, 33eafac). 1803 passed + 2 xfailed; ruff and mypy clean; src/ diff
++  empty throughout, diffed byte-identical against a pre-round backup. Note the fix round was re-dispatched
++  after the first agent died to a session limit having made no change — tree verified clean before resuming.
++  THE FIX ROUND OVERTURNED BOTH THE REVIEWER'S DIAGNOSIS AND MY RULING, AND IT IS RIGHT —
++  CONTROLLER-VERIFIED. The reviewer called _condition_beside_n and _compute_vs_baseline(roster=)
++  FIXTURE GAPS and I ruled "close them in task 1". They are STRUCTURALLY DEAD PARAMETERS:
++    - _condition_beside_n's narrowing is invariant under BOTH branches of _cond_roster — the identity
++      check holds or fails independent of roster size;
++    - _compute_vs_baseline's `roster` only feeds units_matching(roster, comp.within), and comp.within is
++      PROVABLY None for every comparison reachable there. Verified myself: Comparison.within defaults to
++      None (contrasts.py:33) and _baseline_comparisons constructs
++      Comparison(id=…, of=…, against=…, declared=False) at :195 WITHOUT EVER SETTING within, so
++      units_matching returns None unconditionally. The reviewer's proposed remedy — "a vs_baseline
++      comparison with `within`" — DESCRIBES A CONFIG THIS CODE CANNOT PRODUCE.
++  GENERALIZES, AND IT IS NEW: A SITE NO TEST CAN SEE IS NOT ALWAYS A FIXTURE GAP. It can be a DEAD
++  PARAMETER, and no fixture can make a dead parameter observable — chasing one produces either a test
++  that cannot fail or a config that cannot exist. Before ruling "extend the fixture", ask whether the
++  argument reaches anything. The right remedy is to record the pinning obligation AGAINST THE TASK THAT
++  MAKES THE PARAMETER LIVE.
++CARRY FORWARD — TASK 14 AND TASK 15 EACH OWE A PIN: task 14 for _condition_beside_n and task 15 for
++  _compute_vs_baseline(roster=), each becoming live under its own narrowing. Recorded as an obligation
++  on those tasks, NOT as closed and NOT as an unowned deferral.
++  Also closed in this round: the pin now asserts the FULL `n` dict plus value/ci95 rather than
++  n["resolved"] alone (mutating execute_plan's units=roster now fails on completed 10->3, failed 0->7);
++  and units_hash is RECOMPUTED AND COMPARED rather than asserted as startswith("sha256:").
++  The fix round also independently re-verified the reviewer's two "caught by the whole suite" claims
++  rather than trusting them — _condition_report_by_levels (11 named tests fail) and
++  _compute_declared_contrasts (3 fail, including n_paired 20->1).
++Task 2: implemented, commits 3b5e942 + d3ee12c. 1803 passed + 2 xfailed; ruff and mypy clean. Thirteen
++  codes registered (twelve in § Errors validate reports, E-DATA-HOLDOUT-VARIES in § Errors core raises
++  beside its VARIES siblings), both § Validation rows, the resample x holdout sentence, and THE
++  INFERENCE-BASE RULING: the test partition counts as `n`, training units count NOWHERE, and
++  provenance.units.n / units_hash stay whole-roster. technical_n filed not fixed. NOT BUILT marker
++  correctly left to task 19.
++CONTROLLER-VERIFIED CONTRADICTION, RAISED BY THE IMPLEMENTER AND RULED BACK TO IT: task 2's own
++  reference.md text says a roster-wide split beside a cell structure is "REFUSED, NOT DRAWN" and that
++  drawing within each cell "IS NOT BUILT", while experimental-designs.md:123 still says, present tense
++  and unqualified, that "folds and holdouts are drawn WITHIN each cell". TWO NORMATIVE DOCUMENTS GIVING
++  OPPOSITE ANSWERS TO ONE QUESTION. Ruled: task 2 closes it minimally NOW rather than leaving it to task
++  8, six tasks away — CLAUDE.md says both consistency passes run BEFORE AN EDIT IS FINISHED, so the
++  cross-document pass is the editing task's obligation, not a later task's. Task 8 keeps the fuller
++  treatment.
++  GENERALIZES: the rule that made task 2 right to LEAVE the NOT BUILT marker is the same rule that makes
++  it wrong to leave this — NEVER SHIP A DOCUMENT STATE THAT IS FALSE, IN EITHER DIRECTION. It applied the
++  principle in one direction and not the other.
++PLAN DEFECT RECORDED: the plan attributes the reference.md cell-paragraph rewrite to TASK 8, but it
++  actually fell to task 2. Task 8's implementer would otherwise assume the reconciliation already
++  happened and check nothing. Task 8's dispatch must carry the current wording.
++Task 2: COMPLETE (commits 3b5e942, d3ee12c, efba1e7, 641b63c, ecaa7dc). 1803 passed + 2 xfailed; ruff,
++  mypy and the mechanical pass clean after each fix commit. CONTROLLER-VERIFIED: the "drawn within each
++  cell" claim is now DEAD across all four documents.
++  THE SWEEP LESSON DEMONSTRATED ITSELF. I pointed at ONE contradiction, in experimental-designs.md. The
++  implementer's second pass found THREE MORE INSTANCES OF THE IDENTICAL CLAIM INSIDE reference.md — the
++  file it had just finished editing: § Validation's "Folds fit inside the cells" row, § Cross-validation's
++  opening ("Under allocation: between, folds are drawn within each cell"), and § Repeat kinds' fold row.
++  Its own rewrite of § A fixed holdout split changed the underlying rule and left three siblings
++  asserting the old one. THIS IS "SWEEP FOR THE CLAIM, NOT THE FILE" PROVING ITSELF INSIDE A SINGLE
++  FILE — the boundary that traps people is not only the file, it is the SECTION they were editing.
++  The superseded § Validation row was left in place rather than deleted, because H3c-3-SCOPING.md cites
++  it BY NAME — correct call: a scoping is dated evidence and its citations must keep resolving.
++PLAN DEFECT CORRECTED, AND MY LEDGER LINE WAS WRONG: the misattribution is in TASK 20's brief ("task 8
++  already rewrote the one paragraph that did"), NOT task 8's. Task 8's brief correctly names task 2 and
++  correctly flags two of the four spots as its own to finish. My previous entry said task 8; that is
++  struck. TASK 20's dispatch is the one that must carry the current wording.
++Task 3: implemented, commits 93372ce + 0c1f9b1. 1820 passed + 2 xfailed (baseline 1803 + 17 new); ruff
++  and mypy clean. The measurements/resample precedent held — five LEAF_TYPES entries, NO closed key set.
++  THIRD IMPLEMENTER, THIRD SET OF BRIEF DEFECTS, AND ONE IS "A MUTATION IS A CLAIM TOO" IN MY OWN BRIEF:
++  (1) my `frac` comment claimed a false guarantee about (int, float) vs float — _is_type ALREADY promotes
++  int->float, so the tuple is behaviourally redundant; it kept the tuple per the interface and reworded
++  the comment.
++  (2) MY SECOND MUTATION INSTRUCTION DOES NOT FALSIFY THE TEST. Deleting only the `method` line leaves
++  four other holdout.* entries, which keep `holdout` A KNOWN CONTAINER — so the closure test still
++  passes. It used a corrected mutation (delete all five) that does fail. This is the third
++  non-discriminating mutation in two slices, and the second one I wrote.
++  (3) A THIRD instance of the "holdout stays whole" claim beyond the two my brief named — inside
++  _check_unknown_keys's OWN DOCSTRING in the same file. Task 2 hit the identical pattern one task ago:
++  the false claim is never only where you noticed it.
++  It also added a test BEYOND the brief's file scope, pinning end-to-end through validate_config that the
++  new envelope finding and E-DATA-HOLDOUT-UNSUPPORTED fire TOGETHER — the brief's own tests exercised
++  check_envelope directly, which would not have caught a wiring break.
++Task 3 review dispatched. BASE ecaa7dc, HEAD 0c1f9b1.
++Task 3 review: spec ✅, quality approved with findings — 1 Important, 3 Minor. Nothing blocks 4-7.
++  Mechanism verified BY BEHAVIOUR: non-mapping holdout gives exactly one E-CONFIG-TYPE with no
++  traceback; {} and null both silent, matching the documented null-is-absent rule and both sibling
++  blocks; typos report at the exact path with the difflib hint; stratify_by takes bare string AND list;
++  EVERY new assertion has a killing mutation. The five closed keys are exactly the set § Errors gives a
++  code each, so no legal config is refused.
++  ALL THREE BRIEF DEFECTS CONFIRMED, and the implementer's generalization on the blind mutation is the
++  keeper: "DELETE ONE CHILD OF N>1" CAN NEVER FALSIFY A _known_containers DERIVATION, because the
++  siblings keep the container known. That is the SHAPE of my error, not just the instance.
++  Its out-of-scope end-to-end test is confirmed genuinely discriminating — dropping E-CONFIG-KEY-UNKNOWN
++  at the validate.py wiring left ALL 32 envelope tests green and failed that one test alone.
++  IMPORTANT — A FALSE CLAIM INTRODUCED INSIDE THE COMMIT THAT FIXED A FALSE CLAIM. The rewritten `frac`
++  comment cites limits.max_failed_fraction's entry as precedent for (int, float); THAT ENTRY IS A BARE
++  float. Same pattern H4a hit ("three overreaching claims inside a single commit that was itself fixing
++  overreaching claims"), now seen in a second slice.
++  MINOR WORTH GENERALIZING: the "alongside not instead of" rule was adopted to make task 18's retirement
++  cheap, but this task's test NAME and docstring embed the wholesale refusal — so retirement is deletion
++  PLUS rename PLUS docstring rewrite, not one line. A REFUSAL NAMED IN A TEST'S IDENTIFIER DEFEATS THE
++  RULE EVEN WHEN THE ASSERTION IS RIGHT. Later tasks: name tests for the behaviour, not for the refusal
++  that happens to co-occur.
++CARRY TO TASK 19: reference.md:456 now states the opposite of the code, and plan item (e) as drafted
++  replaces only the TRAILING PARENTHETICAL, leaving the earlier clause ("a typo inside
++  data.units.holdout ... is reached by no check at all") false. THE WHOLE ROW needs rewriting.
++Task 3: COMPLETE (commits 93372ce, 0c1f9b1, cdf7295). 1820 passed + 2 xfailed; ruff and mypy clean. The
++  false citation is gone — the comment now states plainly that the tuple documents what _is_type already
++  does for a bare float, dropping the comparison rather than repairing it. All four findings closed;
++  comment-only, so no new mutation round was owed and it said so rather than inventing one.
++  BASE for task 4 is cdf7295.
++Task 4: dispatched — design_digest excludes holdout.seed, and the open half of its spec-defects entry.
++Task 4: implemented, commit TBD. 1823 passed + 2 xfailed (baseline 1820 + 3 new); ruff and mypy clean.
++  `_units_excluding_assign_seed` renamed `_units_excluding_drawn_seeds`, now dropping `holdout.seed`
++  alongside each `assign.<axis>.seed`; sweep for the old name returned nothing except the two
++  narrative mentions in spec-defects.md that explain the rename by name (expected, per brief step 3's
++  own replacement text). spec-defects.md's open half struck and closed; its CLOSED half (task 16's
++  paragraph) also named the old function and was updated too, since the brief said every hit moves.
++  reference.md § What `auto` derives from already carried both the prose and the table row naming
++  `holdout.seed` and `E-DATA-HOLDOUT-SEED` (verified, not assumed) — no doc change owed there.
++  TWO ISSUES SURFACED AND BOTH FIXED BEFORE COMMIT, NOT AFTER:
++  (1) Step 4's literal command `uv run ruff format .` (not `--check`) rewrote 67 files, including
++  fenced Python inside README.md — reverted everything outside the three task files via
++  `git checkout --`, confirmed `ruff format --check` baseline back to 67 (was silently 66 for one
++  cycle). Future briefs should say `--check` in step 4.
++  (2) The brief's step-5 second mutation (`out = {**out, "holdout": None}` gated on
++  `isinstance(holdout, dict) and "seed" in holdout`) cannot discriminate `base` from `widened` in
++  `test_a_pinned_holdout_seed_does_not_move_the_design_digest` — NEITHER has a `seed` key, so that
++  branch never fires for either config, and the mutation instead fails on the EARLIER
++  `design_digest(base) == design_digest(pinned)` assertion (because `pinned` alone gets nulled).
++  A MUTATION WHOSE TWO BRANCHES CANNOT DIFFER, per CLAUDE.md's own catalogue. Substituted the
++  unguarded form `if isinstance(holdout, dict): out = {**out, "holdout": None}` (no `"seed" in
++  holdout` guard), which fails on the intended `design_digest(base) != design_digest(widened)`
++  assertion instead — that is the mutation that actually proves the positive companion. Both
++  mutations run, confirmed FAIL, reverted in place, diffed byte-identical against a pre-round backup,
++  confirmed PASS.
++  See task-4-report.md for the commit sha.
+diff --git a/.superpowers/sdd/2026-08-15-fixed-holdout/task-4-report.md b/.superpowers/sdd/2026-08-15-fixed-holdout/task-4-report.md
+new file mode 100644
+index 0000000..3d1c8d5
+--- /dev/null
++++ b/.superpowers/sdd/2026-08-15-fixed-holdout/task-4-report.md
+@@ -0,0 +1,82 @@
++# Task 4 report: `design_digest` excludes `holdout.seed`
++
++**Status:** Complete. **Commit:** `2196a45` — `fix: exclude data.units.holdout.seed from the design digest`.
++
++**Files changed:** `src/publishable/hashes.py`, `tests/test_hashes.py` (appended, three tests exactly
++as the brief specified), `docs/superpowers/spec-defects.md`, `.superpowers/sdd/2026-08-15-fixed-holdout/progress.md`.
++
++## Summary
++
++`_units_excluding_assign_seed` renamed `_units_excluding_drawn_seeds`; it now drops `data.units.holdout.seed`
++in addition to each `assign.<axis>.seed`, and `design_digest` calls the new name. Implemented exactly as
++the brief's Step 3 code. Sweep for the old name (`grep -rn _units_excluding_assign_seed src/ tests/ docs/`)
++returns nothing in `src/`/`tests/`; the two remaining hits in `spec-defects.md` are narrative sentences
++explaining the rename by name ("was renamed `_units_excluding_drawn_seeds`" and a parenthetical on the
++task-16 paragraph I updated to match) — expected, matching the brief's own replacement text. Proved the
++sweep can fail by running it against `_units_excluding_drawn_seeds`, which returns hits.
++
++`spec-defects.md`: struck the open half ("One field over, the same defect is latent") with the brief's
++exact replacement text, updated the "Found by/Closed by" and trailing severity sentences to record H3d
++task 4 as the closer of the `holdout.seed` half, and additionally updated the task-16 paragraph's own
++reference to the old function name (the brief said "every hit moves, including the spec-defects.md entry,
++whose closed half names the old function" — the closed half needed the update too, not just the open half).
++
++Verified rather than assumed: `reference.md` § What `auto` derives from already carries both the prose
++sentence and a **table row** (`| data.units.holdout.seed | digest + the resolved roster | ... |`) naming
++`holdout.seed`'s digest exclusion and `E-DATA-HOLDOUT-SEED` — landed in an earlier task in this slice, so
++no doc change was owed here. Read the table directly rather than trusting the earlier prose-only grep.
++
++## Two issues found and corrected before commit
++
++1. **The brief's Step 4 command (`uv run ruff format .`, not `--check`) rewrote 67 files**, including
++   fenced Python inside `README.md` (comment realignment) and reformatting of an unrelated existing test
++   in `test_hashes.py`. Reverted every file outside my three targets via `git checkout --`; re-ran
++   `ruff format --check .` and confirmed the baseline is back to 67 (the CLAUDE.md-documented pre-existing
++   count). One collateral hit landed inside a file I *am* touching — `test_hashes.py`'s
++   `test_design_digest_excludes_assign_seed_with_a_control` had its multi-line assertion collapsed to one
++   line; hand-reverted that one hunk so my diff to that file is purely additive. Confirmed via
++   `git diff tests/test_hashes.py` showing only the appended tests. **Future briefs for this file should
++   say `ruff format --check .` in Step 4**, not the mutating form — running it live reformats the whole
++   repo's pre-existing unformatted region, which CLAUDE.md itself documents as out of scope.
++
++2. **The brief's Step 5 second mutation cannot discriminate.** As specified — change the dict comprehension
++   to `out = {**out, "holdout": None}`, still gated on `isinstance(holdout, dict) and "seed" in holdout` —
++   neither `base` nor `widened` in `test_a_pinned_holdout_seed_does_not_move_the_design_digest` carries a
++   `seed` key, so that branch never fires for either config; the test still fails, but on the *earlier*
++   `design_digest(base) == design_digest(pinned)` assertion (because `pinned` alone gets its `holdout`
++   nulled), not on the intended `design_digest(base) != design_digest(widened)` the brief names. This is
++   the "a mutation whose two branches cannot differ" shape CLAUDE.md's own catalogue names. Substituted the
++   unguarded form — `if isinstance(holdout, dict): out = {**out, "holdout": None}` — which does fail on the
++   intended `base != widened` assertion, actually proving the positive companion is not vacuous. Ran both
++   forms, confirmed FAIL, cleared `__pycache__`, reverted in place, diffed byte-identical against a
++   pre-round backup (`/private/tmp/.../scratchpad/hashes_backup.py`), confirmed PASS.
++
++## Verification
++
++- `uv run pytest tests/test_hashes.py -k "holdout_seed or exclusion"`: 5 passed (the 3 new tests plus 2
++  pre-existing matched by the keyword filter).
++- Full suite: **1823 passed, 2 xfailed** (baseline 1820 + 3 new).
++- `uv run ruff check .`: all checks passed. `uv run mypy`: success, 42 source files.
++- `uv run ruff format --check .`: 67 files would be reformatted (matches the pre-existing baseline
++  CLAUDE.md records; confirmed unchanged from before this task by reverting the incidental `ruff format .`
++  run — see Issue 1 above).
++- Mutation 1 (holdout branch gated `if False and ...`): both new equality-based tests **FAILED** as
++  required. Cleared `__pycache__`, reverted in place, reran green.
++- Mutation 2 (drop whole block, as brief specified then as corrected — see Issue 2): both forms make
++  `test_a_pinned_holdout_seed_does_not_move_the_design_digest` **FAIL**, at different assertions for the
++  reason given above. Cleared `__pycache__`, reverted in place, `diff` against scratchpad backup confirmed
++  byte-identical, reran green.
++
++## Concerns
++
++- `.superpowers/sdd/2026-08-15-fixed-holdout/progress.md` had never been committed since the slice's spec
++  landed (task 1, 2, 3's ledger entries and the "Task 4: dispatched" line were all sitting uncommitted in
++  the working tree at the start of this task). Unlike task 3's report, which left it untouched, I appended
++  my own entry and committed the whole file — there was no prior commit to leave it out of, and the ledger
++  is meant to be tracked. Flagging so a reader six months out knows this commit's `progress.md` diff
++  includes three earlier tasks' notes, not just mine.
++- Two brief/behavior disagreements found (Step 4's command, Step 5's second mutation) — both are the kind
++  this slice has asked implementers to surface rather than silently work around. Neither blocks the task;
++  both are corrected and verified above.
++- No disagreement found in Steps 1–3 (the test text, the rename, and the code) — all matched the brief
++  exactly as written.
+diff --git a/docs/superpowers/spec-defects.md b/docs/superpowers/spec-defects.md
+index ef9d760..1499c3b 100644
+--- a/docs/superpowers/spec-defects.md
++++ b/docs/superpowers/spec-defects.md
+@@ -4871,38 +4871,40 @@ seed is "the deliberate act", and every `auto` value in the table below it mixes
+ boundary, every `sweep.sample` draw, and every *other* axis's allocation — the exact confounding
+ ("one visible change and two invisible ones") this section exists to refuse. The exclusion is also
+ what makes the row *An axis's `assign.seed` | digest + the axis name + the resolved roster* honest:
+ that derivation reads the digest, so a field it produces must not feed it.
+ 
+ The fix is one line in `hashes.design_digest` — drop `seed` from each `assign.<axis>` block before
+ canonicalising, leaving every other `assign` field (`method`, `from`, `stratify_by`, `ratio`,
+ `block_size`) inside, since those describe what is randomized over. **H3c-1 task 16 owns it.**
+ No document change is owed.
+ 
+-**Closed by task 16.** `hashes._units_excluding_assign_seed` drops `seed` from each
+-`assign.<axis>` block, per-axis, before `design_digest` canonicalises `data.units` — every other
+-`assign` field, and a second or later axis's own `seed`, still moves the digest. It also never
+-raises on a shape it does not expect (`assign` or an axis block that is not a mapping), since
+-`validate` can reach `design_digest` before a config is known-good.
+-
+-**One field over, the same defect is latent.** The document excludes only `assign.seed`, so as
+-written it endorses `data.units.holdout.seed` perturbing every other derived draw — the same
+-confounding, from the same wholesale canonicalisation. `holdout` is `NOT BUILT`, so nothing
+-exhibits it yet; the slice that builds `data.units.holdout` owes either the same exclusion in
+-`design_digest` or a stated reason the two seeds differ.
+-
+-**Found by:** H3c-1, Task 1 (documents-only). **Closed by:** H3c-1, Task 16.
++**Closed by task 16.** `hashes._units_excluding_drawn_seeds` (named `_units_excluding_assign_seed`
++until renamed by H3d task 4) drops `seed` from each `assign.<axis>` block, per-axis, before
++`design_digest` canonicalises `data.units` — every other `assign` field, and a second or later
++axis's own `seed`, still moves the digest. It also never raises on a shape it does not expect
++(`assign` or an axis block that is not a mapping), since `validate` can reach `design_digest`
++before a config is known-good.
++
++**~~One field over, the same defect is latent.~~ Closed by H3d, task 4.**
++`hashes._units_excluding_assign_seed` was renamed `_units_excluding_drawn_seeds` and now
++drops `data.units.holdout.seed` as well as each `assign.<axis>.seed`, so a pinned holdout
++seed no longer perturbs any other derived draw. `reference.md` § What `auto` derives from
++gained the matching row and named `E-DATA-HOLDOUT-SEED` in the same slice.
++
++**Found by:** H3c-1, Task 1 (documents-only). **Closed by:** H3c-1, Task 16 (`assign.seed`
++half); H3d, Task 4 (`holdout.seed` half).
+ **Severity:** Was Minor while open, since `assign` is refused outright as `NOT BUILT` and no
+ config could reach a pinned `assign.seed` — but it would have become live the moment H3c-1
+ retired that refusal, so closing it now rather than later avoids a fix landing after the
+-confounding it prevents becomes reachable. The `holdout.seed` half above remains open and is
+-unaffected by this closure.
++confounding it prevents becomes reachable. The `holdout.seed` half above is closed by H3d
++task 4.
+ 
+ ## RESOLVED (H3c, task 10) — `assign.<axis>.from`'s "unchanged" divergence from `weight_by`/`cluster_by`
+ 
+ Task 10's brief said `_check_weight_by` "is the model" for the new `assign.<axis>.from`
+ checks, and "every one of those applies here unchanged" — including "why a non-str
+ declaration returns silently (`check_envelope` owns `E-CONFIG-TYPE`, and reporting it
+ again would describe `3` as 'empty')".
+ 
+ **That reason did not carry over, and the brief was wrong that it did.** `weight_by`
+ and `cluster_by` are `envelope.py` `LEAF_TYPES` entries (`"data.units.weight_by": str`,
+diff --git a/src/publishable/hashes.py b/src/publishable/hashes.py
+index fd029a9..83b005d 100644
+--- a/src/publishable/hashes.py
++++ b/src/publishable/hashes.py
+@@ -59,55 +59,72 @@ def _canonical(payload: Any) -> bytes:
+ 
+ def parameters_hash(config: dict[str, Any]) -> str:
+     """Everything in the config except `metadata` and the two host paths."""
+     covered = {k: v for k, v in config.items() if k != "metadata"}
+     data = covered.get("data")
+     if isinstance(data, dict):
+         covered["data"] = {k: v for k, v in data.items() if k not in ("input_dir", "output_dir")}
+     return _prefixed(hashlib.sha256(_canonical(covered)).hexdigest())
+ 
+ 
+-def _units_excluding_assign_seed(units: Any) -> Any:
+-    """`data.units` with `assign.<axis>.seed` dropped from every axis block.
++def _units_excluding_drawn_seeds(units: Any) -> Any:
++    """`data.units` with every drawn partition's own `seed` dropped —
++    `assign.<axis>.seed` from each axis block, and `holdout.seed`.
+ 
+-    `assign` is a mapping of axis name -> block, so the exclusion is per-axis:
++    `assign` is a mapping of axis name -> block, so its exclusion is per-axis:
+     an axis's own `seed` is dropped from its own block only, never the whole
+-    `assign` subtree and never a sibling axis's `seed`. See docs/reference.md
+-    § What `auto` derives from: an axis's `assign.seed` "mixes digest + the
+-    axis name + the resolved roster" — a seed that is itself inside the
+-    digest it is mixed with would make the derivation self-referential.
++    `assign` subtree and never a sibling axis's `seed`. `holdout` is a single
++    block, so its exclusion is one key. See docs/reference.md § What `auto`
++    derives from: each of these seeds mixes the digest with the roster, and a
++    seed that is itself inside the digest it is mixed with would make the
++    derivation self-referential.
++
++    **The wider harm is the reason this is not merely tidy.** `design_digest`
++    canonicalizes `data.units` wholesale, and every other derived draw in the
++    run reads the digest — the `seed` repeat stream, `sweep.sample`, each
++    axis's assignment. Leaving a pinned seed in would mean that pinning one
++    partition to cite it silently redrew all the others, which is the exact
++    confounding § What `auto` derives from exists to prevent.
++
++    Every other field of both blocks still moves the digest, which is the
++    point: widening `frac`, restratifying, or changing an axis's `method` is a
++    different design and must not be reproducible under the same digest.
+ 
+     `design_digest` runs at run time on a validated config, but `validate`
+     reaches it too (indirectly, via `expand` -> the `sample` seed derivation),
+-    so a malformed config can arrive here first. This function never raises:
+-    a non-mapping `units`, a non-mapping `assign`, or a non-mapping axis block
+-    is left exactly as given rather than unpacked, so the caller's canonical
+-    JSON encoding still runs over *something* instead of crashing on a shape
+-    it did not expect.
++    so a malformed config can arrive here first. This function never raises: a
++    non-mapping `units`, a non-mapping `assign`, a non-mapping axis block, or a
++    non-mapping `holdout` is left exactly as given rather than unpacked, so the
++    caller's canonical JSON encoding still runs over *something* instead of
++    crashing on a shape it did not expect.
+     """
+     if not isinstance(units, dict):
+         return units
+-    assign = units.get("assign")
+-    if not isinstance(assign, dict):
+-        return units
+-    new_assign = {}
+-    changed = False
+-    for axis, block in assign.items():
+-        if isinstance(block, dict) and "seed" in block:
+-            new_assign[axis] = {k: v for k, v in block.items() if k != "seed"}
+-            changed = True
+-        else:
+-            new_assign[axis] = block
+-    if not changed:
+-        return units
+-    return {**units, "assign": new_assign}
++    out = units
++    assign = out.get("assign")
++    if isinstance(assign, dict):
++        new_assign = {}
++        changed = False
++        for axis, block in assign.items():
++            if isinstance(block, dict) and "seed" in block:
++                new_assign[axis] = {k: v for k, v in block.items() if k != "seed"}
++                changed = True
++            else:
++                new_assign[axis] = block
++        if changed:
++            out = {**out, "assign": new_assign}
++    holdout = out.get("holdout")
++    if isinstance(holdout, dict) and "seed" in holdout:
++        out = {**out, "holdout": {k: v for k, v in holdout.items() if k != "seed"}}
++    return out
+ 
+ 
+ def design_digest(config: dict[str, Any]) -> str:
+-    """`data.units` (every field except `assign.seed` itself) and `sweep.groups`.
++    """`data.units` (every field except a drawn partition's own `seed`) and `sweep.groups`.
+ 
+     A parameter edit redraws nothing, and neither does pinning or changing an
+-    axis's `assign.seed` — see `_units_excluding_assign_seed`.
++    axis's `assign.seed` or `data.units.holdout.seed` — see
++    `_units_excluding_drawn_seeds`.
+     """
+-    units = _units_excluding_assign_seed((config.get("data") or {}).get("units"))
++    units = _units_excluding_drawn_seeds((config.get("data") or {}).get("units"))
+     groups = (config.get("sweep") or {}).get("groups")
+     return _prefixed(hashlib.sha256(_canonical({"units": units, "groups": groups})).hexdigest())
+diff --git a/tests/test_hashes.py b/tests/test_hashes.py
+index 158612e..d785a76 100644
+--- a/tests/test_hashes.py
++++ b/tests/test_hashes.py
+@@ -213,10 +213,103 @@ def test_design_digest_does_not_raise_on_malformed_assign_shapes():
+     none_seed = {
+         "data": {
+             "units": {
+                 "key": "patient_id",
+                 "assign": {"arm": {"seed": None, "method": "blocked"}},
+             }
+         }
+     }
+     for config in (non_mapping_assign, non_mapping_block, non_mapping_units, none_seed):
+         design_digest(config)  # must not raise
++
++
++def test_a_pinned_holdout_seed_does_not_move_the_design_digest():
++    """A seed that is itself inside the digest it is mixed with makes the
++    derivation self-referential — and worse, moves every OTHER derived draw in
++    the run. `assign.<axis>.seed` is already excluded for that reason; this is
++    the same exclusion one field over.
++
++    The positive companion is in the same test: changing a NON-seed holdout
++    field MUST move the digest, or an implementation that dropped the whole
++    `holdout` block would pass the first assertion alone."""
++    base = {
++        "data": {
++            "units": {
++                "from": "index.csv",
++                "key": "patient_id",
++                "holdout": {"method": "random", "frac": 0.2},
++            }
++        }
++    }
++    pinned = {
++        "data": {
++            "units": {
++                "from": "index.csv",
++                "key": "patient_id",
++                "holdout": {"method": "random", "frac": 0.2, "seed": 1234},
++            }
++        }
++    }
++    other_pin = {
++        "data": {
++            "units": {
++                "from": "index.csv",
++                "key": "patient_id",
++                "holdout": {"method": "random", "frac": 0.2, "seed": 9999},
++            }
++        }
++    }
++    assert design_digest(base) == design_digest(pinned)
++    assert design_digest(pinned) == design_digest(other_pin)
++
++    widened = {
++        "data": {
++            "units": {
++                "from": "index.csv",
++                "key": "patient_id",
++                "holdout": {"method": "random", "frac": 0.3},
++            }
++        }
++    }
++    assert design_digest(base) != design_digest(widened)
++
++
++def test_the_seed_exclusion_covers_assign_and_holdout_together():
++    """One config carrying both pins. Asserted together because the two
++    exclusions are one function: an implementation that returned early after
++    rewriting `assign` would leave `holdout.seed` in, and a config with only
++    one pin cannot tell that apart from a correct one."""
++
++    def cfg(assign_seed, holdout_seed):
++        return {
++            "data": {
++                "units": {
++                    "from": "index.csv",
++                    "key": "patient_id",
++                    "assign": {"arm": {"method": "random", "seed": assign_seed}},
++                    "holdout": {"method": "random", "frac": 0.2, "seed": holdout_seed},
++                }
++            }
++        }
++
++    assert design_digest(cfg(7, 11)) == design_digest(cfg(8, 12))
++    # A non-seed edit inside the SAME two blocks still moves it, so the
++    # exclusion is per-field rather than per-block.
++    moved = {
++        "data": {
++            "units": {
++                "from": "index.csv",
++                "key": "patient_id",
++                "assign": {"arm": {"method": "blocked", "seed": 7}},
++                "holdout": {"method": "random", "frac": 0.2, "seed": 11},
++            }
++        }
++    }
++    assert design_digest(cfg(7, 11)) != design_digest(moved)
++
++
++def test_the_seed_exclusion_never_raises_on_a_shape_it_did_not_expect():
++    """`validate` reaches `design_digest` before a config is known-good, so a
++    non-mapping `holdout` must be left exactly as given rather than unpacked.
++    Each of these must return a digest instead of raising."""
++    for holdout in ("nonsense", ["a", "list"], 3, None):
++        assert design_digest({"data": {"units": {"holdout": holdout}}}).startswith("sha256:")

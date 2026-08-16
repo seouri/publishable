@@ -1,0 +1,165 @@
+# Review package: ad6cf3d..HEAD
+
+## Commits
+ddeee8f refactor: expand conditions as a product over axes
+
+## Files changed
+ src/publishable/sweep.py | 55 ++++++++++++++++++++++++++++++++++++------------
+ tests/test_sweep.py      | 16 ++++++++++++++
+ 2 files changed, 57 insertions(+), 14 deletions(-)
+
+## Diff
+diff --git a/src/publishable/sweep.py b/src/publishable/sweep.py
+index 7da9758..74713ae 100644
+--- a/src/publishable/sweep.py
++++ b/src/publishable/sweep.py
+@@ -107,67 +107,94 @@ def _keys_for(paths: list[str]) -> dict[str, str]:
+             candidate = ".".join(segments[-depth:])
+             others = [p for p in paths if p != path]
+             if not any(p == candidate or p.endswith("." + candidate) for p in others):
+                 keys[path] = candidate
+                 break
+         else:
+             keys[path] = path
+     return keys
+ 
+ 
+-def label_for(values: dict[str, Any], grid: dict[str, Any], is_baseline: bool) -> str:
++def _swept_paths(sweep: dict[str, Any]) -> list[str]:
++    """Every path any axis-shaped mode sweeps, in declared order.
++
++    `label_for` shortens these to unique suffixes, so it needs the whole set:
++    a key is only unambiguous against every other swept path, not against one
++    mode's. Later modes extend this and nothing else about labelling changes.
++    """
++    return list(sweep.get("grid") or {})
++
++
++def label_for(values: dict[str, Any], swept: list[str], is_baseline: bool) -> str:
+     if is_baseline:
+         return "baseline"
+-    keys = _keys_for(list(grid))
++    keys = _keys_for(swept)
+     return AXIS_SEPARATOR.join(
+         f"{keys.get(path, path.rsplit('.', 1)[-1])}={render_value(value)}"
+         for path, value in values.items()
+     )
+ 
+ 
+ def condition_dir_name(index: int, label: str) -> str:
+     """The `<nn>_<label>` name a condition nests under, in `run_dir/conditions/`.
+ 
+     Single source of truth for the format: `runner.step_dir_for` and
+     `artifacts.StepIO.read_condition` both nest here, and a second implementation
+     of this string is how they drift apart.
+     """
+     return f"{index:02d}_{label}"
+ 
+ 
++def _axes(sweep: dict[str, Any]) -> list[list[dict[str, Any]]]:
++    """One entry per axis-shaped mode present, each a list of `{path: value}` cells.
++
++    The product of these is the condition set. `grid` contributes one axis per
++    key; later modes contribute one axis each, whose cells may set several paths
++    at once. Keeping every mode in this one list is what makes the composition
++    rule — "the product of every axis-shaped mode present" — a property of the
++    structure rather than a sentence someone has to remember.
++    """
++    axes: list[list[dict[str, Any]]] = []
++    for path, values in (sweep.get("grid") or {}).items():
++        axes.append([{path: value} for value in values])
++    return axes
++
++
+ def expand(config: dict[str, Any]) -> list[Condition]:
+-    """Ordered conditions: a declared baseline as 00, then the grid product.
++    """Ordered conditions: a declared baseline as 00, then the product of every axis.
+ 
+     With no `sweep` block, one condition whose label is None — which is what
+     keeps the `conditions/` level out of the artifact tree.
+     """
+     sweep = config.get("sweep") or {}
+     if not sweep:
+         return [Condition(index=0, label=None, values={}, is_baseline=False)]
+ 
+     rows: list[tuple[dict[str, Any], bool]] = []
+     baseline = sweep.get("baseline")
+     if baseline:
+         rows.append((dict(baseline), True))
+ 
+-    grid = sweep.get("grid") or {}
+-    if grid:
+-        axes = list(grid.items())
+-        # itertools.product varies the LAST argument fastest, which is exactly
+-        # the declared-order nesting the specification asks for.
+-        for combo in itertools.product(*(values for _, values in axes)):
+-            rows.append(
+-                ({path: value for (path, _), value in zip(axes, combo, strict=True)}, False)
+-            )
+-
++    axes = _axes(sweep)
++    if axes:
++        # `itertools.product` varies its LAST argument fastest, which is the
++        # declared-order nesting the specification asks for. Preserved from the
++        # grid-only implementation this replaces.
++        for combo in itertools.product(*axes):
++            values: dict[str, Any] = {}
++            for cell in combo:
++                values.update(cell)
++            rows.append((values, False))
++
++    swept = _swept_paths(sweep)
+     return [
+-        Condition(index=i, label=label_for(values, grid, is_baseline),
++        Condition(index=i, label=label_for(values, swept, is_baseline),
+                   values=values, is_baseline=is_baseline)
+         for i, (values, is_baseline) in enumerate(rows)
+     ]
+ 
+ 
+ def sweep_document(
+     conditions: list[Condition],
+     levels: list["RepeatLevel"],
+     repeats: list["Repeat"],
+     digest: str,
+diff --git a/tests/test_sweep.py b/tests/test_sweep.py
+index c493a0f..08fd6b1 100644
+--- a/tests/test_sweep.py
++++ b/tests/test_sweep.py
+@@ -43,20 +43,36 @@ def test_the_last_declared_axis_varies_fastest():
+         "sweep": {"grid": {"a.x": [1, 2], "b.y": ["p", "q"]}}
+     })
+     assert [c.values for c in conds] == [
+         {"a.x": 1, "b.y": "p"},
+         {"a.x": 1, "b.y": "q"},
+         {"a.x": 2, "b.y": "p"},
+         {"a.x": 2, "b.y": "q"},
+     ]
+ 
+ 
++def test_grid_axes_vary_the_last_declared_axis_fastest() -> None:
++    """`itertools.product` varies its last argument fastest, which is the
++    declared-order nesting § Expansion modes asks for. The refactor moves this
++    loop, so pin the order it produces before moving it."""
++    conditions = expand(
++        {"sweep": {"grid": {"a.x": [1, 2], "b.y": ["p", "q"]}}}
++    )
++
++    assert [dict(c.values) for c in conditions] == [
++        {"a.x": 1, "b.y": "p"},
++        {"a.x": 1, "b.y": "q"},
++        {"a.x": 2, "b.y": "p"},
++        {"a.x": 2, "b.y": "q"},
++    ]
++
++
+ def test_an_empty_grid_axis_still_expands_to_nothing_here():
+     """`expand` is pure and reports what the declaration says; `validate` is what
+     refuses it (E-SWEEP-AXIS-EMPTY, Task 4). Pinned so the refusal has something
+     to refuse and so nobody later reads the empty list as acceptable output."""
+     assert expand({"sweep": {"grid": {"a.x": []}}}) == []
+ 
+ 
+ def test_condition_values_are_immutable():
+     conds = expand({"sweep": {"baseline": {"analysis.method": "pearson"}}})
+     assert conds[0].values["analysis.method"] == "pearson"

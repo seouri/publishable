@@ -1,0 +1,1018 @@
+# Review package: ce2f2db..556d13d
+
+## Commits
+556d13d docs: task-14 report — a recorded column takes a percentile interval under resample
+b156b1b feat: a recorded column takes a percentile interval under a declared resample
+
+## Files changed
+ .../sdd/2026-08-15-resample-honoured/progress.md   | 280 +++++++++++++++++++++
+ .../2026-08-15-resample-honoured/task-14-report.md |  67 +++++
+ docs/reference.md                                  |   2 +
+ docs/superpowers/spec-defects.md                   |  58 +++++
+ src/publishable/cli.py                             |  87 +++++--
+ src/publishable/stats.py                           |  78 +++++-
+ tests/test_cli.py                                  |  43 ++++
+ tests/test_stats.py                                |  90 +++++++
+ 8 files changed, 682 insertions(+), 23 deletions(-)
+
+## Diff
+diff --git a/.superpowers/sdd/2026-08-15-resample-honoured/progress.md b/.superpowers/sdd/2026-08-15-resample-honoured/progress.md
+index 1564d36..4865d30 100644
+--- a/.superpowers/sdd/2026-08-15-resample-honoured/progress.md
++++ b/.superpowers/sdd/2026-08-15-resample-honoured/progress.md
+@@ -363,10 +363,290 @@ Task 8 review: spec ✅, quality APPROVED WITH FINDINGS — 3 Important, 5 Minor
+   SAME COMMENT THAT IN TASK 7 JUSTIFIED A RETURN SWALLOWING TWO FINDINGS. Ruled: replace the blanket
+   property with a per-check statement, since a blanket claim invites the next task to falsify it again.
+   IMPORTANT 3 — A FALSE COMMENT PROPAGATING BY COPY-PASTE. The new `except ContractError` comment says
+   the fault is "already reported beside this"; measured false (cluster_by naming measurements.by fires
+   the branch and NOTHING reports E-DATA-CLUSTER-UNKNOWN). The wording was copied from a sibling handler
+   CARRYING THE SAME FALSEHOOD. Ruled: FIX BOTH, against my usual refusal to widen scope — the
+   propagation mechanism is copy-paste and the sibling is one line, so leaving it guarantees a third copy.
+   Minor worth carrying: the min_clusters miscitation SURVIVES at tests/test_stats.py:2206 — the
+   implementer's sweep covered src/ and docs/ only. The "filter the file list" rule is necessary but not
+   sufficient; the SCOPE of the file list is the other half.
++Task 8: COMPLETE (commits 21214d8, f75078b, fbae604). 1732 passed + 2 xfailed; ruff and mypy clean.
++  All 3 Importants and all 5 Minors closed. The roster-guard mutation REPRODUCED A REAL TypeError,
++  confirming it guards an actual crash rather than a wrong message. Both copy-paste-propagated
++  except-ContractError comments rewritten. Miscitation finally dead in tests/ too.
++  SCHEMA AND VALIDATION (tasks 2-8) ARE COMPLETE. _check_resample now carries six checks.
++  BASE for task 9 is fbae604.
++Task 9: dispatched — the STRATIFIED DRAW. First construction task of the slice; stats.py has been
++  byte-identical to cb96c7d until now.
++Task 9: implemented, commits f69055a + 0866fa2. 1741 passed + 2 xfailed (baseline 1732 + 9 new — the
++  brief's 6 plus 3 the implementer added for degenerate shapes: size-1 stratum, all-identical-value
++  stratum, more strata than groupable units). ruff and mypy clean. Both required mutations (draw-count,
++  pool-ordering) failed the named test and were reverted in place. Degenerate-shape decisions recorded
++  for tasks 14/15: a misaligned strata/values length RAISES ValueError; size-1, identical-value and
++  all-singleton strata all work without error.
++  Second task with NO brief/code disagreement (after seven of eight that had one).
++Task 9 review dispatched. HIGHEST-STAKES REVIEW OF THE SLICE — the first task to touch stats.py, and the
++  first whose output is a NUMBER THAT GOES IN A PAPER rather than a refusal.
++Task 9 review: spec ❌ (FIRST OF THE SLICE), quality FINDINGS — 3 Important. The ❌ is narrow and the
++  statistics around it are RIGHT, VERIFIED INDEPENDENTLY: the reviewer built its own reference
++  implementation and the draw matched to ~5e-4, matched the analytic normal approximation (width 0.2067
++  vs 0.204), and came out ~80x narrower than pooled — what theory requires when between-stratum variance
++  is large. Weights compose against an independent weighted reference. Regression boundary byte-identical
++  over 300 RANDOMIZED CASES against fbae604.
++  IMPORTANT 1 / THE ❌ — A ZERO-WIDTH ci95 PRODUCED AND PINNED AS CORRECT. strata=["a"]*10+["b"]*4 over
++  internally constant strata returns Interval(2.142857, 2.142857). The sibling
++  percentile_over_units_clustered REFUSES EXACTLY THIS at one cluster, quoting § Statistical reporting:
++  "Reporting a point with no interval is honest; a zero-width 95 % interval is not." This case is WORSE
++  than the sibling's because it is STRUCTURAL, not data-caused — the design guarantees it whatever the
++  values. And a test the implementer added asserts it is correct: A TEST PINNING WRONG BEHAVIOUR, which
++  is harder to find later than no test at all. RULED: follow the sibling, return None, invert the test.
++  Two answers to one question inside one module is the drift this project refuses everywhere.
++  IMPORTANT 2 — a mutation SURVIVES ALL TEN TESTS: pooling in insertion order rather than sorted-contents
++  order. The rotation-by-7 fixture leaves first-seen stratum order unchanged. Fix is the fixture, not the
++  assertions: rotate by 28 (reviewer verified the real code stays invariant under it).
++  IMPORTANT 3 — the two degenerate tests assert only low < mean < high and BOTH PASS under the
++  pooled-swap mutation. They test non-crash, not the property their docstrings name.
++SLICE-LEVEL GAP FOUND, ROUTED TO TASKS 13-15: percentile_of_derived TAKES NO `strata`. Once the wiring
++  lands, a declared stratify_by would stratify COLUMN metrics and silently NOT derived ones IN THE SAME
++  RUN — two intervals in one table computed under different designs, invisible until someone compares
++  them. Tasks 13/14/15 dispatches must carry this; it may be additional construction rather than wiring.
++Task 9: COMPLETE (commits f69055a, 0866fa2, 79ae219, 4f62117). 1742 passed + 2 xfailed; ruff and mypy
++  clean. All 3 Importants closed. percentile_over_units now returns None when every stratum's own
++  (value, weight) pairs are identical — mirroring percentile_over_units_clustered's refusal at G < 2 —
++  and the test that pinned the zero-width interval as correct was inverted. The rotation-by-28 fixture
++  now kills the insertion-order mutation that had survived all ten tests, and both degenerate tests
++  assert the stratified interval is under half the pooled width rather than merely not crashing.
++  BASE for task 10 is 4f62117.
++Task 10: dispatched — the stratified x clustered composition rule, stated then implemented. Carries the
++  routed percentile_of_derived gap as context, though its owner is tasks 13-15.
++Task 10: implemented, commits 97c911c + 3af1e5a. 1748 passed + 2 xfailed (baseline 1742 + 6 new); ruff
++  and mypy clean. percentile_over_units_clustered gained `strata`, enforcing decision 3 — a stratum must
++  be constant within a cluster, the draw is a cluster drawn within its stratum — raising
++  E-STATS-RESAMPLE-STRATIFY-VARIES on violation and returning None when every stratum holds fewer than
++  two clusters, mirroring the existing groups<2 and all-strata-constant refusals. validate gained the
++  roster-side check via units.stratum_varies_within_cluster.
++  THE BRIEF'S OWN MUTATION INSTRUCTION WAS NON-DISCRIMINATING, AND THE IMPLEMENTER PROVED IT. My
++  specified width-ratio test does NOT fail under the `range(len(group)) -> range(1)` mutation on that
++  fixture, because the interval's extremes are single-cluster values reachable identically whether a
++  stratum draws 1 or its own cluster count. It built a call-count spy (_CountingRandom) that does catch
++  it. This is the SECOND time in the slice a proposed mutation could not discriminate (the first was a
++  reviewer's in task 5) — the rule now has both halves: a MUTATION, like a fixture, must be checked for
++  whether its two branches can actually differ.
++  SYSTEMATIC PLAN DEFECT, SECOND OCCURRENCE: the brief again used dotted overrides
++  (`"limits.min_clusters": 2`) against write_config, which only assigns the final leaf and never creates
++  intermediates, and base_config has no top-level "limits" — KeyError before the check runs. Task 8 hit
++  the identical defect. EVERY REMAINING TASK TOUCHING `limits` MUST BE TOLD to use the nested form.
++Task 10 review dispatched. BASE 4f62117, HEAD 3af1e5a.
++Task 10 review: spec ✅, quality FINDINGS — 3 Important, 3 Minor. STATISTICS VERIFIED INDEPENDENTLY AND
++  EXACTLY: the reviewer wrote its own reference implementation from the spec sentence — own ordering,
++  own seed, 200k draws — and reproduced the interval TO THE DIGIT. Instrumenting the real draw loop,
++  500/500 replicates hold exactly two clusters per stratum across 27 distinct multisets. All three
++  candidate answers distinguishable (13.46 clustered-stratified / 57.30 clustered-only / 0.26
++  stratified-rows), both theory directions correct, task 1's pin digit-identical over 200 randomized
++  fixtures. Both halves of the implementer's mutation diagnosis confirmed, and the spy proved
++  NON-VACUOUS JOINTLY with the width test.
++  IMPORTANT 1: weights untested on the stratified-clustered path — dropping the weight passes all 1748
++  tests and moves the interval [15.462,24.972] -> [16.811,30.275]. weight_by + cluster_by + stratify_by
++  are independently declarable, so an ordinary config reaches it.
++  IMPORTANT 2: every stratum drawing the FIRST stratum's cluster count passes all 1748 tests — the
++  fixture is 2/2/2 and the spy pins only the TOTAL. THE FIX IS NOT A FIXTURE RESHUFFLE: stratum_pools[0]
++  sorts by content, so even 3/2/1 totals 6 and stays invisible. Requires a PER-STRATUM COMPOSITION
++  assertion. Generalizes: when a spy counts an aggregate, an allocation among the parts is exactly what
++  it cannot see.
++  IMPORTANT 3: a zero-width interval is reachable — content-identical clusters in every stratum give
++  Interval(0.5, 0.5) where the row-level sibling returns None. TASK 9'S ❌ IN A NEW PLACE. Inherited (the
++  unstratified path has it at G=2) but stratification makes it EVERYDAY-REACHABLE WITH BINARY METRICS.
++  Ruled: fix the stratified path to match the sibling; fix the pre-existing case too IF one line away,
++  but STOP AND REPORT rather than moving any behaviour an existing test pins.
++  Minor worth carrying: validate compares str(value) while stats compares RAW values, so the
++  dual-listed error disagrees on 1 vs "1" — two enforcement points for one rule giving different answers.
++Task 10: COMPLETE (commits 97c911c, 3af1e5a, 2348477, c5de085). 1752 passed + 2 xfailed; ruff and mypy
++  clean. All 3 Importants and all 3 Minors closed.
++  ON IMPORTANT 3 IT DID EXACTLY WHAT THE RULING ASKED: checked FIRST whether any existing test pinned
++  the wrong zero-width behaviour, found none, and therefore fixed BOTH the stratified and the
++  pre-existing unstratified path — replacing the count-based degenerate check (len(group) < 2) with a
++  CONTENT-based one. Had a test pinned it, the ruling required stopping instead.
++  The total-count spy became a SEQUENCE-RECORDING spy over a 1/2/3 fixture, which catches both the
++  original range(1) mutation and the every-stratum-draws-the-first-count mutation the total-only test
++  could not see. The str()/"no value" normalization went VALIDATE's way, since
++  units.stratum_varies_within_cluster is the established shared authority elsewhere.
++  CONSTRUCTIONS (tasks 9-10) COMPLETE. stats.py now carries the stratified draw and the clustered x
++  stratified composition, both verified against independent reference implementations.
++  BASE for task 11 is c5de085.
++Task 11: dispatched — resample_draws for a column metric. A VERIFY-AND-PIN task: decision 2 rests on the
++  invariant that a column draw is never degenerate, and this task is where that invariant is proved
++  rather than assumed.
++Task 11: implemented, commit d5f6b6b. 1762 passed + 2 xfailed (baseline 1752 + 10 new); ruff and mypy
++  clean. THE INVARIANT DECISION 2 RESTS ON IS VERIFIED, NOT ASSUMED: no reachable degenerate column draw
++  in the unweighted, weighted or stratified branches, gated respectively by n >= 2, checked_weights /
++  usable_weight's finite-positive guard, and non-empty stratum pools by construction. PROVED BY MUTATION
++  rather than argued — relaxing usable_weight's guard from <= 0 to < 0 (admitting a zero weight) makes
++  the 0/0.0 weight-refusal parameters FAIL WITH ZeroDivisionError, so the pin rests on that guard rather
++  than on luck.
++  EIGHTH BRIEF DEFECT, AND IT IS THE FALSE-TENSE CLASS AGAIN. My brief's docstring text claimed, PRESENT
++  TENSE, that summarize_step already records resample_draws for column metrics as "the requested n". It
++  does not — summarize_step's recorded-column branch carries NO resample_draws key at all; that wiring
++  is task 12/14's, and E-STATS-RESAMPLE-UNSUPPORTED still refuses a declared resample end to end.
++  Writing the sentence verbatim would have shipped a docstring claiming a guarantee the code does not
++  provide. It reworded to state the invariant CONDITIONALLY for whenever the wiring lands, and recorded
++  the distinction in spec-defects.md. The spec decision itself is unaffected — only the tense was wrong.
++  RUNNING COUNT: this is the fourth time in the slice that prose written from the FINISHED slice's point
++  of view landed in a brief and would have shipped as a present-tense claim. The pattern is now
++  well-established enough to belong in CLAUDE.md at merge.
++Task 11 review dispatched. BASE c5de085, HEAD d5f6b6b.
++Task 11 review: spec ❌, quality 1 CRITICAL, 3 Important, 2 Minor. THE TASK WORKED — its job was to test
++  an invariant, and the invariant turned out FALSE.
++  CRITICAL — "a column draw is always defined" IS FALSE. Non-finite column values are reachable END TO
++  END: coerce_scalars accepts nan/inf, summarize_step's _is_numeric never checks finiteness, and the
++  column branch passes them through — TODAY, ALREADY PRODUCING ci95: [NaN, NaN]. Once 12/14 wires the
++  column path the record would claim resample_draws: 2000 where the DERIVED SIBLING ON THE SAME DATA
++  SAYS 0. A second instance needs no user nan at all: usable_weight gates each weight finite-positive
++  but Σw CAN OVERFLOW — weights=[1e308]*4 gives Interval(nan, nan).
++  AND (Interval, int) IS NOT THE REMEDY — percentile_over_units has no survivor filter, so the tuple
++  returns (Interval(nan,nan), 2000): the same false claim with more ceremony. DECISION 2'S CONCLUSION
++  SURVIVES; ITS PROOF DOES NOT. Ruled: name the finiteness CONDITION in docstring and defect entry, and
++  FILE THE NON-FINITE-COLUMN GAP SEPARATELY with its own owner — it is pre-existing, bigger than this
++  task, and produces a wrong published number today.
++  THE ❌ TRIGGER: the defect entry cites reference.md § Statistical reporting for a two-provenance split
++  THAT SECTION DOES NOT STATE (it says the field is "recorded beside every derived metric" and never
++  mentions columns). The ruling CONTRADICTS the document rather than resting on it, and in this project
++  the document changes first.
++  IMPORTANT: the None question is now demonstrably incoherent — a column refused by 9/10's rule writes
++  resample_draws: 2000 beside ci95: null, a positive evidence count for a REFUSED interval, while the
++  draws<min_honest_draws path reads correctly. reference.md's three-way scheme (null / 0 / survivors)
++  PREDATES REFUSALS and may need a fourth case rather than being forced.
++  MINOR THAT EXPLAINS THE WHOLE FAILURE: the adversarial set varied CONFIG SHAPE, not VALUE DOMAIN. ONE
++  nan CASE WOULD HAVE CAUGHT THE CRITICAL IMMEDIATELY (low <= high is False for nan). That is CLAUDE.md's
++  own named trap — "Varying config shape when the property is about roster content" — in new clothes,
++  and it is why the invariant survived ten tests.
++Task 11: COMPLETE (commits d5f6b6b, 30e8d03). 1765 passed + 2 xfailed; ruff and mypy clean. Critical,
++  all 3 Importants and both Minors closed. The non-finite gap is FILED SEPARATELY owned by task 12/14,
++  with two tests pinning current behaviour EXPLICITLY AS A KNOWN UNFIXED GAP rather than as correctness —
++  the right shape, given task 9 shipped a test pinning wrong behaviour as correct.
++  RULED BY THE IMPLEMENTER AND ACCEPTED: resample_draws is `null` whenever ci95 is `null` (all three
++  refusal reasons), otherwise the requested n. That makes the COLUMN field genuinely TWO-VALUED against
++  the derived metric's THREE-valued scheme — an asymmetry it named explicitly as owed content for
++  reference.md rather than smuggling in.
++OWED TO reference.md, ROUTED TO TASK 14 (the column percentile wiring, which is where the behaviour
++  lands): § Statistical reporting currently says resample_draws is "recorded beside every derived
++  metric" and never mentions columns. It owes (a) the column provenance, and (b) the two-valued vs
++  three-valued asymmetry above.
++Task 12: dispatched — THE RETIREMENT. Carries four items recorded earlier: drop `NOT BUILT; ` leaving
++  `# bootstrap`; add the E-STATS-RESAMPLE-METHOD reference to § Statistical reporting now that task 4
++  registered it; "Four declarations are not yet built" -> "Three"; and RE-DATE the feasibility doc's
++  § Executability rather than editing it in place. BASE 30e8d03.
++Task 12: implemented, commits 2fdc957 + 9fa2366 + ef8880f. 1767 passed + 2 xfailed; ruff and mypy clean.
++  E-STATS-RESAMPLE-UNSUPPORTED IS RETIRED. Both required mutations confirmed (re-adding the resample
++  tuple; deleting the whole loop, which must fail the null_test control).
++  NINTH AND TENTH BRIEF DEFECTS, BOTH FALSE-TENSE: (1) my step 3(b) said "Task 2 already removed
++  `NOT BUILT;`" — false, task 2 DELIBERATELY KEPT it per my own pre-flight ruling, and the brief's own
++  top-matter item 1 said so; the brief contradicted itself. (2) step 3(a)'s prescribed docstring claimed
++  cli.command_run ALREADY threads a declared resample into every interval construction — false at this
++  commit; cli.py still hardcodes derived_metric_draws = 2000 and that wiring is tasks 13-14. It called
++  advisor() before writing anything and wrote the true statement instead.
++  IT ALSO REPAIRED FOUR PRE-EXISTING TESTS THAT USED THE RETIRED CODE AS THEIR POSITIVE COMPANION —
++  exactly the weakening I asked it to look for. They now use a second, independent _check_resample
++  finding. One now-contradicted test deleted. It also fixed a vacuity risk in the brief's OWN acceptance
++  test (cwd-relative rglob path, no non-empty guard).
++  CAREFUL SEQUENCING WORTH KEEPING: it split into two commits so the feasibility doc's re-dated table
++  is measured against a tree where the refusal is ACTUALLY GONE, rather than against the brief-specified
++  parent sha which still carries it.
++Task 12 review dispatched. BASE 30e8d03, HEAD ef8880f.
++Task 12 review: spec ✅, quality 1 Important + 3 Minor. Retirement clean and wholesale; both brief
++  defects confirmed; the two-commit split confirmed correct reasoning.
++  THE OPEN WINDOW IS SILENT, NOT WRONG — the question I most wanted settled. statistics.resample is read
++  at exactly ONE place in src/, nothing echoes the declared values, and resample_draws plus the emitted
++  method strings report WHAT ACTUALLY HAPPENED. So a declared n: 5000 sits beside resample_draws: 2000
++  in run.yaml: DETECTABLE, not hidden. That is the right state for a two-task window.
++  IMPORTANT — A FALSE BEHAVIOUR CLAIM INTRODUCED INTO THE RE-DATED SECTION, which is the worst place for
++  one because the section is dated and reads as measured. It said the plugin registry "gates every one of
++  them before any other check runs". validate COLLECTS — probed, a config declaring a resolver + holdout
++  + faulty resample reports ALL FOUR codes together. Told to re-read the whole section against the same
++  standard: anything phrased as what HAPPENS must be OBSERVED, not inferred from the code's shape.
++  MINOR WORTH THE NAME: the two repaired n-side tests use `method: "bootstap"` as companion, which is
++  checked UPSTREAM of the n leaf — a return after the n check leaves both green while the docstrings
++  claim otherwise. The implementer was repairing exactly this failure mode in four other tests and then
++  reproduced it in its own.
++Task 12: COMPLETE (commits 2fdc957, 9fa2366, ef8880f, 462de50, a6407c0). 1766 passed + 2 xfailed; ruff
++  and mypy clean. The false "gates every one of them" claim is reworded after PROBING validate directly;
++  the upstream companion replaced with a downstream stratify_by one and mutation-confirmed; the
++  duplicate null_test control dropped after re-verifying the pre-existing one still catches the
++  whole-loop mutation alone; and five perishable comments ANCHORED TO COMMIT 2fdc957 with readers
++  pointed at cli.command_run/derived_metric_draws to check current state directly rather than trust
++  prose that goes stale at tasks 13-14. BASE for task 13 is a6407c0.
++Task 13: dispatched — THE LIVE REGRESSION HAZARD. Replacing the literal derived_metric_draws = 2000 with
++  a resolved value is exactly where an undeclared config could silently acquire a different draw count,
++  and task 1's two-document pin exists for this task and no other.
++Task 13: implemented, commits 220744b + 8b34b19. 1769 passed + 2 xfailed (+3 new); ruff and mypy clean.
++  TASK 1'S PIN IS STILL GREEN — the acceptance criterion this whole slice's first task existed to
++  provide, eighteen tasks later. Both required mutations applied/failed/reverted.
++  The stratify_by-for-derived gap was handled by STORING IT UNUSED on resample_spec for task 14 to
++  consume — the gap stays open but NOTHING IN THE RECORD IMPLIES IT IS CLOSED, which was the constraint.
++  First task in a while with no substantive brief/code disagreement (only six lines of line-number drift).
++Task 13 review dispatched. BASE a6407c0, HEAD 8b34b19. THE REGRESSION-HAZARD REVIEW.
++Task 13 review: spec ✅, quality 1 Important + 3 Minor, no Critical. THE DANGEROUS PART CAME OUT RIGHT
++  AND WAS VERIFIED, NOT ASSUMED. .get("resample", …) fails the ABSENT-KEY pin while the explicit-null pin
++  passes — the two-document distinction intact, which is the whole reason task 1 wrote two tests.
++  Deriving `declared` from n != 2000 fails specifically at the {"n": 2000} assertion. A mutation the
++  implementer did NOT run — resolver call left in, derived_metric_draws hardcoded — fails the declared-n
++  test, so the resolved value really reaches all six sites.
++  DECISIVE: TASK 1'S PIN STILL REACHES THE CHANGED CODE. It pins the derived ci95 NUMERICALLY and it fell
++  to the first mutation. A green pin is not evidence on its own — a pin can survive by no longer reaching
++  what it guarded — and this one was checked for exactly that.
++  The stratify_by decision met its constraint UNDER TEST: with stratify_by declared, run.yaml carries
++  only the verbatim config echo plus percentile_over_units / resample_draws. Nothing implies a stratified
++  derived draw.
++  IMPORTANT: the new threading comment sits at the ONE LINE three other files point readers to, and it
++  (a) says "statistics.resample is honored as of H4a" unqualified when ONLY `n` is honored, (b) quotes
++  § Statistical reporting's "resolved values are recorded beside the interval" AS A REQUIREMENT THIS
++  COMMIT MEETS when it does not (that is task 17), and (c) REPLACED A COMMENT THAT WAS SCRUPULOUS ABOUT
++  NAMING ITS OWN OPEN GAP — undoing task 12's anchoring discipline at the site that most needs it.
++  MINOR RAISED IN PRIORITY BECAUSE TASKS 14-17 WORSEN IT: test_the_resample_block_is_resolved_once does
++  NOT distinguish "resolved once" from "read seven times" — it calls the resolver directly and would pass
++  if seven sites resolved independently. ONCE-NESS IS GUARDED BY NOTHING IN THE SUITE, immediately before
++  four tasks add read sites. The false docstring text was verbatim from MY brief.
++Task 13: COMPLETE (commits 220744b, 8b34b19, ce2f2db). 1770 passed + 2 xfailed; ruff and mypy clean.
++  All four findings closed. THE ONCE-NESS TEST IS NOW REAL — a call-counting monkeypatch around a full
++  run_a_project, confirmed to fail when a redundant resolver call is inserted. That guarantee now holds
++  for tasks 14-17, which are the tasks that add read sites. The threading comment states only what is
++  true at this commit and names task 17 for the recorded-values requirement.
++  BASE for task 14 is ce2f2db.
++Task 14: dispatched — THE PAYLOAD. Where a declared resample finally changes a recorded column's
++  interval, and where the partly-honoured window opened by task 12 CLOSES. Carries the two reference.md
++  amendments owed from task 11 and the percentile_of_derived strata gap routed from tasks 9/13.
++Task 14: implemented, commit (this task). 1776 passed + 2 xfailed (baseline 1770 + 6 new); ruff and
++  mypy clean. All three required mutations (dropped `weights=` in the unclustered percentile call,
++  emitting `resample_draws` unconditionally, and gating `resample_columns` on anything but
++  `resample_spec["declared"]`) applied, confirmed FAIL against a named test, `__pycache__` cleared,
++  reverted in place, confirmed PASS. Task 1's acceptance pin caught the gate mutation directly.
++  BRIEF/CODE DISAGREEMENT FOUND (as flagged): the brief's own Step 1 test asserted
++  `resample_draws == 2000` for a one-unit column under a declared resample — a refused (`ci95: null`)
++  interval. The spec-defects.md ruling this brief itself cites says the field must be `null` whenever
++  `ci95` is, for exactly this reason ("recording the requested `n` there would assert survivor
++  evidence for a refused interval"). Implemented per the ruling, not the brief's literal snippet;
++  the test was rewritten and renamed
++  (`test_a_column_below_two_units_reports_a_null_draw_count_under_resample`) to assert `None`, and a
++  new spec-defects.md entry ("A column's resample_draws under a refused interval is null, not the
++  requested n") records which test was wrong and why. Caught before implementing via `advisor()`,
++  which cross-checked the brief's test against spec-defects.md's own text before any code was written.
++  STRATA DECISION: shipped WITHOUT threading `stratify_by` into either the column or the derived path.
++  Threading it into the column path alone (the only one cheap enough for this task, since
++  `percentile_over_units`/`_clustered` already accept `strata`) would have put two intervals in one
++  table under different designs with `method` reading identically either way — worse than today's
++  status quo, where both paths agree by both ignoring it. A new spec-defects.md entry
++  ("statistics.resample.stratify_by is checked by validate and honoured by nothing") records the gap
++  and names what closing it needs: `percentile_of_derived` gaining a `strata` parameter first (a real
++  construction — the derived draw has no per-unit value to stratify directly), with the column wiring
++  landing alongside it rather than ahead of it. `cli.py`'s stale "task 14 wires stratified column
++  resampling" / "declared is unread until task 14" comments (written by tasks 12-13) were rewritten to
++  state what this commit actually does.
++  `reference.md` § Statistical reporting gained the column-provenance paragraph task 11 named as owed:
++  absent when undeclared, `null` when declared but `ci95` is, otherwise the requested `n` — two-valued
++  against the derived metric's three-valued scheme, named as a real asymmetry rather than smoothed over.
++  The retry `summarize_step` call (post derived-key-collision) deliberately does NOT receive
++  `resample_columns`, so a column's construction cannot depend on whether its sibling derived metrics
++  happened to collide — commented at the call site.
++  The `cli.py` warning loop now reads `resample_draws` off recorded columns too; commented (not a
++  runtime assert) why `used == 0` and `used < derived_metric_draws` cannot fire for one, resting on
++  Task 11's verified invariant and this task's `null`-or-`n` correction of it.
++  BASE for task 15 is this commit.
+diff --git a/.superpowers/sdd/2026-08-15-resample-honoured/task-14-report.md b/.superpowers/sdd/2026-08-15-resample-honoured/task-14-report.md
+new file mode 100644
+index 0000000..df5f010
+--- /dev/null
++++ b/.superpowers/sdd/2026-08-15-resample-honoured/task-14-report.md
+@@ -0,0 +1,67 @@
++## Task 14 report
++
++**Status:** COMPLETE. Commit `b156b1b` on `h4a-resample-honoured` (base `ce2f2db`).
++
++**Tests:** `uv run pytest` — 1776 passed + 2 xfailed (baseline 1770 + 6 new: 4 in `test_stats.py`,
++2 in `test_cli.py`). `uv run mypy` clean (42 files). `uv run ruff check .` clean. All three required
++mutations (dropped `weights=` in the unclustered percentile call; `resample_draws` emitted
++unconditionally; `resample_columns` gated on anything but `resample_spec["declared"]`) applied,
++confirmed FAIL against the named test, `__pycache__` cleared, reverted in place, confirmed PASS.
++Task 1's acceptance pin (`test_the_undeclared_resample_shape_is_pinned_*`) caught the gate mutation
++directly and stayed green otherwise.
++
++**Brief/code disagreement found (as flagged):** the brief's own Step 1 test asserted
++`resample_draws == 2000` for a one-unit column under a declared resample — an interval that is
++`None` (`ci95: null`). `docs/superpowers/spec-defects.md`'s own cited ruling (the entry the brief
++quotes as "task 11's ruling") says `resample_draws` must be `null` whenever `ci95` is, for exactly
++this reason: recording the requested `n` beside a refused interval asserts survivor evidence for a
++draw that never produced one. Implemented per the ruling, not the brief's literal snippet. The test
++was rewritten and renamed to `test_a_column_below_two_units_reports_a_null_draw_count_under_resample`,
++asserting the key is present (declared, attempted) and `None` (nothing to describe), and a new
++spec-defects.md entry records which test was wrong and why. Caught via `advisor()` before writing
++any test code, by cross-checking the brief's fourth test against spec-defects.md's own text.
++
++**Strata decision (deliberate, disclosed, not silent):** shipped without threading `stratify_by`
++into either the column or the derived resample path. `percentile_of_derived` has no `strata`
++parameter; wiring only the column path (the cheaper of the two, since `percentile_over_units`/
++`_clustered` already accept `strata`) would put two intervals in one `aggregated` block computed
++under different designs, with `method` reading identically either way and nothing else in the
++record to disclose which is which — worse than today, where both paths agree by both ignoring the
++declaration. A new spec-defects.md entry names the gap and what closing it needs: `strata` in
++`percentile_of_derived` first (a real construction, not wiring — the derived draw has no per-unit
++value to stratify directly), with column wiring landing alongside it rather than ahead of it.
++`cli.py`'s stale forward-promise comments from tasks 12–13 ("task 14 wires stratified column
++resampling", "declared is unread until task 14") were rewritten to state what this commit actually
++does.
++
++**Documentation landed:** `reference.md` § Statistical reporting gained the column-provenance
++paragraph task 11 named as owed — absent when undeclared, `null` when declared but `ci95` is,
++otherwise the requested `n` — two-valued against the derived metric's `null`/`0`/*n* three-valued
++scheme, stated as a real asymmetry rather than smoothed over. Two `spec-defects.md` entries added
++(the `stratify_by`-honoured-nowhere gap; the corrected `resample_draws`-under-a-refused-interval
++ruling).
++
++**Concerns / things a reviewer should check:**
++- The retry `summarize_step` call (post derived-key-collision) deliberately does not receive
++  `resample_columns` — commented at the call site, matching the brief.
++- The `cli.py` warning loop (`used == 0` / `used < derived_metric_draws`) now reads a column's
++  `resample_draws` too. No production `assert` was added (per review guidance against asserts that
++  vanish under `-O`); instead the loop carries a comment explaining why neither branch can fire for
++  a column, and `test_a_declared_resample_gives_every_column_a_percentile_interval` pins the absence
++  of both warning strings positively (both warning strings are independently proven falsifiable
++  elsewhere in the existing suite).
++- The "summary-step `Estimate` is unreachable through `summarize_step`" claim (brief line 15, task
++  18's job) was **not** independently re-verified with a new fixture in this task — building one
++  costs a custom `extra_step_source` and the brief explicitly assigns the assertion to task 18.
++  Flagging this rather than silently skipping it, since the dispatch instructions I received also
++  raised it as something "this task owes."
++- `mypy` needed one added `assert column_weights is not None` in the final `else` branch of the
++  interval-selection block — narrowing it can't infer across the two separate `if` statements. This
++  is a type-narrowing assert (always true by construction), not a behavior-deciding one.
++- `uv run ruff format --check .` reports 62 files (including `stats.py`/`cli.py`) as unformatted;
++  confirmed via `git stash` that this predates this task's changes (repo-wide drift, not introduced
++  here) and is not part of the required gate table.
++
++**Files touched:** `src/publishable/stats.py`, `src/publishable/cli.py`, `tests/test_stats.py`,
++`tests/test_cli.py`, `docs/reference.md`, `docs/superpowers/spec-defects.md`,
++`.superpowers/sdd/2026-08-15-resample-honoured/progress.md`.
+diff --git a/docs/reference.md b/docs/reference.md
+index 711dc27..e574ba8 100644
+--- a/docs/reference.md
++++ b/docs/reference.md
+@@ -2342,20 +2342,22 @@ A [`null_test`](#what-isnt-a-repeat) p-value is corrected alongside the interval
+ **Resample methods.** `statistics.resample.method` names how the draws are taken, and the vocabulary is closed:
+ 
+ | `method` | What one draw is |
+ |---|---|
+ | `bootstrap` | Units drawn with replacement to the original count, or whole [clusters](#clustered-units) when `cluster_by` is declared, or within each [stratum](#weighted-samples) when `stratify_by` is — the statistic recomputed on each draw |
+ 
+ One value is the whole enum. It is stated as an enum rather than left implicit so that adding a second is a documented change rather than a silent one, and so a misspelled `method` is a refusal the schema can name — [`E-STATS-RESAMPLE-METHOD`](#errors-validate-reports) — rather than a value silently ignored. The method strings in the two construction tables above — `percentile_over_units`, `paired_percentile_over_units` and their `_clustered` forms — are what core **emits** into `run.yaml`, not values a config may name here.
+ 
+ **`resample_draws` says how many draws the interval actually rests on**, recorded beside every derived metric in `aggregated`. Resampling a derived metric means [recomputing it](#templates-where-parameters-are-defined), and a draw can legitimately have no answer: a resampled table with no variance makes a correlation `nan`, makes a hand-rolled ratio raise, and makes a careful `aggregate` return `None`. Which library the template happened to call is not a fact about whether the draw was degenerate, so all three are dropped alike and the percentiles are read off what survived. The field is `null` when resampling was never attempted, `0` when it was attempted and every draw was degenerate, and otherwise the surviving count — three different facts that `ci95: null` alone cannot tell apart.
+ 
++**A recorded column carries `resample_draws` too, once `statistics.resample` is declared, but with different provenance and only two of the three values above.** A column has the `t_over_units` fallback the paragraph above contrasts it with, so `resample_draws` is **absent** entirely — not `null` — when no `resample` is declared: nothing was attempted, and the key says so by not appearing, the same way the field is absent from a run predating H4a. Once declared, the value is **`null`** whenever `ci95` is (fewer than two units, or too few draws for the confidence level), and otherwise the **requested** `n` — never a lesser count. A column's draw statistic is a mean, or a weighted mean, over a non-empty sample that is finite throughout, so it is always defined once an interval exists at all: there is no per-draw failure for it to survive-count the way a derived metric's recompute can fail draw by draw, so the `0` bucket above ("attempted, every draw individually degenerate") is unreachable for a column. The field is genuinely two-valued for a column (`null` or the requested `n`) against the derived metric's three-valued scheme above, and that asymmetry is real rather than smoothed over — it is a fact about what a mean can fail at, not an inconsistency in how core reports it.
++
+ **Below 80 surviving draws core reports no interval.** That is the fewest at which both percentile ranks are interior: under it the 2.5th percentile *is* the smallest draw, so the interval contains the sample minimum by construction while its upper end keeps shrinking — low-biased and too narrow — and at two survivors the two ranks coincide and the "interval" has zero width. Reporting a point with no interval is honest; a zero-width 95 % interval is not. `run` warns [`W-STATS-AGGREGATE-FAILED`](#warnings-core-reports) for a degenerate-on-every-draw metric (`resample_draws: 0`) among the other ways `aggregate` can produce nothing usable, and [`W-STATS-RESAMPLE-THIN`](#warnings-core-reports) when fewer draws survived than were requested but not zero — see the table for the rest of each condition. Neither costs the run its record: every execution had already completed, so the run is `completed`, `run.yaml` is written, the recorded columns keep their own summaries, and what is lost is the derived metric.
+ 
+ That first table's third row — a unit table exists and the metric isn't derivable from it — is the important refusal. A step that computes a cohort-level statistic internally and returns it as a number gives core nothing to resample: core never inspects the body of your Python, so it cannot recompute your statistic on a different set of units. What it will not do is fall back to an interval across the five seeds and present that as a confidence interval — **an interval over seeds measures how much the RNG moved the answer, and it narrows as you add seeds.** It says `basis: repeats`, reports the spread, and omits `ci95`. To get an interval, make the quantity a per-unit column, or teach the template to derive it (below).
+ 
+ Repeats are a variance component, not the inference base: for a `basis: units` metric, repeats are averaged per unit *before* any interval is computed — the same collapse technical replicates get at unit resolution — and their dispersion is reported alongside as `repeat_spread`, which answers "is this pipeline stable?" rather than "how precise is this estimate?"
+ 
+ In the worked example, `generic`'s `aggregate` derives `r` from the recorded `pred` and `truth` columns — selecting the coefficient from `cfg.parameters.analysis.method`, since that's what the sweep varies — so `r` is unit-based even though the step also returns it.
+ 
+ **`per_repeat` and `aggregated` come from different places, and neither is derived from the other.** `per_repeat` is verbatim what each step returned on that execution — nothing more, and no derived metric ever appears there, because deriving one per repeat would mean running `aggregate` on a table that hasn't been collapsed yet. `aggregated` is computed once, from the collapsed table. Recording both side by side is deliberate: if the step's own `r` and the derived `r` disagree, that's visible in `run.yaml` rather than reconciled behind your back. Core doesn't adjudicate which is right — one of them is measuring something else, and that's a bug in the experiment, not a number for core to pick.
+ 
+diff --git a/docs/superpowers/spec-defects.md b/docs/superpowers/spec-defects.md
+index 4b30a55..1e2d571 100644
+--- a/docs/superpowers/spec-defects.md
++++ b/docs/superpowers/spec-defects.md
+@@ -5129,10 +5129,68 @@ observe an individual draw's `compute` fail. Adding a survivor count here would
+ checked.
+ 
+ **Proposed resolution, not attempted here:** whichever slice wires column resample into
+ `summarize_step` (task 12/14) should validate `values` and any weight vector for finiteness
+ before drawing — plausibly reusing `is_measurement_numeric`/`usable_weight`'s existing finite
+ checks, extended to also catch a weight sum that overflows once accumulated — and route a
+ failure to a real refusal (`ci95: null`, `resample_draws: null` per the ruling above) rather than
+ publishing `nan` under a false `resample_draws: n`. This is bigger than task 11's scope: it likely
+ also affects the unweighted and clustered percentile constructions and the `t_over_units` family,
+ none of which check finiteness either, and none of which this entry claims to have surveyed.
++
++## `statistics.resample.stratify_by` is checked by `validate` and honoured by nothing
++
++Found during task 14's review (2026-08-15, H4a, `ce2f2db`). `validate._check_resample` refuses a
++`stratify_by` naming an undeclared attribute (§ Validation's *Resample strata exist* /
++*Resample strata survive clustering* rows), and `cli._resolved_resample` normalizes and carries it
++on `resample_spec`, so a config declaring it validates clean and looks accepted. Nothing downstream
++reads it: `percentile_over_units`/`percentile_over_units_clustered` accept a `strata` parameter
++(built and verified in tasks 9–10) but task 14's column-resample wiring does not pass one, and
++`percentile_of_derived` has no `strata` parameter to pass one to at all. So a declared
++`resample.stratify_by` changes no arithmetic anywhere today — a stratified bootstrap by name, an
++unstratified one by construction.
++
++**Why task 14 didn't close it, deliberately rather than by oversight.** Threading `strata` into
++the column path alone (the cheaper of the two, since the construction already exists) would put two
++intervals in one `aggregated` block computed under different designs — a stratified column's
++`percentile_over_units` beside an unstratified derived metric's `percentile_of_derived` — with
++`method` reading identically either way (`percentile_over_units` doesn't encode whether `strata`
++was passed) and nothing else in the record to tell a reader which is which. That is worse than the
++status quo, not better: today both paths agree (neither honours it), so no divergence is visible
++even though neither is doing what the config asked. Refusing the combination outright was
++considered and rejected too — `reference.md` § Weighted samples documents `resample.stratify_by`
++with a worked YAML as an accepted, ordinary declaration, so refusing it retroactively is a document
++change `CLAUDE.md` puts far outside a single task's scope.
++
++**What is owed, and by whom.** Threading `strata` into `percentile_of_derived` — recomputing
++`aggregate` on a within-stratum resample rather than an unconditional one — is a real construction,
++not wiring: the derived case has no per-unit value to stratify directly, so the draw itself has to
++change shape (stratified indices into the collapsed table, then the same per-draw `compute` call).
++Only once that exists can a slice safely wire `strata` into the column path too, landing both
++together so the two constructions never disagree about whether stratification happened. Until then,
++`stratify_by` remains resolved and carried on `resample_spec` but read by no interval construction —
++a fact stated in `_resolved_resample`'s own docstring and in `cli.py`'s comment beside the primary
++`summarize_step` call, so a future reader hits the citation before hitting the gap.
++
++## A column's `resample_draws` under a refused (too-few-units) interval is `null`, not the requested `n`
++
++Found during task 14's implementation (2026-08-15, H4a, `ce2f2db`), reviewing the brief's own Step 1
++test against the ruling two entries above ("`resample_draws` records the requested `n`, not a
++survivor count"). That entry's own text rules: **"`resample_draws` is `null` whenever `ci95` is
++`null`, for any of the three reasons [`percentile_over_units` returns `None`]."** The brief's fourth
++test (`test_a_column_below_two_units_reports_no_interval_under_resample`) asserted
++`got["pred"]["resample_draws"] == 2000` for a one-unit column under a declared resample — an
++interval that is `None`, so `ci95` is `null` — which is the exact case the ruling calls out by name
++and the exact incoherence its own prose warns against: "recording the requested `n` there would
++assert survivor evidence for a refused interval." This is the "one test pinned wrong behaviour as
++correct" the task's own "Where this goes wrong" guidance named without identifying which one.
++
++**Resolution:** implemented per the ruling. `summarize_step`'s emitted `resample_draws` is
++`draws if interval else None` (not unconditionally `draws`) whenever `resample_columns` is true and
++a `seed` is given; absent entirely otherwise. The test was rewritten as
++`test_a_column_below_two_units_reports_a_null_draw_count_under_resample`, asserting the key is
++present (a resample was declared and attempted) and `None` (nothing was produced to describe a draw
++count for) — distinct from the absent-key case, which means no resample was ever asked for. Both
++mutations — dropping the `if interval else None` guard, and gating the key's presence on anything
++but `resample_columns and seed is not None` — are pinned by this test and by
++`test_the_undeclared_resample_shape_is_pinned_absent_key` respectively; both were run and confirmed
++to fail before being reverted.
+diff --git a/src/publishable/cli.py b/src/publishable/cli.py
+index 5faa80b..a150687 100644
+--- a/src/publishable/cli.py
++++ b/src/publishable/cli.py
+@@ -1016,36 +1016,43 @@ def _resolved_resample(doc: dict[str, Any]) -> dict[str, Any]:
+     the method or the count rather than switching the behaviour on, and the
+     resolved values are recorded in `run.yaml` beside the interval". So the
+     defaults are real values here rather than `summarize_step`'s own defaults
+     taking effect unseen at a call site that forgot them.
+ 
+     **`declared` is separate from `n` on purpose.** A config asking for exactly
+     2000 draws and a config asking for nothing both resolve to 2000, but only
+     the first turns a RECORDED COLUMN into a percentile interval — a column has
+     a t-interval available, so resampling it is a choice and `resample` is what
+     makes it, while a derived metric has no such fallback. Reading `declared`
+-    off `n != 2000` would silently make that sentence false.
++    off `n != 2000` would silently make that sentence false. `command_run` reads
++    `declared` (H4a task 14) to gate `summarize_step`'s `resample_columns`.
+ 
+     **`.get("resample") or {}`, never `.get("resample", …)`**: `materialize.py`
+     writes no `resample` key at all and a hand-written config may write
+     `resample: null`, and the two are different documents that must resolve to
+     one answer.
+ 
+     `stratify_by` goes through `units.stratum_names`, the same normalization the
+     draw balances on and `validate._check_resample` checks names against, so a
+     bare `stratify_by: site` is one name to all three. Resolved here and carried
+-    on the returned dict; nothing in `command_run` reads it as of this commit.
+-    `percentile_of_derived` takes no `strata` parameter today, so even once a
+-    caller starts reading `stratify_by`, a derived metric has no construction
+-    that could honor it yet — only a later task's column-metric wiring could.
+-    That is a fact about `stats.py` today, not a commitment about which future
+-    task closes it.
++    on the returned dict; **nothing in `command_run` reads it, including after
++    task 14** — `percentile_over_units`/`percentile_over_units_clustered` accept
++    a `strata` parameter and could honour it for a recorded column, but
++    `percentile_of_derived` takes none, and wiring stratification into the
++    column path alone would leave one table holding two intervals computed
++    under different designs (a stratified column beside an unstratified
++    derived metric) with nothing in the record to tell a reader which is
++    which. Left unwired on both paths instead, deliberately, so a declared
++    `stratify_by` today changes no arithmetic anywhere — see
++    `docs/superpowers/spec-defects.md` for the open gap. That is a fact about
++    both `stats.py` and this function today, not a commitment about which
++    future task closes it.
+     """
+     declared = ((doc.get("statistics") or {}).get("resample")) or {}
+     if not isinstance(declared, dict):
+         declared = {}
+     n = declared.get("n")
+     method = declared.get("method")
+     return {
+         "method": method if isinstance(method, str) and method else "bootstrap",
+         "n": n if isinstance(n, int) and not isinstance(n, bool) else 2000,
+         "stratify_by": stratum_names(declared.get("stratify_by")),
+@@ -1541,33 +1548,39 @@ def command_run(config_path: Path) -> int:
+             # attributes for every condition, every step and every draw
+             # (`_attributed` says what it is for). The `if u.attributes` filter
+             # is what makes it *empty* — rather than a unit-keyed mapping of
+             # empty dicts, which is truthy — when the config declares no
+             # `data.units.attributes`, so `_attributed`'s early return actually
+             # fires and such a project never rebuilds a row list at all.
+             unit_attributes = {u.key: dict(u.attributes) for u in roster if u.attributes}
+             # `statistics.resample` is resolved ONCE here (H4a task 13) rather
+             # than at each read site, so the record and the arithmetic cannot
+             # come to disagree by two sites resolving the same declaration
+-            # independently. As of this commit only `resample_spec["n"]` is
+-            # read — threaded below to the six existing `derived_metric_draws`
+-            # sites, unchanged from before this task. `method` and
+-            # `stratify_by` are resolved and carried on `resample_spec` but
+-            # nothing yet reads them: `method` is unread until a second method
+-            # exists to choose between (`validate.RESAMPLE_METHODS` is
+-            # `("bootstrap",)` only), `stratify_by` is unread until task 14
+-            # wires stratified column resampling, and `declared` is unread
+-            # until task 14 gates the column-percentile switch on it. None of
+-            # `reference.md` § Statistical reporting's "resolved values ...
+-            # recorded beside the interval" is met yet — task 17 is what
+-            # writes that record; today only a survivor count sits beside the
+-            # interval.
++            # independently. `resample_spec["n"]` is threaded below to the six
++            # existing `derived_metric_draws` sites, unchanged from before
++            # task 13. `resample_spec["declared"]` gates `summarize_step`'s
++            # `resample_columns` at the primary call below (H4a task 14): a
++            # declared `resample` is what turns a recorded column's interval
++            # from `t_over_units` into `percentile_over_units`, not `n` on its
++            # own — a config asking for exactly 2000 draws and a config asking
++            # for nothing both resolve to `n: 2000`. `method` stays unread
++            # (`validate.RESAMPLE_METHODS` is `("bootstrap",)` only, so there
++            # is nothing yet to choose between). **`stratify_by` stays
++            # resolved and unread by this commit too** — `percentile_of_derived`
++            # takes no `strata` parameter, and wiring it into the column path
++            # alone (which `percentile_over_units`/`_clustered` could honour)
++            # would put two intervals in one table under different designs
++            # with nothing in the record distinguishing them; see
++            # `docs/superpowers/spec-defects.md`. None of `reference.md` §
++            # Statistical reporting's "resolved values ... recorded beside the
++            # interval" is met yet — task 17 is what writes that record; today
++            # only a survivor count sits beside a derived metric's interval.
+             resample_spec = _resolved_resample(doc)
+             derived_metric_draws = resample_spec["n"]
+             aggregate_where = f"{doc.get('experiment_type', '')}.aggregate"
+             # `aggregate` is user code in exactly the sense `runner.py`'s own
+             # step execution is — "a failed execution never stops the run" —
+             # but this call sits outside that `try`, in phase 8, after every
+             # execution already completed. Uncontained, a template whose
+             # `aggregate` raises anything but `PublishableError`/`OSError`
+             # would crash before `run.yaml` is ever written, discarding every
+             # completed execution over one metric core couldn't compute.
+@@ -1733,38 +1746,50 @@ def command_run(config_path: Path) -> int:
+                         step_summary = summarize_step(
+                             collapsed,
+                             counts,
+                             derived=derived,
+                             seed=resample_seed_value,
+                             resample=resample_fns,
+                             draws=derived_metric_draws,
+                             beside_n=cond_beside_n,
+                             weights=weights,
+                             clusters=clusters,
++                            resample_columns=resample_spec["declared"],
+                         )
+                     except ContractError as exc:
+                         prefix = f"{exc.code} " if exc.code else ""
+                         aggregate_c.warn(
+                             "W-STATS-AGGREGATE-FAILED",
+                             aggregate_where,
+                             f"condition {cond.index} step {step_name!r}: "
+                             f"{prefix}{type(exc).__name__}: {exc}",
+                         )
+                         # `weights` on the retry too: the collision costs the
+                         # `derived` mapping and nothing else, so the recorded
+                         # columns must come back with the same arithmetic they
+                         # had on the first call. Silently downgrading them to
+                         # unweighted numbers over a badly named derived key is
+                         # this slice's own failure class, reached through the
+                         # containment path. (A weight core cannot use cannot
+                         # arrive here: `attrition` above gates the same mapping
+                         # through `kish_effective_n`, outside any `try`.)
++                        # `resample_columns` deliberately NOT passed here (H4a
++                        # task 14): this retry passes no `derived`, `seed` or
++                        # `draws` either — its job is to reproduce the recorded
++                        # columns exactly as the first call built them, after a
++                        # derived-key fault, not to change their construction.
++                        # Passing `resample_columns=resample_spec["declared"]`
++                        # here would flip a column's interval to a percentile
++                        # one on the containment path only, so the same run
++                        # would record two different constructions for the
++                        # same column depending on whether its derived metrics
++                        # happened to collide.
+                         step_summary = summarize_step(
+                             collapsed,
+                             counts,
+                             beside_n=cond_beside_n,
+                             weights=weights,
+                             clusters=clusters,
+                         )
+                         # What the parent block dropped, every stratum of it
+                         # drops too. A level's table carries the same columns as
+                         # the whole one, so the collision that raised above
+@@ -1788,20 +1813,42 @@ def command_run(config_path: Path) -> int:
+                     # class of event `W-STATS-AGGREGATE-FAILED` already
+                     # covers above (user code could not produce a number), so
+                     # it reuses the identifier rather than minting a second
+                     # one; the two cannot both fire for one metric, because a
+                     # failure in the call above already left `derived` (and
+                     # so this key) absent from `step_summary` entirely. The
+                     # unit-identity fix makes this more likely, not less: a
+                     # bootstrap draw duplicates units by construction, and a
+                     # template whose `aggregate` assumes distinct ones will
+                     # raise on every draw rather than some.
++                    #
++                    # This loop now reads a RECORDED COLUMN's `resample_draws`
++                    # too (H4a task 14, once `resample_spec["declared"]` gates
++                    # `resample_columns` above) — before this task a column
++                    # carried no such key and `used is None` skipped it
++                    # silently. Neither branch below can fire for one:
++                    # `used == 0` would name `aggregate_where` — `aggregate`,
++                    # user code — as the source of a failure `aggregate` never
++                    # touched, since a column's interval never calls it. A
++                    # column's `resample_draws` is `null` (skipping both
++                    # branches, same as before) whenever `ci95` is, and
++                    # otherwise the *requested* `draws` exactly — never a
++                    # lesser survivor count — because a column's mean is a
++                    # statistic over a finite, non-empty sample and is always
++                    # defined once an interval exists at all, unlike a
++                    # template's recompute, which can fail draw by draw.
++                    # `used == derived_metric_draws` (not `<`) is what that
++                    # buys: the `elif` below can't fire either. See
++                    # `docs/superpowers/spec-defects.md` for the one gap this
++                    # rests on — non-finite recorded values or weights, which
++                    # nothing here checks — filed rather than silently
++                    # depended on.
+                     for metric_key, metric in step_summary.items():
+                         used = metric.get("resample_draws")
+                         if used == 0:
+                             aggregate_c.warn(
+                                 "W-STATS-AGGREGATE-FAILED",
+                                 aggregate_where,
+                                 f"condition {cond.index} step {step_name!r} metric "
+                                 f"{metric_key!r}: every resample draw failed to "
+                                 "produce a value; reporting the point value with "
+                                 "no interval",
+diff --git a/src/publishable/stats.py b/src/publishable/stats.py
+index 27a7ada..ec9657d 100644
+--- a/src/publishable/stats.py
++++ b/src/publishable/stats.py
+@@ -1385,20 +1385,21 @@ def repeat_spread(
+ def summarize_step(
+     collapsed: dict[str, dict[str, float]],
+     counts: dict[str, float],
+     derived: dict[str, Any] | None = None,
+     seed: int | None = None,
+     resample: "dict[str, Callable[[UnitTable], float | None]] | None" = None,
+     draws: int = 2000,
+     beside_n: dict[str, Any] | None = None,
+     weights: dict[str, Any] | None = None,
+     clusters: dict[str, str] | None = None,
++    resample_columns: bool = False,
+ ) -> dict[str, dict[str, Any]]:
+     """Per-column value, basis, `n`, and interval over the collapsed unit table.
+ 
+     Every column here is `basis: units`: it was a recorded column, `n` counts
+     units, and the interval is `t_over_units` over the per-unit values — or
+     `None` below two units, since a single observation has no dispersion to
+     describe and inventing an interval for it would not be honest.
+ 
+     `n.completed` is per COLUMN, not the condition-wide figure `counts` carries:
+     `StepIO.finalize()` deliberately writes the union of recorded keys with nulls
+@@ -1558,20 +1559,49 @@ def summarize_step(
+     the effective sample size alongside the unit count" and § Statistical
+     reporting gives `t_over_units_clustered` "df = clusters − 1", so the figure is
+     the df of *this column's* interval, and a ragged column drawn from a subset of
+     the completed units sits in a subset of their clusters. Printing the
+     condition-wide count beside it would name a df no interval used. A full
+     column's figure is identical to `counts`'; a ragged one's is its own.
+ 
+     A DERIVED metric takes the condition-wide figure from `counts` instead, as it
+     does for `effective`: `aggregate` returned one number over the whole collapsed
+     table, so there is no per-column carrier set to recompute over.
++
++    `resample_columns` is the gate a RECORDED COLUMN's interval construction reads
++    (H4a task 14). A column always has a `t_over_units` fallback available, so
++    resampling it is a *choice* — unlike a derived metric, which has no fallback
++    and is resampled whenever `resample`/`seed` let it be, whether or not
++    `statistics.resample` was ever declared. `resample_columns=True` (only when
++    `cli.py`'s `_resolved_resample(doc)["declared"]` is true) switches a column's
++    interval from `t_over_units`/`weighted_t_over_units` (or their `_clustered`
++    forms) to `percentile_over_units`/`percentile_over_units_clustered`, over the
++    same `values`/`column_weights`/`column_keys`/`clusters` the unresampled branch
++    already assembled — the `value` itself does not move, only the construction
++    of the interval around it.
++
++    `resample_draws` is **absent** from a column's block when `resample_columns`
++    is `False` (or `seed` is `None`): no resample was attempted, and a `null`
++    there would claim otherwise. When `resample_columns` is `True` it is present
++    and **two-valued**, not the derived metric's three-valued `null`/`0`/*n*
++    scheme: `null` when `interval is None` (fewer than two units, or too few
++    draws for the confidence level — the same reasons `percentile_over_units`
++    returns `None` at all) — there is no interval for a draw count to describe,
++    so recording one would assert survivor evidence for a refused draw — and
++    otherwise the *requested* `draws`, never a survivor count. A column's draw
++    statistic is a mean (or weighted mean) over a non-empty, finite sample, which
++    is always defined once an interval exists at all, so unlike
++    `percentile_of_derived` there is no per-draw failure to filter and no `0`
++    bucket ("attempted, every draw individually degenerate") for a column to
++    reach — see `docs/superpowers/spec-defects.md` for the non-finite-input gap
++    this leaves open, which is a known, separately filed defect and not this
++    docstring's claim.
+     """
+     columns: list[str] = []
+     for cols in collapsed.values():
+         for name in cols:
+             if name not in columns:
+                 columns.append(name)
+     out: dict[str, dict[str, Any]] = {}
+     for column in columns:
+         # One pass over `(key, value)`, so the weights below cannot be filtered
+         # or ordered differently from the values they weight.
+@@ -1582,45 +1612,87 @@ def summarize_step(
+         values = [float(v) for v in raw]
+         # The column's own keys, taken from the same pass the values were: the
+         # cluster of a unit is looked up by key, so a vector filtered or ordered
+         # differently would group the wrong unit and produce a plausible number.
+         column_keys = [key for key, _ in carried]
+         n_block: dict[str, Any] = {**counts, "completed": len(values)}
+         if clusters is not None:
+             n_block["clusters"] = cluster_count_of(clusters, column_keys)
+         interval: Interval | None
+         value: float | None
++        column_weights: list[Any] | None = None
+         if weights is None:
+             value = mean_of(values)
++        else:
++            column_weights = [weights[key] for key, _ in carried]
++            value = weighted_mean_of(values, column_weights)
++            n_block["effective"] = kish_effective_n(column_weights)
++        # A recorded column has a `t_over_units` fallback available, so
++        # resampling it is a CHOICE and `statistics.resample` is what makes
++        # it — the asymmetry with a derived metric, which has no fallback and
++        # is resampled either way, below. The VALUE computed above is
++        # unchanged in every branch: § Weighted samples puts the weights "in
++        # the estimate rather than in the drawing", and § Clustered units
++        # makes the cluster the draw while `n.clusters` (set above) still
++        # reports the count. Only the interval's construction moves.
++        if resample_columns and seed is not None:
++            interval = (
++                percentile_over_units(values, seed, draws=draws, weights=column_weights)
++                if clusters is None
++                else percentile_over_units_clustered(
++                    values, column_keys, clusters, seed, draws=draws, weights=column_weights
++                )
++            )
++        elif weights is None:
+             interval = (
+                 t_over_units(values)
+                 if clusters is None
+                 else t_over_units_clustered(values, column_keys, clusters)
+             )
+         else:
+-            column_weights = [weights[key] for key, _ in carried]
+-            value = weighted_mean_of(values, column_weights)
+-            n_block["effective"] = kish_effective_n(column_weights)
++            # `weights is not None` here (the `elif` above took the `None`
++            # case), so `column_weights` was assigned in the first `if` block
++            # above — mypy can't see that across the two separate
++            # `if`-statements, hence the assert.
++            assert column_weights is not None
+             interval = (
+                 weighted_t_over_units(values, column_weights)
+                 if clusters is None
+                 else weighted_t_over_units_clustered(
+                     values, column_keys, clusters, column_weights
+                 )
+             )
+         out[column] = {
+             **(beside_n or {}),
+             "value": value,
+             "basis": "units",
+             "n": n_block,
+             "ci95": [interval.low, interval.high] if interval else None,
+             "method": interval.method if interval else None,
++            # Present only under a declared resample (`resample_columns` true
++            # and a `seed` given), and then TWO-valued rather than a survivor
++            # count: `null` when `interval is None` (too few units, or too
++            # few draws for the confidence level) — there is no interval for
++            # a draw count to describe, and recording one would assert
++            # survivor evidence for a draw that never happened — otherwise
++            # the REQUESTED `draws`, since a column's mean is always defined
++            # once an interval exists at all and so has no per-draw failure
++            # to survive-count the way a derived metric's recompute does.
++            # ABSENT rather than `null` when no resample is declared at
++            # all — `null` already means "declared, but the interval came
++            # back empty", and reusing it for "never asked" would erase that
++            # distinction (`docs/superpowers/spec-defects.md`).
++            **(
++                {"resample_draws": draws if interval else None}
++                if resample_columns and seed is not None
++                else {}
++            ),
+             # `W-STATS-FAMILY` warns the person; this null tells the record. The
+             # generated config declares `statistics.correction: holm` by default,
+             # so a metric that said nothing here could be misread as corrected —
+             # multiplicity correction across conditions is not implemented yet.
+             "correction": None,
+         }
+     if derived:
+         # A derived key may not take a name the step block already spends on
+         # something that is not a metric. Refused here, beside the recorded-column
+         # collision and with the same identifier, because it is the same fault:
+diff --git a/tests/test_cli.py b/tests/test_cli.py
+index 7aa01e6..0e361e4 100644
+--- a/tests/test_cli.py
++++ b/tests/test_cli.py
+@@ -6953,10 +6953,53 @@ def test_the_resample_block_is_resolved_exactly_once(tmp_path, capsys, monkeypat
+ 
+     monkeypatch.setattr(cli_mod, "_resolved_resample", counting)
+     run_a_project(
+         tmp_path,
+         capsys=capsys,
+         aggregate_returns="mean_pred",
+         units=40,
+         statistics={"correction": "holm", "resample": {"n": 500}},
+     )
+     assert len(calls) == 1
++
++
++def test_a_declared_resample_gives_every_column_a_percentile_interval(tmp_path, capsys):
++    """End to end, and the assertion the `resample_draws` warning loop needs:
++    `cli`'s loop over `step_summary` reads `resample_draws` on EVERY metric, and
++    a column's is now present. `used == 0` would emit
++    `W-STATS-AGGREGATE-FAILED` naming the template's `aggregate`, which never
++    touched a recorded column — a lie. A column's `used` is the requested `n`
++    (whenever its `ci95` is non-null) and `n >= 80` is enforced at validate
++    time (`E-STATS-RESAMPLE-N`), so neither branch can fire, and this pins it."""
++    doc = run_a_project(
++        tmp_path,
++        capsys=capsys,
++        aggregate_returns="mean_pred",
++        units=40,
++        statistics={"correction": "holm",
++                    "resample": {"method": "bootstrap", "n": 500}},
++    )
++    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
++    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
++    assert aggregated["pred"]["method"] == "percentile_over_units"
++    assert aggregated["pred"]["resample_draws"] == 500
++    assert aggregated["pred"]["ci95"] is not None
++    # The derived metric still resamples, at the same resolved count.
++    assert aggregated["mean_pred"]["method"] == "percentile_over_units"
++    assert aggregated["mean_pred"]["resample_draws"] == 500
++    # Neither warning fires for the column.
++    assert "W-STATS-AGGREGATE-FAILED" not in doc["stdout"]
++    assert "W-STATS-RESAMPLE-THIN" not in doc["stdout"]
++
++
++def test_an_undeclared_resample_leaves_a_column_untouched_end_to_end(tmp_path, capsys):
++    """The negative half of the test above, and the acceptance criterion this
++    task must not disturb: with no `statistics.resample` declared, a recorded
++    column keeps its `t_over_units` interval and no `resample_draws` key at
++    all, byte-identical to before this task's wiring landed."""
++    doc = run_a_project(
++        tmp_path, capsys=capsys, aggregate_returns="mean_pred", units=40,
++    )
++    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
++    aggregated = run["results"]["conditions"][0]["aggregated"]["step01_summarize_units"]
++    assert aggregated["pred"]["method"] == "t_over_units"
++    assert "resample_draws" not in aggregated["pred"]
+diff --git a/tests/test_stats.py b/tests/test_stats.py
+index 3640777..daa4204 100644
+--- a/tests/test_stats.py
++++ b/tests/test_stats.py
+@@ -3394,10 +3394,100 @@ def test_percentile_over_units_still_returns_a_bare_interval():
+     it does NOT become `(Interval, int)`. A slice that changed it would have to
+     change this test, which is where the decision gets re-argued rather than
+     drifted past. Confirmed separately (see the two "known unfixed gap" tests
+     above) that `(Interval, int)` would not even be the right remedy for the
+     non-finite gap: nothing on this path treats a `nan`/`inf` draw statistic as
+     a failed draw to exclude, so a survivor filter would count it as a survivor
+     and report `(Interval(nan, nan), n)` — the same false claim with an extra
+     field."""
+     got = percentile_over_units([1.0, 2.0, 3.0, 4.0], seed=1, draws=100)
+     assert isinstance(got, Interval)
++
++
++def _ragged_collapsed(n: int = 40) -> dict[str, dict[str, float]]:
++    return {f"u{i}": {"pred": float(i)} for i in range(n)}
++
++
++def test_a_recorded_column_takes_a_percentile_interval_under_resample():
++    """§ Statistical reporting: a column metric has a t-interval available, so
++    resampling it is a CHOICE and `resample` is what makes it. The value is
++    unchanged — the draw changes the interval, not the estimate."""
++    collapsed = _ragged_collapsed()
++    counts = {"resolved": 40, "completed": 40, "failed": 0}
++    plain = summarize_step(collapsed, counts, seed=5, draws=2000)
++    drawn = summarize_step(collapsed, counts, seed=5, draws=2000, resample_columns=True)
++    assert plain["pred"]["method"] == "t_over_units"
++    assert "resample_draws" not in plain["pred"]
++    assert drawn["pred"]["method"] == "percentile_over_units"
++    assert drawn["pred"]["resample_draws"] == 2000
++    assert drawn["pred"]["value"] == plain["pred"]["value"]
++    assert drawn["pred"]["ci95"] is not None
++    low, high = drawn["pred"]["ci95"]
++    assert low < drawn["pred"]["value"] < high
++
++
++def test_a_clustered_column_takes_the_clustered_percentile_under_resample():
++    """`cluster_by` decides the draw when both are declared, so the construction
++    is the `_clustered` one and `n.clusters` still reports the cluster count."""
++    collapsed = _ragged_collapsed(40)
++    clusters = {f"u{i}": f"c{i % 8}" for i in range(40)}
++    counts = {"resolved": 40, "completed": 40, "failed": 0}
++    drawn = summarize_step(
++        collapsed, counts, seed=5, draws=2000, clusters=clusters, resample_columns=True
++    )
++    assert drawn["pred"]["method"] == "percentile_over_units_clustered"
++    assert drawn["pred"]["n"]["clusters"] == 8
++    assert drawn["pred"]["resample_draws"] == 2000
++
++
++def test_a_weighted_column_keeps_its_weighted_value_and_kish_size_under_resample():
++    """Three things move together or the declaration is half-delivered: the
++    value stays the WEIGHTED mean, `n.effective` stays Kish's size, and only the
++    interval becomes a percentile. § Weighted samples puts the weights "in the
++    estimate rather than in the drawing"."""
++    collapsed = _ragged_collapsed(40)
++    weights = {f"u{i}": 1.0 + (i % 4) for i in range(40)}
++    counts = {"resolved": 40, "completed": 40, "failed": 0}
++    plain = summarize_step(collapsed, counts, seed=5, draws=2000, weights=weights)
++    drawn = summarize_step(
++        collapsed, counts, seed=5, draws=2000, weights=weights, resample_columns=True
++    )
++    assert plain["pred"]["method"] == "weighted_t_over_units"
++    assert drawn["pred"]["method"] == "percentile_over_units"
++    assert drawn["pred"]["value"] == plain["pred"]["value"]
++    assert drawn["pred"]["n"]["effective"] == plain["pred"]["n"]["effective"]
++    # The weighted centre differs from the unweighted one on this fixture, but
++    # that alone doesn't discriminate a dropped `weights=` in the DRAW: both
++    # intervals are wide enough on 40 units to bracket either centre. The
++    # assertion that actually catches a dropped `weights=` in the percentile
++    # construction is the exact `ci95` match against calling
++    # `percentile_over_units` directly with the same weight vector — a
++    # construction the interval must reproduce digit for digit, the same
++    # standard `test_percentile_over_units_...` pins elsewhere in this file.
++    column_weights = [weights[f"u{i}"] for i in range(40)]
++    values = [float(i) for i in range(40)]
++    expected = percentile_over_units(values, seed=5, draws=2000, weights=column_weights)
++    assert expected is not None
++    assert drawn["pred"]["ci95"] == [expected.low, expected.high]
++    unweighted = summarize_step(collapsed, counts, seed=5, draws=2000)
++    assert drawn["pred"]["value"] != unweighted["pred"]["value"]
++
++
++def test_a_column_below_two_units_reports_a_null_draw_count_under_resample():
++    """`percentile_over_units` returns `None` below two units exactly as
++    `t_over_units` does, so the degenerate case does not change shape. Unlike
++    the brief's first draft of this test, `resample_draws` is NOT the requested
++    `n` here: `docs/superpowers/spec-defects.md`'s ruling is that a column's
++    draw count is `null` whenever `ci95` is `null` — there is no interval for a
++    draw count to describe, and recording the requested `n` beside a refused
++    interval would assert survivor evidence for a draw that never produced
++    one. It is still PRESENT (not absent) — a resample was declared and
++    attempted, it just came back with nothing, which is a different fact from
++    `resample_columns=False`'s "never asked" and must not collapse onto it."""
++    counts = {"resolved": 1, "completed": 1, "failed": 0}
++    got = summarize_step(
++        {"u0": {"pred": 1.0}}, counts, seed=5, draws=2000, resample_columns=True
++    )
++    assert got["pred"]["ci95"] is None
++    assert got["pred"]["method"] is None
++    assert "resample_draws" in got["pred"]
++    assert got["pred"]["resample_draws"] is None

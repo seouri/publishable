@@ -7,10 +7,15 @@ import pytest
 from publishable import ContractError
 from publishable.units import (
     DRAWN_ASSIGN_METHODS,
+    HOLDOUT_METHODS_REALIZED,
     ArmPlan,
+    HoldoutPlan,
     Unit,
     UnitList,
     _apportion,
+    _assign_constant_columns,
+    _holdout_constant_column,
+    _seed_from,
     apply_rule,
     arm_members,
     arms_of,
@@ -20,6 +25,10 @@ from publishable.units import (
     clusters_of,
     collapse_measurements,
     fold_basis,
+    holdout_for,
+    holdout_seed_for,
+    holdout_sizes,
+    holdout_values_fault,
     partition_units,
     resolve_units,
     stratum_varies_within_cluster,
@@ -2884,6 +2893,72 @@ def test_one_column_named_by_both_cluster_and_arm_reports_exactly_one_code(input
     assert e.value.code == "E-DATA-ASSIGN-VARIES"
 
 
+def test_resolve_units_checks_holdout_after_assign_and_before_cluster(input_dir: Path):
+    """`test_collapse_stops_at_the_first_entry_of_the_constant_mapping_it_is_given`
+    (`test_units.py`, `_holdout_constant_column` fixture) pins the ordering
+    against a `constant` mapping the test itself builds by hand — it proves
+    `collapse_measurements` stops at whichever entry is first in the dict it
+    is given, never that `resolve_units` actually builds that dict in this
+    order. This is the companion that calls `resolve_units` on a real
+    declaration, the way `test_one_column_named_by_both_cluster_and_arm_reports_exactly_one_code`
+    above does for `assign` vs. `cluster_by` alone: one unit's rows disagree
+    under `assign`, `holdout.from` and `cluster_by` at once, so only the
+    `constant.update` order `resolve_units` itself builds decides which code
+    comes back."""
+    _write_reads(
+        input_dir,
+        "patient_id,read_id,arm,split,site\n"
+        "p1,r1,control,train,S1\np1,r2,treatment,test,S2\n",
+    )
+    decl = {
+        "from": "reads.csv",
+        "key": "patient_id",
+        "attributes": ["arm", "split", "site", "read_id"],
+        "cluster_by": "site",
+        "assign": {"arm": {"method": "by_attribute"}},
+        "holdout": {"method": "by_attribute", "from": "split"},
+        "measurements": {"by": "read_id", "collapse": "first"},
+    }
+    with pytest.raises(ContractError) as e:
+        resolve_units(decl, input_dir)
+    assert e.value.code == "E-DATA-ASSIGN-VARIES"
+
+    without_assign = dict(decl)
+    del without_assign["assign"]
+    with pytest.raises(ContractError) as e2:
+        resolve_units(without_assign, input_dir)
+    assert e2.value.code == "E-DATA-HOLDOUT-VARIES"
+
+
+def test_a_bare_string_holdout_does_not_reach_the_registry_through_the_flat_comprehension(
+    input_dir: Path,
+):
+    """`holdout` is a key of `CONSTANT_COLUMN_RULES`, so `resolve_units`'s flat
+    comprehension — `if isinstance(units_decl.get(declaration), str) and
+    units_decl[declaration]` — would otherwise admit a bare-string
+    `data.units.holdout` naming a column that varies within a unit's
+    measurement rows, and raise `E-DATA-HOLDOUT-VARIES` at path
+    `data.units.holdout` (no `.from`) for a shape `_check_holdout` already
+    refuses as `E-CONFIG-TYPE`. `holdout.from` reaches this registry only
+    through `_holdout_constant_column`, so the flat comprehension excludes
+    `holdout` explicitly and this declaration produces no `constant` entry at
+    all — `resolve_units` completes without raising, over a roster whose
+    `split` column varies exactly the way the mapping form would refuse."""
+    _write_reads(
+        input_dir,
+        "patient_id,read_id,split\np1,r1,train\np1,r2,test\n",
+    )
+    decl = {
+        "from": "reads.csv",
+        "key": "patient_id",
+        "attributes": ["split", "read_id"],
+        "holdout": "split",
+        "measurements": {"by": "read_id", "collapse": "first"},
+    }
+    units, _, _ = resolve_units(decl, input_dir)
+    assert units[0].split == "train"
+
+
 def test_roster_order_not_severity_decides_when_different_units_violate_different_declarations(
     input_dir: Path,
 ):
@@ -3049,3 +3124,541 @@ def test_the_stratum_check_reads_cluster_membership_from_the_one_authority():
     with pytest.raises(ContractError) as e:
         stratum_varies_within_cluster(roster, "animal_id", "label")
     assert e.value.code == "E-DATA-CLUSTER-UNKNOWN"
+
+
+def test_holdout_sizes_is_the_single_authority_for_the_split_sizes():
+    """One arithmetic for the split, shared by `validate`'s refusal and the
+    draw. `_apportion`'s largest-remainder rule, which `assignment_for`'s
+    `random` branch already uses — so a `frac` `validate` approves is a `frac`
+    the draw realizes at the same sizes.
+
+    Each row is chosen so a DIFFERENT wrong rule gives a different answer:
+    truncation, rounding, and largest-remainder disagree on at least one."""
+    assert holdout_sizes(10, 0.2) == (8, 2)
+    assert holdout_sizes(240, 0.2) == (192, 48)
+    # 7 × 0.2 = 1.4: truncation gives 1 — this row separates largest-remainder
+    # (and rounding) from truncation, not from each other.
+    assert holdout_sizes(7, 0.2) == (6, 1)
+    # 4 × 0.2 = 0.8: the floor is 0 and the remainder goes to the LARGEST
+    # fractional part, which is the test side's 0.8 against the train side's
+    # 3.2 — so largest-remainder gives 1 here where truncation gives 0.
+    assert holdout_sizes(4, 0.2) == (3, 1)
+    # 6 × 0.25 = 1.5: banker's-rounding `round()` rounds a .5 tie to the
+    # nearest EVEN integer, giving `test = 2`; largest-remainder allots the
+    # single remainder unit to the side with the larger fractional part when
+    # there is one, and ties broken any other way from `round()`'s still
+    # disagree here. This is the row task 7's review named as missing — a
+    # rounding-based reimplementation of this function passes every other row
+    # in this test (task 7 review, finding 2).
+    assert holdout_sizes(6, 0.25) == (5, 1)
+    # The case the refusal exists for: no rule can give the test side a unit.
+    assert holdout_sizes(2, 0.2) == (2, 0)
+    assert sum(holdout_sizes(13, 0.3)) == 13
+
+
+def _holdout_roster(n, **attrs_by_index):
+    """`n` units keyed `u0..u{n-1}`, each carrying whatever the caller maps.
+
+    Named distinctly from the module's other `_roster(n) -> UnitList` (used
+    throughout this file, keys zero-padded to 3 digits and pinned against
+    exact literals at lines 296 and 333-337) rather than reusing that name:
+    the two would collide as the same module-level binding, and the later
+    definition would silently repoint every earlier call to a different key
+    format."""
+    return UnitList(
+        [
+            Unit(key=f"u{i}", paths=(), attributes={k: v(i) for k, v in attrs_by_index.items()})
+            for i in range(n)
+        ]
+    )
+
+
+def test_an_unclustered_holdout_cuts_the_shuffled_roster_at_the_apportioned_sizes():
+    """`_apportion` + one shuffle + consecutive slices — `assignment_for`'s
+    `random` branch, one declaration over. The realized membership is pinned as
+    a literal derived by RUNNING this, not by predicting it: a predicted
+    membership that happened to match a wrong construction is how a 13-unit
+    apportionment matched a reverse-order mutant by coincidence in an earlier
+    slice."""
+    plan = holdout_for(_holdout_roster(10), {"method": "random", "frac": 0.2}, seed=1234)
+    assert len(plan.train) == 8 and len(plan.test) == 2
+    assert set(plan.train) | set(plan.test) == {f"u{i}" for i in range(10)}
+    assert not set(plan.train) & set(plan.test)
+    assert plan.seed == 1234
+    assert plan.strata == ()
+    # PINNED LITERALS — derived by running the implementation (see task-10-report.md).
+    assert plan.train == ("u2", "u8", "u3", "u5", "u6", "u4", "u9", "u0")
+    assert plan.test == ("u1", "u7")
+
+
+def test_the_same_seed_and_roster_draw_the_same_holdout_and_a_different_seed_does_not():
+    """Determinism, and the positive companion that keeps it from being
+    vacuous: a different seed must give a DIFFERENT partition, or a draw that
+    ignored the seed entirely would pass the first assertion alone."""
+    a = holdout_for(_holdout_roster(20), {"method": "random", "frac": 0.25}, seed=7)
+    b = holdout_for(_holdout_roster(20), {"method": "random", "frac": 0.25}, seed=7)
+    c = holdout_for(_holdout_roster(20), {"method": "random", "frac": 0.25}, seed=8)
+    assert a.test == b.test
+    assert a.test != c.test
+
+
+def test_a_by_attribute_holdout_reads_the_column_and_records_no_draw():
+    """Read through `arms_of`, the single authority for a column-read
+    partition — so roster order is preserved and set equality is enforced by
+    the same function an arm assignment uses. No seed and no strata are
+    recorded, `ArmPlan`'s own convention: reading a partition the data holds is
+    not drawing one."""
+    roster = _holdout_roster(10, split=lambda i: "test" if i % 5 == 0 else "train")
+    plan = holdout_for(roster, {"method": "by_attribute", "from": "split"}, seed=1234)
+    assert plan.test == ("u0", "u5")
+    assert plan.train == ("u1", "u2", "u3", "u4", "u6", "u7", "u8", "u9")
+    assert plan.seed is None
+    assert plan.strata == ()
+
+
+def test_a_by_attribute_holdout_over_a_column_that_is_not_the_two_literals_raises():
+    """The run-time half of `E-DATA-HOLDOUT-VALUES`, through `arms_of`'s own
+    set equality. `validate` refuses this first; the draw refuses it too rather
+    than partitioning on whatever it finds."""
+    roster = _holdout_roster(10, split=lambda i: "A" if i % 2 else "B")
+    with pytest.raises(ContractError) as exc:
+        holdout_for(roster, {"method": "by_attribute", "from": "split"}, seed=1)
+    assert exc.value.code == "E-DATA-HOLDOUT-VALUES"
+    # Asserts the agreement `holdout_values_fault` exists to guarantee — the
+    # raise's wording IS the function's answer, not an independent literal that
+    # could drift from it.
+    assert str(exc.value) == holdout_values_fault(roster, "split")
+
+
+@pytest.mark.parametrize(
+    "n,frac,empty_side",
+    [(2, 0.2, "test"), (2, 0.9, "train")],
+    ids=["the test side is apportioned none", "the train side is apportioned none"],
+)
+def test_a_holdout_that_leaves_a_side_empty_raises(n, frac, empty_side):
+    """Both sides, because `validate` refuses only the test one: 2 units at
+    `frac: 0.9` apportions `(0, 2)` and would fit a model on nothing.
+    `assignment_for`'s posture — the draw holds the realized sizes and is the
+    last place that can see them."""
+    with pytest.raises(ContractError) as exc:
+        holdout_for(_holdout_roster(n), {"method": "random", "frac": frac}, seed=1)
+    assert exc.value.code == "E-DATA-HOLDOUT-EMPTY"
+    # The invariant tail names both "the training side" and "the test side" in
+    # every instance of this message, so `empty_side in str(exc.value)` alone
+    # cannot discriminate which one is actually empty. `leaves the {side} side
+    # empty` is the one phrase that names the computed side specifically —
+    # task 11 merged this with the clustered/stratified coverage check, one
+    # refusal rather than two of the same fault.
+    assert f"leaves the {empty_side} side empty" in str(exc.value)
+
+
+@pytest.mark.parametrize("method", ["stratified", "", None, "by_attributes"])
+def test_an_unknown_holdout_method_raises_rather_than_falling_back(method):
+    """An allowlist, not a denylist of the methods that happen to draw today.
+    `validate` refuses an out-of-enum method first; this is what stops a THIRD
+    method added to `HOLDOUT_METHODS` and to nothing else from validating clean
+    and then silently partitioning on a column."""
+    with pytest.raises(NotImplementedError) as exc:
+        holdout_for(_holdout_roster(10), {"method": method, "frac": 0.2}, seed=1)
+    assert repr(method) in str(exc.value)
+    assert "random" in str(exc.value)
+    assert "by_attribute" in str(exc.value)
+
+
+def test_holdout_methods_realized_is_pinned_by_what_it_documents():
+    """`HOLDOUT_METHODS_REALIZED` is read at exactly one place — the final
+    `NotImplementedError`'s message — and pinned by nothing else, so adding a
+    method to the tuple without building the branch behind it would make that
+    message claim a draw this build does not perform.
+    `DRAWN_ASSIGN_METHODS`'s own test is the model: every declared member must
+    actually draw or read a plan, not merely fail to hit the final raise."""
+    assert HOLDOUT_METHODS_REALIZED == ("random", "by_attribute")
+    random_roster = _holdout_roster(10)
+    attr_roster = _holdout_roster(10, split=lambda i: "test" if i % 5 == 0 else "train")
+    for method, roster, block in (
+        ("random", random_roster, {"method": "random", "frac": 0.2}),
+        ("by_attribute", attr_roster, {"method": "by_attribute", "from": "split"}),
+    ):
+        assert method in HOLDOUT_METHODS_REALIZED
+        plan = holdout_for(roster, block, seed=1)
+        assert isinstance(plan, HoldoutPlan)
+
+
+def test_a_clustered_holdout_keeps_every_cluster_whole():
+    """`reference.md` § Clustered units: "core computed the partition, so core
+    keeps it indivisible." A holdout that trains on one cell of an animal and
+    tests on another leaks just as thoroughly for happening only once.
+
+    Twelve units in six clusters of two, so both a correct draw and a
+    unit-level one give the same SIZES — the cluster-integrity assertion is the
+    only thing that separates them, which is why the fixture is built this way
+    rather than with clusters of one."""
+    roster = _holdout_roster(12, animal=lambda i: f"a{i // 2}")
+    clusters = {f"u{i}": f"a{i // 2}" for i in range(12)}
+    plan = holdout_for(
+        roster, {"method": "random", "frac": 0.5}, seed=99, clusters=clusters
+    )
+    train, test = set(plan.train), set(plan.test)
+    assert train | test == {f"u{i}" for i in range(12)}
+    assert not train & test
+    for cluster in {f"a{i}" for i in range(6)}:
+        members = {k for k, c in clusters.items() if c == cluster}
+        assert members <= train or members <= test, (cluster, plan)
+    # A positive companion for the integrity assertion above, which a draw
+    # putting EVERY unit on one side would also satisfy.
+    assert train and test
+
+
+def test_the_clustered_and_unclustered_constructions_are_not_the_same_draw():
+    """The relation between the two constructions, pinned — H3c-2's own
+    experience is that a fixture cannot tell them apart unless it is built to.
+
+    The unclustered path shuffles unit keys and cuts two consecutive slices;
+    the clustered path shuffles cluster names, sorts largest-first, and deals
+    each to the bucket furthest below its own target share — which
+    interleaves by ratio rather than slicing. **Even with one cluster per
+    unit, no agreement between the two on SIZE is promised** (a sweep found
+    90 disagreements over n x frac, some outright legality disagreements —
+    see `holdout_for`'s docstring); the only difference this fixture can
+    assert without pinning a coincidence is MEMBERSHIP. `len(plain.test) == 4`
+    is this seed's realized size, asserted as a fact, not compared against
+    the clustered draw's own (possibly different) realized size."""
+    roster = _holdout_roster(10, animal=lambda i: f"u{i}")
+    singleton = {f"u{i}": f"u{i}" for i in range(10)}
+    plain = holdout_for(roster, {"method": "random", "frac": 0.4}, seed=5)
+    clustered = holdout_for(
+        roster, {"method": "random", "frac": 0.4}, seed=5, clusters=singleton
+    )
+    assert len(plain.test) == 4
+    assert set(plain.test) != set(clustered.test)
+
+
+def test_a_stratified_holdout_splits_within_each_stratum():
+    """`stratify_by` balances the split inside each stratum rather than only
+    over the roster. Three UNEQUAL strata — 8, 4 and 2 units — so an
+    unstratified draw, a correct stratified one, and one that weighted the
+    strata equally each produce a different per-stratum test count.
+
+    At `frac: 0.5` the correct per-stratum test counts are 4, 2 and 1; an
+    unstratified draw of the same roster gives 7 test units spread by chance,
+    which this asserts against directly."""
+    sizes = {"big": 8, "mid": 4, "small": 2}
+    labels = ["big"] * 8 + ["mid"] * 4 + ["small"] * 2
+    roster = _holdout_roster(14, band=lambda i: labels[i])
+    plan = holdout_for(
+        roster, {"method": "random", "frac": 0.5, "stratify_by": ["band"]}, seed=17
+    )
+    assert plan.strata == ("band",)
+    per_stratum = {}
+    for name in sizes:
+        members = {f"u{i}" for i, lab in enumerate(labels) if lab == name}
+        per_stratum[name] = len(members & set(plan.test))
+    assert per_stratum == {"big": 4, "mid": 2, "small": 1}
+    # Membership too, not only counts: the counts are FORCED by the
+    # apportionment, so no count assertion can see a change in how the
+    # generator is carried across strata — the same dimension-no-assertion-
+    # can-see shape that let a deleted shuffle pass an earlier slice's suite.
+    # PINNED LITERAL — derived by running the implementation (see task-11-report.md).
+    assert set(plan.test) == {"u2", "u5", "u6", "u7", "u8", "u11", "u13"}
+
+
+def test_a_stratified_clustered_holdout_composes_both_rules():
+    """The composition: strata outside, whole clusters inside — the same
+    arrangement `assignment_for` uses, and sound only while
+    `E-DATA-HOLDOUT-STRATIFY-VARIES` refuses a cluster carrying two stratum
+    values, since such a cluster would belong to two groups and be divided.
+
+    Every cluster whole AND every stratum represented on both sides."""
+    labels = ["x"] * 8 + ["y"] * 8
+    roster = _holdout_roster(16, animal=lambda i: f"a{i // 2}", band=lambda i: labels[i])
+    clusters = {f"u{i}": f"a{i // 2}" for i in range(16)}
+    plan = holdout_for(
+        roster,
+        {"method": "random", "frac": 0.5, "stratify_by": ["band"]},
+        seed=23,
+        clusters=clusters,
+    )
+    assert plan.strata == ("band",)
+    train, test = set(plan.train), set(plan.test)
+    for cluster in {f"a{i}" for i in range(8)}:
+        members = {k for k, c in clusters.items() if c == cluster}
+        assert members <= train or members <= test, cluster
+    # Counts, not only "some of each" — forced by 4 whole clusters of 2 units
+    # per band at equal weights, so an implementation that dropped the strata
+    # entirely and dealt clusters over the whole 16-unit roster would still
+    # put both bands on both sides by chance (this exact fixture does, at
+    # `frac: 0.5` over two equal-sized 8-unit bands) but could not produce a
+    # clean 4/4 split for BOTH bands.
+    for band in ("x", "y"):
+        members = {f"u{i}" for i, lab in enumerate(labels) if lab == band}
+        assert len(members & test) == 4 and len(members & train) == 4, band
+    # PINNED LITERAL — derived by running the implementation (see the task-11
+    # fix report), catching a composition that ignores strata even when it
+    # happens to produce a 4/4 count for both bands by coincidence.
+    assert test == {"u4", "u5", "u6", "u7", "u12", "u13", "u14", "u15"}
+
+
+def test_a_stratified_holdout_that_leaves_a_side_empty_across_every_stratum_raises():
+    """Coverage over the MERGED draw, `assignment_for`'s rule for the identical
+    composition: a side a small stratum apportioned nothing is fine while
+    another stratum covered it, and only a side empty everywhere is refused.
+
+    Two strata of one unit each at `frac: 0.2` apportion `(1, 0)` in both, so
+    the test side is empty across the whole draw."""
+    roster = _holdout_roster(2, band=lambda i: f"b{i}")
+    with pytest.raises(ContractError) as exc:
+        holdout_for(
+            roster, {"method": "random", "frac": 0.2, "stratify_by": ["band"]}, seed=1
+        )
+    assert exc.value.code == "E-DATA-HOLDOUT-EMPTY"
+    # The full message, not only the code — pins the `", drawn within N stratum
+    # declaration(s)"` fragment, unpinned by any test before this one.
+    assert (
+        "leaves the test side empty, drawn within 1 stratum declaration(s)"
+        in str(exc.value)
+    )
+    assert "over whole clusters" not in str(exc.value)
+
+
+def test_a_single_cluster_holdout_leaves_the_test_side_empty_over_whole_clusters():
+    """The second half of the deleted `NotImplementedError` test's coverage —
+    a single cluster spanning the whole roster cannot split, so the whole
+    roster is dealt to one bucket (ties break to the earlier-declared level,
+    `train`) and the test side is empty. Pins the `" over whole clusters"`
+    suffix, unpinned by any test until now, and is the clustered branch of
+    `E-DATA-HOLDOUT-EMPTY` that no earlier test reaches."""
+    roster = _holdout_roster(10)
+    clusters = {f"u{i}": "c0" for i in range(10)}
+    with pytest.raises(ContractError) as exc:
+        holdout_for(
+            roster, {"method": "random", "frac": 0.2}, seed=1, clusters=clusters
+        )
+    assert exc.value.code == "E-DATA-HOLDOUT-EMPTY"
+    assert "leaves the test side empty" in str(exc.value)
+    assert "over whole clusters" in str(exc.value)
+    assert "stratum declaration" not in str(exc.value)
+
+
+def test_a_holdout_stratify_by_naming_no_attribute_names_the_holdout_path():
+    """The first half of the deleted `NotImplementedError` test's coverage,
+    and Step 3(a)'s own deliverable: the `declaration` argument
+    `holdout_for` hands `_stratum_groups` must read
+    `data.units.holdout.stratify_by`, the path a holdout's config actually
+    has — not an assign-shaped path built by interpolating an axis name into
+    a fixed `data.units.assign.<...>` template, which would print
+    `data.units.assign.holdout.stratify_by`, a path no config can hold."""
+    with pytest.raises(NotImplementedError) as exc:
+        holdout_for(
+            _holdout_roster(10),
+            {"method": "random", "frac": 0.2, "stratify_by": ["x"]},
+            seed=1,
+        )
+    assert "`data.units.holdout.stratify_by` names 'x'" in str(exc.value)
+    assert "`E-DATA-HOLDOUT-STRATIFY-UNKNOWN`" in str(exc.value)
+    assert "E-DATA-ASSIGN-STRATIFY-FORWARD" not in str(exc.value)
+    assert "E-DATA-ASSIGN-STRATIFY-UNKNOWN" not in str(exc.value)
+
+
+def test_a_thin_stratum_alone_does_not_raise():
+    """The positive companion for the rule above, produced by the code under
+    test: one stratum apportioning the test side nothing is accepted while
+    another covers it. Without this the refusal above is indistinguishable from
+    a per-stratum coverage rule."""
+    labels = ["big"] * 9 + ["tiny"]
+    roster = _holdout_roster(10, band=lambda i: labels[i])
+    plan = holdout_for(
+        roster, {"method": "random", "frac": 0.2, "stratify_by": ["band"]}, seed=3
+    )
+    assert plan.test and plan.train
+    tiny = {"u9"}
+    # `tiny <= set(plan.train)` is forced by `holdout_sizes(1, 0.2) == (1, 0)`
+    # under ANY correct per-stratum apportionment, so it cannot distinguish a
+    # construction — the "big" stratum's actual membership is what can.
+    # PINNED LITERAL — derived by running the implementation.
+    assert tiny <= set(plan.train)
+    assert set(plan.test) == {"u2", "u3"}
+
+
+def test_a_by_attribute_holdout_with_no_from_raises_not_realized():
+    """`method: by_attribute` naming no column is `validate`'s `E-DATA-HOLDOUT-FROM`;
+    the draw refuses it too rather than reading a column that does not exist."""
+    with pytest.raises(NotImplementedError) as exc:
+        holdout_for(_holdout_roster(10), {"method": "by_attribute"}, seed=1)
+    assert "no column" in str(exc.value)
+    assert "E-DATA-HOLDOUT-FROM" in str(exc.value)
+
+
+@pytest.mark.parametrize("frac", [None, "0.2", True, -0.5, 0.0, 1.0, 2.0])
+def test_a_random_holdout_with_an_unusable_frac_raises_not_realized(frac):
+    """Widened to refuse both an unusable TYPE (`None`, a string, a bool) and
+    an out-of-range VALUE, so the docstring's "both sides are refused empty"
+    guarantee holds for every `frac` rather than only the ones `validate`
+    would have let through to the empty-side check."""
+    with pytest.raises(NotImplementedError) as exc:
+        holdout_for(_holdout_roster(10), {"method": "random", "frac": frac}, seed=1)
+    assert "no usable `frac`" in str(exc.value)
+    assert "E-DATA-HOLDOUT-FRAC" in str(exc.value)
+
+
+_MEASUREMENT_ROWS = [
+    {"patient_id": "p1", "read_id": "r1", "split": "train", "value": "1"},
+    {"patient_id": "p1", "read_id": "r2", "split": "test", "value": "2"},
+    {"patient_id": "p2", "read_id": "r3", "split": "test", "value": "3"},
+]
+
+
+def _units_from_rows(rows, attributes):
+    return [
+        Unit(key=r["patient_id"], paths=(), attributes={a: r[a] for a in attributes})
+        for r in rows
+    ]
+
+
+def test_a_holdout_from_column_varying_within_a_unit_is_refused():
+    """A `by_attribute` holdout reading a column that disagrees between two
+    rows of one unit would file that unit on whichever side the row the
+    collapse kept says — a train/test membership decided by row order.
+
+    `p1` carries `train` and `test`; `p2` carries one value, so the fixture
+    also proves the check is per-unit rather than per-roster."""
+    units = _units_from_rows(_MEASUREMENT_ROWS, ["read_id", "split", "value"])
+    constant = _holdout_constant_column({"method": "by_attribute", "from": "split"})
+    assert constant == {"holdout.from": "split"}
+    with pytest.raises(ContractError) as exc:
+        collapse_measurements(units, "read_id", "first", constant)
+    assert exc.value.code == "E-DATA-HOLDOUT-VARIES"
+    assert "split" in str(exc.value)
+
+
+def test_a_constant_holdout_from_column_collapses_cleanly():
+    """The positive companion, produced by the code under test: the same
+    declaration over rows that AGREE collapses without raising, and the
+    surviving unit keeps the value. Without this the test above passes
+    identically if the rule refused every `holdout.from`."""
+    rows = [dict(r, split="train") for r in _MEASUREMENT_ROWS]
+    units = _units_from_rows(rows, ["read_id", "split", "value"])
+    collapsed, counts = collapse_measurements(
+        units, "read_id", "first",
+        _holdout_constant_column({"method": "by_attribute", "from": "split"}),
+    )
+    assert [u.key for u in collapsed] == ["p1", "p2"]
+    assert [u.attributes["split"] for u in collapsed] == ["train", "train"]
+    assert counts == [2, 1]
+
+
+@pytest.mark.parametrize(
+    "decl",
+    [
+        None,
+        {},
+        "nonsense",
+        {"method": "random", "frac": 0.2},
+        {"method": "random", "frac": 0.2, "from": "split"},
+        {"method": "by_attribute"},
+        {"method": "by_attribute", "from": ""},
+        {"method": "by_attribute", "from": 7},
+    ],
+    ids=["absent", "empty", "not a mapping", "random", "random with a stray from",
+         "by_attribute with no from", "empty from", "non-string from"],
+)
+def test_the_holdout_accessor_resolves_no_column_for_these(decl):
+    """It resolves a column or it does not; it never reports a malformed
+    declaration. `E-DATA-HOLDOUT-METHOD`, `-FROM` and `-NO-DRAW` are
+    `validate`'s findings to raise, not a `ContractError` from a run that
+    resolution has no path to report through.
+
+    The `random with a stray from` row is the load-bearing one: the gate is on
+    the METHOD, so a drawn split whose declaration happens to carry a `from`
+    still reads no column — a run that raised `E-DATA-HOLDOUT-VARIES` there
+    would be refusing a config over a column its draw never reads."""
+    assert _holdout_constant_column(decl) == {}
+
+
+def test_collapse_stops_at_the_first_entry_of_the_constant_mapping_it_is_given():
+    """`collapse_measurements` stops at the first `constant` entry whose column
+    disagrees and raises that entry's code — this test builds the mapping by
+    hand, so it pins only that stopping behaviour, not that `resolve_units`
+    builds the mapping in any particular order. The order `resolve_units`
+    itself builds — `assign` before `holdout` before the flat pair — is pinned
+    by `test_resolve_units_checks_holdout_after_assign_and_before_cluster`,
+    which calls `resolve_units` on a real declaration; that is where the
+    ordering guarantee actually lives.
+
+    The fixture makes ONE unit violate `assign`, `holdout` and `cluster_by`
+    at once — three declarations, so the three candidate orderings each give a
+    different answer, which two declarations could not distinguish."""
+    rows = [
+        {"patient_id": "p1", "read_id": "r1", "split": "train", "arm": "a", "site": "s1"},
+        {"patient_id": "p1", "read_id": "r2", "split": "test", "arm": "b", "site": "s2"},
+    ]
+    units = _units_from_rows(rows, ["read_id", "split", "arm", "site"])
+    constant = _assign_constant_columns({"arm": {"method": "by_attribute"}})
+    constant.update(_holdout_constant_column({"method": "by_attribute", "from": "split"}))
+    constant.update({"cluster_by": "site"})
+    with pytest.raises(ContractError) as exc:
+        collapse_measurements(units, "read_id", "first", constant)
+    assert exc.value.code == "E-DATA-ASSIGN-VARIES"
+
+    # Remove the highest-priority declaration and the NEXT one reports — which
+    # is what proves the order rather than merely that `assign` reports.
+    without_assign = _holdout_constant_column(
+        {"method": "by_attribute", "from": "split"}
+    )
+    without_assign.update({"cluster_by": "site"})
+    with pytest.raises(ContractError) as exc2:
+        collapse_measurements(units, "read_id", "first", without_assign)
+    assert exc2.value.code == "E-DATA-HOLDOUT-VARIES"
+
+
+def test_a_pinned_holdout_seed_is_returned_literally_and_ignores_the_digest():
+    """`sweep.sample_seed_for`'s load-bearing half, copied: on the pinned path
+    the digest is not consulted at all, so a pinned split survives a roster
+    that grows, shrinks or reorders.
+
+    Three varying inputs against one pin, because a function that read ANY of
+    them would move for at least one of these."""
+    block = {"method": "random", "frac": 0.2, "seed": 4321}
+    assert holdout_seed_for(block, "sha256:aaa", _roster(10)) == 4321
+    assert holdout_seed_for(block, "sha256:bbb", _roster(10)) == 4321
+    assert holdout_seed_for(block, "sha256:aaa", _roster(11)) == 4321
+
+
+def test_a_boolean_seed_is_not_a_pin():
+    """`isinstance(True, int)` is `True`, and `seed: true` is not a pin —
+    `validate` refuses it as `E-DATA-HOLDOUT-SEED`, and honouring it as `1`
+    here would record a derived seed under a key the config wrote
+    deliberately."""
+    derived = holdout_seed_for({"seed": True}, "sha256:aaa", _roster(10))
+    assert derived != 1
+    assert derived == holdout_seed_for({}, "sha256:aaa", _roster(10))
+
+
+def test_the_derived_holdout_seed_mixes_the_digest_and_the_resolved_roster():
+    """§ What `auto` derives from's new row. Each assertion changes exactly one
+    input, so a derivation that ignored either would fail one of them."""
+    base = holdout_seed_for({}, "sha256:aaa", _roster(10))
+    assert base == holdout_seed_for({"seed": "auto"}, "sha256:aaa", _roster(10))
+    assert base != holdout_seed_for({}, "sha256:bbb", _roster(10))
+    assert base != holdout_seed_for({}, "sha256:aaa", _roster(11))
+    # `units_hash` covers the roster IN RESOLVED ORDER, so a reordered roster
+    # is a different trial and must draw a different split.
+    reordered = UnitList(list(_roster(10))[::-1])
+    assert base != holdout_seed_for({}, "sha256:aaa", reordered)
+    assert 0 <= base < 2**32
+
+
+def test_the_holdout_seed_is_not_the_fold_seed_for_the_same_digest():
+    """`_seed_from` hardcodes `|folds`. The two declarations are mutually
+    exclusive today (`E-DATA-HOLDOUT-FOLD`), so nothing observes a collision —
+    which is the argument for the suffix rather than against it: the two stay
+    independent whatever a later slice permits."""
+    assert holdout_seed_for({}, "sha256:aaa", _roster(10)) != _seed_from("sha256:aaa")
+
+
+def test_the_holdout_seed_is_not_an_assign_axis_seed_for_the_same_digest():
+    """The other neighbour, and the one whose construction this copies: same
+    digest, same roster, different suffix."""
+    roster = _roster(10)
+    assert holdout_seed_for({}, "sha256:aaa", roster) != assign_seed_for(
+        {}, "holdout", "sha256:aaa", roster
+    )

@@ -1,0 +1,110 @@
+# Review package: 919e128..8548f0328b5a56341aaf8e68fd42fe13e08e6d9b
+
+## Commits
+8548f03 Make Condition.values immutable, matching Unit.attributes
+
+## Files changed
+ src/publishable/sweep.py | 19 ++++++++++++++++++-
+ tests/test_sweep.py      | 17 ++++++++++++++++-
+ 2 files changed, 34 insertions(+), 2 deletions(-)
+
+## Diff
+diff --git a/src/publishable/sweep.py b/src/publishable/sweep.py
+index 6fb5443..7ef95e6 100644
+--- a/src/publishable/sweep.py
++++ b/src/publishable/sweep.py
+@@ -1,29 +1,46 @@
+ """Sweep expansion. See docs/reference.md § Expansion modes.
+ 
+ Pure: a config dict in, an ordered condition list out. No filesystem, no
+ `Config` object, no git — expansion is a function of the declaration alone,
+ so it can be tested exhaustively without a repository.
++
++A `baseline` whose values happen to coincide with a grid cell produces two
++conditions with identical `values` — `00_baseline` and the matching grid
++row — and `expand` deliberately does not dedup them: the baseline is
++declared and the grid is mechanical, and reconciling the two is not
++`expand`'s job.
+ """
+ 
+ import itertools
++from collections.abc import Mapping
+ from dataclasses import dataclass, field
++from types import MappingProxyType
+ from typing import Any
+ 
+ 
+ @dataclass(frozen=True)
+ class Condition:
+     index: int
+     label: str | None
+-    values: dict[str, Any] = field(default_factory=dict)
++    values: Mapping[str, Any] = field(default_factory=dict)
+     is_baseline: bool = False
+ 
++    def __post_init__(self) -> None:
++        # `values` is a plain dict handed in by `expand`; without wrapping it, a
++        # caller could mutate a condition's values after the fact, or reach back
++        # through the dict it originally passed in. The proxy over a copy is what
++        # makes `values["x"] = ...` raise rather than silently drift out of sync
++        # with `sweep.yaml`, written from these same objects. Same fix as
++        # `Unit.attributes` in `units.py`, same reason.
++        object.__setattr__(self, "values", MappingProxyType(dict(self.values)))
++
+ 
+ def label_for(values: dict[str, Any], grid: dict[str, Any], is_baseline: bool) -> str:
+     if is_baseline:
+         return "baseline"
+     return "__".join(f"{path.rsplit('.', 1)[-1]}={value}" for path, value in values.items())
+ 
+ 
+ def expand(config: dict[str, Any]) -> list[Condition]:
+     """Ordered conditions: a declared baseline as 00, then the grid product.
+ 
+diff --git a/tests/test_sweep.py b/tests/test_sweep.py
+index 4b9120e..aa594ff 100644
+--- a/tests/test_sweep.py
++++ b/tests/test_sweep.py
+@@ -1,10 +1,12 @@
++import pytest
++
+ from publishable.sweep import Condition, expand
+ 
+ 
+ def test_no_sweep_block_is_one_unlabelled_condition():
+     """label None is what keeps the `conditions/` level out of the tree."""
+     conds = expand({})
+     assert conds == [Condition(index=0, label=None, values={}, is_baseline=False)]
+ 
+ 
+ def test_a_bare_baseline_is_one_condition_but_labelled():
+@@ -48,15 +50,28 @@ def test_the_last_declared_axis_varies_fastest():
+     ]
+ 
+ 
+ def test_an_empty_grid_axis_still_expands_to_nothing_here():
+     """`expand` is pure and reports what the declaration says; `validate` is what
+     refuses it (E-SWEEP-AXIS-EMPTY, Task 4). Pinned so the refusal has something
+     to refuse and so nobody later reads the empty list as acceptable output."""
+     assert expand({"sweep": {"grid": {"a.x": []}}}) == []
+ 
+ 
++def test_condition_values_are_immutable():
++    conds = expand({"sweep": {"baseline": {"analysis.method": "pearson"}}})
++    assert conds[0].values["analysis.method"] == "pearson"
++    with pytest.raises(TypeError):
++        conds[0].values["x"] = 1
++
++
++def test_condition_values_are_copied_not_aliased():
++    source = {"analysis.method": "pearson"}
++    conds = expand({"sweep": {"baseline": source}})
++    source["analysis.method"] = "spearman"
++    assert conds[0].values["analysis.method"] == "pearson"
++
++
+ def test_conditions_are_frozen():
+-    import pytest
+     c = expand({"sweep": {"grid": {"a.x": [1]}}})[0]
+     with pytest.raises(Exception):  # noqa: B017 — frozen dataclass raises FrozenInstanceError
+         c.index = 5  # type: ignore[misc]

@@ -1,0 +1,758 @@
+# Review package: 07ee0a0..HEAD
+
+## Commits
+bb978ab feat(validate): resolve assign.<axis>.from against the axis-name default
+
+## Files changed
+ docs/reference.md           |   5 +-
+ src/publishable/units.py    |  83 +++++++++++++++++++-
+ src/publishable/validate.py |  99 ++++++++++++++++++++++--
+ tests/test_validate.py      | 180 +++++++++++++++++++++++++++++++++++++++++---
+ 4 files changed, 351 insertions(+), 16 deletions(-)
+
+## Diff
+diff --git a/docs/reference.md b/docs/reference.md
+index 4f68e23..4cd0a4b 100644
+--- a/docs/reference.md
++++ b/docs/reference.md
+@@ -270,21 +270,22 @@ The table below states each check by the mistake it catches. What `validate` *pr
+ | Every axis is assigned | `sweep.groups` declares `sex` but `data.units.assign` has no `sex` block |
+ | Every assignment names an axis | `assign.cohort` names no axis in `sweep.groups` |
+ | Axis names are distinct | `sweep.groups` declares `arm` twice — a condition can't hold two values of one axis |
+ | Stratification is forward-only | `assign.sex.stratify_by: [arm]`, but `arm` is declared after `sex`; an axis may only stratify on one already resolved |
+ | Cells are populated | `sex × arm` over 40 units gives cells of 10; below `limits.min_units_per_cell` (warning) |
+ | Arms need allocation | `sweep.groups` declares arms but `allocation` is `within`, which says every unit appears in every condition — a unit can't be in one arm and in all of them |
+ | Assignment names a method | `assign.arm` declares `stratify_by` and no `method`, or a `method` of `by_column` — the methods are random, by_attribute, blocked, and which of the block's other fields are read follows from which one it is. That a block must exist at all under `allocation: between` is the "Allocation needs arms" and "Every axis is assigned" rows above, between them, so it earns no row of its own |
+ | Assignment method isn't drawn | `assign.arm.method: random` or `blocked` — both are in the enum "Assignment names a method" above checks against, and both draw an arm rather than reading one already assigned, which is specified, not built in this build; only `by_attribute` executes |
+ | Ratio names levels | `assign.arm.ratio` has key `f`; expected one entry per level of axis `arm` (`control`, `treatment`) |
+ | Block size fills the arms | `assign.arm.block_size: 3` with `ratio: {control: 1, treatment: 1}` — a block must be a whole multiple of the ratio's sum, or it can't hold each arm's share |
+-| Attribute assignment resolves | `assign.arm.method: by_attribute` reads column `arm` — defaulted from the axis name — whose values are `{a, b}`, not the declared levels |
++| Assignment attribute exists | `assign.arm.from` — defaulted from the axis name — names `arm`, which is not a unit attribute |
++| Attribute assignment resolves | `assign.arm.method: by_attribute` reads column `arm` — defaulted from the axis name — whose values must equal the declared levels exactly, in either direction: `{a, b}` is refused against levels `{control, treatment}` for naming neither, and so is a resolving column with a value only one of the two levels holds |
+ | Arm is constant within a unit | `assign.arm.from: arm`, and `p1`'s [measurement rows](#what-isnt-a-repeat) declare `control` and `treatment` — the collapse would file `p1` under whichever the file lists first, so the order the file happens to be in would decide which condition `p1` is measured in |
+ | Allocation is coherent | `allocation: between` over 2 arms and 12 units gives cells of 6; below `limits.min_units_per_cell` (warning) |
+ | Allocation strata exist | `assign.arm.stratify_by: [site]` but `site` is neither a unit attribute nor a group axis |
+ | Cluster attribute exists | `data.units.cluster_by` names `site`, which is not a unit attribute |
+ | Cluster is constant within a unit | `cluster_by: site`, and `p1`'s [measurement rows](#what-isnt-a-repeat) declare `S1` and `S2` — the collapse would file `p1` under whichever the file lists first, and its real site would be on both sides of a split |
+ | Clustering looks undeclared | `site` has 6 distinct values across 240 units but `cluster_by` is unset (warning) |
+ | Folds fit inside the clusters | `{kind: fold, k: 10}` with `cluster_by: animal_id` over 6 animals — clusters are indivisible, so `k` may not exceed the cluster count |
+ | Folds fit inside the cells | `{kind: fold, k: 10}` with `allocation: between` over cells of 8 and 232 — folds are drawn within each cell, so `k` may not exceed the smallest cell's unit count, or its cluster count when `cluster_by` is declared |
+ | Fold count is legal | `{kind: fold, k: 1}` — `k` must be an integer ≥ 2, or `all` for leave-one-out |
+ | Fold strata survive clustering | `{kind: fold, stratify_by: label}` with `cluster_by: animal_id`, but `label` varies within animal `A3` — a stratum can't be balanced across a split that can't divide the cluster |
+@@ -414,22 +415,24 @@ are. An unresolvable `experiment_type` reports
+ likewise apart from those same two envelope rows, none of the others.
+ 
+ | Reported when | Code |
+ |---|---|
+ | A key under a container `check_envelope`'s `LEAF_TYPES` table declares, or a top-level key, that the table does not name — checked with a `difflib` hint, skipping the `parameters` and `sweep` subtrees entirely since each has its own closure (`E-PARAM-UNKNOWN`, `E-SWEEP-KEY-UNKNOWN`), and never descending into a known leaf's own value (a typo inside `data.units.holdout` or a `from` mapping is reached by no check at all — not by `_check_shape` either, which checks a container's shape and never the names inside one; [§ Validation](#validation) names the whole-leaf blocks that costs and the slice that closes each, and `holdout` is not among them only because the whole block is refused today as `E-DATA-HOLDOUT-UNSUPPORTED`, which makes its gap latent rather than live); a non-string YAML mapping key is coerced with `str()` first so it is still reported | `E-CONFIG-KEY-UNKNOWN` |
+ | The config file does not parse as YAML, or parses to something other than a mapping | `E-CONFIG-PARSE` |
+ | A top-level block, or a nested container `_check_shape` walks before its items — `data.units` and its `attributes`, `sweep.baseline`, `sweep.grid` and each axis's values, `replication.repeats` and each level, `statistics.contrasts`, `statistics.report_by` — is present and not the mapping, list, or string its position requires; unset (`null`) is treated as absent, matching `E-CONFIG-TYPE` | `E-CONFIG-SHAPE` |
+ | A leaf `check_envelope`'s `LEAF_TYPES` table declares is present and not its declared type — a `bool` never satisfies any leaf's type, since the table declares none as `bool`, and an `int` satisfies a `float` one; unset (`null`) is treated as absent | `E-CONFIG-TYPE` |
+ | [`data.units.allocation`](#allocation-within-subjects-or-between-subjects) is `between` and `sweep.groups` declares no axis to say what the arms are — no axis at all, or none whose `by` this build can read, which is what a malformed `groups` entry leaves it with. The pair is the check rather than either half: `between` says how a unit reaches an arm, not what the arms are, so a design declaring it alone has one cohort and nothing to divide it into. Read from the declarations, so it reports whether or not a roster resolved | `E-DATA-ALLOCATION-NO-ARMS` |
+ | A `data.units.assign` block's `method` is `random` or `blocked` — both are in the enum, and both draw an arm rather than read one a trial system or the data already assigned. Drawing is specified but not implemented in this build; only `method: by_attribute` executes. Deliberately not gated on `allocation`, the same as `E-DATA-ASSIGN-METHOD` immediately below: both are a check on the block's value rather than on a pair of declarations, unlike `E-DATA-ALLOCATION-NO-ARMS` and `E-DATA-ASSIGN-MISSING`, each of which reports a pair of declarations that disagree. Mutually exclusive with `E-DATA-ASSIGN-METHOD` by construction: a value this row names is by definition inside the enum, so it can never also be absent or out of it. Temporary: the refusal lifts with the slice that implements drawing | `E-DATA-ASSIGN-DRAWN` |
++| Under `method: by_attribute`, the resolved attribute's values, over the resolved roster, are not exactly the declared [`sweep.groups`](#expansion-modes) levels for that axis — **set equality, in either direction, under one code**: a unit's value (including a unit carrying no value for the attribute at all) names none of the declared levels, so that unit would belong to no arm and there is no fourth part of `n` for it; or a declared level no unit's value names, so that arm's condition would resolve zero units. `units.arms_of` is the single authority, the construction `units.clusters_of` is for `cluster_by`, and its raise is caught and reported here under its own code, the same reuse `E-DATA-CLUSTER-UNKNOWN` illustrates for its sibling. Skipped when the roster does not resolve, when the axis's `levels` do not resolve to a non-empty list of strings, or when `from` — see `E-DATA-ASSIGN-UNKNOWN` below — does not resolve to a unit attribute, there being nothing to partition against in any of those cases | `E-DATA-ASSIGN-LEVELS` |
+ | A `data.units.assign` block's `method` is absent or `null`, or is a value other than `random`, `by_attribute`, or `blocked`. **A block that is not a mapping at all is reported here too**, as the block naming no method that it is: `envelope.py` types `data.units.assign` itself and none of its children, whose keys are axis names no fixed dotted path could ever name, so nothing else speaks for one. Which of a block's other fields are read follows from the discriminator — `from` is `by_attribute`'s, `block_size` is `blocked`'s — so a block without one describes no assignment. Deliberately not gated on `allocation`, the same as `E-DATA-ASSIGN-DRAWN` immediately above and unlike `E-DATA-ALLOCATION-NO-ARMS` and `E-DATA-ASSIGN-MISSING`, each of which reports a pair of declarations that disagree: this is a check on the block rather than on a pair of declarations, and a block naming no method describes no assignment wherever it was declared | `E-DATA-ASSIGN-METHOD` |
+ | `data.units.allocation` is `between` and a [`sweep.groups`](#expansion-modes) axis has no block under [`data.units.assign`](#allocation-within-subjects-or-between-subjects) — an absent or `null` `assign`, the empty `assign: {}` `init` writes, or the axis's own key left `null`. One finding per unassigned axis, in declaration order, since the remedy is one block each. This and `E-DATA-ALLOCATION-NO-ARMS` are between them the whole of [§ The one config file](#the-one-config-file)'s "REQUIRED when `allocation` is `between`", which is why that rule has no third code of its own. Not reported under `allocation: within`, where a declared group axis is [§ Validation](#validation)'s *Arms need allocation* — a different fault, and one this build reports by nothing. Skipped when `assign` is present and is not a mapping, which `E-CONFIG-TYPE` already reports | `E-DATA-ASSIGN-MISSING` |
++| Under `method: by_attribute`, `assign.<axis>.from` — declared, or **defaulted to the axis name** when absent (§ The one config file: "`from` is `by_attribute` only, and defaults to the axis name") — is not in `data.units.attributes`. `data.units.attributes`, not the roster's realized names, for the reason `E-DATA-WEIGHT-UNKNOWN` below reads that set: an arm is read per unit, so it has to survive resolution as an attribute. Read from the declaration, so it reports whether or not a roster resolved; a non-`str`, non-absent `from` is skipped, there being no `E-CONFIG-TYPE` backstop for so dynamic a key to defer to, unlike `weight_by`/`cluster_by` | `E-DATA-ASSIGN-UNKNOWN` |
+ | [`data.units.cluster_by`](#clustered-units) is a non-empty string and the design resolves to at least one comparison — a generated `vs_baseline` for every non-baseline condition, plus every declared [`statistics.contrasts`](#contrasts-claims-that-arent-condition-vs-baseline) entry, the same family `W-STATS-FAMILY` counts and the same test `E-DATA-WEIGHT-CONTRAST` below applies. [§ Statistical reporting](#statistical-reporting) gives each contrast construction a `_clustered` suffix under a declared cluster — the *t* forms cluster-robust over the differenced values when paired and the arm-level ones when not, the percentile forms resampling whole clusters, jointly across both sides when paired — and **none of those five exists in this build**: `paired_t_over_units` takes a list of per-unit differences and nothing else, the derived forms take rows and a seed and know nothing about membership, and there is no unpaired form at all. So the delta and its interval would be computed as though the units were independent, which is the one thing the declaration says they are not, beside per-condition values that *are* cluster-robust and with nothing in the record saying which is which — the interval [§ Clustered units](#clustered-units) calls too narrow, on the number a reader acts on. The *resolved* family is the test rather than the declaration, exactly as below: a `sweep.baseline` with no axis beside it expands to a single baseline row, never a comparison's subject, so a clustered run of it publishes no delta and is accepted, and a declared contrast over a sweep with no baseline is refused though it declares no baseline at all. [`statistics.report_by`](#reporting-strata) is outside it, a stratum repeating the per-condition aggregation — whose interval is clustered — and publishing no delta. Temporary: the refusal lifts with the slice that builds the `_clustered` contrast family | `E-DATA-CLUSTER-CONTRAST` |
+ | [`data.units.cluster_by`](#clustered-units) is present and is an empty string — an empty declaration changes no behavior — or names a value `data.units.attributes` does not declare, which includes every name under a `{glob: ...}` source, that source declaring none. `data.units.attributes`, not the source's columns, and for the same reason `E-DATA-WEIGHT-UNKNOWN` below reads that set: a cluster is read per unit when the partition is drawn and again when an interval is computed, so it has to survive resolution as an attribute, where a `measurements.by` is consumed at collapse time and dropped from the merged unit. Checked from the declaration alone, so it reports whether or not a roster resolved; a non-string is left to `E-CONFIG-TYPE`. Raised at run time too, under the same code, wherever cluster membership is resolved for a unit that carries no value for it — `units.clusters_of` is the single authority both surfaces read, so a roster core cannot group raises here rather than inventing a cluster for it | `E-DATA-CLUSTER-UNKNOWN` |
+ | [`data.units.cluster_by`](#clustered-units) names a column whose value is not the same across one unit's [measurement rows](#what-isnt-a-repeat) — the rows `data.units.measurements` collapses into that unit. Reported for the first such unit, naming the values it declares. Not a check `validate` can make for itself: `resolve_units` collapses the rows internally, so by the time there is a roster to read the disagreement is gone and the cluster is whichever value `first` or `mode` returned. So it is raised where the rows collapse — at run time under the same code, this being one fault with one identifier on both surfaces — and reaches `validate` through the resolution it already performs, the same route `E-UNITS-COLLAPSE-RULE` below takes. A column only some of a unit's rows carry is not a disagreement: the rows that carry it agree, and whether every unit has a value at all is `E-DATA-CLUSTER-UNKNOWN` above | `E-DATA-CLUSTER-VARIES` |
+ | `data.input_dir` or `data.output_dir` resolves inside the git repository, checked once a repo root is found | `E-DATA-IN-REPO` |
+ | A `data.units.measurements.collapse` rule of `mean`, `median`, or `sum` — the top-level string, or a per-column map's own entry, or its `first` fallback over a column the map does not name — is checked against the resolved roster's own attribute values for that column, and `units.is_measurement_numeric` — the single authority this check and the run-time coercion both read — says at least one is neither numeric nor a string that parses as one (a `bool` counts as neither); skipped, along with the rest of this row's checks, when the roster does not resolve, since there is then no column to check a rule against. Raised at run time too, under the same code, wherever that coercion runs: over an input table's rows as the roster resolves, and over the rows a step [measured](#what-isnt-a-repeat) as its execution finalizes — the same reuse `E-UNITS-COLLAPSE-RULE` below illustrates. The step-path half is not a fault `validate` can predict: the value is one the *step* recorded, not one any declaration named | `E-DATA-MEASUREMENTS-COLLAPSE-TYPE` |
+ | `data.units.measurements` is declared (non-null) and is not a mapping, or is an empty mapping — reported alone, since there is then no `by` or `collapse` to check either; or the mapping is neither of those and its `by` is missing or is not a non-empty string, or its `collapse` is missing — an omitted `collapse` names no rule, so it is this row rather than `E-UNITS-COLLAPSE-RULE` below. Also raised where the roster resolves, under the same code, since resolution reads `by` before this check runs and a malformed block reaches it first | `E-DATA-MEASUREMENTS-INVALID` |
+ | `data.input_dir` or `data.output_dir`, after `expanduser()`, is not an absolute path | `E-DATA-NOT-ABSOLUTE` |
+ | `data.input_manifest_policy` is empty, or is a value outside the declared policies | `E-DATA-POLICY` |
+ | `data.input_dir` or `data.output_dir` is empty | `E-DATA-REQUIRED` |
+ | `data.input_dir` is not a directory, or is a directory with nothing in it | `E-DATA-UNREADABLE` |
+diff --git a/src/publishable/units.py b/src/publishable/units.py
+index 69445fa..312f850 100644
+--- a/src/publishable/units.py
++++ b/src/publishable/units.py
+@@ -6,21 +6,21 @@ Resolution runs at `validate` as well as at `run`, so this module reads
+ directory and no step for an `io` to belong to.
+ """
+ 
+ import csv
+ import hashlib
+ import json
+ import math
+ import random
+ import statistics
+ from collections import Counter
+-from collections.abc import Iterable, Iterator, Mapping
++from collections.abc import Iterable, Iterator, Mapping, Sequence
+ from dataclasses import dataclass, field
+ from pathlib import Path
+ from typing import Any
+ 
+ from publishable.errors import ContractError
+ 
+ RESERVED_FIELDS = ("key", "paths", "attributes")
+ 
+ 
+ class _FrozenAttributes(Mapping[str, Any]):
+@@ -713,20 +713,101 @@ def clusters_of(roster: UnitList, cluster_by: str) -> dict[str, str]:
+                 f"{unit.key!r} carries no value for — a cluster is what a unit is "
+                 "not independent of, so a unit with no cluster has no place on "
+                 "either side of a split. Declare it in `data.units.attributes` and "
+                 "give every unit a value for it",
+                 code="E-DATA-CLUSTER-UNKNOWN",
+             )
+         membership[unit.key] = str(unit.attributes[cluster_by])
+     return membership
+ 
+ 
++def arms_of(roster: UnitList, column: str, levels: Sequence[str]) -> dict[str, list[Unit]]:
++    """Which arm each unit belongs to, partitioned by declared level, in roster order.
++
++    **The single authority** for arm membership, beside `clusters_of` and for the
++    same reason: `validate` and the runner both have to ask "which units are in
++    this arm" of the same declaration, and a second notion of it is the
++    validate-clean-then-disagree gap in a new shape — here it would mean a
++    `between` design `validate` approved whose conditions core cannot actually
++    build, because the partition it draws at run time is not the one `validate`
++    checked. `validate` calls this to turn a mismatch into
++    `E-DATA-ASSIGN-LEVELS`; task 12 calls it for the subset view a `between`
++    condition's roster is built from, and task 13 counts it — neither may
++    re-derive arm membership from the roster on its own, which is the defect
++    class this docstring is written to prevent a third instance of.
++
++    `column` names a **declared attribute** — `assign.<axis>.from`, already
++    resolved against its default by the caller — not a source column, the same
++    side of the line `weight_by` and `cluster_by` fall on: an arm is read per
++    unit when a `between` condition's roster is drawn, so it has to survive
++    resolution as an attribute. `levels` is `sweep.groups`' declared list for
++    that axis, in its own order.
++
++    **Set equality, not subset tolerance, in either direction** —
++    `reference.md` § Allocation states it twice: the `by_attribute` example
++    annotates `from` as naming "a unit attribute whose values are exactly the
++    declared levels", and `allocation: between` opens "each unit belongs to
++    exactly one arm". So this raises `E-DATA-ASSIGN-LEVELS` for either
++    violation, one code because a caller only needs to know the partition is
++    unusable and the message is what says which:
++
++    - a unit's value names none of `levels` — that unit would belong to no
++      arm, and there is no fourth part of `n` for it;
++    - a declared level no unit's value names — that arm's condition would
++      resolve zero units.
++
++    A unit carrying no value for `column` at all is folded into the first
++    violation rather than raising a distinct fault — `clusters_of`'s convention
++    for the same situation: it, too, names no declared level, for the same
++    reason a value outside `levels` does not.
++
++    Values are stringified before comparison, `clusters_of`'s reason: a table
++    yields `str` for every column, and an arm id is a label rather than a
++    quantity nothing downstream does arithmetic on.
++
++    A caller may rely on every returned level's list being non-empty and on
++    every unit in `roster` appearing in exactly one of them — the exact
++    partition set equality promises once this returns without raising.
++    """
++    declared = list(levels)
++    declared_set = set(declared)
++    partition: dict[str, list[Unit]] = {level: [] for level in declared}
++    unmatched: list[tuple[str, str | None]] = []
++    for unit in roster:
++        value = str(unit.attributes[column]) if column in unit.attributes else None
++        if value is None or value not in declared_set:
++            unmatched.append((unit.key, value))
++            continue
++        partition[value].append(unit)
++    if unmatched:
++        key, value = unmatched[0]
++        holds = "carries no value for it" if value is None else f"holds {value!r}"
++        raise ContractError(
++            f"the arm attribute {column!r} does not resolve to the declared levels "
++            f"({', '.join(declared)}) — unit {key!r} {holds}, naming none of them. "
++            "Every unit belongs to exactly one arm, so a value naming none of the "
++            f"declared levels leaves that unit in none of them "
++            f"({len(unmatched)} of {len(roster)} units affected)",
++            code="E-DATA-ASSIGN-LEVELS",
++        )
++    empty = [level for level in declared if not partition[level]]
++    if empty:
++        raise ContractError(
++            f"the arm attribute {column!r} does not resolve to the declared levels "
++            f"— no unit's value names {', '.join(empty)}. Every declared level "
++            "needs at least one unit, or that arm's condition resolves zero of "
++            "them",
++            code="E-DATA-ASSIGN-LEVELS",
++        )
++    return partition
++
++
+ def cluster_count_of(membership: Mapping[str, str], keys: Iterable[str]) -> int:
+     """How many distinct clusters a given set of unit keys falls in.
+ 
+     The counting expression, in one place. `cluster_count` below is the whole
+     roster's answer and this is the same question asked of a SUBSET — the units a
+     metric was actually computed over, which is what `n.clusters` reports
+     (`runner._counts`, `stats.summarize_step`). Those callers have no roster to
+     hand `cluster_count`: they hold a set of completed keys and the roster-wide
+     membership mapping. Writing `len({m[k] for k in keys})` at each of them would
+     be the second and third notion of "how many clusters is that", which is the
+diff --git a/src/publishable/validate.py b/src/publishable/validate.py
+index bca3b35..95c9314 100644
+--- a/src/publishable/validate.py
++++ b/src/publishable/validate.py
+@@ -28,20 +28,21 @@ from publishable.sweep import (
+     render_value,
+     sample_fault,
+     selector_paths,
+ )
+ from publishable.templates.base import BaseTemplate
+ from publishable.templates.registry import get_template, template_names
+ from publishable.units import (
+     COLLAPSE_RULES,
+     NUMERIC_COLLAPSE_RULES,
+     UnitList,
++    arms_of,
+     fold_basis,
+     is_measurement_numeric,
+     resolve_units,
+     rule_for,
+     stratum_varies_within_cluster,
+     usable_weight,
+ )
+ 
+ REQUIRED_METADATA = ("description", "authors")
+ 
+@@ -439,21 +440,21 @@ def validate_config(
+     _check_metadata(doc, config_path, template, c)
+     _check_entrypoint(doc, c)
+     _check_parameters(doc, template, c)
+     _check_versions(doc, template, c)
+     _check_data(doc, config_path, c)
+     roster, technical_n, columns = _check_units(doc, c)
+     units_decl = _units_declaration(doc.get("data") or {}, c) or {}
+     _check_measurements(units_decl, roster, technical_n, columns, c)
+     _check_weight_by(units_decl, roster, c)
+     _check_cluster_by(doc, units_decl, roster, c)
+-    _check_assign(doc, units_decl, c)
++    _check_assign(doc, units_decl, roster, c)
+     # How many indivisible things a `fold` may be drawn from: the resolved unit
+     # count, or the cluster count when `data.units.cluster_by` declares the units
+     # are not independent draws (`reference.md` § Validation, *Folds fit inside the
+     # clusters*). Resolved once, here, and handed to both checks that need it —
+     # `_check_replication` bounds `k` against it and `_check_sweep` sizes a
+     # `k: all` budget from it, and a `k` checked against one number while the
+     # budget counts another is the drift a single derivation removes.
+     #
+     # `units.fold_basis` raises `E-DATA-CLUSTER-UNKNOWN` when a unit carries no
+     # value for the cluster attribute — the case `_check_cluster_by` above reports
+@@ -1210,24 +1211,26 @@ DRAWN_ASSIGN_METHODS = ("random", "blocked")
+ """The two `ASSIGN_METHODS` values that draw an arm rather than read one already
+ assigned. Both are well-formed and in the enum; neither executes in this build,
+ which is what `E-DATA-ASSIGN-DRAWN` refuses — a refusal of a *value*, distinct
+ from `E-DATA-ASSIGN-METHOD`'s refusal of an absent or out-of-enum one. The two
+ checks read the same `method` value in an `elif` chain in `_check_assign`, so
+ that mutual exclusion is a property of the code: a value this tuple names is by
+ construction inside `ASSIGN_METHODS`, so it can never also be out-of-enum.
+ """
+ 
+ 
+-def _check_assign(doc: dict[str, Any], units: dict[str, Any], c: Collector) -> None:
++def _check_assign(
++    doc: dict[str, Any], units: dict[str, Any], roster: UnitList | None, c: Collector
++) -> None:
+     """`data.units.allocation` and `data.units.assign` against each other and against
+-    `sweep.groups` — four § Validation rows, all read from declarations alone, so
+-    each reports whether or not a roster resolved.
++    `sweep.groups` — six § Validation rows, most read from declarations alone, so
++    each reports whether or not a roster resolved; the last two need the roster.
+ 
+     *Allocation needs arms* — `allocation: between` with no group axis. § Allocation
+     puts the reason in one sentence: `between` "answers *how units reach an arm*, not
+     *what the arms are*", so the declaration on its own describes one cohort and
+     nothing to divide it into.
+ 
+     *Every axis is assigned* — a declared group axis with no block under `assign`.
+     One finding per unassigned axis, in declaration order, because the remedy is one
+     block per axis and a reader fixing the first would otherwise come back for the
+     second. Together with the row above this is the whole of § The one config file's
+@@ -1239,26 +1242,65 @@ def _check_assign(doc: dict[str, Any], units: dict[str, Any], c: Collector) -> N
+ 
+     *Assignment names a method*, which is **not** gated on `allocation`: it is a
+     check on the block, not on the pair, and an `assign` block naming no method
+     describes no assignment wherever it was declared.
+ 
+     *Assignment method isn't drawn* — a `method` in the enum but not yet
+     executable (`random`, `blocked`), refused as `E-DATA-ASSIGN-DRAWN` rather than
+     `E-DATA-ASSIGN-METHOD`. Read from the same `elif` chain as the row above, so
+     the two are mutually exclusive by construction rather than by convention.
+ 
++    **`method: by_attribute`'s two new rows, checked only in that branch of the
++    same `elif` chain** — `from` and `levels` mean nothing under `random`/`blocked`,
++    already refused above, or under an absent/out-of-enum method, already refused
++    by the rows above that:
++
++    *Assignment attribute exists* — `assign.<axis>.from`, declared or **defaulted
++    to the axis name** (§ The one config file: "`from` is `by_attribute` only, and
++    defaults to the axis name"), is not in `data.units.attributes`.
++    `E-DATA-ASSIGN-UNKNOWN`. Modelled on `_check_weight_by`'s name half:
++    `data.units.attributes` is the reference set rather than the roster's realized
++    names, for the same reason — an arm is read per unit, so it has to survive
++    resolution as an attribute — and that lets the check run with no roster at
++    all. **Where it diverges from `_check_weight_by`, stated rather than left
++    silent**: `weight_by`/`cluster_by` are `envelope.py` `LEAF_TYPES` leaves, so a
++    non-`str` declaration there is `E-CONFIG-TYPE`'s to report and this module
++    returns rather than duplicating it. `assign.<axis>.from` is not — `assign`'s
++    children are axis names no fixed dotted path can type, the same reason
++    `method` itself carries no such guard — so there is no backstop to defer to.
++    Rather than inventing a second code for a fault this table has none for, a
++    non-`str`, non-`None` `from` is skipped exactly as the two siblings skip their
++    typed case: reported nowhere in this build, a gap rather than a decision, and
++    the axis's `from`/`levels` rows below it are skipped with it, there being no
++    string to resolve against `data.units.attributes` either way.
++
++    *Attribute assignment resolves* — the resolved attribute's values, over the
++    resolved roster, are not exactly the axis's declared `sweep.groups` levels —
++    **set equality, in either direction, one code**: a value naming no declared
++    level, or a declared level no unit's value names. `units.arms_of` is the
++    single authority, the same construction `units.clusters_of` is for
++    `cluster_by`; its `ContractError` is caught here and reported under its own
++    code, `E-DATA-ASSIGN-LEVELS`, the same reuse `_check_units` already makes of
++    `resolve_units`'s raise. Skipped when the roster did not resolve, when the
++    axis's declared `levels` did not resolve to a non-empty list of strings —
++    `sweep.groups`'s own shape fault, reported elsewhere or not at all in this
++    build — or when the attribute name above did not resolve, there being nothing
++    to partition against.
++
+     Group axis names come from `sweep.selector_paths`, which is total over a
+     malformed `sweep.groups` and dedupes. One consequence, stated rather than left
+     to be discovered: `groups: [{by: 123}]` yields no axis name, so `between` beside
+     it reports *Allocation needs arms* — `groups` has no `_check_shape` guard yet
+     (the slice that retires `E-SWEEP-GROUPS-UNSUPPORTED` owes it), and a finding
+-    that names the real consequence of an unreadable axis beats silence.
++    that names the real consequence of an unreadable axis beats silence. The two
++    new rows read `sweep.groups` a second way, entry by entry, since `levels` is
++    not a `by`-path `selector_paths` collects.
+ 
+     A non-mapping `assign` is skipped entirely: `envelope.py` types
+     `data.units.assign` a `dict`, so `E-CONFIG-TYPE` already reports it and a
+     second, derived finding on top is one more thing to read and nothing more to
+     fix. A non-mapping *axis block* has no such reporter — the envelope's own
+     comment says `assign`'s children are axis names no fixed dotted key could ever
+     name — so it is reported here, as the block naming no method that it is.
+     """
+     assign = units.get("assign")
+     # An absent or null `assign` is an empty one — the module's `or {}` convention,
+@@ -1323,20 +1365,67 @@ def _check_assign(doc: dict[str, Any], units: dict[str, Any], c: Collector) -> N
+         elif method in DRAWN_ASSIGN_METHODS:
+             c.error(
+                 "E-DATA-ASSIGN-DRAWN",
+                 where,
+                 f"is {method!r}, which draws an arm rather than reading one already "
+                 f"assigned; drawing is specified but not implemented in this build. "
+                 f"`by_attribute` is the supported method — it reads an arm a trial "
+                 f"system or the data already assigned, which is what a real trial does "
+                 f"regardless. This value will be honored once drawing is built",
+             )
++        else:
++            # `method == "by_attribute"`, the one value neither elif above caught —
++            # the branch where `from` and the axis's declared `levels` mean anything
++            # at all.
++            declared_from = block.get("from")
++            if declared_from is not None and not isinstance(declared_from, str):
++                # No `E-CONFIG-TYPE` backstop exists for this leaf (see docstring);
++                # skipped rather than guessed at.
++                continue
++            resolved_from = declared_from if declared_from is not None else axis
++            attrs = units.get("attributes") or []
++            if not isinstance(attrs, list):
++                continue
++            names = sorted({a for a in attrs if isinstance(a, str)})
++            if resolved_from not in names:
++                default_note = (
++                    "" if declared_from is not None else " (defaulted from the axis name)"
++                )
++                c.error(
++                    "E-DATA-ASSIGN-UNKNOWN",
++                    f"data.units.assign.{axis}.from",
++                    f"resolves to {resolved_from!r}{default_note}, which is not a unit "
++                    f"attribute — an arm is read per unit when a `between` roster is "
++                    f"built, so it has to be one. `data.units.attributes` declares "
++                    f"{', '.join(names) or 'none'}",
++                )
++                continue
++            if roster is None:
++                continue
++            levels: list[str] | None = None
++            if isinstance(sweep, dict):
++                for entry in sweep.get("groups") or []:
++                    if isinstance(entry, dict) and entry.get("by") == axis:
++                        candidate = entry.get("levels")
++                        if (
++                            isinstance(candidate, list)
++                            and candidate
++                            and all(isinstance(v, str) for v in candidate)
++                        ):
++                            levels = candidate
++                        break
++            if levels is None:
++                continue  # `sweep.groups`'s own shape fault, not this row's to report
++            try:
++                arms_of(roster, resolved_from, levels)
++            except ContractError as exc:
++                c.error(exc.code, f"data.units.assign.{axis}.from", str(exc))
+ 
+ 
+ def _check_fold_stratify_by(
+     doc: dict[str, Any],
+     units: dict[str, Any],
+     roster: UnitList | None,
+     cluster_by: str | None,
+     c: Collector,
+ ) -> None:
+     """A `fold` level's `stratify_by` — the attribute exists, and it survives the
+diff --git a/tests/test_validate.py b/tests/test_validate.py
+index 789f5ea..ec2e404 100644
+--- a/tests/test_validate.py
++++ b/tests/test_validate.py
+@@ -7158,26 +7158,30 @@ def test_between_allocation_with_no_group_axis_has_no_arms(write_config):
+     """§ Allocation: `between` "answers *how units reach an arm*, not *what the
+     arms are*", so the declaration alone divides nothing.
+ 
+     The control must report — it carries the two live refusals — so an exact-set
+     assertion tells "the arms are declared" from "the check is dead"."""
+     assert _error_codes(
+         write_config({"data.units": {"from": "index.csv", "key": "patient_id",
+                                      "allocation": "between"}})
+     ) == {"E-DATA-ALLOCATION-UNSUPPORTED", "E-DATA-ALLOCATION-NO-ARMS"}
+ 
++    # `_between` declares no `data.units.attributes` at all, so `arm` — defaulted
++    # from the axis name — resolves to no unit attribute either: a fourth, live
++    # code, `E-DATA-ASSIGN-UNKNOWN`, alongside the three `-UNSUPPORTED` refusals.
+     assert _error_codes(
+         write_config(_between({"arm": {"method": "by_attribute"}}))
+     ) == {
+         "E-DATA-ALLOCATION-UNSUPPORTED",
+         "E-DATA-ASSIGN-UNSUPPORTED",
+         "E-SWEEP-GROUPS-UNSUPPORTED",
++        "E-DATA-ASSIGN-UNKNOWN",
+     }
+ 
+ 
+ @pytest.mark.parametrize(
+     "assign,also",
+     [
+         (None, set()),
+         ({}, set()),
+         ({"arm": None}, {"E-DATA-ASSIGN-UNSUPPORTED"}),
+     ],
+@@ -7204,72 +7208,230 @@ def test_each_unassigned_axis_is_reported_on_its_own():
+ 
+     Reached directly, with no refusal running beside it: `sex` is assigned and
+     `arm` is not, so a check that reported per-*config* rather than per-axis
+     would give one finding here and a check that ignored the assigned axis would
+     give two."""
+     c = Collector()
+     _check_assign(
+         {"sweep": {"groups": [{"by": "sex", "levels": ["f", "m"]},
+                               {"by": "arm", "levels": ["control", "treatment"]}]}},
+         {"allocation": "between", "assign": {"sex": {"method": "by_attribute"}}},
++        None,
+         c,
+     )
+     missing = [f for f in c.findings if f.code == "E-DATA-ASSIGN-MISSING"]
+     assert len(missing) == 1
+     assert "`arm`" in missing[0].message and "`sex`" not in missing[0].message
+ 
+ 
+ def test_allocation_within_leaves_both_cross_field_rows_silent():
+     """Neither row is gated on `groups` alone. A group axis under the default
+     `within` is *Arms need allocation*, a row this build reports by nothing —
+     reporting a missing `assign` there would name the wrong fault."""
+     c = Collector()
+-    _check_assign({"sweep": {"groups": _ARM_AXIS}}, {"from": "index.csv"}, c)
++    _check_assign({"sweep": {"groups": _ARM_AXIS}}, {"from": "index.csv"}, None, c)
+     assert [f.code for f in c.findings] == []
+ 
+ 
+-def test_by_attribute_assignment_is_accepted(write_config):
++def test_by_attribute_assignment_is_accepted(write_config, tmp_path):
+     """`by_attribute` is the one method that executes in this build, so it earns
+     neither `E-DATA-ASSIGN-METHOD` (absent or out-of-enum) nor
+     `E-DATA-ASSIGN-DRAWN` (in-enum but drawn) — the control for both, and it must
+     still report: the three live `-UNSUPPORTED` refusals below discriminate "the
+     config loaded and only the method-value checks are silent" from "nothing
+     ran". The exact set is the number that matters — three codes, none of them
+-    `E-DATA-ASSIGN-METHOD` or `E-DATA-ASSIGN-DRAWN`."""
+-    found = _error_codes(write_config(_between({"arm": {"method": "by_attribute"}})))
++    `E-DATA-ASSIGN-METHOD` or `E-DATA-ASSIGN-DRAWN`.
++
++    This is also the accept path for `from`/`levels`: `write_config`'s
++    `index.csv` carries only `patient_id`, so an `arm` column is written here —
++    one row per declared level, covering both — to exercise `E-DATA-ASSIGN-UNKNOWN`
++    and `E-DATA-ASSIGN-LEVELS` resolving clean rather than merely being unreached."""
++    (tmp_path / "input" / "index.csv").write_text("patient_id,arm\np1,control\np2,treatment\n")
++    found = _error_codes(
++        write_config(_between({"arm": {"method": "by_attribute"}}, attributes=["arm"]))
++    )
+     assert found == {
+         "E-DATA-ALLOCATION-UNSUPPORTED",
+         "E-DATA-ASSIGN-UNSUPPORTED",
+         "E-SWEEP-GROUPS-UNSUPPORTED",
+     }
+     assert "E-DATA-ASSIGN-DRAWN" not in found
+     assert "E-DATA-ASSIGN-METHOD" not in found
++    assert "E-DATA-ASSIGN-UNKNOWN" not in found
++    assert "E-DATA-ASSIGN-LEVELS" not in found
++
++
++def test_assign_from_defaults_to_the_axis_name():
++    """§ The one config file: `from` is `by_attribute` only, and **defaults to
++    the axis name**. No `from` key at all, axis named `arm`, attribute `arm`
++    declared — the default is what makes this resolve, and reached directly
++    (no `allocation`, no `sweep`) so nothing else in `_check_assign` can speak
++    for it. Roster-free, `_check_weight_by`'s own construction: the name half
++    runs from the declaration alone."""
++    c = Collector()
++    _check_assign(
++        {},
++        {"attributes": ["arm"], "assign": {"arm": {"method": "by_attribute"}}},
++        None,
++        c,
++    )
++    assert [f.code for f in c.findings] == []
++
++
++def test_assign_from_default_is_reported_when_it_misses():
++    """Paired with the test above — same config, but `data.units.attributes`
++    does not list `arm`, so the very name the default produced is the one that
++    fails to resolve. Discriminates the default from a check that never ran:
++    a config omitting `from` passes the first test either way if the default
++    is dead code, but only the real default produces a finding naming `arm`
++    here. The message names the resolved value and says it was defaulted,
++    since that string is the only observable evidence of which name the
++    default produced."""
++    c = Collector()
++    _check_assign(
++        {},
++        {"attributes": ["site"], "assign": {"arm": {"method": "by_attribute"}}},
++        None,
++        c,
++    )
++    assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-UNKNOWN"]
++    assert c.findings[0].path == "data.units.assign.arm.from"
++    assert "'arm'" in c.findings[0].message
++    assert "defaulted from the axis name" in c.findings[0].message
++
++
++def test_assign_from_declared_overrides_the_default_and_reports_its_own_name():
++    """A declared `from` is read over the axis name, and the unknown message
++    names the *declared* value rather than the axis — `'cohort_label'`, not
++    `'arm'` — and does not claim a default that did not happen."""
++    c = Collector()
++    _check_assign(
++        {},
++        {
++            "attributes": ["site"],
++            "assign": {"arm": {"method": "by_attribute", "from": "cohort_label"}},
++        },
++        None,
++        c,
++    )
++    assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-UNKNOWN"]
++    assert "'cohort_label'" in c.findings[0].message
++    assert "'arm'" not in c.findings[0].message
++    assert "defaulted from the axis name" not in c.findings[0].message
++
++
++def _arm_roster(values: list[str | None]) -> UnitList:
++    """A roster of units keyed `u0`, `u1`, ... holding `arm` at the given value —
++    `None` meaning the unit carries no value for it at all, `clusters_of`'s own
++    missing-attribute case."""
++    return UnitList(
++        [
++            Unit(key=f"u{i}", paths=(), attributes={"arm": v} if v is not None else {})
++            for i, v in enumerate(values)
++        ]
++    )
++
++
++def test_assign_levels_resolve_when_every_unit_names_a_declared_level():
++    """The accept path for `E-DATA-ASSIGN-LEVELS`: two units, one per declared
++    level. A cluster fixture would coincide with this partition at 2 units —
++    deliberately avoided by using 3 units with a repeated level, so an
++    arm-aware reader (grouping `control` twice) is distinguishable from a
++    cluster-aware one (which has no notion of `levels` at all and would not
++    even run this check)."""
++    c = Collector()
++    _check_assign(
++        {"sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}},
++        {
++            "attributes": ["arm"],
++            "assign": {"arm": {"method": "by_attribute"}},
++        },
++        _arm_roster(["control", "control", "treatment"]),
++        c,
++    )
++    assert [f.code for f in c.findings] == []
++
++
++def test_assign_levels_refused_when_a_value_names_no_declared_level():
++    """§ Allocation, twice: `from` "a unit attribute whose values are exactly
++    the declared levels", and `between` opens "each unit belongs to exactly
++    one arm". A unit holding `unknown_arm` — not `control` or `treatment` —
++    would belong to no arm, and there is no fourth part of `n` for it."""
++    c = Collector()
++    _check_assign(
++        {"sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}},
++        {
++            "attributes": ["arm"],
++            "assign": {"arm": {"method": "by_attribute"}},
++        },
++        _arm_roster(["control", "treatment", "unknown_arm"]),
++        c,
++    )
++    assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-LEVELS"]
++    assert "unknown_arm" in c.findings[0].message
++
++
++def test_assign_levels_refused_when_a_unit_carries_no_value_at_all():
++    """The other route to the same violation `clusters_of` recognizes for
++    `cluster_by`: a unit with no value for the attribute at all belongs to no
++    arm exactly as one holding an unrecognized value does, so it is folded into
++    the same code and message rather than a distinct one."""
++    c = Collector()
++    _check_assign(
++        {"sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}},
++        {
++            "attributes": ["arm"],
++            "assign": {"arm": {"method": "by_attribute"}},
++        },
++        _arm_roster(["control", "treatment", None]),
++        c,
++    )
++    assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-LEVELS"]
++    assert "carries no value" in c.findings[0].message
++
++
++def test_assign_levels_refused_when_a_declared_level_holds_no_unit():
++    """The other direction of set equality: every unit resolves to a declared
++    level, but one declared level — `treatment` — holds none of them, so that
++    arm's condition would resolve zero units."""
++    c = Collector()
++    _check_assign(
++        {"sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}},
++        {
++            "attributes": ["arm"],
++            "assign": {"arm": {"method": "by_attribute"}},
++        },
++        _arm_roster(["control", "control", "control"]),
++        c,
++    )
++    assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-LEVELS"]
++    assert "treatment" in c.findings[0].message
+ 
+ 
+ @pytest.mark.parametrize("method", ["random", "blocked"])
+ def test_a_drawn_assignment_method_is_refused(write_config, method):
+     """`random` and `blocked` are both in `ASSIGN_METHODS`, so neither earns
+     `E-DATA-ASSIGN-METHOD`; both draw an arm rather than reading one already
+     assigned, which is what `E-DATA-ASSIGN-DRAWN` refuses. Parametrized rather
+     than one test for both values, per the mutation requirement: narrowing the
+     refused set to just one of them must fail exactly one of these two runs."""
+     found = _error_codes(write_config(_between({"arm": {"method": method}})))
+     assert found == {
+         "E-DATA-ALLOCATION-UNSUPPORTED",
+         "E-DATA-ASSIGN-UNSUPPORTED",
+         "E-SWEEP-GROUPS-UNSUPPORTED",
+         "E-DATA-ASSIGN-DRAWN",
+     }
+     assert "E-DATA-ASSIGN-METHOD" not in found
+ 
+     c = Collector()
+-    _check_assign({}, {"assign": {"arm": {"method": method}}}, c)
++    _check_assign({}, {"assign": {"arm": {"method": method}}}, None, c)
+     assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-DRAWN"]
+     assert c.findings[0].path == "data.units.assign.arm.method"
+     # The wording, not just the code: `E-DATA-ASSIGN-METHOD`'s out-of-enum branch
+     # also formats `is {method!r}, which is not...`, so a test asserting the code
+     # alone would pass with the `elif method in DRAWN_ASSIGN_METHODS` branch
+     # deleted and the out-of-enum branch mutated to swallow it. `by_attribute`,
+     # the supported alternative, is what discriminates this message from that
+     # one.
+     assert "by_attribute" in c.findings[0].message
+     assert method in c.findings[0].message
+@@ -7282,21 +7444,21 @@ def test_an_assignment_declaring_no_method_is_refused(write_config):
+     assert _error_codes(
+         write_config(_between({"arm": {"stratify_by": ["site"]}}))
+     ) == {
+         "E-DATA-ALLOCATION-UNSUPPORTED",
+         "E-DATA-ASSIGN-UNSUPPORTED",
+         "E-SWEEP-GROUPS-UNSUPPORTED",
+         "E-DATA-ASSIGN-METHOD",
+     }
+ 
+     c = Collector()
+-    _check_assign({}, {"assign": {"arm": {"stratify_by": ["site"]}}}, c)
++    _check_assign({}, {"assign": {"arm": {"stratify_by": ["site"]}}}, None, c)
+     assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-METHOD"]
+     assert c.findings[0].path == "data.units.assign.arm.method"
+     # The wording, not just the code: an absent `method` and a misspelled one
+     # share an identifier, so a test asserting the code alone passes with the
+     # presence branch deleted — `None` is not in the enum either, and the
+     # out-of-enum branch would catch it saying the wrong thing.
+     assert "not declared" in c.findings[0].message
+ 
+ 
+ def test_an_assignment_method_outside_the_enum_is_refused(write_config):
+@@ -7305,51 +7467,51 @@ def test_an_assignment_method_outside_the_enum_is_refused(write_config):
+     assert _error_codes(
+         write_config(_between({"arm": {"method": "by_column"}}))
+     ) == {
+         "E-DATA-ALLOCATION-UNSUPPORTED",
+         "E-DATA-ASSIGN-UNSUPPORTED",
+         "E-SWEEP-GROUPS-UNSUPPORTED",
+         "E-DATA-ASSIGN-METHOD",
+     }
+ 
+     c = Collector()
+-    _check_assign({}, {"assign": {"arm": {"method": "by_column"}}}, c)
++    _check_assign({}, {"assign": {"arm": {"method": "by_column"}}}, None, c)
+     assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-METHOD"]
+     assert "by_column" in c.findings[0].message
+ 
+ 
+ @pytest.mark.parametrize(
+     "assign",
+     [
+         {"arm": "random"},                    # the block itself is not a block
+         {"arm": {"method": 3}},               # a non-string discriminator
+         {"arm": {"method": ["random"]}},      # a structural one
+     ],
+ )
+ def test_a_malformed_assignment_block_reports_rather_than_crashes(assign):
+     """`validate` collects and never raises, and `envelope.py` types
+     `data.units.assign` itself but none of its children — an axis name is not a
+     key any fixed dotted path could ever name — so nothing else speaks for
+     these."""
+     c = Collector()
+-    _check_assign({}, {"assign": assign}, c)
++    _check_assign({}, {"assign": assign}, None, c)
+     assert [f.code for f in c.findings] == ["E-DATA-ASSIGN-METHOD"]
+ 
+ 
+ @pytest.mark.parametrize(
+     "doc,units",
+     [
+         ({"sweep": "grid"}, {"allocation": "between"}),
+         ({"sweep": {"groups": "arm"}}, {"allocation": "between"}),
+         ({"sweep": {"groups": [{"by": 123}]}}, {"allocation": "between", "assign": {}}),
+         ({}, {"allocation": 3, "assign": "random"}),
+         ({}, {"assign": []}),
+     ],
+ )
+ def test_the_assignment_checks_are_total_over_malformed_declarations(doc, units):
+     """Every one of these has its own reporter — `E-CONFIG-SHAPE` for a
+     string `sweep`, `E-CONFIG-TYPE` for a non-mapping `assign` — and none of
+     them may become a traceback here. The first three report the arms fault
+     honestly, since an unreadable axis is an axis nothing can assign."""
+     c = Collector()
+-    _check_assign(doc, units, c)
++    _check_assign(doc, units, None, c)
+     assert all(f.code.startswith("E-DATA-") for f in c.findings)

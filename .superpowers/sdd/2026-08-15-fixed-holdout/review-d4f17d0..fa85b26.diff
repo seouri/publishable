@@ -1,0 +1,687 @@
+# Review package: d4f17d0..fa85b26
+
+## Commits
+fa85b26 feat: every denominator counts the holdout's test partition
+
+## Files changed
+ .../sdd/2026-08-15-fixed-holdout/task-15-report.md | 154 ++++++++++++++++
+ src/publishable/cli.py                             |  80 ++++++++-
+ tests/test_cli.py                                  | 195 +++++++++++++++++++++
+ 3 files changed, 423 insertions(+), 6 deletions(-)
+
+## Diff
+diff --git a/.superpowers/sdd/2026-08-15-fixed-holdout/task-15-report.md b/.superpowers/sdd/2026-08-15-fixed-holdout/task-15-report.md
+new file mode 100644
+index 0000000..ce94699
+--- /dev/null
++++ b/.superpowers/sdd/2026-08-15-fixed-holdout/task-15-report.md
+@@ -0,0 +1,154 @@
++# Task 15 report: the denominators — six sites narrowed, two deliberately not
++
++## Status
++
++DONE
++
++## What was built
++
++`src/publishable/cli.py`: added `_evaluation_roster(roster, holdout)` immediately after
++`_resolved_holdout`, verbatim from the brief (docstring included). In `command_run`, added
++`eval_roster = _evaluation_roster(roster, holdout_plan)` immediately after `holdout_plan` is
++realized, with the brief's comment about `roster` staying whole below that line. Changed exactly six
++call sites from `roster` to `eval_roster`: `execute_plan(units=...)`, `_condition_beside_n(...)`,
++`_condition_counts(...)`, `_condition_report_by_levels(...)`, `_compute_vs_baseline(roster=...)`,
++`_compute_declared_contrasts(roster=...)`. Added the brief's comment at the `provenance["units"]`
++write site explaining why `240` there and `48` in a metric's `n` are both true. Added one line beyond
++the brief: `assert eval_roster is not None` immediately inside `if roster is not None:` (before the
++per-condition loop), with a comment — `mypy` cannot see that `eval_roster is None` iff `roster is
++None` (an invariant of `_evaluation_roster` itself), and without it three of the six narrowed call
++sites failed `arg-type` (`UnitList | None` where `UnitList` is required).
++
++`tests/test_cli.py`: added `_evaluation_roster` and `HoldoutPlan` to the top-level imports (the
++latter placed in import-sorted position, not beside its use, to satisfy `ruff`'s import-order check).
++Appended the brief's two given tests verbatim
++(`test_the_evaluation_roster_is_the_test_partition_and_preserves_roster_order`,
++`test_the_narrowed_roster_is_what_attrition_counts_against`, the latter using `_repeat_result` —
++already imported from `tests.test_stats` at the top of this file — rather than a new
++`_completed_results_for` helper, since `_repeat_result(step, repeat_label, condition_index,
++rows_by_unit)` already builds exactly the `list[ExecutionResult]` needed) and a module-level
++`_HOLDOUT_PLAN_8_2`. Added four more tests for the four sites the brief left unpinned:
++`test_condition_report_by_levels_omits_a_level_confined_to_training_units`,
++`test_compute_declared_contrasts_within_is_narrowed_by_the_test_partition`,
++`test_compute_vs_baseline_roster_argument_never_affects_the_auto_generated_family` (a documented
++non-pin — see below), and `_condition_beside_n` is covered only by the finding in the table, not a
++test (also below).
++
++## The six sites: pinning status
++
++| # | Site | Pinned? | By |
++|---|---|---|---|
++| 1 | `execute_plan(units=eval_roster)` | No | Unpinnable at this commit. `E-DATA-HOLDOUT-UNSUPPORTED` refuses every config declaring a holdout before `command_run`'s body runs, so no test reaches this call site end-to-end. Task 18's `n.resolved` and `max_failed_fraction` pins are what close it (brief's own mutation (c), confirmed below). |
++| 2 | `_condition_beside_n(beside_n, eval_roster, cond.index, arm_members_map)` | No — and not just "no test yet" | **Structurally inert**, verified empirically (see finding below): `_condition_beside_n`'s return depends only on `beside_n`'s own content and on whether `arm_members_map is None`, never on which roster object or content is passed. No task-18 pin closes this either, since the fact being tested (identity of `_cond_roster`'s return against its own input) doesn't change with which roster is fed in. |
++| 3 | `_condition_counts(results, eval_roster, step_name, ...)` | **Yes** | `test_the_narrowed_roster_is_what_attrition_counts_against` (brief's own test). Mutation confirmed below. |
++| 4 | `_condition_report_by_levels(eval_roster, cond.index, arm_members_map, attribute)` | **Yes** | `test_condition_report_by_levels_omits_a_level_confined_to_training_units`. Mutation confirmed below. |
++| 5 | `_compute_vs_baseline(..., roster=eval_roster, ...)` | No — and not just "no test yet" | **Structurally inert**, verified empirically (see finding below): `resolve_contrasts` never sets `within` on an auto-generated (`declared=False`) comparison, so `units_matching(roster, None)` always returns `None` regardless of which roster is passed. `test_compute_vs_baseline_roster_argument_never_affects_the_auto_generated_family` records this rather than asserting a pin that doesn't exist. |
++| 6 | `_compute_declared_contrasts(..., roster=eval_roster, ...)` | **Yes** | `test_compute_declared_contrasts_within_is_narrowed_by_the_test_partition`, using a declared `within` (which *can* be non-`None`, unlike site 5). Mutation confirmed below. |
++
++Sites 2 and 5 are a real disagreement with the brief's framing (see "Where the brief disagreed with
++the code"), not an oversight — I made the six-site change as instructed for both (correctness of
++`cond_roster`'s eventual *content*, and consistency with sites 1/6/3/4, in case a future change makes
++either function's roster argument observable), but no test can distinguish `eval_roster` from
++`roster` there, and neither will task 18's pins.
++
++## The three key-indexed sites, checked rather than restated
++
++Verified `unit_attributes` empirically (`Unit`/`_attributed` reached directly): built the mapping from
++a 10-unit whole roster and again from a 2-unit narrowed roster, ran `_attributed` against a table
++holding rows for only the narrowed unit's keys, and the two outputs were byte-for-byte identical —
++`_attributed` looks up `attributes.get(row["unit"], {})` only for keys the table's rows actually carry,
++so the eight surplus training keys in the whole-roster mapping are never read. `weights` and
++`resample_strata` follow the same shape by inspection (both are consumed by key from `attrition`'s /
++`stats`'s per-completed-unit loop, never iterated over on their own), and I did not find a case where
++narrowing either changes anything. This matches the brief's claim; I did not find a case where it is
++wrong.
++
++## Mutations run
++
++All reverted by editing the file back (never `git checkout --`), `__pycache__` deleted between runs,
++each revert verified by re-running the affected test(s), and a final `diff` against a pre-mutation
++backup confirmed byte-identical restoration of `src/publishable/cli.py` before committing.
++
++**Brief's three, on `_evaluation_roster` and the `execute_plan` site:**
++
++**(a)** Changed the early return to `return UnitList(list(roster)) if roster is not None else None` (a
++copy instead of the same object). Result: **FAIL** —
++`test_the_evaluation_roster_is_the_test_partition_and_preserves_roster_order` failed directly on
++`assert _evaluation_roster(roster, None) is roster` (this test, added this task, asserts the identity
++claim directly — stronger than the brief's fallback prediction that nothing would fail and the
++docstring would need weakening). Reverted; both `-k "evaluation_roster or narrowed_roster_is_what"`
++tests pass again.
++
++**(b)** Changed the narrowing to `test = set(holdout.train)`. Result: **FAIL** — both
++`test_the_evaluation_roster_is_the_test_partition_and_preserves_roster_order` and
++`test_the_narrowed_roster_is_what_attrition_counts_against` failed (`8 == 2` on the latter's
++`narrowed["resolved"]` assertion). Reverted; both pass again.
++
++**(c)** Reverted `execute_plan(units=eval_roster)` to `execute_plan(units=roster)`. Result: **nothing
++failed** — `uv run pytest` still reports 1942 passed, 2 xfailed. The honest result at this commit,
++exactly as the brief predicts: no config can declare a holdout and reach `command_run`, so no test
++exercises this call site end-to-end. Task 18 is what closes it. Reverted back to `eval_roster`.
++
++**Mine, one per pinned site (3, 4, 6), confirming the direct-call tests are mutation-sensitive:**
++rather than re-mutating `command_run`'s source (which none of these four tests reach at all — they
++call the extracted functions directly, the same pattern task 13/14 established, since command_run
++itself can't be exercised past `validate`'s refusal), I fed each test's "should be narrowed" call the
++wrong (whole) roster and confirmed the assertion that pins the fix fails:
++
++- Site 3 is the brief's own test; its `whole["failed"] == 8` assertion already *is* this check
++  (confirmed live before implementing, per the brief's step 2).
++- Site 4: called `_condition_report_by_levels(roster, 0, None, "cohort")` (whole, where `eval_roster`
++  belongs) and re-asserted `"early" not in mutated` — **AssertionError**, confirming `"early"` is
++  present when the wrong roster is fed.
++- Site 6: called `_compute_declared_contrasts(..., roster=roster, ...)` (whole, where `eval_roster`
++  belongs) and re-asserted `n_paired == 1` — got `n_paired == 2`, confirming the mismatch.
++
++I additionally reverted all six `command_run` call sites to `roster` at once (a single script edit)
++and ran the full suite: **1942 passed, 2 xfailed — nothing failed**, the same "honest result" as
++mutation (c), for all six sites simultaneously. This confirms that command_run's own *wiring* (as
++opposed to the narrowing functions' own behavior, which sites 3/4/6 pin directly) is unverifiable
++end-to-end for any of the six sites at this commit, not only for `execute_plan`. Reverted back to the
++six `eval_roster` call sites; full suite green again.
++
++## Test summary
++
++`uv run pytest` — 1942 passed, 2 xfailed (1937 baseline + 5 new tests: two of the brief's own, plus
++`_condition_report_by_levels`, `_compute_declared_contrasts`, and the `_compute_vs_baseline`
++non-pin finding). `uv run ruff check .` and `uv run mypy` clean (42 source files). `uv run ruff
++format --check .` shows only pre-existing drift in 63 files, none of which are `cli.py` or
++`test_cli.py` (confirmed by grepping the reformat list for both filenames — neither appears).
++
++## Where the brief disagreed with the code
++
++Two disagreements, both about which of the six sites are actually observable, found by testing rather
++than assumed from the brief's framing:
++
++1. **Site 2, `_condition_beside_n`.** The brief lists it as one of six sites whose narrowing matters
++   for the denominators. Empirically, its return value depends *only* on `beside_n`'s own content and
++   on whether `arm_members_map is None` — never on the roster argument's identity or content, because
++   `_cond_beside_n`'s only use of its two roster-derived arguments is the identity comparison
++   `cond_roster is roster`, and both sides of that comparison are always derived from the *same*
++   passed-in value in one call. Feeding `_condition_beside_n` the whole roster versus `eval_roster`
++   produces byte-identical output in every case I constructed, with and without a non-`None`
++   `arm_members_map`.
++2. **Site 5, `_compute_vs_baseline`.** Same shape, different cause: `resolve_contrasts` never
++   populates `within` on an auto-generated `vs_baseline` comparison (`Comparison(..., declared=False)`
++   omits the keyword, taking the dataclass default `None`), and `units_matching(_, None)` is `None`
++   regardless of which roster is passed. `_compute_vs_baseline`'s only other use of `roster` is the
++   `if roster is None: return None, []` guard, and `eval_roster is None` iff `roster is None`, so even
++   that guard can't distinguish them.
++
++Both are real findings that outrank the brief's implicit assumption that all six sites are equally
++pinnable, not oversights in my testing — I checked both with actual constructed inputs (see the code
++snippets run during this task), not by reasoning alone. I still made the change at both sites, since
++it is the correct, defensive answer (in case a future change gives either function's roster argument
++teeth — e.g., `within` becoming settable on an auto-generated comparison), but neither is testable now
++and neither will be closed by task 18's two named pins (`n.resolved`, `max_failed_fraction`), which
++don't touch `_condition_beside_n`'s or `_compute_vs_baseline`'s own return values.
++
++## Process notes
++
++`.superpowers/sdd/.gitignore` was clobbered to a bare `*` (the standing `scripts/sdd-workspace` /
++`task-brief` behavior CLAUDE.md documents) when this task's brief was read. Restored via `git
++checkout -- .superpowers/sdd/.gitignore` before committing — safe here because that file had no
++uncommitted content of its own; `git diff` showed no remaining changes to it afterward.
+diff --git a/src/publishable/cli.py b/src/publishable/cli.py
+index e916d02..7b8335e 100644
+--- a/src/publishable/cli.py
++++ b/src/publishable/cli.py
+@@ -492,20 +492,68 @@ def _resolved_holdout(
+     if roster is None:
+         return None
+     block = (units_decl or {}).get("holdout")
+     if not isinstance(block, dict) or not block:
+         return None
+     return holdout_for(
+         roster, block, seed=holdout_seed_for(block, digest, roster), clusters=clusters
+     )
+ 
+ 
++def _evaluation_roster(
++    roster: "UnitList | None", holdout: "HoldoutPlan | None"
++) -> "UnitList | None":
++    """The units every denominator counts against — the holdout's **test**
++    partition when one is declared, and the same roster object otherwise.
++
++    `reference.md` § A fixed holdout split: "`resolved` is the test partition
++    — a 20 % holdout over 240 units reports `resolved: 48`, and the interval is
++    over those 48. That's the honest denominator: the training units produced
++    no result to generalize from."
++
++    **Without this, every training unit lands in `failed`.** `runner.attrition`
++    computes `handed = keys` over whatever roster it is given, and a training
++    unit is handed out, records nothing, and is neither completed nor skipped —
++    so a 0.2 holdout over 240 would report 192 failures and trip
++    `max_failed_fraction` on a run in which nothing failed.
++
++    **The same object, not a copy, when no holdout is declared.**
++    `_cond_beside_n` decides whether `technical_n` survives by IDENTITY
++    (`cond_roster is roster`), so a copy here would silently withhold it from
++    every run in the build.
++
++    Roster order is preserved: it is part of the roster's identity, and
++    `_report_by_levels` walks it to build each level's table.
++
++    **What this deliberately does NOT narrow**, and the list is the point
++    rather than an omission:
++
++    - `provenance.units.n` and `provenance.units_hash` stay whole-roster. They
++      are the roster's identity, not a metric's denominator — which is what
++      makes `240` there and `48` in a metric's `n` two true numbers rather than
++      a contradiction.
++    - The key-indexed maps `command_run` builds over the roster — the
++      `weight_by` weights, `unit_attributes`, and `resample_strata` — are
++      consumed BY KEY over units that completed, so a surplus training key is
++      never looked up. Narrowing them would be a third answer to which roster
++      is which for no observable difference.
++    - `runner._counts`' Kish size and cluster count are computed over the
++      COMPLETED units already (its own docstring: "a df is over the units the
++      interval was computed from"), so they are holdout-safe by construction
++      and need nothing here.
++    """
++    if roster is None or holdout is None:
++        return roster
++    test = set(holdout.test)
++    return UnitList([u for u in roster if u.key in test])
++
++
+ def _cond_roster(
+     roster: "UnitList",
+     cond_index: int,
+     arm_members_map: "dict[int, frozenset[str]] | None",
+ ) -> "UnitList":
+     """The units condition `cond_index` counts against — its own arm's subset
+     of the shared roster when a group axis selects one, and the whole roster
+     (the same object, not a copy) otherwise.
+ 
+     This is the read side of the same narrowing `execute_plan` already applies
+@@ -1457,20 +1505,25 @@ def command_run(config_path: Path) -> int:
+     # still called whenever `expand` treated the config as having a group axis,
+     # so a resolution gap surfaces as `arm_members`'s own `KeyError` — a
+     # caller-disagreement bug to see, not a config to silently accept — rather
+     # than as a silently unnarrowed run.
+     group_axes = _resolved_group_axes(units_decl, sweep_block, roster, digest, clusters)
+     # Realized here, once, and before anything reads it — the runner's
+     # narrowing, the denominators and `allocation.json` are all handed this one
+     # object. See `_resolved_holdout` for why not calling twice is the only
+     # thing that can promise the run and the record agree.
+     holdout_plan = _resolved_holdout(units_decl, roster, digest, clusters)
++    # One narrowing, six readers. `roster` itself stays whole below this line —
++    # `provenance.units.n` and `units_hash` are the roster's identity rather
++    # than a metric's denominator, and rebinding the name would narrow every
++    # future call site silently, including theirs.
++    eval_roster = _evaluation_roster(roster, holdout_plan)
+     arm_members_map = (
+         arm_members(group_axes, conditions)
+         if selector_paths(sweep_block) and roster is not None
+         else None
+     )
+     plan = build_plan(  # phase 4
+         experiment,
+         conditions=[(c.index, c.label) for c in conditions],
+         repeat_labels=labels,
+     )
+@@ -1580,21 +1633,21 @@ def command_run(config_path: Path) -> int:
+             (run_dir / "allocation.json").write_text(json.dumps(alloc_doc, indent=2))
+             alloc_hash = allocation_hash(alloc_doc)
+ 
+         results = execute_plan(  # phase 7
+             plan=plan,
+             run_dir=run_dir,
+             input_dir=input_dir,
+             cfgs=cfgs,
+             repeats=repeats,
+             digest=digest,
+-            units=roster,
++            units=eval_roster,
+             max_failed_fraction=(doc.get("limits") or {}).get("max_failed_fraction"),
+             fold_members=fold_members,
+             arm_members=arm_members_map,
+             holdout_train=(
+                 UnitList([u for u in roster if u.key in set(holdout_plan.train)])
+                 if holdout_plan is not None and roster is not None
+                 else None
+             ),
+             measurements=(units_decl or {}).get("measurements"),
+         )
+@@ -1654,20 +1707,26 @@ def command_run(config_path: Path) -> int:
+             for key, value in (r.returned or {}).items():
+                 if isinstance(value, Estimate) and value.ci95 is not None and value.n is None:
+                     aggregate_c.warn(
+                         "W-STEP-ESTIMATE-N",
+                         f"{r.execution.step_name}.{key}",
+                         "reports a ci95 with no `n`; an interval with no stated "
+                         "denominator is the disclosure risk `limits.min_reported_n` "
+                         "exists to catch, and `study add` cannot check what it cannot see",
+                     )
+         if roster is not None:
++            # `_evaluation_roster` returns `None` only when its own `roster`
++            # argument is `None` (`_resolved_holdout`'s docstring: a `None`
++            # roster has nothing to partition), so `eval_roster` is `None`
++            # exactly when `roster` is — narrowed here for the type checker,
++            # not a new runtime possibility.
++            assert eval_roster is not None
+             # `condition_index` is guarded per condition: core aggregates within
+             # each condition and never pools across conditions — an unguarded
+             # filter would let a same-named step from another condition mark this
+             # one as having a recording step it never ran.
+             template = get_template(doc.get("experiment_type", ""), repo_root)
+             resample_seed_value = resample_seed(digest)
+             # The roster is resolved once per run and shared across every
+             # condition, so this mapping is built once too — it is the same
+             # attributes for every condition, every step and every draw
+             # (`_attributed` says what it is for). The `if u.attributes` filter
+@@ -1808,30 +1867,30 @@ def command_run(config_path: Path) -> int:
+                 aggregated[cond.index] = {}
+                 # `_condition_beside_n` narrows to this condition's own arm
+                 # before deciding whether `technical_n` survives — the read
+                 # side of the same narrowing `execute_plan` already applies to
+                 # what this condition's executions were actually handed. Kept
+                 # as ONE call, not a `cond_roster` computed here and consumed
+                 # a few lines down: that two-step shape is exactly how the bug
+                 # this task fixes happened — a narrowed roster computed and
+                 # then not passed to `attrition`.
+                 cond_beside_n = {
+-                    **_condition_beside_n(beside_n, roster, cond.index, arm_members_map),
++                    **_condition_beside_n(beside_n, eval_roster, cond.index, arm_members_map),
+                     **resample_beside,
+                 }
+                 for step_name in sorted(recording_steps):
+                     collapsed = collapse_repeats(
+                         results, step_name, cond.index, fold_members=fold_members
+                     )
+                     counts = _condition_counts(
+                         results,
+-                        roster,
++                        eval_roster,
+                         step_name,
+                         cond.index,
+                         arm_members_map,
+                         fold_members=fold_members,
+                         weights=weights,
+                         clusters=clusters,
+                     )
+                     max_ineligible = (doc.get("limits") or {}).get("max_ineligible_fraction")
+                     if (
+                         isinstance(max_ineligible, (int, float))
+@@ -2198,21 +2257,21 @@ def command_run(config_path: Path) -> int:
+                         # `_condition_report_by_levels`, not `_report_by_levels`
+                         # bare: under a group axis a level's key set must not
+                         # reach past this condition's own arm into the other
+                         # one — the same defect `_condition_counts` exists to
+                         # fix for `attrition` above, one level in. Passing
+                         # `roster` here directly (bypassing the arm narrowing)
+                         # would let a level of `attribute` that happens to span
+                         # both arms hand `attrition` units the other arm's
+                         # executions never touched.
+                         for level, (keys, level_roster) in _condition_report_by_levels(
+-                            roster, cond.index, arm_members_map, attribute
++                            eval_roster, cond.index, arm_members_map, attribute
+                         ).items():
+                             # One key set decides BOTH the table and the counts.
+                             # Taking the level's rows beside the condition's `n`
+                             # is the S4b Critical's shape — a number reported
+                             # against a denominator computed over other units.
+                             level_collapsed = {
+                                 k: v for k, v in collapsed.items() if k in keys
+                             }
+                             level_counts = attrition(
+                                 results,
+@@ -2404,34 +2463,34 @@ def command_run(config_path: Path) -> int:
+                             "and no strata are reported for this step",
+                         )
+                     # Absent, not empty, the rule `vs_baseline` and `contrasts`
+                     # already follow: a `by: {}` would claim a stratification
+                     # was performed and found nothing.
+                     elif by_block:
+                         aggregated[cond.index][step_name]["by"] = by_block
+             vs_baseline, vs_baseline_members = _compute_vs_baseline(
+                 doc=doc,
+                 conditions=conditions,
+-                roster=roster,
++                roster=eval_roster,
+                 aggregated=aggregated,
+                 collapsed_by_key=collapsed_by_key,
+                 derived_by_key=derived_by_key,
+                 resample_fns_by_key=resample_fns_by_key,
+                 seed=resample_seed_value,
+                 draws=derived_metric_draws,
+                 findings=aggregate_c,
+                 resample_columns=resample_spec["declared"],
+             )
+             contrasts_out, contrast_members = _compute_declared_contrasts(
+                 doc=doc,
+                 conditions=conditions,
+-                roster=roster,
++                roster=eval_roster,
+                 aggregated=aggregated,
+                 collapsed_by_key=collapsed_by_key,
+                 derived_by_key=derived_by_key,
+                 resample_fns_by_key=resample_fns_by_key,
+                 seed=resample_seed_value,
+                 draws=derived_metric_draws,
+                 findings=aggregate_c,
+                 resample_columns=resample_spec["declared"],
+             )
+             # Every interval a reader is shown is corrected against the family
+@@ -2544,20 +2603,29 @@ def command_run(config_path: Path) -> int:
+             },
+             "apparatus": None,
+             "input_manifest": "manifest/input.json",
+             "input_manifest_hash": manifest_hash(manifest),
+             "input_manifest_changed": changed_inputs,
+             "publishable_version": importlib.metadata.version("publishable"),
+             "plugin_versions": {},
+             # A run over a roster whose identity is not pinned is a run whose `n`
+             # means nothing later: `units` and `units_hash` are `None` together
+             # exactly when there is no `data.units` declaration to pin.
++            #
++            # **Whole-roster, deliberately, and not the same number a metric's
++            # `n` reports.** Under a `data.units.holdout` a metric's
++            # `n.resolved` counts the TEST partition — 48 where this says 240
++            # — and both are true: this is the identity of the roster the run
++            # resolved, which is what `units_hash` pins and what `reproduce`
++            # checks, where `n` is the denominator of an estimate. Narrowing
++            # this would make the hash cover a subset the config never
++            # described.
+             "units": (
+                 {"n": len(roster), "key": units_decl["key"]}
+                 if roster is not None and units_decl is not None
+                 else None
+             ),
+             "units_hash": units_hash(roster) if roster is not None else None,
+             # "allocation.json" and its hash, when an arm assignment or a
+             # holdout is declared — `None`/`None` together exactly when
+             # `alloc_doc` was never written, the same pairing `units`/
+             # `units_hash` already use above.
+diff --git a/tests/test_cli.py b/tests/test_cli.py
+index a9ed351..c594c07 100644
+--- a/tests/test_cli.py
++++ b/tests/test_cli.py
+@@ -7,32 +7,34 @@ from typing import Any
+ 
+ import pytest
+ import yaml
+ from tests.test_stats import _repeat_result
+ 
+ from publishable import BaseStep
+ from publishable.cli import (
+     _apply_execution_order,
+     _cond_roster,
+     _condition_counts,
++    _evaluation_roster,
+     _resolved_group_axes,
+     _resolved_holdout,
+     _wide_swept_paths,
+     main,
+ )
+ from publishable.diagnostics import EXIT_INVOCATION, EXIT_OK, EXIT_PARTIAL, EXIT_WRONG, Collector
+ from publishable.errors import ContractError
+ from publishable.generators.experiment import generate_experiment
+ from publishable.generators.step import generate_step
+ from publishable.replication import LABEL_JOIN
+ from publishable.runner import attrition
+ from publishable.scope import Execution
++from publishable.units import HoldoutPlan
+ from publishable.validate import validate_config
+ 
+ Ran = namedtuple("Ran", ["condition_index", "repeat_label"])
+ 
+ 
+ def run_a_project(
+     tmp_path: Path,
+     *,
+     replication: dict[str, Any] | None = None,
+     capsys: pytest.CaptureFixture[str] | None = None,
+@@ -7849,10 +7851,203 @@ def test_a_pinned_holdout_seed_reaches_the_realization():
+     """A pin is the deliberate act, so it has to survive the composition —
+     a realization deriving the seed unconditionally would pass every other
+     assertion in this file."""
+     roster = _cli_roster(10)
+     plan = _resolved_holdout(
+         {"holdout": {"method": "random", "frac": 0.2, "seed": 4321}},
+         roster, "sha256:aaa", None,
+     )
+     assert plan.seed == 4321
+ 
++
++_HOLDOUT_PLAN_8_2 = HoldoutPlan(
++    train=tuple(f"u{i}" for i in range(8)),
++    test=("u8", "u9"),
++    seed=1234,
++    strata=(),
++)
++
++
++def test_the_evaluation_roster_is_the_test_partition_and_preserves_roster_order():
++    """The denominator every metric counts against. Order preserved because
++    the roster's order is part of its identity and `report_by`'s per-level
++    tables are built by walking it.
++
++    The `None` arm is the no-holdout case and must return the SAME OBJECT, not
++    a copy: `_cond_beside_n` decides whether `technical_n` survives by identity
++    (`cond_roster is roster`), so returning a copy here would silently withhold
++    it from every unswept run."""
++    from publishable.units import HoldoutPlan
++
++    roster = _cli_roster(10)
++    assert _evaluation_roster(roster, None) is roster
++    assert _evaluation_roster(None, None) is None
++
++    plan = HoldoutPlan(
++        train=("u3", "u1", "u0", "u2", "u4", "u6", "u5", "u7"),
++        test=("u9", "u8"),
++        seed=1234,
++        strata=(),
++    )
++    narrowed = _evaluation_roster(roster, plan)
++    assert [u.key for u in narrowed] == ["u8", "u9"]
++    assert len(narrowed) == 2
++
++
++def test_the_narrowed_roster_is_what_attrition_counts_against():
++    """The composition this task exists for: `attrition` hands out whatever
++    roster it is given, so a training unit that recorded nothing lands in
++    `failed` unless the roster it sees is already the test partition.
++
++    Asserted through `_condition_counts` — the one function `command_run`
++    calls for a condition's counts — rather than through `attrition` directly,
++    because `attrition` counting correctly over a roster nobody narrowed is
++    the defect, not the fix. `_repeat_result` (already used throughout this
++    file's `attrition`/`_condition_counts` fixtures) builds the
++    `list[ExecutionResult]` `attrition` reads; nothing new is needed for that
++    part."""
++    roster = _cli_roster(10)
++    eval_roster = _evaluation_roster(roster, _HOLDOUT_PLAN_8_2)
++    results = [_repeat_result("step01", "seed01", 0, {"u8": {}, "u9": {}})]
++
++    whole = _condition_counts(results, roster, "step01", 0, None)
++    narrowed = _condition_counts(results, eval_roster, "step01", 0, None)
++
++    # The defect, stated as a number: 8 training units counted as failures.
++    assert whole["resolved"] == 10 and whole["failed"] == 8
++    # The fix.
++    assert narrowed["resolved"] == 2
++    assert narrowed["completed"] == 2
++    assert narrowed["failed"] == 0
++
++
++def test_condition_report_by_levels_omits_a_level_confined_to_training_units():
++    """The third of the six sites the brief names with no test of its own:
++    `_condition_report_by_levels(roster, cond.index, arm_members_map,
++    attribute)`, called with `eval_roster` at `command_run`.
++
++    A `report_by` level built over the whole roster includes a level that
++    exists only among training units — units that never executed and have no
++    row in `collapsed`. Built over the test partition, that level is absent
++    entirely rather than reported with a training-only key set no result
++    backs. `cohort` is confined here so the two readings can't coincidentally
++    agree: `early` (`u0`..`u4`) is entirely training, `late` (`u5`..`u9`)
++    straddles the 8/2 holdout split at `u8`/`u9`."""
++    from publishable.cli import _condition_report_by_levels
++
++    roster = _cli_roster(10, cohort=lambda i: "early" if i < 5 else "late")
++    eval_roster = _evaluation_roster(roster, _HOLDOUT_PLAN_8_2)
++
++    whole = _condition_report_by_levels(roster, 0, None, "cohort")
++    assert set(whole) == {"early", "late"}
++    assert whole["late"][0] == {"u5", "u6", "u7", "u8", "u9"}
++
++    narrowed = _condition_report_by_levels(eval_roster, 0, None, "cohort")
++    # The level confined to training units is gone, not reported empty.
++    assert "early" not in narrowed
++    assert narrowed["late"][0] == {"u8", "u9"}
++
++
++def test_compute_declared_contrasts_within_is_narrowed_by_the_test_partition():
++    """The sixth site: `_compute_declared_contrasts(..., roster=roster, ...)`,
++    called with `eval_roster` at `command_run` — the route that reaches
++    `units_matching(roster, comp.within)` inside `_comparison_step_blocks`, so
++    a contrast's `within` subgroup is over test units too.
++
++    `within={"group": "x"}` matches `u0` and `u2` in the whole 4-unit roster
++    but only `u2` once the roster is narrowed to the 2-unit test partition
++    `{u2, u3}` — `u0`'s membership is real but inert once it can never be a
++    training unit's, and this is what makes that observable: `n_paired` counts
++    2 over the whole roster and 1 over the narrowed one, for the identical
++    `collapsed_by_key` input."""
++    from publishable.cli import _compute_declared_contrasts
++    from publishable.sweep import Condition
++    from publishable.units import UnitList
++
++    roster = _cli_roster(4, group=lambda i: "x" if i % 2 == 0 else "y")
++    eval_roster = UnitList([u for u in roster if u.key in {"u2", "u3"}])
++
++    of_collapsed = {f"u{i}": {"r": 1.0 + 0.1 * i} for i in range(4)}
++    against_collapsed = {f"u{i}": {"r": 0.5} for i in range(4)}
++    conditions = [
++        Condition(index=0, label="baseline", is_baseline=True),
++        Condition(index=1, label="m"),
++    ]
++    doc = {
++        "statistics": {
++            "contrasts": [
++                {"id": "c1", "of": "m", "against": "baseline", "within": {"group": "x"}}
++            ]
++        }
++    }
++    aggregated = {0: {"s": {"r": 0.5}}, 1: {"s": {"r": 1.15}}}
++    collapsed_by_key = {(0, "s"): against_collapsed, (1, "s"): of_collapsed}
++
++    def _run(eval_or_whole):
++        out, _members = _compute_declared_contrasts(
++            doc=doc,
++            conditions=conditions,
++            roster=eval_or_whole,
++            aggregated=aggregated,
++            collapsed_by_key=collapsed_by_key,
++            derived_by_key={},
++            resample_fns_by_key={},
++            seed=7,
++            draws=200,
++            findings=Collector(),
++            resample_columns=False,
++        )
++        return out[0]["s"]["r"]["n_paired"]
++
++    assert _run(roster) == 2
++    assert _run(eval_roster) == 1
++
++
++def test_compute_vs_baseline_roster_argument_never_affects_the_auto_generated_family():
++    """A finding, not a pin: `_compute_vs_baseline`'s only use of `roster` is
++    `units_matching(roster, comp.within)` inside `_comparison_step_blocks`
++    (via `_baseline_comparisons`/`resolve_contrasts`), and `resolve_contrasts`
++    never sets `within` on an auto-generated (non-`declared`) comparison —
++    every `Comparison(..., declared=False)` it builds omits the keyword, so it
++    takes the dataclass default of `None`.  `units_matching(_, None)` returns
++    `None` ("unrestricted") regardless of which roster object is passed, so
++    this site's `roster=eval_roster` at `command_run` cannot be shown to
++    differ from `roster=roster` through this function's return value — the
++    difference is inert here for the same reason `_condition_beside_n`'s is
++    (see the report), not because no fixture was clever enough. Recorded
++    rather than silently asserted so a future change that lets an
++    auto-generated comparison carry `within` is what would make this
++    observable, and this test's failure is what would say so."""
++    from publishable.cli import _compute_vs_baseline
++    from publishable.sweep import Condition
++    from publishable.units import UnitList
++
++    roster = _cli_roster(4, group=lambda i: "x" if i % 2 == 0 else "y")
++    eval_roster = UnitList([u for u in roster if u.key in {"u2", "u3"}])
++
++    of_collapsed = {f"u{i}": {"r": 1.0 + 0.1 * i} for i in range(4)}
++    against_collapsed = {f"u{i}": {"r": 0.5} for i in range(4)}
++    conditions = [
++        Condition(index=0, label="baseline", is_baseline=True),
++        Condition(index=1, label="m"),
++    ]
++    aggregated = {0: {"s": {"r": 0.5}}, 1: {"s": {"r": 1.15}}}
++    collapsed_by_key = {(0, "s"): against_collapsed, (1, "s"): of_collapsed}
++
++    def _run(eval_or_whole):
++        out, _members = _compute_vs_baseline(
++            doc={},
++            conditions=conditions,
++            roster=eval_or_whole,
++            aggregated=aggregated,
++            collapsed_by_key=collapsed_by_key,
++            derived_by_key={},
++            resample_fns_by_key={},
++            seed=7,
++            draws=200,
++            findings=Collector(),
++            resample_columns=False,
++        )
++        return out
++
++    assert _run(roster) == _run(eval_roster)
++

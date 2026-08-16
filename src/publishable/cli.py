@@ -85,12 +85,15 @@ from publishable.templates.base import BaseTemplate
 from publishable.templates.registry import get_template
 from publishable.units import (
     ArmPlan,
+    HoldoutPlan,
     Unit,
     UnitList,
     arm_members,
     assignment_for,
     clusters_of,
     fold_basis,
+    holdout_for,
+    holdout_seed_for,
     partition_units,
     resolve_units,
     stratum_names,
@@ -447,6 +450,104 @@ def _resolved_group_axes(
             dict(axes),
         )
     return axes
+
+
+def _resolved_holdout(
+    units_decl: dict[str, Any] | None,
+    roster: "UnitList | None",
+    digest: str,
+    clusters: dict[str, str] | None,
+) -> "HoldoutPlan | None":
+    """`data.units.holdout`, realized **once per run** — or `None` when the
+    design declares none.
+
+    The one object handed to the runner's narrowing, to the denominators, and
+    to `build_allocation_document`. `build_allocation_document`'s own docstring
+    makes the argument for arms and it transfers verbatim: it used to be handed
+    the roster and re-derive the partition, and *"under a draw that second
+    derivation is a second draw, and 'provably identical' is not something two
+    calls can be made to promise — only not calling twice can."* A `method:
+    random` holdout is a draw, so the partition the run executes, the
+    denominators it reports against, and the membership `allocation.json`
+    claims are the same object rather than three answers that happen to agree.
+
+    `None` for four shapes, and they are one shape: an absent `data.units`, an
+    absent `holdout`, a `holdout: null`, and a `holdout: {}`. The last is
+    `_check_holdout`'s own gate — an empty block declares nothing and
+    partitions nothing — so the two readings of "is a holdout declared" agree
+    rather than one drawing an unmethodded split the other validated as absent.
+    `None` for a `roster` of `None` too: there is nothing to partition. That
+    argument is defensive rather than reachable — `resolve_units` never returns
+    `None`, so a `None` here means no `data.units` at all, which is a config
+    that cannot carry a `holdout` to declare. It costs one line and keeps the
+    helper total over its own signature.
+
+    `clusters` is `cli.command_run`'s single cluster map, the same one the fold
+    partition and the arm draw are handed — not re-derived here, `clusters_of`
+    being the single authority. `group_axes` is deliberately not a parameter: a
+    holdout beside a group axis is refused at this commit as
+    `E-DATA-HOLDOUT-CELLS`, so there is no cell structure for a split to be
+    drawn inside of.
+    """
+    if roster is None:
+        return None
+    block = (units_decl or {}).get("holdout")
+    if not isinstance(block, dict) or not block:
+        return None
+    return holdout_for(
+        roster, block, seed=holdout_seed_for(block, digest, roster), clusters=clusters
+    )
+
+
+def _evaluation_roster(
+    roster: "UnitList | None", holdout: "HoldoutPlan | None"
+) -> "UnitList | None":
+    """The units every denominator counts against — the holdout's **test**
+    partition when one is declared, and the same roster object otherwise.
+
+    `reference.md` § A fixed holdout split: "`resolved` is the test partition
+    — a 20 % holdout over 240 units reports `resolved: 48`, and the interval is
+    over those 48. That's the honest denominator: the training units produced
+    no result to generalize from."
+
+    **Without this, every training unit lands in `failed`.** `runner.attrition`
+    computes `handed = keys` over whatever roster it is given, and a training
+    unit is handed out, records nothing, and is neither completed nor skipped —
+    so a 0.2 holdout over 240 would report 192 failures and trip
+    `max_failed_fraction` on a run in which nothing failed.
+
+    **The same object, not a copy, when no holdout is declared.** There is
+    nothing to copy: `roster` is unchanged, so returning it as-is is the
+    correct answer, not a guard against a downstream identity check. (The
+    identity `_cond_beside_n` tests is between `_cond_roster`'s return and the
+    roster `_condition_beside_n` was given — both derived from that same
+    single argument — so which object this function returns never reaches
+    that decision.)
+
+    Roster order is preserved: it is part of the roster's identity, and
+    `_report_by_levels` walks it to build each level's table.
+
+    **What this deliberately does NOT narrow**, and the list is the point
+    rather than an omission:
+
+    - `provenance.units.n` and `provenance.units_hash` stay whole-roster. They
+      are the roster's identity, not a metric's denominator — which is what
+      makes `240` there and `48` in a metric's `n` two true numbers rather than
+      a contradiction.
+    - The key-indexed maps `command_run` builds over the roster — the
+      `weight_by` weights, `unit_attributes`, and `resample_strata` — are
+      consumed BY KEY over units that completed, so a surplus training key is
+      never looked up. Narrowing them would be a third answer to which roster
+      is which for no observable difference.
+    - `runner._counts`' Kish size and cluster count are computed over the
+      COMPLETED units already (its own docstring: "a df is over the units the
+      interval was computed from"), so they are holdout-safe by construction
+      and need nothing here.
+    """
+    if roster is None or holdout is None:
+        return roster
+    test = set(holdout.test)
+    return UnitList([u for u in roster if u.key in test])
 
 
 def _cond_roster(
@@ -1344,8 +1445,7 @@ def command_run(config_path: Path) -> int:
         # `clusters_of`, and the difference is deliberate: `clusters_of` raises
         # `E-DATA-CLUSTER-UNKNOWN`, a code naming the wrong declaration for a reader
         # whose config declares `fold.stratify_by`, and which code a missing value
-        # belongs under is a property of the declaration being served — `holdout`
-        # and `assign` will each read the same attribute under their own.
+        # belongs under is a property of the declaration being served.
         #
         # Indexed, not `.get`-ed, and total over the roster because it has to be
         # (`units.partition_units` raises `KeyError` on a gap, by contract): every
@@ -1409,6 +1509,22 @@ def command_run(config_path: Path) -> int:
     # caller-disagreement bug to see, not a config to silently accept — rather
     # than as a silently unnarrowed run.
     group_axes = _resolved_group_axes(units_decl, sweep_block, roster, digest, clusters)
+    # Realized here, once, and before anything reads it — the runner's
+    # narrowing, the denominators and `allocation.json` are all handed this one
+    # object. See `_resolved_holdout` for why not calling twice is the only
+    # thing that can promise the run and the record agree.
+    holdout_plan = _resolved_holdout(units_decl, roster, digest, clusters)
+    # One narrowing, six readers. `roster` itself stays whole below this line —
+    # `provenance.units.n` and `units_hash` are the roster's identity rather
+    # than a metric's denominator, and rebinding the name would narrow every
+    # future call site silently, including theirs.
+    eval_roster = _evaluation_roster(roster, holdout_plan)
+    # Checked here, before `execute_plan` spends anything: `_evaluation_roster`
+    # returns `None` only when its own `roster` argument is `None`, so this
+    # invariant either holds for free or is worth knowing about before the
+    # first execution runs, not after — a crash once executions are already
+    # paid for loses the record along with the money (see `4b1aebf`).
+    assert (eval_roster is None) == (roster is None)
     arm_members_map = (
         arm_members(group_axes, conditions)
         if selector_paths(sweep_block) and roster is not None
@@ -1504,11 +1620,13 @@ def command_run(config_path: Path) -> int:
 
         # `allocation.json` — settled beside `sweep.yaml`, before the first
         # execution and never touched again, per § The other files a run
-        # writes: both are partitions of one roster drawn once. `None` when
-        # `group_axes` is empty — no arm assignment resolved for this run —
-        # matching "present when either [an arm assignment or a holdout] is
-        # declared"; `holdout` is never in this build's document at all
-        # (`E-DATA-HOLDOUT-UNSUPPORTED` refuses every declaration of it).
+        # writes: both are partitions of one roster drawn once. `None` only
+        # when NEITHER partition resolved — no arm assignment and no
+        # `data.units.holdout` — matching "present when either is declared".
+        # `holdout_plan` is `_resolved_holdout`'s single realization, the same
+        # object the runner narrowed and the denominators counted against, so
+        # the membership this file claims is the membership the run used rather
+        # than a second draw that happens to agree.
         #
         # `group_axes` — the same object `arm_members` narrowed every
         # condition's roster with above, not a second resolution of the same
@@ -1519,7 +1637,7 @@ def command_run(config_path: Path) -> int:
         # guard is needed here either: `_resolved_group_axes` already returns
         # `{}` when none resolved, and the empty mapping is what makes this
         # `None`.
-        alloc_doc = build_allocation_document(group_axes)
+        alloc_doc = build_allocation_document(group_axes, holdout_plan)
         alloc_hash: str | None = None
         if alloc_doc is not None:
             (run_dir / "allocation.json").write_text(json.dumps(alloc_doc, indent=2))
@@ -1532,10 +1650,15 @@ def command_run(config_path: Path) -> int:
             cfgs=cfgs,
             repeats=repeats,
             digest=digest,
-            units=roster,
+            units=eval_roster,
             max_failed_fraction=(doc.get("limits") or {}).get("max_failed_fraction"),
             fold_members=fold_members,
             arm_members=arm_members_map,
+            holdout_train=(
+                UnitList([u for u in roster if u.key in set(holdout_plan.train)])
+                if holdout_plan is not None and roster is not None
+                else None
+            ),
             measurements=(units_decl or {}).get("measurements"),
         )
 
@@ -1601,6 +1724,10 @@ def command_run(config_path: Path) -> int:
                         "exists to catch, and `study add` cannot check what it cannot see",
                     )
         if roster is not None:
+            # Already checked once, before `execute_plan`, where a failure
+            # would still cost nothing run. Restated here only for the type
+            # checker, which cannot see across that earlier `assert`.
+            assert eval_roster is not None
             # `condition_index` is guarded per condition: core aggregates within
             # each condition and never pools across conditions — an unguarded
             # filter would let a same-named step from another condition mark this
@@ -1755,7 +1882,7 @@ def command_run(config_path: Path) -> int:
                 # this task fixes happened — a narrowed roster computed and
                 # then not passed to `attrition`.
                 cond_beside_n = {
-                    **_condition_beside_n(beside_n, roster, cond.index, arm_members_map),
+                    **_condition_beside_n(beside_n, eval_roster, cond.index, arm_members_map),
                     **resample_beside,
                 }
                 for step_name in sorted(recording_steps):
@@ -1764,7 +1891,7 @@ def command_run(config_path: Path) -> int:
                     )
                     counts = _condition_counts(
                         results,
-                        roster,
+                        eval_roster,
                         step_name,
                         cond.index,
                         arm_members_map,
@@ -2145,7 +2272,7 @@ def command_run(config_path: Path) -> int:
                         # both arms hand `attrition` units the other arm's
                         # executions never touched.
                         for level, (keys, level_roster) in _condition_report_by_levels(
-                            roster, cond.index, arm_members_map, attribute
+                            eval_roster, cond.index, arm_members_map, attribute
                         ).items():
                             # One key set decides BOTH the table and the counts.
                             # Taking the level's rows beside the condition's `n`
@@ -2351,7 +2478,7 @@ def command_run(config_path: Path) -> int:
             vs_baseline, vs_baseline_members = _compute_vs_baseline(
                 doc=doc,
                 conditions=conditions,
-                roster=roster,
+                roster=eval_roster,
                 aggregated=aggregated,
                 collapsed_by_key=collapsed_by_key,
                 derived_by_key=derived_by_key,
@@ -2364,7 +2491,7 @@ def command_run(config_path: Path) -> int:
             contrasts_out, contrast_members = _compute_declared_contrasts(
                 doc=doc,
                 conditions=conditions,
-                roster=roster,
+                roster=eval_roster,
                 aggregated=aggregated,
                 collapsed_by_key=collapsed_by_key,
                 derived_by_key=derived_by_key,
@@ -2491,16 +2618,29 @@ def command_run(config_path: Path) -> int:
             # A run over a roster whose identity is not pinned is a run whose `n`
             # means nothing later: `units` and `units_hash` are `None` together
             # exactly when there is no `data.units` declaration to pin.
+            #
+            # **Whole-roster, deliberately, and not the same number a metric's
+            # `n` reports.** Under a `data.units.holdout` a metric's
+            # `n.resolved` counts the TEST partition — 48 where this says 240
+            # — and both are true: this is the identity of the roster the run
+            # resolved, which is what `units_hash` pins, and what makes a
+            # roster that resolved differently detectable when the run is
+            # reproduced, where `n` is the denominator of an estimate.
+            # Narrowing this would make the hash cover a subset the config
+            # never described.
             "units": (
                 {"n": len(roster), "key": units_decl["key"]}
                 if roster is not None and units_decl is not None
                 else None
             ),
             "units_hash": units_hash(roster) if roster is not None else None,
-            # "allocation.json" and its hash, when an arm assignment or a
-            # holdout is declared — `None`/`None` together exactly when
-            # `alloc_doc` was never written, the same pairing `units`/
-            # `units_hash` already use above.
+            # "allocation.json" and its hash, `None`/`None` together exactly
+            # when `alloc_doc` was never written — which is now when NEITHER an
+            # arm assignment nor a `data.units.holdout` resolved, the gate
+            # `build_allocation_document` widened. The same pairing `units`/
+            # `units_hash` already use above, and the same reason: a file named
+            # in the record and absent from disk is worse than an honest
+            # `None`.
             "allocation": "allocation.json" if alloc_doc is not None else None,
             "allocation_hash": alloc_hash,
         }

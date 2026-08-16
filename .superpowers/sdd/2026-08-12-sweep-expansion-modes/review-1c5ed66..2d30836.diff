@@ -1,0 +1,89 @@
+# Review package: 1c5ed66..HEAD
+
+## Commits
+2d30836 fix: refuse a non-string key inside sweep.grid too
+
+## Files changed
+ src/publishable/validate.py | 11 +++++++++++
+ tests/test_validate.py      | 17 +++++++++++++++++
+ 2 files changed, 28 insertions(+)
+
+## Diff
+diff --git a/src/publishable/validate.py b/src/publishable/validate.py
+index a47556b..ce8f4ae 100644
+--- a/src/publishable/validate.py
++++ b/src/publishable/validate.py
+@@ -116,20 +116,31 @@ def _check_shape(doc: dict[str, Any], c: Collector) -> bool:
+     sweep = doc.get("sweep")
+     if isinstance(sweep, dict):
+         baseline = sweep.get("baseline")
+         if baseline is not None and not isinstance(baseline, dict):
+             _bad("sweep.baseline", baseline, "mapping")
+         grid = sweep.get("grid")
+         if grid is not None and not isinstance(grid, dict):
+             _bad("sweep.grid", grid, "mapping")
+         elif isinstance(grid, dict):
+             for path, values in grid.items():
++                # Same crash as `paired`'s non-string-key guard below, reached
++                # through `grid` instead: YAML permits a non-string mapping key
++                # (`123: [...]` parses fine), but `_keys_for` feeds every swept
++                # path into `.split(".")`, so a non-string `grid` key crashes
++                # `AttributeError: 'int' object has no attribute 'split'` before
++                # this guard existed. Pre-existing and outside the review's
++                # original finding for `paired` — closed here rather than left
++                # as the one axis-shaped mode without the guard its sibling has.
++                if not isinstance(path, str):
++                    _bad("sweep.grid", path, "string")
++                    continue
+                 if values is not None and not isinstance(values, list):
+                     _bad(f"sweep.grid.{path}", values, "list")
+ 
+         # `paired` closes the same gap `grid` does, one level down: `_axes` now
+         # reads it unconditionally (`dict(entry) for entry in paired`), so a
+         # non-list `paired` or a non-mapping entry escaped as a bare `TypeError`/
+         # `ValueError` from `expand`, past `_check_sweep`'s premise that it is the
+         # check that reports an expansion crash. Two guards, same shape as
+         # `grid`'s: the container, then each entry. Unlike a `grid` axis value —
+         # which is used as-is and stays legal as `null` (a param-value question,
+diff --git a/tests/test_validate.py b/tests/test_validate.py
+index c614ed7..d4ec3e2 100644
+--- a/tests/test_validate.py
++++ b/tests/test_validate.py
+@@ -1901,20 +1901,37 @@ def test_an_empty_baseline_beside_a_grid_is_not_a_partial_baseline(write_config)
+     assert "E-SWEEP-BASELINE-PARTIAL" not in found
+ 
+ 
+ def test_a_list_grid_is_a_diagnostic_not_a_traceback(write_config):
+     """`_check_sweep` calls `grid.items()`; without the shape guard this escaped
+     `main`'s handler as `AttributeError: 'list' object has no attribute 'items'`."""
+     found = codes(write_config({"sweep": {"grid": ["analysis.method"]}}))
+     assert "E-CONFIG-SHAPE" in found
+ 
+ 
++def test_a_grid_with_a_non_string_int_key_is_a_diagnostic_not_a_traceback(write_config):
++    """Same class as `paired`'s non-string-key guard, reached through `grid`
++    instead: YAML permits `123: [...]` as a mapping key, but `_keys_for` feeds
++    every swept path into `.split(".")`, so this crashed
++    `AttributeError: 'int' object has no attribute 'split'` before this guard
++    existed. Pre-existing and independent of the `paired` finding — found by
++    the same review pattern applied to `grid`."""
++    found = codes(write_config({"sweep": {"grid": {123: ["a", "b"]}}}))
++    assert "E-CONFIG-SHAPE" in found
++
++
++def test_a_grid_with_a_non_string_float_key_is_a_diagnostic_not_a_traceback(write_config):
++    """Same crash, via a `float` key instead of `int`."""
++    found = codes(write_config({"sweep": {"grid": {1.5: ["a", "b"]}}}))
++    assert "E-CONFIG-SHAPE" in found
++
++
+ def test_a_list_baseline_is_a_diagnostic_not_a_traceback(write_config):
+     """`sweep.expand` calls `dict(baseline)`; without the guard this escaped as
+     `ValueError: dictionary update sequence element #0 has length 15`."""
+     found = codes(
+         write_config(
+             {
+                 "sweep": {
+                     "baseline": ["analysis.method"],
+                     "grid": {"analysis.method": ["spearman"]},
+                 }

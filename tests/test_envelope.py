@@ -1,3 +1,5 @@
+import pytest
+
 from publishable.envelope import LEAF_TYPES, check_envelope
 
 
@@ -143,3 +145,57 @@ def test_a_bare_string_stratify_by_is_accepted_by_the_envelope() -> None:
     disagree — `E-CONFIG-TYPE` here while the draw balances on it there."""
     findings = check_envelope({"statistics": {"resample": {"stratify_by": "site"}}})
     assert not [f for f in findings if f[1].startswith("statistics.resample")]
+
+
+def test_a_misspelled_holdout_child_is_reported() -> None:
+    """`data.units.holdout` is closed one level in, the arrangement
+    `measurements` and `resample` already have: its children have fixed names,
+    so a typo among them is reachable by a check rather than silently ignored.
+
+    The positive companion is in the same test on purpose — a well-spelled
+    sibling in the SAME block must produce no finding, so this cannot pass by
+    reporting every key in the block."""
+    findings = check_envelope({"data": {"units": {"holdout": {"methodd": "random", "frac": 0.2}}}})
+    assert ("E-CONFIG-KEY-UNKNOWN", "data.units.holdout.methodd") in [
+        (code, path) for code, path, _ in findings
+    ]
+    assert not [f for f in findings if f[1] == "data.units.holdout.frac"]
+
+
+@pytest.mark.parametrize(
+    "block,path,expect_type_error",
+    [
+        ({"method": ["random"]}, "data.units.holdout.method", True),
+        ({"method": "random"}, "data.units.holdout.method", False),
+        # A plain `int` is a legal YAML spelling of a fraction; the OPEN-interval
+        # refusal is `E-DATA-HOLDOUT-FRAC`'s, not the envelope's, so `1` must be
+        # well-typed here. `True` is not: `_is_type` excludes `bool` from every
+        # numeric entry, since `True` is not a fraction.
+        ({"frac": 0.2}, "data.units.holdout.frac", False),
+        ({"frac": 1}, "data.units.holdout.frac", False),
+        ({"frac": True}, "data.units.holdout.frac", True),
+        ({"frac": "0.2"}, "data.units.holdout.frac", True),
+        ({"from": "split"}, "data.units.holdout.from", False),
+        ({"from": 3}, "data.units.holdout.from", True),
+        # A bare string names one stratum exactly as a one-element list does —
+        # `units.stratum_names`, the single authority the draw balances on.
+        ({"stratify_by": "label"}, "data.units.holdout.stratify_by", False),
+        ({"stratify_by": ["label"]}, "data.units.holdout.stratify_by", False),
+        ({"stratify_by": 7}, "data.units.holdout.stratify_by", True),
+        ({"seed": "auto"}, "data.units.holdout.seed", False),
+        ({"seed": 1234}, "data.units.holdout.seed", False),
+        ({"seed": True}, "data.units.holdout.seed", True),
+        ({"seed": 1.5}, "data.units.holdout.seed", True),
+    ],
+)
+def test_each_holdout_child_is_typed(
+    block: dict[str, object], path: str, expect_type_error: bool
+) -> None:
+    """Each of the five children, at its own type, with a legal value beside
+    every illegal one. Both arms are asserted because a parametrization that
+    only ever asserts a FAILURE proves nothing about the success path — the
+    shape that left `blocked`'s stratified draw fully threaded and never
+    exercised."""
+    findings = check_envelope({"data": {"units": {"holdout": block}}})
+    typed = [f for f in findings if f[0] == "E-CONFIG-TYPE" and f[1] == path]
+    assert bool(typed) is expect_type_error, findings

@@ -313,8 +313,9 @@ def resolve_units(
         # want this rule, and neither is a flat string: `assign` is a mapping of
         # axis blocks and `holdout` is a mapping with its own `from`. Task 11 adds
         # `_assign_constant_columns` below as `assign`'s accessor, so that one is
-        # now reachable; **`holdout.from` still is not** — its shape is a single
-        # key under a fixed mapping, not one-per-declared-axis, and needs its own
+        # now reachable; **`holdout.from` reaches it through
+        # `_holdout_constant_column`** — its shape is a single key under a
+        # fixed mapping, not one-per-declared-axis, so it needed its own
         # accessor rather than this one's `axis` loop. Verified by probe, not
         # assumed: adding `"assign"` to `CONSTANT_COLUMN_RULES` alone changed
         # nothing, because this comprehension's `isinstance(..., str)` filter
@@ -324,20 +325,40 @@ def resolve_units(
         # iteration order is the order `collapse_measurements` checks
         # declarations in, and it stops at the first that raises, so whichever
         # comes first in this dict wins a unit that violates more than one at
-        # once. `assign` is documented as the worst of the three (§ Allocation:
+        # once. `assign` is documented as the worst of the four (§ Allocation:
         # a mis-collapsed arm decides which condition a unit is measured in,
-        # where cluster/weight only decide which side of a split it lands on
-        # or what it stands for), so it has to be checked before the flat pair
-        # or that severity ordering would be undermined by an accident of
-        # dict-building order — the "precedence rule nothing in the documents
-        # states" `CONSTANT_COLUMN_RULES` warns against, now stated in both
-        # places rather than left implicit.
+        # where cluster/weight/holdout only decide which side of a split it
+        # lands on or what it stands for), so it has to be checked before the
+        # flat pair or that severity ordering would be undermined by an
+        # accident of dict-building order — the "precedence rule nothing in
+        # the documents states" `CONSTANT_COLUMN_RULES` warns against, now
+        # stated in both places rather than left implicit.
         constant = _assign_constant_columns(units_decl.get("assign"))
+        # `holdout.from` next, between `assign` and the flat pair. `assign` is
+        # documented as the worst of the family (§ Allocation: a mis-collapsed
+        # arm decides which CONDITION a unit is measured in), so it stays
+        # first. `holdout.from` and `cluster_by` say the same thing about the
+        # damage — which side of a split the unit lands on — so the order
+        # BETWEEN those two is fixed here deterministically rather than left to
+        # an accident of dict-building, and is **not** a claim that one fault
+        # is worse than the other. `weight_by` stays last, which is the
+        # documented ordering.
+        constant.update(_holdout_constant_column(units_decl.get("holdout")))
+        # `holdout` is excluded here even though it is a `CONSTANT_COLUMN_RULES`
+        # key: this comprehension's `isinstance(..., str)` filter would otherwise
+        # admit a bare-string `data.units.holdout`, a shape `_check_holdout`
+        # already refuses as `E-CONFIG-TYPE` and that `_holdout_constant_column`
+        # above is deliberately silent on. `holdout.from` reaches this registry
+        # only through that accessor, so a mis-typed scalar stays
+        # `E-CONFIG-TYPE`'s finding alone rather than also raising
+        # `E-DATA-HOLDOUT-VARIES` through a second, undocumented route.
         constant.update(
             {
                 declaration: units_decl[declaration]
                 for declaration in CONSTANT_COLUMN_RULES
-                if isinstance(units_decl.get(declaration), str) and units_decl[declaration]
+                if declaration != "holdout"
+                and isinstance(units_decl.get(declaration), str)
+                and units_decl[declaration]
             }
         )
         units, counts = collapse_measurements(
@@ -428,6 +449,45 @@ def _assign_constant_columns(assign_decl: Any) -> dict[str, str]:
         if resolved_from:
             resolved[f"assign.{axis}.from"] = resolved_from
     return resolved
+
+
+def _holdout_constant_column(holdout_decl: Any) -> dict[str, str]:
+    """`holdout.from` when a `by_attribute` holdout declares one — at most one
+    entry, keyed by the literal dotted path a reader would look for.
+
+    `_assign_constant_columns`' sibling, one declaration over, and narrower for
+    the reason that one is narrow: this function's only job is deciding which
+    column, if any, a holdout's constancy has to hold — not reporting a
+    malformed declaration. An absent block, a non-mapping block, a missing
+    `from`, an empty `from` and a non-`str` `from` are shapes
+    `validate._check_holdout` reports (`E-DATA-HOLDOUT-METHOD`,
+    `E-DATA-HOLDOUT-FROM`) and this function is silent on, each because it
+    resolves to no column to check: those are `validate`'s findings to raise,
+    not a `ContractError` from a run that resolution has no path to report
+    through.
+
+    **Gated on `method == "by_attribute"`**, matching `_assign_constant_columns`'
+    own gate and for its reason: `random` draws the split rather than reading
+    one, so no column is read, and a `from` declared beside it means nothing —
+    already refused as `E-DATA-HOLDOUT-NO-DRAW`. Without this gate a drawn
+    split whose declaration carried a stray `from` naming a column that varies
+    within a unit's rows would raise `E-DATA-HOLDOUT-VARIES` over a column its
+    draw never reads, which is the validate-clean-then-crash gap in the
+    opposite direction: a config no check approves, refused anyway by a rule
+    that assumed a read `by_attribute` alone performs.
+
+    **There is no axis-name default**, unlike `assign.<axis>.from`: a holdout
+    has no axis name, which is why `validate` requires `from` outright under
+    `by_attribute` rather than defaulting it.
+    """
+    if not isinstance(holdout_decl, dict):
+        return {}
+    if holdout_decl.get("method") != "by_attribute":
+        return {}
+    declared_from = holdout_decl.get("from")
+    if isinstance(declared_from, str) and declared_from:
+        return {"holdout.from": declared_from}
+    return {}
 
 
 def _measurement_axis(measurements: Any) -> str:
@@ -661,18 +721,34 @@ CONSTANT_COLUMN_RULES: dict[str, tuple[str, str]] = {
         "leave that decision to the order the rows happen to be in. An arm is "
         "a fact about the unit, not about the measurement",
     ),
+    "holdout": (
+        "E-DATA-HOLDOUT-VARIES",
+        "A holdout decides which side of a train/test split the unit lands on, "
+        "so collapsing disagreeing rows would leave that decision to the order "
+        "the rows happen to be in — a unit evaluated against a model it was "
+        "fitted on, or held back from one it should have been evaluated by. "
+        "Which side of a split a unit is on is a fact about the unit, not "
+        "about the measurement",
+    ),
 }
 """The declarations whose column may not vary within a unit's measurement rows.
 
-**Three codes, not one**, deliberately: `reference.md` § Clustered units,
-§ Weighted samples and § Allocation state the same rule about three different
-columns, and each says a different thing about what breaks — a mis-collapsed
-weight mis-sizes what one unit stands for, a mis-collapsed cluster decides which
-side of a split that unit lands on, and a mis-collapsed arm decides which
-*condition* the unit is measured in, the worst of the three because it changes
-what the run claims to have compared rather than how confidently it says so. One
-identifier for any pair of them would send the reader to a section that does not
-describe the damage.
+**Four codes, not one**, deliberately: `reference.md` § Clustered units,
+§ Weighted samples and § Allocation each state the same constancy rule in
+prose, for a different one of the first three columns; `holdout.from`'s own
+instance of the rule is stated only in § Errors core raises
+(`E-DATA-HOLDOUT-VARIES`'s row) rather than in § A fixed holdout split, which
+carries no such paragraph.
+Each of the first three says a different thing about what breaks — a
+mis-collapsed weight mis-sizes what one unit stands for, a mis-collapsed
+cluster decides which side of a split that unit lands on, and a mis-collapsed
+arm decides which *condition* the unit is measured in, the worst of the three
+because it changes what the run claims to have compared rather than how
+confidently it says so. **`holdout` is the one exception**: it says the
+*same* thing about the damage `cluster_by` does — which side of a split the
+unit lands on — and still gets its own code, because one identifier for
+either would send the reader naming the other to a section that does not
+describe their input field at all.
 
 Keyed by the *declaration* rather than by the column, so a config naming one
 column under two declarations is checked once for each **declaration considered
@@ -717,10 +793,15 @@ scatter this docstring's reasoning across every call site that builds a
 `constant` entries keyed `assign.<axis>.from` — the literal dotted path, for the
 error message — and `collapse_measurements`'s lookup strips back to the segment
 before the first `.`, which is a no-op for `cluster_by`/`weight_by` and finds
-`assign` for every axis alike. **`holdout.from` is not reachable through this
-registry today** — it is a single key under a fixed mapping, not one per
-declared axis, so it needs its own accessor the same shape `_assign_constant_columns`
-is for `assign`, and nothing in this task builds one.
+`assign` for every axis alike. **`holdout.from` reaches this registry through
+its own accessor**, `_holdout_constant_column` below — a single key under a
+fixed mapping rather than one per declared axis, so it could not use
+`_assign_constant_columns`'s `axis` loop, and it could not be a flat entry
+either: `resolve_units`' comprehension filters on `isinstance(..., str)` and
+drops a mapping before the registry is consulted. Its `constant` key is the
+dotted `holdout.from`, for the message, and the lookup strips it back to the
+bare `holdout` here, exactly as it strips `assign.<axis>.from` back to
+`assign`.
 
 **Every key in this dict must itself contain no `.`.** `collapse_measurements`'s
 lookup strips a `constant` key back to the segment before its first `.` before
@@ -739,11 +820,14 @@ def collapse_measurements(
 
     `constant` maps a declaration to the column it names, and those columns are
     refused where they vary within one unit's rows rather than being collapsed
-    like any other attribute. A key is either a bare entry of `CONSTANT_COLUMN_RULES`
-    (`cluster_by`, `weight_by`) or a dotted `assign.<axis>.from` — one per declared
-    axis, built by `_assign_constant_columns` — and the lookup below strips either
-    back to the segment before its first `.` to find the rule, so `assign`'s one
-    registry entry covers every axis alike. **`validate` cannot host that check**:
+    like any other attribute. A key is either a bare `CONSTANT_COLUMN_RULES` entry
+    or a dotted path built by that entry's own accessor (`_assign_constant_columns`,
+    `_holdout_constant_column`) for a declaration `CONSTANT_COLUMN_RULES` cannot
+    reach as a flat string — see `CONSTANT_COLUMN_RULES`'s own docstring for which
+    declaration takes which shape and why. The lookup below strips a dotted key
+    back to the segment before its first `.` to find the rule, so one registry
+    entry covers every dotted variant a declaration produces alike.
+    **`validate` cannot host that check**:
     `resolve_units` collapses internally, so a validate-time check sees the
     post-collapse roster and the disagreeing values are already gone. This
     function groups the rows by key and is the one place holding them.
@@ -1077,6 +1161,350 @@ def _apportion(n: int, weights: Sequence[float]) -> list[int]:
     return sizes
 
 
+HOLDOUT_LEVELS = ("train", "test")
+"""`data.units.holdout`'s two sides, in apportionment order — train first.
+
+Fixed literals rather than "the two values the column happens to hold", because
+a holdout declares no `levels` for core to read an order out of, and inferring
+one from the data would make which side is *evaluated* depend on a lexical
+accident of the input. `reference.md` § A fixed holdout split states the rule
+and § Errors names the refusal, `E-DATA-HOLDOUT-VALUES`.
+
+Order is load-bearing twice: it is the order `holdout_sizes` apportions in, so
+`frac` is the SECOND weight, and it is the order `arms_of` is handed for a
+`by_attribute` read.
+"""
+
+
+def holdout_sizes(n: int, frac: float) -> tuple[int, int]:
+    """`(train, test)` — `n` apportioned across `[1 - frac, frac]`.
+
+    **One arithmetic for the split, and two callers**: `validate._check_holdout`
+    refuses a `frac` that apportions the test side zero units, and
+    `holdout_for`'s unclustered draw cuts the shuffled roster at exactly these
+    sizes. Two derivations of the same number would mean `validate` approving a
+    `frac` whose realized test side the draw then sized differently — the
+    validate-clean-then-disagree gap `arms_of`'s own docstring is written to
+    prevent a third instance of.
+
+    `_apportion`'s largest-remainder rule, which `assignment_for`'s `random`
+    branch already uses for `assign.<axis>.ratio`: each side's exact share
+    floors and the remainder goes to the larger fractional part. Every size is
+    within one of its exact proportional share, which is the strongest claim a
+    fraction that doesn't divide `n` supports.
+
+    **A test size of 0 is possible and is the caller's to refuse.** Two units at
+    `frac: 0.2` gives `(2, 0)`. Nothing here raises: `validate` holds the
+    declared `frac` and the roster a message has to name, so the refusal lives
+    there — `_apportion`'s own convention, one construction over.
+    """
+    train, test = _apportion(n, [1.0 - frac, frac])
+    return train, test
+
+
+def holdout_values_fault(roster: UnitList, column: str) -> str | None:
+    """How `column` fails to resolve to exactly `train` and `test` over this
+    roster — as a message — or `None` when it does not fail.
+
+    **One authority, two reporting surfaces**, which is
+    `stratum_varies_within_cluster`'s own arrangement: `validate._check_holdout`
+    collects this as `E-DATA-HOLDOUT-VALUES` and `holdout_for` raises it under
+    the same code, so the two cannot come to disagree about either the verdict
+    or the wording. Two independent wrappings of one raise is exactly how two
+    messages drift apart.
+
+    The **verdict** is `arms_of`'s, unchanged: that function stays the authority
+    for a column-read partition and promises set equality in both directions —
+    no unit's value outside the pair, and neither literal left holding nothing.
+    Only the **wording** is rebuilt here, because `arms_of`'s own message names
+    an arm and an axis's declared levels and would send a holdout's reader to
+    the wrong section.
+
+    Returns a message rather than raising, so `validate` — contracted never to
+    raise — can report it beside every other finding, and so `holdout_for` can
+    raise it with the code that belongs to a holdout rather than to an arm.
+    """
+    try:
+        arms_of(roster, column, HOLDOUT_LEVELS)
+    except ContractError:
+        seen = sorted(
+            {
+                "no value" if u.attributes[column] in (None, "") else str(u.attributes[column])
+                for u in roster
+                if column in u.attributes
+            }
+        )
+        missing = [lit for lit in HOLDOUT_LEVELS if lit not in seen]
+        return (
+            f"the holdout column {column!r} has values {', '.join(seen) or 'none'} over "
+            f"this roster — a `by_attribute` holdout needs exactly "
+            f"`{HOLDOUT_LEVELS[0]}` and `{HOLDOUT_LEVELS[1]}`"
+            + (f", and {', '.join(missing)} names no unit" if missing else "")
+            + ". A holdout declares no levels for core to read an order out of, so the "
+            "two names are fixed rather than inferred from the data"
+        )
+    return None
+
+
+@dataclass(frozen=True)
+class HoldoutPlan:
+    """`data.units.holdout` **realized** — the two sides as unit keys, plus what
+    it took to produce them.
+
+    `ArmPlan`'s sibling and deliberately not the same type: an arm plan is
+    `level -> keys` over a declared `levels` tuple, where a holdout's two sides
+    are fixed and named, and squeezing one into the other would mean either a
+    fabricated axis name or a `levels` field with one legal value.
+
+    - `train` and `test` hold unit keys, never row numbers — a roster that
+      gains a unit renumbers rows and would silently repoint every membership
+      claim. Every key of the roster appears in exactly one of them.
+    - Order is **roster order** under `by_attribute`, which `arms_of` promises,
+      and the order the shuffle realized under `random` — recorded rather than
+      re-sorted, `ArmPlan`'s own rule, because the record of a draw is the
+      draw.
+    - `seed` is the seed the draw was realized with, and is `None` under
+      `by_attribute`: a method that reads a partition the data already holds
+      rather than drawing one, so recording a seed would be a false record of a
+      draw that never happened.
+    - `strata` is the realized `stratify_by`, in declared order, and is empty
+      under `by_attribute` for the reason above and empty under a draw that
+      declared none.
+
+    `frozen=True` blocks rebinding an attribute; the two tuples are immutable
+    outright, so unlike `ArmPlan.members` there is nothing here a determined
+    caller can mutate in place.
+    """
+
+    train: tuple[str, ...]
+    test: tuple[str, ...]
+    seed: int | None
+    strata: tuple[str, ...]
+
+
+HOLDOUT_METHODS_REALIZED = ("random", "by_attribute")
+"""The `data.units.holdout.method` values `holdout_for` draws or reads at this
+commit — named for its own fail-closed message, `assignment_for`'s allowlist
+posture one seam over: a third method added to `validate.HOLDOUT_METHODS` and
+to nothing else falls through to `holdout_for`'s final `NotImplementedError`
+rather than silently partitioning. Declared here rather than imported from
+`validate`, which imports `units` and not the reverse.
+"""
+
+
+def holdout_for(
+    roster: UnitList,
+    block: Mapping[str, Any] | None,
+    *,
+    seed: int,
+    clusters: Mapping[str, str] | None = None,
+) -> HoldoutPlan:
+    """`data.units.holdout`, realized — **the single producer** of a
+    `HoldoutPlan`.
+
+    A **pure function of its arguments**, `assignment_for`'s reason one
+    declaration over: `validate` has to ask "which units are in the test
+    partition" of the same declaration `cli.command_run` asks it of — the
+    `limits.min_clusters` warning is exactly that question — so the draw cannot
+    live in the runner. Two callers, one answer, computed the same way from the
+    same inputs.
+
+    **`seed` is required and this function never derives one.** The seed
+    argument exists so a caller that derives a seed some other way — from a
+    run's identity, say — composes that derivation with this draw rather than
+    handing the draw a policy to also get right: a function that both draws
+    and derives is two independent things to get wrong inside one, and it
+    would put the derivation out of reach of a test that wants to pin a draw
+    against a known seed. The value is recorded on the plan under `random` and
+    discarded under `by_attribute`, which draws nothing.
+
+    Dispatches on `block["method"]`, `reference.md` § A fixed holdout split's
+    own enum:
+
+    - `by_attribute` reads the two sides out of a column, through `arms_of`
+      **unchanged** — that function stays the authority for a column-read
+      partition and this one does not re-derive it. The levels it is handed are
+      `HOLDOUT_LEVELS`, the fixed `train`/`test` literals, so `arms_of`'s set
+      equality in both directions is what refuses a third value, a value naming
+      neither, and a literal naming no unit. The refusal goes through
+      `holdout_values_fault`, which owns both the verdict and the wording, so
+      this raise and `validate._check_holdout`'s collected finding are one
+      answer rather than two wrappings of the same raise — `arms_of`'s own
+      message names an arm and an axis's declared levels and would send a
+      holdout's reader to the wrong section.
+    - `random`, unclustered and unstratified, draws one: `holdout_sizes` — the
+      same apportionment `validate` approved the `frac` against — then one
+      `rng.shuffle` of the whole roster's keys, then two consecutive slices,
+      train first. That is `assignment_for`'s `random` branch exactly, and
+      deliberately so: one construction, described in one place.
+    - **Every other value raises `NotImplementedError`** — an allowlist. Fail
+      closed costs nothing, because `validate` already refuses an
+      out-of-enum method (`E-DATA-HOLDOUT-METHOD`) before a run reaches here,
+      and it is what keeps a *third* method added to `validate.HOLDOUT_METHODS`
+      and to nothing else from validating clean and then silently partitioning.
+      This includes an absent, non-mapping, or method-less `block` — unlike
+      `assignment_for`, which falls such a block back to `by_attribute`, this
+      function has no default method to fall back to, since an absent holdout
+      declares no holdout at all rather than an unnamed one.
+
+    **`clusters` and `stratify_by` compose, both inside the `random` draw.**
+    A `stratify_by` splits the roster into `_stratum_groups` first, one
+    generator carried across every stratum in roster order, `assignment_for`'s
+    own convention: the seed determines the whole split together rather than
+    each stratum in isolation. `clusters`, present or not, then decides how
+    each stratum (or the whole roster, unstratified) is drawn — whole clusters
+    through `_assign_whole_clusters_by_ratio` at weights `[1 - frac, frac]`, or
+    the unclustered shuffle-and-slice above.
+
+    **The two constructions are deliberately not one, and are not
+    bit-identical.** The unclustered draw shuffles unit keys and cuts two
+    consecutive slices; the clustered draw shuffles cluster names, sorts
+    largest-first and deals each cluster to the bucket furthest below its own
+    target share — the second interleaves by ratio where the first slices, and
+    that is a difference in MEMBERSHIP, not only in mechanism. **Singleton
+    clusters are not exempt from the SIZE disagreement either**: a sweep of
+    every `n` in 2..39 against twelve `frac` values found 90 seeds where the
+    unclustered and singleton-clustered draws realize different sizes,
+    including cases where one refuses outright while the other does not
+    (`n=2, frac=0.1`: unclustered raises `E-DATA-HOLDOUT-EMPTY`; clustered
+    returns a 1/1 split). No size agreement is promised at any cluster size —
+    `_assign_whole_clusters_by_ratio`'s own "no bound on that deviation is
+    promised" already says so — so a fixture pinning equal sizes for both
+    constructions is pinning that seed's coincidence, not a property; what a
+    fixture comparing the two can rely on is that they draw different
+    MEMBERSHIP, whatever sizes each realizes. `_assign_whole_clusters_by_ratio`
+    takes a non-optional `Mapping`
+    and indexes it, unlike `_assign_whole_clusters`, which is why this is two
+    paths rather than one with a `clusters or singletons` default.
+
+    **Both sides are refused empty**, under `E-DATA-HOLDOUT-EMPTY`, checked
+    over the MERGED draw rather than per stratum — `assignment_for`'s rule for
+    the identical composition: a side a small stratum apportioned nothing is
+    fine while another stratum covered it, and only a side empty across the
+    whole draw is refused. `validate._check_holdout` refuses a zero *test*
+    side from the declaration and the roster size, and does not refuse a zero
+    *train* side — 2 units at `frac: 0.9` apportions `(0, 2)`, which would fit
+    a model on nothing. The draw holds the realized sizes and is the last
+    place that can see them, which is `assignment_for`'s own posture for a
+    zero-size arm — including a clustered draw's realized sizes, which a
+    declared `frac` alone cannot predict.
+    """
+    block_map: Mapping[str, Any] = block if isinstance(block, Mapping) else {}
+    method = block_map.get("method")
+    strata = stratum_names(block_map.get("stratify_by"))
+    if method == "by_attribute":
+        column = block_map.get("from")
+        if not isinstance(column, str) or not column:
+            raise NotImplementedError(
+                "`data.units.holdout.method: by_attribute` names no column to read the "
+                "split out of; `validate` refuses this as `E-DATA-HOLDOUT-FROM`"
+            )
+        # `holdout_values_fault` computes the verdict AND the wording, so this
+        # raise and `validate._check_holdout`'s collected finding are one
+        # answer rather than two wrappings of `arms_of` that drift apart.
+        fault = holdout_values_fault(roster, column)
+        if fault is not None:
+            raise ContractError(fault, code="E-DATA-HOLDOUT-VALUES")
+        sides = arms_of(roster, column, HOLDOUT_LEVELS)
+        return HoldoutPlan(
+            train=tuple(u.key for u in sides[HOLDOUT_LEVELS[0]]),
+            test=tuple(u.key for u in sides[HOLDOUT_LEVELS[1]]),
+            seed=None,
+            strata=(),
+        )
+    if method == "random":
+        frac = block_map.get("frac")
+        if (
+            not isinstance(frac, (int, float))
+            or isinstance(frac, bool)
+            or not 0.0 < float(frac) < 1.0
+        ):
+            raise NotImplementedError(
+                "`data.units.holdout.method: random` declares no usable `frac`; "
+                "`validate` refuses this as `E-DATA-HOLDOUT-FRAC`"
+            )
+        weights = [1.0 - float(frac), float(frac)]
+        rng = random.Random(seed)
+        train_keys: list[str] = []
+        test_keys: list[str] = []
+        if strata:
+            # One generator across every stratum, `assignment_for`'s own
+            # convention: the strata are drawn in roster order from one carried
+            # state, so the seed determines the whole split together rather
+            # than each stratum in isolation. `_stratum_groups` is handed no
+            # `resolved`: a holdout's `stratify_by` admits only a unit
+            # attribute, never a `sweep.groups` axis (§ Validation,
+            # *Stratification attribute exists*), and a holdout beside a group
+            # axis is refused outright as `E-DATA-HOLDOUT-CELLS`.
+            groups = _stratum_groups(
+                list(roster), strata, "data.units.holdout.stratify_by"
+            )
+            for stratum_units in groups.values():
+                if clusters is not None:
+                    # Whole clusters inside each stratum — sound only while
+                    # `E-DATA-HOLDOUT-STRATIFY-VARIES` refuses a cluster
+                    # carrying two stratum values, which would belong to two of
+                    # these groups and be divided here. The identical argument
+                    # `assignment_for` makes for the identical composition.
+                    train_bucket, test_bucket = _assign_whole_clusters_by_ratio(
+                        stratum_units, weights, rng, clusters
+                    )
+                    train_keys.extend(u.key for u in train_bucket)
+                    test_keys.extend(u.key for u in test_bucket)
+                else:
+                    keys = [u.key for u in stratum_units]
+                    rng.shuffle(keys)
+                    cut, _rest = holdout_sizes(len(stratum_units), float(frac))
+                    train_keys.extend(keys[:cut])
+                    test_keys.extend(keys[cut:])
+        elif clusters is not None:
+            train_bucket, test_bucket = _assign_whole_clusters_by_ratio(
+                list(roster), weights, rng, clusters
+            )
+            train_keys.extend(u.key for u in train_bucket)
+            test_keys.extend(u.key for u in test_bucket)
+        else:
+            train_size, test_size = holdout_sizes(len(roster), float(frac))
+            keys = [unit.key for unit in roster]
+            rng.shuffle(keys)
+            train_keys.extend(keys[:train_size])
+            test_keys.extend(keys[train_size:])
+        # Coverage over the MERGED draw, never per stratum — `assignment_for`'s
+        # rule for the identical composition: a side a small stratum
+        # apportioned nothing is fine while another stratum covered it, and
+        # only a side empty across the whole draw leaves one half of the split
+        # with no units. Also the one refusal the unclustered and clustered
+        # paths share: with clusters larger than one, a cluster is a bigger
+        # thing to move than a unit, which is why a clustered draw reaches an
+        # empty side more easily rather than being exempt from the refusal —
+        # a claim this docstring does not extend to singleton clusters, where
+        # the two constructions' realized sizes can disagree in either
+        # direction (see the paragraph above).
+        if not train_keys or not test_keys:
+            side = "train" if not train_keys else "test"
+            raise ContractError(
+                f"`data.units.holdout.frac: {frac}` over {len(roster)} resolved units "
+                f"leaves the {side} side empty"
+                + (f", drawn within {len(strata)} stratum declaration(s)" if strata else "")
+                + (" over whole clusters" if clusters is not None else "")
+                + ". Every split needs both sides — the training side has nothing to fit "
+                "on, or the test side has nothing to report over; widen or narrow "
+                "`frac`, stratify on fewer attributes, or resolve a larger roster",
+                code="E-DATA-HOLDOUT-EMPTY",
+            )
+        return HoldoutPlan(
+            train=tuple(train_keys), test=tuple(test_keys), seed=seed, strata=strata
+        )
+    raise NotImplementedError(
+        f"`data.units.holdout.method: {method!r}` is not realized here — the methods "
+        f"this build draws are {', '.join(HOLDOUT_METHODS_REALIZED)}. `validate` "
+        "refuses an out-of-enum method as `E-DATA-HOLDOUT-METHOD` before a run reaches "
+        "this, and an allowlist is what keeps a method added to that enum and to "
+        "nothing else from validating clean and then partitioning on something core "
+        "never drew"
+    )
+
+
 def auto_block_size(weights: Sequence[float]) -> int:
     """`block_size: "auto"`'s resolved value for `assign.<axis>.method: blocked` —
     `reference.md` § Allocation: twice `ratio`'s sum, rounded to a whole number of
@@ -1160,7 +1588,7 @@ def stratum_names(stratify_by: Any) -> tuple[str, ...]:
 def _stratum_groups(
     units: list[Unit],
     names: Sequence[Any],
-    axis: str,
+    declaration: str,
     resolved: Mapping[str, ArmPlan] | None = None,
 ) -> dict[tuple[str, ...], list[Unit]]:
     """The roster split into strata — one entry per distinct combination of the
@@ -1218,6 +1646,18 @@ def _stratum_groups(
     no level of it holds — renders as `no value`, the attribute path's own
     convention for the same absence. Unreachable through `assignment_for`'s two
     producers, which both partition the whole roster they are given.
+
+    **`declaration` is the full dotted path of the declaration being served**,
+    not an axis name: this function has more than one caller and the message it
+    raises names the config path a reader has to go and fix. An axis name
+    interpolated into a fixed `data.units.assign.<...>` template would print
+    `data.units.assign.holdout.stratify_by` for a holdout — a path no config
+    can hold. **The tail of the "every other name" raise is caller-aware too**:
+    a holdout's `stratify_by` admits only a unit attribute — no already-drawn
+    `sweep.groups` axis, since `E-DATA-HOLDOUT-CELLS` refuses a holdout beside
+    a group axis outright — so a holdout reader is sent to
+    `E-DATA-HOLDOUT-STRATIFY-UNKNOWN` and told nothing about a forward
+    declaration or a `sweep.groups` path their declaration cannot take.
     """
     plans = resolved or {}
     sources: list[Mapping[str, str] | None] = []
@@ -1231,8 +1671,17 @@ def _stratum_groups(
                 {key: level for level, keys in plan.members.items() for key in keys}
             )
             continue
+        if declaration.startswith("data.units.holdout"):
+            raise NotImplementedError(
+                f"`{declaration}` names {name!r}, which no resolved unit carries "
+                "as an attribute — a holdout's `stratify_by` admits only a unit "
+                "attribute, never a `sweep.groups` axis (a holdout beside one is "
+                "refused outright, as `E-DATA-HOLDOUT-CELLS`), so there is no "
+                "forward-declared axis this could instead be naming. `validate` "
+                "refuses this as `E-DATA-HOLDOUT-STRATIFY-UNKNOWN`"
+            )
         raise NotImplementedError(
-            f"`data.units.assign.{axis}.stratify_by` names {name!r}, which no resolved "
+            f"`{declaration}` names {name!r}, which no resolved "
             "unit carries as an attribute and no already-drawn `sweep.groups` axis "
             "resolves — a stratum is read per unit when the draw is balanced. A stratum "
             "naming an axis declared AFTER this one names membership no draw has "
@@ -1518,7 +1967,9 @@ def assignment_for(
             # each stratum in isolation.
             stratified_rng = random.Random(seed)
             stratified: dict[str, list[str]] = {level: [] for level in levels}
-            groups = _stratum_groups(list(roster), strata, axis, resolved)
+            groups = _stratum_groups(
+                list(roster), strata, f"data.units.assign.{axis}.stratify_by", resolved
+            )
             for stratum_units in groups.values():
                 if clusters is not None:
                     # The same whole-cluster rule the unstratified clustered
@@ -1651,7 +2102,9 @@ def assignment_for(
             # stratum, which is what a stratified block design is. Cutting the
             # whole roster into blocks and balancing each block's strata
             # instead would be a different design and a second blocking rule.
-            for stratum_units in _stratum_groups(list(roster), strata, axis, resolved).values():
+            for stratum_units in _stratum_groups(
+                list(roster), strata, f"data.units.assign.{axis}.stratify_by", resolved
+            ).values():
                 _blocked_draw(
                     [unit.key for unit in stratum_units],
                     levels,
@@ -1666,8 +2119,10 @@ def assignment_for(
             )
         empty = [level for level in levels if not drawn[level]]
         if empty:
+            declaration = f"data.units.assign.{axis}.stratify_by"
             within = (
-                f" within each of the {len(_stratum_groups(list(roster), strata, axis, resolved))} "
+                f" within each of the "
+                f"{len(_stratum_groups(list(roster), strata, declaration, resolved))} "
                 f"strata of {', '.join(str(name) for name in strata)}"
                 if strata
                 else ""
@@ -1834,9 +2289,14 @@ def stratum_varies_within_cluster(
     different sides, and a cluster that carries two of them cannot be dealt out at
     all, being indivisible. Rather than silently prioritizing one of the two
     constraints, core refuses the pair — so this reports the pair, and the caller
-    decides which declaration to name (`reference.md` § Validation, rows *Fold
-    strata survive clustering* and *Holdout strata survive clustering*, which is why
-    this returns a fault rather than raising one code).
+    decides which declaration to name — **four callers today, under four codes**:
+    `E-DATA-ASSIGN-STRATIFY-VARIES`, `E-REPL-FOLD-STRATIFY-VARIES`,
+    `E-STATS-RESAMPLE-STRATIFY-VARIES` and `E-DATA-HOLDOUT-STRATIFY-VARIES`,
+    answering to `reference.md` § Validation's *Allocation strata survive
+    clustering*, *Fold strata survive clustering*, *Resample strata survive
+    clustering* and *Holdout strata survive clustering*. That is why this returns
+    a fault rather than raising one code: a code chosen here would be right for
+    one caller and wrong for three.
 
     Membership comes from `clusters_of`, the single authority, so a unit carrying no
     cluster value raises `E-DATA-CLUSTER-UNKNOWN` from there rather than being
@@ -2129,6 +2589,51 @@ def assign_seed_for(block: Mapping[str, Any], axis: str, digest: str, roster: Un
     if isinstance(seed, int) and not isinstance(seed, bool):
         return seed
     payload = f"{digest}|assign|{axis}|{units_hash(roster)}".encode()
+    return int.from_bytes(hashlib.sha256(payload).digest()[:4], "big")
+
+
+def holdout_seed_for(block: Mapping[str, Any], digest: str, roster: UnitList) -> int:
+    """The seed `data.units.holdout` draws its split with.
+
+    `reference.md` § What `auto` derives from: a holdout's `seed` mixes "digest
+    + the resolved roster" — the digest because the split is a property of the
+    design, and `units_hash(roster)` because it covers the roster **in resolved
+    order**, so two runs that resolved the same units in a different sequence
+    did not draw the same trial (§ Where units come from).
+
+    **Its own suffix, `|holdout`, and not `_seed_from`'s `|folds`.** A holdout
+    is not a fold, and the two must not draw the same partition from the same
+    digest. They are mutually exclusive declarations at this commit
+    (`E-DATA-HOLDOUT-FOLD`), so nothing *observes* a collision — which is the
+    argument FOR the suffix rather than against it: relying on a refusal
+    elsewhere to keep two derivations apart is how they come to agree by
+    accident the moment that refusal moves.
+
+    **Not `assign_seed_for` either**, whose payload carries an axis name a
+    holdout does not have. The construction is otherwise copied deliberately:
+    the same digest, the same `units_hash`, the same four bytes read big-endian.
+    That shape is shared with `assign_seed_for`, and **not** with every drawn
+    partition: `_seed_from`'s fold payload carries no `units_hash` at all, and
+    `sweep`'s sample seed differs again. Only the resemblance to
+    `assign_seed_for` is claimed here.
+
+    A pinned integer is returned literally, and — the load-bearing half, copied
+    from `sweep.sample_seed_for`'s own docstring — **the digest is not consulted
+    at all** on that path, only read out of `block`. "Pinning an integer is the
+    deliberate act, and the one to take for anything you intend to cite," so a
+    pinned split must survive a roster that grows, shrinks, or reorders, and
+    `hashes.design_digest` strips `holdout.seed` for the same reason: a pinned
+    seed must not move the digest it would otherwise be mixed with.
+
+    `bool` is excluded from the pin: `isinstance(True, int)` is `True`, and
+    `seed: true` is not a pin — `validate` refuses it as
+    `E-DATA-HOLDOUT-SEED`, and honouring it as `1` would record a derived seed
+    under a key the config wrote deliberately.
+    """
+    seed = block.get("seed", "auto")
+    if isinstance(seed, int) and not isinstance(seed, bool):
+        return seed
+    payload = f"{digest}|holdout|{units_hash(roster)}".encode()
     return int.from_bytes(hashlib.sha256(payload).digest()[:4], "big")
 
 

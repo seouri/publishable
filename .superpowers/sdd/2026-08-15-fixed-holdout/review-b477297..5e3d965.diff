@@ -1,0 +1,358 @@
+# Review package: b477297..5e3d965
+
+## Commits
+5e3d965 feat: refuse a malformed data.units.holdout declaration
+
+## Files changed
+ src/publishable/validate.py | 168 ++++++++++++++++++++++++++++++++++++++++++++
+ tests/test_validate.py      |  97 +++++++++++++++++++++++++
+ 2 files changed, 265 insertions(+)
+
+## Diff
+diff --git a/src/publishable/validate.py b/src/publishable/validate.py
+index ef17854..9612572 100644
+--- a/src/publishable/validate.py
++++ b/src/publishable/validate.py
+@@ -615,20 +615,26 @@ def validate_config(
+             # true in general, only true of this particular local. Either way
+             # the config validates clean here and meets `E-DATA-CLUSTER-UNKNOWN`
+             # for real at `run`.
+             basis = None
+     # A `fold` level's `stratify_by`, from the same usable-cluster local the basis
+     # was resolved from: the name it declares, and — when a cluster is declared —
+     # whether the stratum survives a split that cannot divide one. Not in
+     # `replication._fold_k`, which sees the declaration and a count and never a
+     # roster.
+     _check_fold_stratify_by(doc, units_decl, roster, usable_cluster, c)
++    # Sited here for `_check_fold_stratify_by`'s reason and beside it: both read
++    # the resolved roster and the usable cluster name, and both check a
++    # partition's declaration rather than a repeat's. `usable_cluster` is
++    # already narrowed to a non-empty string or `None` above, so this call needs
++    # no guard of its own.
++    _check_holdout(doc, units_decl, roster, usable_cluster, c)
+     _check_replication(
+         doc,
+         template,
+         c,
+         experiment=experiment,
+         fold_basis=basis,
+     )
+     _check_unimplemented(doc, c)
+     _check_sweep(doc, template, c, fold_basis=basis)
+     # After `_check_sweep`, before `_check_contrasts`: `roster` is already in
+@@ -1373,20 +1379,31 @@ method at all.
+ # the direction is deliberate. Two literals naming which methods draw — one here,
+ # one in `units.assignment_for` — would be pinned in agreement by nothing, and a
+ # fourth drawing method added to `ASSIGN_METHODS` on this side alone would pass
+ # `validate` and then partition on a column. `units` is the right home for the
+ # one copy: the dependency edge already runs that way (`units.py` imports
+ # nothing from here). This module's use of the tuple outlived the refusal it was
+ # minted for: it named the methods `E-DATA-ASSIGN-DRAWN` refused, and now names
+ # the branch a drawn method takes through `_check_assign`.
+ 
+ 
++HOLDOUT_METHODS = ("random", "by_attribute")
++"""`data.units.holdout.method`'s enum — `reference.md` § A fixed holdout split.
++
++Two values and no more, and stated as a closed enum for `ASSIGN_METHODS`'s
++reason: a third named here and realized nowhere would validate clean and then
++reach `units.holdout_for`, which refuses what it cannot draw. Which of the two
++reads a partition and which draws one is what decides every other field's
++meaning, so a malformed `method` is reported before any of them is read.
++"""
++
++
+ def _declared_levels(sweep: Any, axis: str) -> list[str] | None:
+     """`sweep.groups`'s declared `levels` for `axis`, or `None` when the axis
+     isn't declared there, or is, but its `levels` don't resolve to a non-empty
+     list of strings — `sweep.groups`'s own shape fault, reported elsewhere or
+     not at all in this build, and not this function's to report a second time.
+ 
+     Shared by `_check_assign`'s `by_attribute` branch (`arms_of` needs the same
+     list to partition a resolved roster against) and its `random`/`blocked`
+     branch (*Ratio names levels* needs it to check a declared `ratio`'s keys),
+     reading `sweep.groups` the same second way `_check_assign`'s own docstring
+@@ -2636,20 +2653,171 @@ def _check_fold_stratify_by(
+                 "E-REPL-FOLD-STRATIFY-VARIES",
+                 "replication.repeats",
+                 f"declares `fold.stratify_by: {declared}`, which varies within "
+                 f"`{cluster_by}` {cluster} — it carries {', '.join(values)}. A cluster is "
+                 "indivisible, so a stratum cannot be balanced across a split that cannot "
+                 "divide the cluster carrying both values; stratify on an attribute that is "
+                 "constant within a cluster, or drop the stratification",
+             )
+ 
+ 
++def _check_holdout(
++    doc: dict[str, Any],
++    units: dict[str, Any],
++    roster: UnitList | None,
++    cluster_by: str | None,
++    c: Collector,
++) -> None:
++    """Every check `data.units.holdout` gets — five findings at this commit, in
++    declaration order, and the enumeration is the list rather than a sample of
++    it:
++
++    - `E-DATA-HOLDOUT-METHOD` — the `method` enum.
++    - `E-DATA-HOLDOUT-FRAC` — `frac` in the open interval (0, 1), under `random`.
++    - `E-DATA-HOLDOUT-FROM` — `from` required, under `by_attribute`.
++    - `E-DATA-HOLDOUT-NO-DRAW` — a field meaning nothing under the declared
++      method.
++    - `E-DATA-HOLDOUT-SEED` — the seed pin.
++
++    **None of the five reads `roster` or `cluster_by`**, and both are in the
++    signature anyway, `units.assignment_for`'s reason: the caller already holds
++    both, and a caller told the signature changed under it is what a stable one
++    avoids. A check added here must state which side of that line it is on —
++    this list is what the next reader counts against, so a sixth finding
++    belongs in it, and a roster-reading one carries its own
++    `roster is not None` guard rather than leaning on a caller.
++
++    **An empty or non-mapping declaration returns reporting nothing**,
++    `_check_resample`'s own gate one block over. `holdout: {}` and
++    `holdout: null` declare nothing and partition nothing;
++    `_check_unimplemented`'s truthiness test is false for both, and a
++    misspelled child inside a non-empty block is `check_envelope`'s
++    `E-CONFIG-KEY-UNKNOWN` rather than this function's.
++
++    Every value read here is `isinstance`-guarded and quietly skipped when it
++    is not the leaf `envelope.LEAF_TYPES` types, the same division
++    `_check_report_by` keeps: a leaf type fault is `E-CONFIG-TYPE`, reported
++    already and deliberately non-fatal, and reporting a second, derived fault
++    on top of the one the reader has to fix anyway is what
++    `validate_config`'s own `usable_cluster` guard avoids.
++
++    **`frac`'s interval is open at both ends.** `0` holds nothing out and `1`
++    holds everything out; each leaves one side of the split empty, and a split
++    with an empty side is not a split. A `frac` small enough to apportion the
++    test side zero units over *this* roster is a different fault with a
++    different fix — widen it, or resolve more units — and is not this check's.
++    """
++    holdout = units.get("holdout")
++    if not isinstance(holdout, dict) or not holdout:
++        return
++
++    method = holdout.get("method")
++    if method is None:
++        c.error(
++            "E-DATA-HOLDOUT-METHOD",
++            "data.units.holdout.method",
++            f"is not declared; the methods are {', '.join(HOLDOUT_METHODS)}, and which "
++            "one is declared decides what every other field of the block means — "
++            "`random` draws a split and `by_attribute` reads one already in the data",
++        )
++    elif not isinstance(method, str):
++        # Absorbed here rather than left to `E-CONFIG-TYPE` alone: the reader's
++        # question is which method they meant, and a bare type finding does not
++        # enumerate the two.
++        c.error(
++            "E-DATA-HOLDOUT-METHOD",
++            "data.units.holdout.method",
++            f"is {method!r}, which names no method; the methods are {', '.join(HOLDOUT_METHODS)}",
++        )
++    elif method not in HOLDOUT_METHODS:
++        c.error(
++            "E-DATA-HOLDOUT-METHOD",
++            "data.units.holdout.method",
++            f"is {method!r}, which is not one of {', '.join(HOLDOUT_METHODS)}. A method "
++            "named here and realized nowhere would validate clean and then partition "
++            "on something core never drew",
++        )
++
++    declared_frac = holdout.get("frac")
++    declared_from = holdout.get("from")
++    if method == "random":
++        if declared_frac is None:
++            c.error(
++                "E-DATA-HOLDOUT-FRAC",
++                "data.units.holdout.frac",
++                "is not declared, and `method: random` draws the test side by "
++                "fraction — there is nothing to draw without one",
++            )
++        elif isinstance(declared_frac, (int, float)) and not isinstance(declared_frac, bool):
++            if not 0.0 < float(declared_frac) < 1.0:
++                c.error(
++                    "E-DATA-HOLDOUT-FRAC",
++                    "data.units.holdout.frac",
++                    f"is {declared_frac}, and a test fraction is strictly between 0 and "
++                    "1 — `0` holds nothing out and `1` holds everything out, and each "
++                    "leaves one side of the split empty",
++                )
++        if declared_from is not None:
++            c.error(
++                "E-DATA-HOLDOUT-NO-DRAW",
++                "data.units.holdout.from",
++                "means nothing under `method: random`, which draws the split rather "
++                "than reading one out of a column — declare `method: by_attribute` to "
++                "read the column, or drop `from`",
++            )
++    elif method == "by_attribute":
++        if declared_from is None:
++            c.error(
++                "E-DATA-HOLDOUT-FROM",
++                "data.units.holdout.from",
++                "is not declared, and `method: by_attribute` reads the split out of a "
++                "column — unlike an assignment axis there is no axis name to default "
++                "to, so the column has to be named",
++            )
++        elif isinstance(declared_from, str) and not declared_from:
++            c.error(
++                "E-DATA-HOLDOUT-FROM",
++                "data.units.holdout.from",
++                "is empty, which names no column to read the split out of",
++            )
++        if declared_frac is not None:
++            c.error(
++                "E-DATA-HOLDOUT-NO-DRAW",
++                "data.units.holdout.frac",
++                "means nothing under `method: by_attribute`, which reads a split the "
++                "data already holds rather than drawing one to a size — the realized "
++                "proportion is whatever the column says it is",
++            )
++        if holdout.get("stratify_by") is not None:
++            c.error(
++                "E-DATA-HOLDOUT-NO-DRAW",
++                "data.units.holdout.stratify_by",
++                "means nothing under `method: by_attribute`: `stratify_by` names how a "
++                "draw is BALANCED, and a split read out of a column was not drawn. The "
++                "same absorption `E-DATA-ASSIGN-NO-DRAW` performs for the same field "
++                "one declaration over",
++            )
++
++    if "seed" in holdout:
++        seed = holdout["seed"]
++        pinned = isinstance(seed, int) and not isinstance(seed, bool)
++        if not pinned and seed != "auto":
++            c.error(
++                "E-DATA-HOLDOUT-SEED",
++                "data.units.holdout.seed",
++                f"is {seed!r}, and a seed is `auto` or a plain integer. A quoted "
++                "number, a float, or a boolean is a pin nothing can honour, and "
++                "deriving one anyway would record a derived seed under a key the "
++                "config wrote deliberately",
++            )
++
++
+ def _accounted_attribute_names(doc: dict[str, Any], units: dict[str, Any]) -> set[str]:
+     """Attribute names another declaration already accounts for, so the
+     undeclared-cluster warning stays off them.
+ 
+     `reference.md`'s `W-DATA-CLUSTER-UNDECLARED` row names four: an attribute a
+     `sweep.groups` axis names or an `assign.from` reads, since every `between`
+     design's arm would otherwise report one; any `stratify_by`, which must be
+     constant within a cluster and so is coarser than one; and
+     `statistics.null_test`'s `shuffle`, which names the label a cluster is what
+     shuffling *respects*.
+diff --git a/tests/test_validate.py b/tests/test_validate.py
+index 41dfb73..5c46c8f 100644
+--- a/tests/test_validate.py
++++ b/tests/test_validate.py
+@@ -11320,10 +11320,107 @@ def test_the_retired_resample_code_appears_nowhere_in_src():
+     contain whatever you would have excluded. Scanned from `__file__` rather
+     than a bare relative `Path("src")`, and guarded against an empty scan, so
+     the assertion cannot pass vacuously by finding nothing to look at."""
+     import pathlib
+ 
+     src_root = pathlib.Path(__file__).resolve().parent.parent / "src"
+     files = list(src_root.rglob("*.py"))
+     assert len(files) > 20
+     hits = [path for path in files if "E-STATS-RESAMPLE-UNSUPPORTED" in path.read_text()]
+     assert hits == []
++
++
++def _holdout(block, **extra) -> dict:
++    """`write_config`'s whole-block override for a config declaring a holdout.
++
++    `base_config` has no `data.units` key at all, so a dotted
++    `{"data.units.holdout": ...}` override raises `KeyError` walking `units` —
++    the whole block is what every other `data.units` test in this file writes.
++    """
++    units = {"from": "index.csv", "key": "patient_id", **extra}
++    if block is not None:
++        units["holdout"] = block
++    return {"data.units": units}
++
++
++def test_an_empty_or_null_holdout_validates_clean(write_config):
++    """`holdout: {}` and `holdout: null` declare nothing and partition nothing,
++    so neither is refused — `_check_resample`'s own `not isinstance(...) or not
++    ...: return` gate, one block over. Pinned because the shape looks like a
++    hole and is not: a misspelled child inside a NON-empty block is reported by
++    `check_envelope`, and `_check_unimplemented`'s truthiness test is false for
++    both of these.
++
++    The positive companion is the third assertion: a real declaration in the
++    same position DOES report, so this cannot pass by the check being dead."""
++    assert "E-DATA-HOLDOUT-METHOD" not in codes(write_config(_holdout({})))
++    assert "E-DATA-HOLDOUT-METHOD" not in codes(write_config(_holdout(None)))
++    assert "E-DATA-HOLDOUT-METHOD" in codes(write_config(_holdout({"frac": 0.2})))
++
++
++@pytest.mark.parametrize(
++    "block,expected",
++    [
++        # `method` — absent, wrong type, out of enum. An allowlist: a method
++        # named here and realized nowhere would validate clean and then
++        # partition on something core never drew.
++        ({"frac": 0.2}, "E-DATA-HOLDOUT-METHOD"),
++        ({"method": ["random"], "frac": 0.2}, "E-DATA-HOLDOUT-METHOD"),
++        ({"method": "stratified", "frac": 0.2}, "E-DATA-HOLDOUT-METHOD"),
++        # `frac` under `random` — absent, and each end of the OPEN interval.
++        ({"method": "random"}, "E-DATA-HOLDOUT-FRAC"),
++        ({"method": "random", "frac": 0}, "E-DATA-HOLDOUT-FRAC"),
++        ({"method": "random", "frac": 1}, "E-DATA-HOLDOUT-FRAC"),
++        ({"method": "random", "frac": -0.5}, "E-DATA-HOLDOUT-FRAC"),
++        ({"method": "random", "frac": 1.5}, "E-DATA-HOLDOUT-FRAC"),
++        # `from` under `by_attribute` — absent and empty. There is no axis name
++        # to default to, unlike `assign.<axis>.from`.
++        ({"method": "by_attribute"}, "E-DATA-HOLDOUT-FROM"),
++        ({"method": "by_attribute", "from": ""}, "E-DATA-HOLDOUT-FROM"),
++        # A field meaning nothing under the declared method, both directions.
++        ({"method": "by_attribute", "from": "split", "frac": 0.2},
++         "E-DATA-HOLDOUT-NO-DRAW"),
++        ({"method": "random", "frac": 0.2, "from": "split"},
++         "E-DATA-HOLDOUT-NO-DRAW"),
++        ({"method": "by_attribute", "from": "split", "stratify_by": ["label"]},
++         "E-DATA-HOLDOUT-NO-DRAW"),
++        # The seed pin — present and neither `auto` nor a plain int.
++        ({"method": "random", "frac": 0.2, "seed": "1234"}, "E-DATA-HOLDOUT-SEED"),
++        ({"method": "random", "frac": 0.2, "seed": 1.5}, "E-DATA-HOLDOUT-SEED"),
++    ],
++)
++def test_a_malformed_holdout_declaration_is_refused(write_config, block, expected):
++    found = codes(write_config(_holdout(block)))
++    assert expected in found
++    # Alongside, never instead of: `E-DATA-HOLDOUT-UNSUPPORTED` is still live
++    # at this commit and task 18 retires it. Membership on its own line makes
++    # that retirement a one-line deletion rather than a rewrite of this test.
++    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found
++
++
++@pytest.mark.parametrize(
++    "block",
++    [
++        {"method": "random", "frac": 0.2},
++        {"method": "random", "frac": 0.2, "seed": "auto"},
++        {"method": "random", "frac": 0.2, "seed": 1234},
++        {"method": "random", "frac": 0.999},
++        {"method": "by_attribute", "from": "split"},
++        {"method": "by_attribute", "from": "split", "seed": 1234},
++    ],
++)
++def test_a_well_formed_holdout_declaration_earns_none_of_the_five(write_config, block):
++    """The success path for every arm above. A parametrization asserting only
++    failures proves nothing about either method's accepted shape — the shape
++    that left `blocked`'s stratified draw fully threaded and never exercised.
++
++    A pinned `seed` is legal under BOTH methods on purpose: `by_attribute`
++    records no seed, but a config carrying one is not malformed, and refusing
++    it here would put the `NO-DRAW` rule somewhere this test would not see."""
++    found = codes(write_config(_holdout(block)))
++    for code in ("E-DATA-HOLDOUT-METHOD", "E-DATA-HOLDOUT-FRAC",
++                 "E-DATA-HOLDOUT-FROM", "E-DATA-HOLDOUT-NO-DRAW",
++                 "E-DATA-HOLDOUT-SEED"):
++        assert code not in found
++    # The positive companion: this config is not silently escaping the check
++    # entirely — the wholesale refusal still fires on the same declaration.
++    assert "E-DATA-HOLDOUT-UNSUPPORTED" in found

@@ -1,0 +1,2618 @@
+# Review package: 152f0bffc9b4aa5718d7ee323d71d87f6a082002..HEAD
+
+## Commits
+b1d6c15 Refuse a sweep that expands to zero conditions
+cb1a5aa Fix read_condition conflating an unresolved index with a resolved null label
+104b018 Run every condition a sweep declares
+82f16c0 Widen read_condition to accept what io.conditions yields, not only a bare index
+09882a7 Let a summary step read across conditions, and only a summary step
+7374581 Extract condition_dir_name as the one source of the conditions/<nn>_<label> format
+eaffd0a Match sweep.yaml's documented shape: grouped repeats, order mode vs execution_order
+4221ed0 Write down the plan a run actually resolved
+e66a88b Plant the swept-away marker unconditionally, and fail loud on a missing cfg
+c37ff1b Give each condition its own cfg, and withhold what a scope cannot know
+66cf0da Check the expansion, and warn about the family it creates
+2b8d9e6 Refuse each unimplemented sweep mode on its own
+e2c9a21 Refuse a swept value that would render the axis separator
+1f63311 Label a condition so a reader can type its name
+8548f03 Make Condition.values immutable, matching Unit.attributes
+919e128 Expand a declared sweep into ordered conditions
+
+## Files changed
+ src/publishable/artifacts.py   |  79 ++++++++++++++
+ src/publishable/cli.py         |  76 +++++++++----
+ src/publishable/config.py      |  23 +++-
+ src/publishable/materialize.py |   9 ++
+ src/publishable/run_record.py  |  19 +++-
+ src/publishable/runner.py      |  93 +++++++++++++++-
+ src/publishable/stats.py       |   5 +
+ src/publishable/sweep.py       | 220 ++++++++++++++++++++++++++++++++++++++
+ src/publishable/validate.py    | 169 +++++++++++++++++++++++++----
+ tests/test_acceptance.py       | 182 ++++++++++++++++++++++++++++++-
+ tests/test_artifacts.py        | 187 ++++++++++++++++++++++++++++++++
+ tests/test_runner.py           | 202 +++++++++++++++++++++++++++++++++--
+ tests/test_sweep.py            | 236 +++++++++++++++++++++++++++++++++++++++++
+ tests/test_validate.py         | 230 +++++++++++++++++++++++++++++++++++----
+ 14 files changed, 1651 insertions(+), 79 deletions(-)
+
+## Diff
+diff --git a/src/publishable/artifacts.py b/src/publishable/artifacts.py
+index dd86839..11994f1 100644
+--- a/src/publishable/artifacts.py
++++ b/src/publishable/artifacts.py
+@@ -5,24 +5,27 @@ import csv
+ import io as _io
+ import json
+ import os
+ import tempfile
+ from pathlib import Path
+ from typing import TYPE_CHECKING, Any
+ 
+ import yaml
+ 
+ from publishable.errors import ArtifactError, ArtifactExistsError, ContractError
++from publishable.sweep import condition_dir_name
+ 
+ if TYPE_CHECKING:
+     from publishable.units import UnitList
+ 
++SCOPE_ORDER = {"run": 0, "condition": 1, "repeat": 2, "summary": 3}
++
+ 
+ def write_atomic(path: Path, data: bytes) -> None:
+     """Temp file plus rename, so a crash leaves nothing rather than a half-file."""
+     path.parent.mkdir(parents=True, exist_ok=True)
+     fd, tmp = tempfile.mkstemp(dir=path.parent, prefix=".partial-")
+     try:
+         with os.fdopen(fd, "wb") as fh:
+             fh.write(data)
+             fh.flush()
+             os.fsync(fh.fileno())
+@@ -164,29 +167,37 @@ def _suffix_for(name: str) -> str | None:
+ 
+ 
+ class StepIO:
+     def __init__(
+         self,
+         *,
+         step_dir: Path,
+         input_dir: Path,
+         run_dir: Path,
+         units: "UnitList | None" = None,
++        scope: str = "repeat",
++        conditions: list[tuple[int, str | None]] | None = None,
++        repeats: list[str] | None = None,
++        step_scopes: dict[str, str] | None = None,
+     ) -> None:
+         self.step_dir = step_dir
+         self.input_dir = input_dir
+         self.run_dir = run_dir
+         self.resumed = False
+         self._recorded_keys: set[str] = set()
+         self._units = units
+         self._rows: dict[str, dict[str, Any]] = {}
+         self._skipped: dict[str, str] = {}
++        self._scope = scope
++        self._conditions = conditions
++        self._repeats = repeats
++        self._step_scopes = step_scopes
+ 
+     @property
+     def units(self) -> "UnitList":
+         if self._units is None:
+             raise ContractError(
+                 "`io.units` needs a `data.units` declaration; none is present, and an "
+                 "empty list would let a step report results about nothing",
+                 code="E-STEP-UNITS-UNAVAILABLE",
+             )
+         return self._units
+@@ -326,20 +337,88 @@ class StepIO:
+                 code="E-ARTIFACT-APPEND",
+             )
+         target = self._resolve(name)
+         target.parent.mkdir(parents=True, exist_ok=True)
+         with target.open("a", encoding="utf-8") as fh:
+             fh.write(json.dumps(record, ensure_ascii=False) + "\n")
+ 
+     def read_input(self, relpath: str) -> Any:
+         return self._read(self.input_dir / relpath)
+ 
++    def _summary_only(self, what: str) -> None:
++        if self._scope != "summary":
++            raise ContractError(
++                f"`io.{what}` is available at `summary` scope only; this step is "
++                f"`{self._scope}`-scoped, and a narrower step has no business reading "
++                "across conditions",
++                code="E-STEP-SCOPE-ONLY",
++            )
++
++    @property
++    def conditions(self) -> list[tuple[int, str | None]]:
++        self._summary_only("conditions")
++        return list(self._conditions or [])
++
++    @property
++    def repeats(self) -> list[str]:
++        self._summary_only("repeats")
++        return list(self._repeats or [])
++
++    def read_condition(
++        self,
++        condition: "int | tuple[int, str | None]",
++        step: str,
++        name: str,
++        repeat: str | None = None,
++    ) -> Any:
++        """`condition` accepts either a bare index or the `(index, label)` element
++        `io.conditions` yields, so the documented `for condition in io.conditions:
++        io.read_condition(condition, ...)` pattern and a literal index both work.
++
++        A resolved condition's label can itself be `None` — the no-`sweep` case,
++        where there is no `conditions/` level to nest under — so membership is
++        checked against the resolved *indices*, never by testing the label for
++        `None`: that would make a legitimately unlabeled condition indistinguishable
++        from an index this run never resolved.
++        """
++        self._summary_only("read_condition")
++        index = condition[0] if isinstance(condition, tuple) else condition
++        target = (self._step_scopes or {}).get(step)
++        if target == "repeat" and repeat is None:
++            raise ContractError(
++                f"`{step}` is repeat-scoped, so `read_condition` needs a `repeat=` naming "
++                "which repeat's copy to read",
++                code="E-STEP-READ-REPEAT-REQUIRED",
++            )
++        by_index = dict(self._conditions or [])
++        if index not in by_index:
++            raise ContractError(
++                f"condition {index} is not among this run's resolved conditions",
++                code="E-STEP-READ-CONDITION-UNKNOWN",
++            )
++        label = by_index[index]
++        base = self.run_dir if label is None else (
++            self.run_dir / "conditions" / condition_dir_name(index, label)
++        )
++        collapsed = len(self._repeats or []) <= 1
++        if target == "repeat" and repeat is not None and not collapsed:
++            base = base / repeat
++        return self._read(base / step / name)
++
+     def read_upstream(self, step: str, name: str) -> Any:
++        target = (self._step_scopes or {}).get(step)
++        if target is not None and SCOPE_ORDER[target] > SCOPE_ORDER[self._scope]:
++            raise ContractError(
++                f"`{step}` is `{target}`-scoped and this step is `{self._scope}`-scoped; "
++                "a wider step cannot read a narrower one, because at the time it runs "
++                "those executions have not happened",
++                code="E-STEP-READ-DIRECTION",
++            )
+         return self._read(self.run_dir / "shared" / step / name)
+ 
+     @staticmethod
+     def _read(path: Path) -> Any:
+         """Inverts the same table `write` dispatches through — see `WRITERS`/`READERS`."""
+         suffix = _suffix_for(path.name)
+         if suffix is not None:
+             return READERS[suffix](path.read_bytes())
+         return path.read_bytes()
+diff --git a/src/publishable/cli.py b/src/publishable/cli.py
+index a094de4..7d8d441 100644
+--- a/src/publishable/cli.py
++++ b/src/publishable/cli.py
+@@ -25,24 +25,25 @@ from publishable.diagnostics import (
+ )
+ from publishable.errors import ContractError, PublishableError
+ from publishable.generators.experiment import generate_experiment
+ from publishable.generators.step import generate_step
+ from publishable.hashes import code_hash, design_digest, parameters_hash
+ from publishable.manifest import build_manifest, manifest_hash, verify_manifest
+ from publishable.provenance import find_repo_root, git_provenance
+ from publishable.replication import resolve_repeats
+ from publishable.run_identity import RunLock, allocate_run_dir, point_latest
+ from publishable.run_record import assemble_run_yaml, run_status
+-from publishable.runner import attrition, execute_plan
++from publishable.runner import attrition, execute_plan, resolve_condition_cfg, resolve_wide_cfg
+ from publishable.scaffold import scaffold_project
+ from publishable.scope import build_plan
+ from publishable.stats import collapse_repeats, summarize_step
++from publishable.sweep import expand, sweep_document
+ from publishable.units import resolve_units, units_hash
+ from publishable.uv_support import uv_lock_info
+ from publishable.validate import validate_config
+ 
+ OPERATION_COMMANDS = {"validate", "run"}
+ 
+ 
+ def _load_experiment(repo_root: Path, entrypoint: str) -> BaseExperiment:
+     """Import the entrypoint class from the project's own `src/` on `sys.path`.
+ 
+@@ -102,21 +103,32 @@ def command_run(config_path: Path) -> int:
+         dirty_c.error(
+             "E-CODE-DIRTY", "src/** or templates/**", "uncommitted changes; commit them first"
+         )
+         print(dirty_c.render())
+         return EXIT_WRONG
+     experiment = _load_experiment(repo_root, doc["entrypoint"])  # phase 3: entrypoint imports
+ 
+     digest = design_digest(doc)  # phase 5: pin hashes
+     repeats = resolve_repeats(doc, digest)
+     labels = [r.label for r in repeats if r.label] or [""]
+-    plan = build_plan(experiment, conditions=[(0, None)], repeat_labels=labels)  # phase 4
++
++    conditions = expand(doc)
++    swept_paths = set((doc.get("sweep") or {}).get("grid") or {})
++    plan = build_plan(  # phase 4
++        experiment,
++        conditions=[(c.index, c.label) for c in conditions],
++        repeat_labels=labels,
++    )
++    cfgs: dict[int, Config] = {
++        c.index: resolve_condition_cfg(doc, dict(c.values)) for c in conditions
++    }
++    cfgs[-1] = resolve_wide_cfg(doc, swept_paths)
+ 
+     input_dir = Path(doc["data"]["input_dir"]).expanduser()
+     output_dir = Path(doc["data"]["output_dir"]).expanduser()
+     ch = code_hash(repo_root)
+     ph = parameters_hash(doc)
+     manifest = build_manifest(input_dir, doc["data"]["input_manifest_policy"])
+     units_decl: dict[str, Any] | None = (doc.get("data") or {}).get("units")
+     roster = resolve_units(units_decl, input_dir) if units_decl else None  # phase 5: roster
+     lock_path, lock_hash = uv_lock_info(repo_root)
+     if lock_path is None:
+@@ -144,53 +156,72 @@ def command_run(config_path: Path) -> int:
+         (run_dir / "environment" / "pyproject.toml").write_bytes(
+             (repo_root / "pyproject.toml").read_bytes()
+         )
+         if lock_path is not None:
+             (run_dir / "environment" / "uv.lock").write_bytes(lock_path.read_bytes())
+ 
+         results = execute_plan(  # phase 7
+             plan=plan,
+             run_dir=run_dir,
+             input_dir=input_dir,
+-            cfg=Config(doc),
++            cfgs=cfgs,
+             repeats=repeats,
+             digest=digest,
+             units=roster,
+             max_failed_fraction=(doc.get("limits") or {}).get("max_failed_fraction"),
+         )
+ 
++        # `sweep.yaml` next to `manifest/input.json`, inside the lock: the resolved
++        # plan a run actually executed, not merely what the config declared.
++        order = (doc.get("replication") or {}).get("order") or "as_declared"
++        execution_order = [
++            (e.condition_index or 0, e.repeat_label or "") for e in plan if e.scope == "repeat"
++        ]
++        (run_dir / "sweep.yaml").write_text(
++            yaml.safe_dump(
++                sweep_document(conditions, repeats, digest, order, execution_order),
++                sort_keys=False,
++            )
++        )
++
+         status = run_status(results)
+-        # S2 always resolves a single condition, so every aggregation below is
+-        # scoped to condition_index=0 — never pooled across conditions. No roster
+-        # means nothing to aggregate over, so `aggregated` stays `None` rather than
+-        # an empty dict — `assemble_run_yaml` omits the key entirely in that case,
+-        # instead of every condition reporting a misleading empty `aggregated: {}`.
++        # No roster means nothing to aggregate over, so `aggregated` stays `None`
++        # rather than an empty dict — `assemble_run_yaml` omits the key entirely in
++        # that case, instead of every condition reporting a misleading empty
++        # `aggregated: {}`.
+         aggregated: dict[int, dict[str, dict[str, Any]]] | None = None
++        # Condition metadata `ExecutionResult` cannot carry: `Execution` holds
++        # index and label but not `is_baseline`, and the acceptance test asserts it.
++        condition_meta = {
++            c.index: {"label": c.label, "is_baseline": c.is_baseline} for c in conditions
++        }
+         if roster is not None:
+-            # `condition_index` is guarded here too, harmless today since S2 never
+-            # resolves more than one condition, but load-bearing the day a sweep
+-            # does: an unguarded filter would let a same-named step from another
+-            # condition mark this one as having a recording step it never ran.
+-            recording_steps = {
+-                r.execution.step_name
+-                for r in results
+-                if r.execution.scope == "repeat" and r.execution.condition_index == 0 and r.rows
+-            }
+-            aggregated = {
+-                0: {
++            # `condition_index` is guarded per condition: core aggregates within
++            # each condition and never pools across conditions — an unguarded
++            # filter would let a same-named step from another condition mark this
++            # one as having a recording step it never ran.
++            aggregated = {}
++            for cond in conditions:
++                recording_steps = {
++                    r.execution.step_name
++                    for r in results
++                    if r.execution.scope == "repeat"
++                    and r.execution.condition_index == cond.index
++                    and r.rows
++                }
++                aggregated[cond.index] = {
+                     step_name: summarize_step(
+-                        collapse_repeats(results, step_name, 0),
+-                        attrition(results, roster, step_name, 0),
++                        collapse_repeats(results, step_name, cond.index),
++                        attrition(results, roster, step_name, cond.index),
+                     )
+                     for step_name in sorted(recording_steps)
+                 }
+-            }
+         changed_inputs = verify_manifest(input_dir, manifest)  # phase 8: re-verify
+         if changed_inputs:
+             status = "failed"
+             drift_c = Collector()
+             noun = "path" if len(changed_inputs) == 1 else "paths"
+             drift_c.error(
+                 "E-INPUT-CHANGED",
+                 "data.input_dir",
+                 f"{len(changed_inputs)} {noun} changed since the manifest was built "
+                 f"at run start: {', '.join(changed_inputs)}",
+@@ -231,20 +262,21 @@ def command_run(config_path: Path) -> int:
+         doc_out = assemble_run_yaml(  # phase 9: assemble and write
+             run_id=run_dir.name,
+             status=status,
+             config=doc,
+             code_hash=ch,
+             parameters_hash=ph,
+             provenance=provenance,
+             results=results,
+             repeats=repeats,
+             aggregated=aggregated,
++            condition_meta=condition_meta,
+         )
+         (run_dir / "run.yaml").write_text(yaml.safe_dump(doc_out, sort_keys=False))
+         # `with` block exit releases the lock.
+ 
+     point_latest(output_dir, run_dir)
+     print(f"run.yaml → {run_dir / 'run.yaml'}")
+     return {"completed": EXIT_OK, "partial": EXIT_PARTIAL}.get(status, EXIT_FAILED)  # phase 10
+ 
+ 
+ def _dispatch(command: str, rest: list[str]) -> int:
+diff --git a/src/publishable/config.py b/src/publishable/config.py
+index bf447cb..69682c8 100644
+--- a/src/publishable/config.py
++++ b/src/publishable/config.py
+@@ -10,40 +10,61 @@ from publishable.errors import ContractError
+ 
+ 
+ def _wrap(value: Any, path: str) -> Any:
+     if isinstance(value, dict):
+         return Node(value, path)
+     if isinstance(value, list):
+         return [_wrap(v, f"{path}[{i}]") for i, v in enumerate(value)]
+     return value
+ 
+ 
++class SweptAway:
++    """Marks a parameter that `sweep` varies, at a scope with no single value for it.
++
++    `Node.__getattr__` raises when it resolves one, so the refusal fires on the read
++    itself. A bare sentinel returned to the caller would not — the raise would land
++    on some later attribute access, under the wrong identifier.
++    """
++
++    __slots__ = ("path",)
++
++    def __init__(self, path: str) -> None:
++        self.path = path
++
++
+ class Node:
+     """Dot-access and nothing else, so no parameter name can be shadowed."""
+ 
+     def __init__(self, data: dict[str, Any], path: str = "") -> None:
+         object.__setattr__(self, "_data", data)
+         object.__setattr__(self, "_path", path)
+ 
+     def __getattr__(self, name: str) -> Any:
+         if name.startswith("_"):
+             raise AttributeError(name)
+         data: dict[str, Any] = object.__getattribute__(self, "_data")
+         base: str = object.__getattribute__(self, "_path")
+         full = f"{base}.{name}" if base else name
+         if name not in data:
+             near = difflib.get_close_matches(name, list(data), n=1)
+             hint = f" — did you mean `{near[0]}`?" if near else ""
+             raise ContractError(
+                 f"{full} is not a path this config holds{hint}", code="E-STEP-PARAM-UNKNOWN"
+             )
+-        return _wrap(data[name], full)
++        value = data[name]
++        if isinstance(value, SweptAway):
++            raise ContractError(
++                f"`{value.path}` is varied by `sweep`, so it has no single value at this "
++                "scope; read it from a `condition`- or `repeat`-scoped step",
++                code="E-STEP-SWEPT-PARAM",
++            )
++        return _wrap(value, full)
+ 
+ 
+ class Config(Node):
+     def __init__(self, data: dict[str, Any]) -> None:
+         super().__init__(data, "")
+ 
+     @property
+     def raw(self) -> dict[str, Any]:
+         return dict(object.__getattribute__(self, "_data"))
+ 
+diff --git a/src/publishable/materialize.py b/src/publishable/materialize.py
+index c01e92b..0d4b6f1 100644
+--- a/src/publishable/materialize.py
++++ b/src/publishable/materialize.py
+@@ -119,20 +119,29 @@ def materialize_config(
+         "    allocation: within             # within  (between: later slice)",
+         "    cluster_by: null               # e.g. site, when units aren't independent",
+         "    weight_by: null                # e.g. sampling_weight, when the sample is enriched",
+         "    measurements: null             # e.g. {by: read_id, collapse: mean}",
+         "    holdout: null                  # optional single fixed train/test split",
+         "",
+         "parameters:",
+         "  # ---- Base values. Everything below is defined by the template, not by core. ----",
+         *_parameters_block(template.parameter_spec),
+         "",
++        "sweep: {}",
++        "  # ---- What varies across conditions. Empty (or omitted) means a single,",
++        "  #      unswept condition — no `conditions/` level in the run's artifact",
++        "  #      tree. Keys are dotted paths into `parameters`; this build expands",
++        "  #      `baseline` and `grid` only. See \"Sweeps and repeats\" in reference.md.",
++        "  # baseline: {analysis.method: pearson}   # optional reference condition",
++        "  # grid:",
++        "  #   analysis.method: [spearman, kendall]",
++        "",
+         "replication:",
+         "  repeats:",
+         f"    - {{kind: seed, n: {INIT_REPEATS}}}          # seed  (batch, fold: later slice)",
+         "  order: as_declared               # as_declared  (randomized: later slice)",
+         '  rationale: ""',
+         "",
+         "statistics:",
+         "  correction: holm                 # none | bonferroni | holm | fdr_bh",
+         "",
+         "limits:",
+diff --git a/src/publishable/run_record.py b/src/publishable/run_record.py
+index b35578b..a6be136 100644
+--- a/src/publishable/run_record.py
++++ b/src/publishable/run_record.py
+@@ -50,20 +50,21 @@ def _execution_block(results: list[ExecutionResult]) -> dict[str, Any]:
+     return {
+         "shared": shared,
+         "conditions": [conditions[k] for k in sorted(conditions)],
+         "summary": summary,
+     }
+ 
+ 
+ def _results_block(
+     results: list[ExecutionResult],
+     aggregated: dict[int, dict[str, dict[str, Any]]] | None,
++    condition_meta: dict[int, dict[str, Any]] | None = None,
+ ) -> dict[str, Any]:
+     # A "run"-scoped step's return has nowhere to land here (§ The two files gives
+     # `results` only `conditions` and `summary`), and the same is true of a
+     # "condition"-scoped step's return — both are dropped rather than given an
+     # undocumented home. See docs/superpowers/spec-defects.md.
+     conditions: dict[int, dict[str, Any]] = {}
+     summary: dict[str, Any] = {}
+     for r in results:
+         e = r.execution
+         if e.scope == "summary":
+@@ -95,20 +96,35 @@ def _results_block(
+     # its own slice — never the same mapping object handed to another condition.
+     # Core aggregates within each condition and never pools across conditions
+     # (`reference.md` § Statistical reporting); sharing one object across two
+     # condition entries would be that pooling by aliasing, invisible until a
+     # reader noticed two conditions reporting identical numbers (or PyYAML's
+     # `&id001`/`*id001` anchors gave it away). A condition absent from
+     # `aggregated` gets its own empty mapping, not another condition's.
+     if aggregated is not None:
+         for index, cond in conditions.items():
+             cond["aggregated"] = aggregated[index] if index in aggregated else {}
++    # `condition_meta` is the one thing an `Execution` cannot carry: it holds
++    # `index`, `label`, and `repeat_label`, but not `is_baseline` — that fact has
++    # to arrive alongside `aggregated` rather than be inferred from executions.
++    # It also fills in a condition that has no `condition`- or `repeat`-scoped
++    # execution in `results` at all (an empty grid axis, say), so its identity
++    # is still on record.
++    if condition_meta is not None:
++        for index, meta in condition_meta.items():
++            cond = conditions.setdefault(
++                index, {"index": index, "label": meta.get("label"), "values": {}, "per_repeat": {}}
++            )
++            cond["label"] = meta.get("label", cond.get("label"))
++            cond["is_baseline"] = meta.get("is_baseline", False)
++        for cond in conditions.values():
++            cond.setdefault("is_baseline", False)
+     return {
+         "conditions": [conditions[k] for k in sorted(conditions)],
+         "summary": summary,
+     }
+ 
+ 
+ def _layout_block(results: list[ExecutionResult], repeats: list[Repeat]) -> dict[str, bool]:
+     """Which degenerate levels survived collapse, per `reference.md` § How artifacts
+     are organized: "No sweep means no `conditions/` level; a single repeat means no
+     repeat level ... The active layout is recorded in `run.yaml` so tooling can rely
+@@ -133,29 +149,30 @@ def assemble_run_yaml(
+     run_id: str,
+     status: str,
+     config: dict[str, Any],
+     code_hash: str,
+     parameters_hash: str,
+     provenance: dict[str, Any],
+     results: list[ExecutionResult],
+     repeats: list[Repeat],
+     draft: bool = False,
+     aggregated: dict[int, dict[str, dict[str, Any]]] | None = None,
++    condition_meta: dict[int, dict[str, Any]] | None = None,
+ ) -> dict[str, Any]:
+     # There is no `counts` parameter here: `summarize_step` already embeds the
+     # per-unit counts as `n` inside each metric under `aggregated`, and the
+     # condition entry's documented shape (`reference.md`'s worked example) has no
+     # plain `n` sibling to `per_repeat`. A parameter this function would only
+     # discard is worse than not having it.
+     return {
+         "schema_version": SCHEMA_VERSION,
+         "run_id": run_id,
+         "status": status,
+         "draft": draft,
+         "config": config,
+         "parameters_hash": parameters_hash,
+         "code_hash": code_hash,
+         "provenance": provenance,
+         "layout": _layout_block(results, repeats),
+         "execution": _execution_block(results),
+-        "results": _results_block(results, aggregated),
++        "results": _results_block(results, aggregated, condition_meta),
+     }
+diff --git a/src/publishable/runner.py b/src/publishable/runner.py
+index f4eb5d1..dcb3ba2 100644
+--- a/src/publishable/runner.py
++++ b/src/publishable/runner.py
+@@ -1,23 +1,26 @@
+ """The execution loop. One execution at a time, in the recorded order."""
+ 
++import copy
+ import json
+ import time
+ from dataclasses import dataclass
+ from datetime import UTC, datetime
+ from pathlib import Path
+ from typing import Any
+ 
+ from publishable.artifacts import StepIO
++from publishable.config import Config, SweptAway
+ from publishable.errors import ContractError
+ from publishable.replication import Repeat
+ from publishable.scope import Execution
++from publishable.sweep import condition_dir_name
+ from publishable.units import UnitList
+ 
+ 
+ @dataclass(frozen=True)
+ class ExecutionResult:
+     execution: Execution
+     status: str
+     started_at: str
+     wall_seconds: float
+     returned: dict[str, Any]
+@@ -135,55 +138,118 @@ def _units_failed_anywhere(results: list[ExecutionResult], roster: "UnitList") -
+     return failed
+ 
+ 
+ def step_dir_for(run_dir: Path, execution: Execution, collapse_repeats: bool) -> Path:
+     """Depth follows scope; degenerate levels collapse."""
+     if execution.scope == "run":
+         return run_dir / "shared" / execution.step_name
+     if execution.scope == "summary":
+         return run_dir / "summary" / execution.step_name
+     base = run_dir
+-    if execution.condition_label is not None:
+-        base = base / "conditions" / (
+-            f"{execution.condition_index:02d}_{execution.condition_label}"
++    if execution.condition_label is not None and execution.condition_index is not None:
++        base = base / "conditions" / condition_dir_name(
++            execution.condition_index, execution.condition_label
+         )
+     if execution.scope == "repeat" and not collapse_repeats and execution.repeat_label:
+         base = base / execution.repeat_label
+     return base / execution.step_name
+ 
+ 
++def resolve_condition_cfg(base: dict[str, Any], values: dict[str, Any]) -> Config:
++    """Overlay this condition's swept values onto the base config.
++
++    Each dotted path in `values` names a leaf under `parameters`; the overlay
++    walks (creating intermediate mappings as needed) to that leaf and sets it,
++    so a `condition`- or `repeat`-scoped step reads exactly this condition's
++    value without ever mentioning the sweep that produced it.
++    """
++    doc = copy.deepcopy(base)
++    for path, value in values.items():
++        node = doc.setdefault("parameters", {})
++        *heads, leaf = path.split(".")
++        for head in heads:
++            node = node.setdefault(head, {})
++        node[leaf] = value
++    return Config(doc)
++
++
++def resolve_wide_cfg(base: dict[str, Any], swept_paths: set[str]) -> Config:
++    """A config for `run`/`summary` scope, with every swept path made unreadable.
++
++    Those scopes have no single condition to draw a swept value from, so each
++    leaf `sweep` varies is replaced by a `SweptAway` marker: `Node.__getattr__`
++    raises `E-STEP-SWEPT-PARAM` the moment such a step reads it, rather than
++    silently handing back a value that could only be wrong for every condition
++    but one.
++
++    Walks with `setdefault`, exactly as `resolve_condition_cfg` does, rather
++    than `get` — a swept path whose parent is absent from `base` must still end
++    up marked. Skipping it there (as an earlier version of this function did)
++    fails in the unsafe direction: the value stays readable, and a `run`- or
++    `summary`-scoped step would silently get a value that could only be wrong
++    for every condition but one. Planting the marker instead means the worst
++    case is a step getting `E-STEP-SWEPT-PARAM` for a path `validate` should
++    have already rejected as unresolvable — a refusal either way, and the more
++    accurate one, since the path *is* swept.
++    """
++    doc = copy.deepcopy(base)
++    for path in swept_paths:
++        node = doc.setdefault("parameters", {})
++        *heads, leaf = path.split(".")
++        for head in heads:
++            node = node.setdefault(head, {})
++        node[leaf] = SweptAway(f"parameters.{path}")
++    return Config(doc)
++
++
+ def execute_plan(
+     *,
+     plan: list[Execution],
+     run_dir: Path,
+     input_dir: Path,
+-    cfg: Any,
++    cfgs: dict[int, Any],
+     repeats: list[Repeat],
+     digest: str,
+     units: UnitList | None = None,
+     max_failed_fraction: float | None = None,
+ ) -> list[ExecutionResult]:
+     """Run every execution in the plan, in order, one at a time.
+ 
+     A failed execution never stops the run — the plan runs to its end, because
+     abandoning it throws away every execution still pending and `resume` cannot
+     un-abort a plan that was never attempted. `max_failed_fraction` is the one
+     documented exception: unit failures only accumulate, so once the fraction of
+     the roster that has failed in at least one execution crosses the threshold, no
+     later execution can bring it back, and spending the remaining compute to
+     confirm that is waste.
+     """
+     collapse = len(repeats) <= 1
+     seeds = {r.label: r.seed for r in repeats}
+     ledger = run_dir / "executions.jsonl"
+     results: list[ExecutionResult] = []
+ 
++    # Derived once from the plan itself, not threaded in as extra parameters:
++    # `io.conditions`/`io.repeats`/`io.read_condition` are a `summary`-scoped
++    # step's read surface, and the plan already carries every condition and
++    # repeat label the run resolved. A no-`sweep` run still has one resolved
++    # condition — index 0, label `None` — and it belongs in this list: `None`
++    # is what tells `read_condition` there is no `conditions/` level to nest
++    # under, not "this index doesn't exist."
++    conditions_list: list[tuple[int, str | None]] = []
++    seen_conditions: set[int] = set()
++    for e in plan:
++        if e.condition_index is not None and e.condition_index not in seen_conditions:
++            seen_conditions.add(e.condition_index)
++            conditions_list.append((e.condition_index, e.condition_label))
++    repeats_list = [r.label for r in repeats]
++    step_scopes = {e.step_name: e.scope for e in plan}
++
+     for execution in plan:
+         started = datetime.now(UTC)
+         clock = time.monotonic()
+ 
+         if execution.scope == "repeat":
+             label = execution.repeat_label or ""
+             if label not in seeds:
+                 raise ContractError(
+                     f"{execution.step_name!r} has repeat label {label!r}, which has no "
+                     f"seed among the resolved repeats {sorted(seeds)!r}",
+@@ -198,25 +264,44 @@ def execute_plan(
+             condition=execution.condition_index,
+             repeat=execution.repeat_label or None,
+             digest=digest,
+             seed=seed,
+         )
+         io = StepIO(
+             step_dir=step_dir_for(run_dir, execution, collapse),
+             input_dir=input_dir,
+             run_dir=run_dir,
+             units=units,
++            scope=execution.scope,
++            conditions=conditions_list,
++            repeats=repeats_list,
++            step_scopes=step_scopes,
+         )
+         io.step_dir.mkdir(parents=True, exist_ok=True)
+         recorded: frozenset[str] = frozenset()
+         skipped: frozenset[str] = frozenset()
+         rows: tuple[dict[str, Any], ...] = ()
++        cfg_key = execution.condition_index if execution.condition_index is not None else -1
++        if cfg_key not in cfgs:
++            # Not a step failure — the plan and the resolved configs disagree,
++            # which means core built an inconsistent plan. Continuing would
++            # write a run record that looks partially fine while resting on a
++            # bug, so this is deliberately not caught by the per-execution
++            # `try` below: only a step's own failure is allowed to leave the
++            # rest of the plan running.
++            raise ContractError(
++                f"no cfg was resolved for condition index {cfg_key!r}, needed by "
++                f"{execution.step_name!r} at {execution.scope!r} scope; the plan and "
++                "the resolved `cfgs` disagree",
++                code="E-RUN-CFG-MISSING",
++            )
++        cfg = cfgs[cfg_key]
+         try:
+             returned = step.run(cfg, io)
+             if returned is None:
+                 returned = {}
+             elif not isinstance(returned, dict):
+                 raise ContractError(
+                     f"{execution.step_name!r} returned {type(returned).__name__}; "
+                     "a step's `run` must return a mapping or None",
+                     code="E-STEP-RETURN-TYPE",
+                 )
+diff --git a/src/publishable/stats.py b/src/publishable/stats.py
+index 4ed389f..6172135 100644
+--- a/src/publishable/stats.py
++++ b/src/publishable/stats.py
+@@ -155,12 +155,17 @@ def summarize_step(
+         if not raw or not all(_is_numeric(v) for v in raw):
+             continue
+         values = [float(v) for v in raw]
+         interval = t_over_units(values)
+         out[column] = {
+             "value": mean_of(values),
+             "basis": "units",
+             "n": {**counts, "completed": len(values)},
+             "ci95": [interval.low, interval.high] if interval else None,
+             "method": interval.method if interval else None,
++            # `W-STATS-FAMILY` warns the person; this null tells the record. The
++            # generated config declares `statistics.correction: holm` by default,
++            # so a metric that said nothing here could be misread as corrected —
++            # multiplicity correction across conditions is not implemented yet.
++            "correction": None,
+         }
+     return out
+diff --git a/src/publishable/sweep.py b/src/publishable/sweep.py
+new file mode 100644
+index 0000000..a567358
+--- /dev/null
++++ b/src/publishable/sweep.py
+@@ -0,0 +1,220 @@
++"""Sweep expansion. See docs/reference.md § Expansion modes.
++
++Pure: a config dict in, an ordered condition list out. No filesystem, no
++`Config` object, no git — expansion is a function of the declaration alone,
++so it can be tested exhaustively without a repository.
++
++A `baseline` whose values happen to coincide with a grid cell produces two
++conditions with identical `values` — `00_baseline` and the matching grid
++row — and `expand` deliberately does not dedup them: the baseline is
++declared and the grid is mechanical, and reconciling the two is not
++`expand`'s job.
++"""
++
++import itertools
++import re
++from collections.abc import Mapping
++from dataclasses import dataclass, field
++from types import MappingProxyType
++from typing import TYPE_CHECKING, Any
++
++if TYPE_CHECKING:
++    from publishable.replication import Repeat
++
++
++@dataclass(frozen=True)
++class Condition:
++    index: int
++    label: str | None
++    values: Mapping[str, Any] = field(default_factory=dict)
++    is_baseline: bool = False
++
++    def __post_init__(self) -> None:
++        # `values` is a plain dict handed in by `expand`; without wrapping it, a
++        # caller could mutate a condition's values after the fact, or reach back
++        # through the dict it originally passed in. The proxy over a copy is what
++        # makes `values["x"] = ...` raise rather than silently drift out of sync
++        # with `sweep.yaml`, written from these same objects. Same fix as
++        # `Unit.attributes` in `units.py`, same reason.
++        object.__setattr__(self, "values", MappingProxyType(dict(self.values)))
++
++
++SWEPT_VALUE_PATTERN = r"^[A-Za-z0-9._+-]+$"
++
++
++def render_value(value: Any) -> str:
++    """As written in the config: `true`/`false` for booleans, shortest round-trip float."""
++    if isinstance(value, bool):
++        return "true" if value else "false"
++    if isinstance(value, float):
++        return repr(value)
++    return str(value)
++
++
++# The axis separator in a label. Kept as a module-level name — not inlined
++# as a literal in `label_for` and `check_swept_value` — because both places
++# that care about it must agree on what it is: the separator `label_for`
++# joins axes with is exactly the substring `check_swept_value` refuses.
++AXIS_SEPARATOR = "__"
++
++
++def check_swept_value(value: Any) -> str | None:
++    """None if `value` is safe to render into a condition label; otherwise why not.
++
++    `docs/reference.md` § How artifacts are organized states two rules that
++    cannot both hold for every value: a swept value must render as
++    `SWEPT_VALUE_PATTERN` (which admits `_`), and axes in a label are joined
++    by `__`. A rendered value containing `__` — e.g. `a__b` — passes the
++    pattern but destroys the separator: `one=a__b__two=c` splits into three
++    axes instead of two. Since a label is also a selector (a hypothesis's
++    `compare.condition`, a contrast's `of`/`against`, and a `report` filter
++    all name conditions by parsing the label's body back into axes), this
++    resolves the conflict by refusing the value rather than the character —
++    `_` alone stays legal.
++
++    Task 4's `validate` is where this predicate is meant to be called from,
++    once `_check_sweep` exists: this is the shape of the check it should run
++    per swept value, on top of (not instead of) the existing pattern check.
++    """
++    rendered = render_value(value)
++    if not re.match(SWEPT_VALUE_PATTERN, rendered):
++        return f"swept value {rendered!r} does not match {SWEPT_VALUE_PATTERN}"
++    if AXIS_SEPARATOR in rendered:
++        return (
++            f"swept value {rendered!r} contains {AXIS_SEPARATOR!r}, the separator "
++            "between axes in a condition label; a label is also a selector, so a "
++            "value containing the separator would produce a label that cannot be "
++            "parsed back into axes"
++        )
++    return None
++
++
++def _keys_for(paths: list[str]) -> dict[str, str]:
++    """The shortest suffix of each dotted path that is unique among them all.
++
++    A label is also a selector, so the key has to be something a reader can
++    type without opening the directory — but it must still identify one axis.
++    """
++    keys: dict[str, str] = {}
++    for path in paths:
++        segments = path.split(".")
++        for depth in range(1, len(segments) + 1):
++            candidate = ".".join(segments[-depth:])
++            others = [p for p in paths if p != path]
++            if not any(p == candidate or p.endswith("." + candidate) for p in others):
++                keys[path] = candidate
++                break
++        else:
++            keys[path] = path
++    return keys
++
++
++def label_for(values: dict[str, Any], grid: dict[str, Any], is_baseline: bool) -> str:
++    if is_baseline:
++        return "baseline"
++    keys = _keys_for(list(grid))
++    return AXIS_SEPARATOR.join(
++        f"{keys.get(path, path.rsplit('.', 1)[-1])}={render_value(value)}"
++        for path, value in values.items()
++    )
++
++
++def condition_dir_name(index: int, label: str) -> str:
++    """The `<nn>_<label>` name a condition nests under, in `run_dir/conditions/`.
++
++    Single source of truth for the format: `runner.step_dir_for` and
++    `artifacts.StepIO.read_condition` both nest here, and a second implementation
++    of this string is how they drift apart.
++    """
++    return f"{index:02d}_{label}"
++
++
++def expand(config: dict[str, Any]) -> list[Condition]:
++    """Ordered conditions: a declared baseline as 00, then the grid product.
++
++    With no `sweep` block, one condition whose label is None — which is what
++    keeps the `conditions/` level out of the artifact tree.
++    """
++    sweep = config.get("sweep") or {}
++    if not sweep:
++        return [Condition(index=0, label=None, values={}, is_baseline=False)]
++
++    rows: list[tuple[dict[str, Any], bool]] = []
++    baseline = sweep.get("baseline")
++    if baseline:
++        rows.append((dict(baseline), True))
++
++    grid = sweep.get("grid") or {}
++    if grid:
++        axes = list(grid.items())
++        # itertools.product varies the LAST argument fastest, which is exactly
++        # the declared-order nesting the specification asks for.
++        for combo in itertools.product(*(values for _, values in axes)):
++            rows.append(
++                ({path: value for (path, _), value in zip(axes, combo, strict=True)}, False)
++            )
++
++    return [
++        Condition(index=i, label=label_for(values, grid, is_baseline),
++                  values=values, is_baseline=is_baseline)
++        for i, (values, is_baseline) in enumerate(rows)
++    ]
++
++
++def sweep_document(
++    conditions: list[Condition],
++    repeats: list["Repeat"],
++    digest: str,
++    order: str,
++    execution_order: list[tuple[int, str]],
++    order_seed: int | None = None,
++) -> dict[str, Any]:
++    """The `sweep.yaml` payload: the resolved plan, as plain YAML-safe data.
++
++    Matches `docs/reference.md` § "`sweep.yaml` — the resolved plan" exactly.
++    `order` and `execution_order` are two different things and stay two
++    parameters: `order` is the scalar *mode* (`as_declared` | `randomized`) —
++    the rule — while `execution_order` is the realized sequence of
++    `(condition index, repeat label)` pairs actually run — the fact. The mode
++    is derivable from the config; what happened is not, which is why both are
++    recorded rather than one re-deriving the other.
++
++    `order_seed` is the seed `order: randomized`'s shuffle used, and is
++    written only when given — its absence under `as_declared` says nothing
++    was shuffled, not that the seed was lost.
++
++    `repeats` groups by kind (only `seed` exists before fold membership lands
++    in a later slice): each entry carries the resolved `seeds`, whether they
++    came from `auto` or were listed explicitly. `labels` is the separate,
++    top-level list of each repeat's composed label, outer to inner — under a
++    `fold` × `seed` nesting this is where `fold03_seed42` would appear.
++
++    Fold membership (`partitions`) belongs here too per § The other files a
++    run writes; folds are a later slice and the key is absent rather than
++    empty, so its absence is not read as "no folds were drawn".
++    """
++    kinds_seen: list[str] = []
++    seeds_by_kind: dict[str, list[int]] = {}
++    for r in repeats:
++        if r.kind not in seeds_by_kind:
++            seeds_by_kind[r.kind] = []
++            kinds_seen.append(r.kind)
++        seeds_by_kind[r.kind].append(r.seed)
++
++    doc: dict[str, Any] = {
++        "design_digest": digest,
++        "conditions": [
++            {"index": c.index, "label": c.label, "values": dict(c.values),
++             "is_baseline": c.is_baseline}
++            for c in conditions
++        ],
++        "repeats": [{"kind": kind, "seeds": seeds_by_kind[kind]} for kind in kinds_seen],
++        "labels": [r.label for r in repeats],
++        "order": order,
++        "execution_order": [
++            {"condition": index, "repeat": label} for index, label in execution_order
++        ],
++    }
++    if order_seed is not None:
++        doc["order_seed"] = order_seed
++    return doc
+diff --git a/src/publishable/validate.py b/src/publishable/validate.py
+index 001826c..39dd029 100644
+--- a/src/publishable/validate.py
++++ b/src/publishable/validate.py
+@@ -5,27 +5,24 @@ from pathlib import Path
+ from typing import Any
+ 
+ import yaml
+ 
+ from publishable.diagnostics import Collector
+ from publishable.errors import ContractError
+ from publishable.manifest import POLICIES
+ from publishable.materialize import TEMPLATE_VERSION
+ from publishable.param import MISSING
+ from publishable.provenance import find_repo_root, resolves_inside_repo
++from publishable.sweep import check_swept_value, expand
+ from publishable.templates.registry import get_template, template_names
+ from publishable.units import resolve_units
+ 
+-# `sweep`'s six axis keys, per reference.md § The one config file. A key present
+-# but empty (`groups: []`, `ablate: null`) declares no axis and is not a sweep.
+-SWEEP_AXIS_KEYS = ("baseline", "grid", "paired", "ablate", "sample", "groups")
+-
+ REQUIRED_METADATA = ("description", "authors")
+ 
+ # The shape of every top-level block, checked once before any `_check_*` reads one —
+ # a property of the config format, not of whichever check happens to read a block
+ # first. `statistics`, `limits`, and `hypotheses` are included even though nothing
+ # reads them yet in this build, so the next reader inherits the guard rather than
+ # the crash a hand-edited config would otherwise produce.
+ _MAPPING_BLOCKS = (
+     "metadata", "data", "parameters", "sweep", "replication", "statistics", "limits",
+ )
+@@ -134,20 +131,21 @@ def validate_config(config_path: Path, c: Collector) -> dict[str, Any] | None:
+         return None  # every later check reads the spec
+ 
+     _check_metadata(doc, config_path, template, c)
+     _check_entrypoint(doc, c)
+     _check_parameters(doc, template, c)
+     _check_versions(doc, c)
+     _check_data(doc, config_path, c)
+     _check_units(doc, c)
+     _check_replication(doc, template, c)
+     _check_unimplemented(doc, c)
++    _check_sweep(doc, template, c)
+     for message in template.validate(doc):
+         c.error("E-TEMPLATE-RULE", "parameters", message)
+     return doc
+ 
+ 
+ def _check_metadata(doc: dict[str, Any], config_path: Path, template: Any, c: Collector) -> None:
+     metadata = doc.get("metadata") or {}
+     for field in REQUIRED_METADATA:
+         if not metadata.get(field):
+             c.error("E-META-REQUIRED", f"metadata.{field}", "is empty, and is required")
+@@ -376,41 +374,61 @@ def _check_replication(doc: dict[str, Any], template: Any, c: Collector) -> None
+             "W-REPL-FLOOR",
+             "replication.repeats",
+             f"total of {total} is below this convention class's default of "
+             f"{template.default_repeats}",
+         )
+ 
+ 
+ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
+     """Declared-but-unimplemented blocks, refused rather than silently ignored.
+ 
+-    This build hardcodes one condition and executes repeats `as_declared`
+-    regardless of what is written here. It now resolves a unit roster, but
+-    several `data.units` sub-fields — allocation other than `within`,
+-    `assign`, `cluster_by`, `weight_by`, `measurements`, `holdout`, and a
+-    `resolver` source — are read by nothing yet. Each of these would
+-    otherwise validate clean and then run something other than what the
++    This build expands `sweep.baseline` and `sweep.grid` only, and executes
++    repeats `as_declared` regardless of what is written here. `sweep.paired`,
++    `.ablate`, `.sample`, and `.groups` are read by nothing yet. It resolves a
++    unit roster, but several `data.units` sub-fields — allocation other than
++    `within`, `assign`, `cluster_by`, `weight_by`, `measurements`, `holdout`,
++    and a `resolver` source — are read by nothing yet either. Each of these
++    would otherwise validate clean and then run something other than what the
+     config describes — the exact failure `E-REPL-KIND-UNSUPPORTED` already
+     refuses for `batch`/`fold`/nested repeat levels. Each message says plainly
+     that the block is honored in a later slice, so a user does not read this as
+     their config being malformed.
+     """
+     sweep = doc.get("sweep") or {}
+-    declared_axes = [key for key in SWEEP_AXIS_KEYS if sweep.get(key)]
+-    if declared_axes:
+-        c.error(
+-            "E-SWEEP-UNSUPPORTED",
+-            "sweep",
+-            f"declares {', '.join(declared_axes)}, which is specified but not implemented "
+-            "in this build — every run executes exactly one condition regardless of what "
+-            "is declared here; sweep execution will be honored in a later slice",
+-        )
++    for mode, code, why in (
++        ("paired", "E-SWEEP-PAIRED-UNSUPPORTED", "couples parameters into one axis"),
++        (
++            "ablate",
++            "E-SWEEP-ABLATE-UNSUPPORTED",
++            "emits 1 + n one-change conditions and reads the baseline rather than "
++            "re-emitting it",
++        ),
++        (
++            "sample",
++            "E-SWEEP-SAMPLE-UNSUPPORTED",
++            "draws continuous ranges and labels its conditions `NN_sample`",
++        ),
++        (
++            "groups",
++            "E-SWEEP-GROUPS-UNSUPPORTED",
++            "is an axis over units rather than parameters, so it needs "
++            "`data.units.allocation` and `data.units.assign`",
++        ),
++    ):
++        if sweep.get(mode):
++            c.error(
++                code,
++                f"sweep.{mode}",
++                f"{why}, and is specified but not implemented in this build — this build "
++                "expands `baseline` and `grid` only; the other modes will be honored in a "
++                "later slice",
++            )
+ 
+     units = _units_declaration(doc.get("data") or {}, c) or {}
+     source = units.get("from")
+     if isinstance(source, dict) and "resolver" in source:
+         c.error(
+             "E-DATA-RESOLVER-UNSUPPORTED",
+             "data.units.from.resolver",
+             f"names `{source['resolver']}`, but resolvers are plugin artifacts and the "
+             "plugin registry is not implemented in this build; resolvers will be honored "
+             "in a later slice. Use a table or a glob for now",
+@@ -444,10 +462,123 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
+ 
+     order = (doc.get("replication") or {}).get("order")
+     if order is not None and order != "as_declared":
+         c.error(
+             "E-REPL-ORDER-UNSUPPORTED",
+             "replication.order",
+             f"is `{order}`, which is specified but not implemented in this build — "
+             "execution always proceeds as_declared regardless of what is declared here; "
+             "`order` will be honored in a later slice",
+         )
++
++
++def _repeat_total(doc: dict[str, Any]) -> int:
++    """The product of every repeat level's count, permissively: an invalid level
++    (`n < 1`) is already reported by `_check_replication` under its own identifier,
++    so this treats it as absent rather than reporting the same defect twice under
++    `W-EXEC-BUDGET`.
++    """
++    levels = ((doc.get("replication") or {}).get("repeats")) or []
++    total = 1
++    for level in levels:
++        count = level.get("n")
++        if count is None:
++            count = level.get("k")
++        if isinstance(count, int) and count >= 1:
++            total *= count
++    return total
++
++
++def _check_sweep(doc: dict[str, Any], template: Any, c: Collector) -> None:
++    """Checks that only become reachable once a sweep actually expands: an
++    unrecognised mode, an axis with nothing in it, a swept path the template
++    doesn't declare, a value the spec itself rejects, a value that can't render
++    into a condition label, the execution budget, and the multiplicity family
++    an enumerated sweep creates. `sweep.expand` is the single source of the
++    condition count — re-deriving it here is exactly the drift Task 4 was
++    told not to reintroduce.
++
++    `E-SWEEP-EXPANDS-EMPTY` is a backstop beneath the per-axis checks above,
++    not a replacement for them: it refuses on the *result* of `expand(doc)`
++    being zero conditions, whatever shape of `sweep` produced that — an empty
++    `grid` axis still gets the specific `E-SWEEP-AXIS-EMPTY` diagnosis (this
++    check runs after, so it never displaces that one), but a declared `sweep`
++    with no shape anyone enumerated here — `{grid: {}}`, or a hand-written
++    block of falsy keys — is still caught, because it is checked mechanically
++    against what would actually execute rather than against a list of shapes
++    someone thought of. A run that would otherwise execute zero conditions
++    while reporting `status: completed` is exactly the failure this project
++    treats as worst: a record describing an experiment nobody performed.
++    """
++    import difflib
++
++    sweep = doc.get("sweep") or {}
++    known = {"baseline", "grid", "paired", "ablate", "sample", "groups"}
++    for key in sweep:
++        if key not in known:
++            near = difflib.get_close_matches(key, sorted(known), n=1)
++            hint = f" — did you mean `{near[0]}`?" if near else ""
++            c.error(
++                "E-SWEEP-KEY-UNKNOWN",
++                f"sweep.{key}",
++                f"is not a sweep mode{hint} — `expand` understands only `baseline` and "
++                "`grid` in this build, so an unrecognised key would expand to zero "
++                "conditions and the run would execute nothing while reporting success",
++            )
++
++    grid = sweep.get("grid") or {}
++    spec = template.parameter_spec
++    for path, values in grid.items():
++        if not values:
++            c.error(
++                "E-SWEEP-AXIS-EMPTY",
++                f"sweep.grid.{path}",
++                "declares no values, so the sweep expands to zero conditions and the run "
++                "would execute nothing while reporting success",
++            )
++            continue
++        if path not in spec:
++            near = difflib.get_close_matches(path, list(spec), n=1)
++            hint = f" — did you mean `{near[0]}`?" if near else ""
++            c.error(
++                "E-SWEEP-PATH-UNKNOWN",
++                f"sweep.grid.{path}",
++                f"is not a parameter of this template{hint}",
++            )
++            continue
++        for i, value in enumerate(values):
++            problem = spec[path].check(value)
++            if problem:
++                c.error("E-PARAM-VALUE", f"sweep.grid.{path}[{i}]", problem)
++            unnameable = check_swept_value(value)
++            if unnameable:
++                c.error("E-SWEEP-VALUE-UNNAMEABLE", f"sweep.grid.{path}[{i}]", unnameable)
++
++    conditions = expand(doc)
++    if sweep and not conditions:
++        c.error(
++            "E-SWEEP-EXPANDS-EMPTY",
++            "sweep",
++            "expands to zero conditions, so the run would execute nothing while "
++            "reporting success — declare `baseline`, a non-empty `grid`, or remove "
++            "`sweep` entirely",
++        )
++
++    executions = len(conditions) * _repeat_total(doc)
++    budget = (doc.get("limits") or {}).get("max_executions")
++    if isinstance(budget, int) and executions > budget:
++        c.warn(
++            "W-EXEC-BUDGET",
++            "limits.max_executions",
++            f"{len(conditions)} conditions × {_repeat_total(doc)} repeats = {executions} "
++            f"executions exceeds {budget}",
++        )
++
++    if len(conditions) > 1:
++        c.warn(
++            "W-STATS-FAMILY",
++            "statistics.correction",
++            f"{len(conditions)} conditions form a family of {len(conditions) - 1} baseline "
++            "comparisons per metric, and multiplicity correction is not implemented in this "
++            "build — every interval reported is uncorrected, and each records "
++            "`correction: null` to say so",
++        )
+diff --git a/tests/test_acceptance.py b/tests/test_acceptance.py
+index 19fc344..a1d9a12 100644
+--- a/tests/test_acceptance.py
++++ b/tests/test_acceptance.py
+@@ -1,21 +1,21 @@
+ """S1's whole promise: `reference.md` § The starter step runs."""
+ 
+ import math
+ import subprocess
+ from pathlib import Path
+ 
+ import pytest
+ import yaml
+ 
+ from publishable.cli import main
+-from publishable.diagnostics import EXIT_FAILED, EXIT_OK, EXIT_WRONG
++from publishable.diagnostics import EXIT_FAILED, EXIT_OK, EXIT_PARTIAL, EXIT_WRONG
+ 
+ 
+ def build(tmp_path: Path) -> tuple[Path, Path, Path]:
+     root = tmp_path / "my-study"
+     data = tmp_path / "data"
+     results = tmp_path / "results"
+     data.mkdir()
+     (data / "index.csv").write_text("patient_id\np1\np2\n")
+     assert main(["new", str(root)]) == EXIT_OK
+     from publishable.generators.experiment import generate_experiment
+@@ -314,20 +314,200 @@ def test_the_inference_base_is_real(tmp_path: Path):
+     assert metric["basis"] == "units"
+     assert metric["method"] == "t_over_units"
+     low, high = metric["ci95"]
+     assert low < metric["value"] < high
+ 
+     assert doc["provenance"]["units"]["n"] == 240
+     assert doc["provenance"]["units"]["key"] == "patient_id"
+     assert doc["provenance"]["units_hash"].startswith("sha256:")
+ 
+ 
++def write_sweep_step(root: Path) -> None:
++    """Overwrite the starter step with one whose recorded `score` depends on
++    `cfg.parameters.analysis.method` — so the three conditions a sweep over that
++    axis produces genuinely differ, not just in label.
++    """
++    step_path = root / "src" / "cohort_pilot" / "steps" / "step01_summarize_units.py"
++    step_path.write_text(
++        "from publishable import BaseStep\n\n\n"
++        "class Step(BaseStep):\n"
++        '    scope = "repeat"\n\n'
++        "    def run(self, cfg, io):\n"
++        '        by_method = {"pearson": 1.0, "spearman": 2.0, "kendall": 3.0}\n'
++        "        score = by_method[cfg.parameters.analysis.method]\n"
++        "        for unit in io.units:\n"
++        '            io.record(unit.key, {"score": score})\n'
++        "        return {}\n"
++    )
++
++
++def build_sweep_project(tmp_path: Path, n_units: int) -> tuple[Path, Path, Path]:
++    """A project swept over `analysis.method`: a declared baseline (pearson) plus
++    a grid of the other two — 3 conditions × 5 seed repeats over one shared roster.
++    """
++    root, cfg, results_dir, _ = build_with_units(tmp_path, n_units)
++    write_sweep_step(root)
++    doc = yaml.safe_load(cfg.read_text())
++    doc["sweep"] = {
++        "baseline": {"analysis.method": "pearson"},
++        "grid": {"analysis.method": ["spearman", "kendall"]},
++    }
++    cfg.write_text(yaml.safe_dump(doc))
++    commit(root, "declare the sweep")
++    return root, cfg, results_dir
++
++
++def build_project_without_sweep(tmp_path: Path, n_units: int) -> tuple[Path, Path, Path]:
++    """The regression baseline: no `sweep` block at all, so `expand` resolves the
++    single unlabeled condition and no `conditions/` level should appear.
++    """
++    root, cfg, results_dir, _ = build_with_units(tmp_path, n_units)
++    commit(root, "no sweep")
++    return root, cfg, results_dir
++
++
++def test_a_sweep_runs_every_condition_over_one_roster(tmp_path: Path):
++    """3 conditions × 5 seed repeats = 15 executions, in the right tree."""
++    root, cfg, results_dir = build_sweep_project(tmp_path, n_units=240)
++    assert main(["run", str(cfg)]) == EXIT_OK
++
++    run_dir = next(results_dir.glob("run_*"))
++    doc = yaml.safe_load((run_dir / "run.yaml").read_text())
++
++    conds = doc["results"]["conditions"]
++    assert [c["label"] for c in conds] == ["baseline", "method=spearman", "method=kendall"]
++    assert conds[0]["is_baseline"] is True
++
++    # the tree: a conditions/ level, five repeat dirs under each
++    labels = sorted(p.name for p in (run_dir / "conditions").iterdir())
++    assert labels == ["00_baseline", "01_method=spearman", "02_method=kendall"]
++    for label in labels:
++        seeds = [p for p in (run_dir / "conditions" / label).iterdir() if p.is_dir()]
++        assert len(seeds) == 5, label
++
++    lines = (run_dir / "executions.jsonl").read_text().splitlines()
++    assert len(lines) == 15
++
++
++def test_each_condition_reports_its_own_numbers(tmp_path: Path):
++    """The headline test: two conditions must not share an aggregated block."""
++    root, cfg, results_dir = build_sweep_project(tmp_path, n_units=240)
++    assert main(["run", str(cfg)]) == EXIT_OK
++    doc = yaml.safe_load((next(results_dir.glob("run_*")) / "run.yaml").read_text())
++
++    blocks = [
++        c["aggregated"]["step01_summarize_units"]["score"] for c in doc["results"]["conditions"]
++    ]
++    values = [b["value"] for b in blocks]
++    assert len(set(values)) == 3, f"conditions must differ, got {values}"
++    assert blocks[0] is not blocks[1], "aggregated must not be a shared object"
++    for b in blocks:
++        assert b["basis"] == "units"
++        assert b["correction"] is None, "an uncorrected interval must say so"
++        assert b["n"]["resolved"] == 240
++
++
++def test_sweep_yaml_records_the_resolved_plan(tmp_path: Path):
++    root, cfg, results_dir = build_sweep_project(tmp_path, n_units=40)
++    assert main(["run", str(cfg)]) == EXIT_OK
++    sweep_doc = yaml.safe_load((next(results_dir.glob("run_*")) / "sweep.yaml").read_text())
++    assert [c["label"] for c in sweep_doc["conditions"]] == [
++        "baseline", "method=spearman", "method=kendall",
++    ]
++    # `repeats` groups by kind (only `seed` exists yet), so one entry whose
++    # `seeds` list carries all five — not five entries. See `sweep.sweep_document`.
++    assert len(sweep_doc["repeats"]) == 1
++    assert len(sweep_doc["repeats"][0]["seeds"]) == 5
++    assert len(sweep_doc["execution_order"]) == 15
++
++
++def test_a_single_condition_run_is_unchanged(tmp_path: Path):
++    """The regression risk of adding a level is that it appears where it should not."""
++    root, cfg, results_dir = build_project_without_sweep(tmp_path, n_units=40)
++    assert main(["run", str(cfg)]) == EXIT_OK
++    run_dir = next(results_dir.glob("run_*"))
++    assert not (run_dir / "conditions").exists()
++
++
++def test_a_summary_step_reading_a_swept_parameter_is_refused_in_a_real_run(tmp_path: Path):
++    """`resolve_wide_cfg` plants `SweptAway` for every swept path in the config the
++    `run`/`summary`-scoped cfg is built from — proved here through an actual `run`,
++    not only by calling `execute_plan` directly with a hand-built `cfgs`.
++    """
++    from publishable.generators.step import generate_step
++
++    root, cfg, results_dir, _ = build_with_units(tmp_path, n_units=40)
++    write_sweep_step(root)
++    generate_step(repo_root=root, experiment="cohort-pilot", step_name="check_swept")
++    step_path = root / "src" / "cohort_pilot" / "steps" / "step02_check_swept.py"
++    step_path.write_text(
++        "from publishable import BaseStep\n\n\n"
++        "class Step(BaseStep):\n"
++        '    scope = "summary"\n\n'
++        "    def run(self, cfg, io):\n"
++        "        return {\"method\": cfg.parameters.analysis.method}\n"
++    )
++    doc = yaml.safe_load(cfg.read_text())
++    doc["sweep"] = {
++        "baseline": {"analysis.method": "pearson"},
++        "grid": {"analysis.method": ["spearman", "kendall"]},
++    }
++    cfg.write_text(yaml.safe_dump(doc))
++    commit(root, "add a summary step that reads the swept parameter")
++
++    assert main(["run", str(cfg)]) == EXIT_PARTIAL
++    run_dir = next(results_dir.glob("run_*"))
++    run_doc = yaml.safe_load((run_dir / "run.yaml").read_text())
++    assert run_doc["status"] == "partial"
++    error = run_doc["execution"]["summary"]["step02_check_swept"]["error"]
++    assert "E-STEP-SWEPT-PARAM" in error
++
++
++def test_a_summary_step_reads_every_condition_in_a_real_run(tmp_path: Path):
++    """`io.conditions`/`io.read_condition` are wired through `runner.execute_plan`'s
++    `StepIO` construction — proved here by a `summary`-scoped step that actually
++    reads each condition's own `step01_summarize_units` output back, in a real run.
++    """
++    from publishable.generators.step import generate_step
++
++    root, cfg, results_dir, _ = build_with_units(tmp_path, n_units=40)
++    write_sweep_step(root)
++    generate_step(repo_root=root, experiment="cohort-pilot", step_name="compare_conditions")
++    step_path = root / "src" / "cohort_pilot" / "steps" / "step02_compare_conditions.py"
++    step_path.write_text(
++        "from publishable import BaseStep\n\n\n"
++        "class Step(BaseStep):\n"
++        '    scope = "summary"\n\n'
++        "    def run(self, cfg, io):\n"
++        "        seen = {}\n"
++        "        for condition in io.conditions:\n"
++        "            table = io.read_condition(\n"
++        '                condition, "step01_summarize_units", "units.parquet",\n'
++        "                repeat=io.repeats[0],\n"
++        "            )\n"
++        '            seen[condition[1]] = table[0]["score"]\n'
++        "        return seen\n"
++    )
++    doc = yaml.safe_load(cfg.read_text())
++    doc["sweep"] = {
++        "baseline": {"analysis.method": "pearson"},
++        "grid": {"analysis.method": ["spearman", "kendall"]},
++    }
++    cfg.write_text(yaml.safe_dump(doc))
++    commit(root, "add a summary step that reads across conditions")
++
++    assert main(["run", str(cfg)]) == EXIT_OK
++    run_doc = yaml.safe_load((next(results_dir.glob("run_*")) / "run.yaml").read_text())
++    seen = run_doc["results"]["summary"]["step02_compare_conditions"]
++    assert seen == {"baseline": 1.0, "method=spearman": 2.0, "method=kendall": 3.0}
++
++
+ def test_the_interval_matches_an_independent_computation(tmp_path: Path):
+     """Recompute the interval from `units.parquet` by hand and compare — verifying
+     the interval against an independent computation, never against itself.
+     """
+     root, cfg, results_dir, _ = build_with_units(tmp_path, n_units=40)
+     write_step(root, recorded=40, skipped=0)
+     commit(root)
+     assert main(["run", str(cfg)]) == EXIT_OK
+     run_dir = next(results_dir.glob("run_*"))
+     doc = yaml.safe_load((run_dir / "run.yaml").read_text())
+diff --git a/tests/test_artifacts.py b/tests/test_artifacts.py
+index 0fb54c8..d80e976 100644
+--- a/tests/test_artifacts.py
++++ b/tests/test_artifacts.py
+@@ -9,20 +9,42 @@ from publishable.artifacts import StepIO, write_atomic
+ 
+ 
+ @pytest.fixture
+ def io(tmp_path: Path) -> StepIO:
+     step_dir = tmp_path / "run" / "shared" / "step01"
+     step_dir.mkdir(parents=True)
+     (tmp_path / "input").mkdir()
+     return StepIO(step_dir=step_dir, input_dir=tmp_path / "input", run_dir=tmp_path / "run")
+ 
+ 
++def make_io(
++    tmp_path: Path,
++    *,
++    scope: str = "repeat",
++    conditions: list[tuple[int, str]] | None = None,
++    repeats: list[str] | None = None,
++    step_scopes: dict[str, str] | None = None,
++) -> StepIO:
++    step_dir = tmp_path / "run" / "step"
++    step_dir.mkdir(parents=True, exist_ok=True)
++    (tmp_path / "input").mkdir(exist_ok=True)
++    return StepIO(
++        step_dir=step_dir,
++        input_dir=tmp_path / "input",
++        run_dir=tmp_path / "run",
++        scope=scope,
++        conditions=conditions,
++        repeats=repeats,
++        step_scopes=step_scopes,
++    )
++
++
+ def test_write_dispatches_on_the_longest_registered_suffix(io: StepIO):
+     io.write("a.json", {"x": 1})
+     io.write("b.yaml", {"y": 2})
+     io.write("c.jsonl", [{"i": 1}, {"i": 2}])
+     io.write("d.csv", [{"k": "p1", "v": 1}])
+     assert (io.step_dir / "a.json").read_text().strip() == '{"x": 1}'
+     assert "y: 2" in (io.step_dir / "b.yaml").read_text()
+     assert (io.step_dir / "c.jsonl").read_text().count("\n") == 2
+     assert "k,v" in (io.step_dir / "d.csv").read_text()
+ 
+@@ -415,10 +437,175 @@ def test_rows_returns_deep_enough_copies_that_mutating_a_row_does_not_corrupt_st
+     io = StepIO(
+         step_dir=sd,
+         input_dir=tmp_path / "in",
+         run_dir=tmp_path / "run",
+         units=UnitList([Unit(key="p0")]),
+     )
+     io.record("p0", {"v": 1})
+     rows = io.rows()
+     rows[0]["v"] = 999
+     assert io.rows() == [{"unit": "p0", "v": 1}]
++
++
++def test_conditions_and_read_condition_are_summary_only(tmp_path: Path):
++    io = make_io(tmp_path, scope="repeat", conditions=[(0, "baseline")])
++    for call in (lambda: io.conditions, lambda: io.read_condition(0, "s", "a.json")):
++        with pytest.raises(ContractError) as e:
++            call()
++        assert e.value.code == "E-STEP-SCOPE-ONLY"
++
++
++def test_repeats_is_summary_only(tmp_path: Path):
++    io = make_io(tmp_path, scope="condition", repeats=["seed17"])
++    with pytest.raises(ContractError) as e:
++        _ = io.repeats
++    assert e.value.code == "E-STEP-SCOPE-ONLY"
++
++
++def test_conditions_and_read_condition_raise_at_run_scope(tmp_path: Path):
++    io = make_io(tmp_path, scope="run", conditions=[(0, "baseline")])
++    with pytest.raises(ContractError) as e:
++        _ = io.conditions
++    assert e.value.code == "E-STEP-SCOPE-ONLY"
++
++
++def test_a_summary_step_can_list_conditions_and_repeats(tmp_path: Path):
++    io = make_io(
++        tmp_path,
++        scope="summary",
++        conditions=[(0, "baseline"), (1, "method=spearman")],
++        repeats=["seed17"],
++    )
++    assert io.conditions == [(0, "baseline"), (1, "method=spearman")]
++    assert io.repeats == ["seed17"]
++
++
++def test_a_wider_step_cannot_read_a_narrower_one(tmp_path: Path):
++    io = make_io(tmp_path, scope="condition", step_scopes={"analyze": "repeat"})
++    with pytest.raises(ContractError) as e:
++        io.read_upstream("analyze", "units.parquet")
++    assert e.value.code == "E-STEP-READ-DIRECTION"
++    assert "condition" in str(e.value) and "repeat" in str(e.value)
++
++
++def test_a_narrower_step_reads_a_wider_one_normally(tmp_path: Path):
++    io = make_io(tmp_path, scope="repeat", step_scopes={"load": "run"})
++    (io.run_dir / "shared" / "load").mkdir(parents=True)
++    (io.run_dir / "shared" / "load" / "a.json").write_text('{"x": 1}\n')
++    assert io.read_upstream("load", "a.json") == {"x": 1}
++
++
++def test_a_step_reads_another_step_at_its_own_scope(tmp_path: Path):
++    io = make_io(tmp_path, scope="condition", step_scopes={"fit": "condition"})
++    (io.run_dir / "shared" / "fit").mkdir(parents=True)
++    (io.run_dir / "shared" / "fit" / "model.json").write_text('{"k": 1}\n')
++    assert io.read_upstream("fit", "model.json") == {"k": 1}
++
++
++@pytest.mark.parametrize("target_scope", ["run", "condition", "repeat"])
++def test_a_summary_step_reads_upstream_from_every_narrower_scope(
++    tmp_path: Path, target_scope: str
++):
++    """`summary` sits above `run`, `condition`, and `repeat` alike — every one of
++    them is a read of something wider, and none may raise E-STEP-READ-DIRECTION.
++    Nothing else exercises read_upstream from a summary caller, so a bug in how
++    `summary` itself is ranked (as opposed to the separate summary-only guard on
++    io.conditions/io.read_condition) would otherwise go undetected."""
++    io = make_io(tmp_path, scope="summary", step_scopes={"upstream": target_scope})
++    (io.run_dir / "shared" / "upstream").mkdir(parents=True)
++    (io.run_dir / "shared" / "upstream" / "a.json").write_text('{"x": 1}\n')
++    assert io.read_upstream("upstream", "a.json") == {"x": 1}
++
++
++def test_read_condition_requires_a_repeat_for_a_repeat_scoped_step(tmp_path: Path):
++    io = make_io(
++        tmp_path,
++        scope="summary",
++        conditions=[(0, "baseline")],
++        step_scopes={"analyze": "repeat"},
++    )
++    with pytest.raises(ContractError) as e:
++        io.read_condition(0, "analyze", "units.parquet")
++    assert e.value.code == "E-STEP-READ-REPEAT-REQUIRED"
++
++
++def test_read_condition_rejects_an_unresolved_condition_index(tmp_path: Path):
++    io = make_io(tmp_path, scope="summary", conditions=[(0, "baseline")])
++    with pytest.raises(ContractError) as e:
++        io.read_condition(7, "s", "a.json")
++    assert e.value.code == "E-STEP-READ-CONDITION-UNKNOWN"
++
++
++def test_read_condition_succeeds_for_a_resolved_condition_with_a_null_label(tmp_path: Path):
++    """The no-`sweep` case: `sweep.expand` resolves one condition, index 0 with
++    `label=None`, meaning there is no `conditions/` level at all — not an absent
++    index. `read_condition(0, ...)` must return the artifact, not raise
++    E-STEP-READ-CONDITION-UNKNOWN, and the path must skip the `conditions/` nest."""
++    io = make_io(tmp_path, scope="summary", conditions=[(0, None)], step_scopes={"fit": "run"})
++    target = io.run_dir / "fit"
++    target.mkdir(parents=True)
++    (target / "model.json").write_text('{"m": 1}\n')
++    assert io.read_condition(0, "fit", "model.json") == {"m": 1}
++    assert not (io.run_dir / "conditions").exists()
++
++
++def test_read_condition_resolves_a_non_repeat_scoped_step_without_a_repeat(tmp_path: Path):
++    io = make_io(
++        tmp_path,
++        scope="summary",
++        conditions=[(0, "baseline"), (1, "method=spearman")],
++        step_scopes={"fit": "condition"},
++    )
++    target = io.run_dir / "conditions" / "01_method=spearman" / "fit"
++    target.mkdir(parents=True)
++    (target / "model.json").write_text('{"m": 1}\n')
++    assert io.read_condition(1, "fit", "model.json") == {"m": 1}
++
++
++def test_read_condition_accepts_the_element_io_conditions_yields(tmp_path: Path):
++    """The documented pattern (reference.md around lines 1784, 1806, 2318):
++    `for condition in io.conditions: io.read_condition(condition, ...)` — passing
++    the (index, label) tuple straight through must work, not only a bare index."""
++    io = make_io(
++        tmp_path,
++        scope="summary",
++        conditions=[(0, "baseline"), (1, "method=spearman")],
++        step_scopes={"fit": "condition"},
++    )
++    target = io.run_dir / "conditions" / "01_method=spearman" / "fit"
++    target.mkdir(parents=True)
++    (target / "model.json").write_text('{"m": 1}\n')
++    results = {}
++    for condition in io.conditions:
++        if condition[0] == 1:
++            results[condition] = io.read_condition(condition, "fit", "model.json")
++    assert results[(1, "method=spearman")] == {"m": 1}
++
++
++def test_read_condition_resolves_a_named_repeat_when_the_run_has_several(tmp_path: Path):
++    io = make_io(
++        tmp_path,
++        scope="summary",
++        conditions=[(0, "baseline")],
++        repeats=["seed1", "seed2"],
++        step_scopes={"analyze": "repeat"},
++    )
++    target = io.run_dir / "conditions" / "00_baseline" / "seed2" / "analyze"
++    target.mkdir(parents=True)
++    (target / "scores.json").write_text('{"s": 2}\n')
++    assert io.read_condition(0, "analyze", "scores.json", repeat="seed2") == {"s": 2}
++
++
++def test_read_condition_collapses_the_repeat_directory_when_the_run_has_only_one(
++    tmp_path: Path,
++):
++    io = make_io(
++        tmp_path,
++        scope="summary",
++        conditions=[(0, "baseline")],
++        repeats=["seed1"],
++        step_scopes={"analyze": "repeat"},
++    )
++    target = io.run_dir / "conditions" / "00_baseline" / "analyze"
++    target.mkdir(parents=True)
++    (target / "scores.json").write_text('{"s": 1}\n')
++    assert io.read_condition(0, "analyze", "scores.json", repeat="seed1") == {"s": 1}
+diff --git a/tests/test_runner.py b/tests/test_runner.py
+index 86cfd43..245d6e0 100644
+--- a/tests/test_runner.py
++++ b/tests/test_runner.py
+@@ -1,20 +1,26 @@
++import copy
+ from pathlib import Path
+ 
+ import pytest
+ 
+ from publishable import BaseExperiment, BaseStep
+ from publishable.config import Config
+ from publishable.errors import ContractError
+ from publishable.replication import Repeat
+ from publishable.run_record import assemble_run_yaml, run_status
+-from publishable.runner import attrition, execute_plan
++from publishable.runner import (
++    attrition,
++    execute_plan,
++    resolve_condition_cfg,
++    resolve_wide_cfg,
++)
+ from publishable.scope import build_plan
+ from publishable.units import Unit, UnitList
+ 
+ 
+ class Load(BaseStep):
+     scope = "run"
+ 
+     def run(self, cfg, io):
+         io.write("cohort.json", {"loaded": True})
+         return {"n": 2}
+@@ -48,52 +54,71 @@ class ReturnsList(BaseStep):
+         return []
+ 
+ 
+ class ReturnsNone(BaseStep):
+     scope = "repeat"
+ 
+     def run(self, cfg, io):
+         return None
+ 
+ 
+-def harness(tmp_path: Path, steps, *, units=None, repeats=None, max_failed_fraction=None):
++def harness(
++    tmp_path: Path, steps, *, units=None, repeats=None, max_failed_fraction=None, conditions=None
++):
+     class P(BaseExperiment):
+         pass
+ 
+     P.steps = steps
+     if repeats is None:
+         repeats = [Repeat("seed", "seed17", 17), Repeat("seed", "seed42", 42)]
+-    plan = build_plan(P(), conditions=[(0, None)], repeat_labels=[r.label for r in repeats])
++    if conditions is None:
++        conditions = [(0, None)]
++    plan = build_plan(P(), conditions=conditions, repeat_labels=[r.label for r in repeats])
+     run_dir = tmp_path / "run"
+     run_dir.mkdir(parents=True, exist_ok=True)
+     (tmp_path / "input").mkdir(parents=True, exist_ok=True)
+     results = execute_plan(
+         plan=plan,
+         run_dir=run_dir,
+         input_dir=tmp_path / "input",
+-        cfg=Config({"parameters": {}}),
++        cfgs={0: Config({"parameters": {}}), -1: Config({"parameters": {}})},
+         repeats=repeats,
+         digest="sha256:abc",
+         units=units,
+         max_failed_fraction=max_failed_fraction,
+     )
+     return run_dir, results, repeats
+ 
+ 
+ def test_no_sweep_means_no_conditions_level(tmp_path: Path):
+     run_dir, _, _ = harness(tmp_path, [Load, Analyze])
+     assert (run_dir / "shared" / "load" / "cohort.json").is_file()
+     assert not (run_dir / "conditions").exists()
+     assert (run_dir / "seed17").is_dir()
+     assert (run_dir / "seed42").is_dir()
+ 
+ 
++def test_a_bare_baseline_still_gets_the_conditions_level(tmp_path: Path):
++    """`docs/reference.md` § How artifacts are organized: the `conditions/` level
++    appears when a sweep is *declared*, not when N > 1. A bare `sweep.baseline`
++    with no `grid` expands to one condition (`sweep.expand`'s
++    `test_a_bare_baseline_is_one_condition_but_labelled`), but unlike the no-sweep
++    case it is labelled `"baseline"`, and `step_dir_for` nests under
++    `conditions/00_baseline/` rather than collapsing the level — the opposite of
++    `test_no_sweep_means_no_conditions_level` right above."""
++    run_dir, _, _ = harness(tmp_path, [Load, Analyze], conditions=[(0, "baseline")])
++    assert (run_dir / "shared" / "load" / "cohort.json").is_file()
++    assert (run_dir / "conditions" / "00_baseline" / "seed17" / "analyze").is_dir()
++    assert (run_dir / "conditions" / "00_baseline" / "seed42" / "analyze").is_dir()
++    assert not (run_dir / "seed17").exists()
++
++
+ def test_a_failed_execution_is_recorded_and_the_run_continues(tmp_path: Path):
+     _, results, _ = harness(tmp_path, [Boom, Analyze])
+     statuses = [r.status for r in results]
+     assert statuses.count("failed") == 2
+     assert statuses.count("completed") == 2
+     assert any("this execution is broken" in (r.error or "") for r in results)
+ 
+ 
+ def test_status_is_partial_when_some_failed(tmp_path: Path):
+     _, results, _ = harness(tmp_path, [Boom, Analyze])
+@@ -141,41 +166,41 @@ def test_a_repeat_label_missing_from_repeats_raises_seed_missing(tmp_path: Path)
+     plan = build_plan(P(), conditions=[(0, None)], repeat_labels=["seedA", "seedB"])
+     run_dir = tmp_path / "run"
+     run_dir.mkdir(parents=True, exist_ok=True)
+     (tmp_path / "input").mkdir(parents=True, exist_ok=True)
+     mismatched_repeats = [Repeat("seed", "seedX", 111), Repeat("seed", "seedY", 222)]
+     with pytest.raises(ContractError) as excinfo:
+         execute_plan(
+             plan=plan,
+             run_dir=run_dir,
+             input_dir=tmp_path / "input",
+-            cfg=Config({"parameters": {}}),
++            cfgs={0: Config({"parameters": {}}), -1: Config({"parameters": {}})},
+             repeats=mismatched_repeats,
+             digest="sha256:abc",
+         )
+     assert excinfo.value.code == "E-RUN-SEED-MISSING"
+ 
+ 
+ def test_an_unlabelled_single_repeat_still_resolves_its_seed(tmp_path: Path):
+     class P(BaseExperiment):
+         pass
+ 
+     P.steps = [Analyze]
+     plan = build_plan(P(), conditions=[(0, None)], repeat_labels=[""])
+     run_dir = tmp_path / "run"
+     run_dir.mkdir(parents=True, exist_ok=True)
+     (tmp_path / "input").mkdir(parents=True, exist_ok=True)
+     results = execute_plan(
+         plan=plan,
+         run_dir=run_dir,
+         input_dir=tmp_path / "input",
+-        cfg=Config({"parameters": {}}),
++        cfgs={0: Config({"parameters": {}}), -1: Config({"parameters": {}})},
+         repeats=[Repeat("seed", "", 17)],
+         digest="sha256:abc",
+     )
+     assert results[0].status == "completed"
+ 
+ 
+ def test_a_non_mapping_return_fails_that_execution_and_the_run_continues(tmp_path: Path):
+     run_dir, results, _ = harness(tmp_path, [ReturnsString, Analyze])
+     string_result = next(r for r in results if r.execution.step_name == "returns_string")
+     analyze_result = next(r for r in results if r.execution.step_name == "analyze")
+@@ -565,21 +590,22 @@ def _two_condition_results(tmp_path: Path, roster: "UnitList"):
+     P.steps = [Record]
+     repeats = [Repeat("seed", "seed17", 17), Repeat("seed", "seed42", 42)]
+     plan = build_plan(
+         P(), conditions=[(0, "c0"), (1, "c1")], repeat_labels=[r.label for r in repeats]
+     )
+     run_dir = tmp_path / "run"
+     run_dir.mkdir(parents=True, exist_ok=True)
+     (tmp_path / "input").mkdir(parents=True, exist_ok=True)
+     results = execute_plan(
+         plan=plan, run_dir=run_dir, input_dir=tmp_path / "input",
+-        cfg=Config({"parameters": {}}), repeats=repeats, digest="sha256:abc", units=roster,
++        cfgs={0: Config({"parameters": {}}), 1: Config({"parameters": {}})},
++        repeats=repeats, digest="sha256:abc", units=roster,
+     )
+     return results, repeats
+ 
+ 
+ def test_aggregated_is_scoped_per_condition_not_shared(tmp_path: Path):
+     from publishable.stats import collapse_repeats, summarize_step
+ 
+     roster = UnitList([Unit(key="p0")])
+     results, repeats = _two_condition_results(tmp_path, roster)
+ 
+@@ -643,19 +669,179 @@ def test_attrition_is_scoped_per_condition(tmp_path: Path):
+     P.steps = [Record]
+     repeats = [Repeat("seed", "seed17", 17), Repeat("seed", "seed42", 42)]
+     plan = build_plan(
+         P(), conditions=[(0, "c0"), (1, "c1")], repeat_labels=[r.label for r in repeats]
+     )
+     run_dir = tmp_path / "run"
+     run_dir.mkdir(parents=True, exist_ok=True)
+     (tmp_path / "input").mkdir(parents=True, exist_ok=True)
+     results = execute_plan(
+         plan=plan, run_dir=run_dir, input_dir=tmp_path / "input",
+-        cfg=Config({"parameters": {}}), repeats=repeats, digest="sha256:abc", units=roster,
++        cfgs={0: Config({"parameters": {}}), 1: Config({"parameters": {}})},
++        repeats=repeats, digest="sha256:abc", units=roster,
+     )
+     assert attrition(results, roster, "record", condition_index=0)["completed"] == 1
+     assert attrition(results, roster, "record", condition_index=1)["completed"] == 2
+ 
+ 
+ def test_attrition_requires_condition_index():
+     with pytest.raises(TypeError):
+         attrition([], None, "analyze")  # type: ignore[call-arg]
++
++
++BASE_PARAMS = {"parameters": {"analysis": {"method": "pearson", "min_samples": 30}}}
++
++
++def run_two_conditions(tmp_path: Path, step_cls):
++    """Two conditions sweeping `analysis.method` over pearson/spearman, each with
++    its own `Config` built by `resolve_condition_cfg`, plus the wide `Config`
++    `resolve_wide_cfg` builds for `run`/`summary` scope, where that path has no
++    single value."""
++
++    class P(BaseExperiment):
++        pass
++
++    P.steps = [step_cls]
++    conditions = [(0, "pearson"), (1, "spearman")]
++    plan = build_plan(P(), conditions=conditions, repeat_labels=[""])
++    run_dir = tmp_path / "run"
++    run_dir.mkdir(parents=True, exist_ok=True)
++    (tmp_path / "input").mkdir(parents=True, exist_ok=True)
++    cfgs = {
++        0: resolve_condition_cfg(BASE_PARAMS, {"analysis.method": "pearson"}),
++        1: resolve_condition_cfg(BASE_PARAMS, {"analysis.method": "spearman"}),
++        -1: resolve_wide_cfg(BASE_PARAMS, {"analysis.method"}),
++    }
++    return execute_plan(
++        plan=plan,
++        run_dir=run_dir,
++        input_dir=tmp_path / "input",
++        cfgs=cfgs,
++        repeats=[Repeat("seed", "", 17)],
++        digest="sha256:abc",
++    )
++
++
++def test_each_condition_sees_its_own_parameter_value(tmp_path: Path):
++    seen = []
++
++    class Reads(BaseStep):
++        def run(self, cfg, io):
++            seen.append(cfg.parameters.analysis.method)
++            return {}
++
++    run_two_conditions(tmp_path, Reads)
++    assert sorted(seen) == ["pearson", "spearman"]
++
++
++def test_a_condition_scoped_step_also_sees_its_own_value(tmp_path: Path):
++    """Same guarantee as the `repeat`-scoped case above, but for `condition`
++    scope — a different branch of `build_plan` and a different `step_dir_for`
++    path, so the `cfgs[condition_index]` lookup needs its own proof."""
++    seen = []
++
++    class Reads(BaseStep):
++        scope = "condition"
++
++        def run(self, cfg, io):
++            seen.append(cfg.parameters.analysis.method)
++            return {}
++
++    run_two_conditions(tmp_path, Reads)
++    assert sorted(seen) == ["pearson", "spearman"]
++
++
++def test_a_run_scoped_step_cannot_read_a_swept_parameter(tmp_path: Path):
++    class Wide(BaseStep):
++        scope = "run"
++
++        def run(self, cfg, io):
++            return {"m": cfg.parameters.analysis.method}
++
++    results = run_two_conditions(tmp_path, Wide)
++    failed = [r for r in results if r.status == "failed"]
++    assert failed and "E-STEP-SWEPT-PARAM" in (failed[0].error or "")
++
++
++def test_a_summary_scoped_step_cannot_read_a_swept_parameter(tmp_path: Path):
++    class Sum(BaseStep):
++        scope = "summary"
++
++        def run(self, cfg, io):
++            return {"m": cfg.parameters.analysis.method}
++
++    results = run_two_conditions(tmp_path, Sum)
++    failed = [r for r in results if r.status == "failed"]
++    assert failed and "E-STEP-SWEPT-PARAM" in (failed[0].error or "")
++
++
++@pytest.mark.parametrize("scope", ["run", "condition", "repeat", "summary"])
++def test_an_unswept_path_reads_normally_at_every_scope(tmp_path: Path, scope: str):
++    """Only the swept paths are withheld; the rest is ordinary, at every scope —
++    the negative that proves the check is conditioned on being swept, not on
++    scope alone."""
++
++    class Reads(BaseStep):
++        def run(self, cfg, io):
++            return {"n": cfg.parameters.analysis.min_samples}
++
++    Reads.scope = scope
++    results = run_two_conditions(tmp_path, Reads)
++    assert all(r.status == "completed" for r in results)
++
++
++def test_per_condition_cfgs_are_not_the_same_object(tmp_path: Path):
++    """`cfg0 is not cfg1` alone would pass even if both shared the same nested
++    `analysis` dict underneath — that aliasing is exactly how an earlier defect
++    in this project first showed itself. Assert the deep-copy actually happened,
++    and that the shared `BASE_PARAMS` fixture survives both calls untouched."""
++    before = copy.deepcopy(BASE_PARAMS)
++    cfg0 = resolve_condition_cfg(BASE_PARAMS, {"analysis.method": "pearson"})
++    cfg1 = resolve_condition_cfg(BASE_PARAMS, {"analysis.method": "spearman"})
++    assert cfg0 is not cfg1
++    assert cfg0.raw["parameters"]["analysis"] is not cfg1.raw["parameters"]["analysis"]
++    assert cfg0.parameters.analysis.method == "pearson"
++    assert cfg1.parameters.analysis.method == "spearman"
++    assert BASE_PARAMS == before
++
++
++def test_resolve_wide_cfg_plants_the_marker_even_when_the_parent_is_absent(tmp_path: Path):
++    """`resolve_wide_cfg` must fail in the safe direction: if a swept path's
++    parent doesn't already exist in `base`, the marker still has to be
++    planted, not skipped. Skipping it would leave the value readable at
++    `run`/`summary` scope — exactly the wrong value for every condition but
++    one, handed over silently instead of refused."""
++    cfg = resolve_wide_cfg({"parameters": {}}, {"analysis.method"})
++    with pytest.raises(ContractError) as excinfo:
++        _ = cfg.parameters.analysis.method
++    assert excinfo.value.code == "E-STEP-SWEPT-PARAM"
++
++
++def test_execute_plan_raises_explicitly_when_a_cfg_is_missing(tmp_path: Path):
++    """A condition index absent from `cfgs` is not a step failing — it is core
++    having built an inconsistent plan — so it must not be swallowed as a
++    per-execution failure, and the error must name what's missing rather than
++    surfacing as a bare `KeyError`."""
++
++    class Analyze(BaseStep):
++        def run(self, cfg, io):
++            return {}
++
++    class P(BaseExperiment):
++        pass
++
++    P.steps = [Analyze]
++    plan = build_plan(P(), conditions=[(0, None)], repeat_labels=[""])
++    run_dir = tmp_path / "run"
++    run_dir.mkdir(parents=True, exist_ok=True)
++    (tmp_path / "input").mkdir(parents=True, exist_ok=True)
++    with pytest.raises(ContractError) as excinfo:
++        execute_plan(
++            plan=plan,
++            run_dir=run_dir,
++            input_dir=tmp_path / "input",
++            cfgs={},  # missing key 0
++            repeats=[Repeat("seed", "", 17)],
++            digest="sha256:abc",
++        )
++    assert excinfo.value.code == "E-RUN-CFG-MISSING"
++    assert "0" in str(excinfo.value)
+diff --git a/tests/test_sweep.py b/tests/test_sweep.py
+new file mode 100644
+index 0000000..0d3e46d
+--- /dev/null
++++ b/tests/test_sweep.py
+@@ -0,0 +1,236 @@
++import pytest
++
++from publishable.sweep import Condition, expand
++
++
++def test_no_sweep_block_is_one_unlabelled_condition():
++    """label None is what keeps the `conditions/` level out of the tree."""
++    conds = expand({})
++    assert conds == [Condition(index=0, label=None, values={}, is_baseline=False)]
++
++
++def test_a_bare_baseline_is_one_condition_but_labelled():
++    """Declared, not count: a sweep with one condition still gets the tree level."""
++    conds = expand({"sweep": {"baseline": {"analysis.method": "pearson"}}})
++    assert len(conds) == 1
++    assert conds[0].label == "baseline"
++    assert conds[0].is_baseline is True
++    assert conds[0].values == {"analysis.method": "pearson"}
++
++
++def test_baseline_plus_grid_prepends_the_baseline():
++    conds = expand({
++        "sweep": {
++            "baseline": {"analysis.method": "pearson"},
++            "grid": {"analysis.method": ["spearman", "kendall"]},
++        }
++    })
++    assert [c.index for c in conds] == [0, 1, 2]
++    assert [c.label for c in conds] == ["baseline", "method=spearman", "method=kendall"]
++    assert [c.is_baseline for c in conds] == [True, False, False]
++    assert conds[1].values == {"analysis.method": "spearman"}
++
++
++def test_grid_without_a_baseline_starts_at_zero():
++    conds = expand({"sweep": {"grid": {"analysis.method": ["pearson", "spearman"]}}})
++    assert [c.index for c in conds] == [0, 1]
++    assert not any(c.is_baseline for c in conds)
++
++
++def test_the_last_declared_axis_varies_fastest():
++    """Numbering reads like nested loops written in declaration order."""
++    conds = expand({
++        "sweep": {"grid": {"a.x": [1, 2], "b.y": ["p", "q"]}}
++    })
++    assert [c.values for c in conds] == [
++        {"a.x": 1, "b.y": "p"},
++        {"a.x": 1, "b.y": "q"},
++        {"a.x": 2, "b.y": "p"},
++        {"a.x": 2, "b.y": "q"},
++    ]
++
++
++def test_an_empty_grid_axis_still_expands_to_nothing_here():
++    """`expand` is pure and reports what the declaration says; `validate` is what
++    refuses it (E-SWEEP-AXIS-EMPTY, Task 4). Pinned so the refusal has something
++    to refuse and so nobody later reads the empty list as acceptable output."""
++    assert expand({"sweep": {"grid": {"a.x": []}}}) == []
++
++
++def test_condition_values_are_immutable():
++    conds = expand({"sweep": {"baseline": {"analysis.method": "pearson"}}})
++    assert conds[0].values["analysis.method"] == "pearson"
++    with pytest.raises(TypeError):
++        conds[0].values["x"] = 1
++
++
++def test_condition_values_are_copied_not_aliased():
++    source = {"analysis.method": "pearson"}
++    conds = expand({"sweep": {"baseline": source}})
++    source["analysis.method"] = "spearman"
++    assert conds[0].values["analysis.method"] == "pearson"
++
++
++def test_conditions_are_frozen():
++    c = expand({"sweep": {"grid": {"a.x": [1]}}})[0]
++    with pytest.raises(Exception):  # noqa: B017 — frozen dataclass raises FrozenInstanceError
++        c.index = 5  # type: ignore[misc]
++
++
++def test_a_single_axis_uses_the_shortest_suffix():
++    conds = expand({"sweep": {"grid": {"analysis.method": ["spearman"]}}})
++    assert conds[0].label == "method=spearman"
++
++
++def test_a_shared_leaf_forces_both_keys_to_keep_a_segment():
++    """The rule is shortest UNIQUE suffix, not shortest suffix."""
++    conds = expand({
++        "sweep": {"grid": {"analysis.method": ["pearson"], "scoring.method": ["auc"]}}
++    })
++    assert conds[0].label == "analysis.method=pearson__scoring.method=auc"
++
++
++def test_a_three_segment_path_disambiguates_only_as_far_as_needed():
++    conds = expand({
++        "sweep": {"grid": {"a.b.method": ["x"], "c.d.method": ["y"]}}
++    })
++    assert conds[0].label == "b.method=x__d.method=y"
++
++
++def test_axes_appear_in_declaration_order_never_sorted():
++    conds = expand({"sweep": {"grid": {"z.one": ["a"], "a.two": ["b"]}}})
++    assert conds[0].label == "one=a__two=b"
++
++
++def test_booleans_and_floats_render_readably():
++    conds = expand({"sweep": {"grid": {"f.flag": [True, False], "g.rate": [0.5]}}})
++    assert [c.label for c in conds] == ["flag=true__rate=0.5", "flag=false__rate=0.5"]
++
++
++def test_a_value_rendering_the_axis_separator_is_refused():
++    from publishable.sweep import check_swept_value
++    message = check_swept_value("a__b")
++    assert message is not None
++    assert "a__b" in message
++    assert "__" in message
++
++
++def test_a_single_underscore_is_still_accepted():
++    """Narrowing the pattern to exclude `_` entirely would be over-correction —
++    only the two-character separator sequence is the conflict."""
++    from publishable.sweep import check_swept_value
++    assert check_swept_value("a_b") is None
++
++
++def test_values_already_refused_by_the_pattern_are_still_refused():
++    """The separator check is on top of the pattern check, not instead of it."""
++    from publishable.sweep import check_swept_value
++    assert check_swept_value("a b") is not None
++    assert check_swept_value("a/b") is not None
++
++
++def test_every_generated_label_body_matches_the_selector_pattern():
++    import re
++
++    from publishable.sweep import SWEPT_VALUE_PATTERN
++    conds = expand({
++        "sweep": {"baseline": {"analysis.method": "pearson"},
++                  "grid": {"analysis.method": ["spearman", "kendall"]}}
++    })
++    for c in conds:
++        for part in c.label.split("__"):
++            value = part.split("=")[-1]
++            assert re.match(SWEPT_VALUE_PATTERN, value), part
++
++
++def test_the_sweep_document_records_the_resolved_plan():
++    """Matches `docs/reference.md` § "`sweep.yaml` — the resolved plan" exactly:
++    `repeats` groups by kind with resolved `seeds`, `labels` is the separate
++    composed-label list, `order` is the scalar mode, and `execution_order` is
++    the realized `{condition, repeat}` sequence — never re-derived."""
++    from publishable.replication import Repeat
++    from publishable.sweep import expand, sweep_document
++
++    conds = expand({"sweep": {"baseline": {"analysis.method": "pearson"},
++                              "grid": {"analysis.method": ["spearman"]}}})
++    repeats = [Repeat("seed", "seed17", 17), Repeat("seed", "seed42", 42)]
++    execution_order = [(0, "seed17"), (0, "seed42"), (1, "seed17"), (1, "seed42")]
++    doc = sweep_document(conds, repeats, "sha256:abc", "as_declared", execution_order)
++
++    assert doc["design_digest"] == "sha256:abc"
++    assert doc["conditions"] == [
++        {"index": 0, "label": "baseline", "values": {"analysis.method": "pearson"},
++         "is_baseline": True},
++        {"index": 1, "label": "method=spearman", "values": {"analysis.method": "spearman"},
++         "is_baseline": False},
++    ]
++    assert doc["repeats"] == [{"kind": "seed", "seeds": [17, 42]}]
++    assert doc["labels"] == ["seed17", "seed42"]
++    assert doc["order"] == "as_declared"
++    assert "order_seed" not in doc
++    assert doc["execution_order"] == [
++        {"condition": 0, "repeat": "seed17"},
++        {"condition": 0, "repeat": "seed42"},
++        {"condition": 1, "repeat": "seed17"},
++        {"condition": 1, "repeat": "seed42"},
++    ]
++
++
++def test_a_randomized_order_records_its_seed():
++    """`order_seed` is present only under `order: randomized` — its absence
++    under `as_declared` says nothing was shuffled, not that a seed is missing."""
++    from publishable.replication import Repeat
++    from publishable.sweep import expand, sweep_document
++
++    conds = expand({"sweep": {"grid": {"a.x": [1]}}})
++    doc = sweep_document(conds, [Repeat("seed", "seed01", 1)], "sha256:r",
++                         "randomized", [(0, "seed01")], order_seed=4417029)
++
++    assert doc["order"] == "randomized"
++    assert doc["order_seed"] == 4417029
++
++
++def test_the_document_is_plain_yaml_safe_data():
++    """It is written with the artifact writer, so it must hold no custom types."""
++    import yaml
++
++    from publishable.replication import Repeat
++    from publishable.sweep import expand, sweep_document
++
++    doc = sweep_document(expand({"sweep": {"grid": {"a.x": [1]}}}),
++                         [Repeat("seed", "seed01", 1)], "sha256:d",
++                         "as_declared", [(0, "seed01")])
++    assert yaml.safe_load(yaml.safe_dump(doc)) == doc
++
++
++def test_the_document_round_trips_a_float_and_a_boolean_condition_value():
++    """The failure mode this artifact cannot afford: a value that serializes
++    to something that doesn't parse back, or parses back to a different type.
++    Also exercises the new nesting — `repeats`/`labels`/`execution_order` —
++    not just the top-level keys."""
++    import yaml
++
++    from publishable.replication import Repeat
++    from publishable.sweep import expand, sweep_document
++
++    conds = expand({"sweep": {"grid": {"analysis.threshold": [0.5], "analysis.strict": [True]}}})
++    repeats = [Repeat("seed", "seed01", 1), Repeat("seed", "seed02", 2)]
++    doc = sweep_document(conds, repeats, "sha256:e", "as_declared",
++                         [(0, "seed01"), (0, "seed02")])
++    round_tripped = yaml.safe_load(yaml.safe_dump(doc))
++
++    assert round_tripped == doc
++    values = round_tripped["conditions"][0]["values"]
++    assert values["analysis.threshold"] == 0.5
++    assert isinstance(values["analysis.threshold"], float)
++    assert values["analysis.strict"] is True
++    assert isinstance(values["analysis.strict"], bool)
++
++    seeds = round_tripped["repeats"][0]["seeds"]
++    assert seeds == [1, 2]
++    assert all(isinstance(s, int) for s in seeds)
++    assert round_tripped["labels"] == ["seed01", "seed02"]
++    assert round_tripped["execution_order"] == [
++        {"condition": 0, "repeat": "seed01"},
++        {"condition": 0, "repeat": "seed02"},
++    ]
+diff --git a/tests/test_validate.py b/tests/test_validate.py
+index 5b90bf3..05ff563 100644
+--- a/tests/test_validate.py
++++ b/tests/test_validate.py
+@@ -155,20 +155,170 @@ def test_two_bad_repeat_levels_are_both_reported():
+         }
+     }
+     c = Collector()
+     _check_replication(doc, GenericTemplate(), c)
+     found = [f for f in c.findings if f.code == "E-REPL-N"]
+     assert len(found) == 2
+     # an invalid design must not also produce a floor warning on top of the errors
+     assert not any(f.code == "W-REPL-FLOOR" for f in c.findings)
+ 
+ 
++def test_an_unrecognised_sweep_key_is_refused(write_config):
++    """A typo'd mode expands to zero conditions and would otherwise run nothing.
++    Same argument as the unknown-parameter check: `init` writes every valid key,
++    so an unrecognised one is a typo by construction."""
++    found = codes(write_config({"sweep": {"gird": {"analysis.method": ["spearman"]}}}))
++    assert "E-SWEEP-KEY-UNKNOWN" in found
++
++
++def test_the_four_refused_modes_are_known_keys_not_unknown_ones(write_config):
++    """`paired`/`ablate`/`sample`/`groups` are refused by `_check_unimplemented` under
++    their own identifiers; `_check_sweep` must not double-report them as unknown."""
++    for mode in ("paired", "ablate", "sample", "groups"):
++        found = codes(write_config({"sweep": {mode: {"analysis.method": ["pearson"]}}}))
++        assert "E-SWEEP-KEY-UNKNOWN" not in found
++
++
++def test_an_axis_declaring_no_values_is_refused(write_config):
++    """Zero conditions is a run that executes nothing while reporting success —
++    the same reasoning as E-UNITS-EMPTY: zero is not a small study."""
++    assert "E-SWEEP-AXIS-EMPTY" in codes(
++        write_config({"sweep": {"grid": {"analysis.method": []}}})
++    )
++
++
++def test_an_empty_grid_block_is_refused_by_the_backstop(write_config):
++    """`sweep: {grid: {}}` never enters the per-axis loop in `_check_sweep` — that
++    loop iterates `grid.items()`, which is empty — so nothing there can catch it.
++    The backstop refuses on `expand(doc)` returning zero conditions, whatever
++    shape of `sweep` produced that."""
++    found = codes(write_config({"sweep": {"grid": {}}}))
++    assert "E-SWEEP-EXPANDS-EMPTY" in found
++
++
++def test_an_empty_axis_still_gets_the_specific_diagnosis_not_just_the_backstop(write_config):
++    """The backstop sits beneath E-SWEEP-AXIS-EMPTY, not in place of it: a config
++    with an empty axis must still receive the specific diagnosis."""
++    found = codes(write_config({"sweep": {"grid": {"analysis.method": []}}}))
++    assert "E-SWEEP-AXIS-EMPTY" in found
++    assert "E-SWEEP-EXPANDS-EMPTY" in found
++
++
++def test_no_sweep_at_all_still_validates_clean(write_config):
++    """The critical negative: no `sweep` block is the ordinary case, and a result
++    check written carelessly (e.g. `if not conditions`, without the `sweep and`
++    guard) would refuse it. `expand({})` returns exactly one condition."""
++    found = codes(write_config({}))
++    assert "E-SWEEP-EXPANDS-EMPTY" not in found
++
++
++def test_a_normal_baseline_plus_grid_config_still_validates_clean(write_config):
++    found = codes(write_config({
++        "sweep": {
++            "baseline": {"analysis.method": "pearson"},
++            "grid": {"analysis.method": ["spearman", "kendall"]},
++        }
++    }))
++    assert not [c for c in found if c.startswith("E-SWEEP")]
++
++
++def test_a_swept_path_must_be_a_real_parameter(write_config):
++    assert "E-SWEEP-PATH-UNKNOWN" in codes(
++        write_config({"sweep": {"grid": {"analysis.methd": ["spearman"]}}})
++    )
++
++
++def test_a_swept_path_that_resolves_is_not_flagged(write_config):
++    found = codes(
++        write_config({"sweep": {"grid": {"analysis.method": ["pearson", "spearman"]}}})
++    )
++    assert "E-SWEEP-PATH-UNKNOWN" not in found
++
++
++def test_a_swept_value_must_be_checkable_against_the_spec(write_config):
++    assert "E-PARAM-VALUE" in codes(
++        write_config({"sweep": {"grid": {"analysis.method": ["spearmann"]}}})
++    )
++
++
++def test_a_swept_value_must_render_as_a_nameable_label(write_config):
++    """A label is a selector; a value needing escaping is not a name anyone can type."""
++    assert "E-SWEEP-VALUE-UNNAMEABLE" in codes(
++        write_config({"sweep": {"grid": {"analysis.method": ["a long sentence"]}}})
++    )
++
++
++def test_a_value_with_a_single_underscore_is_accepted(write_config):
++    """`_` alone stays legal — only `__`, the axis separator, is refused. The value
++    here is not one of the template's choices, so `E-PARAM-VALUE` still fires; what
++    matters is that the label check itself does not also flag it."""
++    found = codes(write_config({"sweep": {"grid": {"analysis.method": ["pearson_x"]}}}))
++    assert "E-SWEEP-VALUE-UNNAMEABLE" not in found
++
++
++def test_the_execution_budget_is_checked_against_the_real_expansion(write_config):
++    found = codes(write_config({
++        "sweep": {"grid": {"analysis.method": ["pearson", "spearman", "kendall"]}},
++        "replication": {"repeats": [{"kind": "seed", "n": 5}]},
++        "limits": {"max_executions": 10},          # 3 × 5 = 15 > 10
++    }))
++    assert "W-EXEC-BUDGET" in found
++
++
++def test_the_budget_does_not_warn_when_the_expansion_fits(write_config):
++    found = codes(write_config({
++        "sweep": {"grid": {"analysis.method": ["pearson", "spearman"]}},
++        "replication": {"repeats": [{"kind": "seed", "n": 2}]},
++        "limits": {"max_executions": 500},
++    }))
++    assert "W-EXEC-BUDGET" not in found
++
++
++def test_the_budget_passes_at_exactly_the_limit_and_fails_one_over(write_config):
++    found_at = codes(write_config({
++        "sweep": {"grid": {"analysis.method": ["pearson", "spearman"]}},
++        "replication": {"repeats": [{"kind": "seed", "n": 5}]},
++        "limits": {"max_executions": 10},           # 2 × 5 = 10, exactly at budget
++    }))
++    assert "W-EXEC-BUDGET" not in found_at
++
++    found_over = codes(write_config({
++        "sweep": {"grid": {"analysis.method": ["pearson", "spearman", "kendall"]}},
++        "replication": {"repeats": [{"kind": "seed", "n": 5}]},
++        "limits": {"max_executions": 14},            # 3 × 5 = 15 > 14
++    }))
++    assert "W-EXEC-BUDGET" in found_over
++
++
++def test_a_multi_condition_sweep_warns_about_the_uncorrected_family(write_config):
++    c = Collector()
++    validate_config(write_config({
++        "sweep": {"grid": {"analysis.method": ["pearson", "spearman", "kendall"]}}
++    }), c)
++    warning = next(f for f in c.findings if f.code == "W-STATS-FAMILY")
++    assert "3" in warning.message
++    assert "not implemented" in warning.message
++
++
++def test_a_single_condition_run_has_no_family(write_config):
++    assert "W-STATS-FAMILY" not in codes(write_config())
++
++
++def test_warnings_alone_leave_the_exit_code_at_zero(write_config):
++    c = Collector()
++    validate_config(write_config({
++        "sweep": {"grid": {"analysis.method": ["pearson", "spearman"]}}
++    }), c)
++    assert not c.has_errors
++    assert c.exit_code() == 0
++
++
+ def test_an_unexpected_error_finding_the_repo_root_is_not_swallowed(write_config, monkeypatch):
+     """`_check_data`'s repo-root lookup narrows its exception handling to the one case
+     that legitimately means 'the inside-the-repo question does not arise' — anything
+     else must propagate rather than presenting a safety check as a clean pass."""
+     import publishable.validate as validate_mod
+ 
+     def _boom(path):
+         raise RuntimeError("disk fell off")
+ 
+     monkeypatch.setattr(validate_mod, "find_repo_root", _boom)
+@@ -259,61 +409,95 @@ def _with_doc_change(write_config, change) -> Path:
+     """Set a top-level key the base fixture does not declare at all — the dotted
+     override helper needs the parent key to preexist, which `sweep` and
+     `data.units` deliberately do not in the base fixture."""
+     path = write_config()
+     doc = yaml.safe_load(path.read_text())
+     change(doc)
+     path.write_text(yaml.safe_dump(doc))
+     return path
+ 
+ 
+-def test_a_declared_sweep_axis_is_refused_not_silently_ignored(write_config):
+-    """S1 hardcodes one condition; a config declaring `sweep.grid` must not
+-    validate clean and then run one condition while `run.yaml` records the sweep
+-    verbatim, describing an experiment that never ran."""
+-    sweep = {"grid": {"analysis.method": ["pearson", "spearman"]}}
+-    path = _with_doc_change(write_config, lambda doc: doc.update(sweep=sweep))
+-    assert "E-SWEEP-UNSUPPORTED" in codes(path)
++def test_baseline_and_grid_are_now_accepted(write_config):
++    """S3a implements `baseline` and `grid` expansion; a config declaring only
++    those must validate clean rather than tripping any sweep refusal."""
++    found = codes(
++        write_config(
++            {
++                "sweep": {
++                    "baseline": {"analysis.method": "pearson"},
++                    "grid": {"analysis.method": ["spearman"]},
++                }
++            }
++        )
++    )
++    assert not [c for c in found if c.startswith("E-SWEEP")]
+ 
+ 
+-def test_an_empty_sweep_block_is_not_a_sweep(write_config):
+-    """An empty or all-null `sweep` (the shape a generated config ships with)
+-    declares no axis and must not trip the refusal meant for an actual sweep."""
+-    path = _with_doc_change(
+-        write_config,
+-        lambda doc: doc.update(
+-            sweep={
+-                "grid": None,
+-                "groups": [],
+-                "ablate": None,
+-                "baseline": None,
+-                "paired": [],
+-                "sample": None,
++@pytest.mark.parametrize(
++    "mode,value,code",
++    [
++        ("paired", [{"analysis.method": "pearson"}], "E-SWEEP-PAIRED-UNSUPPORTED"),
++        ("ablate", {"from": "baseline", "remove": ["a.b"]}, "E-SWEEP-ABLATE-UNSUPPORTED"),
++        ("sample", {"n": 40, "ranges": {}}, "E-SWEEP-SAMPLE-UNSUPPORTED"),
++        ("groups", [{"by": "arm", "levels": ["a", "b"]}], "E-SWEEP-GROUPS-UNSUPPORTED"),
++    ],
++)
++def test_each_unimplemented_mode_is_refused_on_its_own(write_config, mode, value, code):
++    """`paired`, `ablate`, `sample`, and `groups` each get their own refusal now that
++    the old blanket sweep refusal is retired — otherwise each would fall through
++    into silence the moment `baseline`/`grid` stopped covering the whole block."""
++    assert code in codes(write_config({"sweep": {mode: value}}))
++
++
++def test_an_empty_or_null_mode_is_not_a_declaration(write_config):
++    """`init` may write these absent or null; only a truthy value is refused."""
++    found = codes(
++        write_config(
++            {
++                "sweep": {
++                    "grid": {"analysis.method": ["spearman"]},
++                    "paired": [],
++                    "ablate": None,
++                    "sample": None,
++                    "groups": [],
++                }
+             }
+-        ),
++        )
+     )
+-    assert "E-SWEEP-UNSUPPORTED" not in codes(path)
++    assert not [c for c in found if c.endswith("-UNSUPPORTED")]
++
++
++def test_every_sweep_refusal_message_defers_rather_than_scolds(write_config):
++    for mode, value, code in [
++        ("paired", [{"a.b": 1}], "E-SWEEP-PAIRED-UNSUPPORTED"),
++        ("ablate", {"from": "baseline"}, "E-SWEEP-ABLATE-UNSUPPORTED"),
++        ("sample", {"n": 1}, "E-SWEEP-SAMPLE-UNSUPPORTED"),
++        ("groups", [{"by": "arm"}], "E-SWEEP-GROUPS-UNSUPPORTED"),
++    ]:
++        c = Collector()
++        validate_config(write_config({"sweep": {mode: value}}), c)
++        message = next(f.message for f in c.findings if f.code == code)
++        assert "later slice" in message, f"{code} must defer, not scold"
+ 
+ 
+ def test_a_non_default_replication_order_is_refused_not_silently_ignored(write_config):
+     """`replication.order: randomized` currently validates clean and then executes
+     `as_declared` anyway — the record would say randomized while the run wasn't."""
+     found = codes(write_config({"replication.order": "randomized"}))
+     assert "E-REPL-ORDER-UNSUPPORTED" in found
+ 
+ 
+ def test_a_config_without_unimplemented_blocks_still_validates_clean(write_config):
+     """The base fixture declares no sweep axis, no `data.units`, and
+     `replication.order: as_declared` — none of the new refusals should fire
+     against it."""
+     found = codes(write_config())
+-    assert "E-SWEEP-UNSUPPORTED" not in found
+     assert "E-REPL-ORDER-UNSUPPORTED" not in found
+     assert not [c for c in found if c.endswith("-UNSUPPORTED")]
+ 
+ 
+ def test_a_plain_units_block_is_now_accepted(write_config):
+     """The blanket refusal is retired: S2 resolves a roster."""
+     found = codes(write_config({"data.units": {"from": "index.csv", "key": "patient_id"}}))
+     assert not [c for c in found if c.endswith("-UNSUPPORTED")]
+ 
+ 

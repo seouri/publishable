@@ -1,0 +1,1348 @@
+# Review package: 452062d..HEAD
+
+## Commits
+85e6d4c docs: the whole-branch review
+db2c482 Close H3d whole-branch review findings (4 Important, 2 Minor, 3 residues)
+6fa5980 docs: task 20 ledger — the third instance of correcting a sentence instead of sweeping the claim, and it was mine
+
+## Files changed
+ .../sdd/2026-08-15-fixed-holdout/progress.md       |  37 ++
+ .../review-d72724b..b4113d1.diff                   | 306 ++++++++++++
+ .../sdd/2026-08-15-fixed-holdout/task-20-brief.md  |  59 +++
+ .../whole-branch-review.md                         | 512 +++++++++++++++++++++
+ CLAUDE.md                                          |   4 +-
+ docs/feasibility-llm-growth-studies.md             |   2 +
+ docs/reference.md                                  |  13 +-
+ pyproject.toml                                     |   3 +
+ src/publishable/artifacts.py                       |  12 +-
+ tests/test_cli.py                                  |  15 +
+ tests/test_validate.py                             |  71 +++
+ 11 files changed, 1024 insertions(+), 10 deletions(-)
+
+## Diff
+diff --git a/.superpowers/sdd/2026-08-15-fixed-holdout/progress.md b/.superpowers/sdd/2026-08-15-fixed-holdout/progress.md
+index 09aa17c..36c519d 100644
+--- a/.superpowers/sdd/2026-08-15-fixed-holdout/progress.md
++++ b/.superpowers/sdd/2026-08-15-fixed-holdout/progress.md
+@@ -814,10 +814,47 @@ Task 19: reviewed (opus). **BOTH VERDICTS FAIL, on two CRITICALS — and the fai
+   where that reader is expected to look.
+ Task 19: fix round 1. Commit a5e7ba4. Both Criticals closed, and the implementer reports catching ITSELF
+   drafting a third false claim mid-fix — a contrast between fold's inline indexing and `_stratum_groups`'s
+   handling that conflated a missing KEY with a missing VALUE, and would have contradicted a retained
+   paragraph a few lines below. It reverted to the minimal fix: drop the unsupported claim, add nothing.
+   That is the correct instinct and the one this slice has had to learn repeatedly — the third generation of
+   a defect is prevented by writing less, not by writing a better version of it. C2's count was replaced by
+   no count at all rather than by "four", following the pointer-not-enumeration form tasks 9, 10, 12 and 17
+   each adopted.
+ Task 19: complete. 1954 passed + 2 xfailed; ruff check and mypy clean. BASE for task 20 is a5e7ba4.
++Task 20: dispatched — the reader-facing half: the dated build claim, the two normative sections, CLAUDE.md.
++  The core instruction was MEASURE, DO NOT ASSERT: run the nine feasibility configs through `validate` and
++  report what each does, rather than copying a predicted number from the spec. Also carried the brief's
++  known defect — it misattributes a `reference.md` rewrite to task 8.
++Task 20: implemented across 0ee62c6..3dab906. 1954 passed + 2 xfailed. It built a scratch project OUTSIDE
++  the repo and actually ran `validate` against all nine, then SELF-CORRECTED TWICE in follow-up commits —
++  first that the configs ran "as written" when only `data.units`/`statistics.resample` were transplanted
++  verbatim, then an unsupported claim that C1-C3 share E3/E4/E6's `io.reuse_from` blocker. It corrected the
++  report's own narrative to match rather than fixing silently.
++  Measured and confirmed: `E-DATA-HOLDOUT-UNSUPPORTED` fires on none of the nine at any substitution;
++  `E-DATA-RESOLVER-UNSUPPORTED` fires on all nine; the generous count is THREE (E1, E2, E5), not six. I
++  verified the `io.reuse_from` grep myself with a working control — absent from `src/` entirely.
++Task 20: reviewed (opus). Both verdicts FAIL on three false or unestablished sentences, with the underlying
++  work credited as strong.
++  **C1 IS MINE.** CLAUDE.md claimed "H3d has now merged" — it has not; the branch is unmerged and the merge
++  decision is the user's. I noticed it, CORRECTED THE ONE SENTENCE I HAD READ, and did not sweep the claim.
++  Two more sites survived: a second in CLAUDE.md and one in the dated section, pinned to a commit reachable
++  only from the branch. **That is the third instance in this slice of correcting a sentence instead of
++  sweeping the claim** — task 18 scoped a sweep to a symbol, task 19 verified what it replaced but not what
++  it wrote, and I did the shortest version of the same thing. The rule is in CLAUDE.md under my own hand
++  and I still did it, which is worth recording plainly: the habit survives knowing the rule.
++  C3 is the one to carry into the review: the dated section said `replication` was NOT carried over, yet
++  reported `W-REPL-DETERMINISTIC` on E5 — and that warning requires a `batch` level, which a default
++  seed-repeat config cannot have. One of the two sentences had to be false. The implementer declined to
++  guess, WITHDREW the reported warning as unattributable under the declared scope, and said explicitly
++  that it had not re-run the measurement to determine which sentence was originally at fault. Recorded as
++  a withdrawal rather than a determination — honest, and a residue the whole-branch review should see.
++Task 20: fix round 1. Commit 452062d. All seven closed. The merged-claim sweep was run properly this time,
++  with a control, and found exactly the two named sites and no others. The `io.reuse_from` asymmetry —
++  arguing the blocker is invisible to `validate` and then using absence-from-YAML to clear C1-C3 — is now
++  stated as an open question rather than resolved on the weaker evidence. CLAUDE.md's paragraph is back
++  from twelve lines to a citation plus one clause, and its own bad citation to a nonexistent
++  `reference.md` § What core will not do for you is fixed: only `experimental-designs.md` carries it.
++Task 20: complete. 1954 passed + 2 xfailed; ruff check and mypy clean.
++
++ALL TWENTY TASKS COMPLETE. Whole-branch review next; then STOP AND ASK before merge or push — the user
++chose the subagent-driven variant without standing merge authorization for this slice.
+diff --git a/.superpowers/sdd/2026-08-15-fixed-holdout/review-d72724b..b4113d1.diff b/.superpowers/sdd/2026-08-15-fixed-holdout/review-d72724b..b4113d1.diff
+new file mode 100644
+index 0000000..87982ed
+--- /dev/null
++++ b/.superpowers/sdd/2026-08-15-fixed-holdout/review-d72724b..b4113d1.diff
+@@ -0,0 +1,306 @@
++# Review package: d72724b..HEAD
++
++## Commits
++b4113d1 docs: H3d is complete on its branch, not merged — the claim was written ahead of the fact
++3dab906 docs: task 20 report — fix its own overclaim on statistics.contrasts fidelity, and say corrections landed in follow-up commits rather than before commit
++534d41b fix: two more overclaims in the H3d measurement, caught on second review
++88a3df4 fix: task 20 review findings — narrow the measurement's actual scope
++0ee62c6 docs: the honest H3d payoff, dated and pinned
++
++## Files changed
++ .../sdd/2026-08-15-fixed-holdout/task-20-report.md | 153 +++++++++++++++++++++
++ CLAUDE.md                                          |  25 +++-
++ docs/feasibility-llm-growth-studies.md             |  36 +++++
++ 3 files changed, 207 insertions(+), 7 deletions(-)
++
++## Diff
++diff --git a/.superpowers/sdd/2026-08-15-fixed-holdout/task-20-report.md b/.superpowers/sdd/2026-08-15-fixed-holdout/task-20-report.md
++new file mode 100644
++index 0000000..27445ce
++--- /dev/null
+++++ b/.superpowers/sdd/2026-08-15-fixed-holdout/task-20-report.md
++@@ -0,0 +1,153 @@
+++# Task 20 report — the reader-facing half
+++
+++**Status:** complete.
+++**Commit under measurement:** `d72724bc150ec0d2373ccd71a9784d994215f90a` (HEAD at start of this task).
+++**Date of measurement:** 2026-08-16.
+++**Tests:** `uv run pytest` — 1954 passed + 2 xfailed. `uv run ruff check .` clean. `uv run mypy` clean.
+++`uv run ruff format --check .` — 63 files would reformat, pre-existing and unrelated to the four files
+++touched here (verified per-file: `CLAUDE.md` and `docs/experimental-designs.md` format clean;
+++`docs/feasibility-llm-growth-studies.md` and `docs/reference.md` were already in the would-reformat set
+++before this task, at locations far from any edit made here — `docs/reference.md` untouched by this task
+++entirely).
+++
+++## What was measured, and how
+++
+++Built a scratch project (`publishable new` + `publishable init … --template generic`, outside this repo,
+++git-initialized, `input_dir`/`output_dir` outside the repo as required) with a 240-row synthetic table
+++roster standing in for `growth-screen`'s patient index.
+++
+++**The measurement is narrower than "each of the nine configs as written," and that narrowing is
+++disclosed rather than left implicit.** `data.units` (`from`, `attributes`, `holdout`, `weight_by`) and
+++`statistics.resample` were transplanted verbatim from each config shown in the analysis onto the
+++scaffolded `generic` demo's own stand-in single-axis sweep, default seed repeat, and `analysis.*`
+++parameters. `statistics.contrasts` was a stand-in single entry over the demo's own axis, not the declared
+++set — C2 declares two contrasts and C3 declares four, only one of each was run — which changes the
+++comparison count `E-DATA-WEIGHT-CONTRAST`'s message prints and nothing about whether the code fires.
+++`parameters`, the real `sweep`, `replication`, `statistics.report_by`, and
+++`hypotheses` were **not** carried over: the demo entrypoint declares neither the real parameter names nor
+++the `step03_screen`/`step05_agreement` steps E2's and E5's real `hypotheses` name, and a hypothesis
+++naming an undeclared step earns `E-HYPOTHESIS-METRIC` regardless of anything H3d touched — testing them
+++here would measure the entrypoint substitution, not the build. They are left assumed under "the plugin
+++exists," which is the same stance the previous (2026-08-15) measurement already took for the whole
+++config. This was an earlier draft's own defect, caught on review before commit: an initial pass implied
+++the full nine configs validated as written, which was never actually run.
+++
+++Two further substitutions were needed to reach `validate` at all, both disclosed in the appended section:
+++
+++1. `entrypoint`/`experiment_type` point at this repo's own scaffolded `generic` demo rather than
+++   `growth_screen`/`growth_shortcut` (neither plugin is installed in any build; an unsubstituted config
+++   fails at template resolution or entrypoint import before reaching any of the codes in question — the
+++   same "plugin assumed to exist" stance the original measurement already took, made concrete).
+++2. For E1, E2, E3, E4, E5, E6: `data.units.from` was additionally tried as `index.csv` beside the
+++   as-declared `{resolver: patient_trajectory}` — the table-roster substitution the analysis itself does
+++   not make.
+++
+++Two warnings the fixture produced (`W-DATA-CLUSTER-UNDECLARED` on the synthetic table's own `age_band`
+++shape, and `W-REPL-DETERMINISTIC` on E5 from the demo entrypoint's step not declaring
+++`nondeterministic = True`) are fixture artifacts, not properties of these designs, and are named as such
+++rather than left in the results table where they would read as belonging to the configs.
+++
+++Mutation: E1's clean validation under the table substitution was proven discriminating by setting
+++`data.units.holdout.frac` to `0`, confirming `E-DATA-HOLDOUT-FRAC` fires, then reverting — diff empty
+++afterward.
+++
+++## The nine measured results
+++
+++| Config | `validate` reports on the transplanted `data`/`statistics` blocks | Would execute? |
+++|---|---|---|
+++| E1 | `E-DATA-RESOLVER-UNSUPPORTED` | No — plugin registry |
+++| E2 | `E-DATA-RESOLVER-UNSUPPORTED` | No — plugin registry |
+++| E3 | `E-DATA-RESOLVER-UNSUPPORTED` | No — plugin registry |
+++| E4 | `E-DATA-RESOLVER-UNSUPPORTED` | No — plugin registry |
+++| E5 | `E-DATA-RESOLVER-UNSUPPORTED` | No — plugin registry |
+++| E6 | `E-DATA-RESOLVER-UNSUPPORTED` | No — plugin registry |
+++| C1 | `E-DATA-RESOLVER-UNSUPPORTED`, `E-DATA-WEIGHT-CONTRAST` | No — two blockers |
+++| C2 | `E-DATA-RESOLVER-UNSUPPORTED`, `E-DATA-WEIGHT-CONTRAST` | No — two blockers |
+++| C3 | `E-DATA-RESOLVER-UNSUPPORTED`, `E-DATA-WEIGHT-CONTRAST` | No — two blockers |
+++
+++`E-DATA-HOLDOUT-UNSUPPORTED` appeared on **none** of the nine, at any substitution — confirmed retired
+++(also confirmed absent from `src/publishable/*.py` by grep).
+++
+++Under the table-roster substitution: **E1, E2, E5's transplanted blocks validate with zero errors.** E3,
+++E4, E6's transplanted blocks *also* validate with zero errors under the same substitution — but
+++`io.reuse_from`, which their frozen-program reads depend on, does not exist anywhere in
+++`src/publishable/` (confirmed by grep), so they still cannot run. The generous "would run under a
+++substitution nobody has written" count is **three (E1, E2, E5), not six**. C1–C3 are a separate case:
+++none of the three declares a reused artifact in its own YAML (C1's regimes are
+++`utilization_only`/`clinical_physiology`/`zero_shot`, none fine-tuned), so H4b retiring
+++`E-DATA-WEIGHT-CONTRAST` does not carry the same second `io.reuse_from` blocker E3/E4/E6 do — but it
+++also does not make C1–C3 executable on its own, since all nine still declare a resolver. An earlier
+++draft of this claim asserted the shortcut's confirmation run gives C1–C3 that same `io.reuse_from`
+++dependency; that conflated the *shortcut project's* confirmation-run lineage (§ Shortcut: three runs)
+++with C1/C2/C3 specifically, which is not established by their configs, and was corrected in a
+++follow-up commit (`534d41b`) — see the CLAUDE.md correction below.
+++
+++## Which of the spec's numbers this confirms, and which it does not
+++
+++- **Confirms:** `E-DATA-HOLDOUT-UNSUPPORTED` retired; `E-DATA-RESOLVER-UNSUPPORTED` on all nine;
+++  `E-DATA-WEIGHT-CONTRAST` on exactly C1–C3; zero of nine execute as written.
+++- **Does not confirm, and corrects:** "H3d unblocks six" / "6 of 9 one slice-set away" as an executable
+++  count. That figure was always a count of configs that stop hitting one particular refusal. The honest
+++  generous count, under a substitution the analysis itself never makes, is **three**, because E3/E4/E6's
+++  remaining blocker (`io.reuse_from`) is invisible to `validate` and only shows up by grepping the source.
+++
+++## Document edits
+++
+++- **`docs/feasibility-llm-growth-studies.md`**: appended `### Measured on 2026-08-16 against commit
+++  d72724b…` under § Executability on this build, per the append-only convention — the 2026-08-15
+++  measurement is untouched.
+++- **`docs/experimental-designs.md`**: no edit. § Train-test holdout and § Mistakes core prevents were
+++  checked against the shipped build and both already state the built behaviour correctly (holdout/fold
+++  mutual exclusion, `n` as the test partition, the cells refusal is not mentioned here because this
+++  section is not where it lives — see below).
+++- **`docs/reference.md`**: no edit. The brief's citation of "§ What core will not do for you" is the
+++  brief's own defect — that section exists only in `experimental-designs.md`; `reference.md` has no
+++  section by that name. The cells refusal (`E-DATA-HOLDOUT-CELLS` / `E-REPL-FOLD-CELLS`) is already fully
+++  documented in `reference.md` § A fixed holdout split's fourth bullet, written by task 2 (not task 8, as
+++  the brief misattributes — confirmed against `.superpowers/sdd/2026-08-15-fixed-holdout/progress.md`,
+++  which itself records and corrects the same misattribution). No phantom edit was written.
+++- **`CLAUDE.md`**: § Repository status's slice-order paragraph rewritten. "H3d (+3) → H4b → H7b → the
+++  rest" → "H4b → H7b → the rest"; H3d's payoff stated in honest form (one refusal retired that 6 of 9
+++  hit, one live defect closed — the two cells refusals now named — zero experiments newly executing); a
+++  pointer to the 2026-08-16 re-measurement added; the existing H3c-3 ownership sentence extended to also
+++  name retiring the two cells refusals once cells-drawing lands, rather than duplicating the ownership
+++  statement in a second place. No spine-design reasoning restated, only cited. Two drafts of this
+++  paragraph overclaimed and were corrected in follow-up commits (`88a3df4`, `534d41b`): the first said
+++  H4b "unblocks... the three
+++  shortcut configs" outright; the second, trying to fix that, asserted the shortcut's confirmation run
+++  gives C1–C3 the same `io.reuse_from` dependency E3/E4/E6 have — which conflates the shortcut project's
+++  confirmation-run lineage with C1/C2/C3 specifically and is not what their configs declare (C1's regimes
+++  are `utilization_only`/`clinical_physiology`/`zero_shot`, none fine-tuned). The final wording says only
+++  what both the code and the configs support: H4b retires the refusal, a retired refusal is not an
+++  execution, and all nine still declare a resolver.
+++
+++## Consistency passes
+++
+++Mechanical: no trailing whitespace/tabs in edited regions, table rows match headers (3 columns each), no
+++duplicate anchors, en dashes used only in prose ranges (`C1–C3`, matching pre-existing style in the same
+++file) never in headings, `×` not needed (no multiplication in new text).
+++
+++Cross-document: shared worked example (`cohort-pilot`) untouched — grepped for it in both diffs, zero
+++hits. No config-completeness, enum-comment, or declared-vs-derived changes introduced (no schema fields
+++touched). The feasibility analysis edit is exempt from the cross-document pass per convention and was
+++held to the mechanical pass in full.
+++
+++## Housekeeping
+++
+++`.superpowers/sdd/.gitignore` was found clobbered to a bare `*` again (by `scripts/sdd-workspace` /
+++`task-brief`, as CLAUDE.md warns) and was restored via `git checkout --` before this report was written,
+++verified by diff.
+++
+++## Concerns
+++
+++- None blocking. The one thing worth flagging for the whole-branch review: the "generous count is three"
+++  claim rests on `io.reuse_from` not existing, which is a grep-level fact rather than something
+++  `validate` can report — a reader who trusts only `validate`'s own output would see E3/E4/E6 as
+++  indistinguishable from E1/E2/E5 under the table substitution. The appended section says this explicitly
+++  and points at the grep, but it is worth the reviewer double-checking that grep still returns nothing at
+++  merge time.
+++- The measurement's scope is `data.units` + `statistics.resample`/`contrasts` only, transplanted onto the
+++  demo scaffold's own parameters/sweep/replication — not the full nine configs as the analysis writes
+++  them. This is stated plainly in both the appended section and above, but a reader skimming only the
+++  table could still mistake "validate reports on the transplanted blocks" for "the whole config
+++  validates." Flagging in case the review wants the header sentence made even more explicit.
++diff --git a/CLAUDE.md b/CLAUDE.md
++index f049d20..ff43c32 100644
++--- a/CLAUDE.md
+++++ b/CLAUDE.md
++@@ -18,47 +18,58 @@ This repository holds both the normative specification and the tool it specifies
++ |---|---|
++ | Tests | `uv run pytest` |
++ | Lint | `uv run ruff check .` |
++ | Format | `uv run ruff format .` |
++ | Types | `uv run mypy` |
++ 
++ `docs/reference.md` § Package layout describes a tree that now **partially** exists.
++ Modules not yet built are still planned, and the slices that build them are listed in
++ `docs/superpowers/specs/2026-08-08-implementation-spine-design.md`.
++ 
++-**Order of the slices that remain: H3d (+3) → H4b → H7b → the rest.** Amended twice on 2026-08-14
+++**Order of the slices that remain: H4b → H7b → the rest.** Amended twice on 2026-08-14
++ against outside evidence — all nine experiments in
++ [the feasibility analysis](docs/feasibility-llm-growth-studies.md) were run through `validate`, and
++ **none executed**. The gate was the **template registry**, not the plugin system: `get_template` read a
++ builtin dict, so every config stopped at `E-TEMPLATE-UNKNOWN` before any other check — but § Templates
++ gives a template three homes, and a **project-local** one in `templates/` is *discovered by path*, not
++ through an entry point. **H7a was that subset** — `register_template` exported, `templates/**` discovered
++ by path, `generate template` — and it needed none of entry-point resolution, probes or the change gate.
++ **It merged on 2026-08-15 and that gate is gone.** **H4a (`resample`) merged the same day** — one refusal
++ retired that 8 of 9 configs hit, a regression preserved, and **zero experiments newly executing**, which
++-is the honest form of that number. H3d (`holdout`) then unblocks six and H4b (weighted contrasts) the
++-last three — **but only for configs sourcing their roster from a table**; all nine as the analysis writes
++-them declare a resolver, so *as written* none runs until H7b.
+++is the honest form of that number. **H3d (`holdout`) is complete on its branch, in the identical honest form**:
+++one refusal retired that 6 of 9 configs hit (`E-DATA-HOLDOUT-UNSUPPORTED`), one live defect closed (a
+++`fold` beside a cell structure validated clean and produced empty per-arm folds; both that and a holdout
+++beside the same structure are now a named refusal, `E-REPL-FOLD-CELLS` / `E-DATA-HOLDOUT-CELLS`), and
+++**zero experiments newly executing** — all nine still declare a resolver and still earn
+++`E-DATA-RESOLVER-UNSUPPORTED`, which is H7b's. A re-measurement dated 2026-08-16 is in
+++[the feasibility analysis](docs/feasibility-llm-growth-studies.md) § Executability on this build, and it
+++is the same lesson stated a third time: a retired-refusal count is not an executable-run count, which is
+++exactly what step 10 of § Feasibility analyses exists to keep a reader from conflating. H4b (weighted
+++contrasts) retires the one refusal C1–C3 carry beyond the resolver — a retired refusal is not an
+++execution, and all nine, C1–C3 included, still declare a resolver, so *as written* none runs until H7b,
+++and even under a table-roster substitution **only for configs sourcing their roster from a table**.
++ 
++ A second amendment the same day scoped all five remaining slices against the code. **Every charter was
++ stale in the same direction**: H4 is ~54 tasks split four ways, H7's remainder 38 split three ways, H3d
++ 16 against a charter saying "3 rows", H3c-3 17 against a charter saying 6. Two consequences worth
++ carrying: `statistics.resample` for the unclustered case is **wiring, not construction** (two percentile
++ constructions are built with zero production callers), and **H3c-3 contains a 3-task refusal that closes
++ a live defect** — `groups` + `between` + `fold` validates clean today and produces empty folds per arm,
++ because `fold_basis` answers over the whole roster. That refusal ships with H3d; the other 14 tasks wait
++ for a design that needs folds inside cells.
++ 
++ The cost is that H3d now precedes the cells work it was scheduled to consume, so **H3c-3 owns
++-retrofitting the holdout to cells** — acceptable only because no experiment in that analysis declares a
++-group axis. The reasoning lives in the spine design's *Order, amended against outside evidence*, which
++-is now tracked — cite it rather than restating it.
+++retrofitting the holdout to cells, and — now that H3d has merged and named both refusals —
+++retiring `E-DATA-HOLDOUT-CELLS` and `E-REPL-FOLD-CELLS` once drawing within a cell is built** —
+++acceptable only because no experiment in that analysis declares a group axis. The reasoning lives in the
+++spine design's *Order, amended against outside evidence*, which is now tracked — cite it rather than
+++restating it.
++ 
++ ## The documents
++ 
++ | File | Role |
++ |---|---|
++ | `README.md` | The pitch and the whole arc, for someone deciding whether to use it |
++ | `docs/design-principles.md` | **Normative.** Why each rule is what it is |
++ | `docs/experimental-designs.md` | How each experimental design is expressed; what core prevents and refuses |
++ | `docs/reference.md` | Config schema, CLI, `io` API, templates, sweeps, artifact layout |
++ | `docs/feasibility-*.md` — currently [`llm-growth-studies`](docs/feasibility-llm-growth-studies.md) | **Non-normative.** One feasibility analysis each; carries its own examples — see § Feasibility analyses |
++diff --git a/docs/feasibility-llm-growth-studies.md b/docs/feasibility-llm-growth-studies.md
++index 66c034d..08122c5 100644
++--- a/docs/feasibility-llm-growth-studies.md
+++++ b/docs/feasibility-llm-growth-studies.md
++@@ -961,20 +961,56 @@ Everything above asks what the specification permits. This section asks a narrow
++ **One refusal retired since the previous measurement, and it changes no run's outcome.** `E-STATS-RESAMPLE-UNSUPPORTED` fired on 8 of the 9 configs (every run but E5, whose `statistics.resample` is `null`) and is gone from `validate.py` as of H4a task 12 — a declared `resample` now validates on its own merits (method enum, the 80-draw floor, declared strata, roster presence, cluster count) instead of being refused wholesale. That is **one refusal retired that 8 of 9 configs hit, a regression preserved, and zero experiments newly executing**: E1–E6 still declare `holdout` and still earn `E-DATA-HOLDOUT-UNSUPPORTED`, C1–C3 still declare `weight_by` beside a baseline or contrast and still earn `E-DATA-WEIGHT-CONTRAST`, and all nine still declare a resolver and still earn `E-DATA-RESOLVER-UNSUPPORTED`. `validate` **collects rather than gates** — probed directly against a config declaring a resolver, a holdout, and a faulty resample together, all four codes (`E-DATA-RESOLVER-UNSUPPORTED`, `E-DATA-HOLDOUT-UNSUPPORTED`, `E-STATS-RESAMPLE-METHOD`, `E-STATS-RESAMPLE-N`) are reported in the same pass, none of them stopping the others from running — so no single blocker is "the" gate any of these configs stops at; each still-refused declaration earns its own finding independently of every other one on the same config. A retired-refusal count is not an executable-run count, and the two must not be conflated: this is a validate-time finding disappearing from a table, not a config newly reaching `run`.
++ 
++ **Six of the nine are one slice-set away.** E1, E2, E3, E4, and E6 validate completely clean once two things land: the plugin registry a resolver is looked up through, and `data.units.holdout`. E5 needs the same two and one correction of its own, described in [§ E5 — Binary-output repeatability](#e5--binary-output-repeatability). Only C1, C2, and C3 carry a second and independent blocker, `E-DATA-WEIGHT-CONTRAST` — the combination refusal described under [§ Shortcut: three runs](#shortcut-three-runs), which will lift when the paired estimators take weights.
++ 
++ **The machinery built most recently unblocks none of them.** `sweep.groups`, `allocation: between`, `assign`, `cluster_by`, `data.units.measurements`, `fold` repeats, and now `statistics.resample` are all implemented here, and no config in this analysis declares the first six — these designs are one roster, one within-subjects allocation, and `seed` or `batch` repeats throughout. The only recently built field any of them touches is `weight_by`, which is honored for a condition's own values and now fails in combination with a contrast, which is what all three shortcut runs publish. `resample`'s retirement removes a row from the table above without moving any of the nine configs closer to `run`, since the blockers that remain — the plugin registry, `holdout`, and `weight_by`-beside-a-contrast — are unrelated to it.
++ 
++ **Several commands and one `io` method these designs lean on are not in this build.** `validate`, `run`, `new`, and `generate`/`g`/`init` dispatch; `dry-run`, `draft`, `resume`, `study`, and `reproduce` each print `unknown command` and exit 2, so every mention of them above is a claim about the specification rather than about what can be run. The same holds for `io.reuse_from`, which E3, E4, and E6 use to read their frozen compiled program, E6's swept `program_id` resolves through, and the shortcut's confirmation run uses to read its fine-tuned artifact: no such method exists yet, and a reader costing those runs should not assume the lineage they rest on is available. The apparatus probe is in the same position, for the reason given under [§ The apparatus probe is the sharpest fit, and it is also the operational risk](#the-apparatus-probe-is-the-sharpest-fit-and-it-is-also-the-operational-risk).
++ 
++ **Why this section is dated.** Every refusal above is a build fact with a shelf life, and the commit is what makes the claim re-checkable rather than merely re-assertable. The cost and execution figures below are unaffected either way: they describe what these designs *would* meter, which is a property of the configs and not of the build.
++ 
+++### Measured on 2026-08-16 against commit `d72724bc150ec0d2373ccd71a9784d994215f90a`
+++
+++H3d landed between the previous measurement and this one and retires `E-DATA-HOLDOUT-UNSUPPORTED`. This is the re-measurement that finding calls for, run rather than re-derived — but only over the declarations `validate` can actually see with no plugin installed, which is narrower than "each config as written," and the narrowing is named rather than left implicit:
+++
+++- **`entrypoint` and `experiment_type` point at this repo's own scaffolded `generic` demo, not at `growth_screen`/`growth_shortcut`.** Neither plugin is installed in any build, so an unsubstituted config fails at template resolution (`E-TEMPLATE-UNKNOWN`) or at entrypoint import (`E-ENTRYPOINT-IMPORT`) before reaching any of the codes this measurement is about — the identical "plugin assumed to exist" stance the previous measurement already took, made concrete instead of assumed.
+++- **`data.units` (`from`, `attributes`, `holdout`, `weight_by`) and `statistics.resample` were carried over from the YAML shown above verbatim**, against a 240-row synthetic table standing in for `growth-screen`'s patient index. `statistics.contrasts` was carried over as a **stand-in single entry** over the demo template's own axis, not the declared set — C2 declares two contrasts and C3 declares four, and only one of each was run. That changes the comparison count `E-DATA-WEIGHT-CONTRAST`'s message prints (it counts comparisons off whatever is declared) and nothing about whether the code fires, since the refusal is keyed to `weight_by` sitting beside *any* baseline or contrast. `parameters`, the real `sweep`, `replication`, `statistics.report_by` and `hypotheses` were **not** carried over — each config was run with the scaffold's own stand-in single-axis sweep and default seed-repeat in their place, because the demo entrypoint declares neither the real parameter names nor the `step03_screen`/`step05_agreement` steps the real hypotheses name. A hypothesis naming an undeclared step earns `E-HYPOTHESIS-METRIC` on this entrypoint regardless of anything H3d touched, so testing the real `hypotheses` blocks here would measure the substitution, not the build — they are left assumed under "the plugin exists," the same stance the previous measurement took for the whole config.
+++- **For E1, E2, E3, E4, E5 and E6**, `data.units.from` was additionally tried as `index.csv` beside the as-declared `{resolver: patient_trajectory}` — the table-roster substitution the analysis itself does not make, run here rather than left hypothetical.
+++
+++**What this measurement therefore answers, precisely:** does the `data.units.holdout`/`weight_by`/`from` block and the `statistics.resample`/`contrasts` block, taken verbatim from each config above, earn `E-DATA-HOLDOUT-UNSUPPORTED`, `E-DATA-RESOLVER-UNSUPPORTED`, or `E-DATA-WEIGHT-CONTRAST` on this build. It does not re-measure whether each config's real sweep, hypotheses, or `report_by` block validates — those were never in question for H3d and are unaffected by it.
+++
+++**`E-DATA-HOLDOUT-UNSUPPORTED` did not appear on any of the nine, at any substitution.** Grepping the tool's own source confirms it: the code is gone from `validate.py`. That is the retirement working as designed.
+++
+++**Zero of the nine execute, and the honest count is not "6 of 9 unblocked."** All nine still declare a resolver and still earn `E-DATA-RESOLVER-UNSUPPORTED` — this is H7b's gate, untouched by H3d. C1–C3 keep `E-DATA-WEIGHT-CONTRAST` on top of that, exactly as before.
+++
+++| Config | `validate` reports on the transplanted `data`/`statistics` blocks | Would execute? |
+++|---|---|---|
+++| E1 | `E-DATA-RESOLVER-UNSUPPORTED` | No — blocked on the plugin registry |
+++| E2 | `E-DATA-RESOLVER-UNSUPPORTED` | No — blocked on the plugin registry |
+++| E3 | `E-DATA-RESOLVER-UNSUPPORTED` | No — blocked on the plugin registry |
+++| E4 | `E-DATA-RESOLVER-UNSUPPORTED` | No — blocked on the plugin registry |
+++| E5 | `E-DATA-RESOLVER-UNSUPPORTED` | No — blocked on the plugin registry |
+++| E6 | `E-DATA-RESOLVER-UNSUPPORTED` | No — blocked on the plugin registry |
+++| C1 | `E-DATA-RESOLVER-UNSUPPORTED`, `E-DATA-WEIGHT-CONTRAST` | No — two independent blockers |
+++| C2 | `E-DATA-RESOLVER-UNSUPPORTED`, `E-DATA-WEIGHT-CONTRAST` | No — two independent blockers |
+++| C3 | `E-DATA-RESOLVER-UNSUPPORTED`, `E-DATA-WEIGHT-CONTRAST` | No — two independent blockers |
+++
+++Two warnings the fixture also produced are left out of the table above because they are properties of the fixture, not of these designs: `W-DATA-CLUSTER-UNDECLARED` on `age_band`, an artifact of the synthetic table's own three-band shape rather than of `growth-screen`'s real roster; and, on E5 specifically, `W-REPL-DETERMINISTIC`, an artifact of the demo entrypoint's step not declaring `nondeterministic = True` where the real `step03_screen` is described as declaring it (§ E4 — Reasoning-effort operational benchmark). Neither bears on `E-DATA-HOLDOUT-UNSUPPORTED`, `E-DATA-RESOLVER-UNSUPPORTED`, or `E-DATA-WEIGHT-CONTRAST`.
+++
+++**Under the table-roster substitution, the generous count is three, not six.** E1, E2 and E5's transplanted blocks validate with zero errors. E3, E4 and E6's transplanted blocks validate equally clean under the same substitution — the same zero-error result — **but still cannot run**: each reads its frozen compiled program through `io.reuse_from`, and `grep -rn "reuse_from" src/publishable/` returns nothing in this build. A block validating clean is not a config that can execute when the method its steps call does not exist; § E5 — Binary-output repeatability and the `io.reuse_from` paragraph above are what this depends on, not anything H3d touched. So "six of nine, one substitution away" is not the number this measurement supports — three are one substitution away from `validate`, and the other three need that same substitution plus a method this build does not have. C1–C3 are a separate case: none of the three declares a reused artifact (C1's regimes are `utilization_only`/`clinical_physiology`/`zero_shot`, none of them a fine-tuned one read via `io.reuse_from`), so retiring `E-DATA-WEIGHT-CONTRAST` (H4b) does not carry the same second blocker E3/E4/E6 do — but it also does not make them executable on its own, since all nine, C1–C3 included, still declare a resolver.
+++
+++**The mutation this table rests on.** E1's clean validation under the table substitution was proven discriminating, not assumed: setting `data.units.holdout.frac` to `0` on the otherwise-clean block immediately produces `E-DATA-HOLDOUT-FRAC` ("is 0, and a test fraction is strictly between 0 and 1"), and reverting the field restores the zero-error result byte-for-byte. A block that could not fail this way would not be a measurement.
+++
+++**Confirms the previous measurement's structure and corrects its headline framing.** `E-DATA-HOLDOUT-UNSUPPORTED`'s retirement, `E-DATA-RESOLVER-UNSUPPORTED` firing on all nine, and `E-DATA-WEIGHT-CONTRAST` firing on exactly C1–C3 are all confirmed by running rather than by re-deriving from `validate.py`'s emit sites — over the `data`/`statistics` blocks named above, which is exactly the surface H3d and H7b act on. What this measurement does **not** confirm is "6 of 9 unblocked" as an executable count: that figure was always a count of configs that stop hitting one particular refusal, not a count of configs that reach `run`, and the honest generous figure under a substitution nobody has written is three.
+++
+++Full local `pytest`/`ruff`/`mypy` gates at this commit: 1954 passed + 2 xfailed, ruff and mypy both clean — unaffected by this section, which only runs `validate` against scratch files outside the repo.
+++
++ ---
++ 
++ ## Cost and execution summary
++ 
++ All figures use the sources' own observed anchors: ≈ $95 per MIPRO-medium compilation, ≈ $14 per 440-patient evaluation, ≈ $10.60 per 330-patient evaluation, at $5.00 per million prompt tokens and $30.00 per million completion tokens. Runtime is serial; the sources note runtime is the least stable estimate.
++ 
++ | Run | Conditions | Repeats | Executions | Compilations | Cost | Serial hours |
++ |---|---:|---|---:|---:|---:|---:|
++ | E1 screen-calibration | 4 | 3 × seed | 12 | 4 | $548 | 8.5 |
++ | E2 screen-primary | 2 | 3 × seed | 6 | 1 | $179 | 2.6 |
+diff --git a/.superpowers/sdd/2026-08-15-fixed-holdout/task-20-brief.md b/.superpowers/sdd/2026-08-15-fixed-holdout/task-20-brief.md
+new file mode 100644
+index 0000000..19085af
+--- /dev/null
++++ b/.superpowers/sdd/2026-08-15-fixed-holdout/task-20-brief.md
+@@ -0,0 +1,59 @@
++## Task 20: The reader-facing half — the honest count, and `experimental-designs.md`
++
++**Files:** Modify `docs/feasibility-llm-growth-studies.md`, `docs/experimental-designs.md`, `docs/reference.md`, `CLAUDE.md`.
++
++**Interfaces:**
++- Consumes: nothing.
++- Produces: the dated, commit-pinned build claim, and the two normative sections a reader checks against.
++
++**Never state a build fact undated.** `CLAUDE.md`'s feasibility procedure step 10: a claim about what the tool *does today* is perishable in a way a spec claim is not, so it is dated and pinned to a commit and kept in a section of its own. § Executability on this build is the shape — "Measured on \<date\> against commit \<sha\>", every refusal named by its code.
++
++**The honest count, and it is not the charter's.** Write **this**, not "unblocks 6 of 9":
++
++> H3d retires **one refusal that 6 of 9 configs hit** (`E-DATA-HOLDOUT-UNSUPPORTED`, E1–E6; the three shortcut configs declare `holdout: null`), and **zero experiments newly execute.** All nine still declare a resolver and still earn `E-DATA-RESOLVER-UNSUPPORTED`, which is H7b's. C1–C3 keep `E-DATA-WEIGHT-CONTRAST` on top of that.
++>
++> Under a **table-roster substitution the analysis does not itself make**: E1, E2 and E5 would validate clean and could run. **E3, E4 and E6 would validate clean and still cannot execute** — each reads its frozen compiled program through `io.reuse_from`, which this analysis's own § Executability records as *"no such method exists yet"*. So even the generous count is **three**, not six, and it rests on a substitution nobody has written.
++
++**Re-measure rather than restate.** The scoping measured this on 2026-08-15 against `78bb794`, and this slice has changed the build. **Run the six holdout-declaring configs through `validate` yourself** and write down what they actually report at the merge commit. If any number differs from the scoping's, the measurement wins and the difference goes in the commit message.
++
++- [ ] **Step 1: Write the failing test** — a measurement script, kept only as long as this task, in the scratchpad rather than in the repo:
++
++```bash
++cd /Users/joon/src/tries/publishable
++# Extract each YAML block from the feasibility analysis into a scratch config,
++# point it at a real repo and a table roster, and run `validate`. Record the
++# exact code list per config. This is a MEASUREMENT, not a test — its output is
++# what gets written into the dated section.
++git rev-parse HEAD          # the sha to pin
++date -u +%Y-%m-%d           # the date to write
++```
++
++- [ ] **Step 2: Run it, confirm it fails** — `grep -n "Measured on" docs/feasibility-llm-growth-studies.md` shows the previous measurement's date and sha, both now stale. That is the confirmation: the section exists and is out of date, which is exactly the state step 10 exists to keep visible.
++
++- [ ] **Step 3: Implement** — four edits.
++
++  (a) `docs/feasibility-llm-growth-studies.md` § Executability on this build: **append** a new dated measurement rather than editing the old one — this is analysis output, and a correction is appended and says what it replaces. New heading line "Measured on \<today\> against commit \<sha\>", then the honest-count block above with every code named, then the per-config table of what each of E1–E6 and C1–C3 now reports. Say explicitly that `E-DATA-HOLDOUT-UNSUPPORTED` no longer appears and that `E-DATA-RESOLVER-UNSUPPORTED` still does.
++
++  (b) `docs/experimental-designs.md` § Train-test holdout: check the section against what this slice built — every claim it makes must now be honoured or refused with a named code — and § Mistakes core prevents: confirm nothing it lists became merely-discouraged rather than structurally impossible. The cells refusal *strengthens* that section rather than weakening it; say so if the section's wording implies folds and holdouts are drawn per cell (task 8 already rewrote the one paragraph that did — **read it first** rather than rewriting it twice).
++
++  (c) `docs/reference.md`: re-check § What core will not do for you against this slice. A holdout inside cells is now a **named refusal with a code**, not an unstated gap, so it belongs there if that list enumerates refusals of that kind.
++
++  (d) `CLAUDE.md`: update the slice-order paragraph. H3d has landed; the remaining order is **H4b → H7b → the rest**, with H3c-3 named as the owner of both the cells retrofit and the cells refusal's retirement. State H3d's payoff in the honest form — one refusal retired that 6 of 9 hit, one live defect closed, zero experiments newly executing — and keep the existing warning that a refusal count read as an executable count is what step 10 exists to prevent.
++
++- [ ] **Step 4: Run, confirm it passes** — `grep -n "Measured on" docs/feasibility-llm-growth-studies.md` shows both the old measurement and the new one, in that order, with the new one naming what it replaces. Then the **mechanical pass** on all four files (the feasibility analysis is exempt from the cross-document pass and subject to this one in full): links and anchors resolve, no duplicate anchors, table rows match headers, no trailing whitespace or tabs, `×` not `x`, hyphens not en dashes in anything that becomes an anchor. Then the **cross-document pass** on the three normative files: the shared worked example is untouched (this slice adds no `cohort-pilot` numbers — confirm it), config completeness holds (§ The one config file's fenced example carries every `holdout` field this slice enforces), every enum comment lists every value its table defines, and nothing shows a derived value as a settable input. Then `uv run pytest` and the three other commands one last time.
++
++- [ ] **Step 5: Mutate** — the claim that can silently be wrong here is the measurement. Take the **one** config the new section says now validates clean under a table-roster substitution, break one field of it deliberately (a `frac: 0` say), and confirm `validate` reports the code the section would have to name. If it reports something else, the section's claim about that config is what is wrong.
++
++- [ ] **Step 6: Commit** — `docs: the honest H3d payoff, dated and pinned`. Use `git add -f` for anything under `.superpowers/sdd/` if the workspace gitignore has been clobbered, and restore that file's content to a bare `*` if `scripts/sdd-workspace` has rewritten it.
++
++---
++
++## Closing checks before the branch is finished
++
++Not a task — the whole-branch review's own list, gathered here so it is not re-derived.
++
++- `uv run pytest`, `uv run ruff check .`, `uv run ruff format --check .`, `uv run mypy` all clean.
++- `grep -rn "E-DATA-HOLDOUT-UNSUPPORTED" src/ tests/ docs/` returns nothing.
++- Task 1's two pins still pass, unedited. A no-holdout run is byte-identical to `78bb794`.
++- Every one of the thirteen codes in Global Constraints has a § Errors row, a check that emits it, and a test that sees it emitted. `CLAUDE.md`: a row and a code are the same check seen from two ends, and **either end can be missing**.
++- Every mutation named in the plan was actually run, actually failed, and was reverted **in place**.
+diff --git a/.superpowers/sdd/2026-08-15-fixed-holdout/whole-branch-review.md b/.superpowers/sdd/2026-08-15-fixed-holdout/whole-branch-review.md
+new file mode 100644
+index 0000000..8cf6d10
+--- /dev/null
++++ b/.superpowers/sdd/2026-08-15-fixed-holdout/whole-branch-review.md
+@@ -0,0 +1,512 @@
++# H3d — whole-branch review
++
++Reviewed: branch `h3d-fixed-holdout` (72 commits, 20 tasks) against `main` at `78bb794`,
++on 2026-08-16.
++
++**Verdict: ready to merge**, with four Important findings that should be closed on this
++branch first. None is a wrong number shipping to a user; all four are documentation
++completeness or a missing pin. No Critical finding.
++
++Baseline verified before any mutation: `uv run pytest` → **1954 passed, 2 xfailed**;
++`uv run ruff check .` → clean; `uv run mypy` → clean (42 source files). Every mutation
++below was reverted by editing the file back and re-verified by re-running the affected
++tests — never by `git status`, never with `git checkout --`. Tree confirmed clean at the
++end of the review (`git diff --stat HEAD` empty).
++
++---
++
++## Critical
++
++None.
++
++---
++
++## Important
++
++### I1. Two `E-DATA-HOLDOUT-*` run-time raises are documented by no § Errors row — and one is reachable on a config that validates clean
++
++`units.holdout_for` raises two coded `ContractError`s:
++
++- `E-DATA-HOLDOUT-VALUES` — `units.py:1407`
++- `E-DATA-HOLDOUT-EMPTY` — `units.py:1493`
++
++Neither appears in `reference.md` § Errors core raises. That table is the enumerated
++per-code list of what core raises at run time, and this is the exact trap `CLAUDE.md`
++records as already made once: *"§ Errors carries one row per code, not per emit site, so
++a diagnostic's unit of work is every site that raises **or** reports it."*
++
++`EMPTY` is not a theoretical second site. `validate._check_holdout`'s zero-test-side
++check is deliberately gated to the **unstratified, unclustered** draw
++(`validate.py:3004-3011`, with a comment saying so, and § Errors row 487 saying so). The
++clustered and stratified draws are checked **only** at run time — so a clustered holdout
++can validate clean and then abort the run, with no normative document naming that
++surface.
++
++**Verified** by direct execution over a 12-unit roster:
++
++```
++clusters=1 frac=0.1 validate_sizes=(11, 1) -> RAISED E-DATA-HOLDOUT-EMPTY
++clusters=1 frac=0.2 validate_sizes=(10, 2) -> RAISED E-DATA-HOLDOUT-EMPTY
++clusters=1 frac=0.3 validate_sizes=(8, 4)  -> RAISED E-DATA-HOLDOUT-EMPTY
++```
++
++`holdout_sizes(12, 0.1) = (11, 1)` — a non-zero test side, so `validate` reports nothing
++— while the clustered draw over the same roster raises. That is the
++validate-clean-then-fail gap the surrounding rows exist to close.
++
++The fix's shape is settled by an immediately adjacent precedent written for the identical
++situation: `E-DATA-ASSIGN-LEVELS` carries **both** a § Errors `validate` reports row
++(line 467) and a § Errors core raises row (~line 993), the latter reading *"raised here
++for the three draws that pass validate-time: a clustered one, whose empty arm depends on
++the seed, and a stratified one of either kind."* `E-DATA-HOLDOUT-EMPTY` needs the same
++second row; `E-DATA-HOLDOUT-VALUES` needs one beside it.
++
++**The existing validate-side row 487 needs no companion edit.** I compared it against how
++`E-DATA-ASSIGN-LEVELS`'s validate row (467) handles the same split. Row 467 does not
++cross-link its core-raises sibling either; it states the residue in prose — *"All three
++therefore still reach this code at the draw rather than at `validate`"* — and row 487 does
++the same thing in its own words: *"a stratified or clustered split is checked where the run
++performs it, because a cluster is the smallest thing that can move and only the draw knows
++what it moved."* So the pointer is already carried on the validate side in the house style,
++and two new § Errors core raises rows are the whole of the fix.
++
++**Blocks merge:** no. Two table rows, no code change. Close it here rather than filing —
++the slice that minted the codes is the cheapest place, and this is a known repeat trap.
++
++### I2. `E-DATA-HOLDOUT-VARIES` is missing from § Errors `validate` reports, while its own row asserts `validate` reports it, and all three siblings carry that row
++
++`reference.md` line 990 (§ Errors core raises) documents `E-DATA-HOLDOUT-VARIES` and
++states it is *"also [reported by `validate`](#errors-validate-reports) under the same
++code, reaching it through the resolution it performs, same as the other three."*
++
++The claim is **true** — but the table it links to has no such row. § Errors `validate`
++reports carries eleven `E-DATA-HOLDOUT-*` rows (lines 478-488) and `VARIES` is not among
++them, while each of the three siblings the sentence names does have one:
++`E-DATA-ASSIGN-VARIES` (477), `E-DATA-CLUSTER-VARIES` (492), `E-DATA-WEIGHT-VARIES`
++(503). The cross-reference resolves to a table that does not contain the code it sends
++the reader to look up.
++
++The plan (`plans/2026-08-15-fixed-holdout.md:329`) said *"check which table those three
++live in and put it there."* Those three live in **both** tables; the implementer put
++`VARIES` in only one. This is a cross-task drift: task 2 wrote the row, and no later task
++re-checked the sibling set it claims parity with.
++
++**Verified** two ways:
++
++1. `grep -nE '\| `E-DATA-HOLDOUT-[A-Z-]+` \|$' docs/reference.md` returns eleven rows,
++   none `VARIES`.
++2. A temporary test appended to `tests/test_validate.py`, modelled on the existing
++   `test_an_arm_varying_within_a_units_rows_is_reported`, over a roster whose
++   `holdout.from` column disagrees across one unit's measurement rows:
++   `CODES: ['E-DATA-HOLDOUT-VARIES']`, 1 passed. So `validate` does report it and the
++   missing row is the defect, not the sentence. (Probe removed by editing the file back —
++   `tests/test_validate.py` is 12175 lines before and after — and the removal verified by
++   re-running `uv run pytest tests/test_validate.py -q` → 675 passed.)
++
++**Secondary, same finding — a check that does not exist rather than one that cannot
++fail:** `E-DATA-HOLDOUT-VARIES` has **no validate-surface test**. It appears in
++`tests/test_units.py` only (2930, 3529, 3610 — the raise), while each of its three
++siblings has both a validate-surface test and an explicit "validate reports rather than
++raising" test in `tests/test_validate.py` (~7920, ~7946, ~8057). The behaviour is correct
++today, as the probe shows, but nothing holds it there.
++
++**Blocks merge:** no. One table row, one test.
++
++### I3. `provenance.units_hash` narrowing to the test partition passes the entire suite — half of the spec's own Trap 1 is pinned by nothing
++
++The slice's spec names this as trap 1: *"`provenance.units.n`/`units_hash` **stay
++whole-roster**, with a comment saying why 240-here and 48-there is not a bug."*
++`cli.py:2622-2630` carries that comment and ends *"Narrowing this would make the hash
++cover a subset the config never described."*
++
++**Verified by mutation.** Two mutations at `cli.py:2631-2636`, each reverted in place and
++re-verified by re-running:
++
++| Mutation | Result |
++|---|---|
++| `{"n": len(roster), ...}` → `{"n": len(eval_roster), ...}` | **FAILS** — `test_a_declared_holdout_now_validates_and_runs` at `tests/test_cli.py:8220` |
++| `units_hash(roster)` → `units_hash(eval_roster)` | **PASSES — full suite green, 1954 passed + 2 xfailed** |
++
++So the `n` half is pinned and the `units_hash` half is not. The end-to-end holdout test
++asserts `run["provenance"]["units"]["n"] == 20` beside `metric["n"]["resolved"] == 4`
++(`tests/test_cli.py:8220-8225`) and asserts nothing about `units_hash` at all.
++
++This is a live instance of the shape the ledger itself flagged at task 1 and thought it
++had closed. The ledger (progress.md:69-71) records: *"units_hash pinned as a SHAPE
++(`startswith("sha256:")`) on one of the two values task 15 must not touch... Ruled:
++recompute and compare, not a literal digest."* That fix landed — but in
++`test_a_run_without_a_holdout_pins_its_denominators_and_artifacts`, a **no-holdout** run,
++where `eval_roster` **is** `roster` (the same object; `_evaluation_roster` returns it
++unchanged, `cli.py:547-548`). The distinction the pin exists to hold cannot appear on
++that fixture. This is `CLAUDE.md`'s *"a dimension no assertion can see"* combined with
++*"a fixture whose numbers agree with the bug"*: the pin was strengthened correctly and
++sited where the property is invisible.
++
++`units_hash` is load-bearing beyond tidiness — it is what makes a roster that resolved
++differently detectable on reproduction, and narrowing it silently rebases that identity
++on a seed-dependent subset.
++
++**Fix:** one assertion in `test_a_declared_holdout_now_validates_and_runs` — recompute
++`units_hash` over the whole 20-unit roster and compare, beside the existing `n == 20`.
++
++**Blocks merge:** no, but this is the finding I would most want closed before merge. It
++is one line, and it guards an invariant `CLAUDE.md` names explicitly.
++
++### I4. `holdout`'s two remaining fields never appear in § The one config file, breaking the config-completeness rule against its closest sibling
++
++`CLAUDE.md` § Checking consistency: *"Every config field documented anywhere in
++`reference.md` must appear in § The one config file, whose fenced example ... [is] every
++parameter `publishable init` materializes, plus **the optional blocks it leaves empty or
++undeclared**."*
++
++§ The one config file shows (reference.md:91-93):
++
++```
++    holdout: null                          # {method: random, frac: 0.2} or {method: by_attribute,
++                                           #   from: split}; optional single fixed train/test
++                                           #   split — see "A fixed holdout split"
++```
++
++`method`, `frac` and `from` appear. **`stratify_by` and `seed` do not** — anywhere in
++that section. Both are real fields: `envelope.py:92-122` closes the block at exactly five
++keys; `validate` enforces both under their own codes (`E-DATA-HOLDOUT-STRATIFY-UNKNOWN`,
++`E-DATA-HOLDOUT-SEED`, and `E-DATA-HOLDOUT-NO-DRAW` for a `stratify_by` under
++`by_attribute`); § A fixed holdout split's own fence (reference.md:1317-1322) shows all
++five; and § What `auto` derives from (line 2751) names `holdout.seed` beside
++`assign.seed` and `sweep.sample.seed`.
++
++The asymmetry is sharpest against the sibling closest in kind. `assign: {}` is also an
++optional block `init` leaves undeclared, and it is shown at **full expansion in its inline
++comment**, including `stratify_by: []` and `seed: auto` (reference.md:94-102) —
++`envelope.py:61-62` even cites *"§ The one config file's full expansion of an `assign`
++axis block"* as the authority for that block's closed key set. The identical citation
++cannot be made for `holdout`.
++
++**Verified** by reading both fences and cross-checking against `envelope.py`'s
++`LEAF_TYPES` entries and `validate._check_holdout`'s emit sites.
++
++**Blocks merge:** no. Two comment lines in the fence.
++
++---
++
++## Minor
++
++### M1. `allocation_hash`'s docstring speaks of H3d's holdout half in the future tense, after this branch built it
++
++`artifacts.py:337-341`: *"A **future** reader adding H3d's `holdout` half should draw the
++same conclusion: `holdout_hash` (if one is ever needed) belongs beside whatever builds
++the holdout partition's document…"*
++
++H3d's holdout half is added — task 17 gave `build_allocation_document` its fourth key in
++this same file, thirty lines above. The advice is still correct; the framing is stale, and
++it is the one surviving cross-task forward reference of its kind. **Verified** by grepping
++`src/` for slice names: `grep -rn 'H3d\|H3c\|H7a\|H7b\|H4a\|H4b' src/` returns 20 hits,
++19 of which are correct past-tense records of landed work (`H4a task 12`, `H4a task 14`,
++`validate.py:3061`'s H3c-3 ownership note), and this one.
++
++**Blocks merge:** no.
++
++### M2. `tests/test_validate.py:925` asserts the absence of a code that no longer exists anywhere
++
++`assert "E-DATA-HOLDOUT-UNSUPPORTED" not in by_code` — after task 18, the identifier is
++gone from `src/` entirely, so this assertion can never fail. It is paired with two
++positive assertions in the same test, so the test as a whole is not vacuous, and as a
++deliberate retirement regression guard it is defensible. Noting it only so a later reader
++does not mistake it for a live check. **Verified** by
++`grep -rn 'HOLDOUT-UNSUPPORTED' src/` → no hits.
++
++**Blocks merge:** no.
++
++---
++
++## What I checked and found sound
++
++Recording these so the next reader does not re-derive them.
++
++- **The `E-DATA-HOLDOUT-*` family as a family.** Twelve codes minted (thirteen counting
++  the retired `-UNSUPPORTED`). Every code has at least one emit site — none was minted and
++  left unemitted. Enumerated by `grep -rn '"E-DATA-HOLDOUT-' src/` — 22 emit sites across
++  `validate.py` and `units.py`. **Reachability I spot-checked rather than proved for all
++  twelve**: `EMPTY` (the clustered-draw probe under I1) and `VARIES` (the `validate` probe
++  under I2) I demonstrated by execution; the other ten I read against their guards without
++  executing each. No two codes overlap in what they refuse: `FRAC`/`FROM` own value shape
++  under their own method, `NO-DRAW` owns presence under the *wrong* method, `EMPTY` owns a
++  realized zero side, `VALUES` owns the `by_attribute` literal set, `STRATIFY-UNKNOWN` /
++  `STRATIFY-VARIES` split name-existence from cluster-constancy, `FOLD` and `CELLS` are
++  two different co-declarations. The only family-level gaps are I1 and I2, both
++  documentation.
++- **The § Errors row/emit-site correspondence for the ten validate-side codes.** Site
++  counts per code: `METHOD` ×3, `FRAC` ×2, `FROM` ×2, `NO-DRAW` ×3, `SEED` ×1,
++  `STRATIFY-UNKNOWN` ×4, `FOLD` ×1, `VALUES` ×1, `STRATIFY-VARIES` ×1, `EMPTY` ×1. I read
++  the **multi-site** ones against their rows for coverage rather than diffing each site's
++  message. The one worth recording is `STRATIFY-UNKNOWN`, where row 483 lists five
++  predicates against four sites and the mapping is therefore not one-to-one: site 1
++  (`validate.py:2891`) covers a declaration normalizing to no names — the row's "an empty
++  string, or an empty list", and also `0`/`False`/`{}` under its "is not the name of an
++  attribute at all"; site 2 covers a non-string or empty entry *inside* the list; site 3
++  covers a name `attributes` does not declare; site 4 covers a name `measurements.by` also
++  holds. All five row predicates land on a site and all four sites land in the row. Site 4
++  is reachable only when the same name is declared under **both** `attributes` and
++  `measurements.by` (otherwise site 3 fires first and `continue`s) — and that exact config
++  is what `test_a_holdout_stratum_naming_the_measurement_axis_is_refused` builds, so the
++  narrow site is genuinely exercised. The two branches sharing a code are separated by
++  **message fragment** in the parametrized test, explicitly because asserting the code
++  alone had left the second branch deletable (task 6 review, F1).
++- **`_check_holdout`'s "ten findings at this commit" docstring** (validate.py:2692) is
++  accurate — ten codes, and the enumeration matches the emit sites one for one. Its
++  "three of the ten read `roster`" claim is also accurate (`VALUES`, `STRATIFY-VARIES`,
++  `EMPTY`), each carrying its own `roster is not None` guard as stated.
++- **`stratum_varies_within_cluster`'s caller count.** The spec flagged it stale at
++  "two rows" with three real callers. It now says *"four callers today, under four
++  codes"* (units.py:2292) and there are exactly four call sites
++  (`validate.py:2081, 2664, 2976, 5758`) under exactly the four codes named. The trap was
++  closed correctly.
++- **`CLAUDE.md` invariants.**
++  - *A repeat is one of three kinds; `holdout` rejected as a kind.* Intact.
++    `{kind: holdout}` still earns `E-REPL-KIND` and the message still routes to
++    `data.units.holdout` — now a real destination
++    (`test_a_holdout_repeat_kind_still_routes_to_the_built_field`). § Validation's row
++    *Holdout isn't a repeat kind* (reference.md:275) is unchanged.
++  - *`io.units` is three operations plus `.train`.* Intact — `UnitList` exposes
++    `__iter__`, `__len__`, `__getitem__` and `train` and nothing else
++    (`units.py:127-163`); a non-int index still earns `E-STEP-UNITS-CONTRACT`, and
++    `.train` without a fold or holdout still earns `E-STEP-UNITS-UNAVAILABLE` with a
++    message now correctly naming both routes.
++  - *Units are the inference base; `n` counts units.* The holdout narrows the
++    denominator, not the basis: `eval_roster` feeds `execute_plan`, `_condition_counts`,
++    `_condition_beside_n` and both `_compute_*(roster=)` sites, while `provenance.units`
++    stays whole-roster with a comment that is true of the code beside it. Verified by
++    mutation (see I3 for the one unpinned half).
++  - *Three hashes, split on purpose.* Untouched — `code_hash`, `parameters_hash`,
++    `input_manifest_hash` all unchanged; the holdout's seed rides `design_digest` and is
++    excluded from it (task 4), which § What `auto` derives from documents at line 2751,
++    and `allocation_hash` needed no change exactly as decision 6 predicted.
++  - *Operation commands take paths and nothing else.* Unchanged — no flag, selector or
++    env var added; `OPERATION_COMMANDS` is still `{"validate", "run"}`.
++- **Task 18's five end-to-end pins.** I re-ran mutation (a) myself:
++  `execute_plan(units=eval_roster)` → `units=roster` fails **both** new tests —
++  `test_a_declared_holdout_now_validates_and_runs` (on the `split.json` membership check)
++  and `test_max_failed_fraction_is_measured_against_the_test_partition` (on
++  `assert 5 < 5`). Reverted in place, re-verified: 8 passed. The report's accounting is
++  honest, including its statement that **task 13's siting has no mutation** because the
++  property (realize once, outside every per-condition loop) is behaviourally invisible —
++  I agree; a call inside the loop draws the same partition from the same seed and roster,
++  so no assertion can separate them, and reading the call site is the only instrument.
++- **Task 16's wiring is properly pinned, with attribution.**
++  `test_the_resample_cluster_warning_counts_the_holdout_s_test_partition` runs two configs
++  differing **only** in whether a holdout is declared, asserts the control is silent, and
++  asserts the message names "test partition" and not "roster" — so the warning's presence
++  is attributable to the holdout rather than to the roster. This is the shape
++  `CLAUDE.md` asks for under *"a refusal that happens to fire must be attributed before
++  it is counted."*
++- **Task 17's `allocation.json` fourth key is pinned.** Mutating away
++  `block["strata"] = list(holdout.strata)` fails
++  `test_a_drawn_holdout_writes_its_own_seed_and_strata_inside_its_block`. Reverted,
++  re-verified: 101 passed.
++- **The two draw constructions are pinned against each other, honestly.**
++  `test_the_clustered_and_unclustered_constructions_are_not_the_same_draw` asserts
++  MEMBERSHIP difference only and states in its docstring why a size comparison would be
++  pinning a coincidence — backed by `holdout_for`'s docstring recording a sweep that found
++  90 seeds where the two disagree on size, including legality disagreements. The
++  cluster-integrity test is built with clusters of two *specifically* so that sizes cannot
++  distinguish correct from buggy and the integrity assertion has to do the work, and it
++  carries a positive companion (`assert train and test`) against the all-to-one-side draw.
++  This is the trap the spec named, closed properly.
++- **Mechanical documentation pass over the four documents plus the feasibility analysis.**
++  Clean: no broken relative links, no unresolvable `#anchor`, no duplicate heading
++  anchors, no table row/header column mismatch, no trailing whitespace, no tabs, no
++  invisible unicode. (Run with a GitHub-compatible slugger; a naive one produces ~18 false
++  positives on headings containing `&` or `/`, which is worth knowing before re-running.)
++- **The worked example.** § A fixed holdout split's *"a 20% holdout over 240 units reports
++  `resolved: 48`"* agrees with the 240-unit `cohort-pilot` roster and with `cli.py`'s own
++  "48 where this says 240" comment. No worked-example value was disturbed.
++- **`CLAUDE.md`'s own edits.** The dropped citation is correct: `reference.md` has no
++  § What core will not do for you — only `experimental-designs.md:387` does. The rewritten
++  order line and the H3c-3 ownership sentence are consistent with `validate.py:3061`,
++  which names H3c-3 as the owner of `E-DATA-HOLDOUT-CELLS`'s retirement.
++- **`spec-defects.md`'s `technical_n` entry is correctly maintained** — see R2 below.
++
++---
++
++## The three flagged residues
++
++### R1. `uv run ruff format .` rewrites the normative documents — confirmed, and worse than the ledger's count
++
++**Confirmed and quantified.** `uv run ruff format --check .` reports **71 files would be
++reformatted** (the ledger's 67 plus this slice's four new records), of which **53 hits are
++in Markdown**. Two of the four normative documents are among them:
++
++- `README.md:189` — collapses the aligned trailing comments in the `Step` fence.
++  `io.record(...)  # the per-unit table —` / `#   what every interval is over` becomes a
++  **dangling comment on its own line**, which then reads as annotating the *next*
++  statement. The same happens to the `io.write(...)` continuation.
++- `docs/reference.md:1032` and `:1139` — same damage, plus it explodes the `analyze(...)`
++  call across five lines and splits `io.write("scores.parquet", result.rows)` from its
++  trailing comment.
++
++It also rewrites **every tracked plan and every `.superpowers/sdd/**` record**, which
++`CLAUDE.md` states must never be retro-edited: *"a spec records what was decided when it
++was written and a scoping what was measured on its date; retro-editing either destroys the
++evidence they exist to hold."* A documented Format command that silently rewrites the
++evidence files is a sharper problem than the README damage.
++
++**Judgment.** This is **pre-existing, not introduced by H3d** — the affected fences in
++`README.md` and `docs/reference.md` are untouched by this branch, and the file list
++includes records from five earlier slices. H3d's contribution is that four of its own new
++lines sit inside would-reformat hunks, which is why the ledger noticed. **It does not
++block merge**: the damage is only realized if someone runs the command, and `ruff format
++--check` is what the plan's verification steps actually call (commit `b477297` fixed 19
++plan steps that said `ruff format .` where they meant `--check`).
++
++**Cause, diagnosed rather than assumed.** This is **default behaviour of the installed
++Ruff**, not a setting anyone turned on: `uv run ruff --version` → **ruff 0.16.2**, and
++`grep -rn 'docstring-code-format\|extend-include\|preview\|include' pyproject.toml`
++returns nothing, with no `.ruff.toml`/`ruff.toml` in the tree. Recent Ruff formats Python
++code blocks embedded in Markdown. Nothing in this repo asked for that; it arrived with a
++version bump.
++
++**Recommended fix — configuration, not reformatting, and I ran it before recommending
++it.** Do not reformat 71 files inside a merge. Append to `pyproject.toml`:
++
++```toml
++[tool.ruff.format]
++exclude = ["*.md"]
++```
++
++`[tool.ruff.format].exclude` rather than a top-level `extend-exclude`, so `ruff check`
++keeps its reach. **Verified**: with that stanza applied, `uv run ruff format --check .`
++drops from *"71 files would be reformatted"* to *"39 files would be reformatted"*, and
++Markdown hits go to **zero** (`grep -cE '^\s*-->.*\.md'` → 0; every remaining hit is
++`.py`). `pyproject.toml` was restored from a copy afterwards and the revert verified by
++re-running — the count is back to 71 and `git status --porcelain` shows only this review
++file.
++
++**A larger finding the fix exposes, which the ledger's framing hides.** Excluding Markdown
++does **not** make the documented command safe. The residual 39 are all Python: **17 files
++in `src/publishable`, 2 in `src/publishable/generators`, 20 in `tests`**. So
++`uv run ruff format .` — `CLAUDE.md`'s documented Format command — would rewrite roughly
++40 % of core's own source on top of the docs. The repo has evidently never been
++format-clean, which is why the ledger's "several tasks' new lines sit in would-reformat
++hunks, deliberately not reformatted" reads as a local choice when it is actually the
++standing state of the tree.
++
++**Judgment on what should happen — deciding it once, as asked.** Two separable things,
++and they should not be bundled:
++
++1. **The Markdown exclusion should land** — as its own commit, on this branch or straight
++   on `main`, either is fine. It is one stanza, it is verified, and it removes the only
++   part of this that damages normative documents and untouchable evidence files.
++2. **The 39 Python files should not be reformatted now, and `CLAUDE.md` should stop
++   claiming otherwise until they are.** A 39-file whitespace commit landing beside or
++   inside a 20-task slice is exactly the "burying small diffs" cost the tasks were right
++   to avoid. Until someone runs that reformat deliberately, on an empty branch, with
++   nothing else in flight, `CLAUDE.md`'s Format row should read `uv run ruff format
++   --check .` — which is what the plan's own verification steps call (commit `b477297`
++   fixed 19 steps that said `ruff format .` where they meant `--check`), and which is the
++   only form of the command that is currently true.
++
++### R2. Task 15 falsifying a filed `spec-defects.md` remediation — **already handled correctly; no action needed**
++
++The residue as flagged is closed. `spec-defects.md`'s OPEN `technical_n` entry
++(lines 5643-5674) carries an appended block:
++
++> **Correction (H3d task 15, `fa85b26`), replacing the "mechanism is cheap" sentence
++> above:** task 15 narrowed `_condition_beside_n`'s call into `_cond_beside_n` to pass
++> `eval_roster` … Closing this gap now needs a fourth parameter carrying the un-narrowed
++> roster as a separate identity reference … not merely reading the existing third
++> argument.
++
++That is exactly the form `CLAUDE.md` prescribes for correcting a published claim — append
++the correction and say what it replaces — applied to the one file it names as a live list.
++**I verified the correction's own claim is true**: `cli.py:1885` reads
++`_condition_beside_n(beside_n, eval_roster, cond.index, arm_members_map)`, so both the
++`cond_roster` argument and the identity reference now derive from the same narrowed value
++and the `cond_roster is roster` check can no longer distinguish the two narrowings. The
++entry's **Owner** line is also correctly re-ownered (*"whichever slice next changes
++`_cond_beside_n`, or H3c-3 … re-owner this entry when that slice finishes rather than
++leaving it pointing at a closed one"*), which is the other habit `CLAUDE.md` records.
++
++**The general lesson is worth one line in `CLAUDE.md` and no more.** A filed gap is not
++inert: it makes claims about the code, and those claims go stale exactly like a
++docstring's. The existing bullet *"A ledger line saying 'filed' is not a filing"* is the
++right home — extend it with "and a filing's claims about the code go stale like any other
++comment; when you change code a `spec-defects.md` entry describes, re-read the entry."
++The mechanical hook already exists: `CLAUDE.md`'s sweep rule already says to grep
++`spec-defects.md` after removing or renaming a string.
++
++**Blocks merge:** no.
++
++### R3. Task 20's withdrawn `W-REPL-DETERMINISTIC` — **the withdrawal is adequate, and I can make the determination it declined to make; do not re-run before merge**
++
++The published text (feasibility-llm-growth-studies.md:997) withdraws the warning and
++states the contradiction rather than guessing which sentence was false:
++
++> `validate.py`'s only emit site for that code requires a `batch` level in
++> `replication.repeats`, `materialize.py` writes a default `{kind: seed, ...}` repeat, and
++> the scope statement two paragraphs up says `replication` was not carried over for any of
++> the nine — so the code cannot fire under the scope this measurement declares, whatever
++> the scratch run actually did.
++
++**I verified both halves of that reasoning independently.** `validate.py:3382-3384` gates
++the warning on `"batch" in kinds`; `materialize.py:145` writes
++`- {kind: seed, n: INIT_REPEATS}`.
++
++**The determination task 20 declined to make, made here from the evidence.** The false
++sentence was **the reported `W-REPL-DETERMINISTIC` on E5**, not the scope statement. The
++two candidates are not symmetrically supported: the scope statement is corroborated by two
++independent facts in the source — `materialize.py` writes a `seed` repeat by default, and
++the warning's sole emit site requires a `batch` level — while the reported warning is
++corroborated by nothing at all beyond its own appearance in a draft. A claim backed by two
++independent code facts outranks a claim backed by none. That is a determination from
++evidence, not a coin-flip between two sentences, and it is what makes a re-run unnecessary
++rather than merely inconvenient.
++
++**And the residual uncertainty is provably inconsequential, which is the second reason no
++re-run is needed.** Even granting the alternative — that the scratch run silently carried
++a `replication` block the scope statement disclaims — no claim the section makes would
++move. The section states its own answer-scope explicitly: *"does the
++`data.units.holdout`/`weight_by`/`from` block and the `statistics.resample`/`contrasts`
++block … earn `E-DATA-HOLDOUT-UNSUPPORTED`, `E-DATA-RESOLVER-UNSUPPORTED`, or
++`E-DATA-WEIGHT-CONTRAST` on this build."* **None of those three codes reads
++`replication`**, and neither does the `W-DATA-CLUSTER-UNDECLARED` the same paragraph
++attributes to the fixture. The one holdout code that *would* be sensitive to `replication`
++— `E-DATA-HOLDOUT-FOLD` — is correctly absent, which is exactly what a default
++seed-repeat predicts.
++
++**Judgment: adequate as it stands; do not re-run before merge.** The withdrawal was the
++right call at the time — task 20 was correct not to guess under time pressure — and the
++published text is honest about what it did and did not establish. The remedy is not a
++re-run and not another hedge: replace *"Which of the two claims was originally at fault was
++not re-run to check; only that they cannot both stand is established"* with the
++determination above — the reported warning was the false one, on the asymmetry of evidence
++— plus the clause that the ambiguity could not have reached the three codes the
++measurement answers for. That closes the thread instead of leaving a later reader to
++reopen it. It is a documentation edit to a **dated** section, so per `CLAUDE.md` it should
++be appended as a correction saying what it replaces, not written over the original.
++
++I also confirmed the section's commit pin is still honest: `git diff --stat
++d72724b..HEAD -- src/ tests/` is **empty**, so no code changed after the commit the
++measurement names, and the four documents' claims about the build are still true of
++`HEAD`.
++
++**Blocks merge:** no.
++
++---
++
++## Would anything make merging this a mistake?
++
++No. Ranked by what I would want closed first:
++
++1. **I3** — one assertion, guards a named `CLAUDE.md` invariant that a full-suite mutation
++   proves is currently unguarded.
++2. **I1** — two § Errors rows; a run-time refusal reachable from a clean `validate` is
++   undocumented, and this is a repeat of a trap already recorded.
++3. **I2** — one § Errors row plus one validate-surface test, restoring parity with the
++   three sibling codes the row itself claims parity with.
++4. **I4** — two comment lines in § The one config file.
++5. **R1** — a `pyproject.toml` stanza; can equally land separately on `main`.
++
++Everything else — the draw constructions, the denominators, the seed derivation and its
++digest exclusion, the cells refusal and its named owner, `allocation.json`'s fourth key,
++the retirement and its pins, the mechanical documentation pass, and the dated measurement
++— I checked and found sound.
+diff --git a/CLAUDE.md b/CLAUDE.md
+index 4edfc8c..8bb7331 100644
+--- a/CLAUDE.md
++++ b/CLAUDE.md
+@@ -11,21 +11,21 @@ This repository holds both the normative specification and the tool it specifies
+ - `src/publishable/` is the implementation. It follows the documents. Where it cannot
+   follow them, **the document changes first** — record the gap in
+   `docs/superpowers/spec-defects.md` rather than diverging silently.
+ 
+ **Commands:**
+ 
+ | Task | Command |
+ |---|---|
+ | Tests | `uv run pytest` |
+ | Lint | `uv run ruff check .` |
+-| Format | `uv run ruff format .` |
++| Format | `uv run ruff format --check .` (the unchecked form is safe to run only on a branch where reformatting the 39 currently-unformatted Python files is the intended change) |
+ | Types | `uv run mypy` |
+ 
+ `docs/reference.md` § Package layout describes a tree that now **partially** exists.
+ Modules not yet built are still planned, and the slices that build them are listed in
+ `docs/superpowers/specs/2026-08-08-implementation-spine-design.md`.
+ 
+ **Order of the slices that remain: H4b → H7b → the rest.** Amended twice on 2026-08-14
+ against outside evidence — all nine experiments in
+ [the feasibility analysis](docs/feasibility-llm-growth-studies.md) were run through `validate`, and
+ **none executed**. The gate was the **template registry**, not the plugin system: `get_template` read a
+@@ -177,21 +177,21 @@ class's module is gone, while an external one is still cached.
+ - **A comment or docstring claiming a guarantee the code does not provide** — at least a dozen instances,
+   including one that explicitly promised "any other `method` string takes the `by_attribute` path" (the
+   fail-open defect written down as if intended), and three overreaching claims inside a single commit
+   that was itself fixing overreaching claims. When you change a guard, re-read its justification. A
+   sentence can also contradict **the argument that justifies the thing it describes**: "a collision among
+   the files that *did* load is still found rather than masked" appeared at four sites including a
+   normative § Errors row, while the reason load-failure is checked first is precisely that a collision
+   verdict computed then would be computed over a partial set of claims. Both properties cannot hold.
+ - **A safety argument in a comment is a claim, and needs a mutation like any other.** A retry inside an `except` was widened, and its new comment argued the retry could never raise because the faults it handles "surface on the first call". **The first call was inside the `try`.** Patching the widened function to raise gave exit 1 with no `run.yaml` and no run directory — every execution paid for, the record lost. Written by someone whose task was closing findings about false comments, and it passed a review. If a comment says *this cannot happen*, make it happen.
+ - **Sweep for the claim, not for the file the claim was first noticed in.** Three sweeps in one slice stopped one file short — one covered `src/` and `docs/` but not `tests/`, one fixed a sentence in `correction.py` and missed the same sentence in the function that falsified it, one stopped at the file its brief happened to name.
+-- **A ledger line saying "filed" is not a filing.** A gap recorded as "registered against \<owner\>" existed only in the ledger; the defects file had no such entry. And an entry naming its owner as *"whichever slice does X"* points at a closed slice once X lands — **re-owner a deferral when the slice that filed it finishes**, or it reads as live work nobody holds.
++- **A ledger line saying "filed" is not a filing.** A gap recorded as "registered against \<owner\>" existed only in the ledger; the defects file had no such entry. And an entry naming its owner as *"whichever slice does X"* points at a closed slice once X lands — **re-owner a deferral when the slice that filed it finishes**, or it reads as live work nobody holds. A filing's claims about the code go stale like any other comment; when you change code a `spec-defects.md` entry describes, re-read the entry.
+ - **Rewriting a sentence when a table row was the thing that was wrong.** "Importing one raises
+   `ImportError` today" was false only while `register_template` sat in a row marked `not yet built` —
+   splitting the row repaired it, because the sentence **derives** its claim from the `Status` column.
+   Replacing it with an enumeration of names would have converted a self-maintaining statement into a
+   maintenance obligation nobody owns, and a second source of truth for build state.
+ - **Locating a table row by position** ("the two rows above", "further up") — at least seven instances,
+   wrong twice, once in a row no diff touched, falsified by an insertion that moved it. Name what a
+   sibling row *does*. When you insert or remove a row, check every row it **moved**, and every count
+   phrase near it.
+ 
+diff --git a/docs/feasibility-llm-growth-studies.md b/docs/feasibility-llm-growth-studies.md
+index bb79c64..a70a983 100644
+--- a/docs/feasibility-llm-growth-studies.md
++++ b/docs/feasibility-llm-growth-studies.md
+@@ -989,20 +989,22 @@ H3d is complete on its `h3d-fixed-holdout` branch and retires `E-DATA-HOLDOUT-UN
+ | E3 | `E-DATA-RESOLVER-UNSUPPORTED` | No — blocked on the plugin registry |
+ | E4 | `E-DATA-RESOLVER-UNSUPPORTED` | No — blocked on the plugin registry |
+ | E5 | `E-DATA-RESOLVER-UNSUPPORTED` | No — blocked on the plugin registry |
+ | E6 | `E-DATA-RESOLVER-UNSUPPORTED` | No — blocked on the plugin registry |
+ | C1 | `E-DATA-RESOLVER-UNSUPPORTED`, `E-DATA-WEIGHT-CONTRAST` | No — two independent blockers |
+ | C2 | `E-DATA-RESOLVER-UNSUPPORTED`, `E-DATA-WEIGHT-CONTRAST` | No — two independent blockers |
+ | C3 | `E-DATA-RESOLVER-UNSUPPORTED`, `E-DATA-WEIGHT-CONTRAST` | No — two independent blockers |
+ 
+ One warning the fixture also produced is left out of the table above because it is a property of the fixture, not of these designs: `W-DATA-CLUSTER-UNDECLARED` on `age_band`, an artifact of the synthetic table's own three-band shape rather than of `growth-screen`'s real roster. It does not bear on `E-DATA-HOLDOUT-UNSUPPORTED`, `E-DATA-RESOLVER-UNSUPPORTED`, or `E-DATA-WEIGHT-CONTRAST`. (An earlier draft of this section also reported `W-REPL-DETERMINISTIC` on E5. That is withdrawn as unattributable, not affirmed as wrong: `validate.py`'s only emit site for that code requires a `batch` level in `replication.repeats`, `materialize.py` writes a default `{kind: seed, ...}` repeat, and the scope statement two paragraphs up says `replication` was not carried over for any of the nine — so the code cannot fire under the scope this measurement declares, whatever the scratch run actually did. Which of the two claims was originally at fault was not re-run to check; only that they cannot both stand is established.)
+ 
++**Correction (H3d whole-branch review, 2026-08-16), replacing the withdrawal's last sentence above:** the reported `W-REPL-DETERMINISTIC` on E5, not the scope statement, was the false claim. The two are not symmetrically supported — the scope statement is corroborated by two independent facts already cited in this section (`materialize.py` writes a default `{kind: seed, ...}` repeat; the warning's sole emit site requires a `batch` level), while the reported warning is corroborated by nothing beyond its own appearance in an earlier draft. The residual uncertainty does not move any claim this section makes: none of the three codes it answers for — `E-DATA-HOLDOUT-UNSUPPORTED`, `E-DATA-RESOLVER-UNSUPPORTED`, `E-DATA-WEIGHT-CONTRAST` — reads `replication`, and neither does `W-DATA-CLUSTER-UNDECLARED`. Not re-run to reach this: `git diff d72724b..HEAD -- src/ tests/` is empty, so no code changed after the commit this section names, and the determination is made from the evidence already in hand rather than from a fresh measurement.
++
+ **Under the table-roster substitution, the generous count is three, not six.** E1, E2 and E5's transplanted blocks validate with zero errors. E3, E4 and E6's transplanted blocks validate equally clean under the same substitution — the same zero-error result — **but still cannot run**: each reads its frozen compiled program through `io.reuse_from`, and `grep -rn "reuse_from" src/publishable/` returns nothing in this build. A block validating clean is not a config that can execute when the method its steps call does not exist; § E3 — Cohort-definition sensitivity, § E6 — Compiled-program transfer, and the `io.reuse_from` paragraph above (§ Executability on this build) are what this depends on, not anything H3d touched. So "six of nine, one substitution away" is not the number this measurement supports — three are one substitution away from `validate`, and the other three need that same substitution plus a method this build does not have.
+ 
+ Whether C1–C3 carry that same `io.reuse_from` dependency is not settled by this measurement. The only evidence available for E3/E4/E6, just above, is a `src/` grep, because `io.reuse_from` is a step-level call invisible to any config — the same is true for C1–C3, so their YAML naming non-fine-tuned regimes (`utilization_only`/`clinical_physiology`/`zero_shot`) is not evidence of absence, only evidence of no *declared* fine-tuned artifact. § Shortcut: three runs, in this same document, points the other way: the roster all three share is annotated `holdout: null   # confirmation run: the roster IS the confirmation set`, and the paragraph above it states "the confirmation run reads the fitted artifact with `io.reuse_from`." Settling this would take reading the steps `growth-shortcut`'s entrypoint registers, which this measurement did not do. Either way, retiring `E-DATA-WEIGHT-CONTRAST` (H4b) does not make C1–C3 executable on its own, since all nine, C1–C3 included, still declare a resolver.
+ 
+ **The mutation this table rests on.** E1's clean validation under the table substitution was proven discriminating, not assumed: setting `data.units.holdout.frac` to `0` on the otherwise-clean block immediately produces `E-DATA-HOLDOUT-FRAC` ("is 0, and a test fraction is strictly between 0 and 1"), and reverting the field restores the zero-error result byte-for-byte. A block that could not fail this way would not be a measurement.
+ 
+ **Confirms the previous measurement's structure and corrects its headline framing.** `E-DATA-HOLDOUT-UNSUPPORTED`'s retirement, `E-DATA-RESOLVER-UNSUPPORTED` firing on all nine, and `E-DATA-WEIGHT-CONTRAST` firing on exactly C1–C3 are all confirmed by running rather than by re-deriving from `validate.py`'s emit sites — over the `data`/`statistics` blocks named above, which is exactly the surface H3d and H7b act on. What this measurement does **not** confirm is "6 of 9 unblocked" as an executable count: that figure was always a count of configs that stop hitting one particular refusal, not a count of configs that reach `run`, and the honest generous figure under a substitution nobody has written is three.
+ 
+ Full local `pytest`/`ruff`/`mypy` gates at this commit: 1954 passed + 2 xfailed, ruff and mypy both clean — unaffected by this section, which only runs `validate` against scratch files outside the repo.
+ 
+diff --git a/docs/reference.md b/docs/reference.md
+index 9f72198..d76abbb 100644
+--- a/docs/reference.md
++++ b/docs/reference.md
+@@ -81,23 +81,27 @@ data:
+     attributes: [label, age, sex]          # available for stratification and reporting
+     allocation: within                     # within | between — feeds paired vs unpaired,
+                                            #   per contrast
+     cluster_by: null                       # e.g. site, when units aren't independent —
+                                            #   see "Clustered units"
+     weight_by: null                        # e.g. sampling_weight, when the sample is enriched or
+                                            #   stratified — see "Weighted samples"
+     measurements: null                     # {by: read_id, collapse: mean} for technical
+                                            #   replicates; collapse is mean | median | sum | first |
+                                            #   mode, or a per-column map — see "What isn't a repeat"
+-    holdout: null                          # {method: random, frac: 0.2} or {method: by_attribute,
+-                                           #   from: split}; optional single fixed train/test
+-                                           #   split — see "A fixed holdout split"
++    holdout: null                          # optional single fixed train/test split — see "A fixed
++                                           #   holdout split"; at full expansion:
++                                           #   method: random     # random | by_attribute
++                                           #   frac: 0.2          # test fraction, for random
++                                           #   from: null         # the attribute naming the partition, for by_attribute
++                                           #   stratify_by: []    # unit attributes to balance the split on
++                                           #   seed: auto         # design digest + "holdout"
+     assign: {}                             # REQUIRED when allocation is `between` — one
+                                            # block per sweep.groups axis, keyed by the axis name:
+                                            #   arm:
+                                            #     method: random     # random | by_attribute | blocked
+                                            #     from: arm          # by_attribute; defaults to the axis name
+                                            #     stratify_by: []    # unit attributes, or an earlier axis
+                                            #     ratio: {}          # one entry per level of THIS axis
+                                            #     block_size: auto   # blocked only; twice the ratio's sum (rounded), or twice the level count when ratio is {}; checked like any block_size
+                                            #     seed: auto         # design digest + axis name
+ 
+@@ -475,20 +479,21 @@ likewise apart from those same two envelope rows, none of the others.
+ | Under `method: random`, `assign.<axis>.stratify_by` names a stratum whose value is not the same across every unit of one cluster, under a declared [`data.units.cluster_by`](#clustered-units) — reported for the first such cluster in roster order, naming the values it carries. **A declared attribute, or an earlier group axis read through the column that axis reads**: an axis assigned `by_attribute` has membership that *is* a column's value, so a `from` varying within a cluster splits that cluster between that axis's own arms, and the halves land in different strata here, where the clustered draw allocates each independently and the cluster straddles both of *this* axis's arms — the indivisibility [§ Clustered units](#clustered-units) promises, broken one axis upstream. It needs a `from` differing from the axis name to arise at all: with the default, the stratum resolves as a declared attribute and the first half of this row covers it. An earlier axis that **draws** is exempt rather than unchecked — it allocated whole clusters, so its membership is constant within every one. A cluster is drawn whole, so an arm cannot be balanced on a stratum the cluster carries two of, and core refuses the pair rather than silently prioritizing one of the two constraints — the same rule and the same reason `E-REPL-FOLD-STRATIFY-VARIES` carries for a `fold` level's own `stratify_by`. `units.stratum_varies_within_cluster` is the constancy test, reading membership from `units.clusters_of`, the [single authority](#clustered-units), so a unit carrying no cluster value raises `E-DATA-CLUSTER-UNKNOWN` there rather than being grouped alone and made trivially constant. Checked against the resolved roster, and skipped when it did not resolve, when no `cluster_by` is declared (nothing is then indivisible), or when the name check above already reported. **Not reached under `blocked`**, whose combination with any `cluster_by` is refused outright as `E-DATA-ASSIGN-BLOCKED-CLUSTER` before a stratum's constancy is a question worth asking | `E-DATA-ASSIGN-STRATIFY-VARIES` |
+ | Under `method: by_attribute`, `assign.<axis>.from` — declared, or **defaulted to the axis name** when absent (§ The one config file: "`from` is `by_attribute` only, and defaults to the axis name") — is present and is an empty string (present, so the default does not apply — an empty declaration changes no behavior), or names a value `data.units.attributes` does not declare. `data.units.attributes`, not the roster's realized names, for the same reason `E-DATA-WEIGHT-UNKNOWN`'s name half reads that set: an arm is read per unit, so it has to survive resolution as an attribute. Read from the declaration, so it reports whether or not a roster resolved. **A non-`str`, non-absent `from` is reported here too**, naming its type rather than a resolved attribute: unlike `weight_by`/`cluster_by`, `assign`'s children are axis names no fixed dotted path can type, so there is no `E-CONFIG-TYPE` backstop to defer to — the same reason `E-DATA-ASSIGN-METHOD`'s own row absorbs a non-mapping block as the block naming no method that it is | `E-DATA-ASSIGN-UNKNOWN` |
+ | Under `method: by_attribute`, `assign.<axis>.from` — declared, or defaulted to the axis name the same way its own name check resolves it (see `E-DATA-ASSIGN-UNKNOWN`) — names a column whose value is not the same across one unit's [measurement rows](#what-isnt-a-repeat), the same shape `E-DATA-CLUSTER-VARIES`, `E-DATA-WEIGHT-VARIES` and `E-DATA-HOLDOUT-VARIES` refuse and reported the same way, through the same collapse. **The worst of the family**: a mis-collapsed cluster or holdout decides which side of a split a unit lands on and a mis-collapsed weight mis-sizes what one unit stands for, but a mis-collapsed arm decides which *condition* the unit is measured in — so the order the file happens to be in would be silently deciding it. One entry per declared axis feeds the same collapse, and each declaration is checked on its own and still raises its own code when it is the only one declared; a single unit violating more than one gets exactly one code, from whichever declaration's entry is checked first — `assign`, ahead of `holdout`, ahead of `cluster_by`/`weight_by`, matching the severity this row states. `holdout` ahead of `cluster_by` is not a further severity claim — the two say the same thing about the damage — but a fixed, deterministic order rather than an accident of dict-building | `E-DATA-ASSIGN-VARIES` |
+ | `data.units.holdout.method` is absent, is not a string, or is not one of `random`, `by_attribute`. An allowlist, not a denylist: a method named here and realized nowhere would validate clean and then partition on something core never drew | `E-DATA-HOLDOUT-METHOD` |
+ | Under `method: random`, `data.units.holdout.frac` is absent or is outside the open interval (0, 1). Both endpoints are excluded: `0` holds nothing out and `1` holds everything out, and each leaves one side of the split empty. A wrong-typed `frac` — a string, a list — is a leaf `envelope.py`'s `LEAF_TYPES` table declares, so it earns `E-CONFIG-TYPE` and never reaches this check | `E-DATA-HOLDOUT-FRAC` |
+ | Under `method: by_attribute`, `data.units.holdout.from` is absent or is empty — there is no column to read the partition out of, and unlike [`assign.<axis>.from`](#allocation-within-subjects-or-between-subjects) a holdout has no axis name to default to. A wrong-typed `from` is a `LEAF_TYPES` leaf too, so it earns `E-CONFIG-TYPE` instead, the same division `E-DATA-HOLDOUT-FRAC` makes | `E-DATA-HOLDOUT-FROM` |
+ | A `data.units.holdout` field that means nothing under the declared method: `frac` under `by_attribute`, which reads a partition rather than drawing one; `from` under `random`, which draws one rather than reading one; or a non-empty `stratify_by` under `by_attribute`, which names how a draw is balanced when no draw happened. One finding per offending field, so a block declaring more than one earns more than one. The same fault [`E-DATA-ASSIGN-NO-DRAW`](#errors-validate-reports) names one declaration over, including its `!= []` exemption — this row does not refuse an empty `stratify_by: []` itself. Unlike the `assign` sibling, `init` never materializes a `holdout` block at all, let alone `stratify_by: []`, and `[]` is not silently accepted: it is refused two checks later, as `E-DATA-HOLDOUT-STRATIFY-UNKNOWN`'s own row states | `E-DATA-HOLDOUT-NO-DRAW` |
+ | `data.units.holdout.seed` is present and is neither `auto` nor a plain integer — a quoted `"1234"`, a `1.5`, or a `true` is a pin nothing can honour, and honouring it as far as the derivation would record a derived seed under a key the config wrote deliberately | `E-DATA-HOLDOUT-SEED` |
+ | `data.units.holdout.stratify_by` names a value `data.units.attributes` does not declare, names the column `data.units.measurements.by` names — consumed when a unit's rows collapse, so no resolved unit carries it — or is not the name of an attribute at all: a non-string, an empty string, or an empty list. Checked from the declaration alone, so it reports whether or not a roster resolved | `E-DATA-HOLDOUT-STRATIFY-UNKNOWN` |
+ | `data.units.holdout` and a `{kind: fold}` repeat level are both declared. Two answers to one question — how the data is divided for evaluation — leaving "which units is this metric over?" with none | `E-DATA-HOLDOUT-FOLD` |
++| Under `method: by_attribute`, `data.units.holdout.from` names a column whose value is not the same across one unit's [measurement rows](#what-isnt-a-repeat), the fourth member of the family [`E-DATA-ASSIGN-VARIES`](#errors-validate-reports) names above, refused and reported the same way, through the same collapse: a mis-collapsed holdout decides which side of a split a unit lands on, the same severity a mis-collapsed cluster carries. Not a check `validate` can make for itself — `resolve_units` collapses the rows internally, so by the time there is a roster to read the disagreement is gone — and reached the same way `E-DATA-CLUSTER-VARIES` and `E-DATA-WEIGHT-VARIES` are: at run time, by `resolve_units`, and reported by `validate` under the same code through the resolution it already performs | `E-DATA-HOLDOUT-VARIES` |
+ | Under `method: by_attribute`, the column `data.units.holdout.from` names does not resolve to exactly `train` and `test`: a unit carries some other value, carries none, or one of the two literals names no unit at all. Read through `units.arms_of`, the single authority for a column-read partition, so the same set equality an arm assignment requires is the one a holdout requires | `E-DATA-HOLDOUT-VALUES` |
+ | `data.units.holdout.stratify_by` names an attribute that varies within a `data.units.cluster_by` cluster, checked through `units.stratum_varies_within_cluster` — the single authority *Fold strata survive clustering* and *Resample strata survive clustering* also read. Whole clusters go to one side of a holdout, so a cluster carrying two stratum values can be dealt to neither | `E-DATA-HOLDOUT-STRATIFY-VARIES` |
+ | Under `method: random`, unstratified and unclustered, `frac` apportions the test side zero units over the resolved roster — every metric would be over nothing. Reported for the unstratified, unclustered draw only, mirroring *Every arm draws units*: a stratified or clustered split is checked where the run performs it, because a cluster is the smallest thing that can move and only the draw knows what it moved | `E-DATA-HOLDOUT-EMPTY` |
+ | `data.units.holdout` is declared beside `data.units.allocation: between` or a non-empty `sweep.groups`. One roster-wide split across a cell structure gives the cells unequal test sizes and, at worst, a cell with no test units — refused rather than recorded, because the imbalance is only visible to a reader who crosses `allocation.json`'s membership against the arms list by hand | `E-DATA-HOLDOUT-CELLS` |
+ | A `{kind: fold}` repeat level is declared beside `data.units.allocation: between` or a non-empty `sweep.groups`, refused for the identical reason and at the identical check site as `E-DATA-HOLDOUT-CELLS`. `k` is bounded by the whole roster's [fold basis](#validation), so a roster-wide partition can leave a small arm with folds holding none of its units | `E-REPL-FOLD-CELLS` |
+ | [`data.units.cluster_by`](#clustered-units) is a non-empty string and the design resolves to at least one comparison — a generated `vs_baseline` for every non-baseline condition, plus every declared [`statistics.contrasts`](#contrasts-claims-that-arent-condition-vs-baseline) entry, the same family `W-STATS-FAMILY` counts and the same test `E-DATA-WEIGHT-CONTRAST` below applies. [§ Statistical reporting](#statistical-reporting) gives each contrast construction a `_clustered` suffix under a declared cluster — the *t* forms cluster-robust over the differenced values when paired and the arm-level ones when not, the percentile forms resampling whole clusters, jointly across both sides when paired — and **none of those five exists in this build**: `paired_t_over_units` takes a list of per-unit differences and nothing else, the derived forms take rows and a seed and know nothing about membership, and there is no unpaired form at all. So the delta and its interval would be computed as though the units were independent, which is the one thing the declaration says they are not, beside per-condition values that *are* cluster-robust and with nothing in the record saying which is which — the interval [§ Clustered units](#clustered-units) calls too narrow, on the number a reader acts on. The *resolved* family is the test rather than the declaration, exactly as below: a `sweep.baseline` with no axis beside it expands to a single baseline row, never a comparison's subject, so a clustered run of it publishes no delta and is accepted, and a declared contrast over a sweep with no baseline is refused though it declares no baseline at all. [`statistics.report_by`](#reporting-strata) is outside it, a stratum repeating the per-condition aggregation — whose interval is clustered — and publishing no delta. Temporary: the refusal lifts with the slice that builds the `_clustered` contrast family | `E-DATA-CLUSTER-CONTRAST` |
+ | [`data.units.cluster_by`](#clustered-units) is present and is an empty string — an empty declaration changes no behavior — or names a value `data.units.attributes` does not declare, which includes every name under a `{glob: ...}` source, that source declaring none. `data.units.attributes`, not the source's columns, and for the same reason `E-DATA-WEIGHT-UNKNOWN` below reads that set: a cluster is read per unit when the partition is drawn and again when an interval is computed, so it has to survive resolution as an attribute, where a `measurements.by` is consumed at collapse time and dropped from the merged unit. Checked from the declaration alone, so it reports whether or not a roster resolved; a non-string is left to `E-CONFIG-TYPE`. Raised at run time too, under the same code, wherever cluster membership is resolved for a unit that carries no value for it — `units.clusters_of` is the single authority both surfaces read, so a roster core cannot group raises here rather than inventing a cluster for it | `E-DATA-CLUSTER-UNKNOWN` |
+ | [`data.units.cluster_by`](#clustered-units) names a column whose value is not the same across one unit's [measurement rows](#what-isnt-a-repeat) — the rows `data.units.measurements` collapses into that unit. Reported for the first such unit, naming the values it declares. Not a check `validate` can make for itself: `resolve_units` collapses the rows internally, so by the time there is a roster to read the disagreement is gone and the cluster is whichever value `first` or `mode` returned. So it is raised where the rows collapse — at run time under the same code, this being one fault with one identifier on both surfaces — and reaches `validate` through the resolution it already performs, the same route `E-UNITS-COLLAPSE-RULE` below takes. A column only some of a unit's rows carry is not a disagreement: the rows that carry it agree, and whether every unit has a value at all is `E-DATA-CLUSTER-UNKNOWN` above | `E-DATA-CLUSTER-VARIES` |
+ | `data.input_dir` or `data.output_dir` resolves inside the git repository, checked once a repo root is found | `E-DATA-IN-REPO` |
+ | A `data.units.measurements.collapse` rule of `mean`, `median`, or `sum` — the top-level string, or a per-column map's own entry, or its `first` fallback over a column the map does not name — is checked against the resolved roster's own attribute values for that column, and `units.is_measurement_numeric` — the single authority this check and the run-time coercion both read — says at least one is neither numeric nor a string that parses as one (a `bool` counts as neither); skipped, along with the rest of this row's checks, when the roster does not resolve, since there is then no column to check a rule against. Raised at run time too, under the same code, wherever that coercion runs: over an input table's rows as the roster resolves, and over the rows a step [measured](#what-isnt-a-repeat) as its execution finalizes — the same reuse `E-UNITS-COLLAPSE-RULE` below illustrates. The step-path half is not a fault `validate` can predict: the value is one the *step* recorded, not one any declaration named | `E-DATA-MEASUREMENTS-COLLAPSE-TYPE` |
+@@ -983,20 +988,22 @@ Two levels, and only one leaf, because only one of these is ever a *state* rathe
+ | An [`Estimate`](#estimate-carries-your-interval-without-core-claiming-it) outside `"summary"` scope, or one carrying `ci95` with no `method` | `ContractError` · `E-STEP-ESTIMATE-SCOPE`, `E-STEP-ESTIMATE-METHOD` |
+ | An [`Estimate`](#estimate-carries-your-interval-without-core-claiming-it) whose `ci95` is not two numbers in ascending order, or whose `value` is not a number | `ContractError` · `E-STEP-ESTIMATE-CI95`, `E-STEP-ESTIMATE-VALUE` |
+ | A [returned value core can't record](#steps-and-artifacts), or any [name collision the record can't hold](#validation) — a derived key against a recorded column, a recorded column against a unit attribute | `ContractError` · `E-STEP-RETURN-TYPE`, `E-STEP-KEY-COLLISION` |
+ | A [`cfg` path](#steps-and-artifacts) the config doesn't hold, or a write through a frozen [`Unit`](#the-unit-list-is-three-operations-and-the-units-in-it-are-frozen) | `ContractError` · `E-STEP-PARAM-UNKNOWN`, `E-UNIT-IMMUTABLE` |
+ | Collapsing [technical replicates](#what-isnt-a-repeat) under a `collapse` rule name that is none of `mean`, `median`, `sum`, `first`, or `mode` | `ContractError` · `E-UNITS-COLLAPSE-RULE` |
+ | Collapsing [technical replicates](#what-isnt-a-repeat) whose `data.units.measurements` block is not a mapping or names no `by`, or under a numeric `collapse` rule over a value that is neither numeric nor a string that parses as one — the second raised as an input table's rows collapse and as a step's `measurement=` rows collapse at the end of its execution, which is the surface `validate` cannot reach, the value being one the step recorded rather than one a declaration named; both are also [reported by `validate`](#errors-validate-reports) under the same codes | `ContractError` · `E-DATA-MEASUREMENTS-INVALID`, `E-DATA-MEASUREMENTS-COLLAPSE-TYPE` |
+ | Collapsing [technical replicates](#what-isnt-a-repeat) of a unit whose rows disagree about the column [`data.units.cluster_by`](#clustered-units), [`data.units.weight_by`](#weighted-samples), or an axis's [`assign.<axis>.from`](#allocation-within-subjects-or-between-subjects) names — the one place the pre-collapse values are in hand, which is why none of the three is a check `validate` makes for itself; all three are also [reported by `validate`](#errors-validate-reports) under the same codes, reaching it through the resolution it performs | `ContractError` · `E-DATA-CLUSTER-VARIES`, `E-DATA-WEIGHT-VARIES`, `E-DATA-ASSIGN-VARIES` |
+ | Under [`data.units.measurements`](#what-isnt-a-repeat), the column `data.units.holdout.from` names is not constant across the rows collapsing into one unit — the unit would be filed on whichever side the row the collapse happened to keep says, making a train/test membership an accident of row order. The fourth member of the family `E-DATA-CLUSTER-VARIES`, `E-DATA-WEIGHT-VARIES` and `E-DATA-ASSIGN-VARIES` already form, and raised where they are raised: at run time, by `resolve_units`, which is the one place holding the pre-collapse rows that prove it; also [reported by `validate`](#errors-validate-reports) under the same code, reaching it through the resolution it performs, same as the other three | `ContractError` · `E-DATA-HOLDOUT-VARIES` |
+ | Resolving [cluster membership](#clustered-units) for a unit that carries no value for the column `data.units.cluster_by` names — when the partition is drawn, when an interval is computed, and wherever `units.clusters_of` is read, that being the single authority both surfaces share, so a roster core cannot group raises rather than inventing a cluster for it; also [reported by `validate`](#errors-validate-reports) under the same code, which is where a run that validates first meets it | `ContractError` · `E-DATA-CLUSTER-UNKNOWN` |
+ | A [drawn arm assignment](#allocation-within-subjects-or-between-subjects) whose realized partition leaves a declared level with no units at all — the same fault, and the same code, [`validate` reports](#errors-validate-reports) for a `ratio` that starves an arm over the resolved roster, raised here for the three draws that pass validate-time: a clustered one, whose empty arm depends on the seed, and a stratified one of either kind — on a declared attribute or on an earlier group axis — which `validate` declines to draw for a reason of its own rather than because the answer would differ. `units.assignment_for` is the single authority, so the run meets it where it draws | `ContractError` · `E-DATA-ASSIGN-LEVELS` |
++| Under `method: by_attribute`, the column `data.units.holdout.from` names does not resolve to exactly `train` and `test` over the resolved roster — the same set equality [`validate` reports](#errors-validate-reports) for the identical fault, raised here because `units.arms_of` is the single authority for a column-read partition and a run that validates first meets it at the draw rather than a second time | `ContractError` · `E-DATA-HOLDOUT-VALUES` |
++| Under `method: random`, a realized holdout draw leaves the train or the test side empty — the same fault [`validate` reports](#errors-validate-reports) for the unstratified, unclustered case, raised here for the two draws `validate` cannot check itself: a stratified draw, whose per-stratum sizes only the run's own draw produces, and a clustered draw, whose empty side depends on the seed the same way a clustered arm assignment's does. `units.holdout_for` is the single authority, so the run meets it where it draws | `ContractError` · `E-DATA-HOLDOUT-EMPTY` |
+ | Resampling a metric a template's [`aggregate`](#templates-where-parameters-are-defined) derived, under a declared [`data.units.cluster_by`](#clustered-units). `percentile_of_derived` draws units; the clustered draw for a *recomputed* metric is a different construction — each replicate drawing whole clusters and rebuilding a unit table from their pooled units, so its row count varies per draw — and it does not exist, so the interval would be narrower than the design supports beside recorded columns that are cluster-robust. **Not a fault `validate` can report**, and the one row here whose absence from that table is the point: `aggregate` is user code core never inspects, and a template overriding it may still return `{}` for a given config, so "derives a metric" has no validate-time meaning and this is the first place core holds the answer as a fact. Contained the way a derived key collision is — the whole `derived` mapping is dropped, the code disclosed through [`W-STATS-AGGREGATE-FAILED`](#warnings-core-reports), and the run keeps its record and its recorded columns — and dropped rather than published with `ci95: null`, that state already meaning "no resample callable, or no seed". Temporary, alongside `E-DATA-CLUSTER-CONTRAST`, which is the same missing construction one level over | `ContractError` · `E-DATA-CLUSTER-DERIVED` |
+ | Computing a [weighted](#weighted-samples) figure — Kish's effective size, or a weighted interval — over a `data.units.weight_by` value that is not a positive finite number, the same `units.usable_weight` predicate `validate` approves the column against, so a weight it cannot use raises here rather than answering a plausible-looking number; also [reported by `validate`](#errors-validate-reports) under the same code, which is where a run that validates first meets it | `ContractError` · `E-DATA-WEIGHT-INVALID` |
+ | **A stratum must be constant within a cluster, and a resample's draw is a cluster drawn within its stratum** — [§ Clustered units](#clustered-units)'s composition, taken again for `resample` rather than invented a second time. `stats.percentile_over_units_clustered` given both `strata` and `membership`, where a cluster's units disagree about the stratum they carry, raised because a public function handed both vectors directly cannot silently pick one. **Dual-listed, but not by one shared authority the way `E-DATA-WEIGHT-INVALID` above is**: `validate` reports the declaration form of this from the roster, through `units.stratum_varies_within_cluster`; `stats.py` cannot import `units.py` to call that same function, so this is a second, independent implementation of its equality over plain sequences — normalized the identical way (`"no value"` for `None`, `str()` otherwise) so the two cannot disagree over a stratum read back as `1` in one place and `"1"` in the other — **again, for a single uncomposed name read straight off the roster**; a composed, multi-name `stratify_by`'s cross-label and `<absent>` sentinel (`cli.py`'s `resample_strata`, H4a task 15) are outside what this equality was built to compare, and a real value colliding with either sentinel string is an acknowledged, unaddressed gap rather than a case this dual listing rules out | `ContractError` · `E-STATS-RESAMPLE-STRATIFY-VARIES` |
+ | A [column](#templates-where-parameters-are-defined) no row of the unit table holds, read off `units` in a template's `aggregate` — reported as [`W-STATS-AGGREGATE-FAILED`](#warnings-core-reports), since `aggregate` runs after every execution has completed and a metric core can't compute never costs a run its record | `ContractError` · `E-STEP-COLUMN-UNKNOWN` |
+ | A [repeat level](#repeat-kinds) whose derived seeds or whose rendered labels are not distinct across its repeats | `ContractError` · `E-REPL-SEED-COLLISION` |
+ | Two [steps](#steps-and-artifacts) in one experiment deriving the same name — including the same step listed twice — or one whose `scope` is not one of the four | `ContractError` · `E-STEP-NAME-COLLISION`, `E-STEP-SCOPE-UNKNOWN` |
+ | A template name claimed twice as a repo's [`templates/`](#templates-where-parameters-are-defined) is discovered and merged — two local registrations of one name, or a local registration of a name core itself registers. One of three load-time raises, beside `E-STEP-NAME-COLLISION`/`E-STEP-SCOPE-UNKNOWN` and `E-TEMPLATE-LOAD`, and dual-surface: every command that resolves a template meets it at load and prints this code, and `validate` [reports it as a finding](#errors-validate-reports) under the same code rather than raising, that table being where its conditions are stated in full. Never raised inside an execution — which template a name means is settled before the first step runs — so it stops the command rather than failing one step | `ContractError` · `E-TEMPLATE-COLLISION` |
+ | A project-local `templates/*.py` fails to load, in any of three shapes: it raises while importing, it imports cleanly but registers nothing, or it registers a class that is not a `BaseTemplate` subclass — [reported for the first such file](#errors-validate-reports) in `discover_local`'s sorted walk, once every file in the directory has been imported. The third of the load-time raises and dual-surface for the same reason `E-TEMPLATE-COLLISION` is: every command resolving a template meets `discover_local` at load. Checked *ahead* of a collision — a collision computed while a file failed to load would be computed over a partial set of claims. Never raised inside an execution, for the same reason `E-TEMPLATE-COLLISION` is not | `ContractError` · `E-TEMPLATE-LOAD` |
+ | [`io.record` or `io.skip`](#the-unit-table-is-the-inference-base) naming a unit the roster does not hold, or naming one this execution has already recorded or skipped — a unit measured with `measurement=` counts as settled for both, in either order, since it arrives by one path or the other and never both, while a second measurement of it is what the argument is for | `ContractError` · `E-STEP-UNIT-UNKNOWN`, `E-STEP-UNIT-SETTLED` |
+ | [`io.record`](#the-importable-surface) given `measurement=` while `data.units.measurements` is undeclared, so there is no rule to collapse the rows under | `ContractError` · `E-STEP-MEASUREMENT-UNDECLARED` |
+diff --git a/pyproject.toml b/pyproject.toml
+index d315b7e..b85e856 100644
+--- a/pyproject.toml
++++ b/pyproject.toml
+@@ -18,20 +18,23 @@ packages = ["src/publishable"]
+ [dependency-groups]
+ dev = ["pytest>=8.0", "ruff>=0.6", "mypy>=1.11", "types-pyyaml>=6.0"]
+ 
+ [tool.ruff]
+ line-length = 100
+ src = ["src", "tests"]
+ 
+ [tool.ruff.lint]
+ select = ["E", "F", "I", "UP", "B"]
+ 
++[tool.ruff.format]
++exclude = ["*.md"]
++
+ [tool.mypy]
+ files = ["src"]
+ python_version = "3.11"
+ strict = true
+ 
+ [[tool.mypy.overrides]]
+ module = "scipy.*"
+ ignore_missing_imports = true
+ 
+ [[tool.mypy.overrides]]
+diff --git a/src/publishable/artifacts.py b/src/publishable/artifacts.py
+index 0f5db16..0468225 100644
+--- a/src/publishable/artifacts.py
++++ b/src/publishable/artifacts.py
+@@ -327,25 +327,27 @@ def allocation_hash(document: dict[str, Any]) -> str:
+     all three hash something the caller already has lying around (the repo
+     tree, the config), not something this module built for them.
+     `manifest_hash` sits in `manifest.py`, next to `build_manifest`, for the
+     matching reason: it hashes the exact document its own module just
+     constructed, so the construction and the hash of what it constructs stay
+     one property of one artifact rather than two modules that have to agree
+     on a shape from a distance. `allocation_hash` follows `manifest_hash`'s
+     placement, not `hashes.py`'s: it hashes `build_allocation_document`'s
+     own return value, and that function lives in `artifacts.py` because
+     `allocation.json` is an artifact `cli.command_run` writes alongside the
+-    others this module already handles. A future reader adding H3d's
+-    `holdout` half should draw the same conclusion: `holdout_hash` (if one
+-    is ever needed) belongs beside whatever builds the holdout partition's
+-    document, not in `hashes.py` either — the module boundary here is "hashes
+-    a document this file assembles," not "is a hash."
++    others this module already handles. H3d's `holdout` half landed the same
++    way this reasoning predicted: task 17 gave `build_allocation_document` a
++    fourth key for the drawn holdout's block rather than adding a separate
++    `holdout_hash` in `hashes.py` — this function already hashes whatever
++    `build_allocation_document` returns, so the holdout's block needed no
++    hash of its own. The module boundary stays "hashes a document this file
++    assembles," not "is a hash."
+     """
+     payload = json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
+     return "sha256:" + hashlib.sha256(payload).hexdigest()
+ 
+ 
+ class StepIO:
+     def __init__(
+         self,
+         *,
+         step_dir: Path,
+diff --git a/tests/test_cli.py b/tests/test_cli.py
+index 0c7a956..e76d41b 100644
+--- a/tests/test_cli.py
++++ b/tests/test_cli.py
+@@ -8211,20 +8211,35 @@ def test_a_declared_holdout_now_validates_and_runs(tmp_path, capsys):
+         json.loads(line)
+         for line in (doc["run_dir"] / "executions.jsonl").read_text().splitlines()
+         if line.strip()
+     ]
+     assert ledger
+     assert all(record["status"] == "completed" for record in ledger), ledger
+ 
+     # Task 15: the denominator is the TEST partition, and the roster's identity
+     # is not. The two numbers asserted side by side, which is the ruling.
+     assert run["provenance"]["units"]["n"] == 20
++
++    # `units_hash` stays whole-roster too — the other half of the same
++    # invariant, and the half the no-holdout sibling test cannot pin because
++    # `eval_roster is roster` there. Recomputed over the whole 20-unit roster
++    # and compared for EQUALITY (review Important #3): mutating `cli.py`'s
++    # `units_hash(roster)` to `units_hash(eval_roster)` at the provenance
++    # call site passed the entire suite before this assertion existed, since
++    # nothing declared a holdout where the two rosters differ.
++    from publishable.units import resolve_units, units_hash
++
++    whole_roster, _technical_n, _columns = resolve_units(
++        run["config"]["data"]["units"], doc["root"].parent / "data"
++    )
++    assert run["provenance"]["units_hash"] == units_hash(whole_roster)
++
+     checked = 0
+     for block in run["results"]["conditions"][0]["aggregated"].values():
+         for metric in block.values():
+             if isinstance(metric, dict) and isinstance(metric.get("n"), dict):
+                 assert metric["n"]["resolved"] == 4, metric
+                 checked += 1
+     # A guard with nothing to guard passes vacuously: if `aggregated` ever
+     # stops carrying a dict `n` (a renamed key, a shape change), this loop
+     # would execute zero times and the assertion above would never run. The
+     # counter makes that silent-pass state itself a failure.
+diff --git a/tests/test_validate.py b/tests/test_validate.py
+index 7d817f4..450e6ca 100644
+--- a/tests/test_validate.py
++++ b/tests/test_validate.py
+@@ -915,20 +915,24 @@ def test_a_holdout_repeat_kind_still_routes_to_the_built_field(write_config):
+     actually existing is pinned by `test_a_plain_holdout_declaration_is_now_accepted`,
+     whose config also declares a real block; this test's own job is only the
+     routing, which the first two assertions carry."""
+     overrides = _holdout({"method": "random", "frac": 0.2})
+     overrides["replication"] = {
+         "repeats": [{"kind": "holdout", "n": 1}], "order": "as_declared"
+     }
+     by_code = messages_by_code(write_config(overrides))
+     assert "E-REPL-KIND" in by_code
+     assert "data.units.holdout" in by_code["E-REPL-KIND"]
++    # `E-DATA-HOLDOUT-UNSUPPORTED` is gone from `src/` entirely (task 18), so
++    # this line alone can never fail — a deliberate retirement regression
++    # guard, not a live check, and defensible only because the two positive
++    # assertions above are what actually exercise this test's claim.
+     assert "E-DATA-HOLDOUT-UNSUPPORTED" not in by_code
+ 
+ 
+ def test_colliding_seeds_are_refused_through_validate(write_config, monkeypatch):
+     import publishable.replication as replication
+ 
+     monkeypatch.setattr(replication, "_seed_for", lambda digest, index: 42)
+     assert "E-REPL-SEED-COLLISION" in codes(
+         write_config({"replication": {"repeats": [{"kind": "seed", "n": 3}]}})
+     )
+@@ -8050,20 +8054,87 @@ def test_validate_reports_rather_than_raising_on_a_varying_arm(write_config, tmp
+         tmp_path,
+         "patient_id,read_id,arm",
+         "p1,r1,control\np1,r2,treatment\n",
+     )
+     path = write_config({"data.units": _ARM_MEASURED_UNITS})
+     c = Collector()
+     validate_config(path, c)
+     assert any(f.code == "E-DATA-ASSIGN-VARIES" for f in c.findings)
+ 
+ 
++# --- `holdout.from` must not vary within a unit's measurement rows ----------
++#
++# The fourth member of the `CONSTANT_COLUMN_RULES` family, alongside
++# `cluster_by`, `weight_by` and `assign.<axis>.from` above — I2 in the H3d
++# whole-branch review: `E-DATA-HOLDOUT-VARIES` had a § Errors core raises row
++# claiming parity with its three siblings but no § Errors validate reports row
++# and no validate-surface test, unlike all three. Same route, same
++# `except ContractError` in `_check_units`.
++
++_HOLDOUT_MEASURED_UNITS = {
++    "from": "index.csv",
++    "key": "patient_id",
++    "attributes": ["read_id", "split"],
++    "holdout": {"method": "by_attribute", "from": "split"},
++    "measurements": {"by": "read_id", "collapse": "first"},
++}
++
++
++def test_a_holdout_column_varying_within_a_units_rows_is_reported(write_config, tmp_path):
++    """§ Errors core raises, `E-DATA-HOLDOUT-VARIES`: replicate rows declaring
++    `train` and `test` would collapse to whichever the file lists first,
++    filing the unit on an accident of row order rather than a real split."""
++    _clustered_table(
++        tmp_path,
++        "patient_id,read_id,split",
++        "p1,r1,train\np1,r2,test\np2,r3,train\n",
++    )
++    path = write_config({"data.units": _HOLDOUT_MEASURED_UNITS})
++    assert "E-DATA-HOLDOUT-VARIES" in codes(path)
++
++
++def test_agreeing_holdout_rows_are_not_reported(write_config, tmp_path):
++    """The holdout half's own control. Same shape, rows that agree — must not
++    report — and the config declares `holdout` at all, so a check that never
++    ran would also pass this."""
++    _clustered_table(
++        tmp_path,
++        "patient_id,read_id,split",
++        "p1,r1,train\np1,r2,train\np2,r3,test\n",
++    )
++    path = write_config({"data.units": _HOLDOUT_MEASURED_UNITS})
++    assert "E-DATA-HOLDOUT-VARIES" not in codes(path)
++
++
++def test_validate_reports_rather_than_raising_on_a_varying_holdout(write_config, tmp_path):
++    """`validate` collects findings and never raises. The same `except
++    ContractError` in `_check_units` that catches the cluster/weight/arm raise
++    catches this one too, and calling `validate_config` directly proves
++    nothing escaped it. The message is pinned, not only the code — `find` the
++    varying column, `who` the offending unit, and the `why` from
++    `CONSTANT_COLUMN_RULES["holdout"]`, none of which a bare code check
++    exercises."""
++    _clustered_table(
++        tmp_path,
++        "patient_id,read_id,split",
++        "p1,r1,train\np1,r2,test\n",
++    )
++    path = write_config({"data.units": _HOLDOUT_MEASURED_UNITS})
++    c = Collector()
++    validate_config(path, c)
++    assert any(f.code == "E-DATA-HOLDOUT-VARIES" for f in c.findings)
++    message = messages_by_code(path)["E-DATA-HOLDOUT-VARIES"]
++    assert "`data.units.holdout.from` names 'split'" in message
++    assert "unit 'p1'" in message
++    assert "decided by the order the rows happen to be in" in message
++
++
+ # --- `k` and `k: all` are bounded by clusters -------------------------------
+ #
+ # `reference.md` § Validation, *Folds fit inside the clusters* and
+ # *Leave-one-out is affordable*. `E-DATA-CLUSTER-UNSUPPORTED` was live when these
+ # were written, so each asserted that refusal BESIDE the fold finding to prove the
+ # check was reached rather than shadowed. It is retired, so each now asserts the
+ # **exact** finding set instead — an empty one where the design is legal — which
+ # proves the same thing more strongly: a clustered config that validates clean is
+ # a clean config, not one whose findings were filtered.
+ #

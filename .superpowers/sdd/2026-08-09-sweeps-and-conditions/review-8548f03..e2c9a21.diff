@@ -1,0 +1,219 @@
+# Review package: 8548f03..HEAD
+
+## Commits
+e2c9a21 Refuse a swept value that would render the axis separator
+1f63311 Label a condition so a reader can type its name
+
+## Files changed
+ src/publishable/sweep.py | 77 +++++++++++++++++++++++++++++++++++++++++++++++-
+ tests/test_sweep.py      | 66 +++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 142 insertions(+), 1 deletion(-)
+
+## Diff
+diff --git a/src/publishable/sweep.py b/src/publishable/sweep.py
+index 7ef95e6..7ae8461 100644
+--- a/src/publishable/sweep.py
++++ b/src/publishable/sweep.py
+@@ -5,20 +5,21 @@ Pure: a config dict in, an ordered condition list out. No filesystem, no
+ so it can be tested exhaustively without a repository.
+ 
+ A `baseline` whose values happen to coincide with a grid cell produces two
+ conditions with identical `values` — `00_baseline` and the matching grid
+ row — and `expand` deliberately does not dedup them: the baseline is
+ declared and the grid is mechanical, and reconciling the two is not
+ `expand`'s job.
+ """
+ 
+ import itertools
++import re
+ from collections.abc import Mapping
+ from dataclasses import dataclass, field
+ from types import MappingProxyType
+ from typing import Any
+ 
+ 
+ @dataclass(frozen=True)
+ class Condition:
+     index: int
+     label: str | None
+@@ -28,24 +29,98 @@ class Condition:
+     def __post_init__(self) -> None:
+         # `values` is a plain dict handed in by `expand`; without wrapping it, a
+         # caller could mutate a condition's values after the fact, or reach back
+         # through the dict it originally passed in. The proxy over a copy is what
+         # makes `values["x"] = ...` raise rather than silently drift out of sync
+         # with `sweep.yaml`, written from these same objects. Same fix as
+         # `Unit.attributes` in `units.py`, same reason.
+         object.__setattr__(self, "values", MappingProxyType(dict(self.values)))
+ 
+ 
++SWEPT_VALUE_PATTERN = r"^[A-Za-z0-9._+-]+$"
++
++
++def render_value(value: Any) -> str:
++    """As written in the config: `true`/`false` for booleans, shortest round-trip float."""
++    if isinstance(value, bool):
++        return "true" if value else "false"
++    if isinstance(value, float):
++        return repr(value)
++    return str(value)
++
++
++# The axis separator in a label. Kept as a module-level name — not inlined
++# as a literal in `label_for` and `check_swept_value` — because both places
++# that care about it must agree on what it is: the separator `label_for`
++# joins axes with is exactly the substring `check_swept_value` refuses.
++AXIS_SEPARATOR = "__"
++
++
++def check_swept_value(value: Any) -> str | None:
++    """None if `value` is safe to render into a condition label; otherwise why not.
++
++    `docs/reference.md` § How artifacts are organized states two rules that
++    cannot both hold for every value: a swept value must render as
++    `SWEPT_VALUE_PATTERN` (which admits `_`), and axes in a label are joined
++    by `__`. A rendered value containing `__` — e.g. `a__b` — passes the
++    pattern but destroys the separator: `one=a__b__two=c` splits into three
++    axes instead of two. Since a label is also a selector (a hypothesis's
++    `compare.condition`, a contrast's `of`/`against`, and a `report` filter
++    all name conditions by parsing the label's body back into axes), this
++    resolves the conflict by refusing the value rather than the character —
++    `_` alone stays legal.
++
++    Task 4's `validate` is where this predicate is meant to be called from,
++    once `_check_sweep` exists: this is the shape of the check it should run
++    per swept value, on top of (not instead of) the existing pattern check.
++    """
++    rendered = render_value(value)
++    if not re.match(SWEPT_VALUE_PATTERN, rendered):
++        return f"swept value {rendered!r} does not match {SWEPT_VALUE_PATTERN}"
++    if AXIS_SEPARATOR in rendered:
++        return (
++            f"swept value {rendered!r} contains {AXIS_SEPARATOR!r}, the separator "
++            "between axes in a condition label; a label is also a selector, so a "
++            "value containing the separator would produce a label that cannot be "
++            "parsed back into axes"
++        )
++    return None
++
++
++def _keys_for(paths: list[str]) -> dict[str, str]:
++    """The shortest suffix of each dotted path that is unique among them all.
++
++    A label is also a selector, so the key has to be something a reader can
++    type without opening the directory — but it must still identify one axis.
++    """
++    keys: dict[str, str] = {}
++    for path in paths:
++        segments = path.split(".")
++        for depth in range(1, len(segments) + 1):
++            candidate = ".".join(segments[-depth:])
++            others = [p for p in paths if p != path]
++            if not any(p == candidate or p.endswith("." + candidate) for p in others):
++                keys[path] = candidate
++                break
++        else:
++            keys[path] = path
++    return keys
++
++
+ def label_for(values: dict[str, Any], grid: dict[str, Any], is_baseline: bool) -> str:
+     if is_baseline:
+         return "baseline"
+-    return "__".join(f"{path.rsplit('.', 1)[-1]}={value}" for path, value in values.items())
++    keys = _keys_for(list(grid))
++    return AXIS_SEPARATOR.join(
++        f"{keys.get(path, path.rsplit('.', 1)[-1])}={render_value(value)}"
++        for path, value in values.items()
++    )
+ 
+ 
+ def expand(config: dict[str, Any]) -> list[Condition]:
+     """Ordered conditions: a declared baseline as 00, then the grid product.
+ 
+     With no `sweep` block, one condition whose label is None — which is what
+     keeps the `conditions/` level out of the artifact tree.
+     """
+     sweep = config.get("sweep") or {}
+     if not sweep:
+diff --git a/tests/test_sweep.py b/tests/test_sweep.py
+index aa594ff..8517c75 100644
+--- a/tests/test_sweep.py
++++ b/tests/test_sweep.py
+@@ -68,10 +68,76 @@ def test_condition_values_are_copied_not_aliased():
+     source = {"analysis.method": "pearson"}
+     conds = expand({"sweep": {"baseline": source}})
+     source["analysis.method"] = "spearman"
+     assert conds[0].values["analysis.method"] == "pearson"
+ 
+ 
+ def test_conditions_are_frozen():
+     c = expand({"sweep": {"grid": {"a.x": [1]}}})[0]
+     with pytest.raises(Exception):  # noqa: B017 — frozen dataclass raises FrozenInstanceError
+         c.index = 5  # type: ignore[misc]
++
++
++def test_a_single_axis_uses_the_shortest_suffix():
++    conds = expand({"sweep": {"grid": {"analysis.method": ["spearman"]}}})
++    assert conds[0].label == "method=spearman"
++
++
++def test_a_shared_leaf_forces_both_keys_to_keep_a_segment():
++    """The rule is shortest UNIQUE suffix, not shortest suffix."""
++    conds = expand({
++        "sweep": {"grid": {"analysis.method": ["pearson"], "scoring.method": ["auc"]}}
++    })
++    assert conds[0].label == "analysis.method=pearson__scoring.method=auc"
++
++
++def test_a_three_segment_path_disambiguates_only_as_far_as_needed():
++    conds = expand({
++        "sweep": {"grid": {"a.b.method": ["x"], "c.d.method": ["y"]}}
++    })
++    assert conds[0].label == "b.method=x__d.method=y"
++
++
++def test_axes_appear_in_declaration_order_never_sorted():
++    conds = expand({"sweep": {"grid": {"z.one": ["a"], "a.two": ["b"]}}})
++    assert conds[0].label == "one=a__two=b"
++
++
++def test_booleans_and_floats_render_readably():
++    conds = expand({"sweep": {"grid": {"f.flag": [True, False], "g.rate": [0.5]}}})
++    assert [c.label for c in conds] == ["flag=true__rate=0.5", "flag=false__rate=0.5"]
++
++
++def test_a_value_rendering_the_axis_separator_is_refused():
++    from publishable.sweep import check_swept_value
++    message = check_swept_value("a__b")
++    assert message is not None
++    assert "a__b" in message
++    assert "__" in message
++
++
++def test_a_single_underscore_is_still_accepted():
++    """Narrowing the pattern to exclude `_` entirely would be over-correction —
++    only the two-character separator sequence is the conflict."""
++    from publishable.sweep import check_swept_value
++    assert check_swept_value("a_b") is None
++
++
++def test_values_already_refused_by_the_pattern_are_still_refused():
++    """The separator check is on top of the pattern check, not instead of it."""
++    from publishable.sweep import check_swept_value
++    assert check_swept_value("a b") is not None
++    assert check_swept_value("a/b") is not None
++
++
++def test_every_generated_label_body_matches_the_selector_pattern():
++    import re
++
++    from publishable.sweep import SWEPT_VALUE_PATTERN
++    conds = expand({
++        "sweep": {"baseline": {"analysis.method": "pearson"},
++                  "grid": {"analysis.method": ["spearman", "kendall"]}}
++    })
++    for c in conds:
++        for part in c.label.split("__"):
++            value = part.split("=")[-1]
++            assert re.match(SWEPT_VALUE_PATTERN, value), part

@@ -1,0 +1,550 @@
+# Review package: 66cf0da..HEAD
+
+## Commits
+e66a88b Plant the swept-away marker unconditionally, and fail loud on a missing cfg
+c37ff1b Give each condition its own cfg, and withhold what a scope cannot know
+
+## Files changed
+ src/publishable/cli.py    |   2 +-
+ src/publishable/config.py |  23 +++++-
+ src/publishable/runner.py |  66 ++++++++++++++++-
+ tests/test_runner.py      | 179 ++++++++++++++++++++++++++++++++++++++++++++--
+ 4 files changed, 261 insertions(+), 9 deletions(-)
+
+## Diff
+diff --git a/src/publishable/cli.py b/src/publishable/cli.py
+index a094de4..4db9804 100644
+--- a/src/publishable/cli.py
++++ b/src/publishable/cli.py
+@@ -144,21 +144,21 @@ def command_run(config_path: Path) -> int:
+         (run_dir / "environment" / "pyproject.toml").write_bytes(
+             (repo_root / "pyproject.toml").read_bytes()
+         )
+         if lock_path is not None:
+             (run_dir / "environment" / "uv.lock").write_bytes(lock_path.read_bytes())
+ 
+         results = execute_plan(  # phase 7
+             plan=plan,
+             run_dir=run_dir,
+             input_dir=input_dir,
+-            cfg=Config(doc),
++            cfgs={0: Config(doc), -1: Config(doc)},
+             repeats=repeats,
+             digest=digest,
+             units=roster,
+             max_failed_fraction=(doc.get("limits") or {}).get("max_failed_fraction"),
+         )
+ 
+         status = run_status(results)
+         # S2 always resolves a single condition, so every aggregation below is
+         # scoped to condition_index=0 — never pooled across conditions. No roster
+         # means nothing to aggregate over, so `aggregated` stays `None` rather than
+diff --git a/src/publishable/config.py b/src/publishable/config.py
+index bf447cb..69682c8 100644
+--- a/src/publishable/config.py
++++ b/src/publishable/config.py
+@@ -10,40 +10,61 @@ from publishable.errors import ContractError
+ 
+ 
+ def _wrap(value: Any, path: str) -> Any:
+     if isinstance(value, dict):
+         return Node(value, path)
+     if isinstance(value, list):
+         return [_wrap(v, f"{path}[{i}]") for i, v in enumerate(value)]
+     return value
+ 
+ 
++class SweptAway:
++    """Marks a parameter that `sweep` varies, at a scope with no single value for it.
++
++    `Node.__getattr__` raises when it resolves one, so the refusal fires on the read
++    itself. A bare sentinel returned to the caller would not — the raise would land
++    on some later attribute access, under the wrong identifier.
++    """
++
++    __slots__ = ("path",)
++
++    def __init__(self, path: str) -> None:
++        self.path = path
++
++
+ class Node:
+     """Dot-access and nothing else, so no parameter name can be shadowed."""
+ 
+     def __init__(self, data: dict[str, Any], path: str = "") -> None:
+         object.__setattr__(self, "_data", data)
+         object.__setattr__(self, "_path", path)
+ 
+     def __getattr__(self, name: str) -> Any:
+         if name.startswith("_"):
+             raise AttributeError(name)
+         data: dict[str, Any] = object.__getattribute__(self, "_data")
+         base: str = object.__getattribute__(self, "_path")
+         full = f"{base}.{name}" if base else name
+         if name not in data:
+             near = difflib.get_close_matches(name, list(data), n=1)
+             hint = f" — did you mean `{near[0]}`?" if near else ""
+             raise ContractError(
+                 f"{full} is not a path this config holds{hint}", code="E-STEP-PARAM-UNKNOWN"
+             )
+-        return _wrap(data[name], full)
++        value = data[name]
++        if isinstance(value, SweptAway):
++            raise ContractError(
++                f"`{value.path}` is varied by `sweep`, so it has no single value at this "
++                "scope; read it from a `condition`- or `repeat`-scoped step",
++                code="E-STEP-SWEPT-PARAM",
++            )
++        return _wrap(value, full)
+ 
+ 
+ class Config(Node):
+     def __init__(self, data: dict[str, Any]) -> None:
+         super().__init__(data, "")
+ 
+     @property
+     def raw(self) -> dict[str, Any]:
+         return dict(object.__getattribute__(self, "_data"))
+ 
+diff --git a/src/publishable/runner.py b/src/publishable/runner.py
+index f4eb5d1..ec10591 100644
+--- a/src/publishable/runner.py
++++ b/src/publishable/runner.py
+@@ -1,20 +1,22 @@
+ """The execution loop. One execution at a time, in the recorded order."""
+ 
++import copy
+ import json
+ import time
+ from dataclasses import dataclass
+ from datetime import UTC, datetime
+ from pathlib import Path
+ from typing import Any
+ 
+ from publishable.artifacts import StepIO
++from publishable.config import Config, SweptAway
+ from publishable.errors import ContractError
+ from publishable.replication import Repeat
+ from publishable.scope import Execution
+ from publishable.units import UnitList
+ 
+ 
+ @dataclass(frozen=True)
+ class ExecutionResult:
+     execution: Execution
+     status: str
+@@ -144,26 +146,73 @@ def step_dir_for(run_dir: Path, execution: Execution, collapse_repeats: bool) ->
+     base = run_dir
+     if execution.condition_label is not None:
+         base = base / "conditions" / (
+             f"{execution.condition_index:02d}_{execution.condition_label}"
+         )
+     if execution.scope == "repeat" and not collapse_repeats and execution.repeat_label:
+         base = base / execution.repeat_label
+     return base / execution.step_name
+ 
+ 
++def resolve_condition_cfg(base: dict[str, Any], values: dict[str, Any]) -> Config:
++    """Overlay this condition's swept values onto the base config.
++
++    Each dotted path in `values` names a leaf under `parameters`; the overlay
++    walks (creating intermediate mappings as needed) to that leaf and sets it,
++    so a `condition`- or `repeat`-scoped step reads exactly this condition's
++    value without ever mentioning the sweep that produced it.
++    """
++    doc = copy.deepcopy(base)
++    for path, value in values.items():
++        node = doc.setdefault("parameters", {})
++        *heads, leaf = path.split(".")
++        for head in heads:
++            node = node.setdefault(head, {})
++        node[leaf] = value
++    return Config(doc)
++
++
++def resolve_wide_cfg(base: dict[str, Any], swept_paths: set[str]) -> Config:
++    """A config for `run`/`summary` scope, with every swept path made unreadable.
++
++    Those scopes have no single condition to draw a swept value from, so each
++    leaf `sweep` varies is replaced by a `SweptAway` marker: `Node.__getattr__`
++    raises `E-STEP-SWEPT-PARAM` the moment such a step reads it, rather than
++    silently handing back a value that could only be wrong for every condition
++    but one.
++
++    Walks with `setdefault`, exactly as `resolve_condition_cfg` does, rather
++    than `get` — a swept path whose parent is absent from `base` must still end
++    up marked. Skipping it there (as an earlier version of this function did)
++    fails in the unsafe direction: the value stays readable, and a `run`- or
++    `summary`-scoped step would silently get a value that could only be wrong
++    for every condition but one. Planting the marker instead means the worst
++    case is a step getting `E-STEP-SWEPT-PARAM` for a path `validate` should
++    have already rejected as unresolvable — a refusal either way, and the more
++    accurate one, since the path *is* swept.
++    """
++    doc = copy.deepcopy(base)
++    for path in swept_paths:
++        node = doc.setdefault("parameters", {})
++        *heads, leaf = path.split(".")
++        for head in heads:
++            node = node.setdefault(head, {})
++        node[leaf] = SweptAway(f"parameters.{path}")
++    return Config(doc)
++
++
+ def execute_plan(
+     *,
+     plan: list[Execution],
+     run_dir: Path,
+     input_dir: Path,
+-    cfg: Any,
++    cfgs: dict[int, Any],
+     repeats: list[Repeat],
+     digest: str,
+     units: UnitList | None = None,
+     max_failed_fraction: float | None = None,
+ ) -> list[ExecutionResult]:
+     """Run every execution in the plan, in order, one at a time.
+ 
+     A failed execution never stops the run — the plan runs to its end, because
+     abandoning it throws away every execution still pending and `resume` cannot
+     un-abort a plan that was never attempted. `max_failed_fraction` is the one
+@@ -203,20 +252,35 @@ def execute_plan(
+         io = StepIO(
+             step_dir=step_dir_for(run_dir, execution, collapse),
+             input_dir=input_dir,
+             run_dir=run_dir,
+             units=units,
+         )
+         io.step_dir.mkdir(parents=True, exist_ok=True)
+         recorded: frozenset[str] = frozenset()
+         skipped: frozenset[str] = frozenset()
+         rows: tuple[dict[str, Any], ...] = ()
++        cfg_key = execution.condition_index if execution.condition_index is not None else -1
++        if cfg_key not in cfgs:
++            # Not a step failure — the plan and the resolved configs disagree,
++            # which means core built an inconsistent plan. Continuing would
++            # write a run record that looks partially fine while resting on a
++            # bug, so this is deliberately not caught by the per-execution
++            # `try` below: only a step's own failure is allowed to leave the
++            # rest of the plan running.
++            raise ContractError(
++                f"no cfg was resolved for condition index {cfg_key!r}, needed by "
++                f"{execution.step_name!r} at {execution.scope!r} scope; the plan and "
++                "the resolved `cfgs` disagree",
++                code="E-RUN-CFG-MISSING",
++            )
++        cfg = cfgs[cfg_key]
+         try:
+             returned = step.run(cfg, io)
+             if returned is None:
+                 returned = {}
+             elif not isinstance(returned, dict):
+                 raise ContractError(
+                     f"{execution.step_name!r} returned {type(returned).__name__}; "
+                     "a step's `run` must return a mapping or None",
+                     code="E-STEP-RETURN-TYPE",
+                 )
+diff --git a/tests/test_runner.py b/tests/test_runner.py
+index 86cfd43..fc78829 100644
+--- a/tests/test_runner.py
++++ b/tests/test_runner.py
+@@ -1,20 +1,26 @@
++import copy
+ from pathlib import Path
+ 
+ import pytest
+ 
+ from publishable import BaseExperiment, BaseStep
+ from publishable.config import Config
+ from publishable.errors import ContractError
+ from publishable.replication import Repeat
+ from publishable.run_record import assemble_run_yaml, run_status
+-from publishable.runner import attrition, execute_plan
++from publishable.runner import (
++    attrition,
++    execute_plan,
++    resolve_condition_cfg,
++    resolve_wide_cfg,
++)
+ from publishable.scope import build_plan
+ from publishable.units import Unit, UnitList
+ 
+ 
+ class Load(BaseStep):
+     scope = "run"
+ 
+     def run(self, cfg, io):
+         io.write("cohort.json", {"loaded": True})
+         return {"n": 2}
+@@ -63,21 +69,21 @@ def harness(tmp_path: Path, steps, *, units=None, repeats=None, max_failed_fract
+     if repeats is None:
+         repeats = [Repeat("seed", "seed17", 17), Repeat("seed", "seed42", 42)]
+     plan = build_plan(P(), conditions=[(0, None)], repeat_labels=[r.label for r in repeats])
+     run_dir = tmp_path / "run"
+     run_dir.mkdir(parents=True, exist_ok=True)
+     (tmp_path / "input").mkdir(parents=True, exist_ok=True)
+     results = execute_plan(
+         plan=plan,
+         run_dir=run_dir,
+         input_dir=tmp_path / "input",
+-        cfg=Config({"parameters": {}}),
++        cfgs={0: Config({"parameters": {}}), -1: Config({"parameters": {}})},
+         repeats=repeats,
+         digest="sha256:abc",
+         units=units,
+         max_failed_fraction=max_failed_fraction,
+     )
+     return run_dir, results, repeats
+ 
+ 
+ def test_no_sweep_means_no_conditions_level(tmp_path: Path):
+     run_dir, _, _ = harness(tmp_path, [Load, Analyze])
+@@ -141,41 +147,41 @@ def test_a_repeat_label_missing_from_repeats_raises_seed_missing(tmp_path: Path)
+     plan = build_plan(P(), conditions=[(0, None)], repeat_labels=["seedA", "seedB"])
+     run_dir = tmp_path / "run"
+     run_dir.mkdir(parents=True, exist_ok=True)
+     (tmp_path / "input").mkdir(parents=True, exist_ok=True)
+     mismatched_repeats = [Repeat("seed", "seedX", 111), Repeat("seed", "seedY", 222)]
+     with pytest.raises(ContractError) as excinfo:
+         execute_plan(
+             plan=plan,
+             run_dir=run_dir,
+             input_dir=tmp_path / "input",
+-            cfg=Config({"parameters": {}}),
++            cfgs={0: Config({"parameters": {}}), -1: Config({"parameters": {}})},
+             repeats=mismatched_repeats,
+             digest="sha256:abc",
+         )
+     assert excinfo.value.code == "E-RUN-SEED-MISSING"
+ 
+ 
+ def test_an_unlabelled_single_repeat_still_resolves_its_seed(tmp_path: Path):
+     class P(BaseExperiment):
+         pass
+ 
+     P.steps = [Analyze]
+     plan = build_plan(P(), conditions=[(0, None)], repeat_labels=[""])
+     run_dir = tmp_path / "run"
+     run_dir.mkdir(parents=True, exist_ok=True)
+     (tmp_path / "input").mkdir(parents=True, exist_ok=True)
+     results = execute_plan(
+         plan=plan,
+         run_dir=run_dir,
+         input_dir=tmp_path / "input",
+-        cfg=Config({"parameters": {}}),
++        cfgs={0: Config({"parameters": {}}), -1: Config({"parameters": {}})},
+         repeats=[Repeat("seed", "", 17)],
+         digest="sha256:abc",
+     )
+     assert results[0].status == "completed"
+ 
+ 
+ def test_a_non_mapping_return_fails_that_execution_and_the_run_continues(tmp_path: Path):
+     run_dir, results, _ = harness(tmp_path, [ReturnsString, Analyze])
+     string_result = next(r for r in results if r.execution.step_name == "returns_string")
+     analyze_result = next(r for r in results if r.execution.step_name == "analyze")
+@@ -565,21 +571,22 @@ def _two_condition_results(tmp_path: Path, roster: "UnitList"):
+     P.steps = [Record]
+     repeats = [Repeat("seed", "seed17", 17), Repeat("seed", "seed42", 42)]
+     plan = build_plan(
+         P(), conditions=[(0, "c0"), (1, "c1")], repeat_labels=[r.label for r in repeats]
+     )
+     run_dir = tmp_path / "run"
+     run_dir.mkdir(parents=True, exist_ok=True)
+     (tmp_path / "input").mkdir(parents=True, exist_ok=True)
+     results = execute_plan(
+         plan=plan, run_dir=run_dir, input_dir=tmp_path / "input",
+-        cfg=Config({"parameters": {}}), repeats=repeats, digest="sha256:abc", units=roster,
++        cfgs={0: Config({"parameters": {}}), 1: Config({"parameters": {}})},
++        repeats=repeats, digest="sha256:abc", units=roster,
+     )
+     return results, repeats
+ 
+ 
+ def test_aggregated_is_scoped_per_condition_not_shared(tmp_path: Path):
+     from publishable.stats import collapse_repeats, summarize_step
+ 
+     roster = UnitList([Unit(key="p0")])
+     results, repeats = _two_condition_results(tmp_path, roster)
+ 
+@@ -643,19 +650,179 @@ def test_attrition_is_scoped_per_condition(tmp_path: Path):
+     P.steps = [Record]
+     repeats = [Repeat("seed", "seed17", 17), Repeat("seed", "seed42", 42)]
+     plan = build_plan(
+         P(), conditions=[(0, "c0"), (1, "c1")], repeat_labels=[r.label for r in repeats]
+     )
+     run_dir = tmp_path / "run"
+     run_dir.mkdir(parents=True, exist_ok=True)
+     (tmp_path / "input").mkdir(parents=True, exist_ok=True)
+     results = execute_plan(
+         plan=plan, run_dir=run_dir, input_dir=tmp_path / "input",
+-        cfg=Config({"parameters": {}}), repeats=repeats, digest="sha256:abc", units=roster,
++        cfgs={0: Config({"parameters": {}}), 1: Config({"parameters": {}})},
++        repeats=repeats, digest="sha256:abc", units=roster,
+     )
+     assert attrition(results, roster, "record", condition_index=0)["completed"] == 1
+     assert attrition(results, roster, "record", condition_index=1)["completed"] == 2
+ 
+ 
+ def test_attrition_requires_condition_index():
+     with pytest.raises(TypeError):
+         attrition([], None, "analyze")  # type: ignore[call-arg]
++
++
++BASE_PARAMS = {"parameters": {"analysis": {"method": "pearson", "min_samples": 30}}}
++
++
++def run_two_conditions(tmp_path: Path, step_cls):
++    """Two conditions sweeping `analysis.method` over pearson/spearman, each with
++    its own `Config` built by `resolve_condition_cfg`, plus the wide `Config`
++    `resolve_wide_cfg` builds for `run`/`summary` scope, where that path has no
++    single value."""
++
++    class P(BaseExperiment):
++        pass
++
++    P.steps = [step_cls]
++    conditions = [(0, "pearson"), (1, "spearman")]
++    plan = build_plan(P(), conditions=conditions, repeat_labels=[""])
++    run_dir = tmp_path / "run"
++    run_dir.mkdir(parents=True, exist_ok=True)
++    (tmp_path / "input").mkdir(parents=True, exist_ok=True)
++    cfgs = {
++        0: resolve_condition_cfg(BASE_PARAMS, {"analysis.method": "pearson"}),
++        1: resolve_condition_cfg(BASE_PARAMS, {"analysis.method": "spearman"}),
++        -1: resolve_wide_cfg(BASE_PARAMS, {"analysis.method"}),
++    }
++    return execute_plan(
++        plan=plan,
++        run_dir=run_dir,
++        input_dir=tmp_path / "input",
++        cfgs=cfgs,
++        repeats=[Repeat("seed", "", 17)],
++        digest="sha256:abc",
++    )
++
++
++def test_each_condition_sees_its_own_parameter_value(tmp_path: Path):
++    seen = []
++
++    class Reads(BaseStep):
++        def run(self, cfg, io):
++            seen.append(cfg.parameters.analysis.method)
++            return {}
++
++    run_two_conditions(tmp_path, Reads)
++    assert sorted(seen) == ["pearson", "spearman"]
++
++
++def test_a_condition_scoped_step_also_sees_its_own_value(tmp_path: Path):
++    """Same guarantee as the `repeat`-scoped case above, but for `condition`
++    scope — a different branch of `build_plan` and a different `step_dir_for`
++    path, so the `cfgs[condition_index]` lookup needs its own proof."""
++    seen = []
++
++    class Reads(BaseStep):
++        scope = "condition"
++
++        def run(self, cfg, io):
++            seen.append(cfg.parameters.analysis.method)
++            return {}
++
++    run_two_conditions(tmp_path, Reads)
++    assert sorted(seen) == ["pearson", "spearman"]
++
++
++def test_a_run_scoped_step_cannot_read_a_swept_parameter(tmp_path: Path):
++    class Wide(BaseStep):
++        scope = "run"
++
++        def run(self, cfg, io):
++            return {"m": cfg.parameters.analysis.method}
++
++    results = run_two_conditions(tmp_path, Wide)
++    failed = [r for r in results if r.status == "failed"]
++    assert failed and "E-STEP-SWEPT-PARAM" in (failed[0].error or "")
++
++
++def test_a_summary_scoped_step_cannot_read_a_swept_parameter(tmp_path: Path):
++    class Sum(BaseStep):
++        scope = "summary"
++
++        def run(self, cfg, io):
++            return {"m": cfg.parameters.analysis.method}
++
++    results = run_two_conditions(tmp_path, Sum)
++    failed = [r for r in results if r.status == "failed"]
++    assert failed and "E-STEP-SWEPT-PARAM" in (failed[0].error or "")
++
++
++@pytest.mark.parametrize("scope", ["run", "condition", "repeat", "summary"])
++def test_an_unswept_path_reads_normally_at_every_scope(tmp_path: Path, scope: str):
++    """Only the swept paths are withheld; the rest is ordinary, at every scope —
++    the negative that proves the check is conditioned on being swept, not on
++    scope alone."""
++
++    class Reads(BaseStep):
++        def run(self, cfg, io):
++            return {"n": cfg.parameters.analysis.min_samples}
++
++    Reads.scope = scope
++    results = run_two_conditions(tmp_path, Reads)
++    assert all(r.status == "completed" for r in results)
++
++
++def test_per_condition_cfgs_are_not_the_same_object(tmp_path: Path):
++    """`cfg0 is not cfg1` alone would pass even if both shared the same nested
++    `analysis` dict underneath — that aliasing is exactly how an earlier defect
++    in this project first showed itself. Assert the deep-copy actually happened,
++    and that the shared `BASE_PARAMS` fixture survives both calls untouched."""
++    before = copy.deepcopy(BASE_PARAMS)
++    cfg0 = resolve_condition_cfg(BASE_PARAMS, {"analysis.method": "pearson"})
++    cfg1 = resolve_condition_cfg(BASE_PARAMS, {"analysis.method": "spearman"})
++    assert cfg0 is not cfg1
++    assert cfg0.raw["parameters"]["analysis"] is not cfg1.raw["parameters"]["analysis"]
++    assert cfg0.parameters.analysis.method == "pearson"
++    assert cfg1.parameters.analysis.method == "spearman"
++    assert BASE_PARAMS == before
++
++
++def test_resolve_wide_cfg_plants_the_marker_even_when_the_parent_is_absent(tmp_path: Path):
++    """`resolve_wide_cfg` must fail in the safe direction: if a swept path's
++    parent doesn't already exist in `base`, the marker still has to be
++    planted, not skipped. Skipping it would leave the value readable at
++    `run`/`summary` scope — exactly the wrong value for every condition but
++    one, handed over silently instead of refused."""
++    cfg = resolve_wide_cfg({"parameters": {}}, {"analysis.method"})
++    with pytest.raises(ContractError) as excinfo:
++        _ = cfg.parameters.analysis.method
++    assert excinfo.value.code == "E-STEP-SWEPT-PARAM"
++
++
++def test_execute_plan_raises_explicitly_when_a_cfg_is_missing(tmp_path: Path):
++    """A condition index absent from `cfgs` is not a step failing — it is core
++    having built an inconsistent plan — so it must not be swallowed as a
++    per-execution failure, and the error must name what's missing rather than
++    surfacing as a bare `KeyError`."""
++
++    class Analyze(BaseStep):
++        def run(self, cfg, io):
++            return {}
++
++    class P(BaseExperiment):
++        pass
++
++    P.steps = [Analyze]
++    plan = build_plan(P(), conditions=[(0, None)], repeat_labels=[""])
++    run_dir = tmp_path / "run"
++    run_dir.mkdir(parents=True, exist_ok=True)
++    (tmp_path / "input").mkdir(parents=True, exist_ok=True)
++    with pytest.raises(ContractError) as excinfo:
++        execute_plan(
++            plan=plan,
++            run_dir=run_dir,
++            input_dir=tmp_path / "input",
++            cfgs={},  # missing key 0
++            repeats=[Repeat("seed", "", 17)],
++            digest="sha256:abc",
++        )
++    assert excinfo.value.code == "E-RUN-CFG-MISSING"
++    assert "0" in str(excinfo.value)

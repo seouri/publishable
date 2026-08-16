@@ -18,14 +18,14 @@ This repository holds both the normative specification and the tool it specifies
 |---|---|
 | Tests | `uv run pytest` |
 | Lint | `uv run ruff check .` |
-| Format | `uv run ruff format .` |
+| Format | `uv run ruff format --check .` (the unchecked form rewrites every file the check currently reports, which is more than a change of your own — run it only on a branch where reformatting them is the intended change) |
 | Types | `uv run mypy` |
 
 `docs/reference.md` § Package layout describes a tree that now **partially** exists.
 Modules not yet built are still planned, and the slices that build them are listed in
 `docs/superpowers/specs/2026-08-08-implementation-spine-design.md`.
 
-**Order of the slices that remain: H3d (+3) → H4b → H7b → the rest.** Amended twice on 2026-08-14
+**Order of the slices that remain: H4b → H7b → the rest.** Amended twice on 2026-08-14
 against outside evidence — all nine experiments in
 [the feasibility analysis](docs/feasibility-llm-growth-studies.md) were run through `validate`, and
 **none executed**. The gate was the **template registry**, not the plugin system: `get_template` read a
@@ -35,9 +35,15 @@ through an entry point. **H7a was that subset** — `register_template` exported
 by path, `generate template` — and it needed none of entry-point resolution, probes or the change gate.
 **It merged on 2026-08-15 and that gate is gone.** **H4a (`resample`) merged the same day** — one refusal
 retired that 8 of 9 configs hit, a regression preserved, and **zero experiments newly executing**, which
-is the honest form of that number. H3d (`holdout`) then unblocks six and H4b (weighted contrasts) the
-last three — **but only for configs sourcing their roster from a table**; all nine as the analysis writes
-them declare a resolver, so *as written* none runs until H7b.
+is the honest form of that number. **H3d (`holdout`) is complete on its branch, in the identical honest form**:
+one refusal retired that 6 of 9 configs hit (`E-DATA-HOLDOUT-UNSUPPORTED`), one live defect closed (a
+`fold` beside a cell structure validated clean and produced empty per-arm folds; both that and a holdout
+beside the same structure are now a named refusal, `E-REPL-FOLD-CELLS` / `E-DATA-HOLDOUT-CELLS`), and
+**zero experiments newly executing** — all nine still declare a resolver and still earn
+`E-DATA-RESOLVER-UNSUPPORTED`, which is H7b's. A re-measurement dated 2026-08-16 is in
+[the feasibility analysis](docs/feasibility-llm-growth-studies.md) § Executability on this build. H4b
+(weighted contrasts) retires the one refusal C1–C3 carry beyond the resolver — a retired refusal is not an
+execution, and all nine, C1–C3 included, still declare a resolver, so *as written* none runs until H7b.
 
 A second amendment the same day scoped all five remaining slices against the code. **Every charter was
 stale in the same direction**: H4 is ~54 tasks split four ways, H7's remainder 38 split three ways, H3d
@@ -49,9 +55,10 @@ because `fold_basis` answers over the whole roster. That refusal ships with H3d;
 for a design that needs folds inside cells.
 
 The cost is that H3d now precedes the cells work it was scheduled to consume, so **H3c-3 owns
-retrofitting the holdout to cells** — acceptable only because no experiment in that analysis declares a
-group axis. The reasoning lives in the spine design's *Order, amended against outside evidence*, which
-is now tracked — cite it rather than restating it.
+retrofitting the holdout to cells and retiring `E-DATA-HOLDOUT-CELLS` and `E-REPL-FOLD-CELLS`, both
+already named on H3d's branch, once drawing within a cell is built** — acceptable only because no
+experiment in that analysis declares a group axis. The reasoning lives in the spine design's *Order,
+amended against outside evidence*, which is now tracked — cite it rather than restating it.
 
 ## The documents
 
@@ -177,7 +184,7 @@ class's module is gone, while an external one is still cached.
   verdict computed then would be computed over a partial set of claims. Both properties cannot hold.
 - **A safety argument in a comment is a claim, and needs a mutation like any other.** A retry inside an `except` was widened, and its new comment argued the retry could never raise because the faults it handles "surface on the first call". **The first call was inside the `try`.** Patching the widened function to raise gave exit 1 with no `run.yaml` and no run directory — every execution paid for, the record lost. Written by someone whose task was closing findings about false comments, and it passed a review. If a comment says *this cannot happen*, make it happen.
 - **Sweep for the claim, not for the file the claim was first noticed in.** Three sweeps in one slice stopped one file short — one covered `src/` and `docs/` but not `tests/`, one fixed a sentence in `correction.py` and missed the same sentence in the function that falsified it, one stopped at the file its brief happened to name.
-- **A ledger line saying "filed" is not a filing.** A gap recorded as "registered against \<owner\>" existed only in the ledger; the defects file had no such entry. And an entry naming its owner as *"whichever slice does X"* points at a closed slice once X lands — **re-owner a deferral when the slice that filed it finishes**, or it reads as live work nobody holds.
+- **A ledger line saying "filed" is not a filing.** A gap recorded as "registered against \<owner\>" existed only in the ledger; the defects file had no such entry. And an entry naming its owner as *"whichever slice does X"* points at a closed slice once X lands — **re-owner a deferral when the slice that filed it finishes**, or it reads as live work nobody holds. A filing's claims about the code go stale like any other comment; when you change code a `spec-defects.md` entry describes, re-read the entry.
 - **Rewriting a sentence when a table row was the thing that was wrong.** "Importing one raises
   `ImportError` today" was false only while `register_template` sat in a row marked `not yet built` —
   splitting the row repaired it, because the sentence **derives** its claim from the `Status` column.
@@ -237,7 +244,7 @@ One analysis per file, at `docs/feasibility-<subject>.md`, kebab-case matching i
 3. **Express each experiment in the spec's vocabulary**, in this order: the problem in two sentences, the design decision (which axis, which repeat kind, which allocation, where the units come from), then the actual YAML.
 4. **Every YAML must be checkable against `reference.md` § The one config file**, whose fenced example is the config schema for template `generic` at full expansion — every parameter `publishable init` materializes, plus the optional blocks it leaves empty or undeclared. Any field you show must exist there or in the proposed template's `parameter_spec`; a template declares nothing outside `parameters`, so there is no top-level block of a plugin's own.
 5. **Do the arithmetic before writing the YAML, not after.** Every config states its condition count, its repeat structure, its execution count against `limits.max_executions`, its unit-executions (which is what a metered run is billed by, and what `dry-run` prints), and its cost and runtime from anchors the source itself observed. A feasibility section without execution counts is decorative — and a repeat structure chosen without them is how a translated design silently costs several times the original.
-6. **Name every refusal with its route.** Interactions, dose-response orderings, differences-in-differences, adaptive selection, model fitting, counterbalancing, roster-changing variants. `reference.md` § What core will not do for you and `experimental-designs.md` § What core will not do for you are the two lists to check against; the route is usually a `summary`-step `Estimate`, a separate run joined in a `study`, or a `report_by` stratum.
+6. **Name every refusal with its route.** Interactions, dose-response orderings, differences-in-differences, adaptive selection, model fitting, counterbalancing, roster-changing variants. `experimental-designs.md` § What core will not do for you is the list to check against; the route is usually a `summary`-step `Estimate`, a separate run joined in a `study`, or a `report_by` stratum.
 7. **Separate what is not an experiment at all.** Reference-standard adjudication, governance firewalls, and human decisions made between runs are not pipelines core executes. Say so explicitly — treating them as runs is the failure mode this step exists to catch.
 8. **Propose the plugin last, from what the designs actually needed.** Apply the core-vs-plugin test to every piece, keep the registered artifacts to the four registries, and say which of them the domain does *not* need. Watch the correction family: every metric a template's `aggregate` returns is comparisons × metrics, so a template returning twenty diagnostics corrects every interval in the run for numbers nobody reads.
 9. **Record the gaps the analysis found in the spec**, separately from the analysis itself. These are the deliverable's second output — a real project pressing on the schema is where an under-specified rule shows up.

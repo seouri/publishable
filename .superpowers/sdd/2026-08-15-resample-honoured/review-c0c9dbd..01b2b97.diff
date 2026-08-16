@@ -1,0 +1,194 @@
+# Review package: c0c9dbd..01b2b97
+
+## Commits
+01b2b97 docs: task 7 report — E-STATS-RESAMPLE-UNITS gates on declaration, not roster
+d280f86 feat: E-STATS-RESAMPLE-UNITS, so retiring the refusal cannot open a silent no-op
+
+## Files changed
+ .../2026-08-15-resample-honoured/task-7-report.md  | 16 ++++++++
+ docs/reference.md                                  |  2 +
+ src/publishable/validate.py                        | 27 ++++++++++++++
+ tests/test_validate.py                             | 43 ++++++++++++++++++++++
+ 4 files changed, 88 insertions(+)
+
+## Diff
+diff --git a/.superpowers/sdd/2026-08-15-resample-honoured/task-7-report.md b/.superpowers/sdd/2026-08-15-resample-honoured/task-7-report.md
+new file mode 100644
+index 0000000..f2da43a
+--- /dev/null
++++ b/.superpowers/sdd/2026-08-15-resample-honoured/task-7-report.md
+@@ -0,0 +1,16 @@
++## Task 7 report
++
++**Status:** done.
++
++**Commit:**
++- `d280f86` feat: E-STATS-RESAMPLE-UNITS, so retiring the refusal cannot open a silent no-op
++
++**Tests:** `uv run pytest` — 1721 passed, 2 xfailed (baseline 1719 + 2 xfailed; 2 new tests added). `uv run ruff check .` clean. `uv run mypy` clean. Mutation (`if not units_declared:` → `if roster is None:`) confirmed `test_an_unresolvable_roster_does_not_earn_a_second_resample_finding` FAIL while `test_a_resample_with_no_unit_roster_is_refused` stayed PASS, then reverted in place (`__pycache__` cleared between).
++
++**Judgment call the brief flagged as open:** gate on `not units_declared` (i.e. `(doc.get("data") or {}).get("units")` truthy), not on `roster is None`. Confirmed empirically: with `data.units: {from: nope.csv, key: patient_id}` (a real file that doesn't exist), `roster` is `None` but `units_declared` is truthy, so gating on `roster is None` would fire `E-STATS-RESAMPLE-UNITS` on top of `E-UNITS-SOURCE-MISSING` — the exact double-fault the brief's `usable_cluster` precedent warns against. Gating on the declaration reports only the pre-existing `_check_units` finding in that case, and still refuses the true no-roster shape (no `data.units` block at all). Both tests distinguish the two cases as required — one config with no `data.units` key at all, the other with `data.units` declared but pointing at a nonexistent file.
++
++**No disagreement with the brief found this time** — the six-implementers framing in my instructions expected one, but the brief's own "Gate on the declaration, not on `roster is None`" instruction matched what the code needed exactly, and the precedent (`_check_replication`'s fold-without-basis shape) was a clean fit with no adaptation required. I looked for a mismatch specifically (re-read `_check_resample`'s existing four checks, `_check_replication`'s `E-REPL-FOLD-K` site, and the `usable_cluster` guard in `validate_config`) and found none worth reporting.
++
++**Interface delivered, unchanged from the brief:** the new check sits at the top of `_check_resample`, right after the `not isinstance(resample, dict) or not resample` guard, and returns before any of the four existing checks (method enum, `n` floor, family bound, strata names) — none of which read `units_declared`, so the ordering only affects whether they run at all when there's no roster to check. `E-STATS-RESAMPLE-UNSUPPORTED` still fires wholesale from `_check_unimplemented` regardless (verified: the "no roster" test's positive-companion config still carries `-UNSUPPORTED` alongside the new code, since neither test asserts uniqueness of findings). Registered in `docs/reference.md` § Errors `validate` reports (alphabetically last among the `E-STATS-RESAMPLE-*` rows, after `-STRATIFY-UNKNOWN`) and § Validation (new row *Resample has a roster*, placed immediately before *Clusters enough to resample* since it's the precondition that check and the `n`-floor/family-bound checks all presuppose). No count-phrase near either table needed updating — grepped both tables' surrounding prose for row-count phrasing and found none, matching task 4's prior finding.
++
++**Concerns:** none. The two new tests are the fixture-distinguishing pair the brief asked for, and the mutation confirmed they actually distinguish the two cases rather than both passing under either gate.
+diff --git a/docs/reference.md b/docs/reference.md
+index da20e24..5a0f763 100644
+--- a/docs/reference.md
++++ b/docs/reference.md
+@@ -240,20 +240,21 @@ The table below states each check by the mistake it catches. What `validate` *pr
+ | Sample draws aren't compared to a baseline | `sweep.baseline` is declared beside a `sweep.sample` axis; each draw would be a comparison against it, and the correction family skips drawn conditions — specified, not built in this build |
+ | Sample is drawable | `sweep.sample.method` is `gaussian` — the methods are sobol, latin_hypercube, random; and `{uniform: [0.99, 0.80]}` has its bounds the wrong way round |
+ | Baseline is a valid condition | `sweep.baseline` sets `analysis.method: pearsonn` |
+ | Swept values are nameable | `sweep.grid.prompt.text[1]` renders as `a long sentence`, which can't be a [condition label](#how-artifacts-are-organized) — a swept value must render as `[A-Za-z0-9._+-]+` |
+ | Repeat kind coherence | `{kind: bootstrap}` is not a repeat kind — declare `statistics.resample` instead |
+ | Batch has something to measure | `{kind: batch, n: 5}` is declared but no step sets `nondeterministic = True`, so five batches recompute one answer (warning) |
+ | Batch takes no fields | `{kind: batch, k: 3}` — a batch varies nothing, so `n` is the only field it accepts |
+ | Each kind takes its own count | `{kind: fold, k: 2, n: 5}` — `n` is a `seed`/`batch` field and a fold's count is `k`, so this executes two folds while the [execution count](#repeat-kinds) reads five. A count one reader believes and the other ignores is refused, not resolved by precedence |
+ | Null test coherence | `statistics.null_test` requires `shuffle` to name a unit attribute |
+ | Shuffle level is unambiguous | `null_test.shuffle: status` varies within `match_set` `M07` but is constant within `M12`, so neither a within-cluster nor a whole-cluster null applies |
++| Resample has a roster | `statistics.resample` is declared with no `data.units` — nothing to resample, and the declaration would run nothing |
+ | Clusters enough to resample | `statistics.resample` with `cluster_by: animal_id` over 4 animals bootstraps 4 draws; below `limits.min_clusters` (warning) |
+ | Resample draws are honest | `statistics.resample: {n: 50}` — below 80 draws a percentile interval's lower endpoint is the sample minimum, so core reports none and every metric in the run loses its `ci95` |
+ | Resample draws fit the family | `statistics.resample: {n: 200}` over 3 comparisons under `holm` — the tightest corrected level is 0.01667 and needs 240 draws, so `ci95_corrected` would be null (warning) |
+ | Technical replicates | `{kind: technical}` is not a repeat kind — declare `data.units.measurements` instead |
+ | Collapse rule fits the column | `measurements.collapse: mean` over `site`, which is a string — use `first` or `mode`, or a per-column map |
+ | Measurement axis exists | `measurements: {by: read_id}` over a `reads.csv` with no `read_id` column, where rows sharing a `key` were collapsed anyway — checked only where the input carried the replicates, since a `by` naming a measurement a step supplies through `io.record(..., measurement=)` names no input column |
+ | Grid size sane | 20 conditions × 10 folds × 3 seeds = 600 executions exceeds `limits.max_executions` — conditions counted over every axis the sweep expands, a [group axis](#expansion-modes) included, since a group level is a condition that executes like any other |
+ | Leave-one-out is affordable | `{kind: fold, k: all}` over 240 units × 3 conditions = 720 executions exceeds `limits.max_executions` — counted over the cluster count rather than the unit count when `cluster_by` is declared, `k: all` being leave-one-*cluster*-out |
+ | Credentials present | `INSTRUMENT_API_TOKEN` is not set in `.env` |
+ | Credentials a swept value needs | `AZURE_OPENAI_API_KEY` is [required by](#a-credential-can-belong-to-a-parameter-value) `llm.provider: azure_openai`, selected in condition `01_model=azure.gpt-4.1`, and is not set in `.env` |
+@@ -518,20 +519,21 @@ likewise apart from those same two envelope rows, none of the others.
+ | A `statistics.contrasts` entry's `of` or `against` names another entry's `id` rather than a condition's label — contrasts compare conditions and do not nest | `E-STATS-CONTRAST-NESTED` |
+ | A `statistics.contrasts` entry sets `of` and `against` to the same condition | `E-STATS-CONTRAST-SAME-SIDES` |
+ | `statistics.contrasts` is not a list, an entry in it is not a mapping, or an entry's `id` is missing, is not a string, or repeats an earlier entry's | `E-STATS-CONTRAST-SHAPE` |
+ | A `statistics.contrasts` entry's `of` or `against` names a value that matches no declared condition's label and no other entry's `id` | `E-STATS-CONTRAST-UNKNOWN` |
+ | A `statistics.contrasts` entry's `within` names an attribute `data.units.attributes` does not declare | `E-STATS-CONTRAST-WITHIN` |
+ | `statistics.correction` is set and is a value other than `none`, `bonferroni`, `holm`, or `fdr_bh` — unset (`null`) is accepted | `E-STATS-CORRECTION-UNKNOWN` |
+ | A `statistics.report_by` entry is not a string, or names an attribute `data.units.attributes` does not declare | `E-STATS-REPORTBY-UNKNOWN` |
+ | `statistics.resample.method` names a value other than `bootstrap` — the whole enum, [§ Statistical reporting](#statistical-reporting)'s *Resample methods*. Unset (`null`) is accepted and takes the documented default | `E-STATS-RESAMPLE-METHOD` |
+ | `statistics.resample.n` is below 80, the fewest draws both percentile ranks are interior at. Refused rather than warned because under it core reports no interval at all, so a declared `n: 50` would null `ci95` on every metric in the run rather than narrowing one | `E-STATS-RESAMPLE-N` |
+ | `statistics.resample.stratify_by` names a value `data.units.attributes` does not declare, or an entry that is not a name at all (`stratify_by: [3]`). `data.units.attributes`, not the source's columns, for the same reason `E-DATA-CLUSTER-UNKNOWN` reads that set: a stratum is read per unit when the draw is taken, so it has to survive resolution as an attribute. Read through the same normalization the draw balances on, so a bare `stratify_by: site` is one name to both. One finding per offending name. Unlike `assign.<axis>.stratify_by`, a [`sweep.groups`](#expansion-modes) axis name is **not** a legal target here — a resample draws from the roster, not from an allocation. Unlike that field, `stratify_by` here **is** an `envelope.py` `LEAF_TYPES` leaf (`(str, list)`), so a wrong-typed *declaration* (`stratify_by: 5`) is `E-CONFIG-TYPE` and stays silent under this code rather than being reported twice — only a wrong-typed *entry* inside an otherwise-list declaration reaches this row. A bare `stratify_by: ""` is accepted rather than refused, unlike a `fold` level's own `stratify_by` above: `units.stratum_names` treats an empty string the same as an absent one (both falsy), naming no stratum at all rather than one empty name, so there is nothing here to refuse | `E-STATS-RESAMPLE-STRATIFY-UNKNOWN` |
++| `statistics.resample` is declared and `data.units` is not — there is no unit table to draw from, so the declaration would change no behavior. Read from the declaration, not from whether a roster resolved: a declared-but-unresolvable `data.units` already has its own finding | `E-STATS-RESAMPLE-UNITS` |
+ | `sweep.ablate` is declared (truthy) and `sweep.baseline` fixes a level of a [`sweep.groups`](#expansion-modes) axis, which § Expansion modes refuses because "an ablation is one change from *its own cell's* full model, and there is no single reference condition when the reference cohort differs". The consequence is stronger than a mis-numbering, which is why this is an error: in the composition § Expansion modes permits — `ablate` over group axes and nothing else — a baseline fixing an axis expands over nothing, so the crossed ablation has one cell and **every other level of that axis is executed by no condition at all** while the run reports success. `ablate` beside a *parameter* axis duplicates the fixed level instead, the way `E-SWEEP-BASELINE-GROUP` describes, and is refused for its own reason by `E-SWEEP-ABLATE-CROSSED` beside this code. The two group-level refusals are exclusive: a config carries this one or that one, never both | `E-SWEEP-ABLATE-BASELINE-GROUP` |
+ | `sweep.ablate` is declared and `sweep.baseline` is not, so no condition is one change away from anything and the ablated conditions carry only their own change. Both sides are read for a *truthy* value, so `ablate: null` is not a declaration and an empty `baseline: {}` is not one either | `E-SWEEP-ABLATE-BASELINE-MISSING` |
+ | `sweep.ablate` is declared (truthy) alongside a non-empty `sweep.grid`, `sweep.paired` or `sweep.sample` — the axis-shaped modes, read as one set rather than named here, so a later axis mode joins this refusal by being classified as one (the mode vocabulary is a closed partition of axis and non-axis modes, and a mode outside it is refused by `E-SWEEP-KEY-UNKNOWN` before it can be used at all). `sweep.groups` is a non-axis mode and composes freely, varying units rather than parameters | `E-SWEEP-ABLATE-CROSSED` |
+ | A `sweep.ablate.remove` entry names a path `remove` cannot act on, in either of two ways: the parameter is neither a boolean nor `nullable`, so neither `false` nor `null` is a value it may hold (reported whatever the baseline says); or — for a boolean, and only when a `sweep.baseline` is declared at all — the baseline fixes no *boolean* value for that path, so `remove` finds nothing to turn off and sets `null` rather than `false`, planting it at a parameter that is not nullable. Reported only for a path the template declares, since an unknown one is `E-SWEEP-PATH-UNKNOWN`; the baseline reading is `remove`'s alone, an `override` stating its own value | `E-SWEEP-ABLATE-TARGET` |
+ | A `sweep.grid` axis declares an empty (falsy) list of values, so the sweep would expand to zero conditions | `E-SWEEP-AXIS-EMPTY` |
+ | `sweep.baseline` fixes a level of a [`sweep.groups`](#expansion-modes) axis and `sweep.ablate` is not declared — § Expansion modes' *the arms of a group axis are peers*. `_baseline_cells` reads a fixed axis as fixed, so it expands over nothing while `_axes` still emits that level as a product row: the level is rendered **twice**, once as the baseline row and once as its own axis's, and the two conditions hold the same units and the same parameters, with directories identical at every artifact — [*two identical measurements reported as two arms*](experimental-designs.md#mistakes-core-prevents). Where the axis declares two or more levels, the other levels' rows cross the single baseline and `E-DATA-ALLOCATION-CONTRAST` reports beside this code — but that refusal is temporary, and at one level there is no cross-arm comparison for it to read at all. The route a control arm actually wants, once there are two of them, is a [`statistics.contrasts`](#contrasts-claims-that-arent-condition-vs-baseline) entry naming both arms — whose delta this build refuses for the same disjoint-units reason, leaving a `summary`-step `Estimate` or two runs joined in a `study`. Where `ablate` is declared the sibling code `E-SWEEP-ABLATE-BASELINE-GROUP` reports instead, never both | `E-SWEEP-BASELINE-GROUP` |
+ | `sweep` is declared and resolves to zero conditions, whatever shape produced that — a backstop beneath the per-axis checks above | `E-SWEEP-EXPANDS-EMPTY` |
+ | `sweep` declares a key that is not one of the six recognized sweep modes (`baseline`, `grid`, `paired`, `ablate`, `sample`, `groups`) | `E-SWEEP-KEY-UNKNOWN` |
+ | A [`sweep.groups`](#expansion-modes) axis declares the same level twice (`levels: [control, treatment, control]`). The route § Mistakes core prevents' *two identical measurements reported as two arms* is not otherwise closed by: `E-DATA-ALLOCATION-NO-ARMS` and `E-DATA-ALLOCATION-WITHIN-ARMS` both read the `within`-versus-arms question and are satisfied here, `E-SWEEP-PATH-DUPLICATE` compares axis *names* across entries rather than values within one entry's `levels`, and `arms_of`'s set equality has nothing to disagree with because `{control} == {control}`. Unrefused, `expand` renders two conditions carrying the same label and the same `values`, each handed the same units, and the two condition directories are identical at every artifact on a green run. A **parameter** axis repeating a value (`grid: {analysis.method: [pearson, pearson]}`) has the same shape and is deliberately not refused — but **not because its consequence is milder**: crossed with a group axis it reproduces this outcome exactly. `groups: [{by: arm, levels: [control, treatment]}] × grid: {analysis.method: [pearson, pearson]}` runs to exit 0 with `00_arm=control__method=pearson` and `01_arm=control__method=pearson` identical at every artifact, and the duplicated label bodies carry the *arm* — so they are [selectors](#contrasts-claims-that-arent-condition-vs-baseline), and a contrast naming one resolves silently to the later of the pair with no ambiguity reported. Only the group axis is checked because a group level is a claim about *which units* and a parameter value is not; the parameter-axis duplicate is a known gap, recorded here rather than closed. The axis's *other* route to two identical arms — a `sweep.baseline` fixing one of its levels, which renders that level as the baseline row and as its own product row — is `E-SWEEP-BASELINE-GROUP`; neither code reaches the other's shape | `E-SWEEP-LEVEL-DUPLICATE` |
+ | Two axis-shaped modes — any two of `sweep.grid`, `sweep.paired` and `sweep.sample` — write the same dotted path, so `expand`'s product would let whichever mode is later silently overwrite the other's value on every combination; or a [`sweep.groups`](#expansion-modes) axis's `by` names a path one of those three writes, which is the worse version of the same collision — a group cell is a *set of units*, so every condition marks that path a selector and no scope plants the parameter, leaving the parameter axis claiming to sweep a value every condition ran at its base. The same refusal fires when `by` names a path this template declares as a parameter at all, swept or not — an unswept collision has no other axis losing its value, but the condition's own label and directory still claim a value `resolve_condition_cfg` never plants, indistinguishable from a real swept parameter to a reader who has not opened `sweep.yaml`. A group axis's name is a label key rather than a parameter path, so renaming either side resolves it. **Also read one level shallower, entry by entry rather than through the deduping `selector_paths`**: two `sweep.groups` entries naming the same `by` — [§ Validation](#validation)'s *Axis names are distinct* — cross two same-named axes into the product, rendering two conditions under the identical label | `E-SWEEP-PATH-DUPLICATE` |
+diff --git a/src/publishable/validate.py b/src/publishable/validate.py
+index f025815..03e696d 100644
+--- a/src/publishable/validate.py
++++ b/src/publishable/validate.py
+@@ -5009,20 +5009,47 @@ def _check_resample(doc: dict[str, Any], roster: UnitList | None, c: Collector)
+     returns `None` below `min_honest_draws(confidence)` draws — 80 at 95 % — so
+     a declared `n: 50` would null `ci95` on every recorded column in the run,
+     silently and with nothing in the record saying why. Refusing it here is why
+     `validate` learns about `n` in the same slice that will teach
+     `summarize_step` to honor it, rather than a slice later.
+     """
+     statistics = doc.get("statistics") or {}
+     resample = statistics.get("resample")
+     if not isinstance(resample, dict) or not resample:
+         return
++    # No roster at all, which is a different fault from every check below and
++    # the one they all presuppose away. `reference.md` § The one config file
++    # marks `units:` "required by fold, resample, null_test", and § Where units
++    # come from says resample "isn't available" without one. The precedent is
++    # `_check_replication`'s fold-without-basis check (`E-REPL-FOLD-K`), for the
++    # same reason: a declaration that cannot operate on anything is refused
++    # rather than accepted and silently skipped.
++    #
++    # Read from the DECLARATION, not from `roster is None`: the roster is also
++    # `None` when `data.units` is declared and failed to resolve, and that fault
++    # already has `_check_units`' own finding. A second, derived fault on top of
++    # the one the reader has to fix anyway is what `validate_config`'s
++    # `usable_cluster` guard avoids by the same argument. Every later check in
++    # this function returns after this one, since each of them presupposes a
++    # roster it would have nothing to read.
++    units_declared = ((doc.get("data") or {}).get("units")) or {}
++    if not units_declared:
++        c.error(
++            "E-STATS-RESAMPLE-UNITS",
++            "statistics.resample",
++            "is declared and `data.units` is not, so there is no unit table to draw "
++            "from and no metric core could recompute on a draw — a declaration that "
++            "changes no behavior. Declare `data.units`, or drop `resample` and report "
++            "over repeats, which is honest for a design whose executions are the "
++            "observations",
++        )
++        return
+     method = resample.get("method")
+     # `None`/absent means the documented default, `bootstrap` — § Statistical
+     # reporting: declaring `resample` "changes the method or the count rather
+     # than switching the behaviour on". Only a value actually named is checked.
+     # A wrong-typed `method` is `E-CONFIG-TYPE`'s finding already; skipped here
+     # rather than reported a second time under this code.
+     if method is not None and isinstance(method, str) and method not in RESAMPLE_METHODS:
+         c.error(
+             "E-STATS-RESAMPLE-METHOD",
+             "statistics.resample.method",
+diff --git a/tests/test_validate.py b/tests/test_validate.py
+index cd68837..fbcf8cb 100644
+--- a/tests/test_validate.py
++++ b/tests/test_validate.py
+@@ -10923,10 +10923,53 @@ def test_the_family_bound_applies_to_an_unset_n_too(write_config):
+                 "data.units": {"from": "index.csv", "key": "patient_id"},
+                 "sweep": {
+                     "baseline": {"analysis.min_samples": 30},
+                     "grid": {"analysis.min_samples": [31]},
+                 },
+                 "statistics": {"resample": {"method": "bootstrap"}},
+             }
+         )
+     )
+     assert "W-STATS-RESAMPLE-FAMILY" not in few
++
++
++def test_a_resample_with_no_unit_roster_is_refused(write_config):
++    """`reference.md` marks `data.units` "required by fold, resample,
++    null_test". Once `E-STATS-RESAMPLE-UNSUPPORTED` retires, this shape would
++    otherwise validate clean and do nothing — the exact failure
++    `_check_unimplemented`'s own `E-SWEEP-SAMPLE-BASELINE` comment records."""
++    found = codes(
++        write_config({"statistics": {"resample": {"method": "bootstrap", "n": 2000}}})
++    )
++    assert "E-STATS-RESAMPLE-UNITS" in found
++    # Positive companion in the same test: the identical declaration WITH a
++    # roster is not refused, so this cannot pass by refusing every resample.
++    assert "E-STATS-RESAMPLE-UNITS" not in codes(
++        write_config(
++            {
++                "data.units": {"from": "index.csv", "key": "patient_id"},
++                "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
++            }
++        )
++    )
++
++
++def test_an_unresolvable_roster_does_not_earn_a_second_resample_finding(write_config):
++    """`roster` is `None` for a declared-but-unresolvable `data.units` too, and
++    that fault already has `_check_units`' own finding. Gating on the DECLARATION
++    rather than on `roster is None` is what keeps this from reporting a derived
++    fault on top of the one the reader has to fix anyway."""
++    c = Collector()
++    validate_config(
++        write_config(
++            {
++                "data.units": {"from": "nope.csv", "key": "patient_id"},
++                "statistics": {"resample": {"method": "bootstrap", "n": 2000}},
++            }
++        ),
++        c,
++    )
++    found = {f.code for f in c.findings}
++    assert "E-STATS-RESAMPLE-UNITS" not in found
++    # The positive half: the real fault IS reported, so the test cannot pass by
++    # the config being clean.
++    assert any(code.startswith("E-UNITS-") or code.startswith("E-DATA-") for code in found)

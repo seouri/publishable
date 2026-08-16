@@ -1,0 +1,536 @@
+# Review package: c671abc..8b3602a
+
+## Commits
+8b3602a feat: a holdout narrows io.units to the test partition at every scope
+
+## Files changed
+ .../sdd/2026-08-15-fixed-holdout/task-14-report.md | 153 +++++++++++++++++++
+ src/publishable/cli.py                             |   9 +-
+ src/publishable/runner.py                          |  44 ++++++
+ tests/test_runner.py                               | 169 +++++++++++++++++++++
+ 4 files changed, 372 insertions(+), 3 deletions(-)
+
+## Diff
+diff --git a/.superpowers/sdd/2026-08-15-fixed-holdout/task-14-report.md b/.superpowers/sdd/2026-08-15-fixed-holdout/task-14-report.md
+new file mode 100644
+index 0000000..caade10
+--- /dev/null
++++ b/.superpowers/sdd/2026-08-15-fixed-holdout/task-14-report.md
+@@ -0,0 +1,153 @@
++# Task 14 report: runner narrowing — `io.units` is the test partition, `io.units.train` the training one
++
++## Status
++
++DONE
++
++## What was built
++
++`src/publishable/runner.py`: added `holdout_train: "UnitList | None" = None` to `execute_plan`'s
++keyword-only parameters, immediately after `arm_members`. Added a docstring paragraph naming
++`holdout_train` and stating that `units` is the test partition and `io.units.train` is
++`holdout_train` at every scope when it is given. Added two assertions at the top of the function
++body, before the loop: `holdout_train is None or fold_members is None` (guards `E-DATA-HOLDOUT-FOLD`)
++and `holdout_train is None or arm_members is None` (guards `E-DATA-HOLDOUT-CELLS`), each with a
++comment naming the two error codes and the reasoning for asserting rather than silently choosing a
++precedence. In the no-fold branch of the per-execution narrowing (`if fold_members is None or
++scoped_units is None:`), added:
++
++```python
++step_units = scoped_units
++if holdout_train is not None and scoped_units is not None:
++    step_units = UnitList(list(scoped_units), train=holdout_train)
++```
++
++The `scoped_units is not None` guard is **the one addition beyond the brief's literal snippet**: the
++brief's `if holdout_train is not None:` alone crashes `list(None)` for a no-roster run (`units=None`)
++under a declared holdout, a real path `mypy` caught (`Argument 1 to "list" has incompatible type
++"UnitList | None"`). Since `_resolved_holdout` already returns `None` whenever `roster is None`, this
++guard changes no reachable behavior — it only makes the type, and the "no roster → no partition
++either" invariant, checkable.
++
++`src/publishable/cli.py`: removed the `# noqa: F841 -- consumed starting task 14` from the
++`holdout_plan = _resolved_holdout(...)` call — it is now read. Added `holdout_train=` to the
++`execute_plan` call, narrowing `roster` to `holdout_plan.train`'s keys via `UnitList`, guarded by
++`holdout_plan is not None and roster is not None` (the extra `roster is not None` conjunct is the
++same `mypy`-driven addition as above: `roster` is typed `UnitList | None` at that call site, and
++`holdout_plan is not None` alone doesn't narrow it for the type checker even though the two are
++never non-`None`/`None` in different directions in practice). Left `units=roster` untouched, per the
++brief (task 15 owns that line).
++
++`tests/test_runner.py`: appended the brief's three tests verbatim (`test_a_holdout_narrows_io_units_at_every_scope`,
++`test_without_a_holdout_train_still_raises_at_every_scope`,
++`test_a_holdout_beside_a_fold_is_a_core_defect_not_a_silent_choice`), plus the four helpers the brief
++named but that did not yet exist in this file (grepped first — `_runner_roster`, `_run_one_step`,
++`_run_one_step_raw`, `_one_step_plan` collide with nothing): `_runner_roster` (an `n`-unit roster
++`u0..u{n-1}`), `_load_step_from_source` (compiles the `{scope}`-formatted recording-step source and
++returns its `Step` class — needed because `scope` is a class attribute `build_plan` reads before any
++instance exists, so a scope-parametrized test needs one class per scope), `_one_step_plan` (a
++one-step, one-condition plan via `build_plan`, for driving `execute_plan` directly without a `cli`
++run), `_run_one_step_raw` (returns the single raw `ExecutionResult`), and `_run_one_step` (asserts
++`status == "completed"` and returns the parsed `seen.json` the recording step wrote). Added
++`import json` at the top of the file for the last helper.
++
++## `io.units.train` when no holdout was declared
++
++Unchanged and confirmed by test: with `holdout_train=None` (and no fold), `step_units` stays exactly
++`scoped_units` — a `UnitList` whose `._train` is `None` — so `io.units.train` still raises
++`E-STEP-UNITS-UNAVAILABLE` (`ContractError`, from `UnitList.train`'s property in
++`src/publishable/units.py`). It does **not** return an empty list; that would be the exact bug
++`design-principles.md` calls out ("an empty list would let a fit run on nothing"), and mutation (e)
++below reproduces it deliberately to show the control test catches it.
++
++## Test summary
++
++`uv run pytest` — 1933 passed, 2 xfailed (1927 baseline + 6 new: the 3 brief tests, one of which is
++parametrized ×4 scopes). `uv run ruff check .` and `uv run mypy` clean (42 source files). `uv run
++ruff format --check` on the three touched files shows only pre-existing drift, confirmed present
++before this task via `git stash` + re-check on `cli.py`/`runner.py`/`test_runner.py`; my own added
++lines in `test_runner.py` show no diff under `ruff format --check --diff` (verified directly, not
++inferred).
++
++## Mutations — five run, not three
++
++All reverted by editing the file back (never `git checkout --` on the touched files); each revert
++verified by re-running the targeted test, `__pycache__` deleted between runs, and a final `diff`
++against a pre-mutation backup copy confirmed byte-identical restoration for both `runner.py` and
++`cli.py` before committing.
++
++**(a)** brief's — moved the `if holdout_train is not None ...` narrowing inside a scope check, so it
++only applies at `execution.scope == "repeat"` (structurally: `if fold_members is None or
++scoped_units is None: step_units = scoped_units; if execution.scope == "repeat": if holdout_train is
++not None and scoped_units is not None: step_units = UnitList(...)`).
++Result: **FAIL** for `run`, `condition`, `summary`; **PASS** for `repeat` —
++`test_a_holdout_narrows_io_units_at_every_scope[run/condition/summary]` failed with
++`E-STEP-UNITS-UNAVAILABLE` (the step touching `io.units.train` on a roster that was never wrapped),
++exactly as predicted.
++
++**(b)** brief's — changed `step_units = UnitList(list(scoped_units), train=holdout_train)` to
++`step_units = UnitList(list(holdout_train), train=holdout_train)`.
++Result: **FAIL** for all four scope rows, each on `seen["test"] == ["u8", "u9"]` (the step saw the
++training roster as `io.units` instead of the test partition) — exactly as predicted.
++
++**(c)** brief's — changed `cli.py`'s `holdout_train=` expression to `holdout_train=None`.
++Result: **nothing failed** — `uv run pytest` still reports 1933 passed, 2 xfailed. This is the
++honest result at this commit: `E-DATA-HOLDOUT-UNSUPPORTED` refuses every config that declares a
++holdout before `command_run` is reached, so no test exercises this call site end-to-end yet. Task
++18's brief is what closes it; I did not invent a test reaching `command_run` with a holdout.
++
++**(d)** mine — deleted the `assert holdout_train is None or fold_members is None, (...)` block (the
++`E-DATA-HOLDOUT-FOLD` guard), leaving only the `E-DATA-HOLDOUT-CELLS` assertion.
++Result: **FAIL** — `test_a_holdout_beside_a_fold_is_a_core_defect_not_a_silent_choice` failed, but
++not by the pair resolving silently and returning: execution proceeded past the (now-missing)
++assertion and crashed three lines later with an unrelated `ContractError`
++(`E-RUN-SEED-MISSING` — the dynamically-loaded step's module name `test_runner_dynamic_step` has no
++seed among the resolved repeats `[]`, since the test passes `repeats=[]`). The test still fails
++under this mutation and for the reason the brief's docstring names (no `AssertionError` is raised),
++even though the concrete exception surfacing first is a different one — the same shape task 13's
++mutation (d) found: a guard's removal can surface as a crash somewhere else in the call chain rather
++than as the naively-expected wrong return.
++
++**(e)** mine, since the brief left it unnamed — changed the outer condition
++`if fold_members is None or scoped_units is None:` to `if scoped_units is None:` (dropping the
++`fold_members is None or` disjunct).
++Result: **FAIL** — `test_without_a_holdout_train_still_raises_at_every_scope` failed:
++`result.status == "completed"` instead of `"failed"`. With `fold_members=None` and `holdout_train=None`
++on a `repeat`-scope execution, this mutation routes the narrowing into the fold branch
++(`elif execution.scope == "repeat":`) instead of the no-fold branch. `_handed_keys(label, keys,
++fold_members=None)` returns the whole `keys` set (its own documented `None`-passthrough), so
++`step_units` becomes `UnitList(all units, train=UnitList([]))` — an **empty list**, not the raise the
++control demands. This is exactly the failure mode `design-principles.md`'s `UnitList.train` docstring
++and this task's brief both call out by name ("an empty list would let a fit run on nothing" /
++"a narrowing written one branch too wide would hand a train list to a run that declared no
++partition") — confirming a single-line mutation does reach this seam, and it is the disjunct guard
++protecting it.
++
++## Where the brief disagreed with the code
++
++Two places, both `mypy`-driven and both additive (no behavior change on any reachable path):
++
++1. `runner.py`'s no-fold branch: the brief's `if holdout_train is not None:` alone is well-typed only
++   because `scoped_units` is never actually `None` when `holdout_train` is not — but `mypy` cannot see
++   that invariant across two independently-`None`-able parameters, and flagged `list(scoped_units)` as
++   `list(UnitList | None)`. Added `and scoped_units is not None`.
++2. `cli.py`'s `execute_plan` call: the brief's `if holdout_plan is not None else None` ternary, with
++   `roster` typed `UnitList | None`, left `mypy` unable to narrow `roster` inside the `if`-branch
++   (`Item "None" of "UnitList | None" has no attribute "__iter__"`). Added `and roster is not None`.
++
++Both additions are guarded by the existing invariant in `_resolved_holdout`'s own docstring ("`None`
++for a `roster` of `None` too"), so neither changes what any config or direct `execute_plan` caller
++observes — they only make the already-true invariant visible to the type checker. `uv run mypy` was
++not clean before these two edits (2 errors) and is clean after.
++
++No other disagreement found. The five-scope narrowing (inverse of the fold rule), the two assertions'
++placement (before the loop, not inside the branch), and the helper functions' shapes all matched the
++brief once these two guards were added.
++
++## Process notes
++
++`.superpowers/sdd/.gitignore` was clobbered to a bare `*` by reading `task-14-brief.md` (the standing
++`scripts/sdd-workspace`/`task-brief` behavior CLAUDE.md documents). Restored via `git checkout --
++.superpowers/sdd/.gitignore` before committing — safe here because that file had no uncommitted
++content of its own; it reverted the auto-clobber back to the last commit's tracked content, verified
++by `git diff` showing no remaining changes to it.
+diff --git a/src/publishable/cli.py b/src/publishable/cli.py
+index 7329934..e916d02 100644
+--- a/src/publishable/cli.py
++++ b/src/publishable/cli.py
+@@ -1456,23 +1456,21 @@ def command_run(config_path: Path) -> int:
+     # impossible. Gating on `selector_paths` instead means `arm_members` is
+     # still called whenever `expand` treated the config as having a group axis,
+     # so a resolution gap surfaces as `arm_members`'s own `KeyError` — a
+     # caller-disagreement bug to see, not a config to silently accept — rather
+     # than as a silently unnarrowed run.
+     group_axes = _resolved_group_axes(units_decl, sweep_block, roster, digest, clusters)
+     # Realized here, once, and before anything reads it — the runner's
+     # narrowing, the denominators and `allocation.json` are all handed this one
+     # object. See `_resolved_holdout` for why not calling twice is the only
+     # thing that can promise the run and the record agree.
+-    holdout_plan = _resolved_holdout(  # noqa: F841 -- consumed starting task 14
+-        units_decl, roster, digest, clusters
+-    )
++    holdout_plan = _resolved_holdout(units_decl, roster, digest, clusters)
+     arm_members_map = (
+         arm_members(group_axes, conditions)
+         if selector_paths(sweep_block) and roster is not None
+         else None
+     )
+     plan = build_plan(  # phase 4
+         experiment,
+         conditions=[(c.index, c.label) for c in conditions],
+         repeat_labels=labels,
+     )
+@@ -1586,20 +1584,25 @@ def command_run(config_path: Path) -> int:
+             plan=plan,
+             run_dir=run_dir,
+             input_dir=input_dir,
+             cfgs=cfgs,
+             repeats=repeats,
+             digest=digest,
+             units=roster,
+             max_failed_fraction=(doc.get("limits") or {}).get("max_failed_fraction"),
+             fold_members=fold_members,
+             arm_members=arm_members_map,
++            holdout_train=(
++                UnitList([u for u in roster if u.key in set(holdout_plan.train)])
++                if holdout_plan is not None and roster is not None
++                else None
++            ),
+             measurements=(units_decl or {}).get("measurements"),
+         )
+ 
+         status = run_status(results)
+         # No roster means nothing to aggregate over, so `aggregated` stays `None`
+         # rather than an empty dict — `assemble_run_yaml` omits the key entirely in
+         # that case, instead of every condition reporting a misleading empty
+         # `aggregated: {}`.
+         aggregated: dict[int, dict[str, dict[str, Any]]] | None = None
+         # Same absent-not-empty rule as `aggregated`, for the same reason: a run
+diff --git a/src/publishable/runner.py b/src/publishable/runner.py
+index 8f3044b..3401bf7 100644
+--- a/src/publishable/runner.py
++++ b/src/publishable/runner.py
+@@ -460,20 +460,21 @@ def execute_plan(
+     plan: list[Execution],
+     run_dir: Path,
+     input_dir: Path,
+     cfgs: dict[int, Any],
+     repeats: list[Repeat],
+     digest: str,
+     units: UnitList | None = None,
+     max_failed_fraction: float | None = None,
+     fold_members: dict[str, frozenset[str]] | None = None,
+     arm_members: "dict[int, frozenset[str]] | None" = None,
++    holdout_train: "UnitList | None" = None,
+     measurements: dict[str, Any] | None = None,
+ ) -> list[ExecutionResult]:
+     """Run every execution in the plan, in order, one at a time.
+ 
+     A failed execution never stops the run — the plan runs to its end, because
+     abandoning it throws away every execution still pending and `resume` cannot
+     un-abort a plan that was never attempted. `max_failed_fraction` is the one
+     documented exception: unit failures only accumulate, so once the fraction of
+     the roster that has failed in at least one execution crosses the threshold, no
+     later execution can bring it back, and spending the remaining compute to
+@@ -487,21 +488,45 @@ def execute_plan(
+     an arm here filters that same roster rather than reading the units a second
+     time. Narrowed exactly when `execution.condition_index is not None` — a `run`-
+     or `summary`-scoped execution belongs to no condition and so to no arm, and
+     keeps the whole roster unconditionally, the same way a `fold` repeat already
+     leaves those two scopes alone. The narrowing happens **before** the fold
+     branch below reads `units`, not after: a `fold` repeat's `train` is built as
+     "the roster minus what this execution was handed", and computing that
+     complement across the *whole* roster rather than within the arm would leak
+     the other arm's units into `.train` — the same class of leak
+     `units.partition_units` exists to prevent for a cluster, one level up.
++
++    `holdout_train` is `data.units.holdout`'s training roster, already resolved
++    by the caller (`cli.command_run`'s single-authority narrowing) — this
++    function derives nothing from it beyond wrapping it. Unlike a `fold`, a
++    holdout's split is fixed for the whole run, so when `holdout_train` is given,
++    `units` is the test partition and `io.units.train` is `holdout_train` at
++    every scope — `run`, `condition`, `repeat` and `summary` alike, not only
++    `repeat` the way a fold's `.train` is.
+     """
++    # Two evaluation splits is two answers to "which units is this metric
++    # over?", which is exactly what `validate` refuses. No config can reach this
++    # at this commit: `E-DATA-HOLDOUT-FOLD` (task 6) refuses a `holdout` beside a
++    # declared `fold` level, and `E-DATA-HOLDOUT-CELLS` (task 8) refuses a
++    # holdout beside the group axis `arm_members` comes from. So this asserts
++    # something about core's own callers rather than about a config — and it is
++    # an assertion rather than silent precedence because if either refusal ever
++    # stops holding, a crash here is what makes that visible instead of a
++    # partition chosen by whichever branch happened to be written first.
++    assert holdout_train is None or fold_members is None, (
++        "a holdout and a fold repeat both narrow the roster; `validate` refuses the "
++        "pair as `E-DATA-HOLDOUT-FOLD`"
++    )
++    assert holdout_train is None or arm_members is None, (
++        "a holdout beside a group axis is refused as `E-DATA-HOLDOUT-CELLS`"
++    )
+     collapse = len(repeats) <= 1
+     seeds = {r.label: r.seed for r in repeats}
+     ledger = run_dir / "executions.jsonl"
+     results: list[ExecutionResult] = []
+ 
+     # Derived once from the plan itself, not threaded in as extra parameters:
+     # `io.conditions`/`io.repeats`/`io.read_condition` are a `summary`-scoped
+     # step's read surface, and the plan already carries every condition and
+     # repeat label the run resolved. A no-`sweep` run still has one resolved
+     # condition — index 0, label `None` — and it belongs in this list: `None`
+@@ -561,21 +586,40 @@ def execute_plan(
+             arm_keys = _arm_keys(execution.condition_index, {u.key for u in units}, arm_members)
+             scoped_units = UnitList([u for u in units if u.key in arm_keys])
+         # A fold repeat puts the units out of reach of the wider scopes: there is
+         # no fold at "run" or "condition" scope, since folds are repeats and
+         # repeats haven't happened yet, so a step fitting there would fit on units
+         # later folds test on. By "summary" scope every fold has already run, so
+         # there is nothing left to leak, and it keeps the whole roster like the
+         # no-fold case — the arm-narrowed roster, when a group axis is declared,
+         # since arm narrowing already ran above.
+         if fold_members is None or scoped_units is None:
++            # A `data.units.holdout` is fixed for the WHOLE run, so it narrows
++            # at every scope — `run`, `condition`, `repeat` and `summary`
++            # alike. That is the inverse of the fold rule three lines below,
++            # and deliberately: `reference.md` § Step scope says "a `holdout`
++            # does not raise, because its split is fixed for the whole run",
++            # and `experimental-designs.md` § Cross-validation says
++            # "condition-scoped fitting is right for a fixed holdout and wrong
++            # for cross-validation". A holdout that took the fold branch's
++            # `run`/`condition` hole would hand `None` to exactly the step a
++            # holdout exists to let fit.
++            #
++            # `units` is already the TEST partition when a holdout is declared
++            # — `cli.command_run` narrowed it at the call site, `_cond_roster`'s
++            # single-authority rule, which `attrition`'s own docstring restates
++            # ("does not re-derive that narrowing itself, and must not"). This
++            # function turns two rosters into one `UnitList`; it derives
++            # neither.
+             step_units = scoped_units
++            if holdout_train is not None and scoped_units is not None:
++                step_units = UnitList(list(scoped_units), train=holdout_train)
+         elif execution.scope in ("run", "condition"):
+             step_units = None  # no fold exists yet at these scopes
+         elif execution.scope == "repeat":
+             handed = _handed_keys(
+                 execution.repeat_label or "", {u.key for u in scoped_units}, fold_members
+             )
+             step_units = UnitList(
+                 [u for u in scoped_units if u.key in handed],
+                 train=UnitList([u for u in scoped_units if u.key not in handed]),
+             )
+diff --git a/tests/test_runner.py b/tests/test_runner.py
+index ffd579b..8a12b9b 100644
+--- a/tests/test_runner.py
++++ b/tests/test_runner.py
+@@ -1,11 +1,12 @@
+ import copy
++import json
+ from pathlib import Path
+ 
+ import numpy as np
+ import pytest
+ from tests.test_stats import _repeat_result
+ 
+ from publishable import BaseExperiment, BaseStep
+ from publishable.config import Config
+ from publishable.errors import ContractError
+ from publishable.hashes import parameters_hash
+@@ -1780,10 +1781,178 @@ def test_clusters_and_effective_are_independent_parts_of_n(tmp_path: Path):
+         roster,
+         "record_four_skip_one",
+         0,
+         weights=_WEIGHTS,
+         clusters=_SITES,
+     )
+     assert both["clusters"] == 2
+     assert both["effective"] == pytest.approx(_KISH_COMPLETED)
+     assert "effective" not in attrition(results, roster, "record_four_skip_one", 0, clusters=_SITES)
+     assert "clusters" not in attrition(results, roster, "record_four_skip_one", 0, weights=_WEIGHTS)
++
++
++# --- Task 14: a holdout narrows `io.units` to the test partition, and
++# `io.units.train` to the training one, at every scope. ---
++
++_UNITS_RECORDING_STEP_SOURCE = """\
++from publishable import BaseStep
++
++
++class Step(BaseStep):
++    scope = "{scope}"
++
++    def run(self, cfg, io):
++        io.write("seen.json", {{
++            "test": [u.key for u in io.units],
++            "train": [u.key for u in io.units.train],
++        }})
++        return {{"n": len(io.units)}}
++"""
++
++
++def _runner_roster(n: int) -> UnitList:
++    """`n` units keyed `u0`..`u{n-1}` — the roster the holdout tests split into
++    a train/test pair via `_runner_roster(10)`'s `{u0..u7}`/`{u8, u9}` split."""
++    return UnitList([Unit(key=f"u{i}") for i in range(n)])
++
++
++def _load_step_from_source(source: str, *, scope: str) -> type:
++    """Compile `source` (formatted with `scope`) and return its `Step` class.
++
++    `scope` is a class attribute `build_plan` reads before any instance exists,
++    so a test parametrized over scope needs one class per scope rather than one
++    shared class mutated in place — hence a source template instead of a plain
++    class body."""
++    namespace: dict = {"__name__": "test_runner_dynamic_step"}
++    exec(compile(source.format(scope=scope), "<dynamic-step>", "exec"), namespace)
++    return namespace["Step"]
++
++
++def _one_step_plan(tmp_path: Path, *, scope: str, source: str = _UNITS_RECORDING_STEP_SOURCE):
++    """A one-step, one-condition plan for driving `execute_plan` directly,
++    without a `cli` run — what the holdout-beside-a-fold assertion test needs,
++    since no config can reach that seam."""
++    step_cls = _load_step_from_source(source, scope=scope)
++
++    class P(BaseExperiment):
++        pass
++
++    P.steps = [step_cls]
++    return build_plan(P(), conditions=[(0, None)], repeat_labels=["seed17"])
++
++
++def _run_one_step_raw(
++    tmp_path: Path,
++    *,
++    scope: str,
++    units,
++    source: str,
++    holdout_train=None,
++    fold_members=None,
++):
++    """Build a one-step plan for `scope` and run it through `execute_plan`
++    directly (no `cli`), returning its single `ExecutionResult` — the raw form
++    the "still raises" control needs `.status`/`.error` from."""
++    plan = _one_step_plan(tmp_path, scope=scope, source=source)
++    run_dir = tmp_path / "run"
++    run_dir.mkdir(parents=True, exist_ok=True)
++    (tmp_path / "in").mkdir(parents=True, exist_ok=True)
++    results = execute_plan(
++        plan=plan,
++        run_dir=run_dir,
++        input_dir=tmp_path / "in",
++        cfgs={0: Config({"parameters": {}}), -1: Config({"parameters": {}})},
++        repeats=[Repeat("seed", "seed17", 17)],
++        digest="sha256:abc",
++        units=units,
++        holdout_train=holdout_train,
++        fold_members=fold_members,
++    )
++    return results[0]
++
++
++def _run_one_step(tmp_path: Path, *, scope: str, units, holdout_train, source: str):
++    """Like `_run_one_step_raw`, but asserts the execution completed and returns
++    the `seen.json` the recording step wrote — the test/train keys it saw as
++    `io.units`/`io.units.train`."""
++    plan = _one_step_plan(tmp_path, scope=scope, source=source)
++    run_dir = tmp_path / "run"
++    run_dir.mkdir(parents=True, exist_ok=True)
++    (tmp_path / "in").mkdir(parents=True, exist_ok=True)
++    results = execute_plan(
++        plan=plan,
++        run_dir=run_dir,
++        input_dir=tmp_path / "in",
++        cfgs={0: Config({"parameters": {}}), -1: Config({"parameters": {}})},
++        repeats=[Repeat("seed", "seed17", 17)],
++        digest="sha256:abc",
++        units=units,
++        holdout_train=holdout_train,
++    )
++    result = results[0]
++    assert result.status == "completed", result.error
++    step_dir = step_dir_for(run_dir, plan[0], collapse_repeats=True)
++    return json.loads((step_dir / "seen.json").read_text())
++
++
++@pytest.mark.parametrize("scope", ["run", "condition", "repeat", "summary"])
++def test_a_holdout_narrows_io_units_at_every_scope(tmp_path, scope):
++    """§ A fixed holdout split: the split is fixed for the whole run, so
++    `io.units` is the test partition and `io.units.train` the training one at
++    EVERY scope — the inverse of the fold rule in the same function, which
++    hands `None` at `run` and `condition`.
++
++    All four scopes are parametrized because the fold branch's `run`/
++    `condition` special case sits three lines away, and a narrowing written
++    inside it would pass a `repeat`-only test."""
++    roster = _runner_roster(10)
++    train = UnitList(
++        [u for u in roster if u.key in {"u0", "u1", "u2", "u3", "u4", "u5", "u6", "u7"}]
++    )
++    test = UnitList([u for u in roster if u.key in {"u8", "u9"}])
++    seen = _run_one_step(
++        tmp_path,
++        scope=scope,
++        units=test,
++        holdout_train=train,
++        source=_UNITS_RECORDING_STEP_SOURCE,
++    )
++    assert seen["test"] == ["u8", "u9"]
++    assert seen["train"] == ["u0", "u1", "u2", "u3", "u4", "u5", "u6", "u7"]
++
++
++def test_without_a_holdout_train_still_raises_at_every_scope(tmp_path):
++    """The control, and it must produce something: with `holdout_train=None`
++    and no fold, `io.units` is the whole roster and `io.units.train` raises —
++    the shape task 1 pinned end to end. A narrowing written one branch too wide
++    would hand a train list to a run that declared no partition."""
++    roster = _runner_roster(10)
++    result = _run_one_step_raw(
++        tmp_path, scope="repeat", units=roster, source=_UNITS_RECORDING_STEP_SOURCE
++    )
++    assert result.status == "failed"
++    assert "E-STEP-UNITS-UNAVAILABLE" in (result.error or "")
++
++
++def test_a_holdout_beside_a_fold_is_a_core_defect_not_a_silent_choice(tmp_path):
++    """No CONFIG can reach this: `E-DATA-HOLDOUT-FOLD` refuses the pair at
++    validate time, and `E-DATA-HOLDOUT-CELLS` closes the arm interaction. So
++    the seam is exercised by calling `execute_plan` directly with both
++    arguments non-`None`, rather than by a fixture that cannot exist — naming a
++    seam is not testing it.
++
++    An assertion rather than a silent precedence: two answers to "which units
++    is this metric over?" is exactly what the refusal exists to prevent, and if
++    it ever stops preventing it, this must be a crash and not a guess."""
++    roster = _runner_roster(10)
++    with pytest.raises(AssertionError):
++        execute_plan(
++            plan=_one_step_plan(tmp_path, scope="repeat"),
++            run_dir=tmp_path / "run",
++            input_dir=tmp_path / "in",
++            cfgs={},
++            repeats=[],
++            digest="sha256:aaa",
++            units=roster,
++            holdout_train=UnitList(list(roster)[:5]),
++            fold_members={"fold0": frozenset({"u0"})},
++        )

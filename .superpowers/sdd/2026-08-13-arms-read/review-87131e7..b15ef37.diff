@@ -1,0 +1,435 @@
+# Review package: 87131e7..HEAD
+
+## Commits
+b15ef37 feat: write allocation.json recording realized arm assignment
+
+## Files changed
+ src/publishable/artifacts.py | 68 +++++++++++++++++++++++++++++++++++
+ src/publishable/cli.py       | 20 +++++++++++
+ tests/test_artifacts.py      | 70 +++++++++++++++++++++++++++++++++++-
+ tests/test_cli.py            | 85 ++++++++++++++++++++++++++++++++++++++++++++
+ 4 files changed, 242 insertions(+), 1 deletion(-)
+
+## Diff
+diff --git a/src/publishable/artifacts.py b/src/publishable/artifacts.py
+index dbfffd6..1443712 100644
+--- a/src/publishable/artifacts.py
++++ b/src/publishable/artifacts.py
+@@ -1,26 +1,29 @@
+ # src/publishable/artifacts.py
+ """Scope-aware, atomic, append-only artifacts. docs/reference.md § Steps and artifacts."""
+ 
+ import csv
++import hashlib
+ import io as _io
+ import json
+ import os
+ import tempfile
++from collections.abc import Mapping, Sequence
+ from pathlib import Path
+ from typing import TYPE_CHECKING, Any
+ 
+ import yaml
+ 
+ from publishable.coercion import coerce_scalars
+ from publishable.errors import ArtifactError, ArtifactExistsError, ContractError
+ from publishable.sweep import condition_dir_name
++from publishable.units import arms_of
+ 
+ if TYPE_CHECKING:
+     from publishable.units import UnitList
+ 
+ SCOPE_ORDER = {"run": 0, "condition": 1, "repeat": 2, "summary": 3}
+ 
+ 
+ def write_atomic(path: Path, data: bytes) -> None:
+     """Temp file plus rename, so a crash leaves nothing rather than a half-file."""
+     path.parent.mkdir(parents=True, exist_ok=True)
+@@ -160,20 +163,85 @@ READERS = {
+ def _suffix_for(name: str) -> str | None:
+     """The longest registered suffix of the name's last component, lower-cased."""
+     last = name.rsplit("/", 1)[-1].lower()
+     best: str | None = None
+     for suffix in WRITERS:
+         if last.endswith(suffix) and (best is None or len(suffix) > len(best)):
+             best = suffix
+     return best
+ 
+ 
++def build_allocation_document(
++    roster: "UnitList", group_axes: Mapping[str, tuple[str, Sequence[str]]]
++) -> dict[str, Any] | None:
++    """`allocation.json`'s payload — `reference.md` § `allocation.json` — who
++    went where prints it in full: four top-level keys, `arms`/`seed`/`strata`
++    keyed by axis name, `holdout` sharing the file because both are
++    partitions of one roster drawn once.
++
++    Returns `None` when `group_axes` is empty — no arm assignment resolved,
++    matching § The other files a run writes' "present when either is
++    declared": the caller writes nothing in that case rather than an empty
++    file.
++
++    **`arms`** maps each axis to `units.arms_of`'s own partition, restated as
++    unit keys in roster order — `arms_of` is the single authority task 10
++    built for arm membership, read here directly rather than reduced through
++    `units.arm_members` (built for a *condition's* intersection across axes,
++    the wrong shape for "every level of every axis"), and rather than a
++    third derivation of membership from the roster. Unit keys, never row
++    numbers, because a roster that gains a unit renumbers rows and would
++    silently repoint every membership claim; roster order because `arms_of`
++    already promises it and re-sorting here would silently contradict a
++    `blocked` design that reads that order as data (once `blocked` itself is
++    built).
++
++    **`seed` and `strata` are always empty in this build.** This build's
++    only reachable `assign.method` is `by_attribute` (`E-DATA-ASSIGN-DRAWN`
++    refuses `random` and `blocked`, the two methods that draw), and
++    `by_attribute` reads an arm a trial system already assigned rather than
++    drawing one — recording a `seed` would be a false record of a draw that
++    never happened, the same fault § Allocation names for a non-empty
++    `ratio` under `by_attribute`. `assign.stratify_by` names how a draw was
++    *balanced*; with no draw there is nothing it describes, so the axis is
++    left out of `strata` for the same reason. Both keys stay present as
++    empty mappings — `seed`/`strata` are `{}`, not omitted — because the
++    shape is "keyed by axis name" whether or not any axis qualifies, and an
++    omitted key would read as "this build never has a seed or strata block
++    at all" rather than "no axis drew or stratified this run."
++
++    **`holdout` is never written here.** `E-DATA-HOLDOUT-UNSUPPORTED`
++    refuses every `data.units.holdout` declaration in this build, so there
++    is never a holdout partition to record; the key is omitted entirely
++    rather than written `null`, matching `manifest/input.json`'s own
++    "absent rather than null, so 'not hashed' can't be misread as 'hashed
++    to nothing'" — here, "no holdout key" rather than "a holdout of
++    nothing." H3d adds the key once that refusal lifts.
++    """
++    if not group_axes:
++        return None
++    arms: dict[str, dict[str, list[str]]] = {}
++    for axis, (column, levels) in group_axes.items():
++        partition = arms_of(roster, column, levels)
++        arms[axis] = {level: [u.key for u in units] for level, units in partition.items()}
++    return {"seed": {}, "arms": arms, "strata": {}}
++
++
++def allocation_hash(document: dict[str, Any]) -> str:
++    """Covers `allocation.json`'s payload the same way `manifest.manifest_hash`
++    covers the input manifest's — canonical JSON, sha256 — so `provenance.
++    allocation_hash` is derived from exactly the bytes written, never from a
++    document that could drift from the file on disk."""
++    payload = json.dumps(document, sort_keys=True, separators=(",", ":")).encode()
++    return "sha256:" + hashlib.sha256(payload).hexdigest()
++
++
+ class StepIO:
+     def __init__(
+         self,
+         *,
+         step_dir: Path,
+         input_dir: Path,
+         run_dir: Path,
+         units: "UnitList | None" = None,
+         scope: str = "repeat",
+         conditions: list[tuple[int, str | None]] | None = None,
+diff --git a/src/publishable/cli.py b/src/publishable/cli.py
+index 7d77ffa..6353245 100644
+--- a/src/publishable/cli.py
++++ b/src/publishable/cli.py
+@@ -8,20 +8,21 @@ import importlib
+ import importlib.metadata
+ import json
+ import sys
+ from collections.abc import Callable
+ from datetime import UTC, datetime
+ from pathlib import Path
+ from typing import TYPE_CHECKING, Any
+ 
+ import yaml
+ 
++from publishable.artifacts import allocation_hash, build_allocation_document
+ from publishable.base_experiment import BaseExperiment, load_experiment
+ from publishable.coercion import coerce_scalars
+ from publishable.config import Config
+ from publishable.contrasts import resolve_contrasts, units_matching
+ from publishable.correction import Member, corrected_fields
+ from publishable.diagnostics import (
+     EXIT_FAILED,
+     EXIT_INVOCATION,
+     EXIT_OK,
+     EXIT_PARTIAL,
+@@ -1264,20 +1265,33 @@ def command_run(config_path: Path) -> int:
+                     mode,
+                     execution_order,
+                     order_seed,
+                     partitions=partitions,
+                     sample_seed=sample_seed_for(doc),
+                 ),
+                 sort_keys=False,
+             )
+         )
+ 
++        # `allocation.json` — settled beside `sweep.yaml`, before the first
++        # execution and never touched again, per § The other files a run
++        # writes: both are partitions of one roster drawn once. `None` when
++        # `group_axes` is empty — no arm assignment resolved for this run —
++        # matching "present when either [an arm assignment or a holdout] is
++        # declared"; `holdout` is never in this build's document at all
++        # (`E-DATA-HOLDOUT-UNSUPPORTED` refuses every declaration of it).
++        alloc_doc = build_allocation_document(roster, group_axes) if roster is not None else None
++        alloc_hash: str | None = None
++        if alloc_doc is not None:
++            (run_dir / "allocation.json").write_text(json.dumps(alloc_doc, indent=2))
++            alloc_hash = allocation_hash(alloc_doc)
++
+         results = execute_plan(  # phase 7
+             plan=plan,
+             run_dir=run_dir,
+             input_dir=input_dir,
+             cfgs=cfgs,
+             repeats=repeats,
+             digest=digest,
+             units=roster,
+             max_failed_fraction=(doc.get("limits") or {}).get("max_failed_fraction"),
+             fold_members=fold_members,
+@@ -2046,20 +2060,26 @@ def command_run(config_path: Path) -> int:
+             "plugin_versions": {},
+             # A run over a roster whose identity is not pinned is a run whose `n`
+             # means nothing later: `units` and `units_hash` are `None` together
+             # exactly when there is no `data.units` declaration to pin.
+             "units": (
+                 {"n": len(roster), "key": units_decl["key"]}
+                 if roster is not None and units_decl is not None
+                 else None
+             ),
+             "units_hash": units_hash(roster) if roster is not None else None,
++            # "allocation.json" and its hash, when an arm assignment or a
++            # holdout is declared — `None`/`None` together exactly when
++            # `alloc_doc` was never written, the same pairing `units`/
++            # `units_hash` already use above.
++            "allocation": "allocation.json" if alloc_doc is not None else None,
++            "allocation_hash": alloc_hash,
+         }
+         doc_out = assemble_run_yaml(  # phase 9: assemble and write
+             run_id=run_dir.name,
+             status=status,
+             config=doc,
+             code_hash=ch,
+             parameters_hash=ph,
+             provenance=provenance,
+             results=results,
+             repeats=repeats,
+diff --git a/tests/test_artifacts.py b/tests/test_artifacts.py
+index 12aa76b..c1c7b07 100644
+--- a/tests/test_artifacts.py
++++ b/tests/test_artifacts.py
+@@ -1,20 +1,20 @@
+ # tests/test_artifacts.py
+ import json
+ from pathlib import Path
+ from typing import Any
+ 
+ import numpy as np
+ import pytest
+ 
+ from publishable import ArtifactError, ArtifactExistsError, ContractError
+-from publishable.artifacts import StepIO, write_atomic
++from publishable.artifacts import StepIO, allocation_hash, build_allocation_document, write_atomic
+ from publishable.units import Unit, UnitList
+ 
+ 
+ def _u(key: str) -> Unit:
+     return Unit(key=key)
+ 
+ 
+ @pytest.fixture
+ def io(tmp_path: Path) -> StepIO:
+     step_dir = tmp_path / "run" / "shared" / "step01"
+@@ -1230,10 +1230,78 @@ def test_read_condition_collapses_the_repeat_directory_when_the_run_has_only_one
+         tmp_path,
+         scope="summary",
+         conditions=[(0, "baseline")],
+         repeats=["seed1"],
+         step_scopes={"analyze": "repeat"},
+     )
+     target = io.run_dir / "conditions" / "00_baseline" / "analyze"
+     target.mkdir(parents=True)
+     (target / "scores.json").write_text('{"s": 1}\n')
+     assert io.read_condition(0, "analyze", "scores.json", repeat="seed1") == {"s": 1}
++
++
++def _mixed_arm_roster():
++    """4 `control` and 9 `treatment`, 13 total — every number in play (4, 9, 13)
++    is distinct from the others and from every arm fixture already in the
++    suite (`_arm_roster12`'s 7/5/12, `test_cli.py`'s 8/3/11), and no
++    `cluster_by` attribute is declared, so this can't double as a cluster
++    fixture. Keys are deliberately **not** in alphabetical or roster-grouped
++    order within either arm — `c3, c0, c2, c1` and a shuffled 9-key
++    treatment list — so a test reading `arms_of`'s output back can tell
++    "the order `arms_of` resolved units in" from "sorted," which a
++    same-length, same-membership check could not."""
++    control_keys = ["c3", "c0", "c2", "c1"]
++    treatment_keys = ["t5", "t1", "t8", "t0", "t3", "t7", "t2", "t6", "t4"]
++    units = [Unit(key=k, attributes={"arm": "control"}) for k in control_keys]
++    units += [Unit(key=k, attributes={"arm": "treatment"}) for k in treatment_keys]
++    return UnitList(units), control_keys, treatment_keys
++
++
++def test_build_allocation_document_returns_none_with_no_group_axes():
++    """`group_axes` empty — no arm assignment resolved for this run — is the
++    absent half of 'present when either is declared', and `command_run` reads
++    `None` here as "write nothing.\""""
++    roster, _, _ = _mixed_arm_roster()
++    assert build_allocation_document(roster, {}) is None
++
++
++def test_build_allocation_document_maps_axis_to_level_to_unit_keys_in_roster_order():
++    """The mutation the brief names: writing row indices rather than keys must
++    fail THIS assertion, not merely a length check — `["c3", "c0", "c2",
++    "c1"]` and `[0, 1, 2, 3]` are both length 4, so only the exact key
++    strings, in `arms_of`'s own resolved order, discriminate. `seed` and
++    `strata` are asserted `{}` — the addendum's finding that a writer
++    emitting a seed under `by_attribute` (nothing was drawn) looks correct
++    against a fixture nobody checked the seed of — and `holdout` is asserted
++    absent, since this build never declares one."""
++    roster, control_keys, treatment_keys = _mixed_arm_roster()
++    group_axes = {"arm": ("arm", ["control", "treatment"])}
++
++    doc = build_allocation_document(roster, group_axes)
++
++    assert doc is not None
++    assert set(doc.keys()) == {"seed", "arms", "strata"}
++    assert doc["arms"] == {"arm": {"control": control_keys, "treatment": treatment_keys}}
++    assert doc["seed"] == {}
++    assert "arm" not in doc["seed"]
++    assert doc["strata"] == {}
++    assert "arm" not in doc["strata"]
++    assert "holdout" not in doc
++
++
++def test_allocation_hash_is_deterministic_and_content_sensitive():
++    """Mirrors `manifest.manifest_hash`'s own contract: same document, same
++    hash; a document that differs by one unit key hashes differently — the
++    property `provenance.allocation_hash` rests on to say a copy edited
++    after the run no longer matches what that run reported."""
++    roster, _, _ = _mixed_arm_roster()
++    group_axes = {"arm": ("arm", ["control", "treatment"])}
++    doc = build_allocation_document(roster, group_axes)
++
++    h1 = allocation_hash(doc)
++    h2 = allocation_hash(build_allocation_document(roster, group_axes))
++    assert h1 == h2
++    assert h1.startswith("sha256:")
++
++    mutated = json.loads(json.dumps(doc))
++    mutated["arms"]["arm"]["control"][0] = "c9"
++    assert allocation_hash(mutated) != h1
+diff --git a/tests/test_cli.py b/tests/test_cli.py
+index f83e7a6..ee02ce1 100644
+--- a/tests/test_cli.py
++++ b/tests/test_cli.py
+@@ -564,20 +564,105 @@ def test_a_group_axis_actually_narrows_end_to_end(tmp_path: Path, monkeypatch):
+     run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
+     conditions = run["results"]["conditions"]
+     assert [c["label"] for c in conditions] == ["arm=control", "arm=treatment"]
+     control_n = conditions[0]["aggregated"]["step01_summarize_units"]["score"]["n"]
+     treatment_n = conditions[1]["aggregated"]["step01_summarize_units"]["score"]["n"]
+ 
+     assert control_n == {"resolved": 8, "completed": 7, "ineligible": 1, "failed": 0}
+     assert treatment_n == {"resolved": 3, "completed": 2, "ineligible": 0, "failed": 1}
+ 
+ 
++def test_allocation_json_is_written_with_exact_arm_keys_when_declared(tmp_path: Path, monkeypatch):
++    """Task 14: a real `sweep.groups` + `allocation: between` + `assign` config,
++    run all the way to a real `allocation.json` — the same `_check_unimplemented`
++    patch and discipline as `test_a_group_axis_actually_narrows_end_to_end`, and
++    no other route in.
++
++    **Fixture numbers, chosen to discriminate.** 4 `control` and 9 `treatment`,
++    13 total: 4, 9, and 13 are each distinct from one another, from this
++    module's own 8/3/11 fixture above, and from `test_runner.py`'s 7/5/12 arm
++    fixture — no arm fixture shares a boundary with another. The keys within
++    each arm are listed out of both alphabetical and roster order (`c3, c0,
++    c2, c1`; a shuffled 9-key treatment list) so the assertion below can tell
++    "the roster's own resolved order" from "sorted" — the mutation the brief
++    names (row indices instead of keys) fails on the exact key strings *and*
++    on their order, not merely on length or set membership.
++    """
++    import publishable.validate as validate_mod
++
++    monkeypatch.setattr(validate_mod, "_check_unimplemented", lambda doc, c: None)
++
++    control_keys = ["c3", "c0", "c2", "c1"]
++    treatment_keys = ["t5", "t1", "t8", "t0", "t3", "t7", "t2", "t6", "t4"]
++    control_rows = "\n".join(f"{k},control" for k in control_keys)
++    treatment_rows = "\n".join(f"{k},treatment" for k in treatment_keys)
++    roster_csv = f"patient_id,arm\n{control_rows}\n{treatment_rows}\n"
++
++    doc = run_a_project(
++        tmp_path,
++        roster_csv=roster_csv,
++        units_overrides={
++            "allocation": "between",
++            "assign": {"arm": {"method": "by_attribute"}},
++            "attributes": ["arm"],
++        },
++        sweep={"groups": [{"by": "arm", "levels": ["control", "treatment"]}]},
++    )
++
++    run_yaml = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
++    # The positive control the addendum asks for, paired with the file's own
++    # existence below: a run directory that died before writing anything
++    # would have no `run.yaml` at all, so this discriminates "the run
++    # completed and wrote allocation.json" from "nothing ran."
++    assert run_yaml["status"] == "completed"
++
++    alloc_path = doc["run_dir"] / "allocation.json"
++    assert alloc_path.exists()
++    alloc = json.loads(alloc_path.read_text())
++
++    assert set(alloc.keys()) == {"arms", "seed", "strata"}
++    assert alloc["arms"] == {
++        "arm": {"control": control_keys, "treatment": treatment_keys}
++    }
++    # `by_attribute` draws nothing and stratifies nothing — the addendum's own
++    # finding that a writer emitting a seed anyway looks correct against a
++    # fixture nobody checked the seed of.
++    assert alloc["seed"] == {}
++    assert "arm" not in alloc["seed"]
++    assert alloc["strata"] == {}
++    assert "arm" not in alloc["strata"]
++    assert "holdout" not in alloc
++
++    from publishable.artifacts import allocation_hash
++
++    assert run_yaml["provenance"]["allocation"] == "allocation.json"
++    assert run_yaml["provenance"]["allocation_hash"] == allocation_hash(alloc)
++
++
++def test_allocation_json_is_absent_without_a_declared_arm(tmp_path: Path):
++    """The absent half of 'present when either is declared' — and the addendum's
++    warning that this half is the one that passes vacuously. Paired with a
++    positive assertion on the very same run (`run.yaml` exists and completed),
++    so this cannot pass for a run that failed before writing anything, a wrong
++    `run_dir`, or a typo in the filename — the four verification probes this
++    project has already caught reporting nothing for every input."""
++    doc = run_a_project(tmp_path)
++
++    run_yaml = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
++    assert run_yaml["status"] == "completed"
++    assert (doc["run_dir"] / "sweep.yaml").exists()
++
++    assert not (doc["run_dir"] / "allocation.json").exists()
++    assert run_yaml["provenance"]["allocation"] is None
++    assert run_yaml["provenance"]["allocation_hash"] is None
++
++
+ def test_cond_roster_narrows_each_condition_to_its_own_arm_size():
+     """`_cond_roster` is the read side of the narrowing `execute_plan` already
+     applies to what a condition's own executions run over — task 12's 7/5
+     fixture, reused rather than a fresh one (no arm fixture may share a
+     boundary with a cluster fixture, and this fixture already states why its
+     counts discriminate).
+ 
+     Exact sizes, not a reconciliation: this and
+     `test_cond_roster_covers_the_roster_exactly_once_per_unit` are kept as two
+     separate assertions on purpose, each able to fail on its own — a "sum to

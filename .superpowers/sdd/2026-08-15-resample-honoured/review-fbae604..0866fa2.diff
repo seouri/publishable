@@ -1,0 +1,353 @@
+# Review package: fbae604..0866fa2
+
+## Commits
+0866fa2 docs: task-9 report — the stratified draw, mutation-tested
+f69055a feat: percentile_over_units draws within a stratum, preserving its size
+
+## Files changed
+ .../2026-08-15-resample-honoured/task-9-report.md  |  56 ++++++++
+ src/publishable/stats.py                           |  60 ++++++++-
+ tests/test_stats.py                                | 147 +++++++++++++++++++++
+ 3 files changed, 261 insertions(+), 2 deletions(-)
+
+## Diff
+diff --git a/.superpowers/sdd/2026-08-15-resample-honoured/task-9-report.md b/.superpowers/sdd/2026-08-15-resample-honoured/task-9-report.md
+new file mode 100644
+index 0000000..bd4d7ad
+--- /dev/null
++++ b/.superpowers/sdd/2026-08-15-resample-honoured/task-9-report.md
+@@ -0,0 +1,56 @@
++# Task 9 report — the stratified draw
++
++Status: COMPLETE
++Commit: f69055a
++
++## Test summary
++
++`uv run pytest` 1741 passed + 2 xfailed (baseline 1732 + 2 xfailed; 9 new tests: the brief's 6 plus
++3 I added for degenerate shapes — size-one stratum, all-identical-value stratum, and more strata than
++units where every unit is a singleton stratum). `uv run mypy` and `uv run ruff check .` both clean.
++
++## What was built
++
++`percentile_over_units` in `src/publishable/stats.py` gained `strata: Sequence[Any] | None = None`.
++When given, values are grouped by stratum before any sort (carrying each value's weight with it via a
++single `carried` weight vector shared with the existing weighted path), each stratum's pool is sorted,
++the pools are ordered by their own sorted contents (not by label), and each draw pulls exactly as many
++indices from each pool as that pool holds. Unstratified callers (`strata=None`, the default) take the
++identical code path as before — the existing ~20 `percentile_over_units` tests pass unchanged, and the
++task-1 regression pin is untouched.
++
++Mutation-tested per the brief:
++- Draw-count mutation (`range(1)` instead of `range(len(pool))`) — `test_a_stratified_draw_preserves_each_stratum_size`
++  FAILED (interval moved to ~36.7–37.4, next to the mean-of-stratum-means 37.17 the fixture is sized to
++  distinguish). Reverted in place, re-ran, PASS.
++- Pool-ordering mutation (`ordered = [sorted(pools[k]) for k in sorted(pools)]`, i.e. order by label
++  instead of by sorted contents) — `test_a_stratified_draw_is_invariant_to_stratum_labels` FAILED
++  (9.68... vs a different number under relabelling). Reverted in place, re-ran, PASS.
++`__pycache__` cleared between mutation and revert both times; reverts were in-place edits, never
++`git checkout`.
++
++## Degenerate shapes — decided and tested
++
++- **Misaligned `strata` length**: raises `ValueError` (via `zip(..., strict=True)`), per the brief's
++  own test. Treated as a programming error, not a user error to guard softly — consistent with the
++  existing `weights` contract in the same function.
++- **Stratum of size 1**: works, contributes its one value deterministically to every draw. Tested with
++  the "high" band split into two singletons.
++- **Stratum of all-identical values**: works, contributes zero variance of its own; only the varying
++  strata widen the interval. Tested by replacing the "mid" band with a repeated constant.
++- **More strata than... every unit its own stratum**: works, collapses to a zero-width point interval
++  at the sample mean (no resampling freedom left). Not an error — noted in the test docstring that a
++  design landing here is a `validate`-time concern (`E-STATS-RESAMPLE-*`), not something this
++  construction should refuse.
++
++## Concerns / notes for later tasks
++
++- No brief/code disagreement found — the brief's exact implementation matched what I read at
++  `stats.py:488` before editing, and the fixture arithmetic (9.83 / 37.17) checks out.
++- Task 14 passes `strata=` through from `summarize_step`/resample resolution, and task 15 builds on
++  top of this — both should be able to rely on: unstratified default path is byte-identical to
++  pre-task-9 behavior; `strata=None` is a true no-op; stratum ordering is by sorted contents, not by
++  first-seen order or label, so callers must not assume label order survives.
++- `docs/superpowers/` progress ledger (`progress.md`) had an uncommitted pre-existing edit (dispatch
++  note for task 9) from before this task started; left untouched and uncommitted — not part of this
++  task's diff.
+diff --git a/src/publishable/stats.py b/src/publishable/stats.py
+index 84d40ea..a6d9ac8 100644
+--- a/src/publishable/stats.py
++++ b/src/publishable/stats.py
+@@ -484,20 +484,21 @@ def min_honest_draws(confidence: float = 0.95) -> int:
+     tail = (1.0 - confidence) / 2.0
+     return math.ceil(2.0 / tail)
+ 
+ 
+ def percentile_over_units(
+     values: Sequence[float],
+     seed: int,
+     draws: int = 2000,
+     confidence: float = 0.95,
+     weights: Sequence[Any] | None = None,
++    strata: Sequence[Any] | None = None,
+ ) -> Interval | None:
+     """A percentile interval over the units, by resampling with replacement.
+ 
+     This is what gives a *column* metric a resampled `ci95` when `resample` is
+     declared (`reference.md` § How a metric becomes a number): the mean is
+     recomputed on each bootstrap draw. A derived metric — one `aggregate`
+     computed, with no per-unit value of its own — needs `aggregate` itself
+     recomputed on each draw instead, which is what `percentile_of_derived` does.
+ 
+     With `weights`, the statistic recomputed on each draw is the *weighted* mean
+@@ -512,32 +513,87 @@ def percentile_over_units(
+ 
+     Two things this path deliberately does not inherit from
+     `weighted_t_over_units`. It applies no Kish floor — that construction refuses
+     an effective size below two because Kish's size is where its *degrees of
+     freedom* come from, and a percentile interval has none; its evidence is the
+     spread of the draws, which a concentrated weighting widens rather than
+     invalidates. And each value keeps its own weight through the sort: the pool
+     is sorted for the row-order invariance the unweighted branch explains below,
+     and sorting the two sequences separately would preserve that invariance while
+     silently re-pairing them — a mistake equal weights cannot see.
++
++    With `strata`, each draw preserves **each stratum's own size** and draws with
++    replacement *within* it — `reference.md` § Weighted samples:
++    "`resample.stratify_by` says what an independent draw is, resampling within
++    each stratum so a bootstrap can't return a replicate whose stratum
++    composition the design ruled out." The two ways to get this wrong both
++    produce a plausible number: drawing `n` units and repairing the composition
++    afterwards is the unstratified interval however carefully the counts are
++    matched, and averaging the strata's own means gives every stratum equal say,
++    which is a different estimator entirely (for 20/8/2 units in three bands it
++    reports 37.2 where the sample mean is 9.8).
++
++    `strata` is aligned positionally to `values`, the same contract `weights`
++    has, and `strict=True` on the zip for the same reason: a length mismatch is
++    a misaligned vector and would produce a number rather than an error.
++
++    **Grouping happens before any sort and carries the pairs**, so each value
++    keeps its stratum and its weight; the strata are then ordered by their own
++    sorted contents rather than by label, which is what makes a relabelled
++    stratum give the identical interval and what makes the one-stratum case
++    reproduce the unstratified path digit for digit. Sorting values and stratum
++    labels as separate sequences would preserve every invariance and silently
++    re-pair them — the mistake equal-sized strata cannot see.
+     """
+     if len(values) < 2:
+         return None
+     if draws < min_honest_draws(confidence):
+         return None
++    # One weight vector for every branch below, so a value and its weight are
++    # paired once. `checked_weights` gates before any draw rather than producing
++    # `draws` worth of `nan`, and it is the one authority `validate` and
++    # `kish_effective_n` also read.
++    carried = None if weights is None else checked_weights(weights)
+     rng = random.Random(seed)
+-    if weights is not None:
++    if strata is not None:
++        # Grouped BEFORE any sort, carrying (value, weight) pairs, then each
++        # group sorted and the groups ordered by their own sorted contents —
++        # so the interval depends on the multiset of (value, weight, stratum)
++        # triples and on nothing else, not on row order and not on the labels.
++        pools: dict[Any, list[tuple[float, float]]] = {}
++        pairs_in = zip(
++            values,
++            strata,
++            [1.0] * len(values) if carried is None else carried,
++            strict=True,
++        )
++        for value, stratum, weight in pairs_in:
++            pools.setdefault(stratum, []).append((float(value), weight))
++        ordered = sorted(sorted(pool) for pool in pools.values())
++        means_out: list[float] = []
++        for _ in range(draws):
++            # Each stratum contributes exactly as many rows as it holds: that
++            # is the composition the design ruled the alternatives out of.
++            drawn = [
++                pool[rng.randrange(len(pool))] for pool in ordered for _ in range(len(pool))
++            ]
++            if carried is None:
++                means_out.append(sum(v for v, _ in drawn) / len(drawn))
++            else:
++                means_out.append(_weighted_mean([w for _, w in drawn], [v for v, _ in drawn]))
++        means = sorted(means_out)
++    elif carried is not None:
+         # `sorted` over the pairs, so a value and its weight travel together; the
+         # gate is `checked_weights`, the one authority `validate` and
+         # `kish_effective_n` also read, and it runs before any draw rather than
+         # producing 2000 draws' worth of `nan`.
+-        pairs = sorted(zip(values, checked_weights(weights), strict=True))
++        pairs = sorted(zip(values, carried, strict=True))
+         n = len(pairs)
+         drawn_means = []
+         for _ in range(draws):
+             drawn = [pairs[rng.randrange(n)] for _ in range(n)]
+             drawn_means.append(_weighted_mean([w for _, w in drawn], [v for v, _ in drawn]))
+         means = sorted(drawn_means)
+     else:
+         # Sorted, not just `list(values)`: with a fixed seed, `rng.randrange(n)`
+         # draws the same sequence of *indices* regardless of input order, so
+         # drawing from an unsorted pool would make the resample depend on row
+diff --git a/tests/test_stats.py b/tests/test_stats.py
+index 1a4b1e1..dca4870 100644
+--- a/tests/test_stats.py
++++ b/tests/test_stats.py
+@@ -2855,10 +2855,157 @@ def test_a_single_cluster_column_reports_its_point_with_no_interval():
+     counts = {"resolved": 3, "completed": 3, "ineligible": 0, "failed": 0}
+     out = summarize_step(collapsed, counts, clusters=dict.fromkeys(collapsed, "one"))
+     assert out["score"]["ci95"] is None
+     assert out["score"]["method"] is None
+     assert out["score"]["value"] == pytest.approx(3.0)
+     assert out["score"]["n"]["clusters"] == 1
+     # The control that must report: the same table over two clusters has an
+     # interval, so the `None` above is the cluster count and not the shape.
+     two = summarize_step(collapsed, counts, clusters={"u1": "a", "u2": "a", "u3": "b"})
+     assert two["score"]["ci95"] is not None
++
++
++def _banded_strata() -> tuple[list[float], list[str]]:
++    """Three strata, unequal sizes, disjoint value bands. Sized so that the
++    three candidate constructions produce three DIFFERENT numbers:
++
++      correct stratified mean  (20·0.5 + 8·10.5 + 2·100.5) / 30  ≈  9.83
++      unstratified             same centre, several times wider
++      mean of stratum means    (0.5 + 10.5 + 100.5) / 3          ≈ 37.17
++
++    Two equal strata distinguish none of them, which is the fixture-sizing rule
++    this repo wrote into CLAUDE.md after an apportionment test matched a
++    reverse-order mutant by coincidence."""
++    values = (
++        [i / 20.0 for i in range(20)]
++        + [10.0 + i / 8.0 for i in range(8)]
++        + [100.0 + i / 2.0 for i in range(2)]
++    )
++    strata = ["low"] * 20 + ["mid"] * 8 + ["high"] * 2
++    return values, strata
++
++
++def test_a_stratified_draw_preserves_each_stratum_size():
++    """§ Weighted samples: resampling within each stratum "so a bootstrap can't
++    return a replicate whose stratum composition the design ruled out". The
++    two-value stratum contributes exactly 2 rows to every draw, which pins the
++    interval near 9.83 and makes it much narrower than the unstratified one."""
++    values, strata = _banded_strata()
++    stratified = percentile_over_units(values, seed=7, draws=2000, strata=strata)
++    plain = percentile_over_units(values, seed=7, draws=2000)
++    assert stratified is not None and plain is not None
++    expected = sum(values) / len(values)  # 9.83…
++    assert stratified.low < expected < stratified.high
++    stratified_width = stratified.high - stratified.low
++    plain_width = plain.high - plain.low
++    # Narrower, and by a lot: the whole point of the declaration is that the
++    # 2-unit stratum's contribution stops varying.
++    assert stratified_width < plain_width / 2.0
++    # And NOT the mean-of-stratum-means answer, which is 37.17 — a construction
++    # that gave each stratum equal say would put the interval there instead.
++    assert stratified.high < 20.0
++
++
++def test_a_stratified_draw_is_invariant_to_row_order():
++    """A fixed seed draws a fixed sequence of indices, so the multiset of
++    (value, stratum) pairs must be all that matters — the same invariance the
++    unstratified branch gets from sorting its pool, and the same one
++    `percentile_over_units_clustered` gets from ordering its pools by contents."""
++    values, strata = _banded_strata()
++    pairs = list(zip(values, strata, strict=True))
++    shuffled = pairs[7:] + pairs[:7]
++    a = percentile_over_units(values, seed=11, draws=2000, strata=strata)
++    b = percentile_over_units(
++        [v for v, _ in shuffled], seed=11, draws=2000, strata=[s for _, s in shuffled]
++    )
++    assert a == b
++
++
++def test_a_stratified_draw_is_invariant_to_stratum_labels():
++    """Strata ordered by their own sorted contents, not by label — so renaming
++    `low`/`mid`/`high` to `z`/`a`/`m` gives the identical interval."""
++    values, strata = _banded_strata()
++    renamed = {"low": "z", "mid": "a", "high": "m"}
++    a = percentile_over_units(values, seed=3, draws=2000, strata=strata)
++    b = percentile_over_units(
++        values, seed=3, draws=2000, strata=[renamed[s] for s in strata]
++    )
++    assert a == b
++
++
++def test_one_stratum_reproduces_the_unstratified_interval_digit_for_digit():
++    """The degenerate case is not a special case: with every unit in one
++    stratum, the stratified path draws n indices from one sorted pool, which is
++    exactly what the unstratified path does."""
++    values, _ = _banded_strata()
++    a = percentile_over_units(values, seed=5, draws=2000)
++    b = percentile_over_units(values, seed=5, draws=2000, strata=["only"] * len(values))
++    assert a == b
++
++
++def test_a_stratified_weighted_draw_keeps_each_value_with_its_weight():
++    """Weights travel with values through the grouping AND the sort. Sorting the
++    two sequences separately would preserve every invariance above and silently
++    re-pair them — a mistake equal weights cannot see, which is why the weights
++    here are as banded as the values."""
++    values, strata = _banded_strata()
++    weights = [1.0] * 20 + [5.0] * 8 + [50.0] * 2
++    got = percentile_over_units(values, seed=9, draws=2000, weights=weights, strata=strata)
++    assert got is not None
++    expected = sum(v * w for v, w in zip(values, weights, strict=True)) / sum(weights)
++    assert got.low < expected < got.high
++    # The weighted centre (≈ 39.5) is far from the unweighted one (≈ 9.83), so a
++    # re-pairing or a dropped weight lands outside this interval rather than
++    # inside it.
++    assert got.low > 20.0
++
++
++def test_a_stratified_draw_refuses_a_misaligned_stratum_vector():
++    """A length mismatch is a misaligned vector, and would produce a plausible
++    number rather than an error — the same reason `strict=True` guards the
++    clustered zip."""
++    values, strata = _banded_strata()
++    with pytest.raises(ValueError):
++        percentile_over_units(values, seed=1, draws=2000, strata=strata[:-1])
++
++
++def test_a_size_one_stratum_is_drawn_deterministically_every_time():
++    """A singleton stratum has exactly one candidate index on every draw, so it
++    contributes its one value to every replicate with no variance of its own —
++    it neither breaks the draw nor gets skipped."""
++    values, strata = _banded_strata()
++    # The two-value "high" stratum becomes two singleton strata.
++    strata = strata[:-2] + ["high_a", "high_b"]
++    got = percentile_over_units(values, seed=13, draws=2000, strata=strata)
++    assert got is not None
++    # Both singleton values (100.0 and 100.5) are fixed contributions on every
++    # draw, so the interval still centres near the same overall mean.
++    expected = sum(values) / len(values)
++    assert got.low < expected < got.high
++
++
++def test_a_stratum_of_identical_values_contributes_no_variance_of_its_own():
++    """A stratum whose values are all identical draws different indices but the
++    same number every time — it cannot widen the interval, only the varying
++    strata can."""
++    values, strata = _banded_strata()
++    # Replace the "mid" band (indices 20:28) with a single repeated value.
++    values = list(values)
++    for i in range(20, 28):
++        values[i] = 50.0
++    got = percentile_over_units(values, seed=17, draws=2000, strata=strata)
++    assert got is not None
++    expected = sum(values) / len(values)
++    assert got.low < expected < got.high
++
++
++def test_more_strata_than_two_units_gives_a_zero_width_interval():
++    """Every unit its own singleton stratum: each draw reproduces every value
++    exactly once, so the resample has no freedom left and the interval
++    collapses to a point at the sample mean — not an error, just uninformative,
++    which is why `E-STATS-RESAMPLE-*` validation (not this function) is where a
++    design that does this should be refused."""
++    values = [1.0, 2.0, 3.0, 4.0]
++    strata = ["a", "b", "c", "d"]
++    got = percentile_over_units(values, seed=19, draws=2000, strata=strata)
++    assert got is not None
++    assert got.low == got.high == sum(values) / len(values)

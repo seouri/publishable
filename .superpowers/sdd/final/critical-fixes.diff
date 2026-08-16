@@ -1,0 +1,380 @@
+### COMMITS
+36f9a0d Refuse declared-but-unimplemented blocks instead of silently ignoring them
+
+### DIFF
+diff --git a/src/publishable/generators/experiment.py b/src/publishable/generators/experiment.py
+index cb9b334..f162443 100644
+--- a/src/publishable/generators/experiment.py
++++ b/src/publishable/generators/experiment.py
+@@ -1,16 +1,17 @@
+ """`generate experiment` — always creates, never wraps. Greenfield only."""
+ 
+ from pathlib import Path
+ 
+ from publishable.errors import ContractError
+ from publishable.materialize import materialize_config
++from publishable.provenance import resolves_inside_repo
+ from publishable.templates.registry import get_template
+ 
+ STARTER_STEP = '''\
+ # src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
+ from publishable import BaseStep
+ 
+ 
+ class Step(BaseStep):
+     scope = "repeat"
+ 
+@@ -46,21 +47,21 @@ def generate_experiment(
+     *, repo_root: Path, name: str, template_name: str, input_dir: str, output_dir: str
+ ) -> Path:
+     template = get_template(template_name)
+     if template is None:
+         raise ContractError(
+             f"no installed template registers `{template_name}`", code="E-TEMPLATE-UNKNOWN"
+         )
+     root = repo_root.resolve()
+     for label, raw in (("input_dir", input_dir), ("output_dir", output_dir)):
+         resolved = Path(raw).expanduser().resolve()
+-        if resolved == root or root in resolved.parents:
++        if resolves_inside_repo(resolved, root):
+             raise ContractError(
+                 f"{label} {resolved} resolves inside the git repository at {root}",
+                 code="E-DATA-IN-REPO",
+             )
+ 
+     pkg = package_name(name)
+     entrypoint = f"{pkg}.experiment:{class_name(name)}"
+     pkg_dir = repo_root / "src" / pkg
+     if pkg_dir.exists():
+         raise ContractError(
+diff --git a/src/publishable/provenance.py b/src/publishable/provenance.py
+index 789505e..931ddf9 100644
+--- a/src/publishable/provenance.py
++++ b/src/publishable/provenance.py
+@@ -21,20 +21,30 @@ class GitInfo:
+     config_committed: bool
+ 
+ 
+ def _git(repo: Path, *args: str) -> str:
+     result = subprocess.run(
+         ["git", *args], cwd=repo, capture_output=True, text=True, check=False
+     )
+     return result.stdout.strip()
+ 
+ 
++def resolves_inside_repo(resolved: Path, repo_root: Path) -> bool:
++    """Whether an already-resolved absolute path sits at or under `repo_root`.
++
++    Shared by `validate._check_data` and `generators.experiment.generate_experiment`
++    so the containment rule — `input_dir`/`output_dir` may never resolve inside the
++    git repo — cannot drift between the two call sites that enforce it.
++    """
++    return resolved == repo_root or repo_root in resolved.parents
++
++
+ def find_repo_root(start: Path) -> Path:
+     """Walk up from the path the command was given, never from the cwd."""
+     current = start.resolve()
+     if not current.is_dir():
+         current = current.parent
+     for candidate in (current, *current.parents):
+         if (candidate / ".git").exists():
+             return candidate
+     raise ContractError(
+         f"no git repository found from {current} upwards", code="E-GIT-NO-REPO"
+diff --git a/src/publishable/validate.py b/src/publishable/validate.py
+index 1ce3403..0d4eb72 100644
+--- a/src/publishable/validate.py
++++ b/src/publishable/validate.py
+@@ -4,23 +4,27 @@ import re
+ from pathlib import Path
+ from typing import Any
+ 
+ import yaml
+ 
+ from publishable.diagnostics import Collector
+ from publishable.errors import ContractError
+ from publishable.manifest import POLICIES
+ from publishable.materialize import TEMPLATE_VERSION
+ from publishable.param import MISSING
+-from publishable.provenance import find_repo_root
++from publishable.provenance import find_repo_root, resolves_inside_repo
+ from publishable.templates.registry import get_template, template_names
+ 
++# `sweep`'s six axis keys, per reference.md § The one config file. A key present
++# but empty (`groups: []`, `ablate: null`) declares no axis and is not a sweep.
++SWEEP_AXIS_KEYS = ("baseline", "grid", "paired", "ablate", "sample", "groups")
++
+ REQUIRED_METADATA = ("description", "authors")
+ 
+ 
+ def _flatten(node: Any, prefix: str = "") -> dict[str, Any]:
+     flat: dict[str, Any] = {}
+     for key, value in (node or {}).items():
+         path = f"{prefix}.{key}" if prefix else key
+         if isinstance(value, dict):
+             flat.update(_flatten(value, path))
+         else:
+@@ -48,20 +52,21 @@ def validate_config(config_path: Path, c: Collector) -> dict[str, Any] | None:
+             f"(known: {', '.join(template_names())})",
+         )
+         return None  # every later check reads the spec
+ 
+     _check_metadata(doc, config_path, template, c)
+     _check_entrypoint(doc, c)
+     _check_parameters(doc, template, c)
+     _check_versions(doc, c)
+     _check_data(doc, config_path, c)
+     _check_replication(doc, template, c)
++    _check_unimplemented(doc, c)
+     for message in template.validate(doc):
+         c.error("E-TEMPLATE-RULE", "parameters", message)
+     return doc
+ 
+ 
+ def _check_metadata(doc: dict[str, Any], config_path: Path, template: Any, c: Collector) -> None:
+     metadata = doc.get("metadata") or {}
+     for field in REQUIRED_METADATA:
+         if not metadata.get(field):
+             c.error("E-META-REQUIRED", f"metadata.{field}", "is empty, and is required")
+@@ -139,44 +144,62 @@ def _check_data(doc: dict[str, Any], config_path: Path, c: Collector) -> None:
+             "data.input_manifest_policy",
+             "is empty, and is required",
+         )
+     elif policy not in POLICIES:
+         c.error(
+             "E-DATA-POLICY",
+             "data.input_manifest_policy",
+             f"is `{policy}`, which is not one of {', '.join(POLICIES)}",
+         )
+ 
+-    try:
+-        repo_root = find_repo_root(config_path).resolve()
+-    except ContractError as exc:
+-        if exc.code == "E-GIT-NO-REPO":
+-            return  # not in a repo, so "inside the repo" doesn't arise
+-        raise
++    # `E-DATA-REQUIRED` and `E-DATA-UNREADABLE` have nothing to do with the repo
++    # either — same reasoning as the policy check above — so they must not sit
++    # behind the repo-existence early return below. Only `E-DATA-IN-REPO`
++    # legitimately needs a repo root to compare against.
++    resolvable: dict[str, Path] = {}
+     for field in ("input_dir", "output_dir"):
+         raw = data.get(field)
+         if not raw:
+             c.error("E-DATA-REQUIRED", f"data.{field}", "is empty, and is required")
+             continue
+-        resolved = Path(raw).expanduser().resolve()
+-        if resolved == repo_root or repo_root in resolved.parents:
++        path = Path(raw).expanduser()
++        if not path.is_absolute():
+             c.error(
+-                "E-DATA-IN-REPO",
++                "E-DATA-NOT-ABSOLUTE",
+                 f"data.{field}",
+-                f"resolves inside the git repository at {repo_root}",
++                f"is `{raw}`, which is not an absolute path — reference.md requires "
++                "input_dir/output_dir to be absolute so the config means the same "
++                "location regardless of the directory a command is run from",
+             )
++            continue
++        resolvable[field] = path.resolve()
++
+     input_dir = data.get("input_dir")
+     if input_dir:
+         path = Path(input_dir).expanduser()
+         if not path.is_dir() or not any(path.iterdir()):
+             c.error("E-DATA-UNREADABLE", "data.input_dir", f"{path} is unreadable or empty")
+ 
++    try:
++        repo_root = find_repo_root(config_path).resolve()
++    except ContractError as exc:
++        if exc.code == "E-GIT-NO-REPO":
++            return  # not in a repo, so "inside the repo" doesn't arise
++        raise
++    for field, resolved in resolvable.items():
++        if resolves_inside_repo(resolved, repo_root):
++            c.error(
++                "E-DATA-IN-REPO",
++                f"data.{field}",
++                f"resolves inside the git repository at {repo_root}",
++            )
++
+ 
+ def _check_replication(doc: dict[str, Any], template: Any, c: Collector) -> None:
+     levels = ((doc.get("replication") or {}).get("repeats")) or []
+     total = 1
+     any_invalid = False
+     for level in levels:
+         # `or` would read a declared 0 as "absent" and silently substitute 1,
+         # which is the difference between warning about an empty design and not.
+         count = level.get("n")
+         if count is None:
+@@ -192,10 +215,53 @@ def _check_replication(doc: dict[str, Any], template: Any, c: Collector) -> None
+         total *= 1 if count is None else int(count)
+     if any_invalid:
+         return  # a floor warning derived from an invalid design would be noise
+     if total < template.default_repeats:
+         c.warn(
+             "W-REPL-FLOOR",
+             "replication.repeats",
+             f"total of {total} is below this convention class's default of "
+             f"{template.default_repeats}",
+         )
++
++
++def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
++    """Declared-but-unimplemented blocks, refused rather than silently ignored.
++
++    This build hardcodes one condition, resolves no unit roster, and executes
++    repeats `as_declared` regardless of what is written here. Each of these
++    would otherwise validate clean and then run something other than what the
++    config describes — the exact failure `E-REPL-KIND-UNSUPPORTED` already
++    refuses for `batch`/`fold`/nested repeat levels. Each message says plainly
++    that the block is honored in a later slice, so a user does not read this as
++    their config being malformed.
++    """
++    sweep = doc.get("sweep") or {}
++    declared_axes = [key for key in SWEEP_AXIS_KEYS if sweep.get(key)]
++    if declared_axes:
++        c.error(
++            "E-SWEEP-UNSUPPORTED",
++            "sweep",
++            f"declares {', '.join(declared_axes)}, which is specified but not implemented "
++            "in this build — every run executes exactly one condition regardless of what "
++            "is declared here; sweep execution will be honored in a later slice",
++        )
++
++    units = (doc.get("data") or {}).get("units")
++    if units:
++        c.error(
++            "E-DATA-UNITS-UNSUPPORTED",
++            "data.units",
++            "is specified but not implemented in this build — no unit roster is resolved "
++            "from it, though it is already folded into design_digest; unit resolution "
++            "will be honored in a later slice",
++        )
++
++    order = (doc.get("replication") or {}).get("order")
++    if order is not None and order != "as_declared":
++        c.error(
++            "E-REPL-ORDER-UNSUPPORTED",
++            "replication.order",
++            f"is `{order}`, which is specified but not implemented in this build — "
++            "execution always proceeds as_declared regardless of what is declared here; "
++            "`order` will be honored in a later slice",
++        )
+diff --git a/tests/test_validate.py b/tests/test_validate.py
+index 677260b..aac171a 100644
+--- a/tests/test_validate.py
++++ b/tests/test_validate.py
+@@ -218,20 +218,109 @@ def test_a_config_that_does_not_parse_is_fatal(git_repo: Path):
+ 
+ 
+ def test_a_required_data_dir_left_empty_is_reported(write_config):
+     c = Collector()
+     validate_config(write_config({"data.output_dir": ""}), c)
+     found = [f for f in c.findings if f.code == "E-DATA-REQUIRED"]
+     assert len(found) == 1
+     assert found[0].path == "data.output_dir"
+ 
+ 
++def test_a_relative_input_dir_is_rejected(write_config):
++    assert "E-DATA-NOT-ABSOLUTE" in codes(write_config({"data.input_dir": "./secret"}))
++
++
++def test_a_relative_output_dir_is_rejected(write_config):
++    assert "E-DATA-NOT-ABSOLUTE" in codes(write_config({"data.output_dir": "results"}))
++
++
++def test_a_missing_data_dir_is_reported_even_outside_any_repo(write_config, monkeypatch):
++    """The previous fix wave hoisted `E-DATA-IN-REPO`'s policy check above the
++    repo-existence early return but left `E-DATA-REQUIRED` and `E-DATA-UNREADABLE`
++    behind it under identical reasoning — neither has anything to do with the repo
++    either, so a repo-less config missing `input_dir` must still be caught."""
++    import publishable.validate as validate_mod
++    from publishable.errors import ContractError
++
++    def _no_repo(path):
++        raise ContractError("no git repository found", code="E-GIT-NO-REPO")
++
++    monkeypatch.setattr(validate_mod, "find_repo_root", _no_repo)
++    found = codes(write_config({"data.input_dir": _DELETE}))
++    assert "E-DATA-REQUIRED" in found
++
++
++def _with_doc_change(write_config, change) -> Path:
++    """Set a top-level key the base fixture does not declare at all — the dotted
++    override helper needs the parent key to preexist, which `sweep` and
++    `data.units` deliberately do not in the base fixture."""
++    path = write_config()
++    doc = yaml.safe_load(path.read_text())
++    change(doc)
++    path.write_text(yaml.safe_dump(doc))
++    return path
++
++
++def test_a_declared_sweep_axis_is_refused_not_silently_ignored(write_config):
++    """S1 hardcodes one condition; a config declaring `sweep.grid` must not
++    validate clean and then run one condition while `run.yaml` records the sweep
++    verbatim, describing an experiment that never ran."""
++    sweep = {"grid": {"analysis.method": ["pearson", "spearman"]}}
++    path = _with_doc_change(write_config, lambda doc: doc.update(sweep=sweep))
++    assert "E-SWEEP-UNSUPPORTED" in codes(path)
++
++
++def test_an_empty_sweep_block_is_not_a_sweep(write_config):
++    """An empty or all-null `sweep` (the shape a generated config ships with)
++    declares no axis and must not trip the refusal meant for an actual sweep."""
++    path = _with_doc_change(
++        write_config,
++        lambda doc: doc.update(
++            sweep={
++                "grid": None,
++                "groups": [],
++                "ablate": None,
++                "baseline": None,
++                "paired": [],
++                "sample": None,
++            }
++        ),
++    )
++    assert "E-SWEEP-UNSUPPORTED" not in codes(path)
++
++
++def test_a_declared_unit_roster_is_refused_not_silently_ignored(write_config):
++    """`data.units` is read into `design_digest` (redrawing every seed) but no
++    roster is actually resolved from it in this build — declaring it must be a
++    refusal, not a config that quietly changes seeds while resolving no units."""
++    units = {"source": "index.csv", "key": "patient_id"}
++    path = _with_doc_change(write_config, lambda doc: doc["data"].update(units=units))
++    assert "E-DATA-UNITS-UNSUPPORTED" in codes(path)
++
++
++def test_a_non_default_replication_order_is_refused_not_silently_ignored(write_config):
++    """`replication.order: randomized` currently validates clean and then executes
++    `as_declared` anyway — the record would say randomized while the run wasn't."""
++    found = codes(write_config({"replication.order": "randomized"}))
++    assert "E-REPL-ORDER-UNSUPPORTED" in found
++
++
++def test_a_config_without_unimplemented_blocks_still_validates_clean(write_config):
++    """The base fixture declares no sweep axis, no `data.units`, and
++    `replication.order: as_declared` — none of the three new refusals should fire
++    against it."""
++    found = codes(write_config())
++    assert "E-SWEEP-UNSUPPORTED" not in found
++    assert "E-DATA-UNITS-UNSUPPORTED" not in found
++    assert "E-REPL-ORDER-UNSUPPORTED" not in found
++
++
+ def test_a_missing_entrypoint_is_reported(write_config):
+     """A config `validate` blesses must be one `run` can actually execute — deleting
+     `entrypoint` used to pass validation and then die inside `run` with a bare
+     `KeyError`."""
+     assert "E-ENTRYPOINT-REQUIRED" in codes(write_config({"entrypoint": _DELETE}))
+ 
+ 
+ def test_an_empty_entrypoint_is_reported(write_config):
+     assert "E-ENTRYPOINT-REQUIRED" in codes(write_config({"entrypoint": ""}))
+ 

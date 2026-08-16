@@ -1,0 +1,450 @@
+# Review package: fce663b..HEAD
+
+## Commits
+067d046 feat(units): draw unclustered random assignment, honouring ratio
+
+## Files changed
+ src/publishable/units.py | 148 ++++++++++++++++++++++++++++++++++++++---------
+ tests/test_cli.py        |  12 ++--
+ tests/test_units.py      | 100 ++++++++++++++++++++++++++++++--
+ 3 files changed, 224 insertions(+), 36 deletions(-)
+
+## Diff
+diff --git a/src/publishable/units.py b/src/publishable/units.py
+index 9eb12df..89a359e 100644
+--- a/src/publishable/units.py
++++ b/src/publishable/units.py
+@@ -958,31 +958,36 @@ def arms_of(roster: UnitList, column: str, levels: Sequence[str]) -> dict[str, l
+             code="E-DATA-ASSIGN-LEVELS",
+         )
+     return partition
+ 
+ 
+ DRAWN_ASSIGN_METHODS = ("random", "blocked")
+ """The `validate.ASSIGN_METHODS` values that draw an arm rather than read one
+ already assigned — **one tuple, read by both the refusal and the draw**.
+ 
+ `validate` imports it to report `E-DATA-ASSIGN-DRAWN` (a refusal of a *value*,
+-distinct from `E-DATA-ASSIGN-METHOD`'s refusal of an absent or out-of-enum one),
+-and `assignment_for` below reads it to say which of its two refusals a method
+-earns. It lives here rather than in `validate` because `units.py` depends on
+-nothing there, and because `validate`'s use of it is temporary — task 14 retires
++distinct from `E-DATA-ASSIGN-METHOD`'s refusal of an absent or out-of-enum one).
++It lives here rather than in `validate` because `units.py` depends on nothing
++there, and because `validate`'s use of it is temporary — task 14 retires
+ `E-DATA-ASSIGN-DRAWN` — while realizing a draw is permanent.
+ 
++`assignment_for` below no longer reads it for `random`, which task 8 realizes
++rather than refuses — `blocked`, and `random` beside a declared `cluster_by`
++(task 9), are what still route through the message this tuple names, and it
++is `DRAWN_ASSIGN_METHODS` membership, not tuple *order* or index, that either
++still consults.
++
+ **It is not what makes `assignment_for` fail closed**, and must not be mistaken
+-for that: `assignment_for` allows `by_attribute` and refuses everything else, so
+-a fourth drawing method added to the enum and to nothing else raises rather than
+-reading a column, whether or not anyone remembers to add it here. This tuple
+-only picks which message that raise carries.
++for that: `assignment_for` allows `by_attribute` and `random` and refuses
++everything else, so a fourth drawing method added to the enum and to nothing
++else raises rather than reading a column, whether or not anyone remembers to
++add it here. This tuple only picks which message that raise carries.
+ """
+ 
+ 
+ @dataclass(frozen=True)
+ class ArmPlan:
+     """One axis's **realized** membership: level → unit keys, in roster order.
+ 
+     The shape a drawn allocation and a read one both fit, and the reason this
+     type exists at all: `arms_of` reads an arm out of a *column*, and a drawn
+     axis (`method: random`, `method: blocked`) has no column to read. A caller
+@@ -998,36 +1003,75 @@ class ArmPlan:
+     - `members` maps each level to that arm's unit keys. **In roster order
+       under `by_attribute`**; under a draw, in whatever order the draw
+       realized — `artifacts.build_allocation_document` records the order it
+       is given rather than re-sorting, because a `blocked` design reads that
+       order as data.
+     - `seed` is the seed the draw was realized with (`units.assign_seed_for`),
+       and is `None` under `by_attribute` — a method that reads an arm a trial
+       system already assigned rather than drawing one, so recording a seed
+       would be a false record of a draw that never happened.
+     - `strata` is the realized `assign.<axis>.stratify_by`, empty under
+-      `by_attribute` for the same reason: `stratify_by` names how a draw was
+-      *balanced*, and with no draw there is nothing it describes.
++      `by_attribute` for the reason above: `stratify_by` names how a draw was
++      *balanced*, and with no draw there is nothing it describes. It is also
++      empty under `random` today — task 8 does not yet balance the draw on a
++      declared `stratify_by`, so recording one here would claim a balance
++      that did not happen, the same false-record shape as `by_attribute`'s
++      seed, for a different reason: a real gap in this build rather than a
++      draw that never occurred.
+ 
+     `frozen=True` blocks rebinding an attribute; it does **not** deep-freeze
+     `members`, whose values are tuples but whose mapping a determined caller
+     can still mutate in place if it is handed a `dict`. Treat it as read-only
+     — nothing in core writes through it — rather than as a guarantee this type
+     enforces.
+     """
+ 
+     levels: tuple[str, ...]
+     members: Mapping[str, tuple[str, ...]]
+     seed: int | None
+     strata: tuple[str, ...]
+ 
+ 
++def _apportion(n: int, weights: Sequence[float]) -> list[int]:
++    """`n` split across `weights`, largest-remainder (Hamilton) apportionment —
++    `assignment_for`'s `random` path uses it to turn `assign.<axis>.ratio` into
++    per-level sizes.
++
++    Each entry's exact share (`n * weight / sum(weights)`) floors, and the
++    remainder — `n` minus the sum of those floors — goes one at a time to the
++    largest fractional part, ties broken by the entry's position in `weights`
++    (so the first-declared level of an equal split wins any tie, deterministic
++    rather than left to dict or set order). Every size is within one of its
++    exact proportional share, which is the strongest claim a ratio that
++    doesn't divide `n` supports — `partition_units`'s docstring makes the same
++    argument for folds and refuses to claim the stronger, exact one.
++
++    **Not guaranteed non-zero.** A ratio skewed enough relative to `n` (a
++    weight so small its floor is 0, with the remainder exhausted by larger
++    fractions first) can still leave an entry at 0 — the same gap
++    `reference.md` § Allocation already records against `limits.min_units_per_cell`
++    ("declared, typed, and read by nothing in this build"). Nothing here
++    manufactures a unit for a level the ratio didn't earn one for; inventing
++    a floor-of-one rule would be a guarantee no document states.
++    """
++    total = sum(weights)
++    quotas = [n * weight / total for weight in weights]
++    floors = [int(quota) for quota in quotas]
++    remainder = n - sum(floors)
++    fractions = [quota - floor for quota, floor in zip(quotas, floors, strict=True)]
++    order = sorted(range(len(weights)), key=lambda i: (-fractions[i], i))
++    sizes = list(floors)
++    for i in order[:remainder]:
++        sizes[i] += 1
++    return sizes
++
++
+ def assignment_for(
+     roster: UnitList,
+     axis: str,
+     block: Mapping[str, Any] | None,
+     levels: Sequence[str],
+     digest: str,
+     clusters: Mapping[str, str] | None = None,
+ ) -> ArmPlan:
+     """One axis's allocation, realized — **the single producer** of an `ArmPlan`,
+     and the seam this whole slice turns on.
+@@ -1040,46 +1084,98 @@ def assignment_for(
+     one core can actually build.
+ 
+     Dispatches on `block["method"]`, `reference.md` § Allocation's own enum:
+ 
+     - `by_attribute` (and an absent, non-mapping, or method-less block, which
+       `validate._check_assign` falls back to the same way) reads the arm out
+       of a column, through `arms_of` **unchanged** — that function stays the
+       authority for a column-read partition and this one does not re-derive
+       it. `from` is resolved here, once: the declared `from` when it is a
+       non-empty string, else the axis name.
++    - `random`, unclustered (`clusters is None`), draws one — see below.
+     - **Every other value raises `NotImplementedError`** — an allowlist, not a
+-      denylist of the methods that happen to draw today. `random` and
+-      `blocked` raise the message `DRAWN_ASSIGN_METHODS` selects, until tasks
+-      8 and 10 build them; any other string raises as a method this build
+-      cannot realize. Fail-closed costs nothing here, because `validate`
+-      already refuses an out-of-enum method outright
+-      (`E-DATA-ASSIGN-METHOD`) before `run` can reach this — and it is what
+-      keeps a *fifth* method, added to `validate.ASSIGN_METHODS` and to
+-      nothing else, from validating clean and then silently partitioning on
+-      a column. A denylist would have shipped exactly that regression, since
+-      the two literals naming which methods draw would have been pinned in
+-      agreement by nothing.
++      denylist of the methods that happen to draw today. `blocked`, and
++      `random` beside a declared `cluster_by`, raise the message
++      `DRAWN_ASSIGN_METHODS` selects, until task 10 (and task 9) build them;
++      any other string raises as a method this build cannot realize.
++      Fail-closed costs nothing here, because `validate` already refuses an
++      out-of-enum method outright (`E-DATA-ASSIGN-METHOD`) before `run` can
++      reach this — and it is what keeps a *fifth* method, added to
++      `validate.ASSIGN_METHODS` and to nothing else, from validating clean
++      and then silently partitioning on a column. A denylist would have
++      shipped exactly that regression, since the two literals naming which
++      methods draw would have been pinned in agreement by nothing.
+ 
+     An explicit hole, not a silent fallback to reading a column that need not
+     exist: a drawn axis's units carry no arm attribute, so a fallback would
+     either raise `E-DATA-ASSIGN-LEVELS` about a column nobody declared or,
+     worse, partition on an unrelated one.
+ 
+     `digest` and `clusters` are unread on the `by_attribute` path and are
+-    parameters anyway: they are what tasks 8 and 10 draw with —
+-    `assign_seed_for(block, axis, digest, roster)` for the seed, `clusters`
+-    because a cluster is indivisible and a draw must allocate whole clusters
+-    — and a caller that already has to hold them cannot then be told the
+-    signature changed under it.
++    parameters anyway: `digest` is what `random` draws its seed with
++    (`assign_seed_for(block, axis, digest, roster)`, below), and `clusters`
++    is what task 9's clustered draw allocates whole clusters with instead of
++    individual units — a caller that already has to hold both cannot then be
++    told the signature changed under it.
++
++    **`random`, unclustered, is realized here.** `assign.<axis>.ratio` (`{}`
++    meaning equal allocation, `reference.md` § Allocation) is apportioned
++    across `len(roster)` by `_apportion`, the whole roster is shuffled once
++    with `random.Random(assign_seed_for(...))`, and the shuffled list is cut
++    into consecutive slices sized by that apportionment, in `levels`'
++    declared order — so `members[level]` holds that level's slice **in the
++    order the shuffle realized**, exactly what `ArmPlan.members` promises for
++    a draw. Every declared level is a key of `members` even when its
++    apportioned size is 0 (an empty tuple, not a missing key) — the `zip`
++    below walks `levels` itself, so `set(members) == set(levels)`
++    unconditionally, the same coverage `by_attribute` gets from `arms_of`,
++    though not that function's *non-emptiness* guarantee: see `_apportion`'s
++    own docstring for when a size can still land on 0. A `clusters` mapping
++    passed alongside `random` raises rather than falling silently back to the
++    unclustered draw: allocating whole clusters is task 9's, and a caller
++    that declared `cluster_by` must not be handed a per-unit split that
++    quietly ignores it.
++
++    `strata` is `()` here regardless of a declared `assign.<axis>.stratify_by`
++    — recording it would claim a balance this build does not yet perform, the
++    same false-record reasoning `ArmPlan.strata`'s own docstring gives for
++    `by_attribute`'s seed. Balancing the draw on `stratify_by` is a later
++    task's, not this one's — and until that task lands, `random` draws
++    unbalanced even when `stratify_by` is declared non-empty, silently, since
++    nothing refuses that combination today (recorded, not fixed, in the task
++    8 report).
+     """
+     method = block.get("method") if isinstance(block, Mapping) else None
++    if method == "random" and isinstance(block, Mapping):
++        if clusters is not None:
++            raise NotImplementedError(
++                f"`data.units.assign.{axis}.method: random` beside a declared `cluster_by` "
++                "must allocate whole clusters, not individual units, and this build does not "
++                "draw that yet — task 9. Falling back to an unclustered draw here would "
++                "silently ignore the declared `cluster_by` rather than raising about it"
++            )
++        ratio = block.get("ratio") if isinstance(block, Mapping) else None
++        weights = (
++            [ratio[level] for level in levels]
++            if isinstance(ratio, dict) and ratio
++            else [1] * len(levels)
++        )
++        sizes = _apportion(len(roster), weights)
++        seed = assign_seed_for(block, axis, digest, roster)
++        shuffled = [unit.key for unit in roster]
++        random.Random(seed).shuffle(shuffled)
++        members: dict[str, tuple[str, ...]] = {}
++        start = 0
++        for level, size in zip(levels, sizes, strict=True):
++            members[level] = tuple(shuffled[start : start + size])
++            start += size
++        return ArmPlan(levels=tuple(levels), members=members, seed=seed, strata=())
+     if method is not None and method != "by_attribute":
+         if method in DRAWN_ASSIGN_METHODS:
+             raise NotImplementedError(
+                 f"`data.units.assign.{axis}.method: {method}` draws its allocation, and this "
+                 "build does not draw one yet (`validate` refuses it as `E-DATA-ASSIGN-DRAWN`)"
+             )
+         raise NotImplementedError(
+             f"`data.units.assign.{axis}.method: {method!r}` is not a method this build can "
+             "realize an allocation for; `by_attribute` is the one it reads a column for, and "
+             "no other method may fall back to reading one (`validate` refuses an out-of-enum "
+diff --git a/tests/test_cli.py b/tests/test_cli.py
+index 7254805..cd92bf6 100644
+--- a/tests/test_cli.py
++++ b/tests/test_cli.py
+@@ -491,30 +491,34 @@ def test_resolved_group_axes_is_empty_with_no_roster_to_partition():
+     realized against nothing. The control that must report: the same
+     declaration WITH a roster realizes the axis, so this is the roster's
+     absence doing the work and not the declaration's shape."""
+     sweep_block = {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}
+     units_decl = {"assign": {"arm": {"method": "by_attribute", "from": "arm_column"}}}
+     assert _resolved_group_axes(units_decl, sweep_block, None, "digest") == {}
+     assert set(_resolved_group_axes(units_decl, sweep_block, _levels_roster(), "digest")) == {"arm"}
+ 
+ 
+ def test_resolved_group_axes_raises_rather_than_reading_a_column_under_a_drawn_method():
+-    """`from` "means nothing" under `random`/`blocked` — but this build does not
++    """`from` "means nothing" under `blocked` — but this build does not
+     quietly read the axis name instead, which is what this function used to
+-    resolve to. `units.assignment_for` raises `NotImplementedError` until tasks
+-    8 and 10, an explicit hole; the fixture's units carry an arm attribute, so
++    resolve to. `units.assignment_for` raises `NotImplementedError` until task
++    10, an explicit hole; the fixture's units carry an arm attribute, so
+     a fallback to a column read would have succeeded silently here.
+ 
++    `random` used to be this test's method too, until task 8 made it draw
++    instead of raise — `test_units.py`'s own `random` tests cover it now, so
++    `blocked` is what is left of "a drawn method" for this test's premise.
++
+     Unreachable through `command_run`: `validate` refuses both methods as
+     `E-DATA-ASSIGN-DRAWN` and returns before any of this runs."""
+     sweep_block = {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}
+-    units_decl = {"assign": {"arm": {"method": "random", "from": "arm_column"}}}
++    units_decl = {"assign": {"arm": {"method": "blocked", "from": "arm_column"}}}
+     with pytest.raises(NotImplementedError):
+         _resolved_group_axes(units_decl, sweep_block, _levels_roster(), "digest")
+ 
+ 
+ def test_non_string_levels_make_arm_members_raise_rather_than_skip_narrowing():
+     """`sweep.selector_paths` — the same function `expand` uses to decide which
+     paths are group cells — accepts a `levels` list of any element type, but
+     `_resolved_group_axes` requires every level to be a `str`, matching
+     `validate._check_assign`'s own stricter skip. `groups: [{by: arm, levels:
+     [1, 2]}]` is exactly this disagreement: `expand` treats `arm` as a real
+diff --git a/tests/test_units.py b/tests/test_units.py
+index 21aa5df..93bceac 100644
+--- a/tests/test_units.py
++++ b/tests/test_units.py
+@@ -1202,33 +1202,34 @@ def test_assignment_for_resolves_from_against_the_axis_name_and_reads_no_other_c
+     plan = assignment_for(roster, "arm", block, ["control", "treatment"], "digest")
+     assert plan.members == {"control": ("u0",), "treatment": ("u1",)}
+ 
+     # The control that must report: with no `from`, the axis name is the
+     # column, and this fixture has no `arm` attribute to read.
+     with pytest.raises(ContractError) as e:
+         assignment_for(roster, "arm", None, ["control", "treatment"], "digest")
+     assert e.value.code == "E-DATA-ASSIGN-LEVELS"
+ 
+ 
+-@pytest.mark.parametrize("method", DRAWN_ASSIGN_METHODS)
++@pytest.mark.parametrize("method", [m for m in DRAWN_ASSIGN_METHODS if m != "random"])
+ def test_assignment_for_refuses_a_drawn_method_rather_than_reading_a_column(method: str):
+-    """An explicit hole until tasks 8 and 10, not a silent fallback: a drawn
++    """An explicit hole until task 10, not a silent fallback: a drawn
+     axis's units carry no arm attribute, so falling back to `arms_of` would
+     either raise about a column nobody declared or partition on an unrelated
+     one. The fixture's units DO carry `arm`, so a fallback would succeed
+     silently here — which is exactly why the assertion is `NotImplementedError`
+     and not a `ContractError` about a missing column.
+ 
+-    Parametrized over `DRAWN_ASSIGN_METHODS` itself, not over a literal pair:
+-    `validate` reports `E-DATA-ASSIGN-DRAWN` from that same tuple, and two
+-    independently written pairs are two sources of truth pinned in agreement
+-    by nothing."""
++    Filtered out of `DRAWN_ASSIGN_METHODS` rather than parametrized over it
++    directly, because task 8 makes `random` an exception to this test's own
++    premise: it now draws instead of raising, and its own tests below cover
++    it. `blocked` is what remains — still task 10's, so the tuple `validate`
++    reads `E-DATA-ASSIGN-DRAWN` from is still one source of truth for it."""
+     roster = _arm_roster12()
+     with pytest.raises(NotImplementedError) as e:
+         assignment_for(roster, "arm", {"method": method}, ["control", "treatment"], "digest")
+     assert method in str(e.value)
+     assert "draws its allocation" in str(e.value)
+ 
+ 
+ def test_assignment_for_refuses_a_method_it_has_never_heard_of():
+     """**Fail-closed, and this is the regression it prevents.** `assignment_for`
+     allows `by_attribute` and refuses everything else, rather than denying the
+@@ -1256,20 +1257,107 @@ def test_assignment_for_takes_the_by_attribute_path_for_an_unnamed_method():
+     falls back to. Only `random` and `blocked` divert, so no method that
+     *draws* can reach a column read by falling through."""
+     roster = _arm_roster12()
+     expected = ("c0", "c1", "c2", "c3", "c4", "c5", "c6")
+     for block in (None, {}, {"from": "arm"}):
+         plan = assignment_for(roster, "arm", block, ["control", "treatment"], "digest")
+         assert plan.members["control"] == expected
+         assert plan.seed is None
+ 
+ 
++def _random_roster(n: int) -> UnitList:
++    """`n` units with no attributes at all — a drawn axis has no column to
++    read, so unlike `_arm_roster12` these carry nothing an `arm`-style
++    attribute could leak membership from."""
++    return UnitList([Unit(key=f"u{i:02d}", paths=(), attributes={}) for i in range(n)])
++
++
++def test_a_random_draw_honours_an_unequal_ratio():
++    """12 units, `ratio: {control: 1, treatment: 2}` -> 4 and 8. Deliberately
++    unequal AND not a half: 4/8 cannot be confused with 6/6, with 12, or with
++    each other — the fixture trap the plan's Global Constraints name, restated
++    for a draw rather than a read. Exact membership under a pinned seed is
++    asserted literally, not re-derived from the apportionment rule under
++    test."""
++    roster = _random_roster(12)
++    block = {"method": "random", "ratio": {"control": 1, "treatment": 2}, "seed": 7}
++    plan = assignment_for(roster, "arm", block, ["control", "treatment"], "digest")
++
++    assert plan.seed == 7
++    assert len(plan.members["control"]) == 4
++    assert len(plan.members["treatment"]) == 8
++    assert plan.members["control"] == ("u07", "u11", "u03", "u10")
++    assert plan.members["treatment"] == (
++        "u08",
++        "u04",
++        "u09",
++        "u01",
++        "u00",
++        "u06",
++        "u02",
++        "u05",
++    )
++
++
++def test_a_random_draw_is_a_partition():
++    """Every unit in exactly one arm, every declared level non-empty — the
++    property `arms_of` guarantees for a read assignment and a draw must too.
++    Reuses the 12-unit, `{control: 1, treatment: 2}` fixture from the ratio
++    test above: an equal split over a roster divisible by the arm count would
++    make a coverage bug (a duplicate, or a dropped unit) invisible by size
++    alone."""
++    roster = _random_roster(12)
++    block = {"method": "random", "ratio": {"control": 1, "treatment": 2}, "seed": 7}
++    plan = assignment_for(roster, "arm", block, ["control", "treatment"], "digest")
++
++    assert plan.members["control"]
++    assert plan.members["treatment"]
++    seen = plan.members["control"] + plan.members["treatment"]
++    assert len(seen) == len(set(seen)) == len(roster)
++    assert set(seen) == {unit.key for unit in roster}
++
++
++def test_the_same_seed_draws_the_same_arms():
++    """Two calls with the same pinned seed draw the same arms.
++
++    **The control**: a different pinned seed draws different arms. Without
++    it, an implementation that ignored the seed entirely — always shuffling
++    from an unseeded, or a constant, RNG state — would still pass the first
++    half by accident."""
++    roster = _random_roster(12)
++    levels = ["control", "treatment"]
++    first = assignment_for(roster, "arm", {"method": "random", "seed": 1}, levels, "digest")
++    again = assignment_for(roster, "arm", {"method": "random", "seed": 1}, levels, "digest")
++    assert first.members == again.members
++
++    different = assignment_for(roster, "arm", {"method": "random", "seed": 2}, levels, "digest")
++    assert different.members != first.members
++
++
++def test_a_ratio_that_does_not_divide_the_roster_is_reported_not_rounded_away():
++    """13 units at `ratio: {a: 1, b: 2}` — sum 3 does not divide 13, so there is
++    no exact solution. `_apportion` floors each level's exact share (4.333 ->
++    4, 8.667 -> 8, 12 of the 13 accounted for) and hands the 13th, leftover
++    unit to the largest fractional part rather than the largest level by
++    name: `b`'s 0.667 beats `a`'s 0.333, so that 13th unit — the last element
++    of `b`'s slice of the seed-3 shuffle — lands in `b`, giving 4 and 9. The
++    realized sizes are stated exactly rather than a false "even enough"
++    claim."""
++    roster = _random_roster(13)
++    block = {"method": "random", "ratio": {"a": 1, "b": 2}, "seed": 3}
++    plan = assignment_for(roster, "arm", block, ["a", "b"], "digest")
++
++    assert len(plan.members["a"]) == 4
++    assert len(plan.members["b"]) == 9
++    assert len(plan.members["a"]) + len(plan.members["b"]) == 13
++
++
+ def test_arm_members_reduces_arms_of_across_the_resolved_conditions():
+     """`units.arm_members` is the reduction the runner's subset view is built
+     from: one call into `arms_of` per declared axis, then a per-condition lookup
+     against `.selectors`/`.values` — never a second derivation of membership.
+     7 control, 5 treatment, deliberately uneven per the H3c fixture rule, plus a
+     third condition selecting no axis at all, which must be absent from the
+     result entirely rather than mapped to the whole roster."""
+     from publishable.sweep import Condition
+ 
+     roster = UnitList(

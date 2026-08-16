@@ -8,7 +8,7 @@ import pytest
 
 from publishable import ArtifactError, ArtifactExistsError, ContractError
 from publishable.artifacts import StepIO, allocation_hash, build_allocation_document, write_atomic
-from publishable.units import Unit, UnitList, assignment_for
+from publishable.units import ArmPlan, HoldoutPlan, Unit, UnitList, assignment_for
 
 
 def _u(key: str) -> Unit:
@@ -1431,3 +1431,80 @@ def test_allocation_hash_changes_when_two_units_swap_arms_and_nothing_else_moves
     assert set(swapped_doc["arms"]["arm"]["treatment"]) == swapped_treatment
     assert h2 == "sha256:74e5df039ba6eaaca52d561a0e4bd04a4d1fa7334c4f4bdc2f42ec6ea069981d"
     assert h2 != h1
+
+
+def test_a_drawn_holdout_writes_its_own_seed_and_strata_inside_its_block():
+    """§ `allocation.json`: the top-level `seed`/`strata` are keyed by AXIS and
+    a holdout is not an axis, so its own two travel inside its block. `train`
+    and `test` are unit keys, never row numbers — a roster that gains a unit
+    renumbers rows and would silently repoint every membership claim."""
+    plan = HoldoutPlan(train=("P2", "P7"), test=("P11", "P19"), seed=3310985422, strata=("label",))
+    doc = build_allocation_document({}, plan)
+    assert doc["holdout"] == {
+        "train": ["P2", "P7"],
+        "test": ["P11", "P19"],
+        "seed": 3310985422,
+        "strata": ["label"],
+    }
+    # The axis-keyed blocks stay present and empty, the shape § `allocation.json`
+    # prints for a run whose every axis reads a column.
+    assert doc["seed"] == {} and doc["strata"] == {} and doc["arms"] == {}
+
+
+def test_a_read_holdout_records_neither_seed_nor_strata():
+    """`ArmPlan`'s own convention for `by_attribute`, one declaration over:
+    reading a partition the data already holds is not drawing one, so a `seed`
+    would be a false record of a draw that never happened and a `strata` would
+    describe how a draw was balanced when none was.
+
+    Asserted as absent KEYS rather than as `null`, matching
+    `manifest/input.json`'s "absent rather than null, so 'not hashed' can't be
+    misread as 'hashed to nothing'"."""
+    plan = HoldoutPlan(train=("P2",), test=("P11",), seed=None, strata=())
+    doc = build_allocation_document({}, plan)
+    assert doc["holdout"] == {"train": ["P2"], "test": ["P11"]}
+
+
+def test_a_drawn_unstratified_holdout_records_its_seed_and_no_strata():
+    """The third arm, which the two above cannot distinguish between: a drawn
+    split with no `stratify_by` carries a seed and no strata, so `strata` is
+    omitted for EMPTINESS rather than for the method."""
+    plan = HoldoutPlan(train=("P2",), test=("P11",), seed=7, strata=())
+    assert build_allocation_document({}, plan)["holdout"] == {
+        "train": ["P2"],
+        "test": ["P11"],
+        "seed": 7,
+    }
+
+
+def test_the_document_is_written_when_either_partition_is_declared():
+    """§ The other files a run writes: "present when either is declared". The
+    four combinations, because a gate reading only one of the two passes three
+    of them."""
+    arms = {
+        "arm": ArmPlan(
+            levels=("a", "b"), members={"a": ("P1",), "b": ("P2",)}, seed=None, strata=()
+        )
+    }
+    plan = HoldoutPlan(train=("P1",), test=("P2",), seed=7, strata=())
+    assert build_allocation_document({}, None) is None
+    assert build_allocation_document(arms, None) is not None
+    assert build_allocation_document({}, plan) is not None
+    both = build_allocation_document(arms, plan)
+    assert both is not None and "arms" in both and "holdout" in both
+
+
+def test_the_allocation_hash_covers_the_holdout_block():
+    """`allocation_hash` canonicalizes whatever document it is handed, so the
+    holdout's membership is covered without a `holdout_hash` — which
+    `allocation_hash`'s own docstring rules out.
+
+    The positive companion is the inequality: two documents differing only in
+    which units were held out must hash differently, or the coverage claim is
+    empty."""
+    a = build_allocation_document({}, HoldoutPlan(("P1",), ("P2",), 7, ()))
+    b = build_allocation_document({}, HoldoutPlan(("P2",), ("P1",), 7, ()))
+    assert allocation_hash(a) != allocation_hash(b)
+    assert allocation_hash(a) == allocation_hash(
+        build_allocation_document({}, HoldoutPlan(("P1",), ("P2",), 7, ()))
+    )

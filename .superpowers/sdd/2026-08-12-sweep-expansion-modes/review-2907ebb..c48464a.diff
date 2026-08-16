@@ -1,0 +1,433 @@
+# Review package: 2907ebb..HEAD
+
+## Commits
+c48464a docs: widen the sample refusal row; report the seed shape as both its legal types
+c7faf37 fix: check the values sample draws, not only the bounds it declares
+
+## Files changed
+ docs/reference.md           |  4 +-
+ src/publishable/sweep.py    | 21 ++++++++---
+ src/publishable/validate.py | 73 ++++++++++++++++++++++++++++++++++++-
+ tests/test_sweep.py         | 11 +++++-
+ tests/test_validate.py      | 89 +++++++++++++++++++++++++++++++++++++++++++++
+ 5 files changed, 186 insertions(+), 12 deletions(-)
+
+## Diff
+diff --git a/docs/reference.md b/docs/reference.md
+index 4e2a7be..513551f 100644
+--- a/docs/reference.md
++++ b/docs/reference.md
+@@ -220,21 +220,21 @@ The table below states each check by the mistake it catches. What `validate` *pr
+ | Name matches its directory | `metadata.name` is `cohort-pilot-v2` under `configs/cohort-pilot/`; the two name one experiment |
+ | Template is installed | `experiment_type` names `llm_diagnostic`, which no installed plugin registers — `plugin` says it should come from `someuser/publishable-llm` |
+ | Template version moved | `template_version` is `1.0.0` but installed `generic` reports `1.2.0`; `request.timeout` is new and unset (warning) |
+ | Replication floor | `repeats` total of 1 is below this convention class's default of 5 (warning) |
+ | Sweep paths resolve | `sweep.grid` key `analysis.methd` is not a parameter of template `generic` |
+ | Swept values legal | `sweep.grid.analysis.method[1]` is `spearmann`, expected one of pearson, spearman, kendall |
+ | Ablation targets | `sweep.ablate.remove[0]` is `analysis.min_samples` (int); `remove` needs a boolean or nullable parameter — use `override` |
+ | Ablation needs a baseline | `sweep.ablate` is declared but `sweep.baseline` is not — there is nothing to ablate from |
+ | Ablation doesn't compose with a parameter axis | `sweep.ablate` cannot be combined with `grid`, `paired`, or `sample`; one change at a time and a second parameter axis are contradictory. `groups` is permitted — it varies no parameter |
+ | Ablation baseline isn't a group level | `sweep.baseline` fixes `cohort: derivation` while `ablate` is declared; each cell gets its own baseline condition, so the arms can't have one designated between them |
+-| Sample ranges | `sweep.sample.ranges.analysis.confidence` upper bound 1.4 violates the parameter's `lt=1` |
++| Sample ranges | `sweep.sample.ranges.analysis.confidence` upper bound 1.4 violates the parameter's `lt=1`; and `{uniform: [10, 200]}` over an integer parameter draws `118.385…`, which no bound of it is |
+ | Sample is drawable | `sweep.sample.method` is `gaussian` — the methods are sobol, latin_hypercube, random; and `{uniform: [0.99, 0.80]}` has its bounds the wrong way round |
+ | Baseline is a valid condition | `sweep.baseline` sets `analysis.method: pearsonn` |
+ | Swept values are nameable | `sweep.grid.prompt.text[1]` renders as `a long sentence`, which can't be a [condition label](#how-artifacts-are-organized) — a swept value must render as `[A-Za-z0-9._+-]+` |
+ | Repeat kind coherence | `{kind: bootstrap}` is not a repeat kind — declare `statistics.resample` instead |
+ | Batch has something to measure | `{kind: batch, n: 5}` is declared but no step sets `nondeterministic = True`, so five batches recompute one answer (warning) |
+ | Batch takes no fields | `{kind: batch, k: 3}` — a batch varies nothing, so `n` is the only field it accepts |
+ | Each kind takes its own count | `{kind: fold, k: 2, n: 5}` — `n` is a `seed`/`batch` field and a fold's count is `k`, so this executes two folds while the [execution count](#repeat-kinds) reads five. A count one reader believes and the other ignores is refused, not resolved by precedence |
+ | Null test coherence | `statistics.null_test` requires `shuffle` to name a unit attribute |
+ | Shuffle level is unambiguous | `null_test.shuffle: status` varies within `match_set` `M07` but is constant within `M12`, so neither a within-cluster nor a whole-cluster null applies |
+ | Clusters enough to resample | `statistics.resample` with `cluster_by: animal_id` over 4 animals bootstraps 4 draws; below `limits.min_clusters` (warning) |
+@@ -446,21 +446,21 @@ likewise apart from those same two envelope rows, none of the others.
+ | A `statistics.contrasts` entry's `of` or `against` names a value that matches no declared condition's label and no other entry's `id` | `E-STATS-CONTRAST-UNKNOWN` |
+ | A `statistics.contrasts` entry's `within` names an attribute `data.units.attributes` does not declare | `E-STATS-CONTRAST-WITHIN` |
+ | `statistics.correction` is set and is a value other than `none`, `bonferroni`, `holm`, or `fdr_bh` — unset (`null`) is accepted | `E-STATS-CORRECTION-UNKNOWN` |
+ | A `statistics.report_by` entry is not a string, or names an attribute `data.units.attributes` does not declare | `E-STATS-REPORTBY-UNKNOWN` |
+ | A `sweep.grid` axis declares an empty (falsy) list of values, so the sweep would expand to zero conditions | `E-SWEEP-AXIS-EMPTY` |
+ | `sweep.baseline` is declared and leaves at least one of the swept axes unfixed — per-cell baseline expansion is specified but not implemented in this build | `E-SWEEP-BASELINE-PARTIAL` |
+ | `sweep` is declared and resolves to zero conditions, whatever shape produced that — a backstop beneath the per-axis checks above | `E-SWEEP-EXPANDS-EMPTY` |
+ | `sweep` declares a key that is not one of the six recognized sweep modes (`baseline`, `grid`, `paired`, `ablate`, `sample`, `groups`) | `E-SWEEP-KEY-UNKNOWN` |
+ | Two axis-shaped modes — any two of `sweep.grid`, `sweep.paired` and `sweep.sample` — write the same dotted path, so `expand`'s product would let whichever mode is later silently overwrite the other's value on every combination | `E-SWEEP-PATH-DUPLICATE` |
+ | `sweep.grid`, `sweep.baseline` or a `sweep.sample.ranges` key names a dotted path the template's `parameter_spec` does not declare | `E-SWEEP-PATH-UNKNOWN` |
+-| `sweep.sample` cannot be drawn from: no `n` or an `n` below 1, no `ranges` or an empty one, a `method` outside `sobol` \| `latin_hypercube` \| `random`, a `seed` other than `auto`, a range that is not exactly one of `uniform` \| `int_uniform` \| `log_uniform`, or a range whose bounds are not two ordered numbers (positive ones, under `log_uniform`; integral ones, under `int_uniform`). A bound that is legal here but violates its own parameter's constraints is `E-PARAM-VALUE` | `E-SWEEP-SAMPLE-INVALID` |
++| `sweep.sample` cannot be drawn from: no `n` or an `n` below 1, no `ranges` or an empty one, a `method` outside `sobol` \| `latin_hypercube` \| `random`, a `seed` that is neither `auto` nor a pinned integer, a range that is not exactly one of `uniform` \| `int_uniform` \| `log_uniform`, or a range whose bounds are not two ordered numbers (positive ones, under `log_uniform`; integral ones, under `int_uniform`). A bound — or a drawn value — that is legal here but violates its own parameter's constraints is `E-PARAM-VALUE` | `E-SWEEP-SAMPLE-INVALID` |
+ | A `sweep.grid` value cannot be rendered into a condition label — a `sweep.baseline` value is exempt, since it is never rendered into one | `E-SWEEP-VALUE-UNNAMEABLE` |
+ | `template.validate(doc)` yields a message — run last, after every other check in this table, and ungated by their findings, so a cross-block rule can report on `parameters` another row already refused | `E-TEMPLATE-RULE` |
+ | `experiment_type` names a template no installed package registers | `E-TEMPLATE-UNKNOWN` |
+ | `data.units.attributes` names a value the source table has no column for, or names any value at all under a `{glob: ...}` source, which yields a key and a path and nothing else — reported for the first such name, and after `E-UNITS-ATTR-RESERVED` under either source; or — for a table source only — names a non-string item | `E-UNITS-ATTR-MISSING` |
+ | `data.units.attributes` names a field of `Unit` itself (`key`, `paths`, or `attributes`), which cannot also be a declared attribute | `E-UNITS-ATTR-RESERVED` |
+ | The table `data.units.from` names has no data rows, or the `glob` it names matches no files under `input_dir` | `E-UNITS-EMPTY` |
+ | Two resolved units share the same `data.units.key` value | `E-UNITS-KEY-DUPLICATE` |
+ | `data.units.key` names a column the source table does not have | `E-UNITS-KEY-MISSING` |
+ | `data.units.from` names a table that is not a file under `input_dir`, or is neither a table name nor a `{glob: ...}` mapping | `E-UNITS-SOURCE-MISSING` |
+ 
+diff --git a/src/publishable/sweep.py b/src/publishable/sweep.py
+index 28519c9..0948ecb 100644
+--- a/src/publishable/sweep.py
++++ b/src/publishable/sweep.py
+@@ -240,26 +240,35 @@ def sample_seed_for(config: dict[str, Any]) -> int | None:
+     Public because `cli.py` records it in `sweep.yaml` beside the realized
+     conditions, and a second derivation of this number is how the recorded seed
+     and the executed draw come apart.
+ 
+     A pinned integer is returned literally and the digest is not computed at
+     all: § What `auto` derives from says "an omitted `seed` is `auto`, not an
+     error … pinning an integer is the deliberate act, and the one to take for
+     anything you intend to cite", so a pinned sample must draw the same
+     conditions whatever the roster does.
+ 
+-    The digest is computed only when a `sample` is declared. `design_digest`
+-    json-dumps `data.units`, which is arbitrary user YAML — a bare date parses
+-    as `datetime.date` and is not JSON serializable — so computing it
+-    unconditionally would make every config pay for a crash only this mode's
+-    configs can be exposed to. Reached here, that `TypeError` becomes the same
+-    coded error every other `sample` fault does.
++    The digest is computed only when a `sample` is declared, and only on the
++    `auto` path. `design_digest` json-dumps `data.units`, which is arbitrary
++    user YAML — a bare date parses as `datetime.date` and is not JSON
++    serializable — so the narrower call is the cheaper exposure.
++
++    **The `TypeError` conversion below is defensive, not the user-visible
++    route, and saying so is the point of this paragraph.** `cli.command_run`
++    computes `design_digest(doc)` itself at phase 5, before `expand` is ever
++    called, so on the run path that same bad date raises there first, as a bare
++    traceback, for any config at all — a pre-existing crash independent of
++    `sweep.sample` and recorded in `docs/superpowers/spec-defects.md`. What the
++    conversion buys is this module's own contract: `expand` is public and
++    documented to raise `PublishableError`, and a caller reaching it without
++    going through `cli` (a test, a future tool) gets a coded error rather than
++    a `TypeError` from a hashing helper it never called.
+     """
+     sample = (config.get("sweep") or {}).get("sample")
+     if not sample:
+         return None
+     declared = sample.get("seed", "auto") if isinstance(sample, dict) else "auto"
+     if isinstance(declared, int) and not isinstance(declared, bool):
+         return declared
+     try:
+         digest = design_digest(config)
+     except TypeError as exc:
+diff --git a/src/publishable/validate.py b/src/publishable/validate.py
+index 1bbdd9b..b146f9a 100644
+--- a/src/publishable/validate.py
++++ b/src/publishable/validate.py
+@@ -11,21 +11,27 @@ from publishable.contrasts import resolve_contrasts, units_matching
+ from publishable.diagnostics import Collector
+ from publishable.envelope import check_envelope
+ from publishable.errors import ContractError
+ from publishable.manifest import POLICIES
+ from publishable.materialize import TEMPLATE_VERSION
+ from publishable.param import MISSING
+ from publishable.provenance import find_repo_root, resolves_inside_repo
+ from publishable.replication import resolve_repeats
+ from publishable.scope import step_name as _step_name
+ from publishable.strata import levels_for
+-from publishable.sweep import _swept_paths, check_swept_value, expand, sample_fault
++from publishable.sweep import (
++    _swept_paths,
++    check_swept_value,
++    expand,
++    render_value,
++    sample_fault,
++)
+ from publishable.templates.base import BaseTemplate
+ from publishable.templates.registry import get_template, template_names
+ from publishable.units import UnitList, resolve_units
+ 
+ REQUIRED_METADATA = ("description", "authors")
+ 
+ # The shape of every top-level block, checked once before any `_check_*` reads one —
+ # a property of the config format, not of whichever check happens to read a block
+ # first. `statistics`, `limits`, and `hypotheses` are included even though nothing
+ # reads them yet in this build, so the next reader inherits the guard rather than
+@@ -41,20 +47,21 @@ _MAPPING_BLOCKS = (
+ )
+ _LIST_BLOCKS = ("hypotheses",)
+ _STRING_BLOCKS = ("schema_version", "experiment_type", "template_version", "entrypoint", "plugin")
+ 
+ _KIND_LABEL = {
+     "mapping": "a mapping",
+     "list": "a list",
+     "string": "a string",
+     "integer": "an integer",
+     "number": "a number",
++    "string_or_integer": "a string or an integer",
+ }
+ 
+ 
+ def _flatten(node: Any, prefix: str = "") -> dict[str, Any]:
+     flat: dict[str, Any] = {}
+     for key, value in (node or {}).items():
+         path = f"{prefix}.{key}" if prefix else key
+         if isinstance(value, dict):
+             flat.update(_flatten(value, path))
+         else:
+@@ -205,21 +212,25 @@ def _check_shape(doc: dict[str, Any], c: Collector) -> bool:
+             _bad("sweep.sample", sample, "mapping")
+         elif isinstance(sample, dict):
+             n = sample.get("n")
+             if n is not None and (isinstance(n, bool) or not isinstance(n, int)):
+                 _bad("sweep.sample.n", n, "integer")
+             method = sample.get("method")
+             if method is not None and not isinstance(method, str):
+                 _bad("sweep.sample.method", method, "string")
+             seed = sample.get("seed")
+             if seed is not None and not isinstance(seed, str | int):
+-                _bad("sweep.sample.seed", seed, "string")
++                # Both types, because both are legal: `auto` and a pinned
++                # integer (§ What `auto` derives from). Reporting "expected a
++                # string" would send a user who wrote `seed: [1]` toward
++                # quoting a number.
++                _bad("sweep.sample.seed", seed, "string_or_integer")
+             ranges = sample.get("ranges")
+             if ranges is not None and not isinstance(ranges, dict):
+                 _bad("sweep.sample.ranges", ranges, "mapping")
+             elif isinstance(ranges, dict):
+                 for path, spec in ranges.items():
+                     if not isinstance(path, str):
+                         _bad("sweep.sample.ranges", path, "string")
+                         continue
+                     if not isinstance(spec, dict):
+                         _bad(f"sweep.sample.ranges.{path}", spec, "mapping")
+@@ -1061,20 +1072,77 @@ def _repeat_total(doc: dict[str, Any], unit_count: int | None) -> int | None:
+             # else unreadable (a bool, a list) is reported under its own
+             # identifier and executes 1×, so it must not suppress this check.
+             if isinstance(_declared_count(level), str):
+                 return None
+             continue
+         if count >= 1:
+             total *= count
+     return total
+ 
+ 
++def _check_sampled_values(
++    sample: Any, spec: dict[str, Any], conditions: list[Any], c: Collector
++) -> None:
++    """Every value `sweep.sample` actually draws satisfies its own `Param`.
++
++    **Checking the bounds is not checking the values, and only the values
++    execute.** `uniform: [10, 200]` over `Param(int, ge=2)` has two perfectly
++    legal integer bounds and draws `118.38516808291541`, which a step then reads
++    where the template declares an `int`; `int_uniform: [10, 50]` over
++    `Param(int, choices=[10, 50])` passes on both endpoints and draws `37`,
++    which is neither choice. Both validate clean under a bounds-only check and
++    then run a config § Validation's "Types" and "Choices" rows promise to
++    refuse — the validates-clean-misbehaves-at-run class, one level up from the
++    shape class `_check_shape` and `sample_fault` close.
++
++    **The realized values are checked rather than the declaration's *form*,**
++    deliberately. Refusing "a non-`int_uniform` range on an `int` parameter"
++    would catch the first example and nothing else: it says nothing about
++    `choices`, `pattern`, `ge`/`lt`, or a `log_uniform` range that dips under a
++    `gt=0`, and the constraint vocabulary is closed but not small. What executes
++    is the drawn value, so that is what `Param.check` is asked about — the same
++    call `grid` values and `baseline` values already go through, on the same
++    identifier (`E-PARAM-VALUE`), rather than a `sample`-shaped approximation of
++    it.
++
++    Its cost, stated rather than hidden: the finding names a value the user did
++    not literally write. That is why the message quotes both the drawn value and
++    the range that produced it. It is not flaky — the draw is deterministic
++    given the config, so "this config draws an illegal value" is as stable a
++    claim as any other check here, and re-running `validate` on an unedited
++    config reports the same value. Only the *first* offending draw per path is
++    reported: `n: 50` over a wrong-typed range is one mistake, not fifty.
++    """
++    if not sample or sample_fault(sample) is not None:
++        return
++    for path in sample["ranges"]:
++        if path not in spec:
++            continue  # already reported as `E-SWEEP-PATH-UNKNOWN`
++        for condition in conditions:
++            if path not in condition.values:
++                continue
++            value = condition.values[path]
++            problem = spec[path].check(value)
++            if problem is None:
++                continue
++            form = next(iter(sample["ranges"][path]))
++            hint = ""
++            if spec[path].type_ is int and form != "int_uniform":
++                hint = " — `int_uniform` is the form that draws integers"
++            c.error(
++                "E-PARAM-VALUE",
++                f"sweep.sample.ranges.{path}.{form}",
++                f"draws `{render_value(value)}`, which {problem.lstrip()}{hint}",
++            )
++            break
++
++
+ def _check_sweep(
+     doc: dict[str, Any], template: Any, c: Collector, *, unit_count: int | None = None
+ ) -> None:
+     """Checks that only become reachable once a sweep actually expands: an
+     unrecognised mode, an axis with nothing in it, a swept path the template
+     doesn't declare, a value the spec itself rejects, a value that can't render
+     into a condition label, the execution budget, and the multiplicity family
+     an enumerated sweep creates. `sweep.expand` is the single source of the
+     condition count — re-deriving it here is exactly the drift Task 4 was
+     told not to reintroduce.
+@@ -1269,20 +1337,21 @@ def _check_sweep(
+         conditions = []
+     else:
+         if sweep and not conditions:
+             c.error(
+                 "E-SWEEP-EXPANDS-EMPTY",
+                 "sweep",
+                 "expands to zero conditions, so the run would execute nothing while "
+                 "reporting success — declare `baseline`, a non-empty `grid`, or remove "
+                 "`sweep` entirely",
+             )
++        _check_sampled_values(sample, spec, conditions, c)
+ 
+     # `reference.md` § Validation, "Baseline leaves contrasts confounded": a
+     # `sweep.baseline` that "fixes a value on every axis" leaves comparisons that
+     # "differ on both and are reported `confounded: true`". `cli.py` computes
+     # that fact per comparison at run time, after the compute is spent; the
+     # declaration alone decides it, so it is warnable here.
+     #
+     # **The condition is the row's, and it is deliberately narrower than run
+     # time.** Axes are compared over `sweep.grid`'s keys only, and only when the
+     # baseline fixes every one of them — which is the row's own "fixes a value
+diff --git a/tests/test_sweep.py b/tests/test_sweep.py
+index 300dd73..40982da 100644
+--- a/tests/test_sweep.py
++++ b/tests/test_sweep.py
+@@ -595,22 +595,29 @@ def test_a_malformed_sample_raises_a_coded_error_rather_than_crashing() -> None:
+     ]
+     for sample in malformed:
+         with pytest.raises(ContractError) as excinfo:
+             expand({"sweep": {"sample": sample}})
+         assert excinfo.value.code == "E-SWEEP-SAMPLE-INVALID", sample
+ 
+ 
+ def test_a_yaml_date_under_data_units_does_not_crash_expansion() -> None:
+     """`design_digest` json-dumps `data.units`, which is arbitrary user YAML: a
+     bare date (`enrolled: 2026-08-12`) parses as `datetime.date` and is not JSON
+-    serializable. Only a `sweep.sample` config reaches the digest at all, and it
+-    arrives as a coded error rather than a bare `TypeError` out of `json.dumps`."""
++    serializable. `expand` is public and documented to raise `PublishableError`,
++    so it converts rather than leaking a `TypeError` from a hashing helper its
++    caller never called.
++
++    This is `expand`'s own contract, **not** the user-visible route: `cli`
++    computes the same digest at phase 5 before `expand` runs, so on the run path
++    that date raises there first — for any config, `sample` or not. That
++    pre-existing crash is recorded in `docs/superpowers/spec-defects.md` rather
++    than papered over here."""
+     import datetime
+ 
+     from publishable.errors import ContractError
+ 
+     config = _sample_config()
+     config["data"] = {"units": {"from": "cohort.csv", "enrolled": datetime.date(2026, 8, 12)}}
+     with pytest.raises(ContractError) as excinfo:
+         expand(config)
+     assert excinfo.value.code == "E-SWEEP-SAMPLE-INVALID"
+ 
+diff --git a/tests/test_validate.py b/tests/test_validate.py
+index 6407478..2d99d88 100644
+--- a/tests/test_validate.py
++++ b/tests/test_validate.py
+@@ -4062,10 +4062,99 @@ def test_a_baseline_that_leaves_a_sampled_path_free_is_refused(write_config):
+         write_config(
+             {
+                 "sweep": {
+                     "baseline": {"analysis.method": "pearson"},
+                     "sample": {"n": 6, "ranges": {"analysis.confidence": {"uniform": [0.8, 0.99]}}},
+                 }
+             }
+         )
+     )
+     assert "E-SWEEP-BASELINE-PARTIAL" in found
++
++
++def test_a_uniform_range_over_an_int_parameter_is_refused_by_what_it_draws(write_config):
++    """The bounds are two legal integers, so a bounds-only check reports nothing —
++    and the draw is `118.38…`, which a step reads where `parameter_spec` declares
++    `int`. § Validation's "Types" row promises to refuse exactly that, and the
++    value that executes is the drawn one, not the bound."""
++    c = Collector()
++    validate_config(
++        write_config(
++            {
++                "sweep": {
++                    "sample": {
++                        "n": 4,
++                        "ranges": {"analysis.min_samples": {"uniform": [10, 200]}},
++                    }
++                }
++            }
++        ),
++        c,
++    )
++    found = [f for f in c.findings if f.code == "E-PARAM-VALUE"]
++    assert found, [f.code for f in c.findings]
++    assert found[0].path == "sweep.sample.ranges.analysis.min_samples.uniform"
++    assert "expected integer" in found[0].message
++    assert "int_uniform" in found[0].message
++    # One mistake, one finding — not one per drawn condition.
++    assert len(found) == 1
++
++
++def test_a_sampled_value_outside_the_parameters_choices_is_refused(write_config):
++    """The other half of the same class, and the one a form-level rule could not
++    catch: both `int_uniform` endpoints are declared choices, the form is right
++    for an `int` parameter, and the draws in between are not choices at all."""
++    from publishable.param import Param
++    from publishable.templates.builtin.generic import GenericTemplate
++
++    original = GenericTemplate.parameter_spec
++    GenericTemplate.parameter_spec = {
++        **original,
++        "analysis.min_samples": Param(int, default=10, choices=[10, 50]),
++    }
++    try:
++        c = Collector()
++        validate_config(
++            write_config(
++                {
++                    "parameters.analysis": {
++                        "method": "pearson",
++                        "min_samples": 10,
++                        "confidence": 0.95,
++                        "drop_missing": True,
++                    },
++                    "sweep": {
++                        "sample": {
++                            "n": 8,
++                            "ranges": {"analysis.min_samples": {"int_uniform": [10, 50]}},
++                        }
++                    },
++                }
++            ),
++            c,
++        )
++        found = [f for f in c.findings if f.code == "E-PARAM-VALUE"]
++        assert found, [f.code for f in c.findings]
++        assert "expected one of 10, 50" in found[0].message
++    finally:
++        GenericTemplate.parameter_spec = original
++
++
++def test_a_well_typed_sample_draws_no_value_findings(write_config):
++    """The mirror: `int_uniform` over an `int` parameter and `uniform` over a
++    float one draw legal values, and neither reports anything."""
++    found = codes(
++        write_config(
++            {
++                "sweep": {
++                    "sample": {
++                        "n": 16,
++                        "ranges": {
++                            "analysis.min_samples": {"int_uniform": [10, 200]},
++                            "analysis.confidence": {"uniform": [0.80, 0.99]},
++                        },
++                    }
++                }
++            }
++        )
++    )
++    assert "E-PARAM-VALUE" not in found

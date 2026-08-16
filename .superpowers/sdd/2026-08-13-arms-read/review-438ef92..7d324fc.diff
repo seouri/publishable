@@ -1,0 +1,1061 @@
+# Review package: 438ef92..HEAD
+
+## Commits
+7d324fc docs: scope the new refusal's remedy to a design that has two arms, and state the co-report as a mechanism
+cd8d972 fix: refuse a `sweep.baseline` that fixes a `sweep.groups` level — the arm rendered twice
+
+## Files changed
+ docs/experimental-designs.md |   6 +-
+ docs/reference.md            |  32 ++++---
+ src/publishable/cli.py       |   8 +-
+ src/publishable/validate.py  |  97 ++++++++++++++++----
+ tests/test_cli.py            |  11 ++-
+ tests/test_runner.py         |  11 ++-
+ tests/test_sweep.py          |  26 ++++--
+ tests/test_validate.py       | 213 ++++++++++++++++++++++++++++++++++---------
+ 8 files changed, 304 insertions(+), 100 deletions(-)
+
+## Diff
+diff --git a/docs/experimental-designs.md b/docs/experimental-designs.md
+index 97863c4..5d985d3 100644
+--- a/docs/experimental-designs.md
++++ b/docs/experimental-designs.md
+@@ -115,39 +115,39 @@ data:
+         method: random
+         stratify_by: [site, sex]        # randomize arm, balanced within sex
+         ratio: {control: 1, treatment: 1}
+         seed: auto
+ ```
+ 
+ The `arm` axis's `method: random` carries the same refusal named above — `sex`'s `by_attribute` is unaffected, since it reads a column rather than drawing.
+ 
+ Axes resolve in declaration order and `stratify_by` may name an earlier axis, which is what lets one declaration cover every crossed case: two `by_attribute` axes when both factors already exist, an observed axis followed by a randomized one stratified on it, or two randomized axes for a true factorial randomization. `ratio` always names its own axis's levels, so no cell tuple appears in the config.
+ 
+-Every cell is a condition, so cells get their own `values`, their own labels, and their own partitions — folds and holdouts are drawn *within* each cell, and `limits.min_units_per_cell` is checked per cell, which is where a 2×2 over a fixed roster starts to bite. Fixing the randomized axis in `sweep.baseline` while leaving the observed one free gives one baseline per stratum, so `sex=f__arm=treatment` compares against `sex=f__baseline` — that stratum's own reference, holding `arm: control` — and nothing is confounded. See [reference.md § Expansion modes](reference.md#expansion-modes).
++Every cell is a condition, so cells get their own `values`, their own labels, and their own partitions — folds and holdouts are drawn *within* each cell, and `limits.min_units_per_cell` is checked per cell, which is where a 2×2 over a fixed roster starts to bite. **Neither axis can be the reference**: `sweep.baseline` may not fix a level of a `groups` axis, because the fixed level would be rendered both as the baseline row and as its own axis's product row, giving two conditions the same units. The arms are peers, and the comparison between two of them is a [`statistics.contrasts`](reference.md#contrasts-claims-that-arent-condition-vs-baseline) entry naming both cells — a delta this build refuses to compute over disjoint arms, so it lands in a `scope: "summary"` step's `Estimate` alongside the main effects below. See [reference.md § Expansion modes](reference.md#expansion-modes).
+ 
+ As with a parameter factorial below, **main effects and interaction terms are not computed** — core reports each cell and its contrasts, and the model is yours.
+ 
+ ### Factorial
+ 
+ Full factorial is `grid` over two or more axes.
+ 
+ ```yaml
+ sweep:
+   grid:
+     drug.dose: [0, 10, 20]
+     diet.type: [control, high_fat]
+   # 3 × 2 = 6 conditions
+ ```
+ 
+ Both axes here vary *parameters*; a factorial whose factors are properties of the units is [two `groups` axes](#between-subjects-factorial) instead, and reads the same way. Core reports each condition and its contrast against the baseline.
+ 
+-Which contrasts those are follows from how much `sweep.baseline` fixes, and the rule is the same one the between-subjects case uses: **the baseline expands over whichever axes it doesn't fix**, group axes and parameter axes alike. So when one axis is the factor under test and the other is a stratum you're reporting across — two prompts across six model deployments, one treatment across three assay lots — fix the first and leave the second free, and you get one baseline per stratum with every contrast differing in exactly one place. Fixing a value on both axes instead gives a single reference condition and marks the contrasts that cross both [`confounded: true`](reference.md#allocation-within-subjects-or-between-subjects). See [reference.md § Expansion modes](reference.md#expansion-modes).
++Which contrasts those are follows from how much `sweep.baseline` fixes, and the rule is the same one the between-subjects case uses: **the baseline expands over whichever axes it doesn't fix**, group axes and parameter axes alike — with only a parameter axis ever on the fixed side, since a baseline may not fix a group level at all. So when one axis is the parameter under test and the other is a stratum you're reporting across — two prompts across six model deployments, one normalization setting across three assay lots — fix the first and leave the second free, and you get one baseline per stratum with every contrast differing in exactly one place. Fixing a value on both axes instead gives a single reference condition and marks the contrasts that cross both [`confounded: true`](reference.md#allocation-within-subjects-or-between-subjects). See [reference.md § Expansion modes](reference.md#expansion-modes).
+ 
+ **Main effects and interaction terms are not computed** — see [what core will not do](#what-core-will-not-do-for-you). For a 2×2 that's often fine; for anything you intend to analyze as a factorial model, plan on a `scope: "summary"` step, which is the scope that can see every condition at once.
+ 
+ ### Fractional factorial and coupled settings
+ 
+ Use `paired` when factors must move together rather than combinatorially — coupled settings, where a solvent implies its temperature:
+ 
+ ```yaml
+ sweep:
+   paired:
+@@ -343,21 +343,21 @@ The design is shaped around a specific claim: most irreproducible results are no
+ 
+ | Mistake | What core does |
+ |---|---|
+ | **Repeats counted as `n`** | `n` counts units, always. Every interval is computed from the per-unit table; repeat dispersion is reported separately as `repeat_spread`, so an interval that would narrow as you add seeds is never presented as evidence about a population |
+ | **A confidence interval on a number core can't recompute** | A metric that exists only as a scalar a step returned is reported as `basis: repeats` with **no interval**, rather than one over executions. Giving it an interval means making it a per-unit column or deriving it in the template's `aggregate(units, cfg)` |
+ | **Technical replicates counted as `n`** | They collapse into the unit at resolution, before any step runs, so they cannot reach `n`. `{kind: biological}` is rejected with a pointer to the unit table |
+ | **t-intervals over bootstrap resamples** | `statistics.resample` produces percentile intervals and `statistics.null_test` a null with a p-value, both over the unit table — a t-interval is never applied to resamples |
+ | **Technical replicates dressed as executions** | Technical replication is `data.units.measurements`, collapsed at unit resolution. Re-running an identical step to average it away would compute the same answer three times |
+ | **Pooling across conditions** | Statistics aggregate within a condition only. Cross-condition comparison is an explicit contrast against a declared baseline |
+ | **Paired analysis of an unpaired design** | Comparison type derives from `allocation` and from which axes the contrast crosses, so it can't disagree with how units were actually assigned. Derived per contrast, so a composed design doesn't get one verdict applied to comparisons of both kinds |
+-| **Two identical measurements reported as two arms** | A [`groups`](reference.md#allocation-within-subjects-or-between-subjects) axis narrows each condition to its arm through one shared roster, and a condition's arm is a subset view of that one roster, never a re-resolution — so declaring the axis without `allocation: between` is refused (`E-DATA-ALLOCATION-WITHIN-ARMS`) rather than quietly measuring every unit under every arm label and reporting one set of values as if it were two. The mirror is refused too: `allocation: between` with no axis naming what the arms are (`E-DATA-ALLOCATION-NO-ARMS`). And a contrast that crosses arms is refused outright rather than reported paired over an empty intersection (`E-DATA-ALLOCATION-CONTRAST`) — the two sides hold disjoint units by construction, so there is no shared unit left to difference. Those three all read the *within*-versus-arms question; a fourth closes the route that answers it correctly and still repeats itself, a level declared twice on one axis (`E-SWEEP-LEVEL-DUPLICATE`), where the two conditions carry the same label and the same units because the two arms are equal rather than overlapping |
++| **Two identical measurements reported as two arms** | A [`groups`](reference.md#allocation-within-subjects-or-between-subjects) axis narrows each condition to its arm through one shared roster, and a condition's arm is a subset view of that one roster, never a re-resolution — so declaring the axis without `allocation: between` is refused (`E-DATA-ALLOCATION-WITHIN-ARMS`) rather than quietly measuring every unit under every arm label and reporting one set of values as if it were two. The mirror is refused too: `allocation: between` with no axis naming what the arms are (`E-DATA-ALLOCATION-NO-ARMS`). And a contrast that crosses arms is refused outright rather than reported paired over an empty intersection (`E-DATA-ALLOCATION-CONTRAST`) — the two sides hold disjoint units by construction, so there is no shared unit left to difference. `E-DATA-ALLOCATION-WITHIN-ARMS`, `E-DATA-ALLOCATION-NO-ARMS` and `E-DATA-ALLOCATION-CONTRAST` all read the *within*-versus-arms question, and two more close the routes that answer it correctly and still repeat themselves: a level declared twice on one axis (`E-SWEEP-LEVEL-DUPLICATE`), where the two conditions carry the same label and the same units because the two arms are equal rather than overlapping; and a `sweep.baseline` fixing a level of the axis (`E-SWEEP-BASELINE-GROUP`, or `E-SWEEP-ABLATE-BASELINE-GROUP` where `ablate` is declared), where that level is rendered both as the baseline row and as its own axis's product row — the arms are peers, and designating one as the reference is a [`statistics.contrasts`](reference.md#contrasts-claims-that-arent-condition-vs-baseline) entry rather than a baseline |
+ | **A subgroup finding that cost nothing to look for** | Describing a subgroup is [`statistics.report_by`](reference.md#reporting-strata) and joins no family; *testing* one is a [`within` contrast](reference.md#contrasts-claims-that-arent-condition-vs-baseline), declared before the run and corrected with every other comparison |
+ | **Uncorrected multiplicity across a sweep** | `statistics.correction` reports the adjusted result beside the raw one — a family-wise method narrows the interval, `fdr_bh` adjusts the p-value and reports no interval, since controlling a false discovery rate bounds a set rather than any one comparison; `validate` warns when a multi-condition *enumerated* sweep declares `none`, and when `fdr_bh` is declared over a family that will carry no p-value to adjust. `sample` draws are excluded — they feed one downstream fit rather than being comparisons a reader acts on |
+ | **An enriched sample reported as if it were representative** | `data.units.weight_by` weights the estimate and records `weighted_by` beside it; `validate` warns when an attribute looks like a sampling weight and nothing declares it |
+ | **An equivalence gate with no way to state it** | `evaluate_on: ci95_upper` makes the claim expressible, so an invariance gate no longer has to be written as a directional test on a point estimate — which passes on an estimate whose interval permits a large effect. Core supplies the form; declaring the right one is still yours |
+ | **A paired contrast over units that aren't paired** | A contrast is computed over the intersection of both sides' completed units and records `n_paired`, so a difference of condition means is never reported as a paired one |
+ | **Ignored clustering** | `cluster_by` produces cluster-robust intervals; `validate` flags an attribute that looks like an undeclared cluster |
+ | **A model fitted on the units it will be tested on** | A fold exists only at repeat scope, so under a `fold` repeat `io.units` raises at run and condition scope rather than handing a wider step the whole roster. The fit can only happen where the split does |
+ | **A cluster split across train and test** | A declared `cluster_by` makes clusters indivisible in every partition core computes, so a fold can't train on one cell of an animal and test on another. `validate` rejects a `k` above the cluster count |
+ | **Resampling clustered rows as if independent** | A declared `cluster_by` makes the cluster the bootstrap draw, so 300 cells from 10 animals give a 10-draw interval rather than a 300-draw one that looks several times more precise than the data supports — √(1 + (m−1)ρ) times, which for 30 cells an animal at ρ = 0.6 is about four |
+ | **A permutation that shuffles away the matching** | `null_test` shuffles at the level the shuffled attribute lives at — within clusters when it varies inside one, whole clusters when it doesn't — so a matched design gets a conditional test instead of a free relabelling |
+diff --git a/docs/reference.md b/docs/reference.md
+index b41f785..f369a5c 100644
+--- a/docs/reference.md
++++ b/docs/reference.md
+@@ -104,21 +104,23 @@ parameters:
+   # ---- Base values. Everything below is defined by the template, not by core. ----
+   analysis:
+     method: pearson                # choices: pearson | spearman | kendall
+     min_samples: 30                # integer >= 2
+     confidence: 0.95               # float in (0, 1)
+     drop_missing: true
+ 
+ sweep:
+   # ---- What varies. Omit entirely for a single-condition experiment. ----
+   # Keys are dotted paths into `parameters`; modes compose. See "Sweeps and repeats".
+-  baseline: {analysis.method: pearson}   # optional reference condition; enables deltas
++  baseline: {analysis.method: pearson}   # optional reference condition; enables deltas.
++                                         #   Parameter paths only — a `groups` level is not
++                                         #   one, the arms being peers
+   groups: []                             # optional list of unit-group axes,
+                                          #   e.g. [{by: arm, levels: [...]}]
+   paired: []                             # optional coupled settings,
+                                          #   e.g. [{analysis.min_samples: 30,
+                                          #   analysis.confidence: 0.95}] — one axis, not a product
+   ablate: null                           # optional; 1 + n one-change conditions, e.g.
+                                          #   {from: baseline, remove: [...]} or {override: [...]}
+                                          #   — requires baseline
+   sample: null                           # optional; continuous ranges instead of
+                                          #   enumeration, e.g. {n: 40, method: sobol, seed: auto,
+@@ -224,20 +226,21 @@ The table below states each check by the mistake it catches. What `validate` *pr
+ | Name matches its directory | `metadata.name` is `cohort-pilot-v2` under `configs/cohort-pilot/`; the two name one experiment |
+ | Template is installed | `experiment_type` names `llm_diagnostic`, which no installed plugin registers — `plugin` says it should come from `someuser/publishable-llm` |
+ | Template version moved | `template_version` is `1.0.0` but installed `generic` reports `1.2.0`; `request.timeout` is new and unset (warning) |
+ | Replication floor | `repeats` total of 1 is below this convention class's default of 5 (warning) |
+ | Sweep paths resolve | `sweep.grid` key `analysis.methd` is not a parameter of template `generic` |
+ | Swept values legal | `sweep.grid.analysis.method[1]` is `spearmann`, expected one of pearson, spearman, kendall |
+ | Ablation targets | `sweep.ablate.remove[0]` is `analysis.min_samples` (int); `remove` needs a boolean or nullable parameter — use `override` |
+ | Ablation needs a baseline | `sweep.ablate` is declared but `sweep.baseline` is not — there is nothing to ablate from |
+ | Ablation doesn't compose with a parameter axis | `sweep.ablate` cannot be combined with `grid`, `paired`, or `sample`; one change at a time and a second parameter axis are contradictory. `groups` is permitted — it varies no parameter |
+ | Ablation baseline isn't a group level | `sweep.baseline` fixes `cohort: derivation` while `ablate` is declared; each cell gets its own baseline condition, so the arms can't have one designated between them |
++| Baseline isn't a group level | `sweep.baseline` fixes `arm: control`, a level of a [`sweep.groups`](#expansion-modes) axis; the arms are peers, and the level would be rendered twice — as the baseline row and as its own axis's product row — giving two conditions the same units and the same parameters |
+ | Sample ranges | `sweep.sample.ranges.analysis.confidence` upper bound 1.4 violates the parameter's `lt=1`; and `{uniform: [10, 200]}` over an integer parameter draws `118.385…`, which no bound of it is |
+ | Sample draws aren't compared to a baseline | `sweep.baseline` is declared beside a `sweep.sample` axis; each draw would be a comparison against it, and the correction family skips drawn conditions — specified, not built in this build |
+ | Sample is drawable | `sweep.sample.method` is `gaussian` — the methods are sobol, latin_hypercube, random; and `{uniform: [0.99, 0.80]}` has its bounds the wrong way round |
+ | Baseline is a valid condition | `sweep.baseline` sets `analysis.method: pearsonn` |
+ | Swept values are nameable | `sweep.grid.prompt.text[1]` renders as `a long sentence`, which can't be a [condition label](#how-artifacts-are-organized) — a swept value must render as `[A-Za-z0-9._+-]+` |
+ | Repeat kind coherence | `{kind: bootstrap}` is not a repeat kind — declare `statistics.resample` instead |
+ | Batch has something to measure | `{kind: batch, n: 5}` is declared but no step sets `nondeterministic = True`, so five batches recompute one answer (warning) |
+ | Batch takes no fields | `{kind: batch, k: 3}` — a batch varies nothing, so `n` is the only field it accepts |
+ | Each kind takes its own count | `{kind: fold, k: 2, n: 5}` — `n` is a `seed`/`batch` field and a fold's count is `k`, so this executes two folds while the [execution count](#repeat-kinds) reads five. A count one reader believes and the other ignores is refused, not resolved by precedence |
+ | Null test coherence | `statistics.null_test` requires `shuffle` to name a unit attribute |
+@@ -279,30 +282,30 @@ The table below states each check by the mistake it catches. What `validate` *pr
+ | Arms need allocation | `sweep.groups` declares arms but `allocation` is `within`, which says every unit appears in every condition — a unit can't be in one arm and in all of them |
+ | Assignment names a method | `assign.arm` declares `stratify_by` and no `method`, or a `method` of `by_column` — the methods are random, by_attribute, blocked, and which of the block's other fields are read follows from which one it is. That a block must exist at all under `allocation: between` is the "Allocation needs arms" and "Every axis is assigned" rows above, between them, so it earns no row of its own |
+ | Assignment method isn't drawn | `assign.arm.method: random` or `blocked` — both are in the enum "Assignment names a method" above checks against, and both draw an arm rather than reading one already assigned, which is specified, not built in this build; only `by_attribute` executes |
+ | Ratio names levels | `assign.arm.ratio` has key `f`; expected one entry per level of axis `arm` (`control`, `treatment`) |
+ | Block size fills the arms | `assign.arm.block_size: 3` with `ratio: {control: 1, treatment: 1}` — a block must be a whole multiple of the ratio's sum, or it can't hold each arm's share |
+ | Assignment attribute exists | `assign.arm.from` — defaulted from the axis name — names `arm`, which is not a unit attribute |
+ | Attribute assignment resolves | `assign.arm.method: by_attribute` reads column `arm` — defaulted from the axis name — whose values must equal the declared levels exactly, in either direction: `{a, b}` is refused against levels `{control, treatment}` for naming neither, and so is a column whose values name only one of the two levels, leaving the other arm with no units |
+ | Arm is constant within a unit | Under `method: by_attribute`, `assign.arm.from: arm`, and `p1`'s [measurement rows](#what-isnt-a-repeat) declare `control` and `treatment` — the collapse would file `p1` under whichever the file lists first, so the order the file happens to be in would decide which condition `p1` is measured in |
+ | Allocation is coherent | `allocation: between` over 2 arms and 12 units gives cells of 6; below `limits.min_units_per_cell` — specified, not built in this build (warning) |
+ | Allocation strata exist | `assign.arm.stratify_by: [site]` but `site` is neither a unit attribute nor a group axis |
+-| Allocation deltas aren't computed | A resolved comparison — a `vs_baseline`, or a `statistics.contrasts` entry — crosses a [group axis](#expansion-modes) (`00_arm=control` vs. `01_arm=treatment`); the two sides hold disjoint units and no contrast construction computes an unpaired delta — specified, not built in this build. Unlike *Clustered deltas aren't computed* and *Weighted deltas aren't computed*, read per comparison rather than for the whole design: `groups × grid`'s within-arm comparisons stay paired and computed |
++| Allocation deltas aren't computed | A resolved comparison crosses a [group axis](#expansion-modes) — a `statistics.contrasts` entry naming `arm=treatment` against `arm=control`; the two sides hold disjoint units and no contrast construction computes an unpaired delta — specified, not built in this build. A generated `vs_baseline` reaches this only where the baseline fixes a group level, refused outright by `E-SWEEP-BASELINE-GROUP`, so a declared contrast is the shape that carries this alone. Unlike *Clustered deltas aren't computed* and *Weighted deltas aren't computed*, read per comparison rather than for the whole design: `groups × grid`'s within-arm comparisons stay paired and computed |
+ | Cluster attribute exists | `data.units.cluster_by` names `site`, which is not a unit attribute |
+ | Cluster is constant within a unit | `cluster_by: site`, and `p1`'s [measurement rows](#what-isnt-a-repeat) declare `S1` and `S2` — the collapse would file `p1` under whichever the file lists first, and its real site would be on both sides of a split |
+ | Clustering looks undeclared | `site` has 6 distinct values across 240 units but `cluster_by` is unset (warning) |
+ | Folds fit inside the clusters | `{kind: fold, k: 10}` with `cluster_by: animal_id` over 6 animals — clusters are indivisible, so `k` may not exceed the cluster count |
+ | Folds fit inside the cells | `{kind: fold, k: 10}` with `allocation: between` over cells of 8 and 232 — folds are drawn within each cell, so `k` may not exceed the smallest cell's unit count, or its cluster count when `cluster_by` is declared |
+ | Fold count is legal | `{kind: fold, k: 1}` — `k` must be an integer ≥ 2, or `all` for leave-one-out |
+ | Fold strata survive clustering | `{kind: fold, stratify_by: label}` with `cluster_by: animal_id`, but `label` varies within animal `A3` — a stratum can't be balanced across a split that can't divide the cluster |
+ | Clustered deltas aren't computed | `data.units.cluster_by` is declared and the design resolves to a comparison — a `vs_baseline`, or a `statistics.contrasts` entry; each condition's own interval reads the cluster as the draw and no contrast construction does — specified, not built in this build |
+-| Baseline leaves contrasts confounded | `sweep.baseline` fixes a value on every `grid` axis (`analysis.method: pearson`, `analysis.min_samples: 30`) over a grid of `method: [spearman, kendall]` × `min_samples: [30, 50]`, so 2 of the 4 contrasts differ on both and are reported `confounded: true`; leaving one axis unfixed gives a baseline per cell instead (warning). A baseline fixing a [group axis](#expansion-modes) too is outside this check, which reads `grid`'s axes alone — that contrast is still marked where it is formed |
++| Baseline leaves contrasts confounded | `sweep.baseline` fixes a value on every `grid` axis (`analysis.method: pearson`, `analysis.min_samples: 30`) over a grid of `method: [spearman, kendall]` × `min_samples: [30, 50]`, so 2 of the 4 contrasts differ on both and are reported `confounded: true`; leaving one axis unfixed gives a baseline per cell instead (warning). This check reads `grid`'s axes alone, and a baseline may not fix a [group axis](#expansion-modes) at all (`E-SWEEP-BASELINE-GROUP`), so a group axis is never one of the axes it counts |
+ | Contrast names a condition | `statistics.contrasts[0].of` is `occasions=4`, which no condition's label matches |
+ | Contrast has two distinct sides | `statistics.contrasts[1]` sets `of` and `against` to the same condition |
+ | Contrast has units in common | `statistics.contrasts[0]` compares two conditions whose completed units don't intersect, so no paired difference exists. Covers the case *Allocation deltas aren't computed* above does not: two same-arm conditions with a `within` stratum, or any pair `resolve_units` happens to leave disjoint, that carry no differing [group axis](#expansion-modes) between them — that row reads `differing_axes ∩ selectors`, this one reads the intersection `stats.paired_keys` actually computes |
+ | Contrast stratum is an attribute | `statistics.contrasts[1].within` names `site`, which is not in `data.units.attributes` |
+ | Contrast stratum is populated | `contrasts[1].within: {dx_family: rare}` leaves 6 paired units; below `limits.min_reported_n` (warning) |
+ | Reporting stratum is an attribute | `statistics.report_by` names `site`, which is not in `data.units.attributes` |
+ | Reporting stratum is populated | `report_by: [dx_family]` has a level with 4 units; below `limits.min_reported_n` (warning) |
+ | Weight attribute exists | `data.units.weight_by` names `sampling_weight`, which is not a unit attribute |
+ | Weights are usable | `sampling_weight` holds a zero or negative value for 3 units; a weight is what a unit stands for |
+ | Weight is constant within a unit | `weight_by: sampling_weight`, and `p1`'s [measurement rows](#what-isnt-a-repeat) carry 1 and 99 — a weight is what one unit stands for, not what one measurement does |
+@@ -421,21 +424,21 @@ check the shape return comes before, so those two never appear together however
+ are. An unresolvable `experiment_type` reports
+ `E-TEMPLATE-UNKNOWN` exactly once, since that check returns immediately after, and,
+ likewise apart from those same two envelope rows, none of the others.
+ 
+ | Reported when | Code |
+ |---|---|
+ | A key under a container `check_envelope`'s `LEAF_TYPES` table declares, or a top-level key, that the table does not name — checked with a `difflib` hint, skipping the `parameters` and `sweep` subtrees entirely since each has its own closure (`E-PARAM-UNKNOWN`, `E-SWEEP-KEY-UNKNOWN`), and never descending into a known leaf's own value (a typo inside `data.units.holdout` or a `from` mapping is reached by no check at all — not by `_check_shape` either, which checks a container's shape and never the names inside one; [§ Validation](#validation) names the whole-leaf blocks that costs and the slice that closes each, and `holdout` is not among them only because the whole block is refused today as `E-DATA-HOLDOUT-UNSUPPORTED`, which makes its gap latent rather than live); a non-string YAML mapping key is coerced with `str()` first so it is still reported | `E-CONFIG-KEY-UNKNOWN` |
+ | The config file does not parse as YAML, or parses to something other than a mapping | `E-CONFIG-PARSE` |
+ | A top-level block, or a nested container `_check_shape` walks before its items — `data.units` and its `attributes`, `sweep.baseline`, `sweep.grid` and each axis's values, `sweep.groups` and each entry's `by`/`levels`, `replication.repeats` and each level, `statistics.contrasts`, `statistics.report_by` — is present and not the mapping, list, or string its position requires; unset (`null`) is treated as absent, matching `E-CONFIG-TYPE`. One value fails this row while being of the right type: a `sweep.groups` entry whose `by` renders to a blank axis name. Checked as [`label_for`](#expansion-modes) renders it — the segment after the last `.` — because that is what a reader sees and what a condition directory carries, so `arm.` fails it as surely as `""` or `" "` does. Such a name is still an axis to `expand`, which renders conditions and names their directories from it, while nothing can resolve an `assign` block or an arm under it. That one is not a container fault and so does not trigger the early return this section's intro describes: it is reported alongside every other row the config earns | `E-CONFIG-SHAPE` |
+ | A leaf `check_envelope`'s `LEAF_TYPES` table declares is present and not its declared type — a `bool` never satisfies any leaf's type, since the table declares none as `bool`, and an `int` satisfies a `float` one; unset (`null`) is treated as absent | `E-CONFIG-TYPE` |
+-| A resolved comparison — a generated `vs_baseline` or a declared [`statistics.contrasts`](#contrasts-claims-that-arent-condition-vs-baseline) entry — whose two conditions differ on a declared [`sweep.groups`](#expansion-modes) axis. Read **per comparison**, not for the whole resolved family the way `E-DATA-WEIGHT-CONTRAST` and `E-DATA-CLUSTER-CONTRAST` below are: [§ Allocation](#allocation-within-subjects-or-between-subjects)'s pairing table says two conditions differing only on parameter axes under `between` share that arm's units and are paired within it, but two conditions differing on *any* group axis hold disjoint sets of units by construction — unpaired — so a `groups × grid` design's within-arm comparisons stay legal while its cross-arm ones are refused. No construction in this build computes an unpaired interval: `paired_t_over_units` takes a list of per-unit differences and nothing else, and there is no `welch_t_over_units` or unpaired percentile form to call. Reached, the delta would be computed over an empty pairing — `stats.paired_keys` over two disjoint arms — and published as `null` beside a `paired: true` that is false. Temporary: the refusal lifts with the slice that builds the unpaired estimator family | `E-DATA-ALLOCATION-CONTRAST` |
++| A resolved comparison — a generated `vs_baseline` or a declared [`statistics.contrasts`](#contrasts-claims-that-arent-condition-vs-baseline) entry — whose two conditions differ on a declared [`sweep.groups`](#expansion-modes) axis. A declared contrast is the route that reaches this on its own: a `vs_baseline` comparison takes each condition against its own cell's baseline, so it crosses a group axis only where the baseline fixes a group level, which `E-SWEEP-BASELINE-GROUP` and `E-SWEEP-ABLATE-BASELINE-GROUP` refuse outright — that route still reports here, always beside one of them. Read **per comparison**, not for the whole resolved family the way `E-DATA-WEIGHT-CONTRAST` and `E-DATA-CLUSTER-CONTRAST` below are: [§ Allocation](#allocation-within-subjects-or-between-subjects)'s pairing table says two conditions differing only on parameter axes under `between` share that arm's units and are paired within it, but two conditions differing on *any* group axis hold disjoint sets of units by construction — unpaired — so a `groups × grid` design's within-arm comparisons stay legal while its cross-arm ones are refused. No construction in this build computes an unpaired interval: `paired_t_over_units` takes a list of per-unit differences and nothing else, and there is no `welch_t_over_units` or unpaired percentile form to call. Reached, the delta would be computed over an empty pairing — `stats.paired_keys` over two disjoint arms — and published as `null` beside a `paired: true` that is false. Temporary: the refusal lifts with the slice that builds the unpaired estimator family | `E-DATA-ALLOCATION-CONTRAST` |
+ | `data.units.allocation` is present and is not `within` or `between`. Checked before `E-DATA-ALLOCATION-NO-ARMS` and `E-DATA-ALLOCATION-WITHIN-ARMS` run, so each can assume `allocation` is already one of the two — matching `ASSIGN_METHODS`'s own enum-check pattern for `assign.<axis>.method` in the same function. An absent or `null` value is `within`, the default, and is not this row's concern | `E-DATA-ALLOCATION-METHOD` |
+ | [`data.units.allocation`](#allocation-within-subjects-or-between-subjects) is `between` and `sweep.groups` declares no axis to say what the arms are — no axis at all, or none whose `by` this build can read, which is what a malformed `groups` entry leaves it with. The pair is the check rather than either half: `between` says how a unit reaches an arm, not what the arms are, so a design declaring it alone has one cohort and nothing to divide it into. Read from the declarations, so it reports whether or not a roster resolved | `E-DATA-ALLOCATION-NO-ARMS` |
+ | The mirror of `E-DATA-ALLOCATION-NO-ARMS`: [`sweep.groups`](#expansion-modes) declares an axis, but [`data.units.allocation`](#allocation-within-subjects-or-between-subjects) is `within`, or absent (which defaults to it). `within` says every unit appears in every condition, so a unit can't be in one arm and in all of them — the fault [§ Validation](#validation)'s *Arms need allocation* names, and the pair this row and its mirror form is what makes handing every condition on a group axis the same, whole roster structurally impossible rather than merely avoided. Read from the declarations, so it reports whether or not a roster resolved. Gated on `allocation` being exactly `null`/absent/`within`, not on a bare declared axis, so an out-of-enum `allocation` value is left to `E-DATA-ALLOCATION-METHOD` to catch rather than being misreported here as `within` | `E-DATA-ALLOCATION-WITHIN-ARMS` |
+ | A `data.units.assign` block's `method` is `random` or `blocked` — both are in the enum, and both draw an arm rather than read one a trial system or the data already assigned. Drawing is specified but not implemented in this build; only `method: by_attribute` executes. Deliberately not gated on `allocation`, the same as `E-DATA-ASSIGN-METHOD`'s own refusal of an absent or out-of-enum method: both are a check on the block's value rather than on a pair of declarations, unlike `E-DATA-ALLOCATION-NO-ARMS` and `E-DATA-ASSIGN-MISSING`, each of which reports a pair of declarations that disagree. Mutually exclusive with `E-DATA-ASSIGN-METHOD` by construction: a value this row names is by definition inside the enum, so it can never also be absent or out of it. Temporary: the refusal lifts with the slice that implements drawing | `E-DATA-ASSIGN-DRAWN` |
+ | Under `method: by_attribute`, the resolved attribute's values, over the resolved roster, are not exactly the declared [`sweep.groups`](#expansion-modes) levels for that axis — **set equality, in either direction, under one code**: a unit's value (including a unit carrying no value for the attribute at all) names none of the declared levels, so that unit would belong to no arm and there is no fourth part of `n` for it; or a declared level no unit's value names, so that arm's condition would resolve zero units. `units.arms_of` is the single authority, the construction `units.clusters_of` is for `cluster_by`, and its raise is caught and reported here under its own code, the same reuse `E-DATA-CLUSTER-UNKNOWN` illustrates for its sibling. Skipped when the roster does not resolve, when the axis's `levels` do not resolve to a non-empty list of strings, or when `from` does not resolve to a unit attribute at all — `E-DATA-ASSIGN-UNKNOWN`'s own fault to report — there being nothing to partition against in any of those cases | `E-DATA-ASSIGN-LEVELS` |
+ | A `data.units.assign` block's `method` is absent or `null`, or is a value other than `random`, `by_attribute`, or `blocked`. **A block that is not a mapping at all is reported here too**, as the block naming no method that it is: `envelope.py` types `data.units.assign` itself and none of its children, whose keys are axis names no fixed dotted path could ever name, so nothing else speaks for one. Which of a block's other fields are read follows from the discriminator — `from` is `by_attribute`'s, `block_size` is `blocked`'s — so a block without one describes no assignment. Deliberately not gated on `allocation`, the same as `E-DATA-ASSIGN-DRAWN`'s own refusal of a well-formed method value this build does not yet execute, and unlike `E-DATA-ALLOCATION-NO-ARMS` and `E-DATA-ASSIGN-MISSING`, each of which reports a pair of declarations that disagree: this is a check on the block rather than on a pair of declarations, and a block naming no method describes no assignment wherever it was declared | `E-DATA-ASSIGN-METHOD` |
+ | `data.units.allocation` is `between` and a [`sweep.groups`](#expansion-modes) axis has no block under [`data.units.assign`](#allocation-within-subjects-or-between-subjects) — an absent or `null` `assign`, the empty `assign: {}` `init` writes, or the axis's own key left `null`. One finding per unassigned axis, in declaration order, since the remedy is one block each. This and `E-DATA-ALLOCATION-NO-ARMS` are between them the whole of [§ The one config file](#the-one-config-file)'s "REQUIRED when `allocation` is `between`", which is why that rule has no third code of its own. Not reported under `allocation: within`, where a declared group axis is [§ Validation](#validation)'s *Arms need allocation* — a different fault, reported under its own code, `E-DATA-ALLOCATION-WITHIN-ARMS`. Skipped when `assign` is present and is not a mapping, which `E-CONFIG-TYPE` already reports | `E-DATA-ASSIGN-MISSING` |
+ | Under `method: by_attribute`, `assign.<axis>.from` — declared, or **defaulted to the axis name** when absent (§ The one config file: "`from` is `by_attribute` only, and defaults to the axis name") — is present and is an empty string (present, so the default does not apply — an empty declaration changes no behavior), or names a value `data.units.attributes` does not declare. `data.units.attributes`, not the roster's realized names, for the same reason `E-DATA-WEIGHT-UNKNOWN`'s name half reads that set: an arm is read per unit, so it has to survive resolution as an attribute. Read from the declaration, so it reports whether or not a roster resolved. **A non-`str`, non-absent `from` is reported here too**, naming its type rather than a resolved attribute: unlike `weight_by`/`cluster_by`, `assign`'s children are axis names no fixed dotted path can type, so there is no `E-CONFIG-TYPE` backstop to defer to — the same reason `E-DATA-ASSIGN-METHOD`'s own row absorbs a non-mapping block as the block naming no method that it is | `E-DATA-ASSIGN-UNKNOWN` |
+ | Under `method: by_attribute`, `assign.<axis>.from` — declared, or defaulted to the axis name the same way its own name check resolves it (see `E-DATA-ASSIGN-UNKNOWN`) — names a column whose value is not the same across one unit's [measurement rows](#what-isnt-a-repeat), the same shape `E-DATA-CLUSTER-VARIES` and `E-DATA-WEIGHT-VARIES` refuse and reported the same way, through the same collapse. **The worst of the three**: a mis-collapsed cluster decides which side of a split a unit lands on and a mis-collapsed weight mis-sizes what one unit stands for, but a mis-collapsed arm decides which *condition* the unit is measured in — so the order the file happens to be in would be silently deciding it. One entry per declared axis feeds the same collapse, and each declaration is checked on its own and still raises its own code when it is the only one declared; a single unit violating more than one gets exactly one code, from whichever declaration's entry is checked first — `assign`, ahead of `cluster_by`/`weight_by`, matching the severity this row states | `E-DATA-ASSIGN-VARIES` |
+ | [`data.units.cluster_by`](#clustered-units) is a non-empty string and the design resolves to at least one comparison — a generated `vs_baseline` for every non-baseline condition, plus every declared [`statistics.contrasts`](#contrasts-claims-that-arent-condition-vs-baseline) entry, the same family `W-STATS-FAMILY` counts and the same test `E-DATA-WEIGHT-CONTRAST` below applies. [§ Statistical reporting](#statistical-reporting) gives each contrast construction a `_clustered` suffix under a declared cluster — the *t* forms cluster-robust over the differenced values when paired and the arm-level ones when not, the percentile forms resampling whole clusters, jointly across both sides when paired — and **none of those five exists in this build**: `paired_t_over_units` takes a list of per-unit differences and nothing else, the derived forms take rows and a seed and know nothing about membership, and there is no unpaired form at all. So the delta and its interval would be computed as though the units were independent, which is the one thing the declaration says they are not, beside per-condition values that *are* cluster-robust and with nothing in the record saying which is which — the interval [§ Clustered units](#clustered-units) calls too narrow, on the number a reader acts on. The *resolved* family is the test rather than the declaration, exactly as below: a `sweep.baseline` with no axis beside it expands to a single baseline row, never a comparison's subject, so a clustered run of it publishes no delta and is accepted, and a declared contrast over a sweep with no baseline is refused though it declares no baseline at all. [`statistics.report_by`](#reporting-strata) is outside it, a stratum repeating the per-condition aggregation — whose interval is clustered — and publishing no delta. Temporary: the refusal lifts with the slice that builds the `_clustered` contrast family | `E-DATA-CLUSTER-CONTRAST` |
+@@ -484,28 +487,29 @@ likewise apart from those same two envelope rows, none of the others.
+ | A `seed` or `batch` level's `n`, or a `fold` level's `k`, resolves to an integer less than 1 | `E-REPL-N` |
+ | `replication.order` is set and is a value other than `as_declared` or `randomized` — unset (`null`) is accepted | `E-REPL-ORDER` |
+ | Two members of one repeat level derive the same seed, or resolve to the same label, from the digest the check ran against | `E-REPL-SEED-COLLISION` |
+ | A `statistics.contrasts` entry's `of` or `against` names another entry's `id` rather than a condition's label — contrasts compare conditions and do not nest | `E-STATS-CONTRAST-NESTED` |
+ | A `statistics.contrasts` entry sets `of` and `against` to the same condition | `E-STATS-CONTRAST-SAME-SIDES` |
+ | `statistics.contrasts` is not a list, an entry in it is not a mapping, or an entry's `id` is missing, is not a string, or repeats an earlier entry's | `E-STATS-CONTRAST-SHAPE` |
+ | A `statistics.contrasts` entry's `of` or `against` names a value that matches no declared condition's label and no other entry's `id` | `E-STATS-CONTRAST-UNKNOWN` |
+ | A `statistics.contrasts` entry's `within` names an attribute `data.units.attributes` does not declare | `E-STATS-CONTRAST-WITHIN` |
+ | `statistics.correction` is set and is a value other than `none`, `bonferroni`, `holm`, or `fdr_bh` — unset (`null`) is accepted | `E-STATS-CORRECTION-UNKNOWN` |
+ | A `statistics.report_by` entry is not a string, or names an attribute `data.units.attributes` does not declare | `E-STATS-REPORTBY-UNKNOWN` |
+-| `sweep.ablate` is declared (truthy) and `sweep.baseline` fixes a level of a [`sweep.groups`](#expansion-modes) axis, which § Expansion modes refuses because "an ablation is one change from *its own cell's* full model, and there is no single reference condition when the reference cohort differs". The consequence is stronger than a mis-numbering, which is why this is an error: a baseline fixing an axis expands over nothing, so the crossed ablation has one cell and **every other level of that axis is executed by no condition at all** while the run reports success | `E-SWEEP-ABLATE-BASELINE-GROUP` |
++| `sweep.ablate` is declared (truthy) and `sweep.baseline` fixes a level of a [`sweep.groups`](#expansion-modes) axis, which § Expansion modes refuses because "an ablation is one change from *its own cell's* full model, and there is no single reference condition when the reference cohort differs". The consequence is stronger than a mis-numbering, which is why this is an error: in the composition § Expansion modes permits — `ablate` over group axes and nothing else — a baseline fixing an axis expands over nothing, so the crossed ablation has one cell and **every other level of that axis is executed by no condition at all** while the run reports success. `ablate` beside a *parameter* axis duplicates the fixed level instead, the way `E-SWEEP-BASELINE-GROUP` describes, and is refused for its own reason by `E-SWEEP-ABLATE-CROSSED` beside this code. The two group-level refusals are exclusive: a config carries this one or that one, never both | `E-SWEEP-ABLATE-BASELINE-GROUP` |
+ | `sweep.ablate` is declared and `sweep.baseline` is not, so no condition is one change away from anything and the ablated conditions carry only their own change. Both sides are read for a *truthy* value, so `ablate: null` is not a declaration and an empty `baseline: {}` is not one either | `E-SWEEP-ABLATE-BASELINE-MISSING` |
+ | `sweep.ablate` is declared (truthy) alongside a non-empty `sweep.grid`, `sweep.paired` or `sweep.sample` — the axis-shaped modes, read as one set rather than named here, so a later axis mode joins this refusal by being classified as one (the mode vocabulary is a closed partition of axis and non-axis modes, and a mode outside it is refused by `E-SWEEP-KEY-UNKNOWN` before it can be used at all). `sweep.groups` is a non-axis mode and composes freely, varying units rather than parameters | `E-SWEEP-ABLATE-CROSSED` |
+ | A `sweep.ablate.remove` entry names a path `remove` cannot act on, in either of two ways: the parameter is neither a boolean nor `nullable`, so neither `false` nor `null` is a value it may hold (reported whatever the baseline says); or — for a boolean, and only when a `sweep.baseline` is declared at all — the baseline fixes no *boolean* value for that path, so `remove` finds nothing to turn off and sets `null` rather than `false`, planting it at a parameter that is not nullable. Reported only for a path the template declares, since an unknown one is `E-SWEEP-PATH-UNKNOWN`; the baseline reading is `remove`'s alone, an `override` stating its own value | `E-SWEEP-ABLATE-TARGET` |
+ | A `sweep.grid` axis declares an empty (falsy) list of values, so the sweep would expand to zero conditions | `E-SWEEP-AXIS-EMPTY` |
++| `sweep.baseline` fixes a level of a [`sweep.groups`](#expansion-modes) axis and `sweep.ablate` is not declared — § Expansion modes' *the arms of a group axis are peers*. `_baseline_cells` reads a fixed axis as fixed, so it expands over nothing while `_axes` still emits that level as a product row: the level is rendered **twice**, once as the baseline row and once as its own axis's, and the two conditions hold the same units and the same parameters, with directories identical at every artifact — [*two identical measurements reported as two arms*](experimental-designs.md#mistakes-core-prevents). Where the axis declares two or more levels, the other levels' rows cross the single baseline and `E-DATA-ALLOCATION-CONTRAST` reports beside this code — but that refusal is temporary, and at one level there is no cross-arm comparison for it to read at all. The route a control arm actually wants, once there are two of them, is a [`statistics.contrasts`](#contrasts-claims-that-arent-condition-vs-baseline) entry naming both arms — whose delta this build refuses for the same disjoint-units reason, leaving a `summary`-step `Estimate` or two runs joined in a `study`. Where `ablate` is declared the sibling code `E-SWEEP-ABLATE-BASELINE-GROUP` reports instead, never both | `E-SWEEP-BASELINE-GROUP` |
+ | `sweep` is declared and resolves to zero conditions, whatever shape produced that — a backstop beneath the per-axis checks above | `E-SWEEP-EXPANDS-EMPTY` |
+ | `sweep` declares a key that is not one of the six recognized sweep modes (`baseline`, `grid`, `paired`, `ablate`, `sample`, `groups`) | `E-SWEEP-KEY-UNKNOWN` |
+-| A [`sweep.groups`](#expansion-modes) axis declares the same level twice (`levels: [control, treatment, control]`). The route § Mistakes core prevents' *two identical measurements reported as two arms* is not otherwise closed by: `E-DATA-ALLOCATION-NO-ARMS` and `E-DATA-ALLOCATION-WITHIN-ARMS` both read the `within`-versus-arms question and are satisfied here, `E-SWEEP-PATH-DUPLICATE` compares axis *names* across entries rather than values within one entry's `levels`, and `arms_of`'s set equality has nothing to disagree with because `{control} == {control}`. Unrefused, `expand` renders two conditions carrying the same label and the same `values`, each handed the same units, and the two condition directories are identical at every artifact on a green run. A **parameter** axis repeating a value (`grid: {analysis.method: [pearson, pearson]}`) has the same shape and is deliberately not refused — but **not because its consequence is milder**: crossed with a group axis it reproduces this outcome exactly. `groups: [{by: arm, levels: [control, treatment]}] × grid: {analysis.method: [pearson, pearson]}` runs to exit 0 with `00_arm=control__method=pearson` and `01_arm=control__method=pearson` identical at every artifact, and the duplicated label bodies carry the *arm* — so they are [selectors](#contrasts-claims-that-arent-condition-vs-baseline), and a contrast naming one resolves silently to the later of the pair with no ambiguity reported. Only the group axis is checked because a group level is a claim about *which units* and a parameter value is not; the parameter-axis duplicate is a known gap, recorded here rather than closed | `E-SWEEP-LEVEL-DUPLICATE` |
++| A [`sweep.groups`](#expansion-modes) axis declares the same level twice (`levels: [control, treatment, control]`). The route § Mistakes core prevents' *two identical measurements reported as two arms* is not otherwise closed by: `E-DATA-ALLOCATION-NO-ARMS` and `E-DATA-ALLOCATION-WITHIN-ARMS` both read the `within`-versus-arms question and are satisfied here, `E-SWEEP-PATH-DUPLICATE` compares axis *names* across entries rather than values within one entry's `levels`, and `arms_of`'s set equality has nothing to disagree with because `{control} == {control}`. Unrefused, `expand` renders two conditions carrying the same label and the same `values`, each handed the same units, and the two condition directories are identical at every artifact on a green run. A **parameter** axis repeating a value (`grid: {analysis.method: [pearson, pearson]}`) has the same shape and is deliberately not refused — but **not because its consequence is milder**: crossed with a group axis it reproduces this outcome exactly. `groups: [{by: arm, levels: [control, treatment]}] × grid: {analysis.method: [pearson, pearson]}` runs to exit 0 with `00_arm=control__method=pearson` and `01_arm=control__method=pearson` identical at every artifact, and the duplicated label bodies carry the *arm* — so they are [selectors](#contrasts-claims-that-arent-condition-vs-baseline), and a contrast naming one resolves silently to the later of the pair with no ambiguity reported. Only the group axis is checked because a group level is a claim about *which units* and a parameter value is not; the parameter-axis duplicate is a known gap, recorded here rather than closed. The axis's *other* route to two identical arms — a `sweep.baseline` fixing one of its levels, which renders that level as the baseline row and as its own product row — is `E-SWEEP-BASELINE-GROUP`; neither code reaches the other's shape | `E-SWEEP-LEVEL-DUPLICATE` |
+ | Two axis-shaped modes — any two of `sweep.grid`, `sweep.paired` and `sweep.sample` — write the same dotted path, so `expand`'s product would let whichever mode is later silently overwrite the other's value on every combination; or a [`sweep.groups`](#expansion-modes) axis's `by` names a path one of those three writes, which is the worse version of the same collision — a group cell is a *set of units*, so every condition marks that path a selector and no scope plants the parameter, leaving the parameter axis claiming to sweep a value every condition ran at its base. The same refusal fires when `by` names a path this template declares as a parameter at all, swept or not — an unswept collision has no other axis losing its value, but the condition's own label and directory still claim a value `resolve_condition_cfg` never plants, indistinguishable from a real swept parameter to a reader who has not opened `sweep.yaml`. A group axis's name is a label key rather than a parameter path, so renaming either side resolves it. **Also read one level shallower, entry by entry rather than through the deduping `selector_paths`**: two `sweep.groups` entries naming the same `by` — [§ Validation](#validation)'s *Axis names are distinct* — cross two same-named axes into the product, rendering two conditions under the identical label | `E-SWEEP-PATH-DUPLICATE` |
+ | A `sweep.grid`, `sweep.paired`, `sweep.baseline`, `sweep.sample.ranges`, `sweep.ablate.override` or `sweep.ablate.remove` key names a dotted path the template's `parameter_spec` does not declare — every mode that names a dotted path at all, whether it fixes a value there, declares bounds to draw one from, or plants a removal, since every one of them reaches a condition's config through a `setdefault` walk that *creates* a misspelled path rather than failing on it | `E-SWEEP-PATH-UNKNOWN` |
+ | `sweep.baseline` is declared alongside a `sweep.sample` axis, so every non-baseline cell — every combination of a draw with the other axes' levels, not every draw — becomes a `vs_baseline` comparison, while a `sample` draw is [not a comparison](#sweeps-and-repeats) and the correction family skips it, which is specified but not implemented in this build. Both sides are read for a *truthy* value, so an empty `baseline: {}` is not a declaration: it fixes nothing, produces no baseline row, and generates no comparison to correct against. A `sample` sweep with no baseline is unaffected for the same reason, a comparison being generated only against a declared one, and so is a declared [`statistics.contrasts`](#contrasts-claims-that-arent-condition-vs-baseline) entry, whose members are named rather than generated | `E-SWEEP-SAMPLE-BASELINE` |
+ | `sweep.sample` cannot be drawn from: no `n` or an `n` below 1, no `ranges` or an empty one, a `method` outside `sobol` \| `latin_hypercube` \| `random`, a `seed` that is neither `auto` nor a pinned integer, a range that is not exactly one of `uniform` \| `int_uniform` \| `log_uniform`, or a range whose bounds are not two ordered numbers (positive ones, under `log_uniform`; integral ones, under `int_uniform`). A bound — or a drawn value — that is legal here but violates its own parameter's constraints is `E-PARAM-VALUE` | `E-SWEEP-SAMPLE-INVALID` |
+ | A `sweep.grid`, `sweep.paired` or `sweep.ablate.override` value, or a [`sweep.groups`](#expansion-modes) axis's level, cannot be rendered into a condition label — every value a config *writes* that `label_for` renders, and a label is also a directory segment, so a value carrying `/` would resolve outside the condition directory. A group level joins them because a group cell renders like any other axis's (`00_arm=control`); it takes this check alone and no `Param` check, naming a set of units rather than a parameter value. A `sweep.baseline` value is exempt, since it is never rendered into one. A `sweep.sample.ranges` bound is exempt for the other reason: a label carries the *drawn* value rather than the bound, and a drawn number always renders within `[A-Za-z0-9._+-]+`, so there is nothing a bound could carry that the label could not | `E-SWEEP-VALUE-UNNAMEABLE` |
+ | `template.validate(doc)` yields a message — run last, after every other check in this table, and ungated by their findings, so a cross-block rule can report on `parameters` another row already refused | `E-TEMPLATE-RULE` |
+ | `experiment_type` names a template no installed package registers | `E-TEMPLATE-UNKNOWN` |
+ | `data.units.attributes` names a value the source table has no column for, or names any value at all under a `{glob: ...}` source, which yields a key and a path and nothing else — reported for the first such name, and after `E-UNITS-ATTR-RESERVED` under either source; or — for a table source only — names a non-string item. Reported for `data.units.measurements.by` too, when it names no column of the source *and* rows sharing a key were collapsed anyway: the collapse groups on the key alone, so such a `by` averages rows nothing distinguished as measurements of one unit. The source's columns, not `data.units.attributes` — `design-principles.md` § Core vs. plugin lists `measurements.by` beside `attributes` as a parallel namer of an input field, and the fence in [§ What isn't a repeat](#what-isnt-a-repeat) declares no attributes at all. Only when rows were collapsed — the same `by` over an input holding one row per unit names a measurement a [step](#what-isnt-a-repeat) supplies, which no input column carries | `E-UNITS-ATTR-MISSING` |
+ | `data.units.attributes` names a field of `Unit` itself (`key`, `paths`, or `attributes`), which cannot also be a declared attribute | `E-UNITS-ATTR-RESERVED` |
+ | `data.units.measurements.collapse` names a rule that is none of `mean`, `median`, `sum`, `first`, or `mode` — raised where [technical replicates](#what-isnt-a-repeat) are collapsed, which `validate` also resolves and reports under the same code, the same reuse `E-REPL-SEED-COLLISION` above illustrates | `E-UNITS-COLLAPSE-RULE` |
+@@ -1599,21 +1603,21 @@ baseline as one leading block and then the ablations — `00_cohort=derivation__
+ `03_cohort=derivation__notes=false`, `04_cohort=validation__labs=false`,
+ `05_cohort=validation__notes=false` — so a design written against the indices above looks for a
+ directory `03_cohort=validation__baseline` that is named `01_` instead. The labels, the conditions,
+ and every unit each one holds are the ones printed; only the indices differ, and nothing about a
+ result depends on them. The interleaved rule this section and [§ How artifacts are
+ organized](#how-artifacts-are-organized)' Index row both state is what a reader should design
+ against and is ill-defined once a *second* axis makes a cell's rows non-contiguous — which is why
+ the numbering is stated here rather than quietly changed to match the tool, and why picking one is
+ a design decision nobody has taken. Address a baseline by its label, never by its index.
+ 
+-That's "which features matter, in each of two cohorts" — an ordinary design, and expressing it as two configs would give up the shared allocation, the shared seed list, and the single `run.yaml` that make the arms comparable in the first place. The baseline becomes one condition per level rather than one per run, which is the honest reading: there is no single reference condition when the reference cohort differs. `sweep.baseline` may not name the group axis for this reason — the arms are peers, and `validate` rejects a baseline that fixes a level while `ablate` is declared.
++That's "which features matter, in each of two cohorts" — an ordinary design, and expressing it as two configs would give up the shared allocation, the shared seed list, and the single `run.yaml` that make the arms comparable in the first place. The baseline becomes one condition per level rather than one per run, which is the honest reading: there is no single reference condition when the reference cohort differs. `sweep.baseline` may not fix a level of the group axis, here or anywhere else — the arms are peers — and this composition is the shape where the refusal bites hardest: a fixed group axis expands over nothing, so the crossed ablation has one cell and every other level is executed by no condition at all. `validate` rejects it as `E-SWEEP-ABLATE-BASELINE-GROUP`; the plain product's own refusal is `E-SWEEP-BASELINE-GROUP`, described under `baseline` below.
+ 
+ **`grid` — cartesian product.** The default. Every combination of every listed value.
+ 
+ **`paired` — coupled assignments.** When parameters must move together rather than combinatorially, a list of dicts is treated as a single axis:
+ 
+ ```yaml
+ sweep:
+   grid:
+     analysis.method: [pearson, spearman]
+   paired:                                # 2 settings, NOT 2×2
+@@ -1669,20 +1673,24 @@ sweep:
+       levels: [control, treatment]
+   # 2 conditions: 00_arm=control, 01_arm=treatment
+ ```
+ 
+ `groups` is a **list**, always — one axis is a list of one. Two spellings for one concept is the drift this project exists to prevent, so there is no mapping shorthand.
+ 
+ A group level is a *set of units*, resolved from [`data.units`](#allocation-within-subjects-or-between-subjects): core assigns them when `allocation: between` with `assign.method: random` or `blocked`, and reads an existing column when `by_attribute`. `io.units` then yields that level's units, and nothing else about the condition changes. (`random` and `blocked` are refused in this build as `E-DATA-ASSIGN-DRAWN` — see [§ Allocation](#allocation-within-subjects-or-between-subjects); `by_attribute` is what runs today.)
+ 
+ So two conditions on a group axis can share a `parameters_hash` — and that's correct, not a degenerate case. Identical code and identical parameters over two arms of units is exactly the claim a trial makes, and the three hashes say so precisely: same code, same parameters, different units. The design cell is recorded in `results.conditions[i].values` (`{arm: treatment}`) and the realized membership in `allocation.json`.
+ 
++**The arms of a group axis are peers, and `sweep.baseline` may not fix one of them** — not `{arm: control}`, not on any axis in the list, whatever else the sweep declares. The reason is what the expansion would otherwise do: the baseline row and the axis's own product row are the same cell, so `control` is rendered *twice* — once as `00_baseline` and once as `01_arm=control` — and the two conditions hold the same units and the same parameters, with directories identical at every artifact. That is [*two identical measurements reported as two arms*](experimental-designs.md#mistakes-core-prevents), which is why it is refused (`E-SWEEP-BASELINE-GROUP`, and `E-SWEEP-ABLATE-BASELINE-GROUP` where `ablate` is declared) rather than resolved by suppressing one of the rows. A baseline that fixes only *parameter* paths stays legal beside a group axis and is the shape to write: it expands over the axis, giving every arm its own reference.
++
++What a control arm actually designates is a comparison, and a comparison between two arms is a [`statistics.contrasts`](#contrasts-claims-that-arent-condition-vs-baseline) entry naming both conditions by label — `of: arm=treatment`, `against: arm=control` — which says the same thing without claiming one arm is the reference for the whole run. **This build refuses to compute that delta** (`E-DATA-ALLOCATION-CONTRAST`, temporary — see [§ Allocation](#allocation-within-subjects-or-between-subjects)): the two sides hold disjoint units, and no unpaired construction exists yet. Until it does, the arm-versus-arm difference is an `Estimate` returned by a `summary` step, or two runs joined in a `study`.
++
+ Group axes compose with parameter axes like any other mode, which is how "each arm analyzed three ways" is expressed:
+ 
+ ```yaml
+ sweep:
+   groups:
+     - {by: arm, levels: [control, treatment]}
+   grid:
+     analysis.method: [pearson, spearman]
+   # groups × grid = 2 × 2 = 4 conditions
+ ```
+@@ -1717,43 +1725,43 @@ data:
+ | Both factors already in the data | Two `by_attribute` axes; core assigns nothing |
+ | One randomized, one observed | Declare the observed axis first, and stratify the randomized one on it — which is how the design is actually run |
+ | Both randomized (a 2×2 factorial randomization) | Two `random` axes, the second stratifying on the first |
+ 
+ The first row's two `by_attribute` axes are the only one of the three that executes in this build; the other two describe `random`, refused as [`E-DATA-ASSIGN-DRAWN`](#allocation-within-subjects-or-between-subjects).
+ 
+ `ratio` is always keyed by its own axis's levels, so no cell tuple appears anywhere in the config, and forward-only stratification makes a cycle unrepresentable rather than something `validate` has to detect. What core still won't do is decompose the result: a crossed design reports each cell and its contrasts, and [main effects and interactions](experimental-designs.md#what-core-will-not-do-for-you) remain a `scope: "summary"` step — exactly as they are for a parameter `grid`.
+ 
+ Comparisons *across* a group axis are unpaired, since no unit appears in two levels — unless the levels are matched, in which case `cluster_by` on the matched-set identifier is what carries the dependence. See [experimental-designs.md § Matched case-control](experimental-designs.md#matched-case-control). Comparisons *within* a level, between two parameter settings applied to the same arm, remain paired: composing a group axis with a parameter axis doesn't make every contrast in the run unpaired. See [Allocation](#allocation-within-subjects-or-between-subjects).
+ 
+-**`baseline` — a designated reference.** Without one, every condition is a peer and `report` can only list them. With one, core computes deltas and effect sizes against it automatically. It accepts group levels as well as parameter paths, so `{arm: control}` designates the control arm:
++**`baseline` — a designated reference.** Without one, every condition is a peer and `report` can only list them. With one, core computes deltas and effect sizes against it automatically. It fixes *parameter* paths and only those — a group axis's levels are peers, and a baseline naming one is refused (`E-SWEEP-BASELINE-GROUP`, above):
+ 
+ ```yaml
+ sweep:
+   baseline: {analysis.method: pearson, analysis.min_samples: 30}
+   grid:
+     analysis.method: [spearman, kendall]
+ ```
+ 
+ The baseline is condition `00`, and `results.conditions[i].vs_baseline` carries the difference in each numeric metric, with a standardized effect size when the metric is a per-unit mean. Declaring one is optional but recommended: "the treated arm scored 0.12 higher (Cohen's d = 0.4)" is the sentence a paper needs, and it can't be produced from an unlabeled set of peers.
+ 
+ **With more than one axis present, how many baseline conditions there are follows from how many of them the baseline fixes.** Two cases, one rule, and neither a default the other overrides:
+ 
+ | `sweep.baseline` | Baseline conditions | Each `vs_baseline` targets |
+ |---|---|---|
+-| A value on every axis — `{arm: control, analysis.method: pearson}` | One, condition `00` | That single condition. A contrast differing on two axes at once is marked [`confounded: true`](#allocation-within-subjects-or-between-subjects) |
++| A value on every axis — `{analysis.method: pearson, analysis.min_samples: 30}`, over a grid sweeping both | One, condition `00` | That single condition. A contrast differing on two axes at once is marked [`confounded: true`](#allocation-within-subjects-or-between-subjects) |
+ | A value on some axes — `{analysis.method: pearson}`, over a grid sweeping `analysis.method` and `data.sex`, so `data.sex` is left free | One per cell of the unfixed axes — `sex=f__baseline` and `sex=m__baseline` | Its own cell's baseline: `method=spearman__sex=f` compares against `sex=f__baseline`, resolved by matching the free axes' values rather than by position |
+ 
+-**The rule underneath both is that the baseline expands over whichever axes it doesn't fix** — group axes and parameter axes alike. The second row is the one to design around, because it's the row where nothing is confounded: fix the factor you're measuring, leave the axes you're stratifying over free, and every contrast differs in exactly one place.
++**The rule underneath both is that the baseline expands over whichever axes it doesn't fix** — group axes and parameter axes alike. A group axis is always on the unfixed side, since a baseline may not fix one at all, so a design carrying one is always in the second row. That row is the one to design around anyway, because it's the row where nothing is confounded: fix the factor you're measuring, leave the axes you're stratifying over free, and every contrast differs in exactly one place.
+ 
+-**The expansion doesn't distinguish group axes from parameter axes, because a design that treats an axis as a stratum wants a reference per stratum either way.** Fixing a randomized arm and leaving an observed `sex` axis free gives the per-subgroup contrasts a subgroup report wants. Fixing the prompt under test and leaving `llm.model` free gives the per-deployment contrasts a benchmark across deployments wants — the same shape, and the second axis is a nuisance axis in both, whether its levels are sets of units or parameter values. Restricting expansion to group axes would give the benchmark one reference deployment and mark every other deployment's contrast confounded, which is the correct verdict on a contrast nobody wanted to form and the wrong answer to the question being asked.
++**On that unfixed side the expansion doesn't distinguish group axes from parameter axes, because a design that treats an axis as a stratum wants a reference per stratum either way.** Leaving an observed `sex` axis free while the factor under test is fixed gives the per-subgroup contrasts a subgroup report wants. Fixing the prompt under test and leaving `llm.model` free gives the per-deployment contrasts a benchmark across deployments wants — the same shape, and the second axis is a nuisance axis in both, whether its levels are sets of units or parameter values. Expanding over parameter axes alone would give the benchmark one reference deployment and mark every other deployment's contrast confounded, which is the correct verdict on a contrast nobody wanted to form and the wrong answer to the question being asked.
+ 
+-`ablate × groups` always lands in the second row, since `validate` rejects a baseline that fixes a group level while `ablate` is declared: an ablation is one change from *its own cell's* full model, and there is no single reference condition when the reference cohort differs. Plain `ablate` lands in the first, because it isn't an axis and the baseline fixes every parameter it varies from — so there is one baseline, condition `00`, exactly as the mode's own description above says. Prefer the second row whenever the levels are peers: two cohorts, two sites, a derivation and a validation set.
++`ablate × groups` always lands in the second row, since `validate` rejects a baseline that fixes a group level (`E-SWEEP-ABLATE-BASELINE-GROUP` where `ablate` is declared): an ablation is one change from *its own cell's* full model, and there is no single reference condition when the reference cohort differs. Plain `ablate` lands in the first, because it isn't an axis and the baseline fixes every parameter it varies from — so there is one baseline, condition `00`, exactly as the mode's own description above says. Prefer the second row whenever the levels are peers: two cohorts, two sites, a derivation and a validation set.
+ 
+ Baseline conditions are references rather than comparisons, so they never count as one: six conditions under two per-arm baselines are four comparisons in the [correction family](#sweeps-and-repeats), not five.
+ 
+ ### Repeat kinds
+ 
+ `replication.repeats` is a list, because "repeat" isn't one thing — and the kinds differ in what they vary *and* in how they must be aggregated. Treating them alike is a statistical error, not a stylistic one.
+ 
+ | Kind | Varies | Aggregation core applies |
+ |---|---|---|
+ | `seed` | RNG state only | Averaged per unit; dispersion reported as `repeat_spread` |
+diff --git a/src/publishable/cli.py b/src/publishable/cli.py
+index 2bce916..705231b 100644
+--- a/src/publishable/cli.py
++++ b/src/publishable/cli.py
+@@ -224,24 +224,24 @@ def _wide_swept_paths(sweep_block: dict[str, Any]) -> set[str]:
+     condition in the run used" failure the baseline half of this union exists to
+     prevent, reached through a mode added after it was written.
+     `ablated_paths` is unioned in for the same reason and by the same rule,
+     from the other side of the axis/non-axis split: an ablated path varies
+     across conditions too. Most are already covered by the `baseline` term —
+     a removed path is one the baseline fixes — but an `override` path the
+     baseline leaves alone is not, and it is exactly the residue this union has
+     now been widened for three times.
+ 
+     **`selector_paths` is subtracted**, and it is the one term that narrows
+-    rather than widens. A `baseline` may fix a group level (§ Expansion modes:
+-    it "accepts group levels as well as parameter paths"), so `{arm: control}`
+-    reaches the `baseline` term above — but a group path names no parameter,
+-    so planting a `SweptAway` marker at `parameters.arm` would invent the same
++    rather than widens. Every `groups` axis's path arrives through the
++    `_swept_paths` term above, in every design that declares one, and a group
++    path names no parameter, so planting a `SweptAway` marker at `parameters.arm`
++    would invent the same
+     phantom parameter `resolve_condition_cfg` now refuses to invent, one scope
+     over: a `run`- or `summary`-scoped step reading `cfg.parameters.arm` would
+     get `E-STEP-SWEPT-PARAM` — "this is swept, you cannot read it here" — for a
+     parameter that does not exist in any scope. Subtracting leaves the honest
+     refusal, `E-STEP-PARAM-UNKNOWN` from `Node.__getattr__`.
+ 
+     A function rather than the inline union it was, so the subtraction is
+     testable directly: `tests/test_cli.py`'s
+     `test_a_group_path_gets_no_swept_away_marker` pins the exact set for a
+     hand-built `sweep` block, and `test_a_group_axis_actually_narrows_end_to_end`
+diff --git a/src/publishable/validate.py b/src/publishable/validate.py
+index fbe0255..074cd4b 100644
+--- a/src/publishable/validate.py
++++ b/src/publishable/validate.py
+@@ -2093,23 +2093,27 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
+     through the same `E-SWEEP-PATH-UNKNOWN` `grid` uses, and its bounds through
+     the same `E-PARAM-VALUE` (§ Validation, "Sample ranges"). Neither is
+     `sweep.ablate`, which `expand` applies after the product as the one mode that
+     does not multiply: `_check_shape` guards every shape `ablation_changes`
+     reads, and `_check_sweep` checks each `override` value against its own
+     `Param` on the same `E-PARAM-VALUE`/`E-SWEEP-VALUE-UNNAMEABLE` pair a `grid`
+     value gets. Its composition rules are checked there too, as of this slice —
+     a `remove` on a parameter that can hold neither `false` nor `null`
+     (`E-SWEEP-ABLATE-TARGET`), `ablate` without a `baseline`
+     (`E-SWEEP-ABLATE-BASELINE-MISSING`), and `ablate` crossed with a parameter
+-    axis (`E-SWEEP-ABLATE-CROSSED`). The one § Validation row still open is
+-    "Ablation baseline isn't a group level", which needs a group axis to have a
+-    level for a baseline to fix. `sweep.groups` is no longer refused here, and
++    axis (`E-SWEEP-ABLATE-CROSSED`). § Validation's "Ablation baseline isn't a
++    group level" needed a group axis to have a level for a baseline to fix, and
++    is checked here too, beside its sibling "Baseline isn't a group level"
++    (`E-SWEEP-ABLATE-BASELINE-GROUP` and `E-SWEEP-BASELINE-GROUP`) — one rule
++    under two codes, guarded exclusively, because the same declaration duplicates
++    a level under the plain product and hides every other level under `ablate`.
++    `sweep.groups` is no longer refused here, and
+     neither is `data.units.allocation: between` nor `data.units.assign`: `expand`
+     crosses a group axis into the condition product, `_check_assign` checks
+     `allocation` and `assign` against each other and against `sweep.groups` for
+     real, `units.arm_members` narrows a condition's roster to its own arm, and
+     `cli.py` writes `allocation.json` and `provenance.allocation_hash` — so each
+     declaration changes the record, which is the test this family applies. It
+     resolves a unit roster, but two `data.units` sub-fields — `holdout` and a
+     `resolver` source — are still read by nothing.
+     `data.units.measurements` is no longer among them either: `resolve_units` collapses
+     the rows an input table carries, `StepIO.finalize` collapses the ones a step
+@@ -2783,23 +2787,24 @@ def _check_sweep(
+                 seen[level] = j
+ 
+     # `sweep.baseline` gets the same per-entry checks — one value, not a list.
+     # `reference.md`:218 names this by example ("Baseline is a valid condition |
+     # `sweep.baseline` sets `analysis.method: pearsonn`"). Unchecked, a misspelled
+     # path was planted verbatim into condition `00`'s config by
+     # `resolve_condition_cfg`'s `setdefault` walk, so `00_baseline` ran the base
+     # config under a label claiming otherwise and the run reported success.
+     #
+     # **A group level is the one baseline key that is not a parameter path**, and
+-    # it is skipped before `_path_resolves` rather than after: § Expansion modes
+-    # says a baseline "accepts group levels as well as parameter paths, so
+-    # `{arm: control}` designates the control arm", and `_value_checks` indexes
++    # it is skipped before `_path_resolves` rather than after: it is refused by
++    # `E-SWEEP-BASELINE-GROUP`/`E-SWEEP-ABLATE-BASELINE-GROUP` below rather than
++    # as an unknown parameter — § Expansion modes says "`sweep.baseline` may not
++    # fix a level of a group axis" and names why — and `_value_checks` indexes
+     # `spec[path]` unguarded, so suppressing only the error would move the
+     # `KeyError` one line down inside a function contracted never to raise. The
+     # gate is the declared axis names, never the presence of a `groups` block: a
+     # baseline fixing a group path no axis declares is an unknown path, and stays
+     # `E-SWEEP-PATH-UNKNOWN`.
+     baseline = sweep.get("baseline") or {}
+     for path, value in baseline.items():
+         if path in group_axes:
+             continue
+         if _path_resolves(path, f"sweep.baseline.{path}"):
+@@ -2854,43 +2859,95 @@ def _check_sweep(
+     # `SWEEP_MODES`, derived from `PRODUCT_MODES + NON_PRODUCT_MODES`, so a
+     # seventh mode is refused outright (`E-SWEEP-KEY-UNKNOWN`) until someone
+     # classifies it — and classifying it as a parameter axis is what puts it
+     # here. That second classification is a separate act since the split, and
+     # `tests/test_sweep.py` pins the residual so it cannot be skipped.
+     # `groups` is a product mode and deliberately not a parameter axis, which is
+     # the row's stated exception: it varies units rather than parameters, so
+     # every condition is still exactly one parameter change from its own arm's
+     # baseline — legal beside `ablate`, and no longer refused for its own reason
+     # the way it was before this row's own family of checks landed for real.
+-    # § Expansion modes, twice: "`sweep.baseline` may not name the group axis for
+-    # this reason — the arms are peers, and `validate` rejects a baseline that
+-    # fixes a level while `ablate` is declared", because "an ablation is one
+-    # change from *its own cell's* full model, and there is no single reference
+-    # condition when the reference cohort differs".
++    # § Expansion modes: "`sweep.baseline` may not fix a level of a group axis —
++    # the arms are peers". **One rule, two codes**, because the same declaration
++    # breaks two different ways and a message naming the wrong one is a message
++    # a reader cannot act on. `expand`'s `crossed` branch is the discriminator:
++    # under `ablate` over group axes alone it suppresses the bare product rows,
++    # so the fixed level is *not* duplicated and what goes wrong is that every
++    # other level executes nowhere; without `ablate` the product rows are emitted
++    # and the fixed level is rendered twice. The guards below are mutually
++    # exclusive so that no config collects both, and each states what its own
++    # shape actually does.
+     #
+-    # The consequence is worse than a mis-numbering, which is why it is an error
+-    # rather than a warning: a fixed group axis is a *fixed* axis to
+-    # `_baseline_cells`, so it expands over nothing, the crossed ablation has one
+-    # empty cell to repeat over, and every level but the fixed one is executed
+-    # nowhere while the run reports success — a record describing an experiment
+-    # nobody performed.
++    # `ablate`'s branch, § Expansion modes twice over: "an ablation is one change
++    # from *its own cell's* full model, and there is no single reference
++    # condition when the reference cohort differs". The consequence is worse than
++    # a mis-numbering, which is why it is an error rather than a warning: a fixed
++    # group axis is a *fixed* axis to `_baseline_cells`, so it expands over
++    # nothing, the crossed ablation has one empty cell to repeat over, and every
++    # level but the fixed one is executed nowhere while the run reports success —
++    # a record describing an experiment nobody performed.
++    #
++    # **That "executed nowhere" reading holds for the composition § Expansion
++    # modes permits — `ablate` over group axes and nothing else — and is scoped
++    # to it deliberately.** `expand`'s `crossed` requires *every* axis to be a
++    # group axis, so `ablate` beside a parameter axis takes the other branch of
++    # `expand` and duplicates the level as well. That shape is refused for its
++    # own reason by `E-SWEEP-ABLATE-CROSSED` beside this code — the document
++    # gives it no reading at all — and the message says "would be executed by no
++    # condition at all" of the composition it names rather than of every config
++    # that reaches this line. `test_a_baseline_may_not_fix_a_group_level` pins
++    # the three-code finding set for the crossed shape so the co-report is not
++    # something a later reader has to re-derive.
+     fixed_levels = [path for path in (sweep.get("baseline") or {}) if path in group_axes]
+     if ablate and fixed_levels:
+         c.error(
+             "E-SWEEP-ABLATE-BASELINE-GROUP",
+             f"sweep.baseline.{fixed_levels[0]}",
+             f"fixes the `sweep.groups` axis `{fixed_levels[0]}` while `sweep.ablate` is "
+             "declared — an ablation is one change from its own cell's full model, and "
+             "there is no single reference condition when the reference cohort differs. "
+-            "A fixed group axis also expands over nothing, so every other level of it "
+-            "would be executed by no condition at all. Drop the level from the "
+-            "baseline: `ablate × groups` gives one baseline and its ablations per level",
++            "Crossed with the group axes alone, a fixed group axis also expands over "
++            "nothing, so every other level of it would be executed by no condition at "
++            "all. Drop the level from the baseline: `ablate × groups` gives one baseline "
++            "and its ablations per level",
++        )
++    elif fixed_levels:
++        # The plain product case, which nothing refused until this check: the
++        # baseline row and the axis's own product row are the same cell. Over the
++        # roster the level names they resolve to the same parameters, the same
++        # units, and two condition directories identical at every artifact —
++        # `experimental-designs.md` § Mistakes core prevents' *two identical
++        # measurements reported as two arms*, verbatim. Where the axis declares
++        # two or more levels, the other levels' product rows cross the single
++        # baseline and `E-DATA-ALLOCATION-CONTRAST` reports beside this code —
++        # but that refusal is temporary, and at one level there is no cross-arm
++        # comparison for it to read at all, which is where the run was green.
++        #
++        # The duplicate is stated for the case that produces it — a value naming
++        # a level the axis declares. A baseline fixing a group path to something
++        # no level names expands over no units instead, and is refused by this
++        # same rule rather than by that consequence.
++        c.error(
++            "E-SWEEP-BASELINE-GROUP",
++            f"sweep.baseline.{fixed_levels[0]}",
++            f"fixes the `sweep.groups` axis `{fixed_levels[0]}` — the arms of a group "
++            "axis are peers, and a baseline designating one of them is not a reference "
++            "the expansion can give: the fixed level is rendered twice, once as the "
++            "baseline row and once as the product row its own axis emits, so two "
++            "conditions hold the same units and the same parameters and their "
++            "directories are identical at every artifact. Drop the level from the "
++            "baseline, which then expands over the axis and gives every arm its own "
++            "reference. Where the axis declares two or more levels, the comparison a "
++            "designated arm was reaching for is a `statistics.contrasts` entry naming "
++            "both conditions — whose delta this build refuses over disjoint arms "
++            "(`E-DATA-ALLOCATION-CONTRAST`) until the unpaired estimators exist, "
++            "leaving a `summary`-step `Estimate` or two runs joined in a `study`",
+         )
+ 
+     crossed_modes = parameter_axis_modes_present(sweep) if ablate else []
+     if crossed_modes:
+         c.error(
+             "E-SWEEP-ABLATE-CROSSED",
+             "sweep.ablate",
+             f"cannot be combined with {', '.join(f'`sweep.{m}`' for m in crossed_modes)} — "
+             "`ablate` varies one thing at a time and a parameter axis varies a second, "
+             "so their product is no design with a defensible reading. Split the axis "
+diff --git a/tests/test_cli.py b/tests/test_cli.py
+index d84ef87..d29a94e 100644
+--- a/tests/test_cli.py
++++ b/tests/test_cli.py
+@@ -369,31 +369,38 @@ def test_a_plan_pair_missing_from_execution_order_is_a_core_bug():
+         Execution(_RepeatStep, "repeat_step", "repeat", 0, None, "seedB"),
+     ]
+     with pytest.raises(ContractError) as excinfo:
+         _apply_execution_order(plan, [(0, "seedA")])  # "seedB" has no home
+     assert excinfo.value.code == "E-RUN-ORDER-MISMATCH"
+ 
+ 
+ def test_a_group_path_gets_no_swept_away_marker():
+     """`_wide_swept_paths` marks parameters, and a group cell is not one.
+ 
+-    A `baseline` may fix a group level (§ Expansion modes), so `{arm: control}`
+-    reaches the `baseline` term of the union — and a `SweptAway` marker at
++    A group axis's path reaches the union through `_swept_paths` in every design
++    that declares one — and a `SweptAway` marker at
+     `parameters.arm` would be the same phantom parameter `resolve_condition_cfg`
+     refuses, one scope over: a `run`-scoped step reading `cfg.parameters.arm`
+     would get "this is varied by `sweep`" for a parameter no template declares.
+ 
+     A focused unit test on the function itself, kept beside the end-to-end
+     coverage `test_a_group_axis_actually_narrows_end_to_end` provides: this one
+     pins the exact set `_wide_swept_paths` returns for a hand-built `sweep`
+     block, which discriminates the subtraction rule directly rather than
+     through a whole `run`'s aggregated output.
++
++    The block below also fixes the group level in its `baseline`, a declaration
++    `validate` refuses (`E-SWEEP-BASELINE-GROUP`) and `command_run` therefore
++    never resolves. It is kept because `_wide_swept_paths` is a pure function
++    over whatever block it is handed, and the property under test is that the
++    subtraction does not depend on which term of the union a group path arrived
++    by — asserting it from two terms at once is what pins that.
+     """
+     block = {
+         "groups": [{"by": "arm", "levels": ["control", "treatment"]}],
+         "grid": {"analysis.method": ["pearson", "spearman"]},
+         "baseline": {"arm": "control", "analysis.min_samples": 30},
+     }
+     # `analysis.min_samples` is the control that must report: a baseline-only
+     # parameter path, on the same term of the union the group path arrives by,
+     # so a subtraction that took the whole `baseline` would fail here.
+     assert _wide_swept_paths(block) == {"analysis.method", "analysis.min_samples"}
+diff --git a/tests/test_runner.py b/tests/test_runner.py
+index 108a97c..ffd579b 100644
+--- a/tests/test_runner.py
++++ b/tests/test_runner.py
+@@ -1437,24 +1437,27 @@ def test_a_group_cell_adds_no_parameter() -> None:
+     """`parameters` gains no `arm` key, and the resolved config's
+     `parameters_hash` matches the same design without the group axis.
+ 
+     Every other test in this slice passes whether or not the phantom parameter
+     appears, which is why this one is first. § Expansion modes: "two conditions
+     on a group axis can share a `parameters_hash` — and that's correct … same
+     code, same parameters, different units". A group cell laid over `parameters`
+     invents an `arm` no `parameter_spec` declares, which a `condition`-scoped
+     step then reads as `cfg.parameters.arm`.
+ 
+-    Built through `expand` rather than by hand, over the design § Expansion modes
+-    makes that claim about: a baseline fixing the group level (rows 0 and 1) and
+-    the arm axis crossed with the parameter axis (rows 2 to 5). Rows 2 and 4 are
+-    the two arms of one design, so the claim is asserted between them directly.
++    Built through `expand` rather than by hand, over a sweep whose baseline fixes
++    the group level (rows 0 and 1) beside the arm axis crossed with the parameter
++    axis (rows 2 to 5). That baseline is a declaration `validate` refuses
++    (`E-SWEEP-BASELINE-GROUP`); it is kept here because `expand` is permissive by
++    design and the six rows it yields are the widest set of shapes
++    `resolve_condition_cfg` has to be right about. Rows 2 and 4 are the two arms
++    of one design, so the claim is asserted between them directly.
+     """
+     conditions = expand(
+         {
+             "sweep": {
+                 "groups": [{"by": "arm", "levels": ["control", "treatment"]}],
+                 "grid": {"analysis.method": ["pearson", "spearman"]},
+                 "baseline": {"arm": "control"},
+             }
+         }
+     )
+diff --git a/tests/test_sweep.py b/tests/test_sweep.py
+index 593cde9..ba835a8 100644
+--- a/tests/test_sweep.py
++++ b/tests/test_sweep.py
+@@ -898,33 +898,35 @@ def test_the_mode_vocabulary_is_partitioned_and_parameter_axes_are_a_subset() ->
+         [{"cohort": "derivation"}, {"cohort": "validation"}]
+     ]
+     assert [c.label for c in expand({"sweep": {"groups": groups}})] == [
+         "cohort=derivation",
+         "cohort=validation",
+     ]
+ 
+ 
+ def test_a_group_path_is_marked_a_selector_and_a_parameter_path_is_not() -> None:
+     """§ Expansion modes: "a group level is a *set of units*", and a baseline
+-    "accepts group levels as well as parameter paths, so `{arm: control}`
+-    designates the control arm". So a condition's `values` can hold two kinds of
++    fixes parameter paths. So a condition's `values` can hold two kinds of
+     path, and `runner.resolve_condition_cfg`'s reading — every path names a leaf
+     under `parameters` — is true of one of them. `Condition.selectors` is which,
+     answered once by `expand` rather than re-derived by each reader.
+ 
+     `groups` is a **list** of `{by, levels}` entries, per § Expansion modes:
+     "`groups` is a list, always … there is no mapping shorthand". The axis name
+     is the entry's `by`, and that is the path a group cell sets.
+ 
+     One `expand` call carries both halves: the two baseline rows, which fix
+     `arm` because the baseline names it, and the four product rows, which carry
+-    the group axis's own cells. **The probe is not the row count but the
++    the group axis's own cells. That baseline is a declaration `validate`
++    refuses (`E-SWEEP-BASELINE-GROUP`) — `expand` is deliberately permissive and
++    stays total over it, and the two kinds of path in one `values` mapping is
++    what this test is about. **The probe is not the row count but the
+     marking** — every row here holds `arm`, and each must mark it a selector
+     while marking `analysis.method` nothing. The control is the grid-only sweep
+     below, whose axis is *named* `arm` and marks nothing, so the discriminator
+     is the mode rather than the name."""
+     conditions = expand(
+         {
+             "sweep": {
+                 "groups": [{"by": "arm", "levels": ["control", "treatment"]}],
+                 "grid": {"analysis.method": ["pearson", "spearman"]},
+                 "baseline": {"arm": "control"},
+@@ -1285,29 +1287,33 @@ def test_two_group_axes_cross_each_other() -> None:
+         "sex=m__arm=treatment",
+     ]
+     assert [c.selectors for c in conditions] == [frozenset({"sex", "arm"})] * 4
+ 
+     one_axis = expand({"sweep": {"groups": [{"by": "sex", "levels": ["f", "m"]}]}})
+     assert [c.label for c in one_axis] == ["sex=f", "sex=m"]
+ 
+ 
+ def test_a_baseline_expands_over_a_free_group_axis_and_is_fixed_by_one_it_names() -> None:
+     """§ Expansion modes: "the baseline expands over whichever axes it doesn't fix
+-    — group axes and parameter axes alike", and it "accepts group levels as well
+-    as parameter paths, so `{arm: control}` designates the control arm". The two
+-    rows of that table, over one design, in one direction each:
++    — group axes and parameter axes alike". Fixedness is read off the cells'
++    paths, and this pins that it reads a group axis's path the same way it reads
++    a parameter's, over one design in one direction each:
+ 
+     a baseline fixing the *parameter* leaves the group axis free, giving one
+-    reference per arm; a baseline fixing the *group level* leaves the parameter
+-    axis free, giving one reference per method. Each is the other's control —
+-    the same six conditions under a rule that read only one kind of axis would
+-    produce one of these shapes for both configs."""
++    reference per arm — the shape a design writes; and a baseline fixing the
++    *group level* leaves the parameter axis free, giving one reference per
++    method. The second is a declaration `validate` refuses
++    (`E-SWEEP-BASELINE-GROUP`) precisely because of what it renders here — the
++    two `arm=control` rows below are the same cell twice — and `expand` stays
++    permissive and total over it, which is what makes each config the other's
++    control: a rule that read only one kind of axis would produce one of these
++    shapes for both."""
+     free_group = expand(
+         {
+             "sweep": {
+                 "groups": [{"by": "arm", "levels": ["control", "treatment"]}],
+                 "grid": {"analysis.method": ["pearson", "spearman"]},
+                 "baseline": {"analysis.method": "pearson"},
+             }
+         }
+     )
+     assert [c.label for c in free_group] == [
+diff --git a/tests/test_validate.py b/tests/test_validate.py
+index 51df6c1..8498e77 100644
+--- a/tests/test_validate.py
++++ b/tests/test_validate.py
+@@ -2167,23 +2167,24 @@ def test_the_blank_axis_name_rule_is_an_allowlist_not_a_denylist(write_config):
+             assert "E-CONFIG-SHAPE" in codes(
+                 write_config({"sweep": {"groups": [{"by": by, "levels": ["a", "b"]}]}})
+             ), f"a `by` of {by!r} has no nameable character and was accepted"
+     for by in ("arm", "study arm", "arm\xa0", "a", "0", "_x"):
+         assert "E-CONFIG-SHAPE" not in codes(
+             write_config({"sweep": {"groups": [{"by": by, "levels": ["a", "b"]}]}})
+         ), f"a `by` of {by!r} names something and must not be refused"
+ 
+ 
+ def test_a_group_axis_repeating_a_level_is_refused(write_config):
+-    """`E-SWEEP-LEVEL-DUPLICATE` — the one route to § Mistakes core prevents'
+-    *two identical measurements reported as two arms* that the row's other three
+-    codes do not close.
++    """`E-SWEEP-LEVEL-DUPLICATE` — a route to § Mistakes core prevents' *two
++    identical measurements reported as two arms* that no allocation code closes.
++    (`E-SWEEP-BASELINE-GROUP` closes the other one, a baseline fixing a level of
++    the axis; neither reaches the other's shape.)
+ 
+     `E-DATA-ALLOCATION-NO-ARMS` and `E-DATA-ALLOCATION-WITHIN-ARMS` both read the
+     `within`-versus-arms question, and a config with `allocation: between` and a
+     real axis satisfies both. `E-SWEEP-PATH-DUPLICATE` compares axis *names*
+     across entries, never values inside one entry's `levels`. And `arms_of`'s set
+     equality has nothing to disagree with, because `{control} == {control}`.
+ 
+     Driven end to end before this check existed, `levels: [control, treatment,
+     control]` over a roster holding both values ran to exit 0 with `00_arm=control`
+     and `02_arm=control` **byte-identical at every artifact**, including every
+@@ -6696,21 +6697,27 @@ def test_a_within_allocation_contrast_is_untouched(write_config):
+         }
+     )
+     assert codes(path) == set()
+ 
+ 
+ def test_a_generated_cross_arm_comparison_is_refused_and_the_within_arm_one_is_not(
+     write_config,
+ ):
+     """The third control, and the one the guard exists for: a `groups × grid`
+     design whose baseline fixes the group axis to one arm (`control`) rather
+-    than per-cell. `sweep.expand` then renders one baseline row and
++    than per-cell. That baseline is itself refused (`E-SWEEP-BASELINE-GROUP`),
++    and deliberately so — it is the *only* declaration that makes a generated
++    `vs_baseline` cross arms, since every other baseline expands over the group
++    axis and targets each condition's own cell. `validate` collects rather than
++    stops, so the per-comparison guard still runs here and is what this test
++    reads; the route that carries this code alone is the declared contrast in
++    the test below. `sweep.expand` then renders one baseline row and
+     `contrasts.resolve_contrasts` compares every other condition against it —
+     including the `treatment` ones, which is what makes the baseline-generated
+     route (not just a declared `statistics.contrasts` entry) produce a
+     cross-arm comparison.
+ 
+     Four conditions result: `control/spearman` and `control/kendall`, each
+     differing from the `control/pearson` baseline on `analysis.method` alone
+     (same arm, paired, untouched), and `treatment/spearman` and
+     `treatment/kendall`, each differing on `arm` too (cross-arm, disjoint
+     units, refused). The count discriminates the guard from a
+@@ -7585,75 +7592,185 @@ def test_a_fold_stratify_by_reports_before_an_oversized_k(write_config, tmp_path
+                     "key": "cell_id",
+                     "attributes": ["animal_id", "label"],
+                 },
+                 "replication": {"repeats": [{"kind": "fold", "k": 99, "stratify_by": "label"}]},
+             }
+         )
+     )
+     assert found == {"E-REPL-FOLD-K-TOO-LARGE", "W-DATA-CLUSTER-UNDECLARED"}
+ 
+ 
+-def test_a_baseline_may_fix_a_group_level(write_config):
+-    """§ Expansion modes: `sweep.baseline` "accepts group levels as well as
+-    parameter paths, so `{arm: control}` designates the control arm". A group
+-    level is not a parameter path, so `_path_resolves` must not ask
+-    `parameter_spec` about it — the shared check `grid` and `baseline` use is
+-    right for every other key and wrong for this one.
+-
+-    Two controls, both of which must report, and each closes one direction:
+-    with no `groups` axis declaring `arm`, the same baseline key *is* an unknown
+-    parameter path and stays `E-SWEEP-PATH-UNKNOWN` (which is also the answer to
+-    task 3's open question — nothing else refuses a baseline fixing a group path
+-    no axis declares); and a misspelled parameter path alongside a real group
+-    axis is still reported, so the exemption is the declared axis name and not
+-    the `groups` block's presence.
+-
+-    `E-DATA-ALLOCATION-WITHIN-ARMS` is expected beside the ones under test
++def test_the_one_level_control_arm_baseline_reports_where_it_once_validated_clean(
++    write_config, tmp_path
++):
++    """The defect end to end, on the config that carried it: a well-formed
++    `between` + `by_attribute` design over one `control` level, whose baseline
++    designates that arm the way § Group axes used to tell a reader to.
++
++    Driven before this refusal existed, `validate` reported **zero findings** and
++    `run` exited 0 while `conditions/00_baseline` and `conditions/01_arm=control`
++    came out byte-identical at every file — the same 8 units handed to both, on
++    all five seed repeats. Nothing else in the suite reaches that config: at two
++    levels `E-DATA-ALLOCATION-CONTRAST` masks it, and at one level there is no
++    cross-arm comparison for that code to read.
++
++    `test_by_attribute_assignment_is_accepted` is the control that must stay
++    silent — the same fixture without the baseline, whose finding set is empty —
++    so an exact set of exactly one code here separates "the refusal fired" from
++    "this config was never clean anyway"."""
++    rows = "".join(f"p{i},control\n" for i in range(8))
++    (tmp_path / "input" / "index.csv").write_text(f"patient_id,arm\n{rows}")
++    design = _between({"arm": {"method": "by_attribute"}}, attributes=["arm"])
++    design["sweep"] = {
++        "groups": [{"by": "arm", "levels": ["control"]}],
++        "baseline": {"arm": "control"},
++    }
++    assert _error_codes(write_config(design)) == {"E-SWEEP-BASELINE-GROUP"}
++
++
++def test_a_baseline_may_not_fix_a_group_level(write_config):
++    """`E-SWEEP-BASELINE-GROUP` — § Expansion modes: "the arms of a group axis
++    are peers, and `sweep.baseline` may not fix one of them".
++
++    Unrefused, `_baseline_cells` reads the fixed axis as fixed and expands over
++    nothing while `_axes` still emits that level as a product row, so the level
++    is rendered **twice**. Driven end to end over a roster of 8 `control` units,
++    `conditions/00_baseline` and `conditions/01_arm=control` came out
++    byte-identical at every file, across all five seed repeats, with `validate`
++    reporting zero findings and `run` exiting 0 — `experimental-designs.md`
++    § Mistakes core prevents' *two identical measurements reported as two arms*,
++    verbatim. At two or more levels `E-DATA-ALLOCATION-CONTRAST` fires beside
++    it, which is why the one-level shape below is asserted as its own exact set:
++    that refusal is temporary (it lifts with the unpaired estimator family) and
++    at one level it reaches nothing.
++
++    A group level is still not a parameter path, so `_path_resolves` must not
++    ask `parameter_spec` about it — this reports the level, never
++    `E-SWEEP-PATH-UNKNOWN`, and `_value_checks` is never handed a path
++    `spec[path]` would `KeyError` on.
++
++    Four controls, each of which must report something different:
++
++    * a baseline fixing only a *parameter* path beside a group axis is the legal
++      shape § Expansion modes tells a reader to write, and stays legal — it
++      expands over the axis, one reference per arm;
++    * with no `groups` axis declaring `arm`, the same baseline key *is* an
++      unknown parameter path and stays `E-SWEEP-PATH-UNKNOWN`, so the gate is
++      the declared axis name rather than the `groups` block's presence;
++    * a misspelled parameter path beside a real group axis is still reported;
++    * and `ablate` takes the sibling code instead, never both, since what goes
++      wrong there is that the other levels execute nowhere rather than that this
++      one executes twice (`expand`'s `crossed` branch emits no product rows).
++      Crossed with a *parameter* axis, `crossed` is False and the level is
++      duplicated after all — that shape carries `E-SWEEP-ABLATE-CROSSED` for its
++      own reason, and its three-code set is pinned here so the co-report is not
++      something a later reader has to re-derive.
++
++    `E-DATA-ALLOCATION-WITHIN-ARMS` is expected beside the codes under test
+     rather than filtered away: `validate` collects rather than stops, and none
+-    of these three configs declares `allocation`, which defaults to `within`,
+-    beside the declared `arm` axis.
+-
+-    A baseline fixing the group axis to one arm (`{arm: control}`) is also the
+-    shape `E-DATA-ALLOCATION-CONTRAST` refuses: with no `grid` beside it,
+-    `sweep.expand` still crosses the bare `arm` axis into the product, so
+-    `arm=treatment` is a real condition and `resolve_contrasts` compares it
+-    against the single `control` baseline — a cross-arm, disjoint-units
+-    comparison. It fires in the first and third configs below and not the
+-    second, which declares no `groups` axis at all and so generates no
+-    `arm=treatment` condition to compare."""
++    of these configs declares `allocation`, which defaults to `within`, beside a
++    declared group axis."""
+     axis = [{"by": "arm", "levels": ["control", "treatment"]}]
++    one_level = [{"by": "arm", "levels": ["control"]}]
++
++    # The defect itself, at the one-level shape nothing else touches.
++    assert _error_codes(
++        write_config({"sweep": {"groups": one_level, "baseline": {"arm": "control"}}})
++    ) == {
++        "E-SWEEP-BASELINE-GROUP",
++        "E-DATA-ALLOCATION-WITHIN-ARMS",
++    }
++    message = messages_by_code(
++        write_config({"sweep": {"groups": one_level, "baseline": {"arm": "control"}}})
++    )["E-SWEEP-BASELINE-GROUP"]
++    assert "arm" in message
++    assert "twice" in message
++
++    # And at two levels, where the temporary cross-arm refusal fires beside it.
+     assert _error_codes(
+         write_config({"sweep": {"groups": axis, "baseline": {"arm": "control"}}})
+     ) == {
++        "E-SWEEP-BASELINE-GROUP",
+         "E-DATA-ALLOCATION-WITHIN-ARMS",
+         "E-DATA-ALLOCATION-CONTRAST",
+     }
+ 
++    # Control 1: a parameter-path baseline beside the same axis is legal.
++    assert _error_codes(
++        write_config(
++            {
++                "sweep": {
++                    "groups": axis,
++                    "grid": {"analysis.method": ["spearman", "kendall"]},
++                    "baseline": {"analysis.method": "pearson"},
++                }
++            }
++        )
++    ) == {"E-DATA-ALLOCATION-WITHIN-ARMS"}
++
++    # Control 2: no axis declares `arm`, so the key is an unknown parameter path.
+     assert _error_codes(write_config({"sweep": {"baseline": {"arm": "control"}}})) == {
+         "E-SWEEP-PATH-UNKNOWN"
+     }
+ 
++    # Control 3: a misspelled parameter path beside a real axis is still checked.
+     assert _error_codes(
+         write_config(
+             {
+                 "sweep": {
+                     "groups": axis,
+                     "baseline": {"arm": "control", "analysis.methdo": "pearson"},
+                 }
+             }
+         )
+     ) == {
++        "E-SWEEP-BASELINE-GROUP",
+         "E-SWEEP-PATH-UNKNOWN",
+         "E-DATA-ALLOCATION-WITHIN-ARMS",
+         "E-DATA-ALLOCATION-CONTRAST",
+     }
+ 
++    # Control 4: `ablate` takes the sibling code alone, and the parameter-axis
++    # cross takes it beside `E-SWEEP-ABLATE-CROSSED`.
++    assert _error_codes(
++        write_config(
++            {
++                "sweep": {
++                    "groups": axis,
++                    "baseline": {"arm": "control", "analysis.drop_missing": True},
++                    "ablate": {"remove": ["analysis.drop_missing"]},
++                }
++            }
++        )
++    ) == {
++        "E-SWEEP-ABLATE-BASELINE-GROUP",
++        "E-DATA-ALLOCATION-WITHIN-ARMS",
++    }
++
++    assert _error_codes(
++        write_config(
++            {
++                "sweep": {
++                    "groups": axis,
++                    "grid": {"analysis.method": ["spearman", "kendall"]},
++                    "baseline": {"arm": "control", "analysis.drop_missing": True},
++                    "ablate": {"remove": ["analysis.drop_missing"]},
++                }
++            }
++        )
++    ) == {
++        "E-SWEEP-ABLATE-BASELINE-GROUP",
++        "E-SWEEP-ABLATE-CROSSED",
++        "E-DATA-ALLOCATION-CONTRAST",
++        "E-DATA-ALLOCATION-WITHIN-ARMS",
++    }
++
+ 
+ def test_two_group_axes_may_not_share_a_name(write_config):
+     """§ Validation's *Axis names are distinct* — a shape `selector_paths`'
+     dedup hides from the group-vs-parameter check above, since that check reads
+     `selector_paths(sweep)`, which is total over a malformed block and dedupes
+     two same-named entries into one axis name. Left unchecked, `sweep._axes`
+     still builds one axis per *entry* regardless — verified directly against
+     `sweep.expand`, not assumed: two `arm` entries with disjoint levels
+     (`[a, b]` and `[c, d]`) cross into four conditions whose labels collapse to
+     two (`arm=a`/`arm=b` from the first axis' cells, overwritten by
+@@ -7812,51 +7929,56 @@ def test_a_group_level_must_render_into_a_condition_label(write_config):
+     }
+ 
+     assert _error_codes(
+         write_config(
+             {"sweep": {"groups": [{"by": "arm", "levels": ["control", "treatment"]}]}}
+         )
+     ) == {"E-DATA-ALLOCATION-WITHIN-ARMS"}
+ 
+ 
+ def test_a_baseline_may_not_fix_a_group_level_while_ablate_is_declared(write_config):
+-    """§ Expansion modes states this twice: "`sweep.baseline` may not name the
+-    group axis for this reason — the arms are peers, and `validate` rejects a
+-    baseline that fixes a level while `ablate` is declared", and "`ablate ×
++    """§ Expansion modes states this twice: "`sweep.baseline` may not fix a level
++    of the group axis, here or anywhere else — the arms are peers — and this
++    composition is the shape where the refusal bites hardest", and "`ablate ×
+     groups` always lands in the second row, since `validate` rejects a baseline
+-    that fixes a group level while `ablate` is declared: an ablation is one
+-    change from *its own cell's* full model, and there is no single reference
+-    condition when the reference cohort differs".
++    that fixes a group level: an ablation is one change from *its own cell's*
++    full model, and there is no single reference condition when the reference
++    cohort differs".
++
++    The sibling code `E-SWEEP-BASELINE-GROUP` refuses the same declaration
++    without `ablate`, and the two guards are mutually exclusive — every config
++    here carries exactly one of them, which is what the exact sets pin.
+ 
+     Unrefused, the declaration does not merely mis-number — **a declared level
+     disappears from the run**. The baseline fixes the group axis, so it expands
+     over nothing, the crossed ablation has one empty cell to repeat over, and
+     `expand` returns `00_baseline` and `01_labs=false` on the derivation cohort
+     alone: `validation` is executed nowhere while the run reports success.
+ 
+     Two controls, both of which must report: an ablation whose baseline fixes a
+     *parameter* beside the same group axis is the legal composition and carries
+     *Arms need allocation* alone (it is also
+-    `test_ablate_composes_with_a_group_axis`, untouched), and the same baseline
+-    without `ablate` is the ordinary per-cell design § Expansion modes' second
+-    table row describes. None of the three declares `allocation`, which
+-    defaults to `within`, beside the declared `cohort` axis, so
+-    `E-DATA-ALLOCATION-WITHIN-ARMS` fires alongside every one of them.
++    `test_ablate_composes_with_a_group_axis`, untouched), and the same fixed
++    level *without* `ablate` takes `E-SWEEP-BASELINE-GROUP` rather than this
++    code. None of the three declares `allocation`, which defaults to `within`,
++    beside the declared `cohort` axis, so `E-DATA-ALLOCATION-WITHIN-ARMS` fires
++    alongside every one of them.
+ 
+     The second control also carries `E-DATA-ALLOCATION-CONTRAST`: its baseline
+     fixes `cohort` to `derivation` and leaves `analysis.method` free, so
+     `sweep.expand` renders one per-cell baseline per method value **within
+     `derivation` alone** — `validation`'s two conditions have no baseline of
+     their own and are compared against `derivation`'s, a cross-cohort,
+-    disjoint-units comparison for each. This is the same "a baseline fixing the
+-    group axis to one arm" shape the first control carries, reached here
+-    through a per-cell baseline rather than a fully-fixed one."""
++    disjoint-units comparison for each. That is the generated route to that
++    code, and it is reachable only from a baseline fixing a group level, which
++    is exactly why it is co-reported with the sibling refusal here rather than
++    standing alone."""
+     axis = [{"by": "cohort", "levels": ["derivation", "validation"]}]
+     assert _error_codes(
+         write_config(
+             {
+                 "sweep": {
+                     "groups": axis,
+                     "baseline": {"cohort": "derivation", "analysis.drop_missing": True},
+                     "ablate": {"remove": ["analysis.drop_missing"]},
+                 }
+             }
+@@ -7882,20 +8004,21 @@ def test_a_baseline_may_not_fix_a_group_level_while_ablate_is_declared(write_con
+         write_config(
+             {
+                 "sweep": {
+                     "groups": axis,
+                     "grid": {"analysis.method": ["pearson", "spearman"]},
+                     "baseline": {"cohort": "derivation"},
+                 }
+             }
+         )
+     ) == {
++        "E-SWEEP-BASELINE-GROUP",
+         "E-DATA-ALLOCATION-WITHIN-ARMS",
+         "E-DATA-ALLOCATION-CONTRAST",
+     }
+ 
+ 
+ # `data.units.allocation`, `data.units.assign`, and `sweep.groups` against each
+ # other — § Validation's *Allocation needs arms*, *Every axis is assigned*, and
+ # *Assignment names a method*.
+ #
+ # Each assertion below is an exact set rather than a membership test, so a

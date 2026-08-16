@@ -1,0 +1,567 @@
+# Review package: 26c7847..HEAD
+
+## Commits
+30c099d fix: reconcile per-condition n to a condition's own arm
+
+## Files changed
+ src/publishable/cli.py    | 120 +++++++++++++++++++++++++++++--
+ src/publishable/runner.py |  31 +++++---
+ tests/test_cli.py         | 178 ++++++++++++++++++++++++++++++++++++++++++++++
+ 3 files changed, 312 insertions(+), 17 deletions(-)
+
+## Diff
+diff --git a/src/publishable/cli.py b/src/publishable/cli.py
+index c3697c6..07ac1d6 100644
+--- a/src/publishable/cli.py
++++ b/src/publishable/cli.py
+@@ -38,21 +38,27 @@ from publishable.manifest import build_manifest, manifest_hash, verify_manifest
+ from publishable.provenance import find_repo_root, git_provenance
+ from publishable.replication import (
+     cross_levels,
+     fold_members_for,
+     order_seed_for,
+     realize_order,
+     resolve_repeats,
+ )
+ from publishable.run_identity import RunLock, allocate_run_dir, point_latest
+ from publishable.run_record import assemble_run_yaml, run_status, summary_values
+-from publishable.runner import attrition, execute_plan, resolve_condition_cfg, resolve_wide_cfg
++from publishable.runner import (
++    _arm_keys,
++    attrition,
++    execute_plan,
++    resolve_condition_cfg,
++    resolve_wide_cfg,
++)
+ from publishable.scaffold import scaffold_project
+ from publishable.scope import Execution, build_plan
+ from publishable.stats import (
+     UnitTable,
+     cohens_dz,
+     collapse_repeats,
+     mean_of,
+     min_honest_draws,
+     paired_delta_of_derived,
+     paired_keys,
+@@ -334,20 +340,104 @@ def _resolved_group_axes(
+         declared_from = (
+             block.get("from")
+             if isinstance(block, dict) and block.get("method") == "by_attribute"
+             else None
+         )
+         column = declared_from if isinstance(declared_from, str) and declared_from else axis
+         axes[axis] = (column, levels)
+     return axes
+ 
+ 
++def _cond_roster(
++    roster: "UnitList",
++    cond_index: int,
++    arm_members_map: "dict[int, frozenset[str]] | None",
++) -> "UnitList":
++    """The units condition `cond_index` counts against — its own arm's subset
++    of the shared roster when a group axis selects one, and the whole roster
++    (the same object, not a copy) otherwise.
++
++    This is the read side of the same narrowing `execute_plan` already applies
++    to the units a condition's steps EXECUTE against (`runner.py`'s own
++    `scoped_units`): `attrition` and `statistics.report_by`'s per-level table
++    both count units for a condition, and until this function existed they
++    counted the whole roster while the run itself executed only the arm —
++    `resolved: 12` reported beside 5 units the condition's own executions
++    never touched, with the other arm's 7 silently landing in `failed`
++    (`reference.md` § What isn't a repeat: "Under a group axis it doesn't
++    reconcile, and shouldn't — each arm's interval is over that arm's units").
++
++    Built on `runner._arm_keys`, not `units.arms_of` or a fresh comprehension
++    over `roster`: `arm_members_map` is `units.arm_members`'s answer, already
++    resolved once from the same conditions the plan itself was built from, and
++    `_arm_keys` is the guard `execute_plan` already raises through
++    (`E-RUN-ARM-UNRESOLVED`) for a condition index the resolved arms disagree
++    with the plan about. A fourth derivation of arm membership here — reaching
++    back into `units.arms_of` and re-reducing across axes per condition — is
++    exactly the defect the single-authority pattern (`arms_of`, then
++    `arm_members`, then this) exists to prevent a third instance of.
++    """
++    if arm_members_map is None:
++        return roster
++    keys = _arm_keys(cond_index, {u.key for u in roster}, arm_members_map)
++    return UnitList([u for u in roster if u.key in keys])
++
++
++def _cond_beside_n(
++    beside_n: dict[str, Any], cond_roster: "UnitList", roster: "UnitList"
++) -> dict[str, Any]:
++    """`beside_n` with `technical_n` withheld when `cond_roster` is an arm
++    rather than the whole roster.
++
++    `technical_n` is `{min, max, median}` over the WHOLE roster's measurement
++    counts (`command_run`'s own comment above where it is built) — the same
++    reason `report_by`'s per-level `summarize_step` call passes
++    `weighted_beside` rather than `beside_n`: copying a whole-roster figure
++    onto a subset states a spread nobody computed over that subset. Under a
++    group axis `cond_roster` IS such a subset, one level up from a
++    `report_by` level, so the same withholding applies here rather than
++    leaving a per-arm `n` sitting beside a figure describing units this
++    condition's own table does not hold.
++
++    `cond_roster is roster` (identity, not equality) is `_cond_roster`'s own
++    signal that no group axis narrowed this condition — the same check that
++    function documents for its no-narrowing return.
++    """
++    if cond_roster is roster:
++        return beside_n
++    return {k: v for k, v in beside_n.items() if k != "technical_n"}
++
++
++def _report_by_levels(
++    roster: "UnitList", attribute: str
++) -> dict[str, tuple[set[str], "UnitList"]]:
++    """Each level of `attribute` over `roster`, paired with the roster VIEW
++    `attrition` must count that level against — `report_by`'s per-level loop,
++    extracted so the narrowing is a function with one roster parameter rather
++    than an inline block reading a name from the enclosing scope.
++
++    Passing the whole roster here instead of a condition's own arm
++    (`_cond_roster`'s answer) is the S4b-Critical-shaped defect one level up:
++    the same comment at the call site below states it, "one key set decides
++    BOTH the table and the counts — a number reported against a denominator
++    computed over other units." Extracting this loop is what makes that
++    defect representable as a unit test at all: the inline block it replaces
++    lived inside `command_run`'s per-condition, per-step loop, which no test
++    reaches with a real group axis declared — `validate` refuses one outright
++    in this build (`E-SWEEP-GROUPS-UNSUPPORTED`).
++    """
++    out: dict[str, tuple[set[str], UnitList]] = {}
++    for level, keys in sorted(levels_for(roster, attribute).items()):
++        out[level] = (keys, UnitList([u for u in roster if u.key in keys]))
++    return out
++
++
+ def _attributed(table: UnitTable, attributes: dict[str, dict[str, Any]]) -> UnitTable:
+     """The same table, with each unit's declared attributes merged into its row.
+ 
+     `data.units.attributes` declares what the roster carries; `reference.md` §
+     Templates has `aggregate` reading the unit table, and a template that wants
+     to stratify on a declared attribute has nowhere else to read it from — the
+     collapsed table holds only *recorded* columns, because that is all a step's
+     `io.record` puts there. So the roster is merged in here, at the one boundary
+     where `aggregate` is called.
+ 
+@@ -1242,27 +1332,36 @@ def command_run(config_path: Path) -> int:
+             ] = {}
+             for cond in conditions:
+                 recording_steps = {
+                     r.execution.step_name
+                     for r in results
+                     if r.execution.scope == "repeat"
+                     and r.execution.condition_index == cond.index
+                     and r.rows
+                 }
+                 aggregated[cond.index] = {}
++                # This condition's own arm — a subset view of `roster`, never a
++                # re-resolution — or `roster` itself, the same object, when no
++                # group axis selects one. `attrition` below (and `report_by`'s
++                # per-level table further down) must count what this
++                # condition's executions were actually handed: `_cond_roster`
++                # is the read side of the same narrowing `execute_plan` already
++                # applies to what those executions ran over.
++                cond_roster = _cond_roster(roster, cond.index, arm_members_map)
++                cond_beside_n = _cond_beside_n(beside_n, cond_roster, roster)
+                 for step_name in sorted(recording_steps):
+                     collapsed = collapse_repeats(
+                         results, step_name, cond.index, fold_members=fold_members
+                     )
+                     counts = attrition(
+                         results,
+-                        roster,
++                        cond_roster,
+                         step_name,
+                         cond.index,
+                         fold_members=fold_members,
+                         weights=weights,
+                         clusters=clusters,
+                     )
+                     max_ineligible = (doc.get("limits") or {}).get("max_ineligible_fraction")
+                     if (
+                         isinstance(max_ineligible, (int, float))
+                         and not isinstance(max_ineligible, bool)
+@@ -1375,21 +1474,21 @@ def command_run(config_path: Path) -> int:
+                     # which is why the retry passes no `derived` rather than
+                     # dropping the one colliding key.
+                     try:
+                         step_summary = summarize_step(
+                             collapsed,
+                             counts,
+                             derived=derived,
+                             seed=resample_seed_value,
+                             resample=resample_fns,
+                             draws=derived_metric_draws,
+-                            beside_n=beside_n,
++                            beside_n=cond_beside_n,
+                             weights=weights,
+                             clusters=clusters,
+                         )
+                     except ContractError as exc:
+                         prefix = f"{exc.code} " if exc.code else ""
+                         aggregate_c.warn(
+                             "W-STATS-AGGREGATE-FAILED",
+                             aggregate_where,
+                             f"condition {cond.index} step {step_name!r}: "
+                             f"{prefix}{type(exc).__name__}: {exc}",
+@@ -1399,21 +1498,21 @@ def command_run(config_path: Path) -> int:
+                         # columns must come back with the same arithmetic they
+                         # had on the first call. Silently downgrading them to
+                         # unweighted numbers over a badly named derived key is
+                         # this slice's own failure class, reached through the
+                         # containment path. (A weight core cannot use cannot
+                         # arrive here: `attrition` above gates the same mapping
+                         # through `kish_effective_n`, outside any `try`.)
+                         step_summary = summarize_step(
+                             collapsed,
+                             counts,
+-                            beside_n=beside_n,
++                            beside_n=cond_beside_n,
+                             weights=weights,
+                             clusters=clusters,
+                         )
+                         # What the parent block dropped, every stratum of it
+                         # drops too. A level's table carries the same columns as
+                         # the whole one, so the collision that raised above
+                         # raises identically per level — uncontained, after the
+                         # run has already spent every execution. Retrying each
+                         # level with its own `try` would be worse than either:
+                         # a level block carrying a derived metric its own parent
+@@ -1532,29 +1631,38 @@ def command_run(config_path: Path) -> int:
+                     # raises *after* the run has spent every one of its
+                     # executions, the most expensive place in the program to
+                     # fail.
+                     for attribute in report_by if isinstance(report_by, list) else []:
+                         if not isinstance(attribute, str):
+                             continue
+                         # Not `levels`: that name already holds this run's
+                         # repeat levels, which `repeat_spread` above reads on
+                         # every later pass of this loop.
+                         levels_block: dict[str, dict[str, Any]] = {}
+-                        for level, keys in sorted(levels_for(roster, attribute).items()):
++                        # `cond_roster`, not `roster`: under a group axis a
++                        # level's key set must not reach past this condition's
++                        # own arm into the other one — the same defect one
++                        # layer up `_cond_roster` exists to fix for `attrition`
++                        # above, one level in. `_report_by_levels(roster, ...)`
++                        # would let a level of `attribute` that happens to span
++                        # both arms hand `attrition` units the other arm's
++                        # executions never touched.
++                        for level, (keys, level_roster) in _report_by_levels(
++                            cond_roster, attribute
++                        ).items():
+                             # One key set decides BOTH the table and the counts.
+                             # Taking the level's rows beside the condition's `n`
+                             # is the S4b Critical's shape — a number reported
+                             # against a denominator computed over other units.
+                             level_collapsed = {
+                                 k: v for k, v in collapsed.items() if k in keys
+                             }
+-                            level_roster = UnitList([u for u in roster if u.key in keys])
+                             level_counts = attrition(
+                                 results,
+                                 level_roster,
+                                 step_name,
+                                 cond.index,
+                                 fold_members=fold_members,
+                                 # Recomputed over the level's own units, which is
+                                 # what makes it carryable at all: `technical_n`
+                                 # below is withheld because it is a whole-roster
+                                 # figure that would have to be COPIED down, and
+diff --git a/src/publishable/runner.py b/src/publishable/runner.py
+index 427b1af..f39a2de 100644
+--- a/src/publishable/runner.py
++++ b/src/publishable/runner.py
+@@ -133,31 +133,40 @@ def attrition(
+     unit skipped in one repeat and completed (or simply unrecorded) in another did
+     not get a consistent eligibility answer — that inconsistency is exactly the
+     `failed` case, not a design exclusion. With a fold, intersecting across EVERY
+     repeat-scoped execution would report `completed: 0` for any design containing
+     one, because no unit is ever in more than one fold (`reference.md` § The
+     per-unit tables); `handed_to` scopes the intersection to just the fold — and,
+     under fold × seed, to every seed of that unit's own fold — so only a unit
+     skipped or missing within its own group is `ineligible` or `failed`.
+ 
+     `resolved` counts what was handed out across this condition, not the cohort:
+-    without a fold that is the full roster, since every execution receives it
+-    whole. With a fold it is the union over every *declared* fold's members
+-    intersected with the roster — which the partitions cover exactly, so it is
+-    the full roster again, whether or not each fold's execution ran. That is the
+-    right answer at this scope: the counts a condition reports are against the
+-    cohort the condition was run over, and a fold whose execution is missing
+-    leaves its units genuinely unsettled, so they land in `failed` rather than
+-    vanishing from the denominator. The smaller-than-roster figure is a fact
+-    about one *execution* — `reference.md` § Repeat kinds states it at that
+-    level, "`n: {resolved: 1, completed: 1}` per execution" under `k: all` — and
+-    this function is per-condition, so it is not the number to expect here. No
++    without a fold that is `roster` itself, since every execution receives it
++    whole. `roster` is not always the whole shared roster — under a group axis
++    (`reference.md` § Expansion modes) the caller has already narrowed it to
++    this condition's own arm (`cli.py`'s `_cond_roster`, built from
++    `units.arm_members`), the read-side counterpart of the narrowing
++    `execute_plan` applies to what this condition's executions actually ran
++    over. `attrition` does not re-derive that narrowing itself, and must not:
++    it takes whichever `roster` the call site resolved, arm or whole, exactly
++    once, the same single-authority reason `weights` and `clusters` arrive
++    pre-resolved rather than rebuilt here. With a fold it is the union over
++    every *declared* fold's members intersected with `roster` — which the
++    partitions cover exactly, so it comes back to `roster` again, whether or
++    not each fold's execution ran. That is the right answer at this scope: the
++    counts a condition reports are against the cohort (or arm) the condition
++    was run over, and a fold whose execution is missing leaves its units
++    genuinely unsettled, so they land in `failed` rather than vanishing from
++    the denominator. The smaller-than-roster figure is a fact about one
++    *execution* — `reference.md` § Repeat kinds states it at that level, "`n:
++    {resolved: 1, completed: 1}` per execution" under `k: all` — and this
++    function is per-condition, so it is not the number to expect here. No
+     per-execution `n` is written in this build: `run.yaml`'s `per_repeat` stays
+     verbatim what each step returned (see `run_record.assemble_run_yaml`).
+ 
+     `weights` is unit key → that unit's `data.units.weight_by` value, supplied
+     only when the config declares one, and it is what adds `effective` to the
+     returned mapping (`_counts` says what the figure is and why it is
+     conditional). The values are passed through as the roster holds them —
+     `str`, under a table source — because `stats.kish_effective_n` gates and
+     parses its own input against `units.usable_weight`, the single authority
+     `validate` approves a config's weights against. Coercing here would be a
+diff --git a/tests/test_cli.py b/tests/test_cli.py
+index 4bccf84..bc7a308 100644
+--- a/tests/test_cli.py
++++ b/tests/test_cli.py
+@@ -1,32 +1,35 @@
+ import json
+ import re
+ import subprocess
+ from collections import namedtuple
+ from pathlib import Path
+ from typing import Any
+ 
+ import pytest
+ import yaml
++from tests.test_stats import _repeat_result
+ 
+ from publishable import BaseStep
+ from publishable.cli import (
+     _apply_execution_order,
++    _cond_roster,
+     _resolved_group_axes,
+     _wide_swept_paths,
+     main,
+ )
+ from publishable.diagnostics import EXIT_INVOCATION, EXIT_OK, EXIT_PARTIAL, EXIT_WRONG
+ from publishable.errors import ContractError
+ from publishable.generators.experiment import generate_experiment
+ from publishable.generators.step import generate_step
+ from publishable.replication import LABEL_JOIN
++from publishable.runner import attrition
+ from publishable.scope import Execution
+ 
+ Ran = namedtuple("Ran", ["condition_index", "repeat_label"])
+ 
+ 
+ def run_a_project(
+     tmp_path: Path,
+     *,
+     replication: dict[str, Any] | None = None,
+     capsys: pytest.CaptureFixture[str] | None = None,
+@@ -475,20 +478,195 @@ def test_non_string_levels_make_arm_members_raise_rather_than_skip_narrowing():
+     # The gate `command_run` uses: `selector_paths`, not `group_axes`.
+     assert selector_paths(sweep_block)  # still true — `expand` agrees
+ 
+     roster = UnitList(
+         [Unit(key="u0", attributes={"arm": "1"}), Unit(key="u1", attributes={"arm": "2"})]
+     )
+     with pytest.raises(KeyError):
+         arm_members(roster, group_axes, conditions)
+ 
+ 
++def test_cond_roster_narrows_each_condition_to_its_own_arm_size():
++    """`_cond_roster` is the read side of the narrowing `execute_plan` already
++    applies to what a condition's own executions run over — task 12's 7/5
++    fixture, reused rather than a fresh one (no arm fixture may share a
++    boundary with a cluster fixture, and this fixture already states why its
++    counts discriminate).
++
++    Exact sizes, not a reconciliation: this and
++    `test_cond_roster_covers_the_roster_exactly_once_per_unit` are kept as two
++    separate assertions on purpose, each able to fail on its own — a "sum to
++    the roster" combination (7 + 5 == 12) would be arithmetically implied the
++    moment 7 and 5 are already pinned here, which is the addendum's own
++    corrected finding about its first draft."""
++    from tests.test_runner import _arm_members12, _arm_roster12
++
++    roster = _arm_roster12()
++    arm_members_map = _arm_members12()
++
++    assert len(_cond_roster(roster, 0, arm_members_map)) == 7
++    assert len(_cond_roster(roster, 1, arm_members_map)) == 5
++
++
++def test_cond_roster_covers_the_roster_exactly_once_per_unit():
++    """Coverage, not a sum: `E-DATA-ASSIGN-LEVELS` (task 10) is what makes this
++    meaningful — no unit belongs to no arm, and no declared level is empty —
++    and it fails for reasons the pinned 7/5 counts above do not. Kept in its
++    own test, with no size assertion in it, so mutating "count the whole
++    roster per condition" is caught here independently of the sizes test
++    above rather than only inferred from it dying too."""
++    from tests.test_runner import _arm_members12, _arm_roster12
++
++    roster = _arm_roster12()
++    arm_members_map = _arm_members12()
++
++    control_keys = {u.key for u in _cond_roster(roster, 0, arm_members_map)}
++    treatment_keys = {u.key for u in _cond_roster(roster, 1, arm_members_map)}
++    assert control_keys | treatment_keys == {u.key for u in roster}
++    assert control_keys & treatment_keys == set()
++
++
++def test_cond_roster_is_the_same_object_with_no_group_axis():
++    """`roster is roster` (identity, not equality) is what `_cond_beside_n`
++    reads to decide whether `technical_n` survives — matching `execute_plan`'s
++    own `scoped_units = units` no-op when a run declares no group axis."""
++    from tests.test_runner import _arm_roster12
++
++    roster = _arm_roster12()
++    assert _cond_roster(roster, 0, None) is roster
++
++
++def test_attrition_reconciles_per_arm_over_the_uneven_7_5_fixture():
++    """The counts task 13 exists to fix: `attrition` given the WHOLE roster for
++    an arm-narrowed condition reports `resolved: 12` and derives the other
++    arm's units as `failed` — this asserts the fixed shape, `attrition` given
++    `_cond_roster`'s own answer.
++
++    One unit ineligible in `control` (`c0`, `io.skip`) and one failed in
++    `treatment` (`t0`, recorded nowhere) — matching the addendum's "make at
++    least one arm attrit": two clean arms would leave `ineligible`/`failed`
++    zero everywhere and the reconciliation would hold trivially for reasons
++    that don't discriminate this fix from the bug it fixes."""
++    from tests.test_runner import _arm_members12, _arm_roster12
++
++    roster = _arm_roster12()
++    arm_members_map = _arm_members12()
++    control_roster = _cond_roster(roster, 0, arm_members_map)
++    treatment_roster = _cond_roster(roster, 1, arm_members_map)
++
++    control_rows = {f"c{i}": {"r": 0.5} for i in range(1, 7)}  # c0 skipped
++    treatment_rows = {f"t{i}": {"r": 0.5} for i in range(1, 5)}  # t0 unsettled
++    results = [
++        _repeat_result("measure", "seed01", 0, control_rows, skipped=frozenset({"c0"})),
++        _repeat_result("measure", "seed01", 1, treatment_rows),
++    ]
++
++    control_counts = attrition(results, control_roster, "measure", 0)
++    treatment_counts = attrition(results, treatment_roster, "measure", 1)
++
++    # Exact numbers, not the reconciliation alone: `12 == 12 + 0 + 0` satisfies
++    # `resolved == completed + ineligible + failed` too, so asserting only the
++    # arithmetic is a check that cannot fail (the addendum's own first draft
++    # made exactly this mistake with "sum to the roster").
++    assert control_counts == {"resolved": 7, "completed": 6, "ineligible": 1, "failed": 0}
++    assert treatment_counts == {"resolved": 5, "completed": 4, "ineligible": 0, "failed": 1}
++    assert (
++        control_counts["resolved"]
++        == control_counts["completed"] + control_counts["ineligible"] + control_counts["failed"]
++    )
++    assert (
++        treatment_counts["resolved"]
++        == treatment_counts["completed"]
++        + treatment_counts["ineligible"]
++        + treatment_counts["failed"]
++    )
++
++
++def _crossing_stratum_fixture():
++    """A roster whose `site` attribute crosses both arms — `north` is 4 of 7
++    `control` units and 3 of 5 `treatment` units — so narrowing to one arm
++    actually removes units from a level, rather than a stratum confined to
++    one arm, which wouldn't discriminate the fix from the bug it fixes.
++    Distinct from `_arm_roster12`: a second attribute on the same units, not
++    a shared boundary with any cluster fixture."""
++    from publishable.units import Unit, UnitList
++
++    control = [
++        Unit(key=f"c{i}", attributes={"arm": "control", "site": "north" if i < 4 else "south"})
++        for i in range(7)
++    ]
++    treatment = [
++        Unit(
++            key=f"t{i}",
++            attributes={"arm": "treatment", "site": "north" if i < 3 else "south"},
++        )
++        for i in range(5)
++    ]
++    roster = UnitList(control + treatment)
++    arm_members_map = {
++        0: frozenset(u.key for u in roster if u.attributes["arm"] == "control"),
++        1: frozenset(u.key for u in roster if u.attributes["arm"] == "treatment"),
++    }
++    return roster, arm_members_map
++
++
++def test_report_by_levels_narrows_a_crossing_stratum_to_the_given_roster():
++    """`_report_by_levels` is the piece `command_run`'s `report_by` block calls
++    against `_cond_roster`'s answer, extracted specifically so this is
++    testable at all: the inline loop it replaces lives inside `command_run`'s
++    per-condition, per-step loop, which no test reaches with a real group
++    axis declared (`validate` refuses one outright in this build,
++    `E-SWEEP-GROUPS-UNSUPPORTED`) — extraction is what makes the narrowing a
++    function with one roster parameter rather than an untestable read of an
++    enclosing-scope name.
++
++    Calling the SAME function with the whole roster reproduces the bug this
++    fix removes — the other arm's units join a level that also exists in
++    this one — which is what makes this test able to fail: reverting the
++    call site inside `command_run` back to `roster` would revert to exactly
++    this."""
++    from publishable.cli import _report_by_levels
++
++    roster, arm_members_map = _crossing_stratum_fixture()
++    control_roster = _cond_roster(roster, 0, arm_members_map)
++
++    whole_keys, _whole_roster = _report_by_levels(roster, "site")["north"]
++    assert whole_keys == {"c0", "c1", "c2", "c3", "t0", "t1", "t2"}
++
++    arm_keys, arm_roster = _report_by_levels(control_roster, "site")["north"]
++    assert arm_keys == {"c0", "c1", "c2", "c3"}
++    assert {u.key for u in arm_roster} == arm_keys
++    assert arm_keys < whole_keys  # the narrowing actually removes units
++
++
++def test_cond_beside_n_withholds_technical_n_under_an_arm_only():
++    """Addendum item #5: `technical_n` beside a per-arm `n` needs a decision,
++    and the codebase already litigated this one level down — `report_by`'s
++    own level block withholds it rather than copying a whole-roster figure
++    onto a subset (`weighted_beside`, not `beside_n`, at that call site).
++    `_cond_beside_n` applies the same rule one level up, gated on
++    `_cond_roster`'s own identity signal for "no group axis narrowed this
++    condition"."""
++    from tests.test_runner import _arm_members12, _arm_roster12
++
++    from publishable.cli import _cond_beside_n
++
++    roster = _arm_roster12()
++    arm_members_map = _arm_members12()
++    beside_n = {"technical_n": {"min": 1, "max": 3, "median": 2}, "weighted_by": "w"}
++
++    control_roster = _cond_roster(roster, 0, arm_members_map)
++    assert _cond_beside_n(beside_n, control_roster, roster) == {"weighted_by": "w"}
++    # No group axis: `cond_roster is roster`, and nothing is withheld.
++    assert _cond_beside_n(beside_n, roster, roster) == beside_n
++
++
+ def test_the_recorded_order_is_the_order_that_ran(tmp_path: Path):
+     """The realized order is a fact about the run, not a rule to re-derive.
+ 
+     Uses `RANDOMIZED_ACROSS_CONDITIONS` (2 conditions) rather than a single-condition
+     fixture: with one condition there is no condition boundary for a batch to cross,
+     so the plan-reordering this test exists to catch could be missing entirely and
+     a single-condition run would still pass.
+     """
+     doc = run_a_project(
+         tmp_path,

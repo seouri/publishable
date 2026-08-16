@@ -1,0 +1,199 @@
+# Review package: b4858e7..HEAD
+
+## Commits
+a6a15d3 fix: exclude assign.seed from design_digest, per-axis
+
+## Files changed
+ src/publishable/hashes.py |  44 +++++++++++++++++-
+ tests/test_hashes.py      | 111 ++++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 153 insertions(+), 2 deletions(-)
+
+## Diff
+diff --git a/src/publishable/hashes.py b/src/publishable/hashes.py
+index 14a8ef4..fd029a9 100644
+--- a/src/publishable/hashes.py
++++ b/src/publishable/hashes.py
+@@ -59,15 +59,55 @@ def _canonical(payload: Any) -> bytes:
+ 
+ def parameters_hash(config: dict[str, Any]) -> str:
+     """Everything in the config except `metadata` and the two host paths."""
+     covered = {k: v for k, v in config.items() if k != "metadata"}
+     data = covered.get("data")
+     if isinstance(data, dict):
+         covered["data"] = {k: v for k, v in data.items() if k not in ("input_dir", "output_dir")}
+     return _prefixed(hashlib.sha256(_canonical(covered)).hexdigest())
+ 
+ 
++def _units_excluding_assign_seed(units: Any) -> Any:
++    """`data.units` with `assign.<axis>.seed` dropped from every axis block.
++
++    `assign` is a mapping of axis name -> block, so the exclusion is per-axis:
++    an axis's own `seed` is dropped from its own block only, never the whole
++    `assign` subtree and never a sibling axis's `seed`. See docs/reference.md
++    § What `auto` derives from: an axis's `assign.seed` "mixes digest + the
++    axis name + the resolved roster" — a seed that is itself inside the
++    digest it is mixed with would make the derivation self-referential.
++
++    `design_digest` runs at run time on a validated config, but `validate`
++    reaches it too (indirectly, via `expand` -> the `sample` seed derivation),
++    so a malformed config can arrive here first. This function never raises:
++    a non-mapping `units`, a non-mapping `assign`, or a non-mapping axis block
++    is left exactly as given rather than unpacked, so the caller's canonical
++    JSON encoding still runs over *something* instead of crashing on a shape
++    it did not expect.
++    """
++    if not isinstance(units, dict):
++        return units
++    assign = units.get("assign")
++    if not isinstance(assign, dict):
++        return units
++    new_assign = {}
++    changed = False
++    for axis, block in assign.items():
++        if isinstance(block, dict) and "seed" in block:
++            new_assign[axis] = {k: v for k, v in block.items() if k != "seed"}
++            changed = True
++        else:
++            new_assign[axis] = block
++    if not changed:
++        return units
++    return {**units, "assign": new_assign}
++
++
+ def design_digest(config: dict[str, Any]) -> str:
+-    """`data.units` and `sweep.groups` only, so a parameter edit redraws nothing."""
+-    units = (config.get("data") or {}).get("units")
++    """`data.units` (every field except `assign.seed` itself) and `sweep.groups`.
++
++    A parameter edit redraws nothing, and neither does pinning or changing an
++    axis's `assign.seed` — see `_units_excluding_assign_seed`.
++    """
++    units = _units_excluding_assign_seed((config.get("data") or {}).get("units"))
+     groups = (config.get("sweep") or {}).get("groups")
+     return _prefixed(hashlib.sha256(_canonical({"units": units, "groups": groups})).hexdigest())
+diff --git a/tests/test_hashes.py b/tests/test_hashes.py
+index 0fbf240..158612e 100644
+--- a/tests/test_hashes.py
++++ b/tests/test_hashes.py
+@@ -102,10 +102,121 @@ def test_parameters_hash_does_not_mutate_input():
+ def test_design_digest_covers_units_and_groups_only():
+     base = {
+         "data": {"units": {"key": "patient_id"}},
+         "sweep": {"groups": [], "grid": {"analysis.method": ["spearman"]}},
+         "parameters": {"analysis": {"min_samples": 30}},
+     }
+     edited = {**base, "parameters": {"analysis": {"min_samples": 50}}}
+     assert design_digest(base) == design_digest(edited), "editing a parameter must not redraw"
+     roster = {**base, "data": {"units": {"key": "sample_id"}}}
+     assert design_digest(base) != design_digest(roster)
++
++
++def _units_with_arm(seed=1, method="blocked", from_="site", stratify_by="age_band"):
++    return {
++        "data": {
++            "units": {
++                "key": "patient_id",
++                "assign": {
++                    "arm": {
++                        "method": method,
++                        "seed": seed,
++                        "from": from_,
++                        "stratify_by": stratify_by,
++                    }
++                },
++            }
++        },
++    }
++
++
++def test_design_digest_excludes_assign_seed_with_a_control():
++    base = _units_with_arm(seed=1)
++    reseeded = _units_with_arm(seed=2)
++    assert design_digest(base) == design_digest(reseeded), (
++        "assign.seed must not move the digest"
++    )
++
++    # Control: a different key must still move it, proving the exclusion is
++    # not "the whole config is ignored".
++    key_changed = {
++        **base,
++        "data": {**base["data"], "units": {**base["data"]["units"], "key": "sample_id"}},
++    }
++    assert design_digest(base) != design_digest(key_changed)
++
++
++def test_design_digest_exclusion_is_surgical_not_the_whole_assign_block():
++    base = _units_with_arm()
++
++    from_changed = _units_with_arm(from_="clinic")
++    assert design_digest(base) != design_digest(from_changed), (
++        "assign.arm.from is a different partition and must move the digest"
++    )
++
++    stratify_changed = _units_with_arm(stratify_by="sex")
++    assert design_digest(base) != design_digest(stratify_changed), (
++        "assign.arm.stratify_by is a different balancing draw and must move the digest"
++    )
++
++    second_axis = {
++        **base,
++        "data": {
++            **base["data"],
++            "units": {
++                **base["data"]["units"],
++                "assign": {
++                    **base["data"]["units"]["assign"],
++                    "sex": {"method": "blocked", "seed": 5},
++                },
++            },
++        },
++    }
++    assert design_digest(base) != design_digest(second_axis), (
++        "adding a second axis to assign must move the digest"
++    )
++
++
++def test_design_digest_exclusion_is_per_axis_not_first_found():
++    two_axes = {
++        "data": {
++            "units": {
++                "key": "patient_id",
++                "assign": {
++                    "arm": {"method": "blocked", "seed": 1, "from": "site"},
++                    "sex": {"method": "blocked", "seed": 5},
++                },
++            }
++        },
++    }
++    reseeded_second_axis = {
++        "data": {
++            "units": {
++                "key": "patient_id",
++                "assign": {
++                    "arm": {"method": "blocked", "seed": 1, "from": "site"},
++                    "sex": {"method": "blocked", "seed": 99},
++                },
++            }
++        },
++    }
++    assert design_digest(two_axes) == design_digest(reseeded_second_axis), (
++        "the second axis's own seed must be excluded too, not just the first axis found"
++    )
++
++
++def test_design_digest_does_not_raise_on_malformed_assign_shapes():
++    non_mapping_assign = {"data": {"units": {"key": "patient_id", "assign": "not-a-mapping"}}}
++    non_mapping_block = {
++        "data": {"units": {"key": "patient_id", "assign": {"arm": "not-a-mapping"}}}
++    }
++    non_mapping_units = {"data": {"units": "not-a-mapping"}}
++    none_seed = {
++        "data": {
++            "units": {
++                "key": "patient_id",
++                "assign": {"arm": {"seed": None, "method": "blocked"}},
++            }
++        }
++    }
++    for config in (non_mapping_assign, non_mapping_block, non_mapping_units, none_seed):
++        design_digest(config)  # must not raise

@@ -1,0 +1,154 @@
+# Review package: 9e23e9e..HEAD
+
+## Commits
+15ee377 Hoist find_repo_root above the template check in validate_config
+
+## Files changed
+ src/publishable/validate.py | 17 +++++++++--------
+ tests/test_validate.py      | 44 +++++++++++++++++++++++++++++++++++++++++++-
+ 2 files changed, 52 insertions(+), 9 deletions(-)
+
+## Diff
+diff --git a/src/publishable/validate.py b/src/publishable/validate.py
+index ca992de..a0f28f1 100644
+--- a/src/publishable/validate.py
++++ b/src/publishable/validate.py
+@@ -485,39 +485,40 @@ def validate_config(
+     run time instead would spend exactly the compute the warning is about.
+     """
+     doc = load_document(config_path, c)
+     if doc is None:
+         return None
+ 
+     if not _check_shape(doc, c):
+         return None  # every later check indexes into a block already known malformed
+ 
+     name = doc.get("experiment_type", "")
+-    template = get_template(name)
++    try:
++        repo_root: Path | None = find_repo_root(config_path)
++    except ContractError:
++        # No repo at all. That is `_check_data`'s finding to make (or not), and
++        # there is no `templates/` to discover locally, so local discovery is
++        # skipped rather than reported here — `generic` still resolves as a
++        # core template regardless.
++        repo_root = None
++    template = get_template(name, repo_root)
+     if template is None:
+         c.error(
+             "E-TEMPLATE-UNKNOWN",
+             "experiment_type",
+             f"names `{name}`, which no installed template registers "
+             f"(known: {', '.join(template_names())})",
+         )
+         return None  # every later check reads the spec
+ 
+     entrypoint = doc.get("entrypoint")
+     if experiment is None and isinstance(entrypoint, str) and entrypoint:
+-        try:
+-            repo_root: Path | None = find_repo_root(config_path)
+-        except ContractError:
+-            # No repo at all. That is `_check_data`'s finding to make (or not), and
+-            # there is no `src/` to import from, so the entrypoint check is skipped
+-            # rather than reported as an import failure it did not cause.
+-            repo_root = None
+         try:
+             if repo_root is not None:
+                 experiment = load_experiment(repo_root, entrypoint)
+         except SystemExit as exc:
+             # `SystemExit` is a `BaseException`, so the broad `except Exception` below
+             # does not see it. A user package calling `sys.exit()` at module scope —
+             # or building an `argparse` parser at import — would otherwise end the
+             # process with the user's own exit code and no diagnostic at all, which
+             # is the one outcome `validate` is contracted never to produce.
+             c.error(
+diff --git a/tests/test_validate.py b/tests/test_validate.py
+index 335e1f7..8ce3150 100644
+--- a/tests/test_validate.py
++++ b/tests/test_validate.py
+@@ -434,20 +434,62 @@ def test_a_missing_parameter_is_reported():
+ 
+ def test_the_name_must_match_the_pattern_and_the_directory(write_config):
+     assert "E-NAME-PATTERN" in codes(write_config({"metadata.name": "Cohort_Pilot"}))
+     assert "E-NAME-DIR" in codes(write_config({"metadata.name": "cohort-pilot-v2"}))
+ 
+ 
+ def test_an_uninstalled_template_is_fatal(write_config):
+     assert "E-TEMPLATE-UNKNOWN" in codes(write_config({"experiment_type": "llm_diagnostic"}))
+ 
+ 
++def test_an_unknown_template_still_reports_exactly_one_finding(write_config):
++    """§ Errors: the check "returns immediately after", so none of the other
++    rows appear. Assert the exact set, not that the code is present."""
++    assert codes(write_config({"experiment_type": "llm_diagnostic"})) == {"E-TEMPLATE-UNKNOWN"}
++
++
++def test_a_local_template_validates_through_the_real_path(git_repo: Path, write_config):
++    """End to end: a config naming a local template no longer draws
++    E-TEMPLATE-UNKNOWN. THE CONTROL: a config naming a template that exists
++    nowhere still draws it, so a check that stopped reporting entirely fails."""
++    templates = git_repo / "templates"
++    templates.mkdir()
++    (templates / "my_assay.py").write_text(
++        "from publishable import BaseTemplate, register_template\n\n\n"
++        '@register_template("my_assay")\n'
++        "class MyAssay(BaseTemplate):\n"
++        "    pass\n"
++    )
++
++    found = codes(write_config({"experiment_type": "my_assay", "parameters": {}}))
++    assert "E-TEMPLATE-UNKNOWN" not in found
++
++    still_missing = codes(write_config({"experiment_type": "nowhere_at_all"}))
++    assert "E-TEMPLATE-UNKNOWN" in still_missing
++
++
++def test_no_repo_means_local_discovery_is_skipped_and_generic_still_resolves(
++    write_config, monkeypatch
++):
++    """A config outside any repo. `find_repo_root` raises; the hoist must
++    swallow it. Assert the exact finding set — an added finding here would
++    break the documented early-return order."""
++    import publishable.validate as validate_mod
++    from publishable.errors import ContractError
++
++    def _no_repo(path):
++        raise ContractError("no git repository found", code="E-GIT-NO-REPO")
++
++    monkeypatch.setattr(validate_mod, "find_repo_root", _no_repo)
++    assert codes(write_config()) == set()
++
++
+ def test_data_may_not_resolve_inside_the_repo(write_config, git_repo: Path):
+     inside = str(git_repo / "results")
+     assert "E-DATA-IN-REPO" in codes(write_config({"data.output_dir": inside}))
+ 
+ 
+ def test_an_unreadable_input_dir_is_reported(write_config, tmp_path: Path):
+     assert "E-DATA-UNREADABLE" in codes(write_config({"data.input_dir": str(tmp_path / "absent")}))
+ 
+ 
+ def test_a_moved_template_version_warns_rather_than_failing(write_config):
+@@ -3262,21 +3304,21 @@ def test_an_unknown_input_manifest_policy_is_reported(write_config):
+ def test_a_template_cross_field_rule_is_reported(write_config, monkeypatch):
+     """`generic` has no cross-field rule of its own, so `E-TEMPLATE-RULE` is exercised
+     through a stub template swapped in for the registry lookup `validate_config` makes."""
+     import publishable.validate as validate_mod
+     from publishable.templates.builtin.generic import GenericTemplate
+ 
+     class RuleBreaker(GenericTemplate):
+         def validate(self, config):
+             return ["a cross-field rule was broken"]
+ 
+-    monkeypatch.setattr(validate_mod, "get_template", lambda name: RuleBreaker())
++    monkeypatch.setattr(validate_mod, "get_template", lambda name, repo_root=None: RuleBreaker())
+     assert "E-TEMPLATE-RULE" in codes(write_config())
+ 
+ 
+ def test_falling_below_the_repeat_floor_warns():
+     """Exercised directly: `generic`'s floor is 1, so no legal count can breach it.
+ 
+     Routing this through `validate_config` would need a template that does not
+     exist yet, and asserting the warning against an illegal `n: 0` would be
+     testing the error path while claiming to test the floor.
+     """

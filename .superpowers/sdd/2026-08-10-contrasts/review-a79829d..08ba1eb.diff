@@ -1,0 +1,1135 @@
+# Review package: a79829d..HEAD
+
+## Commits
+08ba1eb Fix the shared-compute cancellation and build results.contrasts
+5349b0e Report a contrast beside the conditions it compares
+
+## Files changed
+ src/publishable/cli.py        | 350 +++++++++++++++++++++++++++++++++++++++++-
+ src/publishable/run_record.py |  29 +++-
+ src/publishable/stats.py      |  24 ++-
+ tests/test_cli.py             | 144 ++++++++++++++++-
+ tests/test_stats.py           |  58 +++++--
+ 5 files changed, 580 insertions(+), 25 deletions(-)
+
+## Diff
+diff --git a/src/publishable/cli.py b/src/publishable/cli.py
+index cecfc3d..1ba3ec9 100644
+--- a/src/publishable/cli.py
++++ b/src/publishable/cli.py
+@@ -3,27 +3,28 @@
+ See docs/reference.md § Exit codes and diagnostics, § Generators, § Scaffolding.
+ """
+ 
+ import importlib
+ import importlib.metadata
+ import json
+ import sys
+ from collections.abc import Callable
+ from datetime import UTC, datetime
+ from pathlib import Path
+-from typing import Any
++from typing import TYPE_CHECKING, Any
+ 
+ import yaml
+ 
+ from publishable.base_experiment import BaseExperiment, load_experiment
+ from publishable.coercion import coerce_scalars
+ from publishable.config import Config
++from publishable.contrasts import resolve_contrasts, units_matching
+ from publishable.diagnostics import (
+     EXIT_FAILED,
+     EXIT_INVOCATION,
+     EXIT_OK,
+     EXIT_PARTIAL,
+     EXIT_WRONG,
+     Collector,
+ )
+ from publishable.errors import ContractError, PublishableError
+ from publishable.generators.experiment import generate_experiment
+@@ -38,33 +39,42 @@ from publishable.replication import (
+     realize_order,
+     resolve_repeats,
+ )
+ from publishable.run_identity import RunLock, allocate_run_dir, point_latest
+ from publishable.run_record import assemble_run_yaml, run_status
+ from publishable.runner import attrition, execute_plan, resolve_condition_cfg, resolve_wide_cfg
+ from publishable.scaffold import scaffold_project
+ from publishable.scope import Execution, build_plan
+ from publishable.stats import (
+     UnitTable,
++    cohens_dz,
+     collapse_repeats,
++    mean_of,
+     min_honest_draws,
++    paired_keys,
++    paired_percentile_of_derived,
++    paired_t_over_units,
+     repeat_spread,
+     resample_seed,
+     summarize_step,
+ )
+-from publishable.sweep import expand, sweep_document
++from publishable.sweep import condition_dir_name, expand, sweep_document
+ from publishable.templates.base import BaseTemplate
+ from publishable.templates.registry import get_template
+-from publishable.units import Unit, partition_units, resolve_units, units_hash
++from publishable.units import Unit, UnitList, partition_units, resolve_units, units_hash
+ from publishable.uv_support import uv_lock_info
+ from publishable.validate import load_document, validate_config
+ 
++if TYPE_CHECKING:
++    from publishable.contrasts import Comparison
++    from publishable.sweep import Condition
++
+ OPERATION_COMMANDS = {"validate", "run"}
+ 
+ 
+ def _preloaded_experiment(config_path: Path) -> BaseExperiment | None:
+     """Import the entrypoint before validating, so a run imports user code once.
+ 
+     `validate_config` imports it too when handed nothing (it needs the step classes
+     for `W-REPL-DETERMINISTIC`), and importing a project's package twice in one
+     process is exactly what `load_experiment`'s `sys.modules` purge exists to make
+     survivable — but paying for it on every run is pointless. Failures are swallowed
+@@ -126,20 +136,305 @@ def _apply_execution_order(
+             code="E-RUN-ORDER-MISMATCH",
+         )
+     summary_executions = [e for e in plan if e.scope == "summary"]
+     return (
+         [e for e in plan if e.scope not in ("repeat", "summary")]
+         + reordered_repeats
+         + summary_executions
+     )
+ 
+ 
++def _baseline_comparisons(
++    doc: dict[str, Any], conditions: "list[Condition]"
++) -> "list[Comparison]":
++    """The subset of `resolve_contrasts`'s list that belongs in `vs_baseline`.
++
++    `resolve_contrasts` also returns declared `statistics.contrasts` entries —
++    an arbitrary `of`/`against` pair under a custom `id` — and those are
++    `results.contrasts` (`_declared_comparisons`, `_compute_declared_contrasts`),
++    not this run's `vs_baseline`. The auto-generated baseline comparisons this
++    function keeps are exactly the ones `resolve_contrasts` built with
++    `id=<condition's own label>` and `against=<the baseline's index>` — the
++    same identity test, run again here (and inverted in `_declared_comparisons`)
++    rather than threaded through as a fourth field on `Comparison`, since only
++    these two callers need it.
++    """
++    baseline = next((c for c in conditions if c.is_baseline), None)
++    if baseline is None:
++        return []
++    label_by_index = {c.index: c.label for c in conditions}
++    return [
++        comp
++        for comp in resolve_contrasts(doc, conditions)
++        if comp.against == baseline.index and comp.id == label_by_index.get(comp.of)
++    ]
++
++
++def _declared_comparisons(doc: dict[str, Any], conditions: "list[Condition]") -> "list[Comparison]":
++    """The complement of `_baseline_comparisons`: every `resolve_contrasts` entry
++    that is *not* an auto-generated baseline comparison — i.e. a declared
++    `statistics.contrasts` entry, headed for `results.contrasts` rather than
++    `vs_baseline`. Same identity test as `_baseline_comparisons`, inverted,
++    kept as its own function so a caller never has to remember to negate the
++    other one correctly.
++    """
++    baseline = next((c for c in conditions if c.is_baseline), None)
++    label_by_index = {c.index: c.label for c in conditions}
++    all_comparisons = resolve_contrasts(doc, conditions)
++    if baseline is None:
++        return all_comparisons
++    return [
++        comp
++        for comp in all_comparisons
++        if not (comp.against == baseline.index and comp.id == label_by_index.get(comp.of))
++    ]
++
++
++def _comparison_step_blocks(
++    comp: "Comparison",
++    *,
++    roster: "UnitList",
++    aggregated: dict[int, dict[str, dict[str, Any]]],
++    collapsed_by_key: dict[tuple[int, str], dict[str, dict[str, float]]],
++    derived_by_key: dict[tuple[int, str], dict[str, Any] | None],
++    resample_fns_by_key: dict[
++        tuple[int, str], dict[str, Callable[[UnitTable], float | None]] | None
++    ],
++    seed: int,
++    draws: int,
++    min_reported_n: float | int | None,
++    findings: Collector,
++    where: str,
++) -> dict[str, dict[str, Any]]:
++    """One comparison's delta, per recording step and per metric already in
++    `aggregated` — the computation `vs_baseline` and `results.contrasts` both
++    rest on, factored out so the two record shapes don't duplicate it.
++
++    A recorded column takes `paired_t_over_units` over the per-unit
++    differences, with `cohens_d = cohens_dz(diffs)`. A derived metric — one
++    `aggregate` computed, absent any per-unit value to difference — takes
++    `paired_percentile_of_derived` instead, with its *own* resample closure on
++    each side (`compute_of`/`compute_against`): the two conditions' `cfg` can
++    differ on exactly the axis the comparison exists to measure, so evaluating
++    one side's closure against both sides' draws is wrong the moment that
++    axis changes which formula `aggregate` runs — the documented worked
++    example's `analysis.method` sweep does exactly this, and with `pred`/
++    `truth` recorded identically across conditions there, a single shared
++    closure cancels on every draw: a zero-width `ci95` at zero beside a
++    nonzero point-estimate delta. `cohens_d` is `None` for a derived metric,
++    for the reason the worked example carries `cohens_d: null` for `r`. Both
++    constructions read `n_paired` off `stats.paired_keys` — the intersection
++    of the two conditions' completed units, narrowed by `within` when the
++    comparison declares one — and record `correction: null`: the correction
++    family, `ci95_corrected`, `correction_level`, and `family_size` are S4c's.
++    """
++    allowed = units_matching(roster, comp.within)
++    of_steps = {k[1] for k in collapsed_by_key if k[0] == comp.of}
++    against_steps = {k[1] for k in collapsed_by_key if k[0] == comp.against}
++    block: dict[str, dict[str, Any]] = {}
++    for step_name in sorted(of_steps & against_steps):
++        of_collapsed = collapsed_by_key[(comp.of, step_name)]
++        against_collapsed = collapsed_by_key[(comp.against, step_name)]
++        base_keys = paired_keys(of_collapsed, against_collapsed, allowed)
++        of_summary = aggregated.get(comp.of, {}).get(step_name, {})
++        against_summary = aggregated.get(comp.against, {}).get(step_name, {})
++        of_derived = derived_by_key.get((comp.of, step_name)) or {}
++        against_derived = derived_by_key.get((comp.against, step_name)) or {}
++        metric_block: dict[str, Any] = {}
++        for metric_key in sorted(set(of_summary) & set(against_summary)):
++            is_derived = metric_key in of_derived or metric_key in against_derived
++            if is_derived:
++                compute_of = (resample_fns_by_key.get((comp.of, step_name)) or {}).get(
++                    metric_key
++                )
++                compute_against = (resample_fns_by_key.get((comp.against, step_name)) or {}).get(
++                    metric_key
++                )
++                n_paired = len(base_keys)
++                interval = None
++                if compute_of is not None and compute_against is not None and n_paired >= 2:
++                    interval, _ = paired_percentile_of_derived(
++                        of_collapsed,
++                        against_collapsed,
++                        base_keys,
++                        compute_of,
++                        compute_against,
++                        seed,
++                        draws=draws,
++                    )
++                of_value = of_summary[metric_key].get("value")
++                against_value = against_summary[metric_key].get("value")
++                delta = (
++                    float(of_value) - float(against_value)
++                    if of_value is not None and against_value is not None
++                    else None
++                )
++                metric_block[metric_key] = {
++                    "delta": delta,
++                    "basis": "units",
++                    "paired": True,
++                    "method": interval.method if interval else None,
++                    "n_paired": n_paired,
++                    "ci95": [interval.low, interval.high] if interval else None,
++                    "cohens_d": None,
++                    "correction": None,
++                }
++            else:
++                col_keys = [
++                    k
++                    for k in base_keys
++                    if metric_key in of_collapsed[k] and metric_key in against_collapsed[k]
++                ]
++                diffs = [
++                    of_collapsed[k][metric_key] - against_collapsed[k][metric_key]
++                    for k in col_keys
++                ]
++                interval = paired_t_over_units(diffs)
++                n_paired = len(col_keys)
++                metric_block[metric_key] = {
++                    "delta": mean_of(diffs),
++                    "basis": "units",
++                    "paired": True,
++                    "method": interval.method if interval else None,
++                    "n_paired": n_paired,
++                    "ci95": [interval.low, interval.high] if interval else None,
++                    "cohens_d": cohens_dz(diffs),
++                    "correction": None,
++                }
++            if min_reported_n is not None and n_paired < min_reported_n:
++                findings.warn(
++                    "W-STATS-CONTRAST-THIN",
++                    "limits.min_reported_n",
++                    f"{where}, step {step_name!r} metric {metric_key!r}: n_paired "
++                    f"{n_paired} is below limits.min_reported_n ({min_reported_n})",
++                )
++        if metric_block:
++            block[step_name] = metric_block
++    return block
++
++
++def _compute_vs_baseline(
++    *,
++    doc: dict[str, Any],
++    conditions: "list[Condition]",
++    roster: "UnitList | None",
++    aggregated: dict[int, dict[str, dict[str, Any]]],
++    collapsed_by_key: dict[tuple[int, str], dict[str, dict[str, float]]],
++    derived_by_key: dict[tuple[int, str], dict[str, Any] | None],
++    resample_fns_by_key: dict[
++        tuple[int, str], dict[str, Callable[[UnitTable], float | None]] | None
++    ],
++    seed: int,
++    draws: int,
++    findings: Collector,
++) -> dict[int, dict[str, dict[str, dict[str, Any]]]] | None:
++    """Every non-baseline condition's own delta against the baseline, per
++    recording step and per metric already in `aggregated` — see
++    `_comparison_step_blocks` for how one comparison's block is built.
++
++    Returns `None`, not `{}`, when nothing survives: no baseline, no metric in
++    common between a condition and the baseline, or (per
++    `contrasts.resolve_contrasts`'s own docstring) no declared baseline at
++    all. `assemble_run_yaml` omits the key entirely in that case rather than
++    writing an empty block that would claim a comparison was made and found
++    nothing.
++    """
++    if roster is None:
++        return None
++    comparisons = _baseline_comparisons(doc, conditions)
++    if not comparisons:
++        return None
++    min_reported_n = (doc.get("limits") or {}).get("min_reported_n")
++    out: dict[int, dict[str, dict[str, dict[str, Any]]]] = {}
++    for comp in comparisons:
++        block = _comparison_step_blocks(
++            comp,
++            roster=roster,
++            aggregated=aggregated,
++            collapsed_by_key=collapsed_by_key,
++            derived_by_key=derived_by_key,
++            resample_fns_by_key=resample_fns_by_key,
++            seed=seed,
++            draws=draws,
++            min_reported_n=min_reported_n,
++            findings=findings,
++            where=f"condition {comp.of} ({comp.id!r}) vs baseline",
++        )
++        if block:
++            out[comp.of] = block
++    return out or None
++
++
++def _compute_declared_contrasts(
++    *,
++    doc: dict[str, Any],
++    conditions: "list[Condition]",
++    roster: "UnitList | None",
++    aggregated: dict[int, dict[str, dict[str, Any]]],
++    collapsed_by_key: dict[tuple[int, str], dict[str, dict[str, float]]],
++    derived_by_key: dict[tuple[int, str], dict[str, Any] | None],
++    resample_fns_by_key: dict[
++        tuple[int, str], dict[str, Callable[[UnitTable], float | None]] | None
++    ],
++    seed: int,
++    draws: int,
++    findings: Collector,
++) -> list[dict[str, Any]] | None:
++    """Every declared `statistics.contrasts` entry's delta, as `results.contrasts`
++    — `reference.md` § Contrasts: claims that aren't condition-vs-baseline: "a
++    contrast belongs to neither of its sides", so it lands beside the
++    conditions rather than inside one, as a flat list rather than keyed by
++    condition index the way `vs_baseline` is.
++
++    `of`/`against` are recorded **with their index** even though the config
++    names them by label alone — `sweep.condition_dir_name`'s `<nn>_<label>`
++    form, the same the run's own `conditions/` directories use — because the
++    record resolves what the config abbreviates.
++
++    Returns `None`, not `[]`, when nothing was declared: this is the sibling
++    no-op `docs/superpowers/spec-defects.md` used to carry (Task 6 retired
++    `E-STATS-CONTRASTS-UNSUPPORTED`, so a declared contrast validated clean
++    with nothing downstream to compute it) — closed here rather than in a
++    later slice.
++    """
++    if roster is None:
++        return None
++    comparisons = _declared_comparisons(doc, conditions)
++    if not comparisons:
++        return None
++    label_by_index = {c.index: c.label for c in conditions}
++    min_reported_n = (doc.get("limits") or {}).get("min_reported_n")
++    out: list[dict[str, Any]] = []
++    for comp in comparisons:
++        block = _comparison_step_blocks(
++            comp,
++            roster=roster,
++            aggregated=aggregated,
++            collapsed_by_key=collapsed_by_key,
++            derived_by_key=derived_by_key,
++            resample_fns_by_key=resample_fns_by_key,
++            seed=seed,
++            draws=draws,
++            min_reported_n=min_reported_n,
++            findings=findings,
++            where=f"contrast {comp.id!r}",
++        )
++        entry: dict[str, Any] = {
++            "id": comp.id,
++            "of": condition_dir_name(comp.of, label_by_index.get(comp.of) or ""),
++            "against": condition_dir_name(comp.against, label_by_index.get(comp.against) or ""),
++        }
++        entry.update(block)
++        out.append(entry)
++    return out or None
++
++
+ def command_validate(config_path: Path) -> int:
+     c = Collector()
+     validate_config(config_path, c)
+     if c.findings:
+         print(config_path)
+         print(c.render())
+     else:
+         print(f"  ✓ config valid · {config_path}")
+     return c.exit_code()
+ 
+@@ -305,20 +600,29 @@ def command_run(config_path: Path) -> int:
+             max_failed_fraction=(doc.get("limits") or {}).get("max_failed_fraction"),
+             fold_members=fold_members,
+         )
+ 
+         status = run_status(results)
+         # No roster means nothing to aggregate over, so `aggregated` stays `None`
+         # rather than an empty dict — `assemble_run_yaml` omits the key entirely in
+         # that case, instead of every condition reporting a misleading empty
+         # `aggregated: {}`.
+         aggregated: dict[int, dict[str, dict[str, Any]]] | None = None
++        # Same absent-not-empty rule as `aggregated`, for the same reason: a run
++        # with no baseline and no declared contrast compares nothing, and
++        # `_compute_vs_baseline` (below, only reached when `roster is not None`)
++        # returns `None` rather than `{}` in that case.
++        vs_baseline: dict[int, dict[str, dict[str, dict[str, Any]]]] | None = None
++        # Same rule, same reason, for the declared side: no `statistics.contrasts`
++        # entry means nothing to report, and `_compute_declared_contrasts` returns
++        # `None` rather than `[]`.
++        contrasts_out: list[dict[str, Any]] | None = None
+         # Condition metadata `ExecutionResult` cannot carry: `Execution` holds
+         # index and label but not `is_baseline` or the swept `values`, and
+         # `reference.md` § The two files shows both on the condition entry.
+         # `dict(...)` unwraps `Condition.values`'s `MappingProxyType`, which
+         # `yaml.safe_dump` has no representer for.
+         condition_meta = {
+             c.index: {"label": c.label, "is_baseline": c.is_baseline, "values": dict(c.values)}
+             for c in conditions
+         }
+         if roster is not None:
+@@ -339,20 +643,31 @@ def command_run(config_path: Path) -> int:
+             # step execution is — "a failed execution never stops the run" —
+             # but this call sits outside that `try`, in phase 8, after every
+             # execution already completed. Uncontained, a template whose
+             # `aggregate` raises anything but `PublishableError`/`OSError`
+             # would crash before `run.yaml` is ever written, discarding every
+             # completed execution over one metric core couldn't compute.
+             # Contained here the same way: the failure is disclosed (below)
+             # and the run's other results — and `run.yaml` itself — survive.
+             aggregate_c = Collector()
+             aggregated = {}
++            # Kept beside `aggregated` so `vs_baseline` (below, once every
++            # condition's own metrics are in) can recompute a paired interval
++            # without re-running `collapse_repeats` or `aggregate` a second
++            # time: the per-unit table, what `aggregate` returned by name, and
++            # the resample closure `_make_resample_fn` built for it, one entry
++            # per (condition, recording step) actually seen this run.
++            collapsed_by_key: dict[tuple[int, str], dict[str, dict[str, float]]] = {}
++            derived_by_key: dict[tuple[int, str], dict[str, Any] | None] = {}
++            resample_fns_by_key: dict[
++                tuple[int, str], dict[str, Callable[[UnitTable], float | None]] | None
++            ] = {}
+             for cond in conditions:
+                 recording_steps = {
+                     r.execution.step_name
+                     for r in results
+                     if r.execution.scope == "repeat"
+                     and r.execution.condition_index == cond.index
+                     and r.rows
+                 }
+                 aggregated[cond.index] = {}
+                 for step_name in sorted(recording_steps):
+@@ -415,20 +730,23 @@ def command_run(config_path: Path) -> int:
+                                     value = coerce_scalars(
+                                         tmpl.aggregate(units, cfg), where=aggregate_where
+                                     ).get(key)
+                                     return None if value is None else float(value)
+ 
+                                 return resample_fn
+ 
+                             resample_fns = {
+                                 key: _make_resample_fn(key, cond_cfg, template) for key in derived
+                             }
++                    collapsed_by_key[(cond.index, step_name)] = collapsed
++                    derived_by_key[(cond.index, step_name)] = derived
++                    resample_fns_by_key[(cond.index, step_name)] = resample_fns
+                     # The second door onto the same containment. `summarize_step`
+                     # refuses a derived key that collides with a recorded column
+                     # (`E-STEP-KEY-COLLISION`) — a real fault, and not weakened
+                     # here — but the fault is in the same user-written
+                     # `aggregate` the `try` above contains, one call later.
+                     # Uncontained it exits before `run.yaml` is written,
+                     # discarding every completed execution over one badly chosen
+                     # name, while the sibling case (a structural return) merely
+                     # warns. So it is disclosed the same way and costs the same
+                     # thing: the whole `derived` mapping, exactly as a coercion
+@@ -530,20 +848,44 @@ def command_run(config_path: Path) -> int:
+                             # The units the metric beside it rests on, so the
+                             # dispersion and the interval describe one
+                             # population (`repeat_spread` says why).
+                             keys=set(collapsed),
+                         )
+                         if spread:
+                             step_summary[column]["repeat_spread"] = (
+                                 spread[0] if len(spread) == 1 else spread
+                             )
+                     aggregated[cond.index][step_name] = step_summary
++            vs_baseline = _compute_vs_baseline(
++                doc=doc,
++                conditions=conditions,
++                roster=roster,
++                aggregated=aggregated,
++                collapsed_by_key=collapsed_by_key,
++                derived_by_key=derived_by_key,
++                resample_fns_by_key=resample_fns_by_key,
++                seed=resample_seed_value,
++                draws=derived_metric_draws,
++                findings=aggregate_c,
++            )
++            contrasts_out = _compute_declared_contrasts(
++                doc=doc,
++                conditions=conditions,
++                roster=roster,
++                aggregated=aggregated,
++                collapsed_by_key=collapsed_by_key,
++                derived_by_key=derived_by_key,
++                resample_fns_by_key=resample_fns_by_key,
++                seed=resample_seed_value,
++                draws=derived_metric_draws,
++                findings=aggregate_c,
++            )
+             if aggregate_c.findings:
+                 # Disclosed, not corrective: a metric that could not be computed
+                 # is not the same fact as a run that did not happen, so `status`
+                 # (set above from the executions themselves, all of which already
+                 # completed by the time `aggregate` runs) is deliberately left
+                 # alone — unlike `E-INPUT-CHANGED` below, which does set
+                 # `status = "failed"` for a different reason (the data a
+                 # completed run rested on is no longer what it read). This is
+                 # printed to stdout only: `run.yaml` has no diagnostics channel
+                 # to carry a finding that isn't a metric, an interval, or a
+@@ -597,20 +939,22 @@ def command_run(config_path: Path) -> int:
+             run_id=run_dir.name,
+             status=status,
+             config=doc,
+             code_hash=ch,
+             parameters_hash=ph,
+             provenance=provenance,
+             results=results,
+             repeats=repeats,
+             aggregated=aggregated,
+             condition_meta=condition_meta,
++            vs_baseline=vs_baseline,
++            contrasts=contrasts_out,
+         )
+         (run_dir / "run.yaml").write_text(yaml.safe_dump(doc_out, sort_keys=False))
+         # `with` block exit releases the lock.
+ 
+     point_latest(output_dir, run_dir)
+     print(f"run.yaml → {run_dir / 'run.yaml'}")
+     return {"completed": EXIT_OK, "partial": EXIT_PARTIAL}.get(status, EXIT_FAILED)  # phase 10
+ 
+ 
+ def _dispatch(command: str, rest: list[str]) -> int:
+diff --git a/src/publishable/run_record.py b/src/publishable/run_record.py
+index eadfdfc..0028478 100644
+--- a/src/publishable/run_record.py
++++ b/src/publishable/run_record.py
+@@ -51,20 +51,22 @@ def _execution_block(results: list[ExecutionResult]) -> dict[str, Any]:
+         "shared": shared,
+         "conditions": [conditions[k] for k in sorted(conditions)],
+         "summary": summary,
+     }
+ 
+ 
+ def _results_block(
+     results: list[ExecutionResult],
+     aggregated: dict[int, dict[str, dict[str, Any]]] | None,
+     condition_meta: dict[int, dict[str, Any]] | None = None,
++    vs_baseline: dict[int, dict[str, dict[str, dict[str, Any]]]] | None = None,
++    contrasts: list[dict[str, Any]] | None = None,
+ ) -> dict[str, Any]:
+     # A "run"-scoped step's return has nowhere to land here (§ The two files gives
+     # `results` only `conditions` and `summary`), and the same is true of a
+     # "condition"-scoped step's return — both are dropped rather than given an
+     # undocumented home. See docs/superpowers/spec-defects.md.
+     conditions: dict[int, dict[str, Any]] = {}
+     summary: dict[str, Any] = {}
+     for r in results:
+         e = r.execution
+         if e.scope == "summary":
+@@ -96,20 +98,33 @@ def _results_block(
+     # its own slice — never the same mapping object handed to another condition.
+     # Core aggregates within each condition and never pools across conditions
+     # (`reference.md` § Statistical reporting); sharing one object across two
+     # condition entries would be that pooling by aliasing, invisible until a
+     # reader noticed two conditions reporting identical numbers (or PyYAML's
+     # `&id001`/`*id001` anchors gave it away). A condition absent from
+     # `aggregated` gets its own empty mapping, not another condition's.
+     if aggregated is not None:
+         for index, cond in conditions.items():
+             cond["aggregated"] = aggregated[index] if index in aggregated else {}
++    # `vs_baseline` is attached only to a condition that actually has one — a
++    # comparison belongs to the non-baseline side, so the baseline condition
++    # itself never gets the key, and neither does one with no metric in common
++    # with the baseline. Absent, not `{}`: an empty block would claim a
++    # comparison was made and found nothing (`contrasts.resolve_contrasts`'s
++    # own docstring, and the regression three prior slices have landed).
++    if vs_baseline is not None:
++        for index, block in vs_baseline.items():
++            if block:
++                conditions.setdefault(
++                    index,
++                    {"index": index, "label": None, "values": {}, "per_repeat": {}},
++                )["vs_baseline"] = block
+     # `condition_meta` is what an `Execution` cannot carry: it holds `index`,
+     # `label`, and `repeat_label`, but not `is_baseline` and not the swept
+     # `values` — those facts have to arrive alongside `aggregated` rather than
+     # be inferred from executions. It also fills in a condition that has no
+     # `condition`- or `repeat`-scoped execution in `results` at all (an empty
+     # grid axis, say), so its identity is still on record.
+     #
+     # `values` is filled here rather than left `{}`: `reference.md` § The two
+     # files and § Statistical reporting both show the swept values on the
+     # condition entry, and `run.yaml` is the file a paper attaches — a reader
+@@ -118,24 +133,32 @@ def _results_block(
+     if condition_meta is not None:
+         for index, meta in condition_meta.items():
+             cond = conditions.setdefault(
+                 index, {"index": index, "label": meta.get("label"), "values": {}, "per_repeat": {}}
+             )
+             cond["label"] = meta.get("label", cond.get("label"))
+             cond["is_baseline"] = meta.get("is_baseline", False)
+             cond["values"] = dict(meta.get("values") or {})
+         for cond in conditions.values():
+             cond.setdefault("is_baseline", False)
+-    return {
++    out: dict[str, Any] = {
+         "conditions": [conditions[k] for k in sorted(conditions)],
+         "summary": summary,
+     }
++    # `contrasts` is declared `statistics.contrasts` entries — a comparison that
++    # belongs to neither of its two sides, so it sits beside `conditions` rather
++    # than inside one (`reference.md` § Contrasts: claims that aren't
++    # condition-vs-baseline). Absent, not `[]`, for the same reason every other
++    # comparison block here is: no declared contrast means nothing to report.
++    if contrasts:
++        out["contrasts"] = contrasts
++    return out
+ 
+ 
+ def _layout_block(results: list[ExecutionResult], repeats: list[Repeat]) -> dict[str, bool]:
+     """Which degenerate levels survived collapse, per `reference.md` § How artifacts
+     are organized: "No sweep means no `conditions/` level; a single repeat means no
+     repeat level ... The active layout is recorded in `run.yaml` so tooling can rely
+     on it."
+ 
+     Shape: `{"conditions": bool, "repeats": bool}`. `"conditions"` is `True` when any
+     execution carries a real condition label (i.e. `sweep` produced more than the
+@@ -157,29 +180,31 @@ def assemble_run_yaml(
+     status: str,
+     config: dict[str, Any],
+     code_hash: str,
+     parameters_hash: str,
+     provenance: dict[str, Any],
+     results: list[ExecutionResult],
+     repeats: list[Repeat],
+     draft: bool = False,
+     aggregated: dict[int, dict[str, dict[str, Any]]] | None = None,
+     condition_meta: dict[int, dict[str, Any]] | None = None,
++    vs_baseline: dict[int, dict[str, dict[str, dict[str, Any]]]] | None = None,
++    contrasts: list[dict[str, Any]] | None = None,
+ ) -> dict[str, Any]:
+     # There is no `counts` parameter here: `summarize_step` already embeds the
+     # per-unit counts as `n` inside each metric under `aggregated`, and the
+     # condition entry's documented shape (`reference.md`'s worked example) has no
+     # plain `n` sibling to `per_repeat`. A parameter this function would only
+     # discard is worse than not having it.
+     return {
+         "schema_version": SCHEMA_VERSION,
+         "run_id": run_id,
+         "status": status,
+         "draft": draft,
+         "config": config,
+         "parameters_hash": parameters_hash,
+         "code_hash": code_hash,
+         "provenance": provenance,
+         "layout": _layout_block(results, repeats),
+         "execution": _execution_block(results),
+-        "results": _results_block(results, aggregated, condition_meta),
++        "results": _results_block(results, aggregated, condition_meta, vs_baseline, contrasts),
+     }
+diff --git a/src/publishable/stats.py b/src/publishable/stats.py
+index 5d0307c..cb5492f 100644
+--- a/src/publishable/stats.py
++++ b/src/publishable/stats.py
+@@ -242,44 +242,62 @@ def percentile_of_derived(
+     return (
+         Interval(low=values[lo], high=values[hi], method="percentile_over_units"),
+         len(values),
+     )
+ 
+ 
+ def paired_percentile_of_derived(
+     of: dict[str, dict[str, float]],
+     against: dict[str, dict[str, float]],
+     keys: list[str],
+-    compute: "Callable[[UnitTable], float | None]",
++    compute_of: "Callable[[UnitTable], float | None]",
++    compute_against: "Callable[[UnitTable], float | None]",
+     seed: int,
+     draws: int = 2000,
+     confidence: float = 0.95,
+ ) -> tuple[Interval | None, int]:
+     """Percentiles of the resampled difference, one draw applied to both sides.
+ 
+     Drawing each side independently would resample the two conditions apart and
+     destroy the pairing — the same error as differencing the two sides' own
+     intervals. Both spellings produce a plausible interval; only this one is
+     narrower, which is what `allocation: within` buys.
++
++    Two computes, not one — a contrast can hold its two sides' `cfg` fixed on
++    every axis except the one being compared, but `aggregate(units, cfg)` is
++    still evaluated once per side with that side's own `cfg`. A single shared
++    `compute` (as an earlier revision of this function took) is only correct
++    when the two sides evaluate the same formula; the moment a swept axis
++    changes which formula `aggregate` runs — analysis.method: pearson vs.
++    spearman, the documented worked example's own case — a shared compute
++    evaluates *one* side's formula against *both* sides' resampled draws. Where
++    the two collapsed tables hold identical per-unit data (exactly the
++    worked-example shape: `pred`/`truth` don't vary with `analysis.method`,
++    only which correlation `aggregate` computes from them does), that shared
++    evaluation cancels on every single draw — a `ci95` of zero width at zero,
++    beside a nonzero point-estimate delta, the "plausible but wrong" case with
++    nothing to raise. A caller that genuinely wants the same statistic on both
++    sides passes the same callable twice; that's a normal call, not a special
++    case this function has to detect.
+     """
+     if len(keys) < 2:
+         return None, 0
+     rng = random.Random(seed)
+     n = len(keys)
+     values: list[float] = []
+     for _ in range(draws):
+         drawn = [keys[rng.randrange(n)] for _ in range(n)]
+         table_a = _unit_table_from_rows([{"unit": k, **of[k]} for k in drawn])
+         table_b = _unit_table_from_rows([{"unit": k, **against[k]} for k in drawn])
+         try:
+-            a = compute(table_a)
+-            b = compute(table_b)
++            a = compute_of(table_a)
++            b = compute_against(table_b)
+         except Exception:  # a degenerate draw, not a fault; see percentile_of_derived
+             continue
+         if a is None or b is None:
+             continue
+         diff = float(a) - float(b)
+         if math.isnan(diff):
+             continue
+         values.append(diff)
+     if len(values) < min_honest_draws(confidence):
+         return None, len(values)
+diff --git a/tests/test_cli.py b/tests/test_cli.py
+index 2f44517..4f2ccd4 100644
+--- a/tests/test_cli.py
++++ b/tests/test_cli.py
+@@ -20,20 +20,21 @@ from publishable.scope import Execution
+ Ran = namedtuple("Ran", ["condition_index", "repeat_label"])
+ 
+ 
+ def run_a_project(
+     tmp_path: Path,
+     *,
+     replication: dict[str, Any] | None = None,
+     capsys: pytest.CaptureFixture[str] | None = None,
+     extra_steps: list[str] | None = None,
+     aggregate_returns: str | None = None,
++    units: int = 10,
+     **overrides: Any,
+ ) -> dict[str, Any]:
+     """Scaffold, configure, commit, and `run` a project end to end.
+ 
+     The one end-to-end driver `test_cli.py` has: every test in this module that
+     needs a real run through `main(["run", ...])` builds on this rather than
+     inventing its own scaffold-and-commit dance. `overrides` lands as top-level
+     keys merged onto the generated `config.yaml` (`sweep`, for instance);
+     `replication` is named explicitly since every caller in this file sets it.
+ 
+@@ -63,24 +64,27 @@ def run_a_project(
+     over the collapsed unit table — a mean, not a sum, since it needs `len(units)`
+     rather than assuming the caller already has a denominator. Patched in via
+     `pytest.MonkeyPatch.context()`, self-contained so no caller needs its own
+     `monkeypatch` fixture, and undone before this function returns.
+     """
+     tmp_path.mkdir(parents=True, exist_ok=True)
+     root = tmp_path / "proj"
+     data = tmp_path / "data"
+     results_dir = tmp_path / "results"
+     data.mkdir()
+-    # 10 patients, not 2: a `fold` design (`{kind: fold, k: 5}`) needs `k <=
+-    # unit_count`, and every other caller in this module only ever checks
+-    # `results`/`sweep.yaml` shape, never the roster's exact size.
+-    patients = "\n".join(f"p{i}" for i in range(1, 11))
++    # 10 patients by default, not 2: a `fold` design (`{kind: fold, k: 5}`) needs
++    # `k <= unit_count`, and every other caller in this module only ever checks
++    # `results`/`sweep.yaml` shape, never the roster's exact size. `units` is a
++    # caller-set override — a thin-pairing test wants a roster small enough that
++    # `n_paired` trips `limits.min_reported_n` without inflating every other
++    # caller's fixture to match.
++    patients = "\n".join(f"p{i}" for i in range(1, units + 1))
+     (data / "index.csv").write_text(f"patient_id\n{patients}\n")
+     assert main(["new", str(root)]) == EXIT_OK
+     with pytest.MonkeyPatch.context() as mp:
+         if aggregate_returns is not None:
+             import publishable.generators.experiment as experiment_gen
+             from publishable.templates.builtin.generic import GenericTemplate
+ 
+             metric_name = aggregate_returns
+             mp.setattr(experiment_gen, "STARTER_STEP", _AGGREGATE_STEP)
+             mp.setattr(
+@@ -710,10 +714,142 @@ def test_a_total_resample_failure_is_disclosed_not_silent(tmp_path, capsys, monk
+         assert "W-STATS-AGGREGATE-FAILED" in doc["stdout"]
+         assert "every resample draw failed" in doc["stdout"]
+     else:
+         # With 2000 draws over a 10-unit roster, an exact all-distinct
+         # permutation surviving once or twice is possible but rare; if it
+         # happened here, the disclosure path wasn't exercised and the
+         # unit-level tests (`test_a_raising_compute_is_treated_as_degenerate_
+         # not_propagated`, `test_total_resample_failure_is_distinguishable_
+         # from_no_resample_supplied`) are what pin the behaviour deterministically.
+         assert metric["resample_draws"] is not None
++
++
++_METHOD_VARYING_STEP = '''\
++# src/{pkg}/steps/step01_summarize_units.py — generated, and runnable as-is
++from publishable import BaseStep
++
++
++class Step(BaseStep):
++    scope = "repeat"
++
++    def run(self, cfg, io):
++        units = list(io.units)
++        # A per-unit value that differs both by condition (`is_spearman`,
++        # keyed off the swept `analysis.method`, so `of` and `against`
++        # genuinely diverge rather than recording the same numbers under two
++        # labels) and *per-unit differently between the two conditions* (the
++        # alternating `extra`, whose parity flips with `is_spearman`) — the
++        # per-unit differences must themselves vary, not just the two
++        # conditions' means, or the paired interval is zero-width and
++        # `cohens_dz` returns `None` regardless of which condition is which.
++        # A per-unit offset that's merely constant-but-nonzero (`+ 0.5` on
++        # every unit, in both conditions) cancels in the difference and hits
++        # the same trap: S4b task 5's plan did, and its fix is in
++        # `docs/superpowers/sdd/2026-08-10-contrasts/progress.md`, Task 5.
++        is_spearman = 1 if cfg.parameters.analysis.method == "spearman" else 0
++        for i, unit in enumerate(units):
++            extra = 0.5 if (i + is_spearman) % 2 == 1 else 0.0
++            io.record(unit.key, {{"pred": float(i) + float(is_spearman) + extra}})
++        return {{"n_units": len(units)}}
++'''
++
++
++def _first_contrast(run: dict[str, Any], label: str) -> dict[str, Any] | None:
++    """The first metric entry in the condition labeled `label`'s `vs_baseline`
++    block, wherever it landed — mirrors `_first_metric`'s shape on the
++    contrast side, since a caller here already knows which condition it
++    expects but not which step or metric name carries it."""
++    for condition in run["results"]["conditions"]:
++        if condition.get("label") != label:
++            continue
++        for step_block in condition.get("vs_baseline", {}).values():
++            for metric in step_block.values():
++                assert isinstance(metric, dict)
++                return metric
++    return None
++
++
++def test_a_baseline_sweep_reports_a_delta(tmp_path, capsys, monkeypatch):
++    """`vs_baseline` is where `resolve_contrasts`'s auto-generated,
++    condition-against-baseline comparisons land. The scaffold's own step
++    records only a bool (`{"present": True}`, filtered by `_is_numeric`), so
++    this uses `_METHOD_VARYING_STEP` — a per-unit value that genuinely
++    differs by condition and has real within-condition variance — to get a
++    real numeric column to difference, rather than `_AGGREGATE_STEP`'s
++    `float(i)` (identical under both conditions, so `delta` and `cohens_d`
++    would pass at their degenerate `0.0`/`None` values regardless of a sign
++    error or a hardcoded `None`)."""
++    import publishable.generators.experiment as experiment_gen
++
++    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
++    doc = run_a_project(
++        tmp_path,
++        capsys=capsys,
++        sweep={
++            "baseline": {"analysis.method": "pearson"},
++            "grid": {"analysis.method": ["spearman"]},
++        },
++    )
++    run = yaml.safe_load((doc["run_dir"] / "run.yaml").read_text())
++    entry = _first_contrast(run, "method=spearman")
++    assert entry is not None
++    assert entry["paired"] is True
++    assert entry["n_paired"] > 0
++    assert entry["method"] in ("paired_t_over_units", "paired_percentile_over_units")
++    assert entry["correction"] is None  # S4c's job, disclosed not applied
++    # The shift is +1.0 for spearman over pearson on every unit, so the mean
++    # per-unit difference is exactly 1.0 regardless of the alternating +0.5 —
++    # pins the sign (`of - against`, not `against - of`) and the magnitude.
++    assert entry["delta"] == pytest.approx(1.0)
++    assert entry["ci95"] is not None
++    low, high = entry["ci95"]
++    assert low < entry["delta"] < high
++    assert high - low > 0  # real variance from the alternating +0.5, not a point mass
++    # `pred` is a recorded column, so `cohens_d = cohens_dz(diffs)` — a real
++    # float, not the `None` a derived metric would carry.
++    assert isinstance(entry["cohens_d"], float)
++
++
++def test_a_run_with_no_baseline_has_no_vs_baseline_block(tmp_path, capsys):
++    """Absent, not empty. An empty block would claim a comparison was made and
++    found nothing."""
++    doc = run_a_project(tmp_path, capsys=capsys)
++    text = (doc["run_dir"] / "run.yaml").read_text()
++    assert "vs_baseline" not in text
++
++
++def test_a_baseline_sweep_with_no_metric_has_no_vs_baseline_block(tmp_path, capsys):
++    """The discriminating case `test_a_run_with_no_baseline_has_no_vs_baseline_
++    block` can't reach: a declared baseline exists (comparisons are resolved),
++    but the scaffold's default step records only a bool, so every
++    `metric_block` this task builds is empty. This is what actually exercises
++    `_compute_vs_baseline`'s `return out or None` and `run_record.py`'s
++    `if block:` guard — with no baseline at all, both are already unreachable
++    for a different reason, and either could be silently dropped without this
++    test moving."""
++    doc = run_a_project(
++        tmp_path,
++        capsys=capsys,
++        sweep={
++            "baseline": {"analysis.method": "pearson"},
++            "grid": {"analysis.method": ["spearman"]},
++        },
++    )
++    text = (doc["run_dir"] / "run.yaml").read_text()
++    assert "vs_baseline" not in text
++
++
++def test_a_thin_pairing_warns(tmp_path, capsys, monkeypatch):
++    import publishable.generators.experiment as experiment_gen
++
++    monkeypatch.setattr(experiment_gen, "STARTER_STEP", _METHOD_VARYING_STEP)
++    doc = run_a_project(
++        tmp_path,
++        capsys=capsys,
++        units=3,
++        limits={"min_reported_n": 10},
++        sweep={
++            "baseline": {"analysis.method": "pearson"},
++            "grid": {"analysis.method": ["spearman"]},
++        },
++    )
++    assert "min_reported_n" in doc["stdout"] or "N_PAIRED" in doc["stdout"]
+diff --git a/tests/test_stats.py b/tests/test_stats.py
+index f6efa59..4b6a407 100644
+--- a/tests/test_stats.py
++++ b/tests/test_stats.py
+@@ -1130,96 +1130,96 @@ def test_the_paired_interval_is_narrower_than_two_independent_draws():
+     an implementation drawing independently loses exactly that.
+ 
+     The per-unit difference alternates 1.0/0.0 (mean 0.5) rather than being a
+     constant 0.5 offset: a constant offset makes the paired difference exactly
+     0.5 on *every* resample regardless of which units are drawn, which would
+     demonstrate the narrowing with a degenerate zero-width interval instead of
+     a real one."""
+     of = {f"u{i}": {"m": float(i) + (1.0 if i % 2 == 0 else 0.0)} for i in range(60)}
+     against = {f"u{i}": {"m": float(i)} for i in range(60)}
+     keys = sorted(of)
+-    paired, _ = paired_percentile_of_derived(of, against, keys, _mean_m, seed=7)
++    paired, _ = paired_percentile_of_derived(of, against, keys, _mean_m, _mean_m, seed=7)
+     a, _ = percentile_of_derived(of, _mean_m, seed=7)
+     b, _ = percentile_of_derived(against, _mean_m, seed=7)
+     independent_width = (a.high - a.low) + (b.high - b.low)
+     assert (paired.high - paired.low) < independent_width / 4
+ 
+ 
+ def test_the_interval_brackets_the_observed_difference():
+     of = {f"u{i}": {"m": float(i) + (1.0 if i % 2 == 0 else 0.0)} for i in range(60)}
+     against = {f"u{i}": {"m": float(i)} for i in range(60)}
+-    got, _ = paired_percentile_of_derived(of, against, sorted(of), _mean_m, seed=7)
++    got, _ = paired_percentile_of_derived(of, against, sorted(of), _mean_m, _mean_m, seed=7)
+     assert got.low < 0.5 < got.high
+ 
+ 
+ def test_it_names_its_own_method_paired_percentile():
+     of = {f"u{i}": {"m": float(i) + 1.0} for i in range(60)}
+     against = {f"u{i}": {"m": float(i)} for i in range(60)}
+-    got, _ = paired_percentile_of_derived(of, against, sorted(of), _mean_m, seed=7)
++    got, _ = paired_percentile_of_derived(of, against, sorted(of), _mean_m, _mean_m, seed=7)
+     assert got.method == "paired_percentile_over_units"
+ 
+ 
+ def test_the_same_seed_reproduces_and_a_different_one_does_not_paired():
+     of = {f"u{i}": {"m": float(i) + (1.0 if i % 2 == 0 else 0.0)} for i in range(60)}
+     against = {f"u{i}": {"m": float(i)} for i in range(60)}
+     k = sorted(of)
+-    assert paired_percentile_of_derived(of, against, k, _mean_m, seed=7) == \
+-        paired_percentile_of_derived(of, against, k, _mean_m, seed=7)
+-    assert paired_percentile_of_derived(of, against, k, _mean_m, seed=7) != \
+-        paired_percentile_of_derived(of, against, k, _mean_m, seed=99)
++    assert paired_percentile_of_derived(of, against, k, _mean_m, _mean_m, seed=7) == \
++        paired_percentile_of_derived(of, against, k, _mean_m, _mean_m, seed=7)
++    assert paired_percentile_of_derived(of, against, k, _mean_m, _mean_m, seed=7) != \
++        paired_percentile_of_derived(of, against, k, _mean_m, _mean_m, seed=99)
+ 
+ 
+ def test_below_the_survivor_floor_there_is_no_interval_paired():
+     of = {f"u{i}": {"m": float(i)} for i in range(60)}
+     against = {f"u{i}": {"m": float(i)} for i in range(60)}
+     got, used = paired_percentile_of_derived(
+-        of, against, sorted(of), lambda t: None, seed=7, draws=200)
++        of, against, sorted(of), lambda t: None, lambda t: None, seed=7, draws=200)
+     assert got is None and used == 0
+ 
+ 
+ def test_a_constant_offset_gives_a_genuinely_zero_width_interval():
+     """A point-mass bootstrap: every unit's difference is the same constant 0.5,
+     so the resampled difference is 0.5 on *every* draw regardless of which units
+     are drawn. That is not a bug — a difference with no sampling variability
+     should report no width — and it is a sharper discriminator against an
+     independently-drawn variant than the alternating fixture above: paired width
+     is exactly 0.0 against a nonzero independent width, an unbounded ratio
+     rather than a merely large one."""
+     of = {f"u{i}": {"m": float(i) + 0.5} for i in range(60)}
+     against = {f"u{i}": {"m": float(i)} for i in range(60)}
+-    got, _ = paired_percentile_of_derived(of, against, sorted(of), _mean_m, seed=7)
++    got, _ = paired_percentile_of_derived(of, against, sorted(of), _mean_m, _mean_m, seed=7)
+     assert got is not None
+     assert got.high - got.low < 1e-9
+ 
+ 
+ def test_a_raising_compute_is_treated_as_degenerate_not_propagated_paired():
+     of = {f"u{i}": {"m": float(i)} for i in range(60)}
+     against = {f"u{i}": {"m": float(i)} for i in range(60)}
+ 
+     def always_raises(units):
+         raise ZeroDivisionError("degenerate draw")
+ 
+     got, used = paired_percentile_of_derived(
+-        of, against, sorted(of), always_raises, seed=7, draws=20)
++        of, against, sorted(of), always_raises, always_raises, seed=7, draws=20)
+     assert got is None
+     assert used == 0
+ 
+ 
+ def test_a_nan_compute_is_treated_as_degenerate_paired():
+     of = {f"u{i}": {"m": float(i)} for i in range(60)}
+     against = {f"u{i}": {"m": float(i)} for i in range(60)}
+ 
+     def always_nan(units):
+         return float("nan")
+ 
+     got, used = paired_percentile_of_derived(
+-        of, against, sorted(of), always_nan, seed=7, draws=20)
++        of, against, sorted(of), always_nan, always_nan, seed=7, draws=20)
+     assert got is None
+     assert used == 0
+ 
+ 
+ def test_a_one_sided_raise_drops_the_whole_draw_not_half():
+     """A defect that narrows the `try` to only one side's `compute` call — the
+     exact regression Finding 1 named — would leave the other side's exception
+     unguarded, crashing the whole function rather than dropping just that
+     draw. `compute` is called twice per draw, `of` then `against` (see the
+     call order in `paired_percentile_of_derived`), so failing every fourth
+@@ -1231,21 +1231,21 @@ def test_a_one_sided_raise_drops_the_whole_draw_not_half():
+     calls = {"n": 0}
+ 
+     def flaky_against_only(units):
+         calls["n"] += 1
+         if calls["n"] % 4 == 0:
+             raise ZeroDivisionError("degenerate on this call only")
+         return float(sum(v for v in units.m if v is not None)) / len(units.m)
+ 
+     draws = 200
+     got, used = paired_percentile_of_derived(
+-        of, against, sorted(of), flaky_against_only, seed=7, draws=draws)
++        of, against, sorted(of), flaky_against_only, flaky_against_only, seed=7, draws=draws)
+     assert used == draws // 2
+     assert got is not None
+ 
+ 
+ def test_a_one_sided_none_drops_the_whole_draw_not_half():
+     """The `None`-flavoured sibling of the test above: checking only `a is
+     None` (omitting the `against`-side check) would let a `None` on `against`
+     reach `float(a) - float(b)` and crash on `TypeError` instead of being
+     dropped as a degenerate draw."""
+     of = {f"u{i}": {"m": float(i)} for i in range(60)}
+@@ -1253,13 +1253,45 @@ def test_a_one_sided_none_drops_the_whole_draw_not_half():
+     calls = {"n": 0}
+ 
+     def flaky_against_only(units):
+         calls["n"] += 1
+         if calls["n"] % 4 == 0:
+             return None
+         return float(sum(v for v in units.m if v is not None)) / len(units.m)
+ 
+     draws = 200
+     got, used = paired_percentile_of_derived(
+-        of, against, sorted(of), flaky_against_only, seed=7, draws=draws)
++        of, against, sorted(of), flaky_against_only, flaky_against_only, seed=7, draws=draws)
+     assert used == draws // 2
+     assert got is not None
++
++
++def test_two_different_computes_over_identical_tables_yield_a_real_interval():
++    """The regression a single shared `compute` produces, and the reason this
++    function takes two: `of` and `against` here hold *identical* per-unit
++    data — exactly the shape a swept axis that doesn't touch the recorded
++    columns produces (the documented worked example's `analysis.method`
++    sweep records the same `pred`/`truth` under every condition; only which
++    correlation `aggregate` computes from them differs). A version of this
++    function taking one `compute` shared by both sides would evaluate that
++    one formula against both sides' identical draws and report a spuriously
++    precise — often exactly zero-width — interval no matter how different
++    the two conditions' real formulas are. `compute_of` (`total`) and
++    `compute_against` (`mean`) are deliberately different formulas over the
++    same data, so a correct implementation must still produce a real,
++    non-degenerate interval that brackets the true, unresampled difference
++    between the two formulas."""
++    table = {f"u{i}": {"m": float(i)} for i in range(60)}
++
++    def total(units: UnitTable) -> float | None:
++        return float(sum(v for v in units.m if v is not None))
++
++    def mean(units: UnitTable) -> float | None:
++        vals = [v for v in units.m if v is not None]
++        return sum(vals) / len(vals) if vals else None
++
++    point_estimate = total(UnitTable(table)) - mean(UnitTable(table))
++    got, used = paired_percentile_of_derived(table, table, sorted(table), total, mean, seed=7)
++    assert got is not None
++    assert used > 0
++    assert got.high - got.low > 0  # non-degenerate: the two formulas disagree
++    assert got.low < point_estimate < got.high

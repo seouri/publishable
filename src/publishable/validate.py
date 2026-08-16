@@ -14,6 +14,7 @@ from publishable.correction import ALPHA
 from publishable.diagnostics import Collector
 from publishable.envelope import check_envelope
 from publishable.errors import ContractError
+from publishable.hashes import design_digest
 from publishable.manifest import POLICIES
 from publishable.materialize import TEMPLATE_VERSION
 from publishable.param import MISSING
@@ -43,7 +44,12 @@ from publishable.units import (
     UnitList,
     assignment_for,
     auto_block_size,
+    clusters_of,
     fold_basis,
+    holdout_for,
+    holdout_seed_for,
+    holdout_sizes,
+    holdout_values_fault,
     is_measurement_numeric,
     resolve_units,
     rule_for,
@@ -616,12 +622,28 @@ def validate_config(
             # the config validates clean here and meets `E-DATA-CLUSTER-UNKNOWN`
             # for real at `run`.
             basis = None
+    # The holdout's realized test partition, resolved once and threaded — the
+    # denominator a resample's cluster count is actually over. Resolved here
+    # rather than inside `_check_resample` so a future second reader gets the
+    # same object rather than realizing a second draw.
+    holdout_test = _holdout_test_roster(doc, units_decl, roster, usable_cluster)
     # A `fold` level's `stratify_by`, from the same usable-cluster local the basis
     # was resolved from: the name it declares, and — when a cluster is declared —
     # whether the stratum survives a split that cannot divide one. Not in
     # `replication._fold_k`, which sees the declaration and a count and never a
     # roster.
     _check_fold_stratify_by(doc, units_decl, roster, usable_cluster, c)
+    # Sited beside `_check_fold_stratify_by` because tasks 6-7 will read
+    # `roster` and `usable_cluster` here too, and taking both parameters now
+    # means the signature does not change under this caller later — at this
+    # commit `_check_holdout` reads neither (see its own docstring).
+    # `usable_cluster` is already narrowed to a non-empty string or `None`
+    # above, so this call needs no guard of its own.
+    _check_holdout(doc, units_decl, roster, usable_cluster, c)
+    # One site for both split kinds, deliberately: see this function's own
+    # docstring for why a second site is the thing being avoided rather than a
+    # cost being paid.
+    _check_evaluation_split_cells(doc, units_decl, c)
     _check_replication(
         doc,
         template,
@@ -639,7 +661,7 @@ def validate_config(
     # later check needing the resolved comparison family (task 6's `n` bound
     # against it) must recompute that family locally rather than read it off
     # this call site.
-    _check_resample(doc, roster, c)
+    _check_resample(doc, roster, c, holdout_test=holdout_test)
     _check_contrasts(doc, c, roster)
     _check_hypotheses(doc, c, experiment, template)
     _check_report_by(doc, c, roster)
@@ -879,12 +901,15 @@ def _check_units(
       resolver either, and without this skip it raises `E-UNITS-SOURCE-MISSING`
       for the same declaration, describing a resolver as a missing file.
 
-    No other `-UNSUPPORTED` field is skipped on: `allocation`, `assign`,
-    `cluster_by`, `weight_by`, and `holdout` are not read by
-    `resolve_units` at all, so resolving against a real table or glob alongside
-    one of those refusals adds a genuine, independent finding — a duplicate key
-    in the roster is a real defect whether or not `holdout` is also declared —
-    rather than noise about the same problem twice.
+    No other `-UNSUPPORTED` field is skipped on: `allocation` and `assign`'s
+    method are not read by `resolve_units` at all, and the three that ARE read
+    — `cluster_by`, `weight_by`, and (under `by_attribute`) `holdout.from` —
+    are read only where a `data.units.measurements` collapse could file a unit
+    by row order, which is an independent fault of its own. So resolving
+    against a real table or glob alongside one of those refusals adds a
+    genuine, independent finding — a duplicate key in the roster is a real
+    defect whether or not `holdout` is also declared — rather than noise about
+    the same problem twice.
 
     Returns the resolved roster, or `None` when resolution did not happen or did
     not succeed — `_check_replication` uses its length to check a `fold` count
@@ -1378,6 +1403,17 @@ method at all.
 # nothing from here). This module's use of the tuple outlived the refusal it was
 # minted for: it named the methods `E-DATA-ASSIGN-DRAWN` refused, and now names
 # the branch a drawn method takes through `_check_assign`.
+
+
+HOLDOUT_METHODS = ("random", "by_attribute")
+"""`data.units.holdout.method`'s enum — `reference.md` § A fixed holdout split.
+
+Two values and no more, and stated as a closed enum for `ASSIGN_METHODS`'s
+reason: a third named here and realized nowhere would validate clean and then
+reach `units.holdout_for`, which refuses what it cannot draw. Which of the two
+reads a partition and which draws one is what decides every other field's
+meaning, so a malformed `method` is reported before any of them is read.
+"""
 
 
 def _declared_levels(sweep: Any, axis: str) -> list[str] | None:
@@ -2515,10 +2551,13 @@ def _check_fold_stratify_by(
     clustering that decides what a split cannot divide.
 
     `reference.md` § Validation, rows "Stratification attribute exists" and "Fold
-    strata survive clustering". **Only the `fold` level's**: the first row names no
-    particular `stratify_by`, and its `data.units.assign.<axis>.stratify_by` and
-    `data.units.holdout.stratify_by` halves belong to the slices that build those
-    blocks, so neither is discharged by this.
+    strata survive clustering". **Only the `fold` level's**: the first row names a
+    `fold` level's *or* `holdout`'s `stratify_by`, and its `holdout` half is
+    `_check_holdout`'s, under its own code (`E-DATA-HOLDOUT-STRATIFY-UNKNOWN`), so
+    that half is not discharged by this. Two checks answer to that one row.
+    `data.units.assign.<axis>.stratify_by` is not this row's at all — `reference.md`
+    routes it to *Allocation strata exist* instead, under
+    `E-DATA-ASSIGN-STRATIFY-UNKNOWN`.
 
     **`data.units.attributes` is the reference set for the name**, the side of the
     line `_check_cluster_by` and `_check_weight_by` read, and for the same reason: a
@@ -2641,6 +2680,422 @@ def _check_fold_stratify_by(
                 "divide the cluster carrying both values; stratify on an attribute that is "
                 "constant within a cluster, or drop the stratification",
             )
+
+
+def _check_holdout(
+    doc: dict[str, Any],
+    units: dict[str, Any],
+    roster: UnitList | None,
+    cluster_by: str | None,
+    c: Collector,
+) -> None:
+    """Every check `data.units.holdout` gets — ten findings at this commit,
+    in emit order, and the enumeration is the list rather than a sample of it:
+
+    - `E-DATA-HOLDOUT-METHOD` — the `method` enum.
+    - `E-DATA-HOLDOUT-FRAC` — `frac` in the open interval (0, 1), under `random`.
+    - `E-DATA-HOLDOUT-FROM` — `from` required, under `by_attribute`.
+    - `E-DATA-HOLDOUT-NO-DRAW` — a field meaning nothing under the declared
+      method.
+    - `E-DATA-HOLDOUT-SEED` — the seed pin.
+    - `E-DATA-HOLDOUT-STRATIFY-UNKNOWN` — a `stratify_by` name that is not a
+      declared unit attribute, names `data.units.measurements.by`, or is not
+      the name of an attribute at all.
+    - `E-DATA-HOLDOUT-FOLD` — a `{kind: fold}` repeat declared beside this
+      block. The only check here that reads a block other than `data.units`.
+    - `E-DATA-HOLDOUT-VALUES` — **reads the roster:** under `by_attribute`, the
+      named column resolving to exactly `train` and `test`.
+    - `E-DATA-HOLDOUT-STRATIFY-VARIES` — **reads the roster:** a stratum that
+      varies within a `cluster_by` cluster.
+    - `E-DATA-HOLDOUT-EMPTY` — **reads the roster:** a `random`, unstratified,
+      unclustered split that apportions the test side zero units.
+
+    **Three of the ten read `roster`**, and each carries its own
+    `roster is not None` guard rather than leaning on a caller — `_check_resample`'s
+    stated convention.
+
+    **Only `E-DATA-HOLDOUT-FOLD` reads `doc`**; `roster` and `cluster_by` are
+    both in the signature anyway, `units.assignment_for`'s reason: the caller
+    already holds them, and a caller told the signature changed under it is
+    what a stable one avoids. A check added here must state which side of
+    that line it is on — this list is what the next reader counts against,
+    so an eleventh finding belongs in it, and a roster-reading one carries
+    its own `roster is not None` guard rather than leaning on a caller.
+
+    **An empty or non-mapping declaration returns reporting nothing**,
+    `_check_resample`'s own gate one block over. `holdout: {}` and
+    `holdout: null` declare nothing and partition nothing; this function's own
+    `if not isinstance(holdout, dict) or not holdout: return` is what keeps
+    both from being read as a declaration, and a misspelled child inside a
+    non-empty block is `check_envelope`'s `E-CONFIG-KEY-UNKNOWN` rather than
+    this function's.
+
+    Every value-shape fault reported here — the `frac` interval, the
+    `method`/`from` type absorptions — is `isinstance`-guarded and quietly
+    skipped when the field is not the leaf `envelope.LEAF_TYPES` type, the
+    same division `_check_report_by` keeps: a leaf type fault is
+    `E-CONFIG-TYPE`, reported already and deliberately non-fatal, and
+    reporting a second, derived fault on top of the one the reader has to fix
+    anyway is what `validate_config`'s own `usable_cluster` guard avoids. The
+    three `NO-DRAW` checks are the exception: they test presence, not shape
+    (`is not None`, no `isinstance`), so a wrong-typed `frac`/`stratify_by`
+    still under the wrong method earns `E-CONFIG-TYPE` alongside `NO-DRAW`
+    rather than being absorbed — presence under the wrong method is the fault
+    regardless of what the value would have been.
+
+    **`frac`'s interval is open at both ends.** `0` holds nothing out and `1`
+    holds everything out; each leaves one side of the split empty, and a split
+    with an empty side is not a split. A `frac` small enough to apportion the
+    test side zero units over *this* roster is a different fault with a
+    different fix — widen it, or resolve more units — and is not this check's.
+    """
+    holdout = units.get("holdout")
+    if not isinstance(holdout, dict) or not holdout:
+        return
+
+    method = holdout.get("method")
+    if method is None:
+        c.error(
+            "E-DATA-HOLDOUT-METHOD",
+            "data.units.holdout.method",
+            f"is not declared; the methods are {', '.join(HOLDOUT_METHODS)}, and which "
+            "one is declared decides what every other field of the block means — "
+            "`random` draws a split and `by_attribute` reads one already in the data",
+        )
+    elif not isinstance(method, str):
+        # Absorbed here rather than left to `E-CONFIG-TYPE` alone: the reader's
+        # question is which method they meant, and a bare type finding does not
+        # enumerate the two.
+        c.error(
+            "E-DATA-HOLDOUT-METHOD",
+            "data.units.holdout.method",
+            f"is {method!r}, which names no method; the methods are {', '.join(HOLDOUT_METHODS)}",
+        )
+    elif method not in HOLDOUT_METHODS:
+        c.error(
+            "E-DATA-HOLDOUT-METHOD",
+            "data.units.holdout.method",
+            f"is {method!r}, which is not one of {', '.join(HOLDOUT_METHODS)}. A method "
+            "named here and realized nowhere would validate clean and then partition "
+            "on something core never drew",
+        )
+
+    declared_frac = holdout.get("frac")
+    declared_from = holdout.get("from")
+    if method == "random":
+        if declared_frac is None:
+            c.error(
+                "E-DATA-HOLDOUT-FRAC",
+                "data.units.holdout.frac",
+                "is not declared, and `method: random` draws the test side by "
+                "fraction — there is nothing to draw without one",
+            )
+        elif isinstance(declared_frac, (int, float)) and not isinstance(declared_frac, bool):
+            if not 0.0 < float(declared_frac) < 1.0:
+                c.error(
+                    "E-DATA-HOLDOUT-FRAC",
+                    "data.units.holdout.frac",
+                    f"is {declared_frac}, and a test fraction is strictly between 0 and "
+                    "1 — `0` holds nothing out and `1` holds everything out, and each "
+                    "leaves one side of the split empty",
+                )
+        if declared_from is not None:
+            c.error(
+                "E-DATA-HOLDOUT-NO-DRAW",
+                "data.units.holdout.from",
+                "means nothing under `method: random`, which draws the split rather "
+                "than reading one out of a column — declare `method: by_attribute` to "
+                "read the column, or drop `from`",
+            )
+    elif method == "by_attribute":
+        if declared_from is None:
+            c.error(
+                "E-DATA-HOLDOUT-FROM",
+                "data.units.holdout.from",
+                "is not declared, and `method: by_attribute` reads the split out of a "
+                "column — unlike an assignment axis there is no axis name to default "
+                "to, so the column has to be named",
+            )
+        elif isinstance(declared_from, str) and not declared_from:
+            c.error(
+                "E-DATA-HOLDOUT-FROM",
+                "data.units.holdout.from",
+                "is empty, which names no column to read the split out of",
+            )
+        if declared_frac is not None:
+            c.error(
+                "E-DATA-HOLDOUT-NO-DRAW",
+                "data.units.holdout.frac",
+                "means nothing under `method: by_attribute`, which reads a split the "
+                "data already holds rather than drawing one to a size — the realized "
+                "proportion is whatever the column says it is",
+            )
+        declared_stratify_by = holdout.get("stratify_by")
+        if declared_stratify_by is not None and declared_stratify_by != []:
+            c.error(
+                "E-DATA-HOLDOUT-NO-DRAW",
+                "data.units.holdout.stratify_by",
+                "means nothing under `method: by_attribute`: `stratify_by` names how a "
+                "draw is BALANCED, and a split read out of a column was not drawn. The "
+                "same absorption `E-DATA-ASSIGN-NO-DRAW` performs for the same field "
+                "one declaration over — including its `!= []` exemption, which is not "
+                "this block's own reason: `init` never writes a `holdout` block at "
+                "all, and an empty `stratify_by: []` is not silently accepted here — "
+                "it is refused two checks later, as `E-DATA-HOLDOUT-STRATIFY-UNKNOWN`",
+            )
+
+    if "seed" in holdout:
+        seed = holdout["seed"]
+        pinned = isinstance(seed, int) and not isinstance(seed, bool)
+        if not pinned and seed != "auto":
+            c.error(
+                "E-DATA-HOLDOUT-SEED",
+                "data.units.holdout.seed",
+                f"is {seed!r}, and a seed is `auto` or a plain integer. A quoted "
+                "number, a float, or a boolean is a pin nothing can honour, and "
+                "deriving one anyway would record a derived seed under a key the "
+                "config wrote deliberately",
+            )
+
+    # `stratify_by`, through `units.stratum_names` — the single authority the
+    # draw balances on, which reads a bare `stratify_by: label` as one name
+    # exactly as `[label]` is. Re-deriving that reading here with an
+    # `isinstance` chain would pin two independent readings of one declaration
+    # in agreement by nothing, which is what `_check_resample` reads it this
+    # way to avoid.
+    #
+    # **`data.units.attributes` is the reference set**, not the source's
+    # columns, the side of the line `_check_cluster_by`, `_check_weight_by` and
+    # `_check_fold_stratify_by` all read: a stratum is read per unit when the
+    # split is drawn, so it has to survive resolution as an attribute rather
+    # than merely be a column of the source. Checked from the declaration
+    # alone, so it reports whether or not a roster resolved.
+    #
+    # One finding per offending name, `E-DATA-ASSIGN-STRATIFY-UNKNOWN`'s rule:
+    # a declaration naming two undeclared attributes earns two, rather than one
+    # naming only the first.
+    attrs = units.get("attributes") or []
+    declared_names = (
+        sorted({a for a in attrs if isinstance(a, str)}) if isinstance(attrs, list) else []
+    )
+    measurements = units.get("measurements")
+    measurement_axis = measurements.get("by") if isinstance(measurements, dict) else None
+    raw_strata = holdout.get("stratify_by")
+    strata = stratum_names(raw_strata)
+    if raw_strata is not None and not strata:
+        # Present, and normalizing to no names: `stratum_names` returns `()`
+        # not just for `""` and `[]` but for anything falsy — `0`, `False`,
+        # `{}` all reach here too. Left silent it would be a declaration that
+        # changes no behaviour, which is exactly what a truthy read of it
+        # hides.
+        c.error(
+            "E-DATA-HOLDOUT-STRATIFY-UNKNOWN",
+            "data.units.holdout.stratify_by",
+            "is empty, which names no attribute to balance the split on and changes "
+            "no behavior. Name the attribute, or remove the key",
+        )
+    for name in strata:
+        if not isinstance(name, str) or not name:
+            c.error(
+                "E-DATA-HOLDOUT-STRATIFY-UNKNOWN",
+                "data.units.holdout.stratify_by",
+                f"names {name!r}, which is not the name of a unit attribute — a split "
+                "is balanced on attributes named as strings",
+            )
+            continue
+        if name not in declared_names:
+            c.error(
+                "E-DATA-HOLDOUT-STRATIFY-UNKNOWN",
+                "data.units.holdout.stratify_by",
+                f"names {name!r}, which is not a unit attribute — a stratum is read "
+                "per unit when the split is drawn, so it has to be one. "
+                f"`data.units.attributes` declares "
+                f"{', '.join(declared_names) or 'none'}",
+            )
+            continue
+        if isinstance(measurement_axis, str) and measurement_axis == name:
+            c.error(
+                "E-DATA-HOLDOUT-STRATIFY-UNKNOWN",
+                "data.units.holdout.stratify_by",
+                f"names {name!r}, which `data.units.measurements.by` also names — the "
+                "measurement axis is consumed when a unit's rows collapse and is not "
+                "an attribute of the resolved unit, so there is nothing left to "
+                "balance the split on. Stratify on an attribute that survives the "
+                "collapse",
+            )
+
+    # The one check here that reads a block other than `data.units`. Sited in
+    # `validate` rather than in `resolve_repeats` because a `fold` level is a
+    # perfectly well-formed *repeat*: what is refused is the COMBINATION with a
+    # declaration in another block, which `resolve_repeats` never sees. That is
+    # also why `replication.REPL_DECLARATION_CODES` is unchanged by this.
+    repeats = (doc.get("replication") or {}).get("repeats")
+    if isinstance(repeats, list) and any(
+        isinstance(level, dict) and level.get("kind") == "fold" for level in repeats
+    ):
+        c.error(
+            "E-DATA-HOLDOUT-FOLD",
+            "data.units.holdout",
+            "is declared beside a `{kind: fold}` repeat level, and the two are "
+            "mutually exclusive — each divides the units for evaluation, so together "
+            "they leave `which units is this metric over?` with no single answer. To "
+            "hold out a final test set AND cross-validate for model selection, declare "
+            "the holdout and do the inner search inside the step over `io.units.train`",
+        )
+
+    # `by_attribute`'s two literals, through `units.holdout_values_fault` — one
+    # authority for both the verdict (`arms_of`'s set equality) and the wording,
+    # so this collected finding and the one `holdout_for` raises at run time
+    # cannot drift apart. `stratum_varies_within_cluster`'s own arrangement:
+    # the function returns a fault and each caller decides whether to collect
+    # it or raise it.
+    if (
+        method == "by_attribute"
+        and roster is not None
+        and isinstance(declared_from, str)
+        and declared_from
+    ):
+        fault = holdout_values_fault(roster, declared_from)
+        if fault is not None:
+            c.error("E-DATA-HOLDOUT-VALUES", "data.units.holdout.from", fault)
+
+    # *Holdout strata survive clustering*, through the fourth
+    # `stratum_varies_within_cluster` call site. Reusing that function rather
+    # than minting a second notion of constancy is the point: whole clusters go
+    # to one side of a holdout, exactly as they do to one side of a fold, so
+    # the holdout inherits the rule rather than inventing one. Skipping a name
+    # already refused above is not load-bearing here — an undeclared or
+    # non-string name carries no value on any unit, so it is constant within
+    # every cluster and this loop would report nothing for it either way — but
+    # it matches the resample site's shape at the same call, one call over.
+    if roster is not None and cluster_by:
+        for name in strata:
+            if not isinstance(name, str) or name not in declared_names:
+                continue  # already refused above
+            try:
+                offender = stratum_varies_within_cluster(roster, cluster_by, name)
+            except ContractError:
+                # `clusters_of` refuses a unit carrying no cluster value
+                # (`E-DATA-CLUSTER-UNKNOWN`), reported beside this by
+                # `_check_cluster_by` or by `_check_units`' own resolution. This
+                # module collects rather than raises.
+                break
+            if offender is not None:
+                cluster, values = offender
+                c.error(
+                    "E-DATA-HOLDOUT-STRATIFY-VARIES",
+                    "data.units.holdout.stratify_by",
+                    f"names {name!r}, which varies within `{cluster_by}` {cluster} — it "
+                    f"carries {', '.join(values)}. A cluster is indivisible and goes "
+                    "whole to one side of the split, so a cluster carrying two stratum "
+                    "values can be dealt to neither; stratify on an attribute constant "
+                    "within a cluster",
+                )
+
+    # The zero-size test partition, sited exactly as *Every arm draws units* is:
+    # **the unstratified, unclustered `random` draw only**. A stratified or
+    # clustered split apportions inside each stratum or moves whole clusters,
+    # so the realized test size is not this arithmetic's answer and only the
+    # draw knows what it moved — that one is checked where the run performs it.
+    # `by_attribute` needs nothing here: `arms_of` above already refuses a
+    # literal no unit's value names, which is an empty side by another name,
+    # and a second refusal of one fault under two codes is what this omission
+    # avoids.
+    if (
+        method == "random"
+        and roster is not None
+        and not strata
+        and not cluster_by
+        and isinstance(declared_frac, (int, float))
+        and not isinstance(declared_frac, bool)
+        and 0.0 < float(declared_frac) < 1.0
+    ):
+        _train_size, test_size = holdout_sizes(len(roster), float(declared_frac))
+        if test_size == 0:
+            c.error(
+                "E-DATA-HOLDOUT-EMPTY",
+                "data.units.holdout.frac",
+                f"is {declared_frac} over {len(roster)} resolved units, which apportions "
+                "the test side zero of them — every metric would be over nothing. Widen "
+                "`frac`, or resolve a larger roster",
+            )
+
+
+def _check_evaluation_split_cells(
+    doc: dict[str, Any], units: dict[str, Any], c: Collector
+) -> None:
+    """A roster-wide evaluation split beside a cell structure — refused, for
+    both split kinds, from one site.
+
+    **The two faults are one fault**, which is why they share a site: a
+    `data.units.holdout` and a `{kind: fold}` level each partition the WHOLE
+    roster once, and `data.units.allocation: between` or a non-empty
+    `sweep.groups` divides that same roster into cells. A partition drawn
+    across the cells rather than within them gives them unequal test sizes and,
+    once the split is fine enough, a cell holding none of its own units at all
+    — a cell-level metric computed from nothing.
+
+    **Two codes, one site.** `E-DATA-HOLDOUT-CELLS` and `E-REPL-FOLD-CELLS`
+    send a reader to the declaration they actually wrote; a single code would
+    name one of the two and be wrong for the other. A second check *site* is
+    what this deliberately does not have — that is how two answers to one
+    question come to disagree.
+
+    **Refused rather than disclosed.** The disclosure route would be
+    `allocation.json` and `sweep.yaml` recording a truthful membership whose
+    imbalance is visible only to a reader who crosses it against the arms list
+    by hand — the silently-wrong class. The repo's own precedent is to refuse
+    the COMBINATION while honouring both DECLARATIONS, and to route it:
+    `E-DATA-WEIGHT-CONTRAST`, `E-DATA-CLUSTER-CONTRAST`,
+    `E-DATA-ALLOCATION-CONTRAST`, `E-DATA-ASSIGN-BLOCKED-CLUSTER`.
+
+    **The `fold` half closes a defect that is live at this commit**, not a
+    hypothetical: `replication._fold_k` bounds `k` against `units.fold_basis`
+    over the WHOLE roster, so 15 units split 12/3 by arm permit `k: 5` and
+    leave the 3-unit arm with two empty folds. Nothing else scheduled closes
+    it sooner, which is why it ships here rather than with the slice that owns
+    cells.
+
+    **The route is a design that draws within each cell**, which this build
+    does not have. `docs/superpowers/spec-defects.md` carries the entry and
+    names **H3c-3** as the owner of this refusal's retirement.
+
+    Knowable from the declarations alone — no roster, no resolution — so this
+    takes neither.
+    """
+    allocation = units.get("allocation")
+    groups = (doc.get("sweep") or {}).get("groups")
+    cells = allocation == "between" or bool(isinstance(groups, list) and groups)
+    if not cells:
+        return
+    where = (
+        "`data.units.allocation: between`"
+        if allocation == "between"
+        else "a non-empty `sweep.groups`"
+    )
+    consequence = (
+        "which divides the roster into cells. One roster-wide split across "
+        "those cells gives them unequal test sizes and, once it is fine "
+        "enough, a cell holding none of its own units — a cell-level metric "
+        "computed from nothing. Drawing the split within each cell is the "
+        "design that lifts this, and it is not built: declare one or the "
+        "other, or run each arm as its own run and join them in a `study`"
+    )
+    if units.get("holdout"):
+        c.error(
+            "E-DATA-HOLDOUT-CELLS",
+            "data.units.holdout",
+            f"is declared beside {where}, {consequence}",
+        )
+    repeats = (doc.get("replication") or {}).get("repeats")
+    if isinstance(repeats, list) and any(
+        isinstance(level, dict) and level.get("kind") == "fold" for level in repeats
+    ):
+        c.error(
+            "E-REPL-FOLD-CELLS",
+            "replication.repeats",
+            f"declares a `fold` level beside {where}, {consequence}",
+        )
 
 
 def _accounted_attribute_names(doc: dict[str, Any], units: dict[str, Any]) -> set[str]:
@@ -2992,8 +3447,14 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
     real, `units.arm_members` narrows a condition's roster to its own arm, and
     `cli.py` writes `allocation.json` and `provenance.allocation_hash` — so each
     declaration changes the record, which is the test this family applies. It
-    resolves a unit roster, but two `data.units` sub-fields — `holdout` and a
-    `resolver` source — are still read by nothing.
+    resolves a unit roster, but one `data.units` sub-field — a `resolver`
+    source — is still read by nothing. `data.units.holdout` is no longer among
+    them either: `_check_holdout` checks the declaration for real,
+    `_resolved_holdout` realizes the partition once per run over the run's own
+    digest, `io.units`/`io.units.train` see the test and training halves,
+    and `cli.py` narrows every denominator to the test partition and writes
+    `allocation.json` and `provenance.allocation_hash` — so the declaration
+    changes the record, which is the test this family applies.
     `data.units.measurements` is no longer among them either: `resolve_units` collapses
     the rows an input table carries, `StepIO.finalize` collapses the ones a step
     records under `measurement=`, and `technical_n` reaches every metric block,
@@ -3095,56 +3556,57 @@ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
             "plugin registry is not implemented in this build; resolvers will be honored "
             "in a later slice. Use a table or a glob for now",
         )
-    for field, code in (
-        # `allocation: between` and `assign` were checked here, as a standalone
-        # `if` and as a loop entry respectively. `_check_assign` now checks both
-        # — against each other and against `sweep.groups` — for real: it reports
-        # an out-of-enum `allocation` value under `E-DATA-ALLOCATION-METHOD`, the
-        # pairing faults under `E-DATA-ALLOCATION-NO-ARMS`/`E-DATA-ASSIGN-MISSING`/
-        # `E-DATA-ALLOCATION-WITHIN-ARMS`, and a malformed or unresolvable `assign`
-        # block under `E-DATA-ASSIGN-METHOD`/`E-DATA-ASSIGN-UNKNOWN`/
-        # `E-DATA-ASSIGN-LEVELS`. `units.arm_members` narrows a condition's roster
-        # to its own arm, and `cli.py` writes `allocation.json` and
-        # `provenance.allocation_hash` — so the declaration changes the record,
-        # which is the test this family applies. What an allocated run may *not*
-        # yet do is publish a cross-arm contrast: `_check_sweep` refuses that
-        # combination under `E-DATA-ALLOCATION-CONTRAST`, a refusal of a
-        # combination rather than of a declaration, so it belongs there rather
-        # than in this loop.
-        # `cluster_by` was here. `_check_cluster_by` checks the declaration for
-        # real, `attrition` counts the clusters, `partition_units` keeps one out
-        # of two folds, and `summarize_step` gives every `basis: units` column a
-        # cluster-robust interval — so the declaration changes the record, which
-        # is the test this family applies. What a clustered run may *not* yet do
-        # is publish a contrast (`_check_sweep` refuses that combination
-        # under `E-DATA-CLUSTER-CONTRAST`) or resample a derived metric
-        # (`stats.summarize_step` raises `E-DATA-CLUSTER-DERIVED` at run time,
-        # that one not being knowable from a declaration at all). Both refuse a
-        # combination rather than a declaration, which is why neither is in this
-        # loop.
-        # `weight_by` was here. `_check_weight_by` checks the declaration for
-        # real, `attrition` computes Kish's effective size from it, and
-        # `summarize_step` weights every `basis: units` column's value and
-        # interval — so the declaration changes the record, which is the test
-        # this family applies. What a weighted run may *not* yet do is publish a
-        # contrast: `_check_sweep` refuses that combination under
-        # `E-DATA-WEIGHT-CONTRAST`, which is a refusal of a combination rather
-        # than of a declaration and so belongs there rather than in this loop.
-        # `measurements` was here. `_check_measurements` now checks the block for
-        # real, `resolve_units` collapses the input path, `finalize` collapses the
-        # step path, and `technical_n` reaches every metric block — so the
-        # declaration changes the record, which is the test this family applies.
-        ("holdout", "E-DATA-HOLDOUT-UNSUPPORTED"),
-    ):
-        # `init` writes these as null; only a real declaration is refused.
-        if units.get(field):
-            c.error(
-                code,
-                f"data.units.{field}",
-                "is specified but not implemented in this build — it is read by nothing "
-                "here, and a declaration that changes no behavior is the failure this "
-                "refusal exists to prevent; it will be honored in a later slice",
-            )
+    # No `data.units` *block* is refused wholesale any more — a `resolver`
+    # source (just above, under `E-DATA-RESOLVER-UNSUPPORTED`) is a leaf value
+    # inside `from`, not one of these blocks, and stays refused. Each block
+    # this function used to hold — `allocation`/`assign`, `cluster_by`,
+    # `weight_by`, `measurements`, and now `holdout` — is checked for real by
+    # its own function instead, and each changes the run's record rather than
+    # validating clean and then doing nothing:
+    #
+    # `allocation: between` and `assign` are checked by `_check_assign` —
+    # against each other and against `sweep.groups` — reporting an out-of-enum
+    # `allocation` value under `E-DATA-ALLOCATION-METHOD`, the pairing faults
+    # under `E-DATA-ALLOCATION-NO-ARMS`/`E-DATA-ASSIGN-MISSING`/
+    # `E-DATA-ALLOCATION-WITHIN-ARMS`, and a malformed or unresolvable `assign`
+    # block under `E-DATA-ASSIGN-METHOD`/`E-DATA-ASSIGN-UNKNOWN`/
+    # `E-DATA-ASSIGN-LEVELS`. `units.arm_members` narrows a condition's roster
+    # to its own arm, and `cli.py` writes `allocation.json` and
+    # `provenance.allocation_hash`. What an allocated run may *not* yet do is
+    # publish a cross-arm contrast: `_check_sweep` refuses that combination
+    # under `E-DATA-ALLOCATION-CONTRAST`, a refusal of a combination rather
+    # than of a declaration, so it lives there rather than here.
+    #
+    # `cluster_by` is checked by `_check_cluster_by`; `attrition` counts the
+    # clusters, `partition_units` keeps one out of two folds, and
+    # `summarize_step` gives every `basis: units` column a cluster-robust
+    # interval. What a clustered run may *not* yet do is publish a contrast
+    # (`_check_sweep` refuses that combination under `E-DATA-CLUSTER-CONTRAST`)
+    # or resample a derived metric (`stats.summarize_step` raises
+    # `E-DATA-CLUSTER-DERIVED` at run time, that one not being knowable from a
+    # declaration at all). Both refuse a combination rather than a
+    # declaration, which is why neither is here.
+    #
+    # `weight_by` is checked by `_check_weight_by`; `attrition` computes
+    # Kish's effective size from it, and `summarize_step` weights every
+    # `basis: units` column's value and interval. What a weighted run may
+    # *not* yet do is publish a contrast: `_check_sweep` refuses that
+    # combination under `E-DATA-WEIGHT-CONTRAST`, a refusal of a combination
+    # rather than of a declaration, so it lives there rather than here.
+    #
+    # `measurements` is checked by `_check_measurements`; `resolve_units`
+    # collapses the input path, `finalize` collapses the step path, and
+    # `technical_n` reaches every metric block.
+    #
+    # `holdout` is checked by `_check_holdout`; `_resolved_holdout` realizes the
+    # partition once per run, `io.units`/`io.units.train` see the two halves,
+    # `cli.py` narrows the denominator to the test partition and writes
+    # `allocation.json` and `provenance.allocation_hash`.
+    #
+    # One `data.units` sub-field remains read by nothing: a `resolver` source
+    # (checked above, under `E-DATA-RESOLVER-UNSUPPORTED`, since resolvers are
+    # plugin artifacts and the plugin registry is not implemented in this
+    # build). `holdout` left this family with this slice.
 
     # `statistics.null_test` validates clean today and is read by nothing —
     # the same silent-no-op class as the fields above. `statistics.resample`
@@ -4992,7 +5454,55 @@ diagnostic rather than a shrug, and what makes adding a second value a
 documented change rather than a silent one."""
 
 
-def _check_resample(doc: dict[str, Any], roster: UnitList | None, c: Collector) -> None:
+def _holdout_test_roster(
+    doc: dict[str, Any],
+    units_decl: dict[str, Any],
+    roster: UnitList | None,
+    cluster_by: str | None,
+) -> UnitList | None:
+    """The holdout's realized **test** partition, or `None` when the design
+    declares none or the draw cannot be performed.
+
+    Realized through `units.holdout_for`, the same pure function
+    `cli.command_run` realizes it with — which is the reason that function is
+    pure at all, `assignment_for`'s own argument: `validate` has to ask "which
+    units will the interval rest on" of the same declaration the run asks it
+    of, so a second answer computed here would be a check aimed at a partition
+    the run does not use.
+
+    **Does not raise for any fault `validate` can already see.** `validate`
+    collects, and this runs over configs that are already known bad — a
+    malformed `frac`, an unresolvable column, an unknown stratum, a cluster
+    attribute a unit does not carry — each caught by the `except` below and
+    each reported by its own check elsewhere. Here they become `None`, and
+    the check that reads this simply does not run rather than reporting a
+    second, derived fault on top of the one the reader has to fix anyway.
+    """
+    if roster is None:
+        return None
+    block = units_decl.get("holdout")
+    if not isinstance(block, dict) or not block:
+        return None
+    try:
+        clusters = clusters_of(roster, cluster_by) if cluster_by else None
+        plan = holdout_for(
+            roster,
+            block,
+            seed=holdout_seed_for(block, design_digest(doc), roster),
+            clusters=clusters,
+        )
+    except (ContractError, NotImplementedError, KeyError, TypeError, ValueError):
+        return None
+    test = set(plan.test)
+    return UnitList([u for u in roster if u.key in test])
+
+
+def _check_resample(
+    doc: dict[str, Any],
+    roster: UnitList | None,
+    c: Collector,
+    holdout_test: UnitList | None = None,
+) -> None:
     """Every check `statistics.resample` gets, seven findings in declaration
     order — the enumeration is the list, not a sample of it:
 
@@ -5001,10 +5511,15 @@ def _check_resample(doc: dict[str, Any], roster: UnitList | None, c: Collector) 
     - `E-STATS-RESAMPLE-N` — the `n` floor.
     - `E-STATS-RESAMPLE-STRATIFY-UNKNOWN` — a `stratify_by` name that is not a
       declared unit attribute.
-    - `W-STATS-RESAMPLE-CLUSTERS` — **reads the roster:** `limits.min_clusters`
-      against the resolved cluster count.
-    - `E-STATS-RESAMPLE-STRATIFY-VARIES` — **reads the roster too:** a stratum
-      that varies within a `cluster_by` cluster.
+    - `W-STATS-RESAMPLE-CLUSTERS` — **reads the holdout's test partition when
+      one is declared, the roster otherwise:** `limits.min_clusters` against
+      the resolved cluster count, over the per-unit table a resample actually
+      draws from.
+    - `E-STATS-RESAMPLE-STRATIFY-VARIES` — **reads the WHOLE roster, on
+      purpose**, even under a `data.units.holdout`. Constancy within a cluster
+      over the whole roster implies it over any subset, so the wider read is
+      the stricter one; the narrower would let a config validate whose training
+      half is incoherent and whose test half happens not to show it.
     - `W-STATS-RESAMPLE-FAMILY` — the comparison-family lower bound on that
       same `n`.
 
@@ -5168,11 +5683,16 @@ def _check_resample(doc: dict[str, Any], roster: UnitList | None, c: Collector) 
     # Counted through `units.fold_basis`, the same function `_check_replication`
     # and `_check_sweep` read — via `basis`, resolved once above this call and
     # threaded through as their `fold_basis=` argument. This check calls it a
-    # second time on the same roster and `cluster_by` rather than being handed
-    # that value: a second call to one derivation is not a second derivation,
-    # but it IS a second `try`/`except ContractError` an edit to the first must
-    # not forget to mirror. Not threaded through as a parameter in this slice;
-    # doing so is a cheap follow-up, not a correctness gap today.
+    # second time on `cluster_by` rather than being handed `basis` itself:
+    # `basis` is over the WHOLE roster (it feeds `fold`, which has no holdout
+    # to narrow against), while this call is over `holdout_test` when one
+    # resolved — a different roster than `basis` was counted from whenever a
+    # holdout is declared, so the two are deliberately not the same
+    # derivation reused, only the same function. A second call to one
+    # derivation is not a second derivation, but it IS a second
+    # `try`/`except ContractError` an edit to the first must not forget to
+    # mirror. Not threaded through `basis` in this slice; doing so is a cheap
+    # follow-up, not a correctness gap today.
     cluster_by = units_declared.get("cluster_by")
     min_clusters = (doc.get("limits") or {}).get("min_clusters")
     if (
@@ -5183,7 +5703,20 @@ def _check_resample(doc: dict[str, Any], roster: UnitList | None, c: Collector) 
         and not isinstance(min_clusters, bool)
     ):
         try:
-            groups = fold_basis(roster, cluster_by)
+            # **The test partition when a holdout is declared, not the whole
+            # roster.** `statistics.resample` draws over the per-unit table,
+            # which under a holdout holds only the units that recorded — so a
+            # percentile interval rests on the clusters of the TEST side, and
+            # counting the wider set warns against a denominator no interval
+            # used. Wrong in the direction of NOT firing: 50 clusters at
+            # `frac: 0.2` leaves roughly 10, and `min_clusters: 20` passed
+            # silently.
+            #
+            # `holdout_test` is `None` whenever no holdout is declared or the
+            # draw could not be performed, so this is `roster` unchanged for
+            # every other design — including every config in the build before
+            # a holdout existed.
+            groups = fold_basis(holdout_test if holdout_test is not None else roster, cluster_by)
         except ContractError:
             # A unit carrying no value for the cluster attribute
             # (`E-DATA-CLUSTER-UNKNOWN`). Sometimes reported beside this by
@@ -5200,11 +5733,14 @@ def _check_resample(doc: dict[str, Any], roster: UnitList | None, c: Collector) 
             # for real at `run`, same as the `basis` computation above handles it.
             groups = None
         if groups is not None and groups < min_clusters:
+            counted = (
+                "this holdout's test partition" if holdout_test is not None else "this roster"
+            )
             c.warn(
                 "W-STATS-RESAMPLE-CLUSTERS",
                 "limits.min_clusters",
-                f"is {min_clusters}, and `data.units.cluster_by: {cluster_by}` puts this "
-                f"roster in {groups} clusters — `resample` draws whole clusters, so the "
+                f"is {min_clusters}, and `data.units.cluster_by: {cluster_by}` puts "
+                f"{counted} in {groups} clusters — `resample` draws whole clusters, so the "
                 f"percentile interval rests on {groups} independent draws however many "
                 "units they hold",
             )

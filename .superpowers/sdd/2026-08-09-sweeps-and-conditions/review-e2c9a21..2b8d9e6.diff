@@ -1,0 +1,242 @@
+# Review package: e2c9a21..HEAD
+
+## Commits
+2b8d9e6 Refuse each unimplemented sweep mode on its own
+
+## Files changed
+ src/publishable/validate.py | 54 +++++++++++++++++++----------
+ tests/test_validate.py      | 84 +++++++++++++++++++++++++++++++--------------
+ 2 files changed, 94 insertions(+), 44 deletions(-)
+
+## Diff
+diff --git a/src/publishable/validate.py b/src/publishable/validate.py
+index 001826c..4681682 100644
+--- a/src/publishable/validate.py
++++ b/src/publishable/validate.py
+@@ -8,24 +8,20 @@ import yaml
+ 
+ from publishable.diagnostics import Collector
+ from publishable.errors import ContractError
+ from publishable.manifest import POLICIES
+ from publishable.materialize import TEMPLATE_VERSION
+ from publishable.param import MISSING
+ from publishable.provenance import find_repo_root, resolves_inside_repo
+ from publishable.templates.registry import get_template, template_names
+ from publishable.units import resolve_units
+ 
+-# `sweep`'s six axis keys, per reference.md § The one config file. A key present
+-# but empty (`groups: []`, `ablate: null`) declares no axis and is not a sweep.
+-SWEEP_AXIS_KEYS = ("baseline", "grid", "paired", "ablate", "sample", "groups")
+-
+ REQUIRED_METADATA = ("description", "authors")
+ 
+ # The shape of every top-level block, checked once before any `_check_*` reads one —
+ # a property of the config format, not of whichever check happens to read a block
+ # first. `statistics`, `limits`, and `hypotheses` are included even though nothing
+ # reads them yet in this build, so the next reader inherits the guard rather than
+ # the crash a hand-edited config would otherwise produce.
+ _MAPPING_BLOCKS = (
+     "metadata", "data", "parameters", "sweep", "replication", "statistics", "limits",
+ )
+@@ -376,41 +372,61 @@ def _check_replication(doc: dict[str, Any], template: Any, c: Collector) -> None
+             "W-REPL-FLOOR",
+             "replication.repeats",
+             f"total of {total} is below this convention class's default of "
+             f"{template.default_repeats}",
+         )
+ 
+ 
+ def _check_unimplemented(doc: dict[str, Any], c: Collector) -> None:
+     """Declared-but-unimplemented blocks, refused rather than silently ignored.
+ 
+-    This build hardcodes one condition and executes repeats `as_declared`
+-    regardless of what is written here. It now resolves a unit roster, but
+-    several `data.units` sub-fields — allocation other than `within`,
+-    `assign`, `cluster_by`, `weight_by`, `measurements`, `holdout`, and a
+-    `resolver` source — are read by nothing yet. Each of these would
+-    otherwise validate clean and then run something other than what the
++    This build expands `sweep.baseline` and `sweep.grid` only, and executes
++    repeats `as_declared` regardless of what is written here. `sweep.paired`,
++    `.ablate`, `.sample`, and `.groups` are read by nothing yet. It resolves a
++    unit roster, but several `data.units` sub-fields — allocation other than
++    `within`, `assign`, `cluster_by`, `weight_by`, `measurements`, `holdout`,
++    and a `resolver` source — are read by nothing yet either. Each of these
++    would otherwise validate clean and then run something other than what the
+     config describes — the exact failure `E-REPL-KIND-UNSUPPORTED` already
+     refuses for `batch`/`fold`/nested repeat levels. Each message says plainly
+     that the block is honored in a later slice, so a user does not read this as
+     their config being malformed.
+     """
+     sweep = doc.get("sweep") or {}
+-    declared_axes = [key for key in SWEEP_AXIS_KEYS if sweep.get(key)]
+-    if declared_axes:
+-        c.error(
+-            "E-SWEEP-UNSUPPORTED",
+-            "sweep",
+-            f"declares {', '.join(declared_axes)}, which is specified but not implemented "
+-            "in this build — every run executes exactly one condition regardless of what "
+-            "is declared here; sweep execution will be honored in a later slice",
+-        )
++    for mode, code, why in (
++        ("paired", "E-SWEEP-PAIRED-UNSUPPORTED", "couples parameters into one axis"),
++        (
++            "ablate",
++            "E-SWEEP-ABLATE-UNSUPPORTED",
++            "emits 1 + n one-change conditions and reads the baseline rather than "
++            "re-emitting it",
++        ),
++        (
++            "sample",
++            "E-SWEEP-SAMPLE-UNSUPPORTED",
++            "draws continuous ranges and labels its conditions `NN_sample`",
++        ),
++        (
++            "groups",
++            "E-SWEEP-GROUPS-UNSUPPORTED",
++            "is an axis over units rather than parameters, so it needs "
++            "`data.units.allocation` and `data.units.assign`",
++        ),
++    ):
++        if sweep.get(mode):
++            c.error(
++                code,
++                f"sweep.{mode}",
++                f"{why}, and is specified but not implemented in this build — this build "
++                "expands `baseline` and `grid` only; the other modes will be honored in a "
++                "later slice",
++            )
+ 
+     units = _units_declaration(doc.get("data") or {}, c) or {}
+     source = units.get("from")
+     if isinstance(source, dict) and "resolver" in source:
+         c.error(
+             "E-DATA-RESOLVER-UNSUPPORTED",
+             "data.units.from.resolver",
+             f"names `{source['resolver']}`, but resolvers are plugin artifacts and the "
+             "plugin registry is not implemented in this build; resolvers will be honored "
+             "in a later slice. Use a table or a glob for now",
+diff --git a/tests/test_validate.py b/tests/test_validate.py
+index 5b90bf3..a78eed6 100644
+--- a/tests/test_validate.py
++++ b/tests/test_validate.py
+@@ -259,61 +259,95 @@ def _with_doc_change(write_config, change) -> Path:
+     """Set a top-level key the base fixture does not declare at all — the dotted
+     override helper needs the parent key to preexist, which `sweep` and
+     `data.units` deliberately do not in the base fixture."""
+     path = write_config()
+     doc = yaml.safe_load(path.read_text())
+     change(doc)
+     path.write_text(yaml.safe_dump(doc))
+     return path
+ 
+ 
+-def test_a_declared_sweep_axis_is_refused_not_silently_ignored(write_config):
+-    """S1 hardcodes one condition; a config declaring `sweep.grid` must not
+-    validate clean and then run one condition while `run.yaml` records the sweep
+-    verbatim, describing an experiment that never ran."""
+-    sweep = {"grid": {"analysis.method": ["pearson", "spearman"]}}
+-    path = _with_doc_change(write_config, lambda doc: doc.update(sweep=sweep))
+-    assert "E-SWEEP-UNSUPPORTED" in codes(path)
+-
+-
+-def test_an_empty_sweep_block_is_not_a_sweep(write_config):
+-    """An empty or all-null `sweep` (the shape a generated config ships with)
+-    declares no axis and must not trip the refusal meant for an actual sweep."""
+-    path = _with_doc_change(
+-        write_config,
+-        lambda doc: doc.update(
+-            sweep={
+-                "grid": None,
+-                "groups": [],
+-                "ablate": None,
+-                "baseline": None,
+-                "paired": [],
+-                "sample": None,
++def test_baseline_and_grid_are_now_accepted(write_config):
++    """S3a implements `baseline` and `grid` expansion; a config declaring only
++    those must validate clean rather than tripping any sweep refusal."""
++    found = codes(
++        write_config(
++            {
++                "sweep": {
++                    "baseline": {"analysis.method": "pearson"},
++                    "grid": {"analysis.method": ["spearman"]},
++                }
+             }
+-        ),
++        )
++    )
++    assert not [c for c in found if c.startswith("E-SWEEP")]
++
++
++@pytest.mark.parametrize(
++    "mode,value,code",
++    [
++        ("paired", [{"analysis.method": "pearson"}], "E-SWEEP-PAIRED-UNSUPPORTED"),
++        ("ablate", {"from": "baseline", "remove": ["a.b"]}, "E-SWEEP-ABLATE-UNSUPPORTED"),
++        ("sample", {"n": 40, "ranges": {}}, "E-SWEEP-SAMPLE-UNSUPPORTED"),
++        ("groups", [{"by": "arm", "levels": ["a", "b"]}], "E-SWEEP-GROUPS-UNSUPPORTED"),
++    ],
++)
++def test_each_unimplemented_mode_is_refused_on_its_own(write_config, mode, value, code):
++    """`paired`, `ablate`, `sample`, and `groups` each get their own refusal now that
++    the old blanket sweep refusal is retired — otherwise each would fall through
++    into silence the moment `baseline`/`grid` stopped covering the whole block."""
++    assert code in codes(write_config({"sweep": {mode: value}}))
++
++
++def test_an_empty_or_null_mode_is_not_a_declaration(write_config):
++    """`init` may write these absent or null; only a truthy value is refused."""
++    found = codes(
++        write_config(
++            {
++                "sweep": {
++                    "grid": {"analysis.method": ["spearman"]},
++                    "paired": [],
++                    "ablate": None,
++                    "sample": None,
++                    "groups": [],
++                }
++            }
++        )
+     )
+-    assert "E-SWEEP-UNSUPPORTED" not in codes(path)
++    assert not [c for c in found if c.endswith("-UNSUPPORTED")]
++
++
++def test_every_sweep_refusal_message_defers_rather_than_scolds(write_config):
++    for mode, value, code in [
++        ("paired", [{"a.b": 1}], "E-SWEEP-PAIRED-UNSUPPORTED"),
++        ("ablate", {"from": "baseline"}, "E-SWEEP-ABLATE-UNSUPPORTED"),
++        ("sample", {"n": 1}, "E-SWEEP-SAMPLE-UNSUPPORTED"),
++        ("groups", [{"by": "arm"}], "E-SWEEP-GROUPS-UNSUPPORTED"),
++    ]:
++        c = Collector()
++        validate_config(write_config({"sweep": {mode: value}}), c)
++        message = next(f.message for f in c.findings if f.code == code)
++        assert "later slice" in message, f"{code} must defer, not scold"
+ 
+ 
+ def test_a_non_default_replication_order_is_refused_not_silently_ignored(write_config):
+     """`replication.order: randomized` currently validates clean and then executes
+     `as_declared` anyway — the record would say randomized while the run wasn't."""
+     found = codes(write_config({"replication.order": "randomized"}))
+     assert "E-REPL-ORDER-UNSUPPORTED" in found
+ 
+ 
+ def test_a_config_without_unimplemented_blocks_still_validates_clean(write_config):
+     """The base fixture declares no sweep axis, no `data.units`, and
+     `replication.order: as_declared` — none of the new refusals should fire
+     against it."""
+     found = codes(write_config())
+-    assert "E-SWEEP-UNSUPPORTED" not in found
+     assert "E-REPL-ORDER-UNSUPPORTED" not in found
+     assert not [c for c in found if c.endswith("-UNSUPPORTED")]
+ 
+ 
+ def test_a_plain_units_block_is_now_accepted(write_config):
+     """The blanket refusal is retired: S2 resolves a roster."""
+     found = codes(write_config({"data.units": {"from": "index.csv", "key": "patient_id"}}))
+     assert not [c for c in found if c.endswith("-UNSUPPORTED")]
+ 
+ 

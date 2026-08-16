@@ -1,0 +1,48 @@
+313bc97 docs: cite the validation rows by title, and stop naming a retired code in src
+2db57a6 docs: cluster_by is a string leaf too, so it inherits no sub-key closure
+3c2e6d6 docs: name the weighted-delta refusal in the validation checks table
+b36b1b6 feat: data.units.weight_by is a declaration core honors, except beside a contrast
+11fb33c test: make the unragged column discriminate in the effective-per-column test
+dcf1ebc feat: wire the weighted estimator, and a percentile draw that stays unweighted
+1a011c6 test: make the weighted xfail pin the arithmetic, not only the shape
+2cdd197 test: pin the derived metric's weighted_by and the four int parts of n
+2836af1 feat: report the effective n a weighted interval was computed at
+0278926 fix: Kish's effective size gates its own weights instead of answering nan
+35d1ef8 feat: a weighted interval takes its df from Kish's effective size
+9e1b3e6 docs: say why the weight warning needs a name and the cluster one does not
+f510ff9 feat: check that a weight exists, is usable, and is not silently absent
+3a9fc89 docs: cite a real section, and say when a run declares measurements
+3978870 fix: measurements.by is checked against the source's columns, not attributes
+7cbc161 docs: state where measurements' sub-fields live, and pin the stratum omission
+ed48f75 feat: data.units.measurements is a declaration core honors
+2f8f65f test: make the runner's measurement tests discriminate mean from median
+a06bed4 docs: state the one-path-or-the-other rule where measurement= is defined
+a76f0e7 test: pin mean against median on the input path, so the shared rule is checkable
+eef7ff7 feat: collapse a step's measurements under the same rule the input takes
+f080564 fix: skip() also refuses a unit that already carries a measurement row
+a3d8aa2 fix: measurement path shares the roster and attribute checks record's plain path already has
+ab6fb2e feat: io.record takes a measurement, and refuses one with no rule
+0024f4d docs: is_measurement_numeric no longer describes a coercion that doesn't exist
+901276d feat: collapse technical replicates at resolution, before n is counted
+e863830 fix: share the numeric predicate, and stop misrouting an omitted collapse
+cc6fb3f refactor: one rule_for, called by both the check and the collapse
+41de16c feat: check the collapse rule against the column it collapses
+f0ad927 test: pin the bool exclusion the numeric gate claims
+d1d2026 fix: gate the constant-collapse shortcut against corrupting sum
+a8f59c9 fix: add median and sum to COLLAPSE_RULES, pin mode's tie-break
+193957b feat: collapse rows sharing a key into one unit
+ docs/reference.md            |  32 +-
+ src/publishable/artifacts.py | 200 ++++++++-
+ src/publishable/cli.py       | 108 ++++-
+ src/publishable/envelope.py  |  36 +-
+ src/publishable/runner.py    |  87 +++-
+ src/publishable/stats.py     | 307 +++++++++++++-
+ src/publishable/units.py     | 331 ++++++++++++++-
+ src/publishable/validate.py  | 428 ++++++++++++++++++-
+ tests/test_artifacts.py      | 389 ++++++++++++++++++
+ tests/test_cli.py            | 312 +++++++++++++-
+ tests/test_runner.py         | 157 +++++++
+ tests/test_stats.py          | 453 ++++++++++++++++++++
+ tests/test_units.py          | 367 ++++++++++++++++-
+ tests/test_validate.py       | 955 ++++++++++++++++++++++++++++++++++++++++++-
+ 14 files changed, 4061 insertions(+), 101 deletions(-)

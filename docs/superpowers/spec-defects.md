@@ -4878,24 +4878,26 @@ canonicalising, leaving every other `assign` field (`method`, `from`, `stratify_
 `block_size`) inside, since those describe what is randomized over. **H3c-1 task 16 owns it.**
 No document change is owed.
 
-**Closed by task 16.** `hashes._units_excluding_assign_seed` drops `seed` from each
-`assign.<axis>` block, per-axis, before `design_digest` canonicalises `data.units` — every other
-`assign` field, and a second or later axis's own `seed`, still moves the digest. It also never
-raises on a shape it does not expect (`assign` or an axis block that is not a mapping), since
-`validate` can reach `design_digest` before a config is known-good.
+**Closed by task 16.** `hashes._units_excluding_drawn_seeds` (named `_units_excluding_assign_seed`
+until renamed by H3d task 4) drops `seed` from each `assign.<axis>` block, per-axis, before
+`design_digest` canonicalises `data.units` — every other `assign` field, and a second or later
+axis's own `seed`, still moves the digest. It also never raises on a shape it does not expect
+(`assign` or an axis block that is not a mapping), since `validate` can reach `design_digest`
+before a config is known-good.
 
-**One field over, the same defect is latent.** The document excludes only `assign.seed`, so as
-written it endorses `data.units.holdout.seed` perturbing every other derived draw — the same
-confounding, from the same wholesale canonicalisation. `holdout` is `NOT BUILT`, so nothing
-exhibits it yet; the slice that builds `data.units.holdout` owes either the same exclusion in
-`design_digest` or a stated reason the two seeds differ.
+**~~One field over, the same defect is latent.~~ Closed by H3d, task 4.**
+`hashes._units_excluding_assign_seed` was renamed `_units_excluding_drawn_seeds` and now
+drops `data.units.holdout.seed` as well as each `assign.<axis>.seed`, so a pinned holdout
+seed no longer perturbs any other derived draw. `reference.md` § What `auto` derives from
+gained the matching row and named `E-DATA-HOLDOUT-SEED` in the same slice.
 
-**Found by:** H3c-1, Task 1 (documents-only). **Closed by:** H3c-1, Task 16.
+**Found by:** H3c-1, Task 1 (documents-only). **Closed by:** H3c-1, Task 16 (`assign.seed`
+half); H3d, Task 4 (`holdout.seed` half).
 **Severity:** Was Minor while open, since `assign` is refused outright as `NOT BUILT` and no
 config could reach a pinned `assign.seed` — but it would have become live the moment H3c-1
 retired that refusal, so closing it now rather than later avoids a fix landing after the
-confounding it prevents becomes reachable. The `holdout.seed` half above remains open and is
-unaffected by this closure.
+confounding it prevents becomes reachable. The `holdout.seed` half above is closed by H3d
+task 4.
 
 ## RESOLVED (H3c, task 10) — `assign.<axis>.from`'s "unchanged" divergence from `weight_by`/`cluster_by`
 
@@ -5637,3 +5639,107 @@ convention exists to prevent.
 
 **Owner: unassigned.** Any slice editing `reference.md` § Statistical reporting can settle which
 reading is right; H4b is next to touch that material.
+
+## OPEN — `technical_n` is a whole-roster figure beside a test-partition `n`
+
+`cli._cond_beside_n` withholds `technical_n` from a condition whose roster was narrowed to
+an arm, on the stated grounds that "copying a whole-roster figure onto a subset states a
+spread nobody computed over that subset". A `data.units.holdout` narrows the same way and
+the same withholding is not applied: `technical_n` is `{min, max, median}` over the whole
+roster's measurement counts, and under a holdout it would sit beside an `n` counting the
+test partition alone.
+
+**Deliberately not closed by H3d.** It needs `data.units.measurements` *and*
+`data.units.holdout` declared together, which no config in
+`docs/feasibility-llm-growth-studies.md` does, and closing it inside H3d's task 15 would
+add an unbudgeted behaviour change to the task the scoping already names as the one most
+likely to ship wrong.
+
+**Correction (H3d task 15, `fa85b26`), replacing the "mechanism is cheap" sentence above:**
+task 15 narrowed `_condition_beside_n`'s call into `_cond_beside_n` to pass `eval_roster`
+(the holdout's test partition) as the third argument in place of the whole `roster`. Both
+the `cond_roster` argument and that third argument now derive from the same narrowed
+value, so the identity check `cond_roster is roster` can no longer distinguish "narrowed
+to an arm" from "narrowed to a holdout's test partition" — it never could tell those apart
+by the roster's *content*, but before this task the identity reference was still the
+whole roster, and the mechanism only worked by accident of that specific pairing. Closing
+this gap now needs a fourth parameter carrying the un-narrowed roster as a separate
+identity reference (or the whole roster threaded alongside), not merely reading the
+existing third argument.
+
+**Found by:** H3d, Task 2 (documents-only). **Owner:** whichever slice next changes
+`_cond_beside_n`, or H3c-3 if it retrofits the holdout to cells first — re-owner this entry
+when that slice finishes rather than leaving it pointing at a closed one.
+**Severity:** Minor. Both numbers are individually true and separately labelled; the fault
+is that a reader must know which roster each was computed over.
+
+## OPEN — a typo'd `data.units.holdout.from` reports as a values fault with no hint that the column is absent
+
+`_check_holdout`'s roster half reports `E-DATA-HOLDOUT-VALUES` when a `by_attribute` column
+does not hold exactly `train` and `test`. When the declared `from` names a column the roster
+has no attribute for at all, the same code fires with the same message shape — it says the
+column's values are wrong rather than that the column does not exist, and the values it lists
+are the ones a missing attribute yields rather than anything the user wrote. A misspelt
+`from` is the likeliest way to reach it, and the message sends the reader to look at their
+data instead of at their config.
+
+**Deliberately not closed by H3d.** The fix is a distinct finding — an attribute-existence
+check ahead of the values check, with its own code and its own § Errors row — and H3d's task
+7 was scoped to the values rule alone. Closing it there would have added a thirteenth code to
+a task already carrying three. `assign` has the same shape and the same gap, so a fix should
+close both rather than only the holdout half.
+
+**Found by:** H3d, Task 7 review. **Owner:** whichever slice next adds a diagnostic to
+`_check_holdout` or `_check_assign` — re-owner this entry when that slice finishes rather
+than leaving it pointing at a closed one.
+**Severity:** Minor. The config is refused either way, so nothing invalid runs; the cost is
+the reader's time between the message and the cause.
+
+## OPEN — `units.stratum_names`'s docstring names two call sites and has seven
+
+The docstring claims the helper is "shared by `assign.<axis>.stratify_by` and
+`statistics.resample.stratify_by`, and written against neither in particular". The
+enumeration was true when written and is not now: `stratum_names` is called from seven sites
+in `src/`, including `validate._check_holdout`'s stratum check, which H3d added. The
+"written against neither in particular" half remains true and is the load-bearing part; it is
+the enumeration that has gone stale.
+
+**Deliberately not closed by H3d.** Task 6's review found it and its brief did not own it;
+task 7 was offered it and correctly declined, because task 7 adds no call site and absorbing
+an unrelated docstring into a task carrying a Critical finding is how a slice's diff stops
+being reviewable. It is recorded here rather than deferred a third time in review prose,
+which is not a filing.
+
+**A sibling to check at the same time:** `stratum_varies_within_cluster` had the identical
+defect — two claimed call sites against three real ones — and H3d's task 7 corrected it to
+four. An enumeration of call sites inside a docstring is a maintenance obligation nobody
+owns, so the fix worth preferring is to state what the helper is *for* and drop the count.
+
+**Found by:** H3d, Task 6 review; deferred again at Task 7. **Owner:** whichever slice next
+edits `units.stratum_names` — re-owner this entry when that slice finishes rather than
+leaving it pointing at a closed one.
+**Severity:** Minor. A stale count in a docstring misleads a reader deciding whether a change
+is safe, which is exactly the decision this repo's § Development record exists to support.
+
+## OPEN — an evaluation split cannot be drawn within a cell
+
+`data.units.holdout` and a `{kind: fold}` repeat both partition the whole roster once, and
+`data.units.allocation: between` / a non-empty `sweep.groups` divides that same roster into
+cells. `reference.md` § A fixed holdout split and `experimental-designs.md` both now name the
+refusal this entry documents and record drawing the split **within** each cell as the design
+that would lift it. **No build draws one.**
+
+H3d refuses the combination instead, at one site under two codes — `E-DATA-HOLDOUT-CELLS`
+and `E-REPL-FOLD-CELLS` — because the `fold` half was a live defect: `replication._fold_k`
+bounds `k` against `units.fold_basis` over the whole roster, so 15 units split 12/3 by arm
+permitted `k: 5` and left the 3-unit arm with two empty folds, and the config validated
+clean. Refusing rather than disclosing follows `E-DATA-ASSIGN-BLOCKED-CLUSTER`'s precedent:
+a truthful record of an imbalance no reader crosses by hand is the silently-wrong class.
+
+**Owner of the retirement: H3c-3**, the slice that builds folds and holdouts inside cells.
+Re-owner this entry if that slice's scope changes, rather than leaving it pointing at a
+closed one.
+
+**Found by:** H3d, Task 8. **Severity:** Was Major for `fold` while open — a validated
+config produced empty folds per arm — and is now closed as a refusal rather than as a
+capability.

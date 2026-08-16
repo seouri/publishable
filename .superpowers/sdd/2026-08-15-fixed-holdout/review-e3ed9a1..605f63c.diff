@@ -1,0 +1,297 @@
+# Review package: e3ed9a1..605f63c
+
+## Commits
+605f63c feat: units.holdout_seed_for, with its own digest suffix
+
+## Files changed
+ .../sdd/2026-08-15-fixed-holdout/task-12-report.md | 110 +++++++++++++++++++++
+ src/publishable/units.py                           |  42 ++++++++
+ tests/test_units.py                                |  56 +++++++++++
+ 3 files changed, 208 insertions(+)
+
+## Diff
+diff --git a/.superpowers/sdd/2026-08-15-fixed-holdout/task-12-report.md b/.superpowers/sdd/2026-08-15-fixed-holdout/task-12-report.md
+new file mode 100644
+index 0000000..1643554
+--- /dev/null
++++ b/.superpowers/sdd/2026-08-15-fixed-holdout/task-12-report.md
+@@ -0,0 +1,110 @@
++# Task 12 report: `units.holdout_seed_for`
++
++## Status
++
++DONE
++
++## What was built
++
++`src/publishable/units.py`: added `holdout_seed_for(block, digest, roster) -> int`, placed
++immediately after `assign_seed_for` and before `units_hash`, per the brief. Construction:
++pinned non-bool `int` in `block["seed"]` returned literally (digest never consulted on that
++path); otherwise `sha256(f"{digest}|holdout|{units_hash(roster)}")`, first four bytes
++big-endian — the same shape as `assign_seed_for`, with its own `|holdout` suffix rather than
++`_seed_from`'s `|folds` or `assign_seed_for`'s `|assign|<axis>`.
++
++`tests/test_units.py`: added `_seed_from` and `holdout_seed_for` to the import list (`_roster`,
++`assign_seed_for`, `units_hash` were already imported — reused, not redefined, per the
++collision warning in the task context). Appended five tests at end of file, verbatim from the
++brief:
++
++- `test_a_pinned_holdout_seed_is_returned_literally_and_ignores_the_digest`
++- `test_a_boolean_seed_is_not_a_pin`
++- `test_the_derived_holdout_seed_mixes_the_digest_and_the_resolved_roster`
++- `test_the_holdout_seed_is_not_the_fold_seed_for_the_same_digest`
++- `test_the_holdout_seed_is_not_an_assign_axis_seed_for_the_same_digest`
++
++## Test summary
++
++`uv run pytest` — 1924 passed, 2 xfailed (1919 + 5 new). `uv run ruff check .` and
++`uv run mypy` clean. `uv run ruff format --check .` shows the same pre-existing 63-file drift
++noted in the task context (units.py/test_units.py are the already-unformatted baseline; the
++diff at those two files' lines matches lines this task did not touch).
++
++## Mutations — five run, not two
++
++All reverted by editing the file back (never `git checkout --`); each revert verified by
++re-running the targeted tests, and a final `diff` against a pre-mutation backup copy of
++`units.py` confirmed byte-identical restoration before commit.
++
++**(a)** brief's — payload's `|holdout|` → `|assign|holdout|`.
++Result: **FAIL**, exactly as predicted —
++`test_the_holdout_seed_is_not_an_assign_axis_seed_for_the_same_digest` failed with
++`3716163157 == 3716163157` (the mutated function now computes exactly
++`assign_seed_for({}, "holdout", ...)`'s payload). All other 5 tests still passed.
++
++**(b)** brief's — `if isinstance(seed, int) and not isinstance(seed, bool):` →
++`if isinstance(seed, int):`.
++Result: **FAIL** — `test_a_boolean_seed_is_not_a_pin` failed on its first assertion
++(`assert derived != 1` → `True != 1`, i.e. `derived == 1` since `True` is now honoured as a
++pin). pytest stops at the first failing assertion in a test function, so the second assertion
++in that test did not get a chance to execute under this mutation — reported as observed rather
++than asserting the brief's "both" literally.
++
++**(c)** mine — deleted the pinned-seed early return entirely (function always derives).
++Result: **FAIL** — `test_a_pinned_holdout_seed_is_returned_literally_and_ignores_the_digest`
++failed: `3480535593 == 4321` is false: the pin is silently ignored. This discriminates the
++"pinned path skips the digest" contract that mutation (b) does not reach.
++
++**(d)** mine — dropped the roster from the payload (`payload = f"{digest}|holdout".encode()`,
++no `units_hash(roster)`).
++Result: **FAIL** — `test_the_derived_holdout_seed_mixes_the_digest_and_the_resolved_roster`
++failed on its roster half: `holdout_seed_for({}, "sha256:aaa", _roster(10))` and
++`holdout_seed_for({}, "sha256:aaa", _roster(11))` collided (`1048393362 == 1048393362`),
++proving the test's roster-size assertion is not blind — it does discriminate before the
++digest-only construction is reached. (The reordered-roster assertion in the same test would
++also have failed had execution reached it; pytest stopped at the first failing line.)
++
++**(e)** mine, named per the brief's instruction to find whatever single line kills
++`test_the_holdout_seed_is_not_the_fold_seed_for_the_same_digest` — replaced the payload line
++with `_seed_from`'s exact construction: `payload = f"{digest}|folds".encode()` (dropping both
++the `|holdout` suffix and the roster term, since `_seed_from(digest)` is
++`sha256(f"{digest}|folds")` with no roster mixed in at all).
++Result: **FAIL** — `test_the_holdout_seed_is_not_the_fold_seed_for_the_same_digest` failed with
++`984440229 == 984440229`, confirming the two derivations collide once the payload is made
++byte-identical to `_seed_from`'s.
++
++**Finding to report rather than paper over:** this mutation could not be made to fail *only*
++the fold-neighbour test. Making `holdout_seed_for`'s output equal `_seed_from(digest)` on any
++input requires its payload to be byte-identical to `f"{digest}|folds"` (a sha256 collision on
++a differently-shaped payload is not a realistic alternative), which necessarily drops the
++`units_hash(roster)` term too — so this same edit also failed
++`test_the_derived_holdout_seed_mixes_the_digest_and_the_resolved_roster` (the `_roster(11)`
++assertion) as a side effect. I checked whether a narrower one-line change exists that
++preserves the roster term and still collides with `_seed_from` — e.g. changing only the
++`|holdout|` suffix to `|folds|` while keeping `{units_hash(roster)}` appended — and confirmed
++by inspection and by running it that this does *not* collide (`_seed_from` has no roster
++suffix at all, so `f"{digest}|folds|{units_hash(roster)}"` still differs from
++`f"{digest}|folds"`), meaning it does not fail the target test. So the fold-neighbour
++distinction, as a single-line mutation, is only reachable by an edit that is inseparable from
++the roster-inclusion mutation (d) — the two tests are not independently discriminated by any
++one-line change I could construct, though each is independently discriminated by *some*
++combination not tested here. This is a narrower version of the same coupling the task context
++warned about elsewhere in this slice (a fixture too coarse to distinguish two claims); here it
++is the mutation, not the fixture, that is coarse, and it is disclosed as such rather than
++silently claimed as a clean single-property proof.
++
++## Where the brief disagreed with the code
++
++None found. `assign_seed_for`, `_seed_from`, and `units_hash` all matched the brief's
++description exactly (verified by reading `src/publishable/units.py` before writing the new
++function), and the prescribed test names, docstrings, and payload shape were used verbatim.
++
++## Process notes
++
++`.superpowers/sdd/.gitignore` was clobbered to a bare `*` by running `scripts/task-brief` to
++extract this task's brief (per the standing warning in `CLAUDE.md`). Restored via
++`git checkout -- .superpowers/sdd/.gitignore` before committing — safe here because that file
++had no uncommitted content of its own being destroyed; it was reverting the auto-clobber back
++to the last commit's tracked (correct) content, exactly the "restore" the CLAUDE.md instruction
++prescribes.
+diff --git a/src/publishable/units.py b/src/publishable/units.py
+index c270e97..cb0ae12 100644
+--- a/src/publishable/units.py
++++ b/src/publishable/units.py
+@@ -2585,20 +2585,62 @@ def assign_seed_for(block: Mapping[str, Any], axis: str, digest: str, roster: Un
+     per axis for the same reason: a pinned seed must not move the digest it
+     would otherwise be mixed with.
+     """
+     seed = block.get("seed", "auto")
+     if isinstance(seed, int) and not isinstance(seed, bool):
+         return seed
+     payload = f"{digest}|assign|{axis}|{units_hash(roster)}".encode()
+     return int.from_bytes(hashlib.sha256(payload).digest()[:4], "big")
+ 
+ 
++def holdout_seed_for(block: Mapping[str, Any], digest: str, roster: UnitList) -> int:
++    """The seed `data.units.holdout` draws its split with.
++
++    `reference.md` § What `auto` derives from: a holdout's `seed` mixes "digest
++    + the resolved roster" — the digest because the split is a property of the
++    design, and `units_hash(roster)` because it covers the roster **in resolved
++    order**, so two runs that resolved the same units in a different sequence
++    did not draw the same trial (§ Where units come from).
++
++    **Its own suffix, `|holdout`, and not `_seed_from`'s `|folds`.** A holdout
++    is not a fold, and the two must not draw the same partition from the same
++    digest. They are mutually exclusive declarations at this commit
++    (`E-DATA-HOLDOUT-FOLD`), so nothing *observes* a collision — which is the
++    argument FOR the suffix rather than against it: relying on a refusal
++    elsewhere to keep two derivations apart is how they come to agree by
++    accident the moment that refusal moves.
++
++    **Not `assign_seed_for` either**, whose payload carries an axis name a
++    holdout does not have. The construction is otherwise copied deliberately:
++    the same digest, the same `units_hash`, the same four bytes read big-endian
++    — one derivation shape for every drawn partition in the config.
++
++    A pinned integer is returned literally, and — the load-bearing half, copied
++    from `sweep.sample_seed_for`'s own docstring — **the digest is not consulted
++    at all** on that path, only read out of `block`. "Pinning an integer is the
++    deliberate act, and the one to take for anything you intend to cite," so a
++    pinned split must survive a roster that grows, shrinks, or reorders, and
++    `hashes.design_digest` strips `holdout.seed` for the same reason: a pinned
++    seed must not move the digest it would otherwise be mixed with.
++
++    `bool` is excluded from the pin: `isinstance(True, int)` is `True`, and
++    `seed: true` is not a pin — `validate` refuses it as
++    `E-DATA-HOLDOUT-SEED`, and honouring it as `1` would record a derived seed
++    under a key the config wrote deliberately.
++    """
++    seed = block.get("seed", "auto")
++    if isinstance(seed, int) and not isinstance(seed, bool):
++        return seed
++    payload = f"{digest}|holdout|{units_hash(roster)}".encode()
++    return int.from_bytes(hashlib.sha256(payload).digest()[:4], "big")
++
++
+ def units_hash(units: UnitList) -> str:
+     """Covers the list in resolved order — two runs that resolved the same units in a
+     different sequence did not allocate the same trial."""
+     payload = json.dumps(
+         [
+             {"key": u.key, "paths": list(u.paths), "attributes": dict(u.attributes)}
+             for u in units
+         ],
+         sort_keys=True,
+         separators=(",", ":"),
+diff --git a/tests/test_units.py b/tests/test_units.py
+index 8e1d140..656c98a 100644
+--- a/tests/test_units.py
++++ b/tests/test_units.py
+@@ -8,30 +8,32 @@ from publishable import ContractError
+ from publishable.units import (
+     DRAWN_ASSIGN_METHODS,
+     HOLDOUT_METHODS_REALIZED,
+     ArmPlan,
+     HoldoutPlan,
+     Unit,
+     UnitList,
+     _apportion,
+     _assign_constant_columns,
+     _holdout_constant_column,
++    _seed_from,
+     apply_rule,
+     arm_members,
+     arms_of,
+     assign_seed_for,
+     assignment_for,
+     cluster_count,
+     clusters_of,
+     collapse_measurements,
+     fold_basis,
+     holdout_for,
++    holdout_seed_for,
+     holdout_sizes,
+     holdout_values_fault,
+     partition_units,
+     resolve_units,
+     stratum_varies_within_cluster,
+     units_hash,
+ )
+ 
+ 
+ @pytest.fixture
+@@ -3599,10 +3601,64 @@ def test_collapse_stops_at_the_first_entry_of_the_constant_mapping_it_is_given()
+ 
+     # Remove the highest-priority declaration and the NEXT one reports — which
+     # is what proves the order rather than merely that `assign` reports.
+     without_assign = _holdout_constant_column(
+         {"method": "by_attribute", "from": "split"}
+     )
+     without_assign.update({"cluster_by": "site"})
+     with pytest.raises(ContractError) as exc2:
+         collapse_measurements(units, "read_id", "first", without_assign)
+     assert exc2.value.code == "E-DATA-HOLDOUT-VARIES"
++
++
++def test_a_pinned_holdout_seed_is_returned_literally_and_ignores_the_digest():
++    """`sweep.sample_seed_for`'s load-bearing half, copied: on the pinned path
++    the digest is not consulted at all, so a pinned split survives a roster
++    that grows, shrinks or reorders.
++
++    Three varying inputs against one pin, because a function that read ANY of
++    them would move for at least one of these."""
++    block = {"method": "random", "frac": 0.2, "seed": 4321}
++    assert holdout_seed_for(block, "sha256:aaa", _roster(10)) == 4321
++    assert holdout_seed_for(block, "sha256:bbb", _roster(10)) == 4321
++    assert holdout_seed_for(block, "sha256:aaa", _roster(11)) == 4321
++
++
++def test_a_boolean_seed_is_not_a_pin():
++    """`isinstance(True, int)` is `True`, and `seed: true` is not a pin —
++    `validate` refuses it as `E-DATA-HOLDOUT-SEED`, and honouring it as `1`
++    here would record a derived seed under a key the config wrote
++    deliberately."""
++    derived = holdout_seed_for({"seed": True}, "sha256:aaa", _roster(10))
++    assert derived != 1
++    assert derived == holdout_seed_for({}, "sha256:aaa", _roster(10))
++
++
++def test_the_derived_holdout_seed_mixes_the_digest_and_the_resolved_roster():
++    """§ What `auto` derives from's new row. Each assertion changes exactly one
++    input, so a derivation that ignored either would fail one of them."""
++    base = holdout_seed_for({}, "sha256:aaa", _roster(10))
++    assert base == holdout_seed_for({"seed": "auto"}, "sha256:aaa", _roster(10))
++    assert base != holdout_seed_for({}, "sha256:bbb", _roster(10))
++    assert base != holdout_seed_for({}, "sha256:aaa", _roster(11))
++    # `units_hash` covers the roster IN RESOLVED ORDER, so a reordered roster
++    # is a different trial and must draw a different split.
++    reordered = UnitList(list(_roster(10))[::-1])
++    assert base != holdout_seed_for({}, "sha256:aaa", reordered)
++    assert 0 <= base < 2**32
++
++
++def test_the_holdout_seed_is_not_the_fold_seed_for_the_same_digest():
++    """`_seed_from` hardcodes `|folds`. The two declarations are mutually
++    exclusive today (`E-DATA-HOLDOUT-FOLD`), so nothing observes a collision —
++    which is the argument for the suffix rather than against it: the two stay
++    independent whatever a later slice permits."""
++    assert holdout_seed_for({}, "sha256:aaa", _roster(10)) != _seed_from("sha256:aaa")
++
++
++def test_the_holdout_seed_is_not_an_assign_axis_seed_for_the_same_digest():
++    """The other neighbour, and the one whose construction this copies: same
++    digest, same roster, different suffix."""
++    roster = _roster(10)
++    assert holdout_seed_for({}, "sha256:aaa", roster) != assign_seed_for(
++        {}, "holdout", "sha256:aaa", roster
++    )

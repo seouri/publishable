@@ -1,0 +1,179 @@
+# Review package: 9e07dd4..HEAD
+
+## Commits
+b93a559 fix: check a remove path against the template, and pin the ablate window
+
+## Files changed
+ src/publishable/validate.py | 19 ++++++++---
+ tests/test_validate.py      | 80 +++++++++++++++++++++++++++++++++++++++++++++
+ 2 files changed, 95 insertions(+), 4 deletions(-)
+
+## Diff
+diff --git a/src/publishable/validate.py b/src/publishable/validate.py
+index 1fa4e27..88636a2 100644
+--- a/src/publishable/validate.py
++++ b/src/publishable/validate.py
+@@ -1374,26 +1374,37 @@ def _check_sweep(
+     # unchecked, `override: [{analysis.method: pearsonn}]` executes a condition
+     # whose config holds a value § Validation's "Choices" row promises to refuse,
+     # and `nameable=True` because an override value — unlike a `baseline` one —
+     # *is* what `label_for` renders, so a value carrying the axis separator would
+     # produce a label that cannot be parsed back into axes.
+     #
+     # Gated on `_path_resolves` first, exactly as the `grid` and `sample` loops
+     # are: `_value_checks` indexes `spec[path]` unguarded, so an unknown path
+     # would raise `KeyError` inside a function contracted never to raise.
+     #
+-    # `remove` is NOT checked here: what it produces is `false` or `null`
+-    # depending on the parameter, which is § Validation's "Ablation targets" row
+-    # ("`remove` needs a boolean or nullable parameter — use `override`") and the
+-    # next slice's check to mint, not a second reading of it here.
++    # A `remove` path takes the SAME path check, on the same identifier, for the
++    # same reason `baseline` does: `expand` plants `false`/`null` at it through
++    # `resolve_condition_cfg`'s `setdefault` walk, so a misspelling
++    # (`remove: [analysis.methdo]`) creates a parameter this template never
++    # declared and runs a condition whose label claims a change nothing made.
++    # Only the path is checked here — what `remove` *produces* is `false` or
++    # `null` depending on the parameter, which is § Validation's "Ablation
++    # targets" row ("`remove` needs a boolean or nullable parameter — use
++    # `override`") and the next slice's check to mint, not a second reading of
++    # it here. That split is why this is `_path_resolves` alone rather than
++    # `_value_checks`: the path is a question this build can already answer, the
++    # value is one that needs the row's own identifier.
+     ablate = sweep.get("ablate")
+     if isinstance(ablate, dict):
++        for i, path in enumerate(ablate.get("remove") or []):
++            if isinstance(path, str):
++                _path_resolves(path, f"sweep.ablate.remove[{i}]")
+         for i, entry in enumerate(ablate.get("override") or []):
+             if not isinstance(entry, dict):
+                 continue  # `_check_shape` already refused it, fatally
+             for path, value in entry.items():
+                 where = f"sweep.ablate.override[{i}].{path}"
+                 if _path_resolves(path, where):
+                     _value_checks(path, value, where, nameable=True)
+ 
+     # Guarded the same way `_condition_labels` guards its own `expand(doc)`:
+     # `validate` collects findings and never raises. A `sweep.grid` axis value
+diff --git a/tests/test_validate.py b/tests/test_validate.py
+index 20673f8..c4f5f8c 100644
+--- a/tests/test_validate.py
++++ b/tests/test_validate.py
+@@ -1179,37 +1179,117 @@ def test_an_ablate_override_path_the_template_does_not_declare_is_refused(write_
+                     "baseline": {"analysis.method": "pearson"},
+                     "ablate": {"override": [{"analysis.methdo": "spearman"}]},
+                 }
+             }
+         )
+     )
+     assert "E-SWEEP-PATH-UNKNOWN" in found
+     assert "E-PARAM-VALUE" not in found
+ 
+ 
++def test_an_ablate_remove_path_the_template_does_not_declare_is_refused(write_config):
++    """A `remove` path is planted into a condition's config exactly as an
++    `override` path is — `expand` sets `false`/`null` at it — so a misspelling
++    creates a parameter the template never declared and runs a condition whose
++    label claims a change nothing made. Same identifier as `grid`, `baseline`
++    and `override` get; the *value* `remove` produces is § Validation's
++    "Ablation targets" row and a later slice's check."""
++    c = Collector()
++    validate_config(
++        write_config(
++            {
++                "sweep": {
++                    "baseline": {"analysis.method": "pearson"},
++                    "ablate": {"remove": ["analysis.methdo"]},
++                }
++            }
++        ),
++        c,
++    )
++    finding = next(f for f in c.findings if f.code == "E-SWEEP-PATH-UNKNOWN")
++    assert finding.path == "sweep.ablate.remove[0]"
++
++
+ def test_an_ablate_override_value_carrying_the_axis_separator_is_refused(write_config):
+     """Unlike a `baseline` value, an `override` value IS rendered into the label,
+     so it takes the nameability check too: a value containing `__` makes a label
+     that cannot be parsed back into axes, and a label is also a selector."""
+     found = codes(
+         write_config(
+             {
+                 "sweep": {
+                     "baseline": {"analysis.method": "pearson"},
+                     "ablate": {"override": [{"analysis.method": "a__b"}]},
+                 }
+             }
+         )
+     )
+     assert "E-SWEEP-VALUE-UNNAMEABLE" in found
+ 
+ 
++# The two compositions § Expansion modes rules out are UNREFUSED on this build.
++# `E-SWEEP-ABLATE-UNSUPPORTED` used to refuse any truthy `ablate` at all, so
++# retiring it (the slice's task 4) took these two with it; the checks that refuse
++# them for real are § Validation rows 217 and 218, which the next task mints.
++# These two tests are the window's mechanical handle: `xfail(strict=True)` so
++# they FAIL LOUDLY the moment the gap is closed without the marker being
++# removed, which is how the next task's reviewer confirms closure — a red/green
++# fact in a tracked file rather than a claim in a report. Neither names an
++# identifier, because the next task is instructed to grep before minting one;
++# what they assert is that `validate` refuses the config at all.
++_NO_IDENTIFIER_YET = "§ Validation rows 217/218 — refusal retired with E-SWEEP-ABLATE-UNSUPPORTED"
++
++
++@pytest.mark.xfail(strict=True, reason=_NO_IDENTIFIER_YET)
++def test_ablate_without_a_baseline_is_refused(write_config):
++    """§ Expansion modes: `ablate` "reads the baseline rather than re-emitting it
++    … It therefore **requires** `sweep.baseline`, which `validate` checks". Today
++    it expands to n conditions each carrying only its own change and no baseline
++    row at all — a design the specification says cannot exist."""
++    c = Collector()
++    validate_config(
++        write_config({"sweep": {"ablate": {"remove": ["analysis.drop_missing"]}}}), c
++    )
++    assert [f for f in c.findings if f.level == "error"]
++
++
++@pytest.mark.xfail(strict=True, reason=_NO_IDENTIFIER_YET)
++def test_ablate_crossed_with_a_parameter_axis_is_refused(write_config):
++    """§ Expansion modes: "the product of 'vary one thing at a time' with a second
++    parameter axis is no longer one thing at a time, and there is no defensible
++    reading of what it would mean". Today it expands to the baseline, the grid's
++    rows, and the ablate rows. `E-SWEEP-PATH-DUPLICATE` does not catch it either:
++    ablated paths deliberately do not join the axis-shaped modes' set."""
++    c = Collector()
++    validate_config(
++        write_config(
++            {
++                "sweep": {
++                    # The baseline fixes the grid axis too, so the only fault
++                    # left in this config is the composition itself —
++                    # `E-SWEEP-BASELINE-PARTIAL` would otherwise make this test
++                    # pass for a reason that has nothing to do with `ablate`.
++                    "baseline": {
++                        "analysis.method": "pearson",
++                        "analysis.drop_missing": True,
++                        "analysis.min_samples": 30,
++                    },
++                    "grid": {"analysis.min_samples": [30, 50]},
++                    "ablate": {"remove": ["analysis.drop_missing"]},
++                }
++            }
++        ),
++        c,
++    )
++    assert [f for f in c.findings if f.level == "error"]
++
++
+ @pytest.mark.parametrize(
+     "ablate",
+     [
+         "notamapping",
+         ["notamapping"],
+         {"remove": "analysis.drop_missing"},
+         {"remove": {"analysis.drop_missing": True}},
+         {"remove": [123]},
+         {"remove": [["analysis.drop_missing"]]},
+         {"override": {"analysis.method": "spearman"}},
