@@ -267,3 +267,40 @@ Task 7: reviewed (opus). Spec compliance PASS; task quality FAIL on one Importan
   reports hits.
 Task 7: complete. 1971 passed + 2 xfailed; ruff check, format (76 files) and mypy (43 source files)
   clean. BASE for task 8 is below.
+
+Task 8: implemented at 99a62c3 / 4d1dc18. 1973 passed + 2 xfailed. Both load sites built, no stub for
+  `draft`/`resume` (both in `NOT_BUILT_COMMANDS`), and the document's sentence written as
+  specification with the inheritance recorded.
+  Both mutations reddened their OWN site's test and left the other green — which is the pairing that
+  proves two sites are separately pinned rather than one doing all the work. The reviewer re-ran them
+  and confirmed both halves.
+Task 8: reviewed (opus). Spec compliance PASS; task quality FAIL with two Important and two Minor, all
+  four prose.
+  Important 1: the document and a `cli.py` comment claimed "**three** of its checks ask whether a
+  variable is *set*". Only TWO do — the third credential row is a totality check that ships as
+  `E-TEMPLATE-LOAD` and is pinned by a test that reads no environment at all. Repaired by DROPPING the
+  count rather than writing "two", which is the form that does not go stale when task 11 adds coverage.
+  Note the count originates in the spec's decision 5, which is a dated record and stays as written.
+  Important 2, and it is the one worth carrying: the promise *"creates nothing and reaches nothing off
+  the machine"* was cited to **§ Validation** at three sites — a document link, a `validate.py` comment
+  and a test docstring. The sentence occurs exactly ONCE in the repo, in § CLI reference's operation-
+  commands row. Three citations, all pointing at a section that does not contain the thing they quote.
+  Fixed at all three, and I swept for the CLAIM afterwards — `grep "§ Validation promises"` over
+  `docs/`, `src/` and `tests/` returns nothing.
+  Ruling: a quoted promise is worth locating before citing. All three sites quoted the text correctly
+  and attributed it to the wrong section, which is the failure a reader only discovers when the link
+  takes them somewhere that does not say it.
+  Minor closed: the `_env_file` fixture comment argued the scaffold's `.gitignore` is what keeps the
+  file from making `src/**`+`templates/**` dirty. Inoperative — I read `provenance.py` and the refusal
+  is `git status --porcelain -- src templates`, so a file at the PROJECT ROOT is in neither tree and
+  could not have dirtied it whatever `.gitignore` said. The comment now says what `.gitignore` actually
+  buys (the file stays untracked as in a real project) and states the real reason separately.
+  Routed to task 12: `_local_template` has ZERO callers, so deleting its body leaves the suite green
+  and its comment describes "every caller that passes this" — an empty set. Task 12 is the first
+  caller and must exercise it.
+  Position gap judged a NOTE, not Important, and the reviewer improved on the implementer's framing:
+  core reads no environment variable at this commit, so nothing depends on the load preceding
+  `resolve_template` — AND task 9's `required_env` check reads the RESOLVED template, so it runs after
+  `resolve_template` anyway. Task 9 can only pin "before the first check that reads the environment".
+  It should pin that and reword, or state the stronger position is unpinned by design.
+Task 8: complete. 1973 passed + 2 xfailed; ruff check, format and mypy clean. BASE for task 9 is below.

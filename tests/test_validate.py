@@ -12287,7 +12287,7 @@ def test_a_requires_env_totality_fault_surfaces_as_a_template_load_finding(
 
 def test_validate_loads_dot_env_from_the_repository_root(git_repo: Path, write_config, monkeypatch):
     """`validate` reads `.env`. Not a breach of its promise — `reference.md`
-    § Validation promises it "creates nothing and reaches nothing **off the
+    § CLI reference promises it "creates nothing and reaches nothing **off the
     machine**", and a file in the repository root is on-machine.
 
     `delenv` first: `load_dotenv` writes straight into `os.environ` and only

@@ -509,7 +509,7 @@ def validate_config(
         # core template regardless.
         repo_root = None
     # `.env`, once, before any check that asks whether a variable is set.
-    # `reference.md` § Validation promises `validate` "creates nothing and
+    # `reference.md` § CLI reference promises `validate` "creates nothing and
     # reaches nothing off the machine"; a file in the repository root is
     # on-machine, so this is inside that promise rather than an exception to it.
     # Never overrides an exported variable — see `secrets.load_env`.

@@ -148,9 +148,11 @@ def run_a_project(
     that a refused config never produced.
 
     `_env_file` writes a `.env` at the project root with the given text, before
-    the scaffold is committed — the scaffold's own `.gitignore` opens with
-    `.env`, so the file never reaches the `git add .` below and never makes
-    `src/**`+`templates/**` dirty.
+    the scaffold is committed — the scaffold's own `.gitignore` opens with `.env`,
+    so the file stays untracked exactly as it would in a real project. It could
+    not have made the tree dirty in any case: the refusal reads
+    `git status --porcelain -- src templates`, and a file at the project root is
+    in neither.
 
     `_local_template` writes a project-local template module at
     `templates/cred_assay.py` with the given source, before the config is
