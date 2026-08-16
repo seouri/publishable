@@ -434,7 +434,7 @@ covers three shapes — a file that raises while importing, one that imports cle
 nothing, one that registers a non-`BaseTemplate` — and a `Param` whose construction raises is the
 first of them, so a bad `default=None` or a
 [`requires_env`](#a-credential-can-belong-to-a-parameter-value) mapping that is not total over
-`choices` adds a shape to `E-TEMPLATE-LOAD` without adding a row to the table below or a sixth
+`choices` adds a shape to `E-TEMPLATE-LOAD` without adding a row to [the table this section carries](#errors-validate-reports) or a sixth
 code to this count. Each returns because every check after it reads what it just found wrong, and each is
 what triggers its own return rather than sitting behind it. Every other row in this table fires only once all five have passed — except
 `E-CONFIG-TYPE` and `E-CONFIG-KEY-UNKNOWN`, which `check_envelope` finds as the document
@@ -1581,7 +1581,7 @@ def aggregate(self, units, cfg) -> dict:
 
 **One call per recording step, attributed to that step.** A pipeline can have several steps that call `io.record`, so there is no single unit table to hand over. Core calls `aggregate` once per step that recorded one, over that step's collapsed table, and files the result under that step — which is why the worked example's derived `r` appears at `aggregated.step03_analyze.r` rather than at the top of the condition. A template that only knows how to derive metrics from some tables returns `{}` for the rest.
 
-`Param` carries type, default, constraints, and help text — so `init` renders the file with accurate inline comments, and `validate` enforces exactly what was documented. Adding a parameter in one place makes it appear in newly-initialized configs and become enforceable at once. It carries one thing that is **not** a constraint and so is not in the table below: [the credential a chosen value requires](#a-credential-can-belong-to-a-parameter-value), which constrains the environment a value may be used in rather than the value.
+`Param` carries type, default, constraints, and help text — so `init` renders the file with accurate inline comments, and `validate` enforces exactly what was documented. Adding a parameter in one place makes it appear in newly-initialized configs and become enforceable at once. It carries one thing that is **not** a constraint and so is not in [the constraint table](#templates-where-parameters-are-defined): [the credential a chosen value requires](#a-credential-can-belong-to-a-parameter-value), which constrains the environment a value may be used in rather than the value.
 
 **The constraint vocabulary is closed**, because `parameter_spec` is the schema `validate` enforces and a spec whose vocabulary is open-ended can't be checked or rendered into a comment:
 

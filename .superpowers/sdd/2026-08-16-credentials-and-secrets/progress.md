@@ -206,3 +206,28 @@ Task 4: reviewed (opus). Spec compliance PASS; task quality FAIL with one Import
   so there is nothing to be true to. If a later task specifies one, it owes the fixture.
 Task 4: complete. 1964 passed + 2 xfailed; ruff check, format and mypy clean. Part A's code half is
   done; tasks 5 and 6 are its document half. BASE for task 5 is below.
+
+Tasks 5 and 6: BATCHED into one dispatch and one review — both document-only, both independent, both
+  editing `reference.md`, so one dispatch also removed the risk of two agents racing on that file.
+  Committed separately (8e3a911, f298aca) so each stays reviewable alone.
+  Pre-dispatch I found an ordering edge my conflict scan missed: task 6's brief says it "depends on
+  task 7 for truth", because retiring § Package layout's `— not yet built` marker is a BUILD CLAIM and
+  `secrets.py` does not exist yet. The plan already resolves it — task 6 does the importable-surface
+  half and defers the marker to task 7's commit — so the scan's gap was covered by the brief. Recorded
+  because the scan is mine and it missed a real edge.
+Tasks 5 and 6: reviewed (opus). All four verdicts PASS, with one Important.
+  **Task 5 repaired one positional table reference and introduced another in the same commit** — the
+  new sentence ended "is not in the table below". The brief disagreed with ITSELF: step 2 prescribes
+  that text, step 3 forbids the practice. That is the eighth finding in this slice traceable to prose
+  written ahead of the code, and the first where the brief contains both the rule and its violation.
+  Fixed, and then I swept for the CLAIM rather than the instance I was handed — which found a SECOND
+  one, in text **I** wrote fixing task 2 ("without adding a row to the table below"). Both now name
+  their table by link. One pre-existing instance remains at § the provenance table ("the table above");
+  it predates this slice and is routed to task 14's filings rather than edited here.
+  Ruling: being told about one instance of a banned habit is not a licence to fix only that one. The
+  sweep cost one grep and found a defect I had authored twenty minutes earlier.
+  Also routed to task 14: the constraint table documents `# list of float, 2 to 5 items` while
+  `Param.comment()` renders only `list of float` — `min_items`/`max_items` are read by nothing that
+  renders, and there is no `spec-defects.md` entry. Pre-existing, out of scope here.
+Tasks 5 and 6: complete. 1964 passed + 2 xfailed; ruff check, format and mypy clean. **Part A is done.**
+  BASE for task 7 is below.
