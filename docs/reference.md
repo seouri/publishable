@@ -3608,7 +3608,7 @@ publishable/
 │   ├── manifest.py            # input_dir manifest build/verify, policies
 │   ├── apparatus.py           # probe registry, per-condition facts, change gate — not yet built
 │   ├── uv_support.py          # uv.lock copy/hash, --locked drift checks
-│   ├── secrets.py             # dotenv loading, required_env checks (never touches provenance) — not yet built
+│   ├── secrets.py             # dotenv loading, required_env checks (never touches provenance)
 │   ├── reproduce.py           # clone/checkout/sync, then report what's left to supply — not yet built
 │   ├── report.py              # BaseReport: standard sections, html/markdown, override discovery — not yet built
 │   ├── diagnostics.py         # stable E-/W- identifiers, collected reporting, exit codes
