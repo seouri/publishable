@@ -153,3 +153,11 @@ built are recorded here.
 
 **Task count is unchanged at 14.** Decision 3's correction changes where task 12 edits, not how
 many tasks there are.
+
+**Correction to correction 1, same day, before any of it was built:** it names the first boundary
+`Diagnostic.render()`. The method is `Collector.render()` — `Diagnostic` is a frozen four-field
+dataclass with no methods, and `Collector` holds the findings and renders them. The controller
+misjoined a class list and a method line read from the same file in two separate greps; the plan
+author read `diagnostics.py` and caught it. The ruling is unchanged and is in fact strengthened:
+redacting per-`Diagnostic` would need the values at construction, which is the thing this ruling
+exists to avoid.
