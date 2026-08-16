@@ -35,7 +35,7 @@ through an entry point. **H7a was that subset** — `register_template` exported
 by path, `generate template` — and it needed none of entry-point resolution, probes or the change gate.
 **It merged on 2026-08-15 and that gate is gone.** **H4a (`resample`) merged the same day** — one refusal
 retired that 8 of 9 configs hit, a regression preserved, and **zero experiments newly executing**, which
-is the honest form of that number. **H3d (`holdout`) is complete on its branch, in the identical honest form**:
+is the honest form of that number. **H3d (`holdout`) merged on 2026-08-16, in the identical honest form**:
 one refusal retired that 6 of 9 configs hit (`E-DATA-HOLDOUT-UNSUPPORTED`), one live defect closed (a
 `fold` beside a cell structure validated clean and produced empty per-arm folds; both that and a holdout
 beside the same structure are now a named refusal, `E-REPL-FOLD-CELLS` / `E-DATA-HOLDOUT-CELLS`), and
