@@ -5460,12 +5460,13 @@ def _holdout_test_roster(
     of, so a second answer computed here would be a check aimed at a partition
     the run does not use.
 
-    **Never raises.** `validate` collects, and this runs over configs that are
-    already known bad — a malformed `frac`, an unresolvable column, an unknown
-    stratum, a cluster attribute a unit does not carry. Each of those is
-    reported by its own check; here they become `None`, and the check that
-    reads this simply does not run rather than reporting a second, derived
-    fault on top of the one the reader has to fix anyway.
+    **Does not raise for any fault `validate` can already see.** `validate`
+    collects, and this runs over configs that are already known bad — a
+    malformed `frac`, an unresolvable column, an unknown stratum, a cluster
+    attribute a unit does not carry — each caught by the `except` below and
+    each reported by its own check elsewhere. Here they become `None`, and
+    the check that reads this simply does not run rather than reporting a
+    second, derived fault on top of the one the reader has to fix anyway.
     """
     if roster is None:
         return None
@@ -5500,10 +5501,10 @@ def _check_resample(
     - `E-STATS-RESAMPLE-N` — the `n` floor.
     - `E-STATS-RESAMPLE-STRATIFY-UNKNOWN` — a `stratify_by` name that is not a
       declared unit attribute.
-    - `W-STATS-RESAMPLE-CLUSTERS` — **reads the roster:** `limits.min_clusters`
-      against the resolved cluster count — over the holdout's **test**
-      partition when one is declared, because a resample draws over the
-      per-unit table and that is what the table holds under a holdout.
+    - `W-STATS-RESAMPLE-CLUSTERS` — **reads the holdout's test partition when
+      one is declared, the roster otherwise:** `limits.min_clusters` against
+      the resolved cluster count, over the per-unit table a resample actually
+      draws from.
     - `E-STATS-RESAMPLE-STRATIFY-VARIES` — **reads the WHOLE roster, on
       purpose**, even under a `data.units.holdout`. Constancy within a cluster
       over the whole roster implies it over any subset, so the wider read is
@@ -5722,11 +5723,14 @@ def _check_resample(
             # for real at `run`, same as the `basis` computation above handles it.
             groups = None
         if groups is not None and groups < min_clusters:
+            counted = (
+                "this holdout's test partition" if holdout_test is not None else "this roster"
+            )
             c.warn(
                 "W-STATS-RESAMPLE-CLUSTERS",
                 "limits.min_clusters",
-                f"is {min_clusters}, and `data.units.cluster_by: {cluster_by}` puts this "
-                f"roster in {groups} clusters — `resample` draws whole clusters, so the "
+                f"is {min_clusters}, and `data.units.cluster_by: {cluster_by}` puts "
+                f"{counted} in {groups} clusters — `resample` draws whole clusters, so the "
                 f"percentile interval rests on {groups} independent draws however many "
                 "units they hold",
             )

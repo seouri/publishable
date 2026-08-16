@@ -12093,13 +12093,20 @@ def test_the_resample_cluster_warning_counts_the_holdout_s_test_partition(
     # The control, and it must be silent: 50 clusters is above 20.
     assert "W-STATS-RESAMPLE-CLUSTERS" not in without
 
-    with_holdout = codes(write_config({
+    with_holdout_path = write_config({
         "data.units": dict(common, holdout={"method": "random", "frac": 0.2}),
         "limits": {"min_clusters": 20},
         "statistics": resample,
-    }))
+    })
+    with_holdout = codes(with_holdout_path)
     assert "W-STATS-RESAMPLE-CLUSTERS" in with_holdout
     assert "E-DATA-HOLDOUT-UNSUPPORTED" in with_holdout
+    # The message names what was actually counted — the test partition, not
+    # the roster it was drawn from — so a reader is not sent looking for the
+    # missing clusters in a roster that still has them.
+    holdout_message = messages_by_code(with_holdout_path)["W-STATS-RESAMPLE-CLUSTERS"]
+    assert "test partition" in holdout_message
+    assert "roster" not in holdout_message
 
 
 def test_a_holdout_wide_enough_to_keep_the_clusters_does_not_warn(
@@ -12131,23 +12138,18 @@ def test_the_stratum_constancy_check_still_reads_the_whole_roster(
     still an incoherent declaration, and refusing on the whole roster is the
     stricter, correct reading.
 
-    **Correction (task 16):** every cluster in this fixture varies — `p{2k}`
-    is `y` and `p{2k+1}` is `x` for every `k` — not only the training-side
-    ones a prior draft of this docstring claimed. Verified directly against
-    `stratum_varies_within_cluster` over the realized train/test split at this
-    seed: the offending cluster it reports differs by partition (`a0` over
-    the whole roster and the training side, `a2` over the test side alone),
-    but an offender exists on *both* sides, so this fixture cannot by itself
-    tell "reads the whole roster" from "reads the test partition only" — task
-    16's mutation (c), narrowing this check to the test partition, left this
-    assertion passing. What this test actually proves is narrower than its
-    name: the check still fires at all once a holdout is declared. The
-    positive claim in this function's name — that the check reads the WHOLE
-    roster specifically — rests on the code and on task 16's report, not on
-    an assertion in this file."""
+    Only `a0` (`p0`, `p1`) varies its `label`; every other cluster is
+    constant `x`. At `seed: 1234` with `frac: 0.2`, this fixture's test
+    partition is exactly `{a2, a6, a12, a13}` — `a0` lands on the TRAINING
+    side and so is invisible to a check narrowed to the test partition.
+    Narrowing `stratum_varies_within_cluster`'s argument to the test
+    partition (task 16's mutation (c)) therefore makes this assertion FAIL,
+    which is what distinguishes "reads the whole roster" from "reads the
+    test partition only" — the discriminating fixture task 16's review
+    constructed, in place of the vacuous one this test previously used."""
     (tmp_path / "input" / "index.csv").write_text(
         "patient_id,animal_id,label\n"
-        + "".join(f"p{i},a{i // 2},{'x' if i % 2 else 'y'}\n" for i in range(40))
+        + "".join(f"p{i},a{i // 2},{'y' if i == 1 else 'x'}\n" for i in range(40))
     )
     found = codes(write_config({
         "data.units": {
