@@ -1309,12 +1309,14 @@ def holdout_for(
     live in the runner. Two callers, one answer, computed the same way from the
     same inputs.
 
-    **`seed` is required and this function never derives one.** The derivation
-    is `holdout_seed_for`'s, and composing them is `cli.command_run`'s: a
-    function that both draws and derives is two independent things to get wrong
-    inside one, and it would put the derivation out of reach of a test that
-    wants to pin a draw against a known seed. The value is recorded on the plan
-    under `random` and discarded under `by_attribute`, which draws nothing.
+    **`seed` is required and this function never derives one.** The seed
+    argument exists so a caller that derives a seed some other way — from a
+    run's identity, say — composes that derivation with this draw rather than
+    handing the draw a policy to also get right: a function that both draws
+    and derives is two independent things to get wrong inside one, and it
+    would put the derivation out of reach of a test that wants to pin a draw
+    against a known seed. The value is recorded on the plan under `random` and
+    discarded under `by_attribute`, which draws nothing.
 
     Dispatches on `block["method"]`, `reference.md` § A fixed holdout split's
     own enum:
@@ -1340,6 +1342,10 @@ def holdout_for(
       out-of-enum method (`E-DATA-HOLDOUT-METHOD`) before a run reaches here,
       and it is what keeps a *third* method added to `validate.HOLDOUT_METHODS`
       and to nothing else from validating clean and then silently partitioning.
+      This includes an absent, non-mapping, or method-less `block` — unlike
+      `assignment_for`, which falls such a block back to `by_attribute`, this
+      function has no default method to fall back to, since an absent holdout
+      declares no holdout at all rather than an unnamed one.
 
     **A `clusters` mapping and a non-empty `stratify_by` are not realized at
     this commit** and raise `NotImplementedError` rather than being silently
@@ -1388,7 +1394,11 @@ def holdout_for(
         )
     if method == "random":
         frac = block_map.get("frac")
-        if not isinstance(frac, (int, float)) or isinstance(frac, bool):
+        if (
+            not isinstance(frac, (int, float))
+            or isinstance(frac, bool)
+            or not 0.0 < float(frac) < 1.0
+        ):
             raise NotImplementedError(
                 "`data.units.holdout.method: random` declares no usable `frac`; "
                 "`validate` refuses this as `E-DATA-HOLDOUT-FRAC`"

@@ -7,7 +7,9 @@ import pytest
 from publishable import ContractError
 from publishable.units import (
     DRAWN_ASSIGN_METHODS,
+    HOLDOUT_METHODS_REALIZED,
     ArmPlan,
+    HoldoutPlan,
     Unit,
     UnitList,
     _apportion,
@@ -24,6 +26,7 @@ from publishable.units import (
     fold_basis,
     holdout_for,
     holdout_sizes,
+    holdout_values_fault,
     partition_units,
     resolve_units,
     stratum_varies_within_cluster,
@@ -3219,6 +3222,10 @@ def test_a_by_attribute_holdout_over_a_column_that_is_not_the_two_literals_raise
     with pytest.raises(ContractError) as exc:
         holdout_for(roster, {"method": "by_attribute", "from": "split"}, seed=1)
     assert exc.value.code == "E-DATA-HOLDOUT-VALUES"
+    # Asserts the agreement `holdout_values_fault` exists to guarantee — the
+    # raise's wording IS the function's answer, not an independent literal that
+    # could drift from it.
+    assert str(exc.value) == holdout_values_fault(roster, "split")
 
 
 @pytest.mark.parametrize(
@@ -3234,7 +3241,11 @@ def test_a_holdout_that_leaves_a_side_empty_raises(n, frac, empty_side):
     with pytest.raises(ContractError) as exc:
         holdout_for(_holdout_roster(n), {"method": "random", "frac": frac}, seed=1)
     assert exc.value.code == "E-DATA-HOLDOUT-EMPTY"
-    assert empty_side in str(exc.value)
+    # The invariant tail names both "the training side" and "the test side" in
+    # every instance of this message, so `empty_side in str(exc.value)` alone
+    # cannot discriminate which one is actually empty. `apportions the {side}
+    # side zero` is the one phrase that names the computed side specifically.
+    assert f"apportions the {empty_side} side zero" in str(exc.value)
 
 
 @pytest.mark.parametrize("method", ["stratified", "", None, "by_attributes"])
@@ -3243,8 +3254,67 @@ def test_an_unknown_holdout_method_raises_rather_than_falling_back(method):
     `validate` refuses an out-of-enum method first; this is what stops a THIRD
     method added to `HOLDOUT_METHODS` and to nothing else from validating clean
     and then silently partitioning on a column."""
-    with pytest.raises(NotImplementedError):
+    with pytest.raises(NotImplementedError) as exc:
         holdout_for(_holdout_roster(10), {"method": method, "frac": 0.2}, seed=1)
+    assert repr(method) in str(exc.value)
+    assert "random" in str(exc.value)
+    assert "by_attribute" in str(exc.value)
+
+
+def test_holdout_methods_realized_is_pinned_by_what_it_documents():
+    """`HOLDOUT_METHODS_REALIZED` is read at exactly one place — the final
+    `NotImplementedError`'s message — and pinned by nothing else, so adding a
+    method to the tuple without building the branch behind it would make that
+    message claim a draw this build does not perform.
+    `DRAWN_ASSIGN_METHODS`'s own test is the model: every declared member must
+    actually draw or read a plan, not merely fail to hit the final raise."""
+    assert HOLDOUT_METHODS_REALIZED == ("random", "by_attribute")
+    random_roster = _holdout_roster(10)
+    attr_roster = _holdout_roster(10, split=lambda i: "test" if i % 5 == 0 else "train")
+    for method, roster, block in (
+        ("random", random_roster, {"method": "random", "frac": 0.2}),
+        ("by_attribute", attr_roster, {"method": "by_attribute", "from": "split"}),
+    ):
+        assert method in HOLDOUT_METHODS_REALIZED
+        plan = holdout_for(roster, block, seed=1)
+        assert isinstance(plan, HoldoutPlan)
+
+
+@pytest.mark.parametrize(
+    "block",
+    [{"method": "random", "frac": 0.2, "stratify_by": ["x"]}, {"method": "random", "frac": 0.2}],
+    ids=["a non-empty stratify_by", "a clusters mapping"],
+)
+def test_a_clustered_or_stratified_holdout_raises_not_realized(block):
+    """Neither construction is built at this commit — ignoring either would be
+    a split `validate` called clustered or stratified and the draw balanced on
+    nothing, so both raise rather than silently falling through to the
+    unclustered draw."""
+    clusters = None if "stratify_by" in block else {f"u{i}": "c0" for i in range(10)}
+    with pytest.raises(NotImplementedError) as exc:
+        holdout_for(_holdout_roster(10), block, seed=1, clusters=clusters)
+    assert "clustered or stratified" in str(exc.value)
+
+
+def test_a_by_attribute_holdout_with_no_from_raises_not_realized():
+    """`method: by_attribute` naming no column is `validate`'s `E-DATA-HOLDOUT-FROM`;
+    the draw refuses it too rather than reading a column that does not exist."""
+    with pytest.raises(NotImplementedError) as exc:
+        holdout_for(_holdout_roster(10), {"method": "by_attribute"}, seed=1)
+    assert "no column" in str(exc.value)
+    assert "E-DATA-HOLDOUT-FROM" in str(exc.value)
+
+
+@pytest.mark.parametrize("frac", [None, "0.2", True, -0.5, 0.0, 1.0, 2.0])
+def test_a_random_holdout_with_an_unusable_frac_raises_not_realized(frac):
+    """Widened to refuse both an unusable TYPE (`None`, a string, a bool) and
+    an out-of-range VALUE, so the docstring's "both sides are refused empty"
+    guarantee holds for every `frac` rather than only the ones `validate`
+    would have let through to the empty-side check."""
+    with pytest.raises(NotImplementedError) as exc:
+        holdout_for(_holdout_roster(10), {"method": "random", "frac": frac}, seed=1)
+    assert "no usable `frac`" in str(exc.value)
+    assert "E-DATA-HOLDOUT-FRAC" in str(exc.value)
 
 
 _MEASUREMENT_ROWS = [
