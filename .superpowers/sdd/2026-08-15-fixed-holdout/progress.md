@@ -682,3 +682,35 @@ Task 15: reviewed (opus). Spec compliance PASS — exactly six sites and no seve
   `None, []`; and an `assert` sited AFTER `execute_plan`, which is the shape that once cost this repo
   every execution in a run with the record lost — moved before the call.
 Task 15: complete. 1942 passed + 2 xfailed; ruff check and mypy clean. BASE for task 16 is 2545dda.
+Task 16: dispatched — `W-STATS-RESAMPLE-CLUSTERS` against the test partition. This is the one task in the
+  slice that fixes a defect the SCOPING found rather than building new surface: the check read `fold_basis`
+  over the whole roster while the draw ran over the test partition, under-warning by ~1/frac and failing in
+  the direction of NOT FIRING, which is the worse direction because nobody sees a missing warning.
+  Pre-check added a third mutation: the brief's two reach the two positive tests, and the CONTROL — the one
+  asserting the stratum-constancy check must NOT narrow — was reached by neither, so the boundary was only
+  named. The dispatch asked for an honest negative if narrowing changed nothing observable.
+Task 16: implemented at 30f18b2 / cfd5672. 1945 passed + 2 xfailed. Measured under-warning: 50 clusters,
+  `min_clusters: 20`, `frac: 0.2` — the old check read 50 and stayed silent, the new one reads ~10 and
+  fires. Roughly 5x, matching the estimate.
+  The implementer returned the honest negative on mutation (c) AND investigated why: the control's fixture
+  varied on EVERY cluster, not only training-side ones as its docstring claimed. It fixed the docstring
+  rather than the fixture — correct on the evidence it had, and I flagged to the reviewer that a
+  discriminating fixture looked constructible.
+Task 16: reviewed (opus). Spec compliance PASS; task quality FAIL with two Important and four Minor.
+  The reviewer did not argue the boundary question — it BUILT the fixture. At `seed: 1234` the test
+  partition is exactly `{a2, a6, a12, a13}` and `a0` lands training-side, and the label column does not
+  participate in the draw, so varying only `a0` is deterministic rather than lucky. That fixture passes on
+  HEAD and fails under the narrowing mutation, while the shipped control passes under it.
+  Ruling: the honest negative was the right call on the evidence available and is superseded by a
+  CONSTRUCTION, not by an argument. That distinction is the one worth keeping — "no mutation reaches this"
+  and "no mutation can reach this" are different claims, and only the second justifies leaving a boundary
+  unpinned. The reviewer was asked for exactly that disjunction and answered it with evidence.
+  Second Important: the warning still read "puts this ROSTER in 10 clusters" while the 10 counted a test
+  partition of a 50-cluster roster. The count could not regress invisibly, since the printed value is the
+  compared variable — but the noun was wrong and nothing pinned it. Now conditional, and pinned by an
+  assertion that checks "roster" is ABSENT from the holdout-case message, which is the discriminating form
+  rather than the vacuous one this slice hit at task 10.
+Task 16: fix round 1. Commit 579e524. All five closed. `_holdout_test_roster`'s "**Never raises**" narrowed
+  to a claim tied to its actual `except` tuple; § Errors' row now records the fallback to the whole roster
+  when a declared draw cannot be performed, which the row had stated unconditionally.
+Task 16: complete. 1945 passed + 2 xfailed; ruff check and mypy clean. BASE for task 17 is 579e524.
