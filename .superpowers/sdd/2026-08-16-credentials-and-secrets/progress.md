@@ -41,3 +41,35 @@ line read from the same file in two separate greps. The plan author read `diagno
 it, and the ruling is strengthened by the correction: redacting per-`Diagnostic` would need the values
 at construction, which is what the ruling exists to avoid. Both the spec and the plan carry the
 correction rather than a silent fix.
+
+Task 1: dispatched — mint `E-CRED-MISSING` and `E-CRED-PARAM-MISSING`, and record that the
+  `requires_env` totality check mints nothing. Document-only, and the brief says honestly that no
+  mutation reaches it; the dispatch turned that into a positive obligation instead — re-read each row
+  against the code tasks 9 and 10 will build, and say what it was checked against.
+Task 1: implemented at 5f416c1. 1957 passed + 2 xfailed, unmoved, as a document-only task must be.
+Task 1: reviewed (opus). Spec compliance PASS; task quality FAIL with three Important, **all three in
+  text my own plan supplied rather than in the implementer's execution.** Recorded that way round
+  deliberately: the brief is mine, and a review finding against brief-supplied text is a finding
+  against me.
+  The substantive one: `E-CRED-PARAM-MISSING`'s row claimed THE MESSAGE names the parameter. It does
+  not — task 10's message names the value, the condition and the variable, and the parameter arrives in
+  the finding's `path` field, which `Collector.render()` prints on its own line. The plan's own test
+  comment concedes this ("the parameter (via `path` above)"), so the plan disagreed with itself and the
+  document took the wrong half. Reworded to say the FINDING carries the parameter while the MESSAGE
+  names the value and the condition. Decision 1's grounds are untouched — they rest on the two messages
+  being unshareable, which value-and-condition alone already establishes.
+  Both rows also located their sibling by POSITION, the habit CLAUDE.md bans and which the brief itself
+  invoked one step earlier when it forbade positional description of the insertion point. A brief can
+  contain the defect it warns against. Both now name the sibling code, and the file carries zero
+  "row above/below" references.
+  Ruling on the third: the implementer justified its insertion point by the table being strictly
+  alphabetical. The reviewer extracted all 119 codes and found SEVEN out of order — the table is not.
+  The PLACEMENT is right, because the local `E-CONFIG-*` -> `E-CRED-*` -> `E-DATA-*` run is
+  alphabetical and that is the run these rows join. Only the reason was wrong. Corrected by appending
+  to the report rather than editing it, because a wrong reason for a right answer is what sends the
+  next reader looking for an ordering that is not there. Cost if wrong: nothing today; a future
+  inserter who trusts "strictly alphabetical" picks a slot that is not the run.
+  Verified by the reviewer and worth keeping: decision 2 traced end to end in code — `param.py`'s
+  `ValueError` -> `discovery.py`'s broad catch -> `E-TEMPLATE-LOAD` — rather than taken from the spec.
+  One emit site per code, so neither needs a second row. Task 2's two count phrases are unaffected.
+Task 1: complete. 1957 passed + 2 xfailed; ruff check, format and mypy clean. BASE for task 2 is below.
