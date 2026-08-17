@@ -125,3 +125,29 @@ The resolver's dispatch, its read-only `io`, attribute projection, condition-ind
 `provenance.plugin_versions`, `plugin new`, and **the credential-leak fix** — all **H7b Part B**,
 which also retires `E-DATA-RESOLVER-UNSUPPORTED`. `io.reuse_from` — unbuilt, unowned, filed. The
 apparatus and its probe credential — **H7d**.
+
+---
+
+## Corrections from planning — appended 2026-08-16, replacing nothing above but qualifying it
+
+1. **Decision 3 has a consequence it does not state, and it costs a refusal.** Read literally — and
+   it is meant literally — "`validate` resolves a name without importing a line" is a claim about
+   **resolution**, not merely about the negative answer. So Part A can never hold an installed
+   template's *class*: `get_template` returns `None` for an installed-only name while
+   `template_names` lists it, and reporting `E-TEMPLATE-UNKNOWN` there would be **false**. Task 9
+   therefore mints `E-TEMPLATE-INSTALLED-UNSUPPORTED` — the undocumented `-UNSUPPORTED` build family,
+   no § Errors row — and files the residual with its owner stated as **unassigned**, because Part B's
+   nine tasks are the resolver half and none of them loads a template. This is the honest shape of
+   decision 3's price, and it belongs in the record beside the decision rather than only in the plan.
+2. **Decision 2 implies a fifth *decorator*, not only a fifth group.** `register_reader` follows from
+   `publishable.readers`, and § The importable surface's three-name row did not anticipate it. Task 3
+   documents it; task 15 builds it.
+3. **`is_local_template` is kept rather than replaced.** Its two readers take a *class*, and no
+   installed claim carries one in Part A, so threading a three-valued predicate through them would
+   instantiate a seam no fixture can produce. Task 9 makes the **claim** three-valued at the merge
+   and states that `installed` is unreachable at both class-taking readers.
+4. **Five prescribed mutations were rejected as non-discriminating before execution**, each recorded
+   in its task with the reason — including one that is a *mathematical* no-op in Part A and is
+   written down as "the mutation that does not exist" so nobody proposes it as proof.
+
+**Task count is unchanged at 20.**
