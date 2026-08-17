@@ -56,7 +56,7 @@ a resolver runs user code an exception can carry a credential to `main`'s un-red
 measurement is [`H7b-SCOPING-2.md`](docs/superpowers/H7b-SCOPING-2.md), which re-measured its own
 predecessor a day later and found **seven of its conclusions did not survive**.
 
-**H7b Part B (resolver dispatch) merged on 2026-08-17, against commit `f9d99148c3be5590420e7cff3a3598f2d529ecf2`.**
+**H7b Part B (resolver dispatch) is complete on its branch, against commit `f9d99148c3be5590420e7cff3a3598f2d529ecf2`.**
 `E-DATA-RESOLVER-UNSUPPORTED` is retired. A resolver dispatches at `validate` and `run`, projects onto
 declared attributes, must yield the field a declared `measurements.by` names, and may not read a swept
 parameter. This is the project's **first non-zero executable count**: **three of nine — E1, E2, E5 —

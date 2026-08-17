@@ -6126,6 +6126,11 @@ unread by anything Part B built. `registry.template_provenance` stays with the u
 template entry above — Part B's four tasks were the resolver half and never touched template
 loading.
 
+**CORRECTION 2026-08-17 (whole-branch review), replacing this entry's function name only:** the
+scan-then-load function is `_resolver_for`, not `_resolve_resolver` — `_resolve_resolver` appears
+nowhere in `src/`. The substance stands: `RESOLVERS` is read there, verified by tracing
+`declared_names` → `_registry_for` → `RESOLVERS` rather than assumed.
+
 ## OPEN — a plugin-side collision carries no class, so its finding cannot be redacted — **Owner: none; accepted**
 
 H7c's `PartialLoadError` carries the classes a discovery pass constructed, so a credential a refused

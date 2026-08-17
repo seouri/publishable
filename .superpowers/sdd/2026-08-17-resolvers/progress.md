@@ -129,6 +129,13 @@ Minor (`ResolverIO` construction): moved inside `command_run`'s `if units_decl` 
 nothing is constructed for a run with no units block. `resolver_io` has no reader today besides that one
 call site, so nothing else needed to change.
 
+**CORRECTION 2026-08-17 (whole-branch review): this closure was reopened by task 31 and the sentence
+above is now false.** Task 31 needs `resolver_io.read_paths` after the roster call for `hash_index`,
+so `resolver_io = ResolverIO(input_dir)` moved back out of the ternary, unconditional again. Right
+change — `ResolverIO()` is cheap to construct and `read_paths` must survive past the ternary's scope —
+but it means a run with no units block now constructs one again, exactly what this line once closed.
+Left open; not reopened as an obligation, since nothing reads `resolver_io` for such a run either way.
+
 Minor (`cfg` fixture gap, M2): **not built here — task 29's.** No fixture in this diff reads its `cfg`
 argument, so swapping either production-threaded `cfg` (`validate.py`'s `resolve_wide_cfg(...)` call or
 `cli.py`'s matching one) for `Config({})` would pass the suite unnoticed. Task 29 (`E-RESOLVER-SWEPT-PARAM`)

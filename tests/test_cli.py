@@ -9340,3 +9340,61 @@ def test_a_run_whose_roster_resolves_cleanly_still_reports_nothing(tmp_path, mon
     captured = (doc["stdout"] or "") + (doc["stderr"] or "")
     assert "E-RESOLVER-RAISED" not in captured
     assert "E-UNITS-SOURCE-MISSING" not in captured
+
+
+_LATE_SWEEP_READ_RESOLVER = """\
+from publishable import Unit, register_resolver
+
+_calls = {"n": 0}
+
+
+@register_resolver("plate_wells")
+def resolve(io, cfg):
+    _calls["n"] += 1
+    if _calls["n"] >= 2:
+        _ = cfg.parameters.analysis.method
+    yield Unit(key="p1")
+    yield Unit(key="p2")
+"""
+
+
+def test_command_run_threads_the_real_wide_cfg_to_its_own_resolver_call_too(
+    installed, registries, tmp_path, capsys
+):
+    """The `cli.py` half of the `cfg`-threading obligation the tasks 27-29 review
+    assigned in writing to task 33 — *"The `cli.py` half is still open and
+    remains task 33's"* — and task 33 left unmet (whole-branch review finding
+    I2). Mutating `cli.py`'s own `resolve_wide_cfg(doc, wide_swept_paths(...))`
+    call to `resolve_wide_cfg(doc, set())` left the full suite green before
+    this test existed.
+
+    `command_run` calls `validate_config` first, which resolves the roster once
+    through its OWN `resolve_wide_cfg` call — this resolver does not read the
+    swept parameter on that first call, so `validate` passes clean. Only on a
+    SECOND call — `command_run`'s own, separate roster resolution, right
+    before the run proceeds — does the resolver read `cfg.parameters.analysis
+    .method`, which `sweep.grid` varies here. Under the real cfg, that second
+    call meets the identical `SweptAway` marker the first one did and refuses
+    under `E-RESOLVER-SWEPT-PARAM`. Under the mutation, no marker was ever
+    planted for `cli.py`'s own call, so the resolver reads a real, arbitrary
+    value instead and the run completes — one condition's roster built from a
+    value no condition actually held, in silent violation of `data.units`
+    being one roster for the whole run."""
+    module = "late_sweep_r33"
+    site = installed(
+        "dist-one", "1.0", {"publishable.resolvers": {"plate_wells": f"{module}:resolve"}}
+    )
+    (site / f"{module}.py").write_text(_LATE_SWEEP_READ_RESOLVER)
+    importlib.invalidate_caches()
+    try:
+        doc = run_a_project(
+            tmp_path,
+            units_overrides={"from": {"resolver": "plate_wells"}},
+            sweep={"grid": {"analysis.method": ["pearson", "spearman"]}},
+            capsys=capsys,
+            expect_exit=EXIT_WRONG,
+        )
+    finally:
+        sys.modules.pop(module, None)
+    captured = (doc["stdout"] or "") + (doc["stderr"] or "")
+    assert "E-RESOLVER-SWEPT-PARAM" in captured

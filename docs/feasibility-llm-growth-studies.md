@@ -1062,7 +1062,7 @@ verified against the merged tree rather than carried from the plan.
 
 ### Measured on 2026-08-17 against commit `f9d99148c3be5590420e7cff3a3598f2d529ecf2` — after H7b Part B
 
-H7b **Part B** merged at the commit above and retires `E-DATA-RESOLVER-UNSUPPORTED`. This is the
+H7b **Part B** is complete on its branch at the commit above and retires `E-DATA-RESOLVER-UNSUPPORTED`. This is the
 first re-measurement in this section to actually **run** every one of the nine configs' `data`/
 `statistics` blocks through `validate_config`, rather than re-deriving from emit sites or extending a
 prior grep — the same discipline the 2026-08-16 (H3d) entry set and the one this entry's own
@@ -1116,9 +1116,12 @@ result. A block that could not fail this way would not be a measurement.
 **What this measurement does not settle.** Whether E3, E4 and E6's `data`/`statistics` blocks are
 the *only* thing standing between them and `run` is not answered here — `io.reuse_from` is a step-level
 call invisible to any config, so a clean `validate` result is necessary and not sufficient for those
-three, exactly as the 2026-08-16 entry found for the identical reason. Nothing about the apparatus
-probe's execution is exercised either: none of the nine configs used here declares one, since the
-demo entrypoint carries no `apparatus_probe`.
+three, exactly as the 2026-08-16 entry found for the identical reason. The same limit cuts the other
+way for E1, E2 and E5: a clean `validate` is not sufficient to establish "no remaining core-side
+blocker" for them either, and their "Yes" rests on reading each design's prose for other unbuilt
+dependencies — the same check the three "No" rows needed and got, not on `validate`'s silence. Nothing
+about the apparatus probe's execution is exercised either: none of the nine configs used here declares
+one, since the demo entrypoint carries no `apparatus_probe`.
 
 Full local `pytest`/`ruff`/`mypy` gates at this commit: 2102 passed + 1 skipped + 2 xfailed, ruff and
 mypy both clean.

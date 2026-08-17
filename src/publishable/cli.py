@@ -1348,7 +1348,7 @@ def command_run(config_path: Path) -> int:
             if units_decl
             else (None, None, frozenset())
         )
-    except Exception as exc:
+    except BaseException as exc:
         # `main`'s handler prints `{exc}` with no collector in scope, and a
         # non-`PublishableError` never reaches it at all — it ends the command in
         # a traceback. A resolver's message can carry a credential it read, so the
@@ -1356,6 +1356,21 @@ def command_run(config_path: Path) -> int:
         # values `redact` answers from. A FRESH collector rather than `c`, which
         # has already been rendered and printed above: appending to it would
         # re-print every earlier finding and inflate the counts line.
+        #
+        # `except BaseException`, not `Exception`: a resolver body calling
+        # `sys.exit()` — or raising `KeyboardInterrupt`/another `BaseException`
+        # directly — must still have its message redacted before it reaches
+        # stderr. `KeyboardInterrupt` is re-raised rather than turned into a
+        # diagnostic, so Ctrl-C still stops the command the ordinary way — but
+        # as a FRESH, argument-less `KeyboardInterrupt`, `from None`: a real
+        # Ctrl-C already carries no message, and this is what stops a resolver
+        # body that constructed one carrying a credential (`KeyboardInterrupt(
+        # "...secret...")`) from reaching Python's own uncaught-exception
+        # printer, which prints an exception's `str()` same as any other.
+        # `from None` suppresses the chain — plain `raise` re-raises the
+        # ORIGINAL object, message and all.
+        if isinstance(exc, KeyboardInterrupt):
+            raise KeyboardInterrupt from None
         roster_c = Collector()
         roster_c.credentials = credentials
         roster_code = exc.code if isinstance(exc, PublishableError) else "E-RESOLVER-RAISED"

@@ -369,10 +369,15 @@ def _from_resolver(
         # scope, which describes a different fault at a different time. Re-coded
         # rather than re-raised, on `discover_local`'s precedent for a coded
         # `ContractError` out of user code.
+        # `exc`'s own message ends in a remedy written for a step ("read it from
+        # a `condition`- or `repeat`-scoped step") — a resolver has no such
+        # scope to move to, so only the subject clause (which path is swept) is
+        # reused; the remedy below is the one a resolver can actually follow.
+        subject = str(exc).split(";", 1)[0]
         raise ContractError(
-            f"resolver `{name}` reads {exc}. The unit table is one table for the whole run, "
-            "so conditions that resolved different units could not be paired and `n` would "
-            "mean something different in each. Read a parameter the sweep leaves alone",
+            f"resolver `{name}` reads {subject}. The unit table is one table for the whole "
+            "run, so conditions that resolved different units could not be paired and `n` "
+            "would mean something different in each. Read a parameter the sweep leaves alone",
             code="E-RESOLVER-SWEPT-PARAM",
         ) from exc
     if not units:
@@ -459,9 +464,37 @@ def resolve_units(
     """
     source = units_decl.get("from")
     if isinstance(source, str):
-        units, columns = _from_table(units_decl, input_dir, source)
+        try:
+            units, columns = _from_table(units_decl, input_dir, source)
+        except ContractError:
+            raise
+        except Exception as exc:
+            # `_from_table` opens and parses a file this repo does not control
+            # the contents of — a CSV that is not valid UTF-8 raises
+            # `UnicodeDecodeError` out of `csv.DictReader`, not a `ContractError`.
+            # Recoded here, at the one call site, into the identifier that
+            # names a table/glob source specifically, so the fault is never
+            # mistaken for a resolver's (`E-RESOLVER-RAISED`'s own row is about
+            # a `{resolver: ...}` source only).
+            raise ContractError(
+                f"`data.units.from` names {source}, and reading it raised "
+                f"{type(exc).__name__}: {exc}",
+                code="E-UNITS-SOURCE-UNREADABLE",
+            ) from exc
     elif isinstance(source, dict) and "glob" in source:
-        units, columns = _from_glob(units_decl, str(source["glob"]), input_dir)
+        try:
+            units, columns = _from_glob(units_decl, str(source["glob"]), input_dir)
+        except ContractError:
+            raise
+        except Exception as exc:
+            # `Path.glob` raises `NotImplementedError` for an absolute pattern
+            # rather than a `ContractError` — recoded for the same reason as
+            # the table branch above.
+            raise ContractError(
+                f"`data.units.from.glob` {source['glob']!r} could not be read: "
+                f"{type(exc).__name__}: {exc}",
+                code="E-UNITS-SOURCE-UNREADABLE",
+            ) from exc
     elif isinstance(source, dict) and "resolver" in source:
         # `glob` is tested first, deliberately: `data.units.from` declaring both
         # keys is refused by `validate._check_from_source_exclusivity` as

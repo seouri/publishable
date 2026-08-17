@@ -925,9 +925,11 @@ class ResolverIO:
     purpose, rather than narrowed here: the path is appended to `read_paths`
     *before* `StepIO._read` runs, so a read that raises is still logged, and a
     `relpath` containing `../` is not rejected, so it can name a file outside
-    `input_dir` — no containment check exists for either `IO` class. Task 31
-    (`hash_index` naming what a resolver read) is where whether either matters
-    gets decided; this class does not decide it.
+    `input_dir` — no containment check exists for either `IO` class. Both are
+    benign, decided in `docs/superpowers/spec-defects.md`: a raising read still
+    lands in `read_paths`, but `build_manifest`'s `files` dict is keyed by paths
+    walked from inside `input_dir`, so a name with no file on disk, or one that
+    resolves outside `input_dir`, never gets a hash attached either way.
     """
 
     __slots__ = ("input_dir", "_read_paths")

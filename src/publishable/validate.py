@@ -1357,14 +1357,26 @@ def _check_units(
     except ContractError as exc:
         c.error(exc.code, "data.units", str(exc))
         return None, None, frozenset()
-    except Exception as exc:
-        # A resolver is user code, and `validate` is contracted never to raise —
-        # so anything that is not already a coded refusal becomes one here. The
-        # table and glob branches raise `ContractError` and nothing else, so this
-        # arm is a resolver's by construction rather than a catch-all over core.
-        # `SystemExit` is a `BaseException` and is `load_entry_point`'s to contain
-        # at import; a resolver body calling `sys.exit()` mid-iteration is the
-        # residual, named rather than swallowed.
+    except BaseException as exc:
+        # `validate` is contracted never to raise, and a resolver body is user
+        # code that can fail through `BaseException`, not just `Exception` —
+        # a bare `sys.exit()` or a raised `KeyboardInterrupt`/`BaseException`
+        # would otherwise escape this function entirely. `KeyboardInterrupt`
+        # is re-raised rather than turned into a diagnostic, so Ctrl-C still
+        # stops the command — but as a FRESH, argument-less
+        # `KeyboardInterrupt`, `from None`: a real Ctrl-C already carries no
+        # message, and this is what stops a resolver body that constructed
+        # one carrying a credential from reaching Python's own
+        # uncaught-exception printer, which prints an exception's `str()`
+        # same as any other. `from None` suppresses the chain — plain `raise`
+        # re-raises the ORIGINAL object, message and all. A table or glob
+        # source's own non-`ContractError` faults (a mis-encoded CSV, an
+        # absolute glob pattern) are recoded to `E-UNITS-SOURCE-UNREADABLE`
+        # inside `resolve_units` itself and so are already `ContractError`s
+        # by the time they reach here — this arm is a resolver's by
+        # construction.
+        if isinstance(exc, KeyboardInterrupt):
+            raise KeyboardInterrupt from None
         c.error(
             "E-RESOLVER-RAISED",
             "data.units",
