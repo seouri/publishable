@@ -10069,3 +10069,149 @@ def test_weighted_samples_says_what_core_does_with_a_contrasts_weights():
     assert "worth checking when it isn't" not in section
     assert "the same weights reach both sides" in section
 
+
+_C_STRATA = {
+    "u0": "abnormal|low",
+    "u1": "abnormal|low",
+    "u2": "abnormal|low",
+    "u3": "normal|high",
+    "u4": "normal|high",
+    "u5": "normal|high",
+}
+
+
+def _c_shape_common():
+    """The three shortcut configs' shared shape, as `_comparison_step_blocks`' own
+    arguments: `weight_by: sampling_weight`, a `resample` declaring
+    `stratify_by: [consensus_label, count_stratum]` (composed into one label the
+    way `cli.resample_strata` composes it), `cluster_by: null` and `holdout: null`.
+
+    One recorded column, `prob`, and one derived metric, `auroc` — C1's headline
+    metric is derived by the template's `aggregate`, so both branches of
+    `paired_percentile_of_derived` are exercised.
+    """
+    from publishable.sweep import Condition
+
+    def _derived(table):
+        column = table.prob
+        return float(sum(column) / len(column))
+
+    of = {k: {"prob": v["m"]} for k, v in _W_OF.items()}
+    against = {k: {"prob": 0.0} for k in _W_OF}
+    return dict(
+        conditions=[
+            Condition(index=0, label="regime=utilization_only", is_baseline=True),
+            Condition(index=1, label="regime=zero_shot", values={"model.regime": "zero_shot"}),
+        ],
+        roster=_cli_roster(6),
+        aggregated={
+            1: {"step03_screen": {"prob": 6.0, "auroc": 6.0}},
+            0: {"step03_screen": {"prob": 0.0, "auroc": 0.0}},
+        },
+        collapsed_by_key={(1, "step03_screen"): of, (0, "step03_screen"): against},
+        derived_by_key={(1, "step03_screen"): {"auroc": 6.0}, (0, "step03_screen"): {"auroc": 0.0}},
+        resample_fns_by_key={
+            (1, "step03_screen"): {"auroc": _derived},
+            (0, "step03_screen"): {"auroc": _derived},
+        },
+        seed=7,
+        draws=200,
+        findings=Collector(),
+        resample_columns=True,
+        weights=_W_WEIGHTS,
+        weighted_by="sampling_weight",
+        strata=_C_STRATA,
+    )
+
+
+def test_the_c1_shape_publishes_a_weighted_stratified_vs_baseline_delta():
+    """C1 — a one-axis `grid` over model regime with the utilization-only
+    regression as the declared `baseline`, over a weighted roster with a
+    patient-level stratified bootstrap. The last core-side refusal these three
+    carry is what task 13 retires; this is the number it was standing in for.
+
+    Exact arithmetic on the column: weighted (1+2+3+27+30+33)/12 = 8.0 against
+    unweighted 6.0. Forced bound on the interval: a weighted stratified draw is
+    three low-stratum keys at weight 1 and three high at weight 3, so its floor is
+    (3·1·1 + 3·3·9)/12 = 7.0."""
+    from publishable.cli import _compute_vs_baseline
+
+    out, members = _compute_vs_baseline(doc={}, **_c_shape_common())
+    assert out is not None
+    column = out[1]["step03_screen"]["prob"]
+    derived = out[1]["step03_screen"]["auroc"]
+    assert column["delta"] == pytest.approx(8.0)
+    assert column["method"] == "weighted_paired_percentile_over_units"
+    assert column["ci95"][0] >= 7.0 - 1e-9
+    assert column["weighted_by"] == "sampling_weight"
+    assert column["n_paired_effective"] == pytest.approx(4.8)
+    assert column["cohens_d"] == pytest.approx(2.0)
+    # The derived half, on the same run: core did not weight it, so its `method`
+    # is the unweighted spelling and its `cohens_d` is null — while `weighted_by`
+    # and the effective size travel beside it anyway.
+    assert derived["method"] == "paired_percentile_over_units"
+    assert derived["cohens_d"] is None
+    assert derived["weighted_by"] == "sampling_weight"
+    assert derived["n_paired_effective"] == pytest.approx(4.8)
+    # The derived draw was stratified too: its own forced floor is the UNWEIGHTED
+    # stratified one, 5.0, because core does not weight a derived metric.
+    assert derived["ci95"][0] >= 5.0 - 1e-9
+    # Both metrics joined the correction family, and the column's member carries
+    # the pool rather than the differences.
+    assert {(m.step, m.metric) for m in members} == {
+        ("step03_screen", "prob"),
+        ("step03_screen", "auroc"),
+    }
+    assert all(m.pool is not None and m.weights is None for m in members)
+
+
+def test_the_c2_and_c3_shape_publishes_a_weighted_declared_contrast():
+    """C2 and C3 — a declared `statistics.contrasts` entry rather than a baseline,
+    which is the other route to a comparison and the one `_compute_vs_baseline`
+    cannot reach. The same weighted, stratified numbers, on the record shape that
+    lands beside the conditions rather than inside one."""
+    from publishable.cli import _compute_declared_contrasts
+
+    doc = {
+        "statistics": {
+            "contrasts": [
+                {
+                    "id": "sensitivity",
+                    "of": "regime=zero_shot",
+                    "against": "regime=utilization_only",
+                }
+            ]
+        }
+    }
+    out, members = _compute_declared_contrasts(doc=doc, **_c_shape_common())
+    assert out is not None
+    entry = out[0]
+    assert entry["id"] == "sensitivity"
+    column = entry["step03_screen"]["prob"]
+    assert column["delta"] == pytest.approx(8.0)
+    assert column["method"] == "weighted_paired_percentile_over_units"
+    assert column["n_paired_effective"] == pytest.approx(4.8)
+    assert column["ci95"][0] >= 7.0 - 1e-9
+    assert [m.where for m in members] == ["contrast:sensitivity"] * 2
+
+
+def test_a_weighted_report_by_level_mints_no_member_and_no_delta():
+    """§ Reporting strata: strata "repeat `aggregated` metrics only, never
+    `vs_baseline` or a contrast's delta", and they do not join the correction
+    family. All three C configs declare `report_by`, so the boundary is live on
+    exactly the shapes this task exercises — and `_comparison_step_blocks` excludes
+    the `by` key from its per-metric loop, which is what makes a stratum unable to
+    become a comparison.
+
+    Asserted as an absence beside a presence that must report: the two real
+    metrics are still there, so a loop that produced nothing at all would fail
+    rather than pass."""
+    from publishable.cli import _compute_vs_baseline
+
+    common = _c_shape_common()
+    common["aggregated"][1]["step03_screen"]["by"] = {"sex": {"f": {"prob": 5.0}}}
+    common["aggregated"][0]["step03_screen"]["by"] = {"sex": {"f": {"prob": 0.0}}}
+    out, members = _compute_vs_baseline(doc={}, **common)
+    assert out is not None
+    assert set(out[1]["step03_screen"]) == {"prob", "auroc"}
+    assert len(members) == 2
