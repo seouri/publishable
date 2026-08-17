@@ -17,7 +17,7 @@ from publishable.errors import ContractError
 from publishable.hashes import design_digest
 from publishable.manifest import POLICIES
 from publishable.param import MISSING
-from publishable.plugins import GROUPS, provider_of, scan_group
+from publishable.plugins import GROUPS, names, provider_of, scan_group
 from publishable.provenance import find_repo_root, resolves_inside_repo
 from publishable.replication import resolve_repeats
 from publishable.scope import step_name as _step_name
@@ -636,6 +636,7 @@ def validate_config(
     _check_plugin_collisions(c)
     _check_required_env(doc, template, c)
     _check_requires_env(doc, template, c)
+    _check_probe(name, template, c)
     # Set once `template` is resolved, so `c.render()` — whenever it is finally
     # called, by `command_validate` or `command_run` — redacts a credential value
     # out of any finding's text, including `E-ENTRYPOINT-IMPORT` above, which is
@@ -942,6 +943,41 @@ def _check_requires_env(doc: dict[str, Any], template: Any, c: Collector) -> Non
             f"is `{value}` in {where}, which requires `{variable}` — no value in the "
             "environment or in `.env`",
         )
+
+
+def _check_probe(name: str, template: Any, c: Collector) -> None:
+    """The resolved template's `apparatus_probe` against the installed probes.
+
+    Read from package metadata, so a name no distribution declares is refused
+    without importing one — the same guarantee every other plugin name is
+    answered under. Reported at `experiment_type` because the declaration is the
+    template's rather than the config's: a reader who cannot install the plugin
+    changes which template the experiment uses, and `experiment_type` is where
+    that decision is written.
+
+    Takes the registered name rather than recovering it from the class, which
+    cannot be done: a class knows what it was decorated with only until the
+    pending buffer is drained, and `validate_config` is holding the name anyway.
+
+    A template declaring no probe is the ordinary case and draws nothing —
+    `reference.md` § The apparatus core can only observe: an experiment whose
+    measurements never leave the machine declares nothing and records
+    `apparatus: null`.
+    """
+    declared = getattr(template, "apparatus_probe", None)
+    if not isinstance(declared, str) or not declared:
+        return
+    known = names("publishable.probes")
+    if declared in known:
+        return
+    listed = ", ".join(known) if known else "none installed"
+    c.error(
+        "E-PROBE-UNKNOWN",
+        "experiment_type",
+        f"resolves template `{name}`, which declares `apparatus_probe: {declared}` — "
+        "a name no installed distribution registers in the `publishable.probes` "
+        f"entry-point group (registered: {listed})",
+    )
 
 
 def declared_credential_names_for(doc: dict[str, Any], template: Any) -> list[str]:

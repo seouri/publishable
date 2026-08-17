@@ -5839,6 +5839,11 @@ either give it a reader or state in `reference.md` that it is declarative only.
 config field references it — but it is a second shipped-and-unread surface alongside the ones this
 repo has already tracked.
 
+**Amended 2026-08-17 — H7b Part A task 13:** `apparatus_probe` gained a reader. `validate` now
+checks it against the installed `publishable.probes` distributions (`E-PROBE-UNKNOWN`), so the
+family this entry's `field_convention` belongs to is now `field_convention` and `apparatus_facts`
+only.
+
 ## OPEN — `io.reuse_from` is unbuilt and unowned by any H7 sub-slice
 
 `docs/superpowers/specs/2026-08-16-credentials-and-secrets-design.md` § Out of scope names

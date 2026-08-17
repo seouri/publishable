@@ -139,3 +139,20 @@ def test_a_resolver_is_importable_from_the_one_root():
 
     assert "register_resolver" in publishable.__all__
     assert publishable.register_resolver is not None
+
+
+def test_register_probe_records_the_name_and_returns_the_function(registries):
+    from publishable.plugins import PROBES, register_probe
+
+    @register_probe("assay_instrument")
+    def probe(cfg):
+        return {"model": "x"}
+
+    assert PROBES["assay_instrument"] is probe
+    assert probe(None) == {"model": "x"}
+
+
+def test_a_probe_is_importable_from_the_one_root():
+    import publishable
+
+    assert "register_probe" in publishable.__all__

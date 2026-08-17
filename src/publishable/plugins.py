@@ -101,3 +101,15 @@ def register_resolver(name: str) -> Callable[[F], F]:
         return fn
 
     return decorator
+
+
+def register_probe(name: str) -> Callable[[F], F]:
+    """Record `name -> fn` for this process and return `fn` unchanged. See
+    `register_resolver` for why the mapping is module-global and why the object
+    comes back untouched."""
+
+    def decorator(fn: F) -> F:
+        PROBES[name] = fn
+        return fn
+
+    return decorator

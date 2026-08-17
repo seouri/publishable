@@ -12895,3 +12895,50 @@ def test_an_unresolved_template_name_names_the_plugin_the_config_points_at(write
     ]
     assert "someuser/publishable-llm" not in plain
     assert "`plugin` says" not in plain
+
+
+_PROBING_TEMPLATE = """\
+from publishable import BaseTemplate, register_template
+
+
+@register_template("probing")
+class Probing(BaseTemplate):
+    apparatus_probe = "assay_instrument"
+    parameter_spec = {}
+"""
+
+
+def test_a_declared_probe_no_distribution_registers_is_reported(git_repo, write_config):
+    """The first reader `BaseTemplate.apparatus_probe` has ever had.
+
+    Answered from metadata, so an absent name costs no import — which is also why
+    this reports rather than raising: nothing was loaded to fail.
+    """
+    templates = git_repo / "templates"
+    templates.mkdir()
+    (templates / "probing.py").write_text(_PROBING_TEMPLATE)
+
+    found = messages_by_code(write_config({"experiment_type": "probing", "parameters": {}}))
+    message = found["E-PROBE-UNKNOWN"]
+    assert "assay_instrument" in message
+    assert "publishable.probes" in message
+
+
+def test_an_installed_probe_satisfies_the_check_and_a_template_declaring_none_draws_nothing(
+    installed, git_repo, write_config
+):
+    """THE HONOURING, and the control in one test.
+
+    Without the first half, a `_check_probe` that reported unconditionally passes
+    the refusal test above. Without the second, one that reported for every
+    template — including `generic`, which declares no probe — would too.
+    """
+    templates = git_repo / "templates"
+    templates.mkdir()
+    (templates / "probing.py").write_text(_PROBING_TEMPLATE)
+    installed("dist-one", "1.0", {"publishable.probes": {"assay_instrument": "no_one:probe"}})
+
+    assert "E-PROBE-UNKNOWN" not in codes(
+        write_config({"experiment_type": "probing", "parameters": {}})
+    )
+    assert "E-PROBE-UNKNOWN" not in codes(write_config())  # `generic` declares none
