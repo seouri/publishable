@@ -1,4 +1,6 @@
 # tests/test_validate.py
+import importlib
+import sys
 from pathlib import Path
 
 import pytest
@@ -140,6 +142,40 @@ def messages_by_code(path: Path) -> dict[str, str]:
     c = Collector()
     validate_config(path, c)
     return {f.code: f.message for f in c.findings}
+
+
+def test_validate_imports_no_plugin_for_a_config_that_names_no_resolver(
+    installed, registries, write_config
+):
+    """The narrowed invariant, pinned where it can actually die.
+
+    The two tests that pinned the old, wider claim sit at `scan_group` and
+    `get_template`; neither breaks if `validate` loads a resolver at the wrong
+    moment. This one does: the distribution is installed and its target genuinely
+    imports, and the config's `data.units.from` is a table, so nothing about this
+    config needs the object behind `plate_wells`. A `validate` that loaded the
+    group unconditionally — or loaded before deciding what shape `from` is —
+    turns this red.
+
+    Its positive companion is task 24's
+    `test_a_resolver_source_loads_the_object_behind_the_name`, which asserts the
+    module IS present for a config that names one. Without that half, this test
+    would pass on a `validate` that had no resolver path at all.
+    """
+    site = installed(
+        "dist-one", "1.0", {"publishable.resolvers": {"plate_wells": "loadable_units:resolve"}}
+    )
+    (site / "loadable_units.py").write_text(
+        "from publishable import register_resolver\n\n\n"
+        '@register_resolver("plate_wells")\n'
+        "def resolve(io, cfg):\n    return []\n"
+    )
+    importlib.invalidate_caches()
+    try:
+        assert codes(write_config()) == set()
+        assert "loadable_units" not in sys.modules
+    finally:
+        sys.modules.pop("loadable_units", None)
 
 
 def _validate_with(tmp_path: Path, overrides: dict) -> list:
