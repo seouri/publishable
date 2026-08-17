@@ -2,8 +2,7 @@
 
 **Status:** done.
 
-**Commit:** see `feat: the entry-point metadata scan, five groups, and no .load()` (created after this
-report is written; sha filled in by the commit step).
+**Commit:** `9d28200` — `feat: the entry-point metadata scan, five groups, and no .load()`
 
 **Test summary:** `uv run pytest -q` → **2006 passed, 2 xfailed** (2000 + 2 xfailed baseline + 6 new
 tests in `tests/test_plugins.py`). `uv run mypy` clean over 44 source files, no `[[tool.mypy.overrides]]`
