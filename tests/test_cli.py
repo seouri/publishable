@@ -6791,6 +6791,36 @@ def test_a_weighted_contrast_has_a_documented_method_string():
     assert "weighted_paired_percentile_over_units" in names
 
 
+def _section_text(heading: str) -> str:
+    """`reference.md` from `heading` to the next heading of the same depth or shallower.
+
+    Named rather than positional: the caller passes what the section *is*, so an
+    inserted sibling section cannot silently move the slice.
+    """
+    lines = REFERENCE_MD.read_text().split("\n")
+    start = next(i for i, line in enumerate(lines) if line.strip() == heading)
+    depth = len(heading) - len(heading.lstrip("#"))
+    for j in range(start + 1, len(lines)):
+        match = re.match(r"(#{1,6}) ", lines[j])
+        if match and len(match.group(1)) <= depth:
+            return "\n".join(lines[start:j])
+    return "\n".join(lines[start:])
+
+
+def test_the_weighted_contrast_record_keys_are_documented():
+    """Task 3's ruling, in the document before any code writes it. `n_paired` is a
+    scalar and § Contrasts argues why a contrast has no `n` mapping to join, so
+    Kish's size over the intersection takes a scalar sibling rather than the shape
+    § Weighted samples uses per condition.
+
+    The control asserts the section was really located: a slicer that returned the
+    empty string would fail every `in` and pass every `not in`."""
+    section = _section_text("#### Contrasts: claims that aren't condition-vs-baseline")
+    assert "n_paired" in section  # the control
+    assert "weighted_by" in section
+    assert "n_paired_effective" in section
+
+
 def test_the_weight_refusals_errors_row_names_no_estimator():
     """The row and the message are one claim seen from two ends, and the row is
     where the three functions were actually enumerated. Parsed from the document

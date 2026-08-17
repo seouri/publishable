@@ -2588,6 +2588,38 @@ results:
 
 **`n_paired` is the intersection, and it has to be recorded.** Two conditions can complete on different units — a transform that isn't constructible for every patient, an assay that failed on a subset, an arm whose eligibility differs — and a paired comparison exists only for units that completed in *both*. Differencing the two condition means instead would not be a paired comparison at all, however carefully `paired: true` was derived. The condition-level `n` can't carry this, because it belongs to one condition and the contrast spans two, so the contrast records its own. A contrast whose intersection is empty is reported as such rather than as a delta of zero.
 
+**Under [`weight_by`](#weighted-samples) a contrast entry carries two more keys**, and they are the
+same two facts a weighted per-condition block carries, arranged for a record that has no `n` mapping
+to join. `weighted_by` names the attribute, beside `method`, exactly as it sits beside a condition's
+own value. Kish's effective size takes a **scalar sibling of `n_paired`**, `n_paired_effective`,
+rather than joining an `n` block: this record deliberately has no `n`, on the same argument that
+makes `n_paired` carry its own count, and the
+effective size is a fact about the intersection `n_paired` counts. It is computed over **that
+intersection's** weights and not over the roster's — under a [holdout](#a-fixed-holdout-split) or
+unequal completion those are different multisets, and the size reported beside an interval has to be
+the size the interval was computed at.
+
+```yaml
+results:
+  contrasts:
+    - id: sensitivity
+      of: 02_arm=abnormal
+      against: 01_arm=normal
+      step03_screen:
+        prob: {delta: 0.041, basis: units, paired: true,
+               method: weighted_paired_percentile_over_units,
+               weighted_by: sampling_weight,
+               n_paired: 330, n_paired_effective: 214.7,
+               ci95: [0.018, 0.063], cohens_d: 0.36,
+               correction: holm, correction_level: 0.0125,
+               family_size: 4, family: {comparisons: 2, metrics: 2}}
+```
+
+All four move together or none of them does: a weighted delta beside an unweighted interval, an
+unweighted `cohens_d`, or an `n_paired` with no effective size beside it, is a declaration accepted
+whose effect is half delivered — the same three-way obligation a weighted per-condition block
+carries, with one more part because a contrast reports an effect size a condition does not.
+
 **Contrasts don't nest, and the reason is one you already have.** A contrast is between two *conditions*. A comparison between two *contrasts* — is the effect at dose 1.0 larger than at dose 0.5, did the difference between arms differ between sites, is the mean of the native cells above the mean of the foreign ones — is an interaction term, and [core doesn't compute those](experimental-designs.md#what-core-will-not-do-for-you) whether they arrive through a factorial `grid` or through here. Three shapes people reach for, and all of them are the same thing wearing different clothes:
 
 | You want | It is | Where it goes |
